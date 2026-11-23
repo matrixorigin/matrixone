@@ -30,7 +30,7 @@ func TestPublishReaderSelectionShrinksInPlace(t *testing.T) {
 		mp := mpool.MustNewZero()
 		output := batch.NewWithSize(3)
 		for i := range output.Vecs {
-			output.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+			output.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 			require.NoError(t, vector.AppendFixedList(output.Vecs[i], []int32{10, 20, 30, 40}, nil, mp))
 		}
 		output.SetRowCount(4)

@@ -78,8 +78,10 @@ type container struct {
 	joinDiagnosticActivation []colexec.ExpressionExecutor
 	joinDiagnosticActivated  bool
 
-	leftBat          *batch.Batch
-	resBat           *batch.Batch
+	leftBat *batch.Batch
+	resBat  *batch.Batch
+	// resBatMP is the pool resBat was created with (the result view).
+	resBatMP         *mpool.MPool
 	outputRowLimit   int
 	buildAreaChecked bool
 	checkBuildArea   bool
@@ -477,7 +479,7 @@ func (ctr *container) cleanAsofIndexes(proc *process.Process) {
 
 func (ctr *container) cleanAsofBuildLeftState(proc *process.Process) {
 	if ctr.asofBuildLeftBestRight != nil && proc != nil {
-		ctr.asofBuildLeftBestRight.Clean(proc.Mp())
+		ctr.asofBuildLeftBestRight.Clean(ctr.asofBuildLeftBestRightMP)
 	}
 	if proc != nil {
 		mpool.FreeSlice(proc.Mp(), ctr.asofBuildLeftBestTimes)
@@ -528,8 +530,9 @@ func (ctr *container) cleanNonEqCondExecutor() {
 func (ctr *container) cleanBatch(proc *process.Process) {
 	ctr.rightBats = nil
 	if ctr.resBat != nil {
-		ctr.resBat.Clean(proc.GetMPool())
+		ctr.resBat.Clean(ctr.resBatMP)
 		ctr.resBat = nil
+		ctr.resBatMP = nil
 	}
 	for i := range ctr.joinBats {
 		if ctr.joinBats[i] != nil {

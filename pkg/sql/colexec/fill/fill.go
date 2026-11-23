@@ -82,8 +82,8 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		}
 		// the batch just for eval const value
 		b := batch.NewWithSize(1)
-		defer b.Clean(proc.Mp())
-		b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+		defer cleanOwnedBatch(b)
+		b.SetVector(0, vector.NewVec(types.T_varchar.ToType(), proc.Mp()))
 		batch.SetLength(b, 1)
 		if len(ctr.exes) == 0 {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
@@ -184,11 +184,11 @@ func cloneFillBatch(
 	if source == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	attrs, attrTypes := source.GetSchema()
-	cloned := batch.NewWithSchema(view != nil, attrs, attrTypes)
 	if view != nil {
 		mp = view
 	}
+	attrs, attrTypes := source.GetSchema()
+	cloned := batch.NewWithSchema(attrs, attrTypes, mp)
 	cloned.Recursive = source.Recursive
 	if err := source.CloneTo(cloned, mp); err != nil {
 		cloned.Clean(mp)
@@ -405,7 +405,7 @@ func (ctr *container) pullChild(
 	if err = addOriginalNullMarkers(
 		dup, ap.ColLen, proc.Mp(), ctr.retainedAllocation,
 	); err != nil {
-		dup.Clean(proc.Mp())
+		dup.Clean(orMP(ctr.retainedAllocation, proc))
 		if ctr.allocationAccount != nil && mpool.IsRetryableAllocationCapacity(err) {
 			err = ctr.spillCurrentSource(ap, proc, analyzer, result.Batch)
 			return 0, false, err == nil, false, err
@@ -581,9 +581,9 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 			// destination area grows; all rows in this run share that source.
 			if len(run) > 0 && run[len(run)-1].seq == seq && vec.GetType().IsVarlen() &&
 				len(vec.GetBytesAt(r)) > types.VarlenaInlineSize {
-				snapshot = vector.NewOffHeapVecWithType(*vec.GetType())
+				snapshot = vector.NewVec(*vec.GetType(), retainedMP)
 				if err := appendValue(snapshot, vec, r, retainedMP); err != nil {
-					snapshot.Free(proc.Mp())
+					snapshot.Free(retainedMP)
 					return err
 				}
 				src, srcRow = snapshot, 0
@@ -591,13 +591,13 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 			for _, cd := range run {
 				if err := setValue(ctr.batAt(cd.seq).Vecs[c], src, cd.row, srcRow, retainedMP); err != nil {
 					if snapshot != nil {
-						snapshot.Free(proc.Mp())
+						snapshot.Free(retainedMP)
 					}
 					return err
 				}
 			}
 			if snapshot != nil {
-				snapshot.Free(proc.Mp())
+				snapshot.Free(retainedMP)
 			}
 			ctr.nextRun[c] = ctr.nextRun[c][:0]
 		}
@@ -735,7 +735,7 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 				ctr.linRun[c] = ctr.linRun[c][:0]
 			}
 			if c < len(ctr.linSeed) && ctr.linSeed[c] != nil {
-				ctr.linSeed[c].Free(proc.Mp())
+				ctr.linSeed[c].Free(ctr.retainedPool(proc))
 				ctr.linSeed[c] = nil
 			}
 			if c < len(ctr.linSeedValid) {
@@ -775,16 +775,19 @@ func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int,
 			return err
 		}
 		cd := ctr.linRun[col][0]
+		// An owned value was created by linearFillValue with the expression
+		// pool.
+		valMP := orMP(ctr.expressionAllocation, proc)
 		retainedMP, err := ctr.retainedMP(proc)
 		if err != nil {
 			if owned {
-				valVec.Free(proc.Mp())
+				valVec.Free(valMP)
 			}
 			return err
 		}
 		err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, retainedMP)
 		if owned {
-			valVec.Free(proc.Mp())
+			valVec.Free(valMP)
 		}
 		return err
 	}
@@ -825,37 +828,33 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	preVec := preBatch.Vecs[idx]
 	curVec := curBatch.Vecs[idx]
 	if preVec.GetType().Oid == types.T_decimal128 && curVec.GetType().Oid == types.T_decimal128 {
-		result := vector.NewVec(*preVec.GetType())
-		if ctr.expressionAllocation != nil {
-			result = vector.NewOffHeapVecWithType(*preVec.GetType())
-		}
+		resultMP := orMP(ctr.expressionAllocation, proc)
+		result := vector.NewVec(*preVec.GetType(), resultMP)
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, curRow)
 		value, err := linearExactValue(left, right, 1, 2)
 		if err != nil {
-			result.Free(proc.Mp())
+			result.Free(resultMP)
 			return nil, false, err
 		}
-		if err = vector.AppendFixed(result, value, false, orMP(ctr.expressionAllocation, proc)); err != nil {
-			result.Free(proc.Mp())
+		if err = vector.AppendFixed(result, value, false, resultMP); err != nil {
+			result.Free(resultMP)
 			return nil, false, err
 		}
 		return result, true, nil
 	}
 	if preVec.GetType().Oid == types.T_decimal256 && curVec.GetType().Oid == types.T_decimal256 {
-		result := vector.NewVec(*preVec.GetType())
-		if ctr.expressionAllocation != nil {
-			result = vector.NewOffHeapVecWithType(*preVec.GetType())
-		}
+		resultMP := orMP(ctr.expressionAllocation, proc)
+		result := vector.NewVec(*preVec.GetType(), resultMP)
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal256](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal256](curVec, curRow)
 		value, err := linearExactValue256(left, right, 1, 2)
 		if err != nil {
-			result.Free(proc.Mp())
+			result.Free(resultMP)
 			return nil, false, err
 		}
-		if err = vector.AppendFixed(result, value, false, orMP(ctr.expressionAllocation, proc)); err != nil {
-			result.Free(proc.Mp())
+		if err = vector.AppendFixed(result, value, false, resultMP); err != nil {
+			result.Free(resultMP)
 			return nil, false, err
 		}
 		return result, true, nil
@@ -863,22 +862,22 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 
 	b := batch.NewWithSize(2)
 	if ctr.expressionAllocation != nil {
-		b = batch.NewOffHeapWithSize(2)
+		b = batch.NewWithSize(2)
 	}
 	left, err := makeEndpoint(preVec, preRow, proc, ctr.expressionAllocation)
 	if err != nil {
-		b.Clean(proc.Mp())
+		cleanOwnedBatch(b)
 		return nil, false, err
 	}
 	b.SetVector(0, left)
 	right, err := makeEndpoint(curVec, curRow, proc, ctr.expressionAllocation)
 	if err != nil {
-		b.Clean(proc.Mp())
+		cleanOwnedBatch(b)
 		return nil, false, err
 	}
 	b.SetVector(1, right)
 	b.SetRowCount(1)
-	defer b.Clean(proc.Mp())
+	defer cleanOwnedBatch(b)
 	result, err := ctr.exes[idx].Eval(proc, []*batch.Batch{b}, nil)
 	return result, false, err
 }
@@ -1244,7 +1243,7 @@ func (ctr *container) driveFill(
 ) (vm.CallResult, error) {
 	// The batch returned last Call has been consumed by the parent by now.
 	if ctr.toFree != nil {
-		ctr.toFree.Clean(proc.Mp())
+		cleanOwnedBatch(ctr.toFree)
 		ctr.toFree = nil
 	}
 	for {

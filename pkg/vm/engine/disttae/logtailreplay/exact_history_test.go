@@ -44,9 +44,9 @@ func exactHistoryFixture(t testing.TB, versions int) (*PartitionState, []types.R
 	rowIDs := make([]types.Rowid, versions)
 	apply := func(row types.Rowid, ts int64, deleted bool) {
 		t.Helper()
-		rowVec := vector.NewVec(types.T_Rowid.ToType())
-		tsVec := vector.NewVec(types.T_TS.ToType())
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		rowVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+		tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+		pkVec := vector.NewVec(types.T_int64.ToType(), pool)
 		defer rowVec.Free(pool)
 		defer tsVec.Free(pool)
 		defer pkVec.Free(pool)
@@ -57,7 +57,7 @@ func exactHistoryFixture(t testing.TB, versions int) (*PartitionState, []types.R
 			mustVectorToProto(rowVec), mustVectorToProto(tsVec), mustVectorToProto(pkVec),
 		}}
 		if deleted {
-			tombstone := vector.NewVec(types.T_Rowid.ToType())
+			tombstone := vector.NewVec(types.T_Rowid.ToType(), pool)
 			defer tombstone.Free(pool)
 			require.NoError(t, vector.AppendFixed(tombstone, types.RandomRowid(), false, pool))
 			input.Vecs = append(input.Vecs, mustVectorToProto(tombstone))

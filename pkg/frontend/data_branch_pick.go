@@ -531,7 +531,7 @@ func materializeValuesUnified(
 	}
 
 	// Build a typed Vec from AST expressions.
-	vec := vector.NewVec(pkType)
+	vec := vector.NewVec(pkType, mp)
 	for _, expr := range stmt.Keys.KeyExprs {
 		if appendErr := appendExprToVecWithPrepareParams(
 			vec, expr, pkType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
@@ -586,7 +586,7 @@ func materializeCompositeValuesUnified(
 	// Build one component vector per PK column.
 	compVecs := make([]*vector.Vector, nPKCols)
 	for i, colIdx := range pkColIdxes {
-		compVecs[i] = vector.NewVec(tblStuff.def.colTypes[colIdx])
+		compVecs[i] = vector.NewVec(tblStuff.def.colTypes[colIdx], mp)
 	}
 	defer func() {
 		for _, v := range compVecs {
@@ -733,7 +733,7 @@ func coercePickKeyVectorToType(
 		return srcVec, false, nil
 	}
 
-	dstVec := vector.NewVec(dstType)
+	dstVec := vector.NewVec(dstType, mp)
 	for rowIdx := 0; rowIdx < srcVec.Length(); rowIdx++ {
 		s, err := formatPickKeyVectorValueAsString(ses, srcVec, rowIdx)
 		if err != nil {

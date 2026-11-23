@@ -136,7 +136,7 @@ func (a *SpillAllocationAccount) SelectedMP(mp *mpool.MPool) (*mpool.MPool, erro
 // newSpillBatch returns an empty off-heap batch; callers allocate its data
 // through DecodedMP or SelectedMP.
 func newSpillBatch(size int) *batch.Batch {
-	return batch.NewOffHeapWithSize(size)
+	return batch.NewWithSize(size)
 }
 
 // GrowAccountedSlice grows an off-heap typed slice under the spill engine's

@@ -461,7 +461,7 @@ func TestORLikeSubjectReuseCoalesceStringDomains(t *testing.T) {
 			require.Equal(t, oid != types.T_blob, shared, "only registered text-family COALESCE overloads qualify")
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(oid.ToType())
+			input.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 			values := []string{"ERROR", "ordinary", "TİMEOUT", "RETRY", ""}
 			if oid == types.T_blob {
 				// LOWER preserves bytes in the binary domain. Keep the fallback

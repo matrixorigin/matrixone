@@ -39,7 +39,7 @@ func ft2ConstStr(t *testing.T, mp *mpool.MPool, s string) *vector.Vector {
 // constant" guard).
 func ft2NonConstStr(t *testing.T, mp *mpool.MPool, s string) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(v, []byte(s), false, mp))
 	return v
 }

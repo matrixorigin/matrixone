@@ -766,7 +766,7 @@ func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -964,7 +964,7 @@ func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error)
 	if exec.IsDistinct() {
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -1027,7 +1027,7 @@ func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error)
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
 
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -2018,7 +2018,7 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -2107,7 +2107,7 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 				if exec.narrowAvgResult {
 					// A Decimal256 state cannot back the Decimal128 result
 					// vector; emit the narrowed mean into a fresh result.
-					resultVec, err := exec.allocation.newVector(resultType)
+					resultVec, err := exec.allocation.newVector(resultType, exec.mp)
 					if err != nil {
 						return nil, err
 					}

@@ -52,7 +52,7 @@ func (tableScan *TableScan) selectPredicateRows(proc *process.Process, input *ba
 	var gathered *batch.Batch
 	defer func() {
 		if gathered != nil {
-			gathered.Clean(proc.Mp())
+			gathered.Clean(tableScan.gatherMP(proc))
 		}
 		tableScan.ctr.filterRows = rows
 	}()
@@ -108,7 +108,7 @@ func (tableScan *TableScan) selectPredicateRows(proc *process.Process, input *ba
 				return nil, false, err
 			}
 			if gathered != nil {
-				gathered.Clean(proc.Mp())
+				gathered.Clean(tableScan.gatherMP(proc))
 			}
 			gathered, current = next, next
 		}
@@ -146,7 +146,7 @@ func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []i
 	if allocation != nil {
 		mp = allocation
 	}
-	output := batch.NewOffHeapWithSize(len(input.Vecs))
+	output := batch.NewWithSize(len(input.Vecs))
 	defer func() {
 		if retErr != nil {
 			output.Clean(mp)
@@ -157,7 +157,7 @@ func gatherSelectedColumns(proc *process.Process, input *batch.Batch, loaded []i
 		if source == nil || (source.Length() == 0 && input.RowCount() != 0) {
 			return nil
 		}
-		dst := vector.NewOffHeapVecWithType(*source.GetType())
+		dst := vector.NewVec(*source.GetType(), mp)
 		output.Vecs[pos] = dst
 		if err := dst.Union(source, rows, mp); err != nil {
 			return err
@@ -243,4 +243,12 @@ func (tableScan *TableScan) prepareColumnUses() {
 		}
 	}
 	tableScan.ctr.columnUses = uses
+}
+
+// gatherMP is the pool gatherSelectedColumns creates the gathered batch with.
+func (tableScan *TableScan) gatherMP(proc *process.Process) *mpool.MPool {
+	if tableScan.OutputAllocation != nil {
+		return tableScan.OutputAllocation
+	}
+	return proc.Mp()
 }

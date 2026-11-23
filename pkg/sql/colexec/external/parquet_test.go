@@ -78,7 +78,7 @@ func TestParquetDecimalMappingRegression(t *testing.T) {
 	page, err := col.Pages().ReadPage()
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{
 		Id:          int32(types.T_decimal64),
@@ -136,7 +136,7 @@ func TestParquetDecimalSameScalePrecisionOverflow(t *testing.T) {
 					require.NotNil(t, page.Dictionary())
 				}
 
-				vec := vector.NewVec(types.New(target.oid, target.targetPrecision, 2))
+				vec := vector.NewVec(types.New(target.oid, target.targetPrecision, 2), proc.Mp())
 				var h ParquetHandler
 				mp := h.getMapper(f.Root().Column("c"), plan.Type{
 					Id:          int32(target.oid),
@@ -195,7 +195,7 @@ func TestParquetDecimalScaleConversion(t *testing.T) {
 					require.NotNil(t, page.Dictionary())
 				}
 
-				vec := vector.NewVec(types.New(target.oid, target.width, 2))
+				vec := vector.NewVec(types.New(target.oid, target.width, 2), proc.Mp())
 				var h ParquetHandler
 				mp := h.getMapper(f.Root().Column("c"), plan.Type{
 					Id:          int32(target.oid),
@@ -239,7 +239,7 @@ func TestParquetDecimalScaleConversion(t *testing.T) {
 				parquet.FixedLenByteArrayValue(encode(new(big.Int).Neg(tenth))),
 			})
 
-		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{
 			Id:          int32(types.T_decimal64),
@@ -426,7 +426,7 @@ func TestParquetStringToDecimalMapping(t *testing.T) {
 	page, err := col.Pages().ReadPage()
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2))
+	vec := vector.NewVec(types.New(types.T_decimal64, 12, 2), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{
 		Id:          int32(types.T_decimal64),
@@ -461,7 +461,7 @@ func TestParquetStringToJsonMapping(t *testing.T) {
 			parquet.ByteArrayValue([]byte(` {"k":"v1","n":1} `)),
 		})
 
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
 		require.NotNil(t, mp)
@@ -479,7 +479,7 @@ func TestParquetStringToJsonMapping(t *testing.T) {
 			parquet.ByteArrayValue([]byte(`{"k":"v0","n":0}`)),
 		})
 
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
 		require.NotNil(t, mp)
@@ -496,7 +496,7 @@ func TestParquetStringToJsonMapping(t *testing.T) {
 			parquet.ByteArrayValue([]byte(`not-json`)),
 		})
 
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
 		require.NotNil(t, mp)
@@ -514,7 +514,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.ByteArrayValue([]byte(" [1, 2, 3] ")).Level(0, 1, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
 		require.NotNil(t, mp)
@@ -535,7 +535,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			parquet.ByteArrayValue([]byte("[1.25,2.25,3.25]")),
 		})
 
-		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
@@ -553,7 +553,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.ByteArrayValue([]byte("[7,8,9]")).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
@@ -566,7 +566,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.FixedLenByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
@@ -576,7 +576,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 
 	t.Run("empty page", func(t *testing.T) {
 		page := parquet.ByteArrayType.NewPage(0, 0, encoding.ByteArrayValues(nil, []uint32{0}))
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		require.NoError(t, processStringToArray[float32](context.Background(), &columnMapper{}, page, proc, vec, 3))
 		require.Equal(t, 0, vec.Length())
 	})
@@ -586,7 +586,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.ByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.T_array_float32.ToType())
+		vec := vector.NewVec(types.T_array_float32.ToType(), proc.Mp())
 		require.ErrorContains(t, processStringToArray[float32](context.Background(), &columnMapper{}, page, proc, vec, 0), "invalid vector dimension 0")
 	})
 
@@ -604,7 +604,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.ByteArrayValue([]byte("[1,2]")).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
@@ -616,7 +616,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.ByteArrayValue([]byte("not-a-vector")).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
@@ -628,7 +628,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.ByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true})
 		require.NotNil(t, mp)
@@ -642,7 +642,7 @@ func TestParquetStringToVectorMapping(t *testing.T) {
 			{parquet.ByteArrayValue([]byte("[1,2]")).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.T_array_float64.ToType())
+		vec := vector.NewVec(types.T_array_float64.ToType(), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -676,7 +676,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, mp)
 		require.True(t, mp.allowRepetition)
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, [][]float32{{1, 2, 3}, {4.5, 5.5, 6.5}}, vector.MustArrayCol[float32](vec))
 	})
@@ -700,7 +700,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, [][]float64{{1.25, 2.25, 3.25}, {4.25, 5.25, 6.25}}, vector.MustArrayCol[float64](vec))
 	})
@@ -717,7 +717,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float64, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, [][]float64{{1.5, 2.5, 3.5}}, vector.MustArrayCol[float64](vec))
 	})
@@ -734,7 +734,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, [][]float32{{1.25, 2.25, 3.25}}, vector.MustArrayCol[float32](vec))
 	})
@@ -756,7 +756,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 				_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 1})
 				require.NotNil(t, mp)
 
-				vec := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+				vec := vector.NewVec(types.New(types.T_array_float32, 1, 0), proc.Mp())
 				require.ErrorContains(t, mp.mapping(page, proc, vec), "overflows FLOAT")
 			})
 		}
@@ -774,7 +774,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "expected vector dimension 3 != actual dimension 2")
 	})
 
@@ -796,7 +796,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.T_array_float32.ToType())
+		vec := vector.NewVec(types.T_array_float32.ToType(), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		rows := vector.MustArrayCol[float32](vec)
 		require.Empty(t, rows[0])
@@ -821,7 +821,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32)})
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.T_array_float32.ToType())
+		vec := vector.NewVec(types.T_array_float32.ToType(), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 3, vec.Length())
 		require.True(t, vec.GetNulls().Contains(0))
@@ -858,7 +858,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, [][]float32{{1, 2, 3}}, vector.MustArrayCol[float32](vec))
 	})
@@ -876,7 +876,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3})
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "parquet list NULL elements are not supported")
 	})
 
@@ -897,7 +897,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_bf16, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_bf16, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 1, vec.Length())
 		require.Equal(t, []types.BF16{
@@ -919,7 +919,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_float16, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_float16, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 1, vec.Length())
 		require.Equal(t, []types.Float16{
@@ -941,7 +941,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 1, vec.Length())
 		require.Equal(t, []int8{-128, 0, 127}, vector.GetArrayAt[int8](vec, 0))
@@ -961,7 +961,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		require.NotNil(t, leaf)
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0), proc.Mp())
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, 1, vec.Length())
 		require.Equal(t, []uint8{0, 128, 255}, vector.GetArrayAt[uint8](vec, 0))
@@ -980,7 +980,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_int8), Width: 3})
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0), proc.Mp())
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "out of range")
 	})
 
@@ -997,7 +997,7 @@ func TestParquetListToVectorMapping(t *testing.T) {
 		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_uint8), Width: 3})
 		require.NotNil(t, mp)
 
-		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0), proc.Mp())
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "out of range")
 	})
 
@@ -1034,7 +1034,7 @@ func TestParquetListMapperRejectsValueKindMismatch(t *testing.T) {
 	require.NotNil(t, mp)
 
 	badPage := &parquetPageWithData{Page: page, data: encoding.Int32Values([]int32{1})}
-	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -1064,7 +1064,7 @@ func TestParquetListMapperRejectsRepetitionLevelOverflow(t *testing.T) {
 			return copy(dst, badValues), nil
 		}),
 	}
-	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -1088,7 +1088,7 @@ func TestParquetListMapperRejectsDefinitionLevelNullnessMismatch(t *testing.T) {
 			return copy(dst, badValues), nil
 		}),
 	}
-	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -1106,7 +1106,7 @@ func TestParquetValueNullnessMustMatchDefinitionLevels(t *testing.T) {
 			return 1, nil
 		}),
 	}
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	err := processParquetValuesToFixed[int32](context.Background(),
 		&columnMapper{srcNull: false, dstNull: true}, badPage, proc, vec, 0,
 		func(v parquet.Value) (int32, error) { return v.Int32(), nil })
@@ -1126,7 +1126,7 @@ func TestParquetOptionalNoNullPageRetainsDefinitionLevel(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.T_bool.ToType())
+	vec := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	require.NoError(t, mp.mapping(page, proc, vec))
 	require.Equal(t, []bool{true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
 	require.False(t, vec.GetNulls().Contains(0))
@@ -1143,7 +1143,7 @@ func TestParquetGenericMappingRejectsValueKindMismatch(t *testing.T) {
 			return 1, nil
 		}),
 	}
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, badPage, proc, vec, 0,
 		func(v parquet.Value) (int32, error) { return v.Int32(), nil })
 	require.Error(t, err)
@@ -1171,7 +1171,7 @@ func TestParquetGenericMappingRejectsValueLevelMismatch(t *testing.T) {
 					return 1, nil
 				}),
 			}
-			vec := vector.NewVec(types.T_int32.ToType())
+			vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, badPage, proc, vec, 0,
 				func(v parquet.Value) (int32, error) { return v.Int32(), nil })
 			require.Error(t, err)
@@ -1201,7 +1201,7 @@ func TestParquetGenericDictionaryMappingRejectsOutOfRangeIndex(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	require.NotPanics(t, func() {
 		err := mp.mapping(badPage, proc, vec)
 		require.Error(t, err)
@@ -1219,7 +1219,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 	})
 	mapScalar := func(t *testing.T, col *parquet.Column, page parquet.Page, target plan.Type, vecType types.Type) *vector.Vector {
 		t.Helper()
-		vec := vector.NewVec(vecType)
+		vec := vector.NewVec(vecType, proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mapper := h.getMapper(col, target)
@@ -1380,7 +1380,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, false, pageSignedOverflow.Dictionary() != nil, "fixture encoding changed")
 		mp := h.getMapper(fSignedOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_int8), NotNullable: true})
 		require.NotNil(t, mp)
-		vecInt8 := vector.NewVec(types.T_int8.ToType())
+		vecInt8 := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 		t.Cleanup(func() { vecInt8.Free(proc.Mp()) })
 		require.ErrorContains(t, mp.mapping(pageSignedOverflow, proc, vecInt8), "overflows TINYINT")
 		require.Zero(t, vecInt8.Length(), "rejected mapping appended output")
@@ -1392,7 +1392,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, false, pageNegativeUnsigned.Dictionary() != nil, "fixture encoding changed")
 		mp = h.getMapper(fNegativeUnsigned.Root().Column("c"), plan.Type{Id: int32(types.T_uint8), NotNullable: true})
 		require.NotNil(t, mp)
-		vecUint8 := vector.NewVec(types.T_uint8.ToType())
+		vecUint8 := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
 		t.Cleanup(func() { vecUint8.Free(proc.Mp()) })
 		require.ErrorContains(t, mp.mapping(pageNegativeUnsigned, proc, vecUint8), "overflows unsigned integer")
 		require.Zero(t, vecUint8.Length(), "rejected mapping appended output")
@@ -1404,7 +1404,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, false, pageUnsignedOverflow.Dictionary() != nil, "fixture encoding changed")
 		mp = h.getMapper(fUnsignedOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_uint8), NotNullable: true})
 		require.NotNil(t, mp)
-		vecUint8Overflow := vector.NewVec(types.T_uint8.ToType())
+		vecUint8Overflow := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
 		t.Cleanup(func() { vecUint8Overflow.Free(proc.Mp()) })
 		require.ErrorContains(t, mp.mapping(pageUnsignedOverflow, proc, vecUint8Overflow), "overflows TINYINT UNSIGNED")
 		require.Zero(t, vecUint8Overflow.Length(), "rejected mapping appended output")
@@ -1460,7 +1460,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, false, pageIntOverflow.Dictionary() != nil, "fixture encoding changed")
 		mp := h.getMapper(fIntOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp)
-		vecInt := vector.NewVec(types.T_int64.ToType())
+		vecInt := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		t.Cleanup(func() { vecInt.Free(proc.Mp()) })
 		require.ErrorContains(t, mp.mapping(pageIntOverflow, proc, vecInt), "overflows BIGINT")
 		require.Zero(t, vecInt.Length(), "rejected mapping appended output")
@@ -1472,7 +1472,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, false, pageUintOverflow.Dictionary() != nil, "fixture encoding changed")
 		mp = h.getMapper(fUintOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp)
-		vecUint := vector.NewVec(types.T_uint64.ToType())
+		vecUint := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		t.Cleanup(func() { vecUint.Free(proc.Mp()) })
 		require.ErrorContains(t, mp.mapping(pageUintOverflow, proc, vecUint), "overflows BIGINT UNSIGNED")
 		require.Zero(t, vecUint.Length(), "rejected mapping appended output")
@@ -1484,7 +1484,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		require.Equal(t, false, pageNegativeUint.Dictionary() != nil, "fixture encoding changed")
 		mp = h.getMapper(fNegativeUint.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp)
-		vecNegativeUint := vector.NewVec(types.T_uint64.ToType())
+		vecNegativeUint := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		t.Cleanup(func() { vecNegativeUint.Free(proc.Mp()) })
 		require.ErrorContains(t, mp.mapping(pageNegativeUint, proc, vecNegativeUint), "overflows unsigned integer")
 		require.Zero(t, vecNegativeUint.Length(), "rejected mapping appended output")
@@ -1521,7 +1521,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 			parquet.ByteArrayValue([]byte("not-a-bit")),
 		})
 		require.Equal(t, false, pageInvalid.Dictionary() != nil, "fixture encoding changed")
-		vecInvalid := vector.NewVec(types.New(types.T_bit, 4, 0))
+		vecInvalid := vector.NewVec(types.New(types.T_bit, 4, 0), proc.Mp())
 		t.Cleanup(func() { vecInvalid.Free(proc.Mp()) })
 		mp := h.getMapper(fInvalid.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 4, NotNullable: true})
 		require.NotNil(t, mp)
@@ -1533,7 +1533,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 			parquet.ByteArrayValue([]byte("16")),
 		})
 		require.Equal(t, false, pageOverflow.Dictionary() != nil, "fixture encoding changed")
-		vecOverflow := vector.NewVec(types.New(types.T_bit, 4, 0))
+		vecOverflow := vector.NewVec(types.New(types.T_bit, 4, 0), proc.Mp())
 		t.Cleanup(func() { vecOverflow.Free(proc.Mp()) })
 		mp = h.getMapper(fOverflow.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 4, NotNullable: true})
 		require.NotNil(t, mp)
@@ -1568,7 +1568,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.New(types.T_bit, 8, 0))
+		vec := vector.NewVec(types.New(types.T_bit, 8, 0), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true})
@@ -1583,7 +1583,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.New(types.T_bit, 8, 0))
+		vec := vector.NewVec(types.New(types.T_bit, 8, 0), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bit), Width: 8, NotNullable: true})
@@ -1648,7 +1648,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		var h ParquetHandler
 		mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), Enumvalues: ","})
 		require.NotNil(t, mapper)
-		invalid := vector.NewVec(types.T_uint64.ToType())
+		invalid := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		defer invalid.Free(proc.Mp())
 		require.Error(t, mapper.mapping(page, proc, invalid))
 		require.Zero(t, invalid.Length(), "mapping failure must roll back partial output")
@@ -1666,7 +1666,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		var h ParquetHandler
 		mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), Enumvalues: ","})
 		require.NotNil(t, mapper)
-		invalid := vector.NewVec(types.T_uint64.ToType())
+		invalid := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		defer invalid.Free(proc.Mp())
 		require.Error(t, mapper.mapping(page, proc, invalid))
 		require.Zero(t, invalid.Length(), "mapping failure must roll back partial output")
@@ -1707,7 +1707,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
@@ -1722,7 +1722,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.T_int8.ToType())
+		vec := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int8), NotNullable: true})
@@ -1737,7 +1737,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.T_uint8.ToType())
+		vec := vector.NewVec(types.T_uint8.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint8), NotNullable: true})
@@ -1752,7 +1752,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.T_uint32.ToType())
+		vec := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint32), NotNullable: true})
@@ -1767,7 +1767,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
@@ -1782,7 +1782,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 		})
 		require.Equal(t, false, page.Dictionary() != nil, "fixture encoding changed")
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
@@ -1966,7 +1966,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 				require.Equal(t, tc.numValues, n)
 				f := writeParquetFixture(t, parquet.Leaf(tc.st), []parquet.Row{parquet.MakeRow(vals)})
 
-				vec := vector.NewVec(types.New(tc.dt, tc.width, 0))
+				vec := vector.NewVec(types.New(tc.dt, tc.width, 0), proc.Mp())
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				var h ParquetHandler
 				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.dt), Width: tc.width, NotNullable: true})
@@ -2079,7 +2079,7 @@ func TestParquetCrossTypeMappings(t *testing.T) {
 				f, page := writeDictAndGetPage(t, tc.node, tc.values)
 				require.NotNil(t, page.Dictionary(), "fixture must exercise dictionary decoding")
 				vecType := types.New(tc.target, tc.width, 0)
-				vec := vector.NewVec(vecType)
+				vec := vector.NewVec(vecType, proc.Mp())
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				var h ParquetHandler
 				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.target), Width: tc.width, NotNullable: !tc.nullable})
@@ -2098,7 +2098,7 @@ func TestParquetFloat32Overflow(t *testing.T) {
 	proc := testutil.NewProc(t)
 	assertOverflow := func(t *testing.T, f *parquet.File, page parquet.Page) {
 		t.Helper()
-		vec := vector.NewVec(types.T_float32.ToType())
+		vec := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
@@ -2195,7 +2195,7 @@ func TestParquetFloat32InfinityMapping(t *testing.T) {
 			} else {
 				f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.DoubleType), []parquet.Row{{parquet.DoubleValue(tc.value).Level(0, 0, 0)}})
 			}
-			vec := vector.NewVec(types.T_float32.ToType())
+			vec := vector.NewVec(types.T_float32.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
@@ -2242,8 +2242,8 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 				col := file.Root().Column("c")
 				h := &ParquetHandler{cols: []*parquet.Column{col}}
 				h.mappers = []*columnMapper{h.getNestedMapper(col, dt)}
-				bat := vectorBatch([]types.Type{types.New(tc.target, tc.width, 0)})
-				t.Cleanup(func() { bat.Clean(proc.Mp()) })
+				bat := vectorBatch([]types.Type{types.New(tc.target, tc.width, 0)}, proc.Mp())
+				t.Cleanup(func() { bat.CleanOwned() })
 				require.NoError(t, h.processRow(rows[0], bat, param, proc))
 				require.True(t, bat.Vecs[0].IsNull(0))
 				err := h.processRow(rows[1], bat, param, proc)
@@ -2291,7 +2291,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 					} else {
 						require.Nil(t, page.Dictionary())
 					}
-					vec := vector.NewVec(types.New(target, 0, 0))
+					vec := vector.NewVec(types.New(target, 0, 0), proc.Mp())
 					t.Cleanup(func() { vec.Free(proc.Mp()) })
 					require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
 					var h ParquetHandler
@@ -2326,7 +2326,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 			} {
 				t.Run(fmt.Sprintf("%s/%s", target, tc.name), func(t *testing.T) {
 					f, page := writeColumnAndGetPage(t, tc.node, []parquet.Row{{tc.value.Level(0, 0, 0)}})
-					vec := vector.NewVec(types.New(target, 0, 0))
+					vec := vector.NewVec(types.New(target, 0, 0), proc.Mp())
 					t.Cleanup(func() { vec.Free(proc.Mp()) })
 					require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
 					def := &plan.ColDef{Typ: plan.Type{Id: int32(target), Width: 0}}
@@ -2354,7 +2354,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 			{types.T_binary, 0}, {types.T_varbinary, 0},
 		} {
 			t.Run(tc.target.String(), func(t *testing.T) {
-				vec := vector.NewVec(types.New(tc.target, tc.width, 0))
+				vec := vector.NewVec(types.New(tc.target, tc.width, 0), proc.Mp())
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				require.NoError(t, appendParquetVarlenValue(proc.Ctx, vec, []byte("x"), false, proc.Mp(), *vec.GetType()))
 				require.Equal(t, []byte("x"), vec.GetBytesAt(0))
@@ -2391,8 +2391,8 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 		empty, err := reader.Open(param, proc)
 		require.NoError(t, err)
 		require.False(t, empty)
-		bat := vectorBatch([]types.Type{types.New(types.T_varchar, 8, 0), types.T_int32.ToType()})
-		t.Cleanup(func() { bat.Clean(proc.Mp()) })
+		bat := vectorBatch([]types.Type{types.New(types.T_varchar, 8, 0), types.T_int32.ToType()}, proc.Mp())
+		t.Cleanup(func() { bat.CleanOwned() })
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("seed"), false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(-1), false, proc.Mp()))
 		bat.SetRowCount(1)
@@ -2426,7 +2426,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 				} else {
 					f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{values[0].Level(0, 0, 0)}})
 				}
-				vec := vector.NewVec(types.New(tc.target, 4, 0))
+				vec := vector.NewVec(types.New(tc.target, 4, 0), proc.Mp())
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				var h ParquetHandler
 				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.target), Width: 4, NotNullable: true})
@@ -2447,7 +2447,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 			} else {
 				f, page = writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{values[0].Level(0, 0, 0)}, {values[1].Level(0, 0, 0)}})
 			}
-			vec := vector.NewVec(types.New(types.T_varchar, 4, 0))
+			vec := vector.NewVec(types.New(types.T_varchar, 4, 0), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 4, NotNullable: true})
@@ -2467,7 +2467,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 			{target: types.T_binary, want: []byte{'a', 'b', 0, 0}},
 			{target: types.T_varbinary, want: []byte{'a', 'b'}},
 		} {
-			vec := vector.NewVec(types.New(tc.target, 4, 0))
+			vec := vector.NewVec(types.New(tc.target, 4, 0), proc.Mp())
 			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target), Width: 4}}
 			require.NoError(t, appendLeafValue(parquet.ByteArrayValue([]byte("ab")), col, vec, def, proc, proc.Mp()))
 			require.Equal(t, tc.want, vec.GetBytesAt(0))
@@ -2477,7 +2477,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 
 	t.Run("text width counts UTF-8 runes", func(t *testing.T) {
 		f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.String().Type()), []parquet.Row{{parquet.ByteArrayValue([]byte("你好")).Level(0, 0, 0)}})
-		vec := vector.NewVec(types.New(types.T_varchar, 2, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 2, 0), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 2, NotNullable: true})
@@ -2490,7 +2490,7 @@ func TestParquetBoundedVarlenMapping(t *testing.T) {
 			{parquet.NullValue().Level(0, 0, 0)},
 			{parquet.ByteArrayValue([]byte("a very long value")).Level(0, 1, 0)},
 		})
-		vec := vector.NewVec(types.New(types.T_blob, 0, 0))
+		vec := vector.NewVec(types.New(types.T_blob, 0, 0), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_blob), NotNullable: false})
@@ -2644,7 +2644,7 @@ func TestParquetTimestampMillisOverflowInFastPath(t *testing.T) {
 					{parquet.Int64Value(math.MaxInt64).Level(0, 0, 0)},
 				})
 			}
-			vec := vector.NewVec(types.T_timestamp.ToType())
+			vec := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(file.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), NotNullable: true})
 			require.NotNil(t, mp)
@@ -2713,7 +2713,7 @@ func TestParquetGeometryAndDatalinkMapping(t *testing.T) {
 				var h ParquetHandler
 				mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(tc.typ.Oid), Width: tc.typ.Width, Scale: tc.typ.Scale})
 				require.NotNil(t, mapper)
-				vec := vector.NewVec(tc.typ)
+				vec := vector.NewVec(tc.typ, proc.Mp())
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				err := mapper.mapping(page, proc, vec)
 				if tc.wantErr != "" {
@@ -2755,7 +2755,7 @@ func TestParquetGeometryAndDatalinkRollback(t *testing.T) {
 				var h ParquetHandler
 				mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), NotNullable: notNull})
 				require.NotNil(t, mapper)
-				vec := vector.NewVec(oid.ToType())
+				vec := vector.NewVec(oid.ToType(), proc.Mp())
 				t.Cleanup(func() { vec.Free(proc.Mp()) })
 				require.NoError(t, vector.AppendBytes(vec, []byte("seed"), false, proc.Mp()))
 				require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
@@ -2794,7 +2794,7 @@ func TestParquetStringSetAndYearMappings(t *testing.T) {
 		NotNullable: true,
 	})
 	require.NotNil(t, setMapper)
-	setVec := vector.NewVec(types.T_uint64.ToType())
+	setVec := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 	t.Cleanup(func() { setVec.Free(proc.Mp()) })
 	require.NoError(t, setMapper.mapping(pageSet, proc, setVec))
 	require.Equal(t, []uint64{3, 2}, vector.MustFixedColWithTypeCheck[uint64](setVec))
@@ -2808,7 +2808,7 @@ func TestParquetStringSetAndYearMappings(t *testing.T) {
 		NotNullable: true,
 	})
 	require.NotNil(t, yearMapper)
-	yearVec := vector.NewVec(types.T_year.ToType())
+	yearVec := vector.NewVec(types.T_year.ToType(), proc.Mp())
 	t.Cleanup(func() { yearVec.Free(proc.Mp()) })
 	require.NoError(t, yearMapper.mapping(pageYear, proc, yearVec))
 	require.Equal(t, []types.MoYear{2024, 0}, vector.MustFixedColWithTypeCheck[types.MoYear](yearVec))
@@ -2835,7 +2835,7 @@ func TestParquetStringSetPreservesWhitespace(t *testing.T) {
 			var h ParquetHandler
 			mapper := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), Enumvalues: " a,a"})
 			require.NotNil(t, mapper)
-			vec := vector.NewVec(types.T_uint64.ToType())
+			vec := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			require.NoError(t, mapper.mapping(page, proc, vec))
 			require.Equal(t, []uint64{1, 2, 3, 0, 0}, vector.MustFixedColWithTypeCheck[uint64](vec))
@@ -3101,7 +3101,7 @@ func TestParquetTimestampToDatetimeUsesSessionTimeZone(t *testing.T) {
 						}})
 					}
 
-					vec := vector.NewVec(types.T_datetime.ToType())
+					vec := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 					var h ParquetHandler
 					mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_datetime), NotNullable: true})
 					require.NotNil(t, mp)
@@ -3273,7 +3273,7 @@ func TestParquet_Dictionary_Bool(t *testing.T) {
 		f, page := writeDictAndGetPage(t, node, vals)
 		require.NotNil(t, page.Dictionary())
 
-		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 		require.NotNil(t, mp)
@@ -3292,7 +3292,7 @@ func TestParquet_Dictionary_Bool(t *testing.T) {
 		f, page := writeColumnAndGetPage(t, node, rows)
 		require.NotNil(t, page.Dictionary())
 
-		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
 		require.NotNil(t, mp)
@@ -3322,7 +3322,7 @@ func TestParquet_Plain_Bool(t *testing.T) {
 		slicedPage := page
 		t.Cleanup(func() { parquet.Release(slicedPage) })
 
-		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 		require.NotNil(t, mp)
@@ -3345,7 +3345,7 @@ func TestParquet_Plain_Bool(t *testing.T) {
 		slicedPage := page
 		t.Cleanup(func() { parquet.Release(slicedPage) })
 
-		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
 		require.NotNil(t, mp)
@@ -3523,7 +3523,7 @@ func TestParquetRowModeLeafConversionsRejectOverflow(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(types.New(tc.target, 0, 0))
+			vec := vector.NewVec(types.New(tc.target, 0, 0), proc.Mp())
 			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target)}}
 			err := appendLeafValue(tc.value, tc.col, vec, def, proc, proc.Mp())
 			require.Error(t, err)
@@ -3551,7 +3551,7 @@ func TestParquetRowModeLeafDefinitionLevelMatchesNullness(t *testing.T) {
 		{name: "definition level overflow", value: parquet.Int32Value(1).Level(0, 2, 0), want: "exceeds maximum"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(types.T_int32.ToType())
+			vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			h := &ParquetHandler{}
 			err := h.processLeafValue(parquet.Row{tc.value}, col, vec, def, proc)
 			require.Error(t, err)
@@ -3561,7 +3561,7 @@ func TestParquetRowModeLeafDefinitionLevelMatchesNullness(t *testing.T) {
 	}
 
 	t.Run("missing nullable leaf appends null", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		h := &ParquetHandler{}
 		require.NoError(t, h.processLeafValue(parquet.Row{}, col, vec, def, proc))
@@ -3966,7 +3966,7 @@ func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	}
 	f, page := writeColumnAndGetPage(t, node, rows)
 
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
@@ -4003,7 +4003,7 @@ func TestParquet_Plain_Bool_UnexpectedNullRollsBack(t *testing.T) {
 			return 1, io.EOF
 		}),
 	}
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4029,7 +4029,7 @@ func TestParquet_Plain_Bool_UnexpectedValueKindRollsBack(t *testing.T) {
 			return 1, io.EOF
 		}),
 	}
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4057,7 +4057,7 @@ func TestParquet_Plain_Bool_DefinitionLevelValueMismatchRollsBack(t *testing.T) 
 			return 2, io.EOF
 		}),
 	}
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4082,7 +4082,7 @@ func TestParquet_Plain_Bool_DefinitionLevelMismatch(t *testing.T) {
 		levels:   []byte{1, 1},
 		numNulls: 1,
 	}
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4104,7 +4104,7 @@ func TestParquet_Plain_Bool_ValueCountMismatch(t *testing.T) {
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
 	badPage := &parquetPageWithNumValues{Page: page, numValues: 2}
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4120,7 +4120,7 @@ func TestParquet_Dictionary_Bool_IndexError(t *testing.T) {
 	}
 	f, page := writeDictAndGetPage(t, node, vals)
 
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
@@ -4143,7 +4143,7 @@ func TestParquet_Dictionary_Bool_IndexCountError(t *testing.T) {
 	}
 	f, page := writeDictAndGetPage(t, node, vals)
 
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
@@ -4167,7 +4167,7 @@ func TestParquet_Dictionary_Bool_NullToNotNull(t *testing.T) {
 	}
 	f, page := writeColumnAndGetPage(t, node, rows)
 
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
@@ -4188,7 +4188,7 @@ func TestParquet_Dictionary_Bool_ValueKindMismatch(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4208,7 +4208,7 @@ func TestParquet_Dictionary_Bool_IndexKindMismatch(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4228,7 +4228,7 @@ func TestParquet_Dictionary_Numeric_IndexKindMismatch(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4246,7 +4246,7 @@ func TestParquet_Dictionary_Numeric_ValueKindMismatch(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4264,7 +4264,7 @@ func TestParquet_Dictionary_String_ValueKindMismatch(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4286,9 +4286,9 @@ func TestParquet_Dictionary_StringMalformedOffsets(t *testing.T) {
 		dt   plan.Type
 		vec  *vector.Vector
 	}{
-		{name: "fixed", dt: plan.Type{Id: int32(types.T_int32), NotNullable: true}, vec: vector.NewVec(types.T_int32.ToType())},
-		{name: "json", dt: plan.Type{Id: int32(types.T_json), NotNullable: true}, vec: vector.NewVec(types.T_json.ToType())},
-		{name: "array", dt: plan.Type{Id: int32(types.T_array_float32), Width: 1, NotNullable: true}, vec: vector.NewVec(types.New(types.T_array_float32, 1, 0))},
+		{name: "fixed", dt: plan.Type{Id: int32(types.T_int32), NotNullable: true}, vec: vector.NewVec(types.T_int32.ToType(), proc.Mp())},
+		{name: "json", dt: plan.Type{Id: int32(types.T_json), NotNullable: true}, vec: vector.NewVec(types.T_json.ToType(), proc.Mp())},
+		{name: "array", dt: plan.Type{Id: int32(types.T_array_float32), Width: 1, NotNullable: true}, vec: vector.NewVec(types.New(types.T_array_float32, 1, 0), proc.Mp())},
 	}
 	var h ParquetHandler
 	for _, tc := range cases {
@@ -4316,7 +4316,7 @@ func TestParquet_Plain_Numeric_ValueKindMismatch(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -4378,7 +4378,7 @@ func TestParquet_Dictionary_Bool_NullableSlicedPage(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 	require.NoError(t, mp.mapping(page, proc, vec))
 	require.Equal(t, []bool{false, false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
 	require.True(t, vec.GetNulls().Contains(0))
@@ -4397,9 +4397,9 @@ func TestParquet_NullableMappingWithAllocationAccount(t *testing.T) {
 	require.NoError(t, err)
 	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	vec := vector.NewOffHeapVecWithType(types.New(types.T_bool, 0, 0))
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0), selection)
 	defer func() {
-		vec.Free(proc.Mp())
+		vec.Free(vec.MPool())
 		require.Zero(t, account.Snapshot().Used)
 		account.Seal()
 		_, err := registry.Finalize(account)
@@ -4445,9 +4445,9 @@ func TestParquet_NullableStringFixedMappingWithAllocationAccount(t *testing.T) {
 	require.NoError(t, err)
 	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	vec := vector.NewOffHeapVecWithType(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), selection)
 	defer func() {
-		vec.Free(proc.Mp())
+		vec.Free(vec.MPool())
 		require.Zero(t, account.Snapshot().Used)
 		account.Seal()
 		_, err := registry.Finalize(account)
@@ -4480,7 +4480,7 @@ func TestParquet_StringFixedMappingRollsBackOnParseError(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	require.NoError(t, vector.AppendFixed(vec, int32(99), false, proc.Mp()))
 
 	err := mp.mapping(page, proc, vec)
@@ -4498,7 +4498,7 @@ func TestParquet_StringJsonMappingRollsBackOnParseError(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	seed, err := types.ParseStringToByteJson(`{"existing":true}`)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendByteJson(vec, seed, false, proc.Mp()))
@@ -4519,7 +4519,7 @@ func TestParquet_StringArrayMappingRollsBackOnParseError(t *testing.T) {
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true})
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+	vec := vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 	seed := []float32{9, 8, 7}
 	require.NoError(t, vector.AppendArray(vec, seed, false, proc.Mp()))
 
@@ -4537,9 +4537,9 @@ func TestParquetStringMappingValidatesBeforeAllocating(t *testing.T) {
 	require.NoError(t, err)
 	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), selection)
 	defer func() {
-		vec.Free(proc.Mp())
+		vec.Free(vec.MPool())
 		require.Zero(t, account.Snapshot().Used)
 		account.Seal()
 		_, err := registry.Finalize(account)
@@ -4571,7 +4571,7 @@ func TestParquetValuesToFixedRollsBackOnConversionError(t *testing.T) {
 		require.Equal(t, [3]int64{}, [3]int64{proc.Mp().CurrNB(), bytes, objects})
 	})
 	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
 	require.NoError(t, vector.AppendFixed(vec, int32(99), false, proc.Mp()))
 
@@ -4587,7 +4587,7 @@ func TestParquetValuesToFixedRollsBackOnConversionError(t *testing.T) {
 	require.True(t, vec.GetNulls().IsEmpty())
 	t.Run("public partial overflow preserves prefix and NULL", func(t *testing.T) {
 		f, page := writeDictAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Value{parquet.FloatValue(1.5), parquet.FloatValue(128)})
-		output := vector.NewVec(types.T_int8.ToType())
+		output := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 		t.Cleanup(func() { output.Free(proc.Mp()) })
 		require.NoError(t, vector.AppendFixed(output, int8(99), false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(output, int8(0), true, proc.Mp()))
@@ -4605,7 +4605,7 @@ func TestParquetValuesToBytesAndJsonRollBackOnConversionError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bytesPage := parquet.ByteArrayType.NewPage(0, 2,
 		encoding.ByteArrayValues([]byte("onetwo"), []uint32{0, 3, 6}))
-	bytesVec := vector.NewVec(types.T_varchar.ToType())
+	bytesVec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(bytesVec, []byte("seed"), false, proc.Mp()))
 
 	err := processParquetValuesToBytes(context.Background(), &columnMapper{}, bytesPage, proc, bytesVec,
@@ -4624,7 +4624,7 @@ func TestParquetValuesToBytesAndJsonRollBackOnConversionError(t *testing.T) {
 	jsonData := append(append([]byte{}, jsonFirst...), jsonSecond...)
 	jsonPage := parquet.ByteArrayType.NewPage(0, 2,
 		encoding.ByteArrayValues(jsonData, []uint32{0, uint32(len(jsonFirst)), uint32(len(jsonData))}))
-	jsonVec := vector.NewVec(types.T_json.ToType())
+	jsonVec := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	seed, err := types.ParseStringToByteJson(`{"existing":true}`)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendByteJson(jsonVec, seed, false, proc.Mp()))
@@ -4645,7 +4645,7 @@ func TestParquetListToArrayRollsBackOnConversionError(t *testing.T) {
 		{parquet.FloatValue(2).Level(0, 1, 0)},
 	})
 
-	vec := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	vec := vector.NewVec(types.New(types.T_array_float32, 1, 0), proc.Mp())
 	seed := []float32{9}
 	require.NoError(t, vector.AppendArray(vec, seed, false, proc.Mp()))
 
@@ -4701,7 +4701,7 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 
 	got := make([]int32, 0, 3)
 	for attempts := 0; attempts < 5; attempts++ {
-		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)}, proc.Mp())
 		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, rerr)
 		vals := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
@@ -4752,7 +4752,7 @@ func TestParquet_ScanParquetFile_SteppedDictionaryBoolBatches(t *testing.T) {
 
 	got := make([]bool, 0, len(rows))
 	for attempts := 0; attempts < 5; attempts++ {
-		bat := vectorBatch([]types.Type{types.New(types.T_bool, 0, 0)})
+		bat := vectorBatch([]types.Type{types.New(types.T_bool, 0, 0)}, proc.Mp())
 		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, rerr)
 		vals := vector.MustFixedColWithTypeCheck[bool](bat.Vecs[0])
@@ -4787,7 +4787,7 @@ func TestParquet_ScanParquetFile_MappingErrorClosesPages(t *testing.T) {
 	param.Extern.Data = string(buf.Bytes())
 
 	proc := testutil.NewProc(t)
-	bat := vectorBatch([]types.Type{types.T_int64.ToType()})
+	bat := vectorBatch([]types.Type{types.T_int64.ToType()}, proc.Mp())
 
 	r := NewParquetReader(param, proc)
 	fileEmpty, err := r.Open(param, proc)
@@ -4828,7 +4828,7 @@ func TestParquet_RowGroupSelection_MappingErrorClosesPages(t *testing.T) {
 	param.Extern.Data = string(buf.Bytes())
 
 	proc := testutil.NewProc(t)
-	bat := vectorBatch([]types.Type{types.T_int64.ToType()})
+	bat := vectorBatch([]types.Type{types.T_int64.ToType()}, proc.Mp())
 
 	r := NewParquetReader(param, proc)
 	fileEmpty, err := r.Open(param, proc)
@@ -4923,7 +4923,7 @@ func TestParquet_RowGroupSelection_PagePath(t *testing.T) {
 
 	got := make([]int32, 0, 4)
 	for attempts := 0; attempts < 4; attempts++ {
-		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)}, proc.Mp())
 		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, rerr)
 		values := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
@@ -5033,7 +5033,7 @@ func TestParquet_RowGroupSelection_NestedRowMode(t *testing.T) {
 	require.False(t, fileEmpty)
 	defer r.Close()
 
-	bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)})
+	bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)}, proc.Mp())
 	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
 	require.True(t, finished)
@@ -5084,7 +5084,7 @@ func TestParquet_RowGroupSelection_NotNullViolation(t *testing.T) {
 	require.False(t, fileEmpty)
 	defer r.Close()
 
-	bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+	bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)}, proc.Mp())
 	_, err = r.ReadBatch(context.Background(), bat, proc, nil)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
@@ -5135,7 +5135,7 @@ func TestParquet_ProfileStats_PagePath(t *testing.T) {
 
 	var totalRows int
 	for attempts := 0; attempts < 5; attempts++ {
-		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)}, proc.Mp())
 		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, rerr)
 		totalRows += bat.RowCount()
@@ -5181,7 +5181,7 @@ func TestParquet_ProfileStats_RowMode(t *testing.T) {
 	require.False(t, fileEmpty)
 	defer r.Close()
 
-	bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)})
+	bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)}, proc.Mp())
 	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
 	require.True(t, finished)
@@ -5197,10 +5197,10 @@ func TestParquet_ProfileStats_RowMode(t *testing.T) {
 }
 
 // helper to build a batch with provided vector types
-func vectorBatch(ts []types.Type) *batch.Batch {
+func vectorBatch(ts []types.Type, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(ts))
 	for i, t := range ts {
-		bat.Vecs[i] = vector.NewVec(t)
+		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
 	return bat
 }
@@ -5299,7 +5299,7 @@ func scanNullableInt32Parquet(t *testing.T, data []byte, shards []*pipeline.Parq
 
 	var rows []string
 	for attempts := 0; attempts < 8; attempts++ {
-		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+		bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)}, proc.Mp())
 		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, rerr)
 		values := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
@@ -5341,7 +5341,7 @@ func scanNestedTextParquet(t *testing.T, data []byte, shards []*pipeline.Parquet
 
 	var rows []string
 	for attempts := 0; attempts < 8; attempts++ {
-		bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)})
+		bat := vectorBatch([]types.Type{types.New(types.T_text, 0, 0)}, proc.Mp())
 		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, rerr)
 		for i := 0; i < bat.RowCount(); i++ {
@@ -5395,7 +5395,7 @@ func Test_parquet_copyDictPageToVec_indexError(t *testing.T) {
 	// Build a simple page context using int32 values as indexes
 	st := parquet.Int32Type
 	page := st.NewPage(0, 3, encoding.Int32Values([]int32{0, 2, 5}))
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	mp := &columnMapper{srcNull: false, dstNull: false, maxDefinitionLevel: 0}
 
 	// dictLen=3, but index 5 is out of range -> error
@@ -5407,7 +5407,7 @@ func Test_parquet_copyDictPageToVec_indexCountError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	st := parquet.Int32Type
 	page := st.NewPage(0, 3, encoding.Int32Values([]int32{0, 2, 1}))
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	mp := &columnMapper{srcNull: false, dstNull: false, maxDefinitionLevel: 0}
 
 	err := copyDictPageToVec[int32](mp, page, proc, vec, 3, []int32{0, 2}, func(idx int32) int32 { return idx })
@@ -5426,7 +5426,7 @@ func Test_parquet_copyDictPageToVec_definitionLevelMismatch(t *testing.T) {
 		levels:   []byte{0, 0, 0},
 		numNulls: 1,
 	}
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
 
 	err := copyDictPageToVec[int32](mp, pageWithBadLevels, proc, vec, 3, []int32{0, 2}, func(idx int32) int32 { return idx })
@@ -5440,7 +5440,7 @@ func Test_parquet_copyPageToVecMap_valueCountError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	st := parquet.Int32Type
 	page := st.NewPage(0, 3, encoding.Int32Values([]int32{1, 2, 3}))
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	mp := &columnMapper{srcNull: false, dstNull: false, maxDefinitionLevel: 0}
 
 	err := copyPageToVec(mp, &parquetPageWithData{
@@ -5462,7 +5462,7 @@ func Test_parquet_copyPageToVecMap_definitionLevelCountError(t *testing.T) {
 		levels:   []byte{1},
 		numNulls: 1,
 	}
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
 
 	err := copyPageToVec(mp, pageWithBadLevels, proc, vec, []int32{1, 2})
@@ -6192,7 +6192,7 @@ func Test_copyPageToVecMap_NullsHandled(t *testing.T) {
 	page, err := col.Pages().ReadPage()
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{Id: int32(types.T_int32) /* nullable */})
 	require.NotNil(t, mp)
@@ -6222,12 +6222,12 @@ func Test_getData_FinishAndOffset(t *testing.T) {
 	require.NoError(t, h.prepare(param))
 
 	// First call -> one row, not finished yet
-	bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+	bat := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)}, proc.Mp())
 	require.NoError(t, h.getData(bat, param, proc))
 	require.Equal(t, 1, bat.RowCount())
 	require.True(t, h.offset < h.file.NumRows(), "should not be finished yet")
 	// Second call -> last row and finish
-	bat2 := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)})
+	bat2 := vectorBatch([]types.Type{types.New(types.T_int32, 0, 0)}, proc.Mp())
 	require.NoError(t, h.getData(bat2, param, proc))
 	require.Equal(t, 1, bat2.RowCount())
 	require.True(t, h.offset >= h.file.NumRows(), "should be finished")
@@ -6266,7 +6266,7 @@ func TestParquet_Timestamp_NotAdjustedToUTC(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
 		require.NotNil(t, mp, "mapper should not be nil for IsAdjustedToUTC=false")
@@ -6303,7 +6303,7 @@ func TestParquet_Timestamp_NotAdjustedToUTC(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+		vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
 		require.NotNil(t, mp)
@@ -6359,7 +6359,7 @@ func TestParquet_Timestamp_NotAdjustedToUTC_AllUnits(t *testing.T) {
 			f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+			vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
 			require.NotNil(t, mp, "mapper should not be nil for %s", tc.name)
@@ -6392,7 +6392,7 @@ func TestParquet_Timestamp_NotAdjustedToUTC_Dictionary(t *testing.T) {
 	}
 	f, page := writeDictAndGetPage(t, node, vals)
 
-	vec := vector.NewVec(types.New(types.T_timestamp, 0, 0))
+	vec := vector.NewVec(types.New(types.T_timestamp, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
 	require.NotNil(t, mp)
@@ -6423,7 +6423,7 @@ func TestParquet_Timestamp_NotAdjustedToUTC_UsesValueTimezoneOffset(t *testing.T
 
 	assertMappedValues := func(t *testing.T, f *parquet.File, page parquet.Page, expected []string) {
 		t.Helper()
-		vec := vector.NewVec(types.T_timestamp.ToType())
+		vec := vector.NewVec(types.T_timestamp.ToType(), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp)})
 		require.NotNil(t, mp)
@@ -6639,7 +6639,7 @@ func TestParquet_ScanEmptyFile(t *testing.T) {
 	param.Extern.Data = string(buf.Bytes())
 
 	proc := testutil.NewProc(t)
-	bat := vectorBatch([]types.Type{types.New(types.T_int64, 0, 0)})
+	bat := vectorBatch([]types.Type{types.New(types.T_int64, 0, 0)}, proc.Mp())
 
 	// ParquetReader.Open should return fileEmpty=true for empty files
 	r := NewParquetReader(param, proc)

@@ -41,7 +41,7 @@ func TestAggregateCollationAdmission(t *testing.T) {
 						require.Zero(t, mp.CurrNB())
 						mpool.DeleteMPool(mp)
 					}()
-					input := vector.NewVec(typ)
+					input := vector.NewVec(typ, mp)
 					defer input.Free(mp)
 					require.NoError(t, vector.AppendBytes(input, []byte("A"), false, mp))
 					source, err := MakeAgg(mp, id, false, typ)

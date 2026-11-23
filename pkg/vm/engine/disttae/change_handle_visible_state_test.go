@@ -573,7 +573,7 @@ func TestVisibleStateChangesHandleCloseNilMPoolAndTypedNilReader(t *testing.T) {
 		currentAfter: func() *batch.Batch {
 			bat := batch.NewWithSize(1)
 			bat.SetAttributes([]string{"a"})
-			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), nil)
 			bat.SetRowCount(0)
 			return bat
 		}(),
@@ -591,8 +591,8 @@ func makeInt32Batch(t *testing.T, mp *mpool.MPool, rows [][2]int32) *batch.Batch
 
 	bat := batch.NewWithSize(2)
 	bat.SetAttributes([]string{"a", "b"})
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for _, row := range rows {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row[0], false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], row[1], false, mp))
@@ -612,9 +612,9 @@ func makeVisibleStateBatch(
 
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes([]string{"__mo_rowid", "id", "v"})
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i, row := range rows {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowIDs[i], false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], row[0], false, mp))
@@ -628,10 +628,10 @@ func makeSchemaEvolutionBatch(t *testing.T, mp *mpool.MPool, rows [][3]int32) *b
 	t.Helper()
 	bat := batch.NewWithSize(4)
 	bat.SetAttributes([]string{catalog.Row_ID, "id", "branch_only", "v"})
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[3] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.T_int32.ToType(), mp)
 	for i, row := range rows {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTestRowid(2, int64(i+1)), false, mp))
 		for col := range row {
@@ -738,9 +738,9 @@ func makeNullableRowIDBatch(t *testing.T, mp *mpool.MPool, rowIDIsNull bool) *ba
 	t.Helper()
 	bat := batch.NewWithSize(3)
 	bat.SetAttributes([]string{catalog.Row_ID, "id", "v"})
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTestRowid(1, 1), rowIDIsNull, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int32(10), false, mp))

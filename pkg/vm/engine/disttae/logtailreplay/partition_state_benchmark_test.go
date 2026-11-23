@@ -64,9 +64,9 @@ func BenchmarkPartitionStateHandleRowsDelete(b *testing.B) {
 func newReplayInsertBatch(b *testing.B, pool *mpool.MPool) (*api.Batch, func()) {
 	b.Helper()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
 
 	segmentID := objectio.NewSegmentid()
 	blockID := objectio.NewBlockid(segmentID, 0, 0)
@@ -92,10 +92,10 @@ func newReplayInsertBatch(b *testing.B, pool *mpool.MPool) (*api.Batch, func()) 
 func newReplayDeleteBatch(b *testing.B, pool *mpool.MPool) (*api.Batch, func()) {
 	b.Helper()
 
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
+	tsVec := vector.NewVec(types.T_TS.ToType(), pool)
+	pkVec := vector.NewVec(types.T_int64.ToType(), pool)
+	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType(), pool)
 
 	segmentID := objectio.NewSegmentid()
 	blockID := objectio.NewBlockid(segmentID, 0, 0)
@@ -141,8 +141,8 @@ func BenchmarkTombstoneObjectReplayWithUnrelatedDeletes(b *testing.B) {
 				packer := types.NewPacker()
 				defer packer.Close()
 				vecs := []*vector.Vector{
-					vector.NewVec(types.T_Rowid.ToType()), vector.NewVec(types.T_TS.ToType()),
-					vector.NewVec(types.T_int64.ToType()), vector.NewVec(types.T_Rowid.ToType()),
+					vector.NewVec(types.T_Rowid.ToType(), pool), vector.NewVec(types.T_TS.ToType(), pool),
+					vector.NewVec(types.T_int64.ToType(), pool), vector.NewVec(types.T_Rowid.ToType(), pool),
 				}
 				defer func() {
 					for _, v := range vecs {

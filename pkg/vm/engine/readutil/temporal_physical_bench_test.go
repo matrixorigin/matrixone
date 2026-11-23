@@ -58,8 +58,8 @@ func BenchmarkTemporalPhysicalReaderWork(b *testing.B) {
 			writer := ioutil.ConstructWriter(0, []uint16{0, 1}, 0, false, false, fs)
 			bat := batch.NewWithSize(2)
 			defer bat.Clean(proc.Mp())
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			for i := 0; i < blocks; i++ {
 				require.NoError(b, vector.AppendBytes(bat.Vecs[0], encode(i), false, proc.Mp()))
 				require.NoError(b, vector.AppendFixed(bat.Vecs[1], int64(i), false, proc.Mp()))

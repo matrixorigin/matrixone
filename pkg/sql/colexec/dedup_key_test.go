@@ -40,7 +40,7 @@ func TestFormatDedupKeyDecodesFloatIdentity(t *testing.T) {
 	packer.EncodeFloat64(math.Copysign(0, -1))
 	float64Key := append([]byte(nil), packer.Bytes()...)
 
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), pool)
 	defer vec.Free(pool)
 	require.NoError(t, vector.AppendBytes(vec, float32Key, false, pool))
 	require.NoError(t, vector.AppendBytes(vec, float64Key, false, pool))
@@ -58,7 +58,7 @@ func TestFormatDedupKeyRejectsMalformedEncodedIdentity(t *testing.T) {
 	pool := mpool.MustNewZero()
 	_, err := FormatDedupKey(nil, 0, []plan.Type{{Id: int32(types.T_int64)}})
 	require.Error(t, err)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), pool)
 	defer vec.Free(pool)
 	require.NoError(t, vector.AppendBytes(vec, []byte{0xff}, false, pool))
 
@@ -70,7 +70,7 @@ func TestFormatDedupKeyRejectsMalformedEncodedIdentity(t *testing.T) {
 	// A truncated integer tuple used to panic inside StringifyTuple while
 	// rendering an already-rejected IGNORE row. Diagnostic formatting must stay
 	// best-effort and return an error instead.
-	truncated := vector.NewVec(types.T_varchar.ToType())
+	truncated := vector.NewVec(types.T_varchar.ToType(), pool)
 	defer truncated.Free(pool)
 	require.NoError(t, vector.AppendBytes(truncated, []byte{0x3b}, false, pool))
 	_, err = FormatDedupKey(truncated, 0, []plan.Type{
@@ -89,8 +89,8 @@ func TestFormatDedupKeyRejectsMalformedEncodedIdentity(t *testing.T) {
 func TestFormatDedupKeyFromLogicalRow(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 	require.NoError(t, vector.AppendBytesList(bat.Vecs[0], [][]byte{[]byte("Alpha"), []byte("éclair"), []byte("a\x00\n\xffb")}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int32{1, 7, 9}, nil, proc.Mp()))

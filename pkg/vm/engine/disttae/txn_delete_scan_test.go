@@ -20,6 +20,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -40,7 +42,7 @@ func BenchmarkDeleteTableWritesSparseWorkspace(b *testing.B) {
 	workspace.SetSegment(colexec.TxnWorkspaceSegment)
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
 	b.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -83,7 +85,7 @@ func BenchmarkDeleteTableWritesGuardBoundary(b *testing.B) {
 	workspace.SetSegment(colexec.TxnWorkspaceSegment)
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
 	b.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -187,7 +189,7 @@ func BenchmarkDeleteTableWritesNamespaceGuard(b *testing.B) {
 	workspace.SetBlkOffset(2)
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
 	b.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -264,7 +266,7 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	makeBatch := func(ids ...types.Rowid) *batch.Batch {
 		bat := batch.NewWithSize(1)
 		bat.Attrs = []string{objectio.PhysicalAddr_Attr}
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], ids, nil, proc.Mp()))
 		bat.SetRowCount(len(ids))
 		t.Cleanup(func() { bat.Clean(proc.Mp()) })
@@ -273,7 +275,7 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	insert := makeBatch(memory)
 	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: insert}}
 	for _, ids := range [][]types.Rowid{{committed, spilled}, {committed, spilled, memory}} {
-		out, err := txn.deleteBatch(makeBatch(ids...), 7, 42)
+		out, err := txn.deleteBatch(makeBatch(ids...), 7, 42, proc.Mp())
 		require.NoError(t, err)
 		require.Equal(t, []types.Rowid{committed}, vector.MustFixedColWithTypeCheck[types.Rowid](out.Vecs[0]))
 	}
@@ -327,7 +329,7 @@ func TestDeleteTableWritesNamespaceGuard(t *testing.T) {
 				for i := 0; i < 8; i++ {
 					b := batch.NewWithSize(1)
 					b.Attrs = []string{objectio.PhysicalAddr_Attr}
-					b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+					b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 					require.NoError(t, vector.AppendFixedList(b.Vecs[0], []types.Rowid{rowID(true, 1, 0), hit, rowID(true, 1, 2)}, nil, proc.Mp()))
 					b.SetRowCount(3)
 					t.Cleanup(func() { b.Clean(proc.Mp()) })
@@ -403,10 +405,10 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	rows[0].SetRowOffset(0)
 	rows[1].SetRowOffset(1)
 	data := types.EncodeSlice(rows[:])
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0], err = vector.NewBorrowedFixedVector(types.T_Rowid.ToType(), len(rows), data)
+	bat.Vecs[0], err = vector.NewVecWithData(types.T_Rowid.ToType(), len(rows), data, nil, nil), error(nil)
 	require.NoError(t, err)
 	bat.SetRowCount(len(rows))
 	defer func() {

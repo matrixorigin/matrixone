@@ -276,7 +276,7 @@ func TestBoundedWorkspaceFailureRetainsNamesWithoutDeleting(t *testing.T) {
 
 func boundedInput(t *testing.T, mp *mpool.MPool, values ...string) *batch.Batch {
 	t.Helper()
-	bat := batch.NewWithSchema(false, []string{"id", "value"}, []types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+	bat := batch.NewWithSchema([]string{"id", "value"}, []types.Type{types.T_int32.ToType(), types.T_text.ToType()}, mp)
 	for i, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(value), false, mp))
@@ -571,7 +571,7 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 			mp := mpool.MustNewZero()
 			attrs := []string{"id", "value"}
 			typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-			input := batch.NewWithSchema(false, attrs, typs)
+			input := batch.NewWithSchema(attrs, typs, mp)
 			defer input.Clean(mp)
 			for i := 0; i < 4; i++ {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(3-i), false, mp))
@@ -620,7 +620,7 @@ func TestBoundedRunDoesNotRepeatedlyChargeDeadAliasedArea(t *testing.T) {
 		t.Run(fmt.Sprintf("null=%v", nullsOnly), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_text.ToType()
-			input := batch.NewWithSchema(false, []string{"value"}, []types.Type{typ})
+			input := batch.NewWithSchema([]string{"value"}, []types.Type{typ}, mp)
 			defer input.Clean(mp)
 			const rows = objectio.BlockMaxRows
 			alias, err := vector.NewConstBytes(typ, []byte(strings.Repeat("x", 16360)), rows, mp)
@@ -847,7 +847,7 @@ func TestBoundedRunSortFailureReleasesAndResets(t *testing.T) {
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	attrs := []string{"id", "value"}
 	typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-	input := batch.NewWithSchema(true, attrs, typs)
+	input := batch.NewWithSchema(attrs, typs, mp)
 	t.Cleanup(func() { input.Clean(mp) })
 	const rows = 128
 	for i := 0; i < rows; i++ {

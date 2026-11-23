@@ -334,7 +334,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					!ctr.checkBuildArea && needsOutputAreaCheck(hashJoin.ResultCols, bat, 0, probePayloadCopiedOnce)
 			}
 
-			if err = hashJoin.resetResultBat(); err != nil {
+			if err = hashJoin.resetResultBat(proc); err != nil {
 				return result, err
 			}
 			for i, rp := range hashJoin.ResultCols {
@@ -1790,7 +1790,7 @@ func (ctr *container) finalize(hashJoin *HashJoin, proc *process.Process, result
 	if err != nil {
 		return err
 	}
-	if err := hashJoin.resetResultBat(); err != nil {
+	if err := hashJoin.resetResultBat(proc); err != nil {
 		return err
 	}
 	rowCnt := 0
@@ -2079,7 +2079,11 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	return nil
 }
 
-func (hashJoin *HashJoin) resetResultBat() error {
+func (hashJoin *HashJoin) resetResultBat(proc *process.Process) error {
+	resultMP, err := hashJoin.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	ctr := &hashJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
@@ -2088,17 +2092,18 @@ func (hashJoin *HashJoin) resetResultBat() error {
 			ctr.resBat.Vecs[i].SetLength(0)
 		}
 	} else {
-		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))
+		ctr.resBat = batch.NewWithSize(len(hashJoin.ResultCols))
+		ctr.resBatMP = resultMP
 		ctr.outputRowLimit = colexec.DefaultBatchSize
 
 		for i, rp := range hashJoin.ResultCols {
 			switch rp.Rel {
 			case 0:
-				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.LeftTypes[rp.Pos])
+				ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.LeftTypes[rp.Pos], resultMP)
 			case 1:
-				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.RightTypes[rp.Pos])
+				ctr.resBat.Vecs[i] = vector.NewVec(hashJoin.RightTypes[rp.Pos], resultMP)
 			case -1:
-				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+				ctr.resBat.Vecs[i] = vector.NewVec(types.T_bool.ToType(), resultMP)
 			}
 			if !hashJoin.IsShuffle {
 				if width := ctr.resBat.Vecs[i].GetType().TypeSize(); width > 0 {

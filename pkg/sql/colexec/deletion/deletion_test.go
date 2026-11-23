@@ -129,6 +129,7 @@ func TestNormalDeletion(t *testing.T) {
 	_, err = vm.Exec(&arg, proc)
 	require.NoError(t, err)
 	arg.Free(proc, false, nil)
+	freeTestChildren(&arg, proc)
 	require.Nil(t, arg.ctr.source)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
@@ -170,9 +171,18 @@ func TestNormalDeletionResetErrorKeepsHandle(t *testing.T) {
 	require.Same(t, firstSource, arg.ctr.source)
 	require.Equal(t, 1, factory.newHandleCalls)
 	arg.Free(proc, true, resetErr)
+	freeTestChildren(&arg, proc)
 	require.Nil(t, arg.ctr.source)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+// freeTestChildren releases the mock children's batches; operators do not
+// free their children.
+func freeTestChildren(arg *Deletion, proc *process.Process) {
+	for _, child := range arg.Children {
+		child.Free(proc, false, nil)
+	}
 }
 
 func resetChildren(arg *Deletion, m *mpool.MPool) {
@@ -212,8 +222,8 @@ func TestFlushCreatesTombstoneWriterForFirstBlock(t *testing.T) {
 	blockID := types.BuildTestBlockid(1, 1)
 	rowID := types.NewRowid(&blockID, 0)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(7), false, proc.Mp()))
 	bat.SetRowCount(1)

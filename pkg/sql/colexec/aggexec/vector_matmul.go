@@ -2385,7 +2385,7 @@ func (exec *vectorMatmulExec) Flush() (_ []*vector.Vector, retErr error) {
 	enc := &vectorMatmulJSON{sorted: sorted}
 	empty := exec.emptyState()
 	for x, state := range exec.state {
-		result, err := exec.allocation.newVector(exec.retType)
+		result, err := exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}

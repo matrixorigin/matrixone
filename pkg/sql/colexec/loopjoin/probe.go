@@ -210,7 +210,7 @@ func (ctr *container) evalConditionWindow(
 	ownedWindow := window
 	defer func() {
 		if ownedWindow != nil {
-			ownedWindow.Clean(proc.Mp())
+			ownedWindow.FreeWindow()
 			window = nil
 		}
 	}()

@@ -881,7 +881,7 @@ func TestPreparedNtileParameter(t *testing.T) {
 			t.Cleanup(stmt.Free)
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
 			proc.SetPrepareParams(params)

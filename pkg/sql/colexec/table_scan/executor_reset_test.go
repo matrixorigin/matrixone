@@ -53,8 +53,8 @@ func TestTableScanResetRetainsFilterExecutor(t *testing.T) {
 	arg.ctr.allFilterExecutors[0] = executor
 	for i := range 2 {
 		func() {
-			input, _ := orLikeScanBatch(t, proc, 2, "pattern", false)
-			defer input.Clean(proc.Mp())
+			input, _ := orLikeScanBatch(t, arg.mp(proc), 2, "pattern", false)
+			defer input.Clean(arg.mp(proc))
 			orLikeScanEval(t, proc, arg, input, false, []int64{0})
 		}()
 		arg.Reset(proc, false, nil)

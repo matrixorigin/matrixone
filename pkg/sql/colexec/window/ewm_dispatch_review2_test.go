@@ -98,6 +98,7 @@ func ewmReviewWire(
 	t.Cleanup(func() {
 		bat.Clean(proc.Mp())
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 	})
 	return arg
 }
@@ -108,14 +109,14 @@ func ewmRunRange(
 	t.Helper()
 	vec, err := arg.ctr.processFuncRange(0, arg, proc, arg.OpAnalyzer, start, end)
 	require.NoError(t, err)
-	t.Cleanup(func() { vec.Free(proc.Mp()) })
+	t.Cleanup(func() { vec.Free(vec.MPool()) })
 	require.Equal(t, end-start, vec.Length())
 	return vector.MustFixedColWithTypeCheck[float64](vec)
 }
 
 func ewmFloatVec(t *testing.T, mp *mpool.MPool, vals ...float64) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(types.T_float64.ToType())
+	vec := vector.NewVec(types.T_float64.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -124,7 +125,7 @@ func ewmFloatVec(t *testing.T, mp *mpool.MPool, vals ...float64) *vector.Vector 
 
 func ewmInt64Vec(t *testing.T, mp *mpool.MPool, vals ...int64) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -133,7 +134,7 @@ func ewmInt64Vec(t *testing.T, mp *mpool.MPool, vals ...int64) *vector.Vector {
 
 func ewmInt32Vec(t *testing.T, mp *mpool.MPool, vals ...int32) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -142,7 +143,7 @@ func ewmInt32Vec(t *testing.T, mp *mpool.MPool, vals ...int32) *vector.Vector {
 
 func ewmUint64Vec(t *testing.T, mp *mpool.MPool, vals ...uint64) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(types.T_uint64.ToType())
+	vec := vector.NewVec(types.T_uint64.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -152,7 +153,7 @@ func ewmUint64Vec(t *testing.T, mp *mpool.MPool, vals ...uint64) *vector.Vector 
 // ewmStrVec builds a nullable varchar vector; "" marks a NULL key.
 func ewmStrVec(t *testing.T, mp *mpool.MPool, vals ...string) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, v := range vals {
 		if v == "" {
 			require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
@@ -190,7 +191,7 @@ func TestEwmDispatchConstantVectors(t *testing.T) {
 		[][]*vector.Vector{{keys}}, constNullX, nil, 4, []int64{0}, []int64{0, 1, 2, 3})
 	vec, err := arg.ctr.processFuncRange(0, arg, proc, arg.OpAnalyzer, 0, 4)
 	require.NoError(t, err)
-	t.Cleanup(func() { vec.Free(proc.Mp()) })
+	t.Cleanup(func() { vec.Free(vec.MPool()) })
 	for row := 0; row < vec.Length(); row++ {
 		require.True(t, vec.IsNull(uint64(row)), "constant NULL x row %d", row)
 	}
@@ -225,6 +226,8 @@ func TestEwmDispatchConstantVectors(t *testing.T) {
 	// constant ORDER BY key in event-time mode: one instant, one peer
 	// group; adjust=true publishes the mass-normalized batch mean
 	proc, mp = ewmReviewProc(t)
+	constKey, err = vector.NewConstFixed(types.T_int64.ToType(), int64(9), 3, mp)
+	require.NoError(t, err)
 	x = ewmFloatVec(t, mp, 1, 2, 3)
 	arg = ewmReviewWire(t, proc, "ewmmean",
 		aggexec.EwmConfig{Mode: aggexec.EwmModeTime, HalfLife: 10, Adjust: true},
@@ -364,8 +367,8 @@ func TestEwmDispatchStagingCancellation(t *testing.T) {
 		values[i] = float64(i)
 	}
 	values[rows-1] = math.NaN()
-	keyVec := vector.NewVec(types.T_int64.ToType())
-	xVec := vector.NewVec(types.T_float64.ToType())
+	keyVec := vector.NewVec(types.T_int64.ToType(), mp)
+	xVec := vector.NewVec(types.T_float64.ToType(), mp)
 	for i := range keys {
 		require.NoError(t, vector.AppendFixed(keyVec, keys[i], false, mp))
 		require.NoError(t, vector.AppendFixed(xVec, values[i], false, mp))

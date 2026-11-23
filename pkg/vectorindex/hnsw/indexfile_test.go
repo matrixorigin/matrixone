@@ -137,10 +137,10 @@ func TestIndexFileCacheLifecycle(t *testing.T) {
 	}
 	runSql = func(*sqlexec.SqlProcess, string) (executor.Result, error) {
 		bat := batch.NewWithSize(4)
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(written[0].IndexID), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(written[0].Checksum), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(1), false, mp))

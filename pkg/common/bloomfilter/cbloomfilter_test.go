@@ -462,7 +462,7 @@ func TestCBloomFilter_UnmarshalError(t *testing.T) {
 
 func TestCBloomFilter_AddVectorWithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), mp)
 	defer vec.Free(mp)
 
 	count := 8192
@@ -506,7 +506,7 @@ func TestCBloomFilter_AddVectorWithNulls(t *testing.T) {
 
 func TestCBloomFilter_TestAndAddVectorWithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), mp)
 	defer vec.Free(mp)
 
 	count := 8192
@@ -553,7 +553,7 @@ func TestCBloomFilter_TestAndAddVectorWithNulls(t *testing.T) {
 
 func TestCBloomFilter_AddVarlenaVectorWithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+	vec := vector.NewVec(types.New(types.T_varchar, 0, 0), mp)
 	defer vec.Free(mp)
 
 	count := 8192
@@ -595,7 +595,7 @@ func TestCBloomFilter_AddVarlenaVectorWithNulls(t *testing.T) {
 
 func TestCBloomFilter_TestAndAddVarlenaVectorWithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+	vec := vector.NewVec(types.New(types.T_varchar, 0, 0), mp)
 	defer vec.Free(mp)
 
 	count := 8192
@@ -861,7 +861,7 @@ func TestCBloomFilterConstVector(t *testing.T) {
 		require.NoError(t, err)
 		defer constV.Free(mp)
 
-		flatV := vector.NewVec(int64Typ)
+		flatV := vector.NewVec(int64Typ, mp)
 		defer flatV.Free(mp)
 		for i := 0; i < 3; i++ {
 			require.NoError(t, vector.AppendFixed[int64](flatV, 99, false, mp))
@@ -883,7 +883,7 @@ func TestCBloomFilterConstVector(t *testing.T) {
 		require.NoError(t, err)
 		defer constV.Free(mp)
 
-		flatV := vector.NewVec(varTyp)
+		flatV := vector.NewVec(varTyp, mp)
 		defer flatV.Free(mp)
 		for i := 0; i < 3; i++ {
 			require.NoError(t, vector.AppendBytes(flatV, []byte("key"), false, mp))
@@ -943,7 +943,7 @@ func TestCBloomFilterConstVector(t *testing.T) {
 			return vector.NewConstFixed[int64](int64Typ, 99, 1, mp)
 		})
 		defer empty.Free(mp)
-		real99 := vector.NewVec(int64Typ)
+		real99 := vector.NewVec(int64Typ, mp)
 		defer real99.Free(mp)
 		require.NoError(t, vector.AppendFixed[int64](real99, 99, false, mp))
 		assertZeroLenNoop(t, empty, real99)
@@ -954,7 +954,7 @@ func TestCBloomFilterConstVector(t *testing.T) {
 			return vector.NewConstBytes(varTyp, []byte("key"), 1, mp)
 		})
 		defer empty.Free(mp)
-		realKey := vector.NewVec(varTyp)
+		realKey := vector.NewVec(varTyp, mp)
 		defer realKey.Free(mp)
 		require.NoError(t, vector.AppendBytes(realKey, []byte("key"), false, mp))
 		assertZeroLenNoop(t, empty, realKey)
@@ -972,7 +972,7 @@ func TestCBloomFilterEmptyFixedVector(t *testing.T) {
 
 	// fixed-width (the issue's repro) plus variable-length, for completeness.
 	for _, typ := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()} {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mpool.MustNewZero())
 		called := false
 		cb := func(bool, bool, int) { called = true }
 

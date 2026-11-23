@@ -57,7 +57,7 @@ func execWithExplicitPublicationAccountLocks(ctx context.Context, bh BackgroundE
 		tableID := rel.GetTableID(ctx)
 		pkType := types.T_int32.ToType()
 		keys := batch.NewWithSize(1)
-		keys.Vecs[0] = vector.NewVec(pkType)
+		keys.Vecs[0] = vector.NewVec(pkType, proc.Mp())
 		defer keys.Clean(proc.Mp())
 		for chunk := range slices.Chunk(ids, int(proc.GetLockService().GetConfig().MaxLockRowCount)) {
 			keys.Vecs[0].ResetWithSameType()

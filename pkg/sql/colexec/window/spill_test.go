@@ -64,6 +64,7 @@ func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -91,6 +92,7 @@ func TestWindowOrderSpillReleasesConsumedMaterializedInput(t *testing.T) {
 
 	t.Cleanup(func() {
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		input.Clean(proc.Mp())
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -180,6 +182,7 @@ func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				child.Free(proc, true, err)
+				colexec.FreeMockChildren(child)
 				arg.Free(proc, true, err)
 			})
 			require.NoError(t, arg.Prepare(proc))
@@ -233,6 +236,7 @@ func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())

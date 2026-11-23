@@ -35,7 +35,7 @@ func TestPreparedPaginationScanBoundRebindAndOverflow(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)
 	c.isPrepare = false
 	c.pn = &plan.Plan{IsPrepare: true}
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	c.proc.SetPrepareParams(params)
 	t.Cleanup(func() {
 		c.proc.SetPrepareParams(nil)
@@ -84,7 +84,7 @@ func TestPreparedPaginationScanBoundRebindAndOverflow(t *testing.T) {
 func TestPreparedPaginationTopRebindsCurrentBounds(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)
 	c.isPrepare = false
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	c.proc.SetPrepareParams(params)
 	t.Cleanup(func() {
 		c.proc.SetPrepareParams(nil)
@@ -176,7 +176,7 @@ func TestPreparedPaginationTopRebindsCurrentBounds(t *testing.T) {
 
 func TestPreparedPaginationTopBoundMatchesRuntimeConversion(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	c.proc.SetPrepareParams(params)
 	t.Cleanup(func() {
 		c.proc.SetPrepareParams(nil)
@@ -226,7 +226,7 @@ func TestPreparedPaginationTopBoundMatchesRuntimeConversion(t *testing.T) {
 
 func TestPreparedPaginationTopBoundRejectsUnprovedConversions(t *testing.T) {
 	c := newMergeTopFallbackTestCompile(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 	c.proc.SetPrepareParams(params)
 	t.Cleanup(func() {
 		c.proc.SetPrepareParams(nil)
@@ -262,7 +262,7 @@ func TestPreparedPaginationTopBoundRejectsUnprovedConversions(t *testing.T) {
 	_, _, ok = preparedPaginationTopBound(c.proc, limit)
 	require.False(t, ok, "binary-number transport is not decimal text")
 	c.proc.SetPrepareParams(params)
-	binaryTyped := vector.NewVec(types.T_varbinary.ToType())
+	binaryTyped := vector.NewVec(types.T_varbinary.ToType(), c.proc.Mp())
 	require.NoError(t, vector.AppendBytes(binaryTyped, []byte("127"), false, c.proc.Mp()))
 	typed := batch.NewWithSize(1)
 	typed.Vecs[0] = binaryTyped
@@ -284,15 +284,15 @@ func installPaginationTypedParam(t *testing.T, proc *process.Process, kind types
 	case types.StringConversionInteger:
 		n, err := strconv.ParseInt(value, 10, 64)
 		require.NoError(t, err)
-		vec = vector.NewVec(types.T_int64.ToType())
+		vec = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, n, false, mp))
 	case types.StringConversionBoolean:
-		vec = vector.NewVec(types.T_bool.ToType())
+		vec = vector.NewVec(types.T_bool.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, value != "0", false, mp))
 	case types.StringConversionFloat:
 		f, err := strconv.ParseFloat(value, 64)
 		require.NoError(t, err)
-		vec = vector.NewVec(types.T_float64.ToType())
+		vec = vector.NewVec(types.T_float64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, f, false, mp))
 	default:
 		t.Fatalf("unsupported kind %v", kind)

@@ -44,7 +44,7 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 			large := jsonAdmissionValue(t, `{"keep":"`+strings.Repeat("x", 32<<10)+`"}`)
 			switch operation {
 			case "snapshot":
-				source := NewVec(types.T_json.ToType())
+				source := NewVec(types.T_json.ToType(), mp)
 				defer source.Free(mp)
 				require.NoError(t, AppendBytes(source, large, false, mp))
 				before := mp.CurrNB()
@@ -86,7 +86,7 @@ func TestJSONReaderTransientAdmissionCoversBacking(t *testing.T) {
 				} else {
 					materialized, err := reader.Materialize(mp)
 					if materialized != nil {
-						materialized.Free(mp)
+						materialized.Free(materialized.MPool())
 					}
 					require.ErrorIs(t, err, want)
 				}
@@ -111,7 +111,7 @@ func TestJSONReaderTransientMutableLifetime(t *testing.T) {
 		live += size
 		return func() { live -= size }, nil
 	}
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	large := jsonAdmissionValue(t, `{"keep":"`+strings.Repeat("x", 16<<10)+`"}`)
 	require.NoError(t, AppendBytes(source, large, false, mp))
@@ -130,7 +130,10 @@ func TestJSONReaderTransientMutableLifetime(t *testing.T) {
 	defer reader.Close()
 	materialized, err := reader.Materialize(mp)
 	require.NoError(t, err)
-	defer materialized.Free(mp)
+	// The result belongs to the reader's admission view; later writes go
+	// through the vector's own pool.
+	mmp := materialized.MPool()
+	defer materialized.Free(mmp)
 	reader.Close()
 	require.GreaterOrEqual(t, live, uint64(materialized.Allocated()))
 	require.Equal(t, large, materialized.GetBytesAt(0))
@@ -138,12 +141,12 @@ func TestJSONReaderTransientMutableLifetime(t *testing.T) {
 	before := live
 	limit = live
 	tooLarge := jsonAdmissionValue(t, `{"keep":"`+strings.Repeat("y", 128<<10)+`"}`)
-	require.ErrorIs(t, AppendBytes(materialized, tooLarge, false, mp), want)
+	require.ErrorIs(t, AppendBytes(materialized, tooLarge, false, mmp), want)
 	require.Equal(t, before, live)
 	require.Equal(t, large, materialized.GetBytesAt(0))
 	materialized.ResetWithSameType()
 	require.Positive(t, live, "reset retains admitted backing")
-	materialized.Free(mp)
+	materialized.Free(mmp)
 	require.Zero(t, live)
 }
 

@@ -43,7 +43,7 @@ func TestConstGroupingSelectionCopies(t *testing.T) {
 				case "rollup":
 					source = NewRollupConst(typ, 5, mp)
 				case "flat-control":
-					source = NewVec(typ)
+					source = NewVec(typ, mp)
 					for range 5 {
 						require.NoError(t, AppendBytes(source, []byte("constant payload"), false, mp))
 					}
@@ -53,11 +53,11 @@ func TestConstGroupingSelectionCopies(t *testing.T) {
 					source.GetGrouping().Add(0, 2, 8)
 				}
 				state := newTestVectorAllocationAccount(t, 1<<20, 64)
-				dst := newAccountedTestVector(t, typ)
 				dmp := state.view(t, mp)
+				dst := newAccountedTestVector(t, typ, dmp)
 				defer func() {
 					source.Free(mp)
-					dst.Free(mp)
+					dst.Free(dmp)
 					finalizeTestVectorAllocationAccount(t, state)
 					require.Zero(t, mp.CurrNB())
 				}()

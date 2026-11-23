@@ -54,9 +54,9 @@ func writeReplayTestObject(t *testing.T, ctx context.Context, mp *mpool.MPool, m
 	writer := ioutil.ConstructWriter(0, []uint16{0, 1, objectio.SEQNUM_COMMITTS}, 0, true, false, mem)
 	for i, key := range keys {
 		b := batch.NewWithSize(3)
-		b.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		b.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		b.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+		b.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(b.Vecs[0], key, false, mp))
 		require.NoError(t, vector.AppendFixed(b.Vecs[1], int64(i+1), false, mp))
 		require.NoError(t, vector.AppendFixed(b.Vecs[2], ts, false, mp))
@@ -298,17 +298,17 @@ func TestHistoricalChangesPKBlockPruning(t *testing.T) {
 			}
 			for _, key := range []int32{11, 99} {
 				b := batch.NewWithSize(2)
-				b.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				b.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(b.Vecs[0], key, false, mp))
-				b.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+				b.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(b.Vecs[1], types.BuildTS(100, 0), false, mp))
 				if tc.clusterBy {
-					clusterKey := vector.NewVec(types.T_int32.ToType())
+					clusterKey := vector.NewVec(types.T_int32.ToType(), mp)
 					require.NoError(t, vector.AppendFixed(clusterKey, key+100, false, mp))
 					b.Vecs = []*vector.Vector{b.Vecs[0], clusterKey, b.Vecs[1]}
 				}
 				if tc.tombstone {
-					rowids := vector.NewVec(types.T_Rowid.ToType())
+					rowids := vector.NewVec(types.T_Rowid.ToType(), mp)
 					require.NoError(t, vector.AppendFixed(rowids, types.Rowid{}, false, mp))
 					b.Vecs = append([]*vector.Vector{rowids}, b.Vecs...)
 				}
@@ -421,8 +421,8 @@ func TestHistoricalChangesPKFilterReplacementChain(t *testing.T) {
 				t.Helper()
 				writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS}, 0, true, false, fs)
 				b := batch.NewWithSize(2)
-				b.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-				b.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+				b.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+				b.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(b.Vecs[0], key, false, mp))
 				require.NoError(t, vector.AppendFixed(b.Vecs[1], types.BuildTS(commit, 0), false, mp))
 				b.SetRowCount(1)

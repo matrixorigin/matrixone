@@ -70,8 +70,8 @@ func TestSortAndSyncDropsTransferredBatchOnWriteError(t *testing.T) {
 	t.Cleanup(func() { fs.Close(ctx) })
 	proc := testutil.NewProcess(t, testutil.WithFileService(&ownershipFailFS{fs}))
 	columnType := types.New(types.T_varchar, 256, 0)
-	input := batch.NewOffHeap([]string{"v"})
-	input.Vecs[0] = vector.NewOffHeapVecWithType(columnType)
+	input := batch.New([]string{"v"})
+	input.Vecs[0] = vector.NewVec(columnType, proc.Mp())
 	for range objectio.BlockMaxRows {
 		// One 24-byte descriptor plus 40 payload bytes per row fills the
 		// injected 512 KiB limit exactly, so ownership transfers before spill.
@@ -100,7 +100,7 @@ func TestSortAndSyncRetainsUntransferredBatchOnWriteError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
 	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
-	input := batch.NewOffHeap([]string{"v"})
+	input := batch.New([]string{"v"})
 	input.Vecs[0] = nil // Validation fails before ownership is transferred.
 	input.SetRowCount(int(objectio.BlockMaxRows))
 	bats := []*batch.Batch{input}
@@ -167,7 +167,7 @@ func TestPersistentSinkerResetRetriesOrReconstructs(t *testing.T) {
 				},
 			}
 			t.Cleanup(func() { _ = writer.free(proc) })
-			input := batch.NewWithSchema(false, []string{"v"}, []types.Type{types.New(types.T_varchar, 256, 0)})
+			input := batch.NewWithSchema([]string{"v"}, []types.Type{types.New(types.T_varchar, 256, 0)}, proc.Mp())
 			defer input.Clean(proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("value"), false, proc.Mp()))
 			input.SetRowCount(1)
@@ -201,7 +201,7 @@ func TestPersistentSinkerResetRetriesOrReconstructs(t *testing.T) {
 
 func TestDeleteOutputRetainsAllObjectStats(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	input := colexec.AllocCNS3ResultBat(true)
+	input := colexec.AllocCNS3ResultBat(true, proc.Mp())
 	defer input.Clean(proc.Mp())
 	names := make([]string, 0, 3)
 	for i := range 3 {
@@ -214,7 +214,7 @@ func TestDeleteOutputRetainsAllObjectStats(t *testing.T) {
 	input.SetRowCount(len(names))
 	writer := &s3WriterDelegate{
 		deleteBlockInfo: make([]*deleteBlockInfo, 1),
-		outputBat:       makeS3OutputBatch(),
+		outputBat:       makeS3OutputBatch(proc.Mp()),
 		updateCtxs:      []*MultiUpdateCtx{{TableDef: &planpb.TableDef{TblId: 1}}},
 	}
 	defer writer.free(proc)
@@ -223,7 +223,7 @@ func TestDeleteOutputRetainsAllObjectStats(t *testing.T) {
 	require.Equal(t, 3, info.bat.RowCount())
 	require.Equal(t, uint64(9), info.rawRowCount)
 	require.NoError(t, writer.addBatchToOutput(proc.Mp(), actionDelete, 0, info.rawRowCount, info.name, info.bat))
-	decoded := batch.NewOffHeapEmpty()
+	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(proc.Mp())
 	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(writer.outputBat.Vecs[4].GetBytesAt(0), proc.Mp()))
 	require.Equal(t, 3, decoded.RowCount())

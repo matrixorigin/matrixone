@@ -47,7 +47,7 @@ func BenchmarkAppendValueRows(b *testing.B) {
 	} {
 		b.Run(test.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			vec := NewVec(test.oid.ToType())
+			vec := NewVec(test.oid.ToType(), mp)
 			b.Cleanup(func() {
 				defer mpool.DeleteMPool(mp)
 				vec.Free(mp)
@@ -107,7 +107,7 @@ func BenchmarkAppendFixedListReuse(b *testing.B) {
 			}
 			b.Run(mode+"_"+strconv.Itoa(size), func(b *testing.B) {
 				mp := mpool.MustNewZero()
-				vec := NewVec(types.T_int64.ToType())
+				vec := NewVec(types.T_int64.ToType(), mp)
 				b.Cleanup(func() {
 					defer mpool.DeleteMPool(mp)
 					vec.Free(mp)
@@ -198,7 +198,7 @@ func BenchmarkAppendVarlenList(b *testing.B) {
 						require.Equal(b, payload, v.GetBytesAt(size-1))
 					}
 					if reuse {
-						vec := NewVec(tc.oid.ToType())
+						vec := NewVec(tc.oid.ToType(), mp)
 						b.Cleanup(func() { vec.Free(mp) })
 						require.NoError(b, tc.add(vec, mp))
 						check(vec)
@@ -215,7 +215,7 @@ func BenchmarkAppendVarlenList(b *testing.B) {
 						check(vec)
 					} else {
 						func() {
-							vec := NewVec(tc.oid.ToType())
+							vec := NewVec(tc.oid.ToType(), mp)
 							defer vec.Free(mp)
 							require.NoError(b, tc.add(vec, mp))
 							check(vec)
@@ -223,7 +223,7 @@ func BenchmarkAppendVarlenList(b *testing.B) {
 						b.ReportAllocs()
 						b.ResetTimer()
 						for range b.N {
-							vec := NewVec(tc.oid.ToType())
+							vec := NewVec(tc.oid.ToType(), mp)
 							if err := tc.add(vec, mp); err != nil {
 								vec.Free(mp)
 								b.Fatal(err)

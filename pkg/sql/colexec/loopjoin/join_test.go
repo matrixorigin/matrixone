@@ -146,14 +146,14 @@ func TestLoopJoinResultBatchUsesAllocationAccount(t *testing.T) {
 		LeftTypes:  []types.Type{types.T_int64.ToType()},
 	}
 	account := installLoopJoinTestAllocation(t, arg)
-	require.NoError(t, arg.resetResultBat())
+	require.NoError(t, arg.resetResultBat(proc))
 	resMP, err := arg.resultMP(proc)
 	require.NoError(t, err)
 	require.Same(t, account, resMP.ViewAccount())
 	require.NoError(t, vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, resMP))
 	used := account.Snapshot().Used
 	require.Positive(t, used)
-	require.NoError(t, arg.resetResultBat())
+	require.NoError(t, arg.resetResultBat(proc))
 	require.Equal(t, used, account.Snapshot().Used)
 
 	arg.Reset(proc, false, nil)
@@ -174,7 +174,7 @@ func TestLoopJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
 		LeftTypes:  []types.Type{types.T_int64.ToType()},
 	}
 	require.NoError(t, arg.SetAllocationAccount(account))
-	require.NoError(t, arg.resetResultBat())
+	require.NoError(t, arg.resetResultBat(proc))
 	resMP, err := arg.resultMP(proc)
 	require.NoError(t, err)
 	err = vector.AppendFixed(arg.ctr.resBat.Vecs[0], int64(1), false, resMP)
@@ -307,7 +307,9 @@ func TestJoin(t *testing.T) {
 		tc.barg.GetChildren(0).Free(tc.proc, false, nil)
 
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -321,7 +323,9 @@ func TestLoopJoinPassesRecursiveMarker(t *testing.T) {
 	})
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -360,13 +364,17 @@ func TestLoopJoinPassesRecursiveMarkerWithEmptyBuild(t *testing.T) {
 	probe := &recursiveLoopJoinProbe{MockOperator: colexec.NewMockOperator().
 		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp()), marker}).
 		WithBatchCallback(func(int) { probeCalls++ })}
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(probe)
 	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		probe.Free(tc.proc, false, nil)
+		freeTestChildren(probe)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -391,6 +399,7 @@ func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 	probe := colexec.NewMockOperator().
 		WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())}).
 		WithBatchCallback(func(int) { probeCalls++ })
+	freeTestChildren(tc.arg)
 	tc.arg.Children = nil
 	tc.arg.AppendChild(probe)
 	// Model a reused operator whose previous generation had a recursive probe.
@@ -398,8 +407,11 @@ func TestLoopJoinPrepareRecomputesRecursiveProbeForFastPath(t *testing.T) {
 	resetHashBuildChildrenWithBatch(tc.barg, batch.EmptyBatch)
 	defer func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		probe.Free(tc.proc, false, nil)
+		freeTestChildren(probe)
 		tc.proc.Free()
 		tc.cancel()
 	}()
@@ -461,7 +473,9 @@ func TestLoopJoinResetAfterEmptyProbe(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -542,7 +556,9 @@ func TestLoopJoinConstNullAfterNonEmptyProbe(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	tc.arg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.arg)
 	tc.barg.Free(tc.proc, false, nil)
+	freeTestChildren(tc.barg)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
@@ -575,7 +591,9 @@ func TestLoopJoinSingleRejectsMultipleRows(t *testing.T) {
 			tc.arg.Reset(tc.proc, true, err)
 			tc.barg.Reset(tc.proc, true, err)
 			tc.arg.Free(tc.proc, true, err)
+			freeTestChildren(tc.arg)
 			tc.barg.Free(tc.proc, true, err)
+			freeTestChildren(tc.barg)
 			tc.proc.Free()
 			require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 		})
@@ -650,7 +668,9 @@ func TestLoopJoinFinalizeResetsAfterPreviousEmptyProbe(t *testing.T) {
 	join.Reset(proc, false, nil)
 	build.Reset(proc, false, nil)
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	build.Free(proc, false, nil)
+	freeTestChildren(build)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -737,7 +757,9 @@ func TestMarkJoinEmitsOneRowPerProbeRowAcrossBuildBatches(t *testing.T) {
 	require.False(t, res.Batch.Vecs[1].GetNulls().Contains(1))
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	build.Free(proc, false, nil)
+	freeTestChildren(build)
 	proc.Free()
 }
 
@@ -832,7 +854,9 @@ func TestMarkJoinResumesAfterDefaultBatchSize(t *testing.T) {
 	require.False(t, res.Batch.Vecs[1].GetNulls().Contains(0))
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	build.Free(proc, false, nil)
+	freeTestChildren(build)
 	proc.Free()
 }
 
@@ -885,6 +909,7 @@ func TestLoopJoinNoCondSplitsLargeBuildBatch(t *testing.T) {
 	require.Nil(t, result.Batch)
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -951,6 +976,7 @@ func TestLoopJoinNonEqCondSplitsLargeBuildBatch(t *testing.T) {
 	require.Nil(t, result.Batch)
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1001,6 +1027,7 @@ func TestLoopJoinConditionEvaluationWindowsOnlyOversizedBuildBatches(t *testing.
 	require.Nil(t, join.ctr.condWindow)
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1081,6 +1108,7 @@ func TestLoopJoinNoCondSplitsWideRowsByBytes(t *testing.T) {
 	require.Greater(t, batchCount, 1)
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1151,6 +1179,7 @@ func TestLoopJoinNonEqCondSplitsWideRowsByBytes(t *testing.T) {
 		"byte-limit yields must reuse the ordinary single-Eval fast path")
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1198,6 +1227,7 @@ func TestLoopJoinEmptyBuildSplitsWideRowsByBytes(t *testing.T) {
 	require.Greater(t, batchCount, 1)
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1243,6 +1273,7 @@ func TestLoopJoinSemiAdmitsEachWideProbeRow(t *testing.T) {
 	require.Nil(t, result.Batch)
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1299,6 +1330,7 @@ func TestLoopJoinBoundedProbeReusesScanAcrossAdmissionYield(t *testing.T) {
 		"the deferred probe must reuse its completed scan")
 
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1345,6 +1377,7 @@ func TestLoopJoinEvalErrorInvalidatesResumeGeneration(t *testing.T) {
 	require.False(t, join.ctr.probeMatched)
 
 	join.Free(proc, true, err)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1383,6 +1416,7 @@ func TestLoopJoinSingleRejectsRowsAcrossBuildBatches(t *testing.T) {
 	require.False(t, join.ctr.probeScanValid)
 
 	join.Free(proc, true, err)
+	freeTestChildren(join)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -1490,6 +1524,7 @@ func TestLoopJoinResultBatchAdmissionMatrix(t *testing.T) {
 				"admission/resume must neither lose nor duplicate probe rows")
 
 			join.Free(proc, false, nil)
+			freeTestChildren(join)
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
 		})
@@ -1583,6 +1618,7 @@ func resetChildren(arg *LoopJoin, m *mpool.MPool) {
 
 func resetChildrenWithBatch(arg *LoopJoin, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	freeTestChildren(arg)
 	arg.Children = nil
 	arg.AppendChild(op)
 }
@@ -1593,6 +1629,7 @@ func resetHashBuildChildren(arg *hashbuild.HashBuild, m *mpool.MPool) {
 
 func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	freeTestChildren(arg)
 	arg.Children = nil
 	arg.AppendChild(op)
 }

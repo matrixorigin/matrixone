@@ -308,6 +308,12 @@ func (ctr *container) decodedMP(proc *process.Process) (*mpool.MPool, error) {
 	return ctr.spillAllocation.DecodedMP(proc.Mp())
 }
 
+// retainedPool is the pool retained endpoint state (prevVecs, linSeed,
+// linEntry, linearLeft) is created with.
+func (ctr *container) retainedPool(proc *process.Process) *mpool.MPool {
+	return orMP(ctr.retainedAllocation, proc)
+}
+
 func orMP(view *mpool.MPool, proc *process.Process) *mpool.MPool {
 	if view != nil {
 		return view
@@ -358,10 +364,10 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &fill.ctr
 	ctr.cleanupSpill(proc)
 	if ctr.allocationAccount != nil {
-		ctr.freeVectors(proc.Mp())
+		ctr.freeVectors(ctr.retainedPool(proc))
 	} else {
-		ctr.clearLinearSeeds(proc.Mp())
-		ctr.clearLinearEntries(proc.Mp())
+		ctr.clearLinearSeeds(ctr.retainedPool(proc))
+		ctr.clearLinearEntries(ctr.retainedPool(proc))
 	}
 	ctr.resetCtrParma(proc.Mp())
 	if ctr.allocationAccount != nil {
@@ -372,16 +378,14 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	}
 	if ctr.buf != nil {
 		if ctr.allocationAccount != nil {
-			ctr.buf.Clean(proc.Mp())
+			cleanOwnedBatch(ctr.buf)
 			ctr.buf = nil
 		} else {
 			ctr.buf.CleanOnlyData()
 		}
 	}
 	for _, b := range ctr.bats {
-		if b != nil {
-			b.Clean(proc.GetMPool())
-		}
+		cleanOwnedBatch(b)
 	}
 	clear(ctr.bats)
 	if ctr.allocationAccount != nil {
@@ -391,7 +395,7 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	}
 	// toFree was popped out of bats, so the loop above does not cover it.
 	if ctr.toFree != nil {
-		ctr.toFree.Clean(proc.GetMPool())
+		cleanOwnedBatch(ctr.toFree)
 		ctr.toFree = nil
 	}
 
@@ -414,7 +418,7 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.valVecs = nil
-	ctr.freeVectors(proc.Mp())
+	ctr.freeVectors(ctr.retainedPool(proc))
 	ctr.freeCoordRuns(proc.Mp())
 	ctr.prevPart.free()
 	ctr.linEntryPart.free()
@@ -432,23 +436,37 @@ func (fill *Fill) ExecProjection(proc *process.Process, input *batch.Batch) (*ba
 	return batch, err
 }
 
-func (ctr *container) freeBatch(mp *mpool.MPool) {
+// freeBatch frees the retained, pending and output batches. Their vectors
+// come from different pools (proc's pool, the retained, expression and
+// output views, decoded spill views), so each is freed with its own pool.
+func (ctr *container) freeBatch(_ *mpool.MPool) {
 	for _, b := range ctr.bats {
-		if b != nil {
-			b.Clean(mp)
-		}
+		cleanOwnedBatch(b)
 	}
 	ctr.bats = nil
-	if ctr.toFree != nil {
-		ctr.toFree.Clean(mp)
-		ctr.toFree = nil
-	}
-	if ctr.buf != nil {
-		ctr.buf.Clean(mp)
-		ctr.buf = nil
-	}
+	cleanOwnedBatch(ctr.toFree)
+	ctr.toFree = nil
+	cleanOwnedBatch(ctr.buf)
+	ctr.buf = nil
 }
 
+// cleanOwnedBatch frees an operator-owned batch, each vector with the pool
+// it was created with.
+func cleanOwnedBatch(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+			bat.Vecs[i] = nil
+		}
+	}
+	bat.Clean(nil)
+}
+
+// freeVectors frees the saved endpoint state. mp is the retained pool
+// (retainedPool), which makeEndpoint creates every endpoint with.
 func (ctr *container) freeVectors(mp *mpool.MPool) {
 	for _, vec := range ctr.prevVecs {
 		if vec != nil {

@@ -50,7 +50,7 @@ func checkFixedVectorPrint[T types.FixedSizeT](t *testing.T, oid types.T, value 
 	t.Run(oid.String(), func(t *testing.T) {
 		mp := mpool.MustNewZero()
 		defer mpool.DeleteMPool(mp)
-		vec := vector.NewVec(oid.ToType())
+		vec := vector.NewVec(oid.ToType(), mp)
 		defer vec.Free(mp)
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 		require.NoError(t, vector.AppendFixed(vec, value, true, mp))
@@ -66,7 +66,7 @@ func TestMoVectorToStringVariableAndEmpty(t *testing.T) {
 		t.Run(oid.String(), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), mp)
 			defer vec.Free(mp)
 			require.Equal(t, "empty vector", MoVectorToString(vec, 10))
 			require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, mp))
@@ -79,7 +79,7 @@ func TestMoVectorToStringVariableAndEmpty(t *testing.T) {
 	}
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	unsupported := vector.NewVec(types.T_decimal256.ToType())
+	unsupported := vector.NewVec(types.T_decimal256.ToType(), mp)
 	defer unsupported.Free(mp)
 	require.NoError(t, vector.AppendFixed(unsupported, types.Decimal256{B0_63: 7}, false, mp))
 	require.Equal(t, "unkown type vec... DECIMAL256", MoVectorToString(unsupported, 10))

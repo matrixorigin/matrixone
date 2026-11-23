@@ -113,7 +113,7 @@ func TestAppendColumnBuffer_AllTypes(t *testing.T) {
 			if c.name == "decimal128" {
 				c.buf.N = 3 // six uint64 halves make three decimal128 values
 			}
-			vec := vector.NewVec(types.New(c.buf.Type, 0, 0))
+			vec := vector.NewVec(types.New(c.buf.Type, 0, 0), mp)
 			defer vec.Free(mp)
 			require.NoError(t, AppendColumnBuffer(c.buf, vec, mp))
 			require.Equal(t, 3, vec.Length())
@@ -123,7 +123,7 @@ func TestAppendColumnBuffer_AllTypes(t *testing.T) {
 
 func TestAppendColumnBuffer_UnsupportedType(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_any, 0, 0))
+	vec := vector.NewVec(types.New(types.T_any, 0, 0), mp)
 	defer vec.Free(mp)
 	require.Error(t, AppendColumnBuffer(&ColumnBuffer{Type: types.T_any, N: 1}, vec, mp))
 }
@@ -135,7 +135,7 @@ func TestAppendColumnBufferRange(t *testing.T) {
 
 	t.Run("fixed", func(t *testing.T) {
 		buf := fixedBuf(types.T_int64, 8, []uint64{10, 20, 30, 40})
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 		defer vec.Free(mp)
 		require.NoError(t, AppendColumnBufferRange(buf, vec, 1, 2, mp))
 		require.Equal(t, []int64{20, 30}, vector.MustFixedColNoTypeCheck[int64](vec))
@@ -143,7 +143,7 @@ func TestAppendColumnBufferRange(t *testing.T) {
 
 	t.Run("varlena", func(t *testing.T) {
 		buf := varlenaBuf(types.T_varchar, []string{"a", "bb", "ccc", "dddd"})
-		vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 0, 0), mp)
 		defer vec.Free(mp)
 		require.NoError(t, AppendColumnBufferRange(buf, vec, 2, 2, mp))
 		require.Equal(t, 2, vec.Length())
@@ -154,7 +154,7 @@ func TestAppendColumnBufferRange(t *testing.T) {
 	// A negative start reads from 0; an over-long range stops at N.
 	t.Run("clamped", func(t *testing.T) {
 		buf := fixedBuf(types.T_int64, 8, []uint64{10, 20})
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 		defer vec.Free(mp)
 		require.NoError(t, AppendColumnBufferRange(buf, vec, -5, 100, mp))
 		require.Equal(t, []int64{10, 20}, vector.MustFixedColNoTypeCheck[int64](vec))
@@ -162,7 +162,7 @@ func TestAppendColumnBufferRange(t *testing.T) {
 
 	t.Run("empty range", func(t *testing.T) {
 		buf := fixedBuf(types.T_int64, 8, []uint64{10, 20})
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 		defer vec.Free(mp)
 		require.NoError(t, AppendColumnBufferRange(buf, vec, 5, 1, mp))
 		require.Equal(t, 0, vec.Length())
@@ -176,7 +176,7 @@ func TestAppendColumnBuffer_Nulls(t *testing.T) {
 	t.Run("fixed", func(t *testing.T) {
 		buf := fixedBuf(types.T_int64, 8, []uint64{10, 0, 30})
 		buf.Nulls = []bool{false, true, false}
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 		defer vec.Free(mp)
 		require.NoError(t, AppendColumnBuffer(buf, vec, mp))
 		require.Equal(t, 3, vec.Length())
@@ -188,7 +188,7 @@ func TestAppendColumnBuffer_Nulls(t *testing.T) {
 	t.Run("varlena", func(t *testing.T) {
 		buf := varlenaBuf(types.T_varchar, []string{"a", "", "ccc"})
 		buf.Nulls = []bool{false, true, false}
-		vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 0, 0), mp)
 		defer vec.Free(mp)
 		require.NoError(t, AppendColumnBuffer(buf, vec, mp))
 		require.True(t, vec.IsNull(1))
@@ -200,7 +200,7 @@ func TestAppendColumnBuffer_Nulls(t *testing.T) {
 			"00000000-0000-0000-0000-000000000001", "",
 		})
 		buf.Nulls = []bool{false, true}
-		vec := vector.NewVec(types.New(types.T_uuid, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uuid, 0, 0), mp)
 		defer vec.Free(mp)
 		require.NoError(t, AppendColumnBuffer(buf, vec, mp))
 		require.True(t, vec.IsNull(1))
@@ -208,7 +208,7 @@ func TestAppendColumnBuffer_Nulls(t *testing.T) {
 
 	// A malformed uuid returns the parse error.
 	t.Run("bad uuid", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_uuid, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uuid, 0, 0), mp)
 		defer vec.Free(mp)
 		require.Error(t, AppendColumnBuffer(varlenaBuf(types.T_uuid, []string{"nope"}), vec, mp))
 	})

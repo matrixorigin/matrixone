@@ -443,7 +443,7 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
 	defer params.Free(proc.Mp())
 	proc.SetPrepareParams(params)
@@ -501,7 +501,7 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 			original := plan2.DeepCopyExpr(bound.GetF().Args[1])
 
 			check := func(param []byte, isNull bool) ([]byte, error) {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
 				proc.SetPrepareParams(params)
 				baseline := proc.Mp().CurrNB()
@@ -542,7 +542,7 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("50"), false, proc.Mp()))
 	defer params.Free(proc.Mp())
 	proc.SetPrepareParams(params)
@@ -600,7 +600,7 @@ func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *
 			require.Equal(t, int32(types.T_decimal128), bound.GetF().Args[1].Typ.Id)
 
 			check := func(param string) ([]byte, error) {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, []byte(param), false, proc.Mp()))
 				proc.SetPrepareParams(params)
 				baseline := proc.Mp().CurrNB()
@@ -652,7 +652,7 @@ func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 			node := &plan.Node{AggList: []*plan.Expr{bound}}
 
 			check := func(param []byte, isNull bool) error {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
 				proc.SetPrepareParams(params)
 				baseline := proc.Mp().CurrNB()
@@ -671,7 +671,7 @@ func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 			require.ErrorContains(t, err,
 				"percentile argument of "+test.function+" cannot be NULL")
 
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
 			proc.SetPrepareParams(params)
 			baseline := proc.Mp().CurrNB()
@@ -1894,7 +1894,7 @@ func TestGetPercentileConfigRejectsInvalidVectors(t *testing.T) {
 	require.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	flat := vector.NewVec(types.T_float64.ToType())
+	flat := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(flat, 0.5, false, mp))
 	nullVec := vector.NewConstNull(types.T_float64.ToType(), 1, mp)
 	unsupported, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("0.5"), 1, mp)

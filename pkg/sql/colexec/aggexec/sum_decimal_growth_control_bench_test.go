@@ -37,7 +37,7 @@ func BenchmarkDecimal64GrowthAndUpdates(b *testing.B) {
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
 			typ := types.New(types.T_decimal64, 18, 0)
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			defer input.Free(mp)
 			groups := make([]uint64, tc.rows)
 			for i := range groups {

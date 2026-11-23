@@ -27,7 +27,7 @@ import (
 func TestTypedReadTypecheckGuard(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	vec := NewVec(types.T_int64.ToType())
+	vec := NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, AppendFixedList(vec, []int64{0, 0, 0}, nil, mp))
 	require.Panics(t, func() { _ = GetFixedAtNoTypeCheck[int32](vec, 0) })

@@ -49,7 +49,7 @@ func TestFunctionParamFrameGrowsAndPreservesWrappers(t *testing.T) {
 
 func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	vec := NewVec(types.T_blob.ToType())
+	vec := NewVec(types.T_blob.ToType(), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 
 	require.NoError(t, AppendBytesWithWriter(vec, 64, mp, func(dst []byte) error {
@@ -68,8 +68,8 @@ func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
 	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_blob.ToType())
 	dmp := state.view(t, mp)
+	vec := newAccountedTestVector(t, types.T_blob.ToType(), dmp)
 	called := false
 
 	err := AppendBytesWithWriter(vec, 1, dmp, func([]byte) error {
@@ -80,7 +80,7 @@ func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	require.False(t, called)
 	require.Zero(t, vec.Length())
 
-	vec.Free(mp)
+	vec.Free(dmp)
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
@@ -102,7 +102,7 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 	require.Greater(t, account.Snapshot().Used, firstUsed)
 
-	transferred.Free(mp)
+	transferred.Free(view)
 	wrapper.Free()
 	require.Zero(t, account.Snapshot().Used)
 }
@@ -289,7 +289,7 @@ func BenchmarkGetStrValue1(b *testing.B) {
 	mp := mpool.MustNewZeroNoFixed()
 
 	vecSize := uint64(50000)
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	for i := uint64(0); i < vecSize; i++ {
 		err := appendOneBytes(vec, []byte("x"), false, mp)
 		require.NoError(b, err)
@@ -313,7 +313,7 @@ func BenchmarkGetStrValue2(b *testing.B) {
 	vecSize := uint64(50000)
 	t2 := types.T_varchar.ToType()
 	t2.Width = 10
-	vec2 := NewVec(t2)
+	vec2 := NewVec(t2, mp)
 	for i := uint64(0); i < vecSize; i++ {
 		err := appendOneBytes(vec2, []byte("x"), false, mp)
 		require.NoError(b, err)
@@ -533,7 +533,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
 	func() {
-		v := NewVec(typ)
+		v := NewVec(typ, mp)
 		defer v.Free(mp)
 		require.NoError(t, appendValue(v, false, false, mp))
 		parameter := generate(v)
@@ -566,7 +566,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 		require.True(t, reuse(scalar, parameter))
 		check(parameter, scalar, 0, true, false)
 		// A NULL wrapper rejects both value shapes without changing its source.
-		constant := NewVec(typ)
+		constant := NewVec(typ, mp)
 		defer constant.Free(mp)
 		require.NoError(t, appendValue(constant, false, false, mp))
 		constant.SetClass(CONSTANT)
@@ -578,7 +578,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 		check(parameter, constant, 0, false, false)
 		changed := typ
 		changed.Width++
-		other := NewVec(changed)
+		other := NewVec(changed, mp)
 		defer other.Free(mp)
 		require.NoError(t, appendValue(other, false, true, mp))
 		require.NoError(t, appendValue(other, true, true, mp))
@@ -648,7 +648,7 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.EqualValues(t, 512, result.vec.GetNulls().GetBitmap().Len())
 	transferred := wrapper.GetResultVector()
 	wrapper.SetResultVector(nil)
-	t.Cleanup(func() { transferred.Free(mp) })
+	t.Cleanup(func() { transferred.Free(view) })
 	require.NoError(t, result.PreExtendAndResetNonNull(8))
 	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
 }

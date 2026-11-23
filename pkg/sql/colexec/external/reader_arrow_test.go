@@ -30,6 +30,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
@@ -94,8 +96,8 @@ func TestExternalArrowLoadFileAndStream(t *testing.T) {
 			require.Equal(t, 2, result.Batch.RowCount())
 			require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
 			require.Equal(t, "a payload longer than twenty three bytes", result.Batch.Vecs[1].GetStringAt(0))
-			require.True(t, result.Batch.Vecs[0].HasBorrowedBacking())
-			require.True(t, result.Batch.Vecs[1].HasBorrowedBacking())
+			require.True(t, result.Batch.Vecs[0].IsReadOnly())
+			require.True(t, result.Batch.Vecs[1].IsReadOnly())
 			require.Greater(t, account.Snapshot().Used, uint64(0))
 
 			result, err = arg.Call(proc)
@@ -155,8 +157,8 @@ func TestExternalArrowForceMaterialize(t *testing.T) {
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecNext, result.Status)
-	require.False(t, result.Batch.Vecs[0].HasBorrowedBacking())
-	require.False(t, result.Batch.Vecs[1].HasBorrowedBacking())
+	require.False(t, result.Batch.Vecs[0].IsReadOnly())
+	require.False(t, result.Batch.Vecs[1].IsReadOnly())
 	require.Equal(t, borrowedBefore, promtestutil.ToFloat64(
 		metric.ArrowLoadPayloadBytesCounter.WithLabelValues("borrowed"),
 	))
@@ -415,7 +417,7 @@ func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {
 	replacement := append([]byte(nil), payload...)
 	replacement[len(replacement)/2] ^= 0xff
 	upload("identity.arrow", replacement)
-	_, err = reader.ReadBatch(ctx, batch.NewWithSize(2), proc, nil)
+	_, _, err = reader.PublishBatch(ctx, proc, nil)
 	require.ErrorIs(t, err, fileservice.ErrObjectChanged)
 	require.NoError(t, reader.Close())
 	require.Zero(t, account.Snapshot().Used)
@@ -911,8 +913,8 @@ func TestExternalArrowFailurePathsReleaseAllocationAccount(t *testing.T) {
 
 func TestFitArrowBatchUsesActualCanonicalWireSize(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.NewOffHeap([]string{"v"})
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	bat := batch.New([]string{"v"})
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range []string{
 		"first payload longer than twenty three bytes",
 		"second payload longer than twenty three bytes",
@@ -949,11 +951,11 @@ func TestFitArrowBatchUsesActualCanonicalWireSize(t *testing.T) {
 func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
 	data := types.EncodeSlice([]int64{11, 22, 33})
-	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 3, data)
+	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 3, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	bat := batch.NewOffHeap([]string{"v"})
+	bat := batch.New([]string{"v"})
 	// The converted batch is the lender of the Arrow buffer.
 	require.NoError(t, bat.HoldLease(lease))
 	lease.Release()
@@ -978,7 +980,7 @@ func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, rows)
-	require.True(t, fitted.Vecs[0].HasBorrowedBacking())
+	require.True(t, fitted.Vecs[0].IsReadOnly())
 	require.Equal(t, sourcePointer,
 		uintptr(unsafe.Pointer(unsafe.SliceData(fitted.Vecs[0].GetData()))))
 	require.Equal(t, []int64{11}, vector.MustFixedColNoTypeCheck[int64](fitted.Vecs[0]))
@@ -994,8 +996,8 @@ func TestFitArrowBatchRejectsOversizedFirstRow(t *testing.T) {
 	for _, rows := range []int{1, 2} {
 		t.Run(fmt.Sprintf("rows-%d", rows), func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			bat := batch.NewOffHeap([]string{"v"})
-			bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+			bat := batch.New([]string{"v"})
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			for row := 0; row < rows; row++ {
 				value := bytes.Repeat([]byte{'x'}, 256)
 				require.NoError(t, vector.AppendBytes(bat.Vecs[0], value, false, mp))

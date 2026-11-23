@@ -44,15 +44,15 @@ func TestFindFirstIndex(t *testing.T) {
 // test FindFirstIndexInSortedVarlenVector
 func TestFindFirstIndexInSortedVarlenVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v1 := NewVec(types.T_char.ToType())
+	v1 := NewVec(types.T_char.ToType(), mp)
 	err := AppendStringList(v1, []string{"a", "b", "b", "c", "c"}, nil, mp)
 	require.NoError(t, err)
 	defer v1.Free(mp)
-	v2 := NewVec(types.T_char.ToType())
+	v2 := NewVec(types.T_char.ToType(), mp)
 	err = AppendStringList(v2, []string{"a", "b", "c", "c", "e"}, nil, mp)
 	require.NoError(t, err)
 	defer v2.Free(mp)
-	v3 := NewVec(types.T_char.ToType())
+	v3 := NewVec(types.T_char.ToType(), mp)
 	err = AppendStringList(v3, []string{"a", "b", "b", "b", "b"}, nil, mp)
 	require.NoError(t, err)
 	defer v3.Free(mp)
@@ -77,7 +77,7 @@ func TestFindFirstIndexInSortedVarlenVector(t *testing.T) {
 
 func TestCollectOffsetsByPrefixEqFactory(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v1 := NewVec(types.T_char.ToType())
+	v1 := NewVec(types.T_char.ToType(), mp)
 	defer v1.Free(mp)
 
 	AppendBytes(v1, []byte("1111"), false, mp)
@@ -108,7 +108,7 @@ func TestCollectOffsetsByPrefixEqFactory(t *testing.T) {
 
 func TestCollectOffsetsByPrefixBetweenFactory(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v1 := NewVec(types.T_char.ToType())
+	v1 := NewVec(types.T_char.ToType(), mp)
 	defer v1.Free(mp)
 
 	require.NoError(t, AppendStringList(v1, []string{"1111", "1121", "1211", "1221", "1231", "1311"}, nil, mp))
@@ -139,7 +139,7 @@ func TestCollectOffsetsByPrefixBetweenFactory(t *testing.T) {
 		})
 	}
 	t.Run("empty_vector", func(t *testing.T) {
-		v := NewVec(types.T_char.ToType())
+		v := NewVec(types.T_char.ToType(), mp)
 		defer v.Free(mp)
 		require.Nil(t, CollectOffsetsByPrefixBetweenFactory([]byte("13"), []byte("11"))(v))
 	})
@@ -147,7 +147,7 @@ func TestCollectOffsetsByPrefixBetweenFactory(t *testing.T) {
 
 func TestCollectOffsetsByPrefixInRangeFactory(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v1 := NewVec(types.T_char.ToType())
+	v1 := NewVec(types.T_char.ToType(), mp)
 	defer v1.Free(mp)
 
 	// Sorted data: keys with prefixes "11", "11", "12", "12", "12", "13"
@@ -184,7 +184,7 @@ func TestCollectOffsetsByPrefixInRangeFactory(t *testing.T) {
 	require.Equal(t, []int64{2, 3, 4}, fn4(v1))
 
 	// Empty vector
-	v2 := NewVec(types.T_char.ToType())
+	v2 := NewVec(types.T_char.ToType(), mp)
 	defer v2.Free(mp)
 	fn5 := CollectOffsetsByPrefixInRangeFactory(lb, ub, 0)
 	require.Nil(t, fn5(v2))
@@ -192,7 +192,7 @@ func TestCollectOffsetsByPrefixInRangeFactory(t *testing.T) {
 
 func TestLinearCollectOffsetsByPrefixInRangeFactory(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v1 := NewVec(types.T_char.ToType())
+	v1 := NewVec(types.T_char.ToType(), mp)
 	defer v1.Free(mp)
 
 	// Unsorted data

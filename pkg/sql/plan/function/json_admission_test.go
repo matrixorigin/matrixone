@@ -48,7 +48,7 @@ func TestJSONCheckedDecodeBeforeTrustedComparison(t *testing.T) {
 			}
 			wire, err := source.MarshalBinary()
 			require.NoError(t, err)
-			left := vector.NewVec(types.T_json.ToType())
+			left := vector.NewVec(types.T_json.ToType(), proc.Mp())
 			defer left.Free(proc.Mp())
 			err = left.UnmarshalBinary(wire)
 			if corrupt {

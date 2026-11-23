@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/internal/jsonread"
@@ -29,7 +30,7 @@ import (
 
 var (
 	jsonReaderVectorSize      = reflect.TypeFor[Vector]().Size()
-	jsonReaderLeaseSize       = reflect.TypeFor[RefCountedBufferLease]().Size()
+	jsonReaderLeaseSize       = reflect.TypeFor[bufferlease.RefCounted]().Size()
 	jsonReaderBuilderSize     = reflect.TypeFor[JSONReaderBuilder]().Size()
 	jsonReaderHandleSize      = reflect.TypeFor[jsonReader]().Size()
 	jsonReaderQueryResultSize = reflect.TypeFor[jsonQueryResult]().Size()
@@ -179,7 +180,7 @@ type jsonReader struct {
 	rows        *Vector // private absolute physical row map, nil for contiguous views
 	column      *Vector
 	mp          *mpool.MPool // allocation view of the column: account, admission or plain
-	lease       *RefCountedBufferLease
+	lease       *bufferlease.RefCounted
 	start       int
 	length      int
 	repeated    bool
@@ -253,7 +254,7 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 	if err != nil {
 		return nil, false, err
 	}
-	private, err := source.dup(allocMP, true, true)
+	private, err := source.dup(allocMP)
 	if err != nil {
 		return nil, false, err
 	}
@@ -261,13 +262,13 @@ func TryNewJSONReaderSnapshotForRows(source *Vector, logicalRows int, mp *mpool.
 	if !private.IsConstNull() {
 		data := private.data[:rows*types.VarlenaSize]
 		if err = validateVectorBinary(byte(private.class), private.typ, uint32(private.length), data, private.area, &private.nsp, true); err != nil {
-			private.Free(mp)
+			private.Free(allocMP)
 			return nil, true, err
 		}
 	}
 	reader, err = publishJSONReader(private, mp, allocMP, admission, ownerMeta)
 	if err != nil {
-		private.Free(mp)
+		private.Free(allocMP)
 		return nil, false, err
 	}
 	ownerMeta = nil
@@ -299,7 +300,7 @@ func NewJSONReaderBuilder(mp *mpool.MPool, admissions ...JSONReaderMemoryAdmissi
 		releaseJSONReaderMetadata(ownerMeta)
 		return nil, err
 	}
-	column := NewOffHeapVecWithType(types.T_json.ToType())
+	column := NewVec(types.T_json.ToType(), allocMP)
 	return &JSONReaderBuilder{column: column, mp: allocMP, admission: admission, ownerMeta: ownerMeta}, nil
 }
 
@@ -344,12 +345,14 @@ func (b *JSONReaderBuilder) Close() {
 	}
 }
 
+// publishJSONReader publishes column, created with allocMP; the reader's lease
+// owns it and frees it with allocMP.
 func publishJSONReader(column *Vector, mp, allocMP *mpool.MPool, admission JSONReaderMemoryAdmission, ownerMeta func()) (JSONReader, error) {
 	releaseMeta, err := ReserveJSONReaderMetadata(allocMP, admission, JSONReaderMetadataCapacity(jsonReaderHandleSize))
 	if err != nil {
 		return nil, err
 	}
-	lease, err := NewRefCountedBufferLease(nil, int64(column.Allocated()), func() { column.Free(mp); releaseJSONReaderMetadata(ownerMeta) })
+	lease, err := bufferlease.NewRefCounted(nil, int64(column.Allocated()), func() { column.Free(allocMP); releaseJSONReaderMetadata(ownerMeta) })
 	if err != nil {
 		releaseJSONReaderMetadata(releaseMeta)
 		return nil, err
@@ -430,7 +433,7 @@ func (r *jsonReader) Select(rows []int64, mp *mpool.MPool) (JSONReader, error) {
 	defer func() { releaseJSONReaderMetadata(releaseMeta) }()
 	// Charge the mapping the way the reader's column is charged.
 	mp = r.allocationMP(mp)
-	mapping := NewOffHeapVecWithType(types.T_int64.ToType())
+	mapping := NewVec(types.T_int64.ToType(), mp)
 	for _, row := range rows {
 		if err = AppendFixed(mapping, int64(r.physicalRow(int(row))), false, mp); err != nil {
 			mapping.Free(mp)
@@ -443,7 +446,7 @@ func (r *jsonReader) Select(rows []int64, mp *mpool.MPool) (JSONReader, error) {
 		return nil, io.ErrClosedPipe
 	}
 	ownedMeta := ownerMeta
-	lease, err := NewRefCountedBufferLease(nil, int64(mapping.Allocated()), func() { mapping.Free(mp); parent.Release(); releaseJSONReaderMetadata(ownedMeta) })
+	lease, err := bufferlease.NewRefCounted(nil, int64(mapping.Allocated()), func() { mapping.Free(mp); parent.Release(); releaseJSONReaderMetadata(ownedMeta) })
 	if err != nil {
 		mapping.Free(mp)
 		parent.Release()
@@ -486,7 +489,7 @@ func (r *jsonReader) Materialize(mp *mpool.MPool) (*Vector, error) {
 	}
 	// Charge the output the way the reader's column is charged.
 	mp = r.allocationMP(mp)
-	destination := NewOffHeapVecWithType(r.column.typ)
+	destination := NewVec(r.column.typ, mp)
 	var err error
 	for row := 0; row < r.length; row++ {
 		physicalRow := r.physicalRow(row)
@@ -627,7 +630,7 @@ type jsonQueryResult struct {
 	value        bytejson.ByteJson
 	exists       bool
 	sqlNull      bool
-	lease        *RefCountedBufferLease
+	lease        *bufferlease.RefCounted
 	releaseMeta  func()
 	releaseValue func()
 	mp           *mpool.MPool

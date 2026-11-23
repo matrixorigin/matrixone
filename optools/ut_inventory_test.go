@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,9 +20,18 @@ import (
 
 func TestRaceInventoryPartition(t *testing.T) {
 	t.Parallel()
-	names := []string{"TestFirst", "Example_named", "FuzzSeeds", "Test字面", "TestLiteral.[a]+(b)?"}
-	for _, layout := range []string{"roundrobin", "contiguous"} {
-		for _, groups := range []int{1, 2, 8} {
+	names := []string{
+		"TestFirst", "Example_named", "FuzzSeeds", "Test字面", "TestLiteral.[a]+(b)?",
+		"TestLegacyPartitionColumnLimitCopy", "TestDatabaseDefaultsFailureAndRecovery",
+		"TestHiddenIndexUserAccess", "TestDecimalIntegerDivPublicContracts",
+	}
+	costOrder := []string{
+		"TestLegacyPartitionColumnLimitCopy", "TestDatabaseDefaultsFailureAndRecovery",
+		"TestHiddenIndexUserAccess", "TestDecimalIntegerDivPublicContracts",
+		"TestFirst", "Example_named", "FuzzSeeds", "Test字面", "TestLiteral.[a]+(b)?",
+	}
+	for _, layout := range []string{"roundrobin", "contiguous", "cost-roundrobin"} {
+		for _, groups := range []int{1, 2, 4, 8, 12} {
 			t.Run(fmt.Sprintf("%s/%d", layout, groups), func(t *testing.T) {
 				inventory := filepath.Join(t.TempDir(), "inventory")
 				// Include diagnostic output and a final root without a newline.
@@ -56,6 +66,8 @@ for ((i=0;i<${#shard_patterns[@]};i++)); do printf '%s\t%s\n' "${shard_patterns[
 						expected := index % groups
 						if layout == "contiguous" {
 							expected = index / ((len(names) + groups - 1) / groups)
+						} else if layout == "cost-roundrobin" {
+							expected = slices.Index(costOrder, name) % groups
 						}
 						if group != expected || re.MatchString(name+"Suffix") || re.MatchString("Prefix"+name) {
 							t.Fatalf("root %q selected by incorrect group/pattern %d %q", name, group, fields[0])
@@ -75,6 +87,49 @@ for ((i=0;i<${#shard_patterns[@]};i++)); do printf '%s\t%s\n' "${shard_patterns[
 				}
 			})
 		}
+	}
+}
+
+func TestRaceInventoryCostLayoutScope(t *testing.T) {
+	t.Parallel()
+	const sqlPackage = "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration"
+	for _, tc := range []struct {
+		name, pkg, batches, parallel, want string
+	}{
+		{"sql-four", sqlPackage, "4", "4", "cost-roundrobin"},
+		{"sql-two-workers", sqlPackage, "4", "2", "roundrobin"},
+		{"sql-serial", sqlPackage, "4", "1", "contiguous"},
+		{"sql-eight-batches", sqlPackage, "8", "4", "roundrobin"},
+		{"other-package", "example/other", "4", "4", "roundrobin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+function batched_race_cancel_requested() { return 1; }
+function run_race_inventory_with_deadline() { printf 'TestOne\n' > "$3"; }
+function partition_race_test_inventory() { printf '%s\n' "$3" > "$CASE_DIR/layout"; return 125; }
+PREBUILT_RACE_REPORT="$CASE_DIR/report"
+status=0
+run_race_test_batches_impl "$PACKAGE" "$CASE_DIR/binary" "$BATCHES" "$PARALLEL" 2 cleanup-only || status=$?
+[[ "$status" == 125 ]] || exit 90
+cat "$CASE_DIR/layout"
+`
+			mock := `#!/bin/bash
+case "$1" in
+ version|env|test) exit 0 ;;
+ list) printf '%s\t%s\n' "$CASE_DIR" "$PACKAGE" ;;
+ *) exit 7 ;;
+esac
+`
+			out, err := scheduleHarnessWithMock(t, script, mock,
+				"PACKAGE="+tc.pkg, "BATCHES="+tc.batches, "PARALLEL="+tc.parallel)
+			if err != nil {
+				t.Fatalf("layout selection failed: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != tc.want {
+				t.Fatalf("layout = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

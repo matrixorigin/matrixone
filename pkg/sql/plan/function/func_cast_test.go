@@ -3955,7 +3955,7 @@ func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
 		{
 			name: "signed to varchar",
 			input: func() *vector.Vector {
-				vec := vector.NewVec(types.T_int64.ToType())
+				vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(vec, []int64{12345}, nil, proc.Mp()))
 				return vec
 			},
@@ -3964,7 +3964,7 @@ func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
 		{
 			name: "unsigned to char",
 			input: func() *vector.Vector {
-				vec := vector.NewVec(types.T_uint64.ToType())
+				vec := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(vec, []uint64{12345}, nil, proc.Mp()))
 				return vec
 			},
@@ -3973,7 +3973,7 @@ func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
 		{
 			name: "decimal to varchar",
 			input: func() *vector.Vector {
-				vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+				vec := vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(vec, []types.Decimal64{types.Decimal64(12345)}, nil, proc.Mp()))
 				return vec
 			},
@@ -3982,7 +3982,7 @@ func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
 		{
 			name: "date to varchar",
 			input: func() *vector.Vector {
-				vec := vector.NewVec(types.T_date.ToType())
+				vec := vector.NewVec(types.T_date.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(vec, []types.Date{types.DateFromCalendar(2026, 7, 2)}, nil, proc.Mp()))
 				return vec
 			},
@@ -4123,7 +4123,7 @@ func TestDecimal64ToDecimal256Scalar(t *testing.T) {
 	expectedNegative, err := types.ParseDecimal256("-56.7800", 65, 4)
 	require.NoError(t, err)
 
-	srcVec := vector.NewVec(fromType)
+	srcVec := vector.NewVec(fromType, mp)
 	defer srcVec.Free(mp)
 	require.NoError(t, vector.AppendFixedList(srcVec, []types.Decimal64{positive, negative, 0},
 		[]bool{false, false, true}, mp))
@@ -4232,7 +4232,7 @@ func TestDecimalToFloatRangeCheckUsesFullPrecision(t *testing.T) {
 	floatTyp := types.Type{Oid: types.T_float32, Width: 5, Scale: 2}
 
 	// decimal128 -> float32(5,2): 999.995 must raise out-of-range
-	d128Vec := vector.NewVec(types.T_decimal128.ToType())
+	d128Vec := vector.NewVec(types.T_decimal128.ToType(), mp)
 	defer d128Vec.Free(mp)
 	d128, err := types.ParseDecimal128("999.995", 30, 3)
 	require.NoError(t, err)
@@ -5663,7 +5663,7 @@ func TestCastLowPrecFloatSourcesAsFloat(t *testing.T) {
 func TestCastEmptyToVectorErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	source := func(typ types.T, null bool) *vector.Vector {
-		v := vector.NewVec(typ.ToType())
+		v := vector.NewVec(typ.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(v, nil, null, proc.Mp()))
 		return v
 	}

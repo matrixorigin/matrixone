@@ -475,7 +475,7 @@ func TestJsonConstructorBinaryValuesUseAdmittedProtocolVersion(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			v := vector.NewVec(tc.typ)
+			v := vector.NewVec(tc.typ, mp)
 			require.NoError(t, tc.append(v, mp))
 			defer v.Free(mp)
 
@@ -508,7 +508,7 @@ func TestJsonConstructorPreparedMetadata(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Prepared parameters reach execution as typed values.
-			v := vector.NewVec(tc.typ)
+			v := vector.NewVec(tc.typ, proc.Mp())
 			defer v.Free(proc.Mp())
 			if tc.typ.Oid == types.T_float32 {
 				require.NoError(t, vector.AppendFixed(v, float32(0.1), false, proc.Mp()))
@@ -522,7 +522,7 @@ func TestJsonConstructorPreparedMetadata(t *testing.T) {
 			require.Equal(t, tc.want, got.String())
 			if tc.binary {
 				// A text-typed key keeps its raw bytes.
-				k := vector.NewVec(types.T_text.ToType())
+				k := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				defer k.Free(proc.Mp())
 				require.NoError(t, vector.AppendBytes(k, []byte(tc.input), false, proc.Mp()))
 				key, err := newOpBuiltInJsonObject().convertKeyToAny(proc, newOpBuiltInJsonArray(), k, 0, defines.MORPCVersion51)

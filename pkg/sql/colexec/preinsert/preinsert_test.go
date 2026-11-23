@@ -103,6 +103,7 @@ func TestPreInsertNormal(t *testing.T) {
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	argument1.Free(proc, false, nil)
+	colexec.FreeMockChildren(&argument1)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
@@ -110,9 +111,9 @@ func TestPreInsertNormal(t *testing.T) {
 func TestTargetSelectedRows(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
+	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 2, 1, 1}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []bool{true, true, false, true}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], []types.Rowid{{1}, {2}, {3}, {4}}, nil, proc.Mp()))
@@ -171,6 +172,7 @@ func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
 	require.NoError(t, arg.constructColBuf(proc, bat2, false))
 	require.Equal(t, 3, arg.ctr.buf.Vecs[1].Length())
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 }
 
 func TestODKUAutoIncrementProvenanceSelectsUserColumnWithHiddenPrimaryKey(t *testing.T) {
@@ -195,8 +197,8 @@ func TestODKUAutoIncrementProvenanceSelectsUserColumnWithHiddenPrimaryKey(t *tes
 	}
 	require.NoError(t, pre.Prepare(proc))
 
-	userID := vector.NewVec(types.T_int64.ToType())
-	hiddenID := vector.NewVec(types.T_uint64.ToType())
+	userID := vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	hiddenID := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 	defer userID.Free(proc.Mp())
 	defer hiddenID.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(userID, int64(0), false, proc.Mp()))
@@ -248,7 +250,7 @@ func TestODKUProvenanceCarriesInputOrdinalsAcrossBufferReuse(t *testing.T) {
 			require.NoError(t, pre.Prepare(proc))
 
 			first := batch.NewWithSize(2)
-			first.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			first.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			first.Vecs[1] = testutil.MakeInt64Vector([]int64{10, 20}, nil, proc.Mp())
 			require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(0), false, proc.Mp()))
 			require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(8), false, proc.Mp()))
@@ -276,6 +278,7 @@ func TestODKUProvenanceCarriesInputOrdinalsAcrossBufferReuse(t *testing.T) {
 			require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](ordinal, 0))
 
 			pre.Free(proc, false, nil)
+			colexec.FreeMockChildren(pre)
 			first.Clean(proc.Mp())
 		})
 	}
@@ -343,6 +346,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 	_, err2 = vm.Exec(&argument2, proc)
 	require.Error(t, err2, "should return error when insert null into primary key column")
 	argument2.Free(proc, false, nil)
+	colexec.FreeMockChildren(&argument2)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
@@ -409,6 +413,7 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	argument1.Free(proc, false, nil)
+	colexec.FreeMockChildren(&argument1)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
@@ -445,7 +450,7 @@ func TestPreInsertRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ.ToType())
+			vec := vector.NewVec(tc.typ.ToType(), proc.Mp())
 			switch tc.typ {
 			case types.T_date:
 				require.NoError(t, vector.AppendFixed(vec, types.ZeroDate, false, proc.Mp()))
@@ -502,7 +507,9 @@ func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *te
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValueForField))
 
 			pre.Free(proc, false, err)
+			colexec.FreeMockChildren(pre)
 			child.Free(proc, false, nil)
+			colexec.FreeMockChildren(child)
 		})
 	}
 
@@ -521,7 +528,9 @@ func TestPreInsertCallRejectsZeroTemporalExpressionsInStrictNoZeroDateMode(t *te
 	_, err := pre.Call(proc)
 	require.NoError(t, err)
 	pre.Free(proc, false, nil)
+	colexec.FreeMockChildren(pre)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 }
 
 func TestPreInsertCallRejectsTimestampBelowMinimum(t *testing.T) {
@@ -555,7 +564,9 @@ func TestPreInsertCallRejectsTimestampBelowMinimum(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValueForField))
 
 	pre.Free(proc, false, err)
+	colexec.FreeMockChildren(pre)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 }
 
 func newZeroTemporalConstVector(t *testing.T, typ types.T, proc *proc) *vector.Vector {
@@ -674,6 +685,7 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, vecsNum1, len(res.Batch.Vecs))
 	argument1.Free(proc, false, nil)
+	colexec.FreeMockChildren(&argument1)
 	proc.Free()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
@@ -1014,7 +1026,7 @@ func TestGenAutoIncrColProbesFromOldestConsumedRange(t *testing.T) {
 			proc.Base.IncrService = incr
 			proc.Base.SessionInfo.StorageEngine = eng
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 			for i := 0; i < 2; i++ {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(0), true, proc.Mp()))
@@ -1131,6 +1143,7 @@ func TestGenAutoIncrColCoordinatesParallelFirstGeneratedID(t *testing.T) {
 }
 
 func resetChildren(arg *PreInsert, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat := colexec.MakeMockBatchsWithNullVec(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
@@ -1138,6 +1151,7 @@ func resetChildren(arg *PreInsert, m *mpool.MPool) {
 }
 
 func resetChildren2(arg *PreInsert, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat1 := colexec.MakeMockBatchs(m)
 	bat2 := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat1, bat2})

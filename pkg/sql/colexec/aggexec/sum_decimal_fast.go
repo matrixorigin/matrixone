@@ -420,7 +420,7 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -475,7 +475,7 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
 			if exec.isSum && exec.widenSumResult {
-				resultVec, err := exec.allocation.newVector(resultType)
+				resultVec, err := exec.allocation.newVector(resultType, exec.mp)
 				if err != nil {
 					return nil, err
 				}
@@ -849,7 +849,7 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -909,7 +909,7 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
 			if exec.isSum && exec.widenSumResult {
-				resultVec, err := exec.allocation.newVector(resultType)
+				resultVec, err := exec.allocation.newVector(resultType, exec.mp)
 				if err != nil {
 					return nil, err
 				}

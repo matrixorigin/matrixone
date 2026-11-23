@@ -16,6 +16,9 @@ package readutil
 
 import (
 	"context"
+	"io"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"io"
-	"testing"
 )
 
 type jsonMemorySource struct{ readerOwnershipDataSource }
@@ -54,7 +55,7 @@ func TestMemoryReaderPublishesJSONVersion(t *testing.T) {
 	require.NoError(t, err)
 	defer reader.Close()
 	output := batch.NewWithSize(1)
-	output.Vecs[0] = vector.NewVec(typ)
+	output.Vecs[0] = vector.NewVec(typ, mp)
 	defer output.Clean(mp)
 	publication := objectio.NewJSONReadSet([]int{0})
 	defer publication.Close()

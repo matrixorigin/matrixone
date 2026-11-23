@@ -17,6 +17,7 @@ package table_function
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
@@ -242,11 +243,11 @@ func (tableFunction *TableFunction) cleanForPrepare(proc *process.Process) {
 	}
 }
 
-func (tableFunction *TableFunction) createResultBatch() *batch.Batch {
+func (tableFunction *TableFunction) createResultBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(tableFunction.Attrs))
 	bat.Attrs = tableFunction.Attrs
 	for i := range tableFunction.ctr.retSchema {
-		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i])
+		bat.Vecs[i] = vector.NewVec(tableFunction.ctr.retSchema[i], mp)
 	}
 	return bat
 }

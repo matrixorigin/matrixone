@@ -253,7 +253,7 @@ func TestCOMStmtJqCursorFetchRetainsExactBinaryRows(t *testing.T) {
 
 	bat := batch.NewWithSize(1)
 	defer bat.Clean(proc.Mp())
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	for i, row := range rows {
 		if row.isNull {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, proc.Mp()))

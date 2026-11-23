@@ -89,8 +89,8 @@ func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 		}, req.Columns)
 		require.NotNil(t, req.Filter)
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("version"), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("17"), false, mp))
 		bat.SetRowCount(1)
@@ -168,13 +168,13 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 		require.Equal(t, types.ArrayToBytes([]float32{0, 0}), []byte(orderFn.Args[1].GetLit().GetVecVal()))
 
 		bat := batch.NewWithSize(7) // version, centroid, pk, entry, include, cpkey, distance
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
-		bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
+		bat.Vecs[4] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[6] = vector.NewVec(types.T_float64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
@@ -221,13 +221,13 @@ func TestScanEntriesOversizedLimitKeepsStorageTopK(t *testing.T) {
 		require.Equal(t, uint64(math.MaxInt), req.IndexParam.GetLimit().GetLit().GetU64Val())
 
 		bat := batch.NewWithSize(7) // version, centroid, pk, entry, include, cpkey, distance
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
-		bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
+		bat.Vecs[4] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[6] = vector.NewVec(types.T_float64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
@@ -275,11 +275,11 @@ func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 		require.Contains(t, req.Columns, catalog.CPrimaryKeyColName)
 
 		bat := batch.NewWithSize(5)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
-		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
+		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
@@ -465,7 +465,7 @@ func TestStorageDistanceRangeAdmission(t *testing.T) {
 func TestStorageTopKEligibilityMatchesVectorTopNDirection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
 	defer entries.Free(mp)
 	for _, entry := range [][]float32{{1}, {10}} {
 		require.NoError(t, vector.AppendArray(entries, entry, false, mp))
@@ -516,12 +516,12 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 				require.Equal(t, []byte{1}, req.FilterHint.MembershipFilterBytes)
 				bat := batch.NewWithSize(len(req.Columns) + 1)
 				for pos := 0; pos < 3; pos++ {
-					bat.Vecs[pos] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[pos] = vector.NewVec(types.T_int64.ToType(), mp)
 				}
-				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
-				bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
-				bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
-				bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
+				bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType(), mp)
+				bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType(), mp)
+				bat.Vecs[6] = vector.NewVec(types.T_float64.ToType(), mp)
 				for row, distance := range []float64{1, 6.25} {
 					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 					require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
@@ -642,11 +642,11 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 				require.Len(t, req.BlockFilters, 1)
 
 				bat := batch.NewWithSize(5)
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_int8, 3, 0))
-				bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[3] = vector.NewVec(types.New(types.T_array_int8, 3, 0), mp)
+				bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(test.raw), false, mp))
@@ -694,11 +694,11 @@ func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 		require.Nil(t, req.IndexParam.DistRange)
 
 		bat := batch.NewWithSize(5)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0))
-		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
+		bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType(), mp)
 		for row, value := range []float32{1, 2} {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
@@ -761,7 +761,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 		scanner := &scriptedRelationScanner{run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(len(req.Columns))
 			for i := range bat.Vecs {
-				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(bat.Vecs[i], int64(0), false, mp))
 			}
 			bat.SetRowCount(1)
@@ -779,11 +779,11 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 		require.NoError(t, err)
 		scanner := &scriptedRelationScanner{run: func(sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(5)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
-			bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
+			bat.Vecs[4] = vector.NewVec(types.T_varchar.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(3), false, mp))
@@ -807,7 +807,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 
 func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	mp := mpool.MustNewZero()
-	keys := vector.NewVec(types.T_int32.ToType())
+	keys := vector.NewVec(types.T_int32.ToType(), mp)
 	defer keys.Free(mp)
 	require.NoError(t, vector.AppendFixedList(keys, []int32{3, 4}, nil, mp))
 	data, err := keys.MarshalBinary()
@@ -826,7 +826,7 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	require.ErrorContains(t, err, "runtime membership filter is empty")
 	testutil.AssertInvalidRuntimeKeys(t, []byte("not-a-vector"))
 
-	bitKeys := vector.NewVec(types.New(types.T_bit, 64, 0))
+	bitKeys := vector.NewVec(types.New(types.T_bit, 64, 0), mp)
 	defer bitKeys.Free(mp)
 	require.NoError(t, vector.AppendFixedList(bitKeys, []uint64{uint64(1) << 63, ^uint64(0)}, nil, mp))
 	bitData, err := bitKeys.MarshalBinary()
@@ -895,9 +895,9 @@ func TestCompactRelationTopBoundsRowsWithClearedEntryVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makeBatch := func(pk int64, dist float64) *batch.Batch {
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 2, 0)) // consumed entry slot
-		bat.Vecs[2] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp) // consumed entry slot
+		bat.Vecs[2] = vector.NewVec(types.T_float64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], pk, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[2], dist, false, mp))
 		bat.SetRowCount(1)
@@ -926,8 +926,8 @@ func TestCompactRelationTopBoundsRowsWithClearedEntryVector(t *testing.T) {
 func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), mp)
 	for row, rawDistance := range []float64{1, 4, 9, 16} {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(row+1), false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], rawDistance, false, mp))
@@ -965,8 +965,8 @@ func TestFilterRelationBatchAppliesResidualBeforeTop(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range []string{"clustering_start", "version"} {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, mp))
 	}
@@ -1000,7 +1000,7 @@ func TestRelationFilterAndTopHelpersCoverEmptyAndDescendingCases(t *testing.T) {
 	defer executor.Free()
 	makeBatch := func(values ...string) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, mp))
 		}
@@ -1039,7 +1039,7 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_array_float64), typ.Id)
 
-	emptyKeys := vector.NewVec(types.T_int64.ToType())
+	emptyKeys := vector.NewVec(types.T_int64.ToType(), mp)
 	emptyKeyData, err := emptyKeys.MarshalBinary()
 	require.NoError(t, err)
 	emptyKeys.Free(mp)
@@ -1067,7 +1067,7 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 
 	newResult := func(values ...float64) executor.Result {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		}
@@ -1091,10 +1091,10 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 	require.NoError(t, appendEntryDistances(nil, &emptyResult, nil, plan.Type{}, ""))
 	emptyResult.Close()
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
 	require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
 	bat.SetRowCount(1)
 	badFunctionResult := executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
@@ -1113,9 +1113,9 @@ func TestPlanReaderReadStreamsAndCloses(t *testing.T) {
 		includeNulls: map[string][]bool{"payload": {false, true}},
 	}
 	out := batch.NewWithSize(3)
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-	out.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	out.Vecs[1] = vector.NewVec(types.T_float64.ToType(), mp)
+	out.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 	defer out.Clean(mp)
 
 	attrs := []string{"pkid", "score", catalog.SystemSI_IVFFLAT_IncludeColPrefix + "payload"}
@@ -1150,7 +1150,7 @@ func TestPlanReaderReadRejectsCancelledAndInvalidOutput(t *testing.T) {
 	}
 	newOutput := func(typ types.Type) *batch.Batch {
 		out := batch.NewWithSize(1)
-		out.Vecs[0] = vector.NewVec(typ)
+		out.Vecs[0] = vector.NewVec(typ, mp)
 		return out
 	}
 
@@ -1234,11 +1234,11 @@ func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 		Cols:          []*plan.ColDef{{Name: "key", Typ: plan.Type{Id: int32(types.T_int64)}}},
 		Name2ColIndex: map[string]int32{"key": 0},
 	}
-	bat, err := makeRelationScanBatch(tableDef, []string{"KEY"})
+	bat, err := makeRelationScanBatch(tableDef, []string{"KEY"}, r.proc.Mp())
 	require.NoError(t, err)
 	require.Equal(t, types.T_int64, bat.Vecs[0].GetType().Oid)
-	bat.Clean(nil)
-	_, err = makeRelationScanBatch(tableDef, []string{"missing"})
+	bat.Clean(r.proc.Mp())
+	_, err = makeRelationScanBatch(tableDef, []string{"missing"}, r.proc.Mp())
 	require.ErrorContains(t, err, "hidden column \"missing\" not found")
 
 	wideDef := &plan.TableDef{
@@ -1505,7 +1505,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 	if err = vector.AppendFixed(out.Vecs[0], int64(2), false, mp); err != nil {
 		return false, false, err
 	}
-	distances := vector.NewVec(types.T_float64.ToType())
+	distances := vector.NewVec(types.T_float64.ToType(), mp)
 	if err = vector.AppendFixed(distances, float64(4), false, mp); err != nil {
 		distances.Free(mp)
 		return false, false, err
@@ -1864,7 +1864,7 @@ func TestRelationScannerDefersWideVectorUntilAfterIncludeFilter(t *testing.T) {
 		PostFilterTopOnly: true,
 		BatchTransform: func(bat *batch.Batch) error {
 			require.Equal(t, bat.RowCount(), bat.Vecs[3].Length())
-			distances := vector.NewVec(types.T_float64.ToType())
+			distances := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 			for row := 0; row < bat.RowCount(); row++ {
 				entry := types.BytesToArray[float64](bat.Vecs[3].GetBytesAt(row))
 				if err := vector.AppendFixed(distances, entry[0]*entry[0], false, proc.Mp()); err != nil {
@@ -2014,7 +2014,7 @@ func TestRelationScannerFallsBackWhenReaderCannotDelayVectorLoading(t *testing.T
 		},
 		BatchTransform: func(bat *batch.Batch) error {
 			require.Len(t, bat.Vecs, 2, "unsupported readers must leave distance calculation to the caller")
-			distances := vector.NewVec(types.T_float64.ToType())
+			distances := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 			entry := types.BytesToArray[float64](bat.Vecs[0].GetBytesAt(0))
 			if err := vector.AppendFixed(distances, entry[0]*entry[0], false, proc.Mp()); err != nil {
 				distances.Free(proc.Mp())
@@ -2176,9 +2176,9 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		switch req.Table {
 		case "centroids_plan_reader":
 			bat := batch.NewWithSize(3)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(77), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(0), false, mp))
 			require.NoError(t, vector.AppendArray(bat.Vecs[2], []float32{0, 0}, false, mp))
@@ -2207,13 +2207,13 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 			packer.EncodeInt64(0)
 			require.Equal(t, packer.Bytes(), prefixes.GetBytesAt(0))
 			bat := batch.NewWithSize(7)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
-			bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
-			bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
+			bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0), mp)
+			bat.Vecs[4] = vector.NewVec(types.T_int32.ToType(), mp)
+			bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[6] = vector.NewVec(types.T_float64.ToType(), mp)
 			for _, row := range []struct {
 				pk  int64
 				vec []float32
@@ -2258,7 +2258,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		IncludeColumns:     []string{"payload"},
 		IncludeColumnTypes: []int32{int32(types.T_int32)},
 	}
-	membershipVec := vector.NewVec(types.T_int64.ToType())
+	membershipVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer membershipVec.Free(mp)
 	membershipValues := make([]int64, exactPkFilterThreshold+1)
 	for i := range membershipValues {
@@ -2440,7 +2440,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 		entriesReaders[shard] = &fillRelationReader{fill: func(out *batch.Batch, mp *mpool.MPool) error {
 			entryPacker := types.NewPacker()
 			defer entryPacker.Close()
-			out.Vecs = append(out.Vecs, vector.NewVec(types.T_float64.ToType()))
+			out.Vecs = append(out.Vecs, vector.NewVec(types.T_float64.ToType(), mp))
 			for _, row := range []struct {
 				pk  int64
 				vec []float32
@@ -2565,7 +2565,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 	readers := []engine.Reader{r}
 	var generation *planSearchGeneration
 	if parallelism > 0 {
-		keys := vector.NewVec(types.T_int64.ToType())
+		keys := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		defer keys.Free(proc.Mp())
 		require.NoError(t, vector.AppendFixedList(keys, []int64{1, 2}, nil, proc.Mp()))
 		payload, err := keys.MarshalBinary()
@@ -2617,8 +2617,8 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 		go func() {
 			defer workers.Done()
 			out := batch.NewWithSize(2)
-			out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			out.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+			out.Vecs[1] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 			defer out.Clean(proc.Mp())
 			end, err := reader.Read(context.Background(), []string{"pkid", "score"}, nil, proc.Mp(), out)
 			require.NoError(t, err)
@@ -2807,7 +2807,7 @@ func TestIvfCentroidPrefixFilterPublishesSortedPrefixes(t *testing.T) {
 	literal := fn.Args[1].GetVec()
 	require.NotNil(t, literal)
 
-	published := vector.NewVec(types.T_any.ToType())
+	published := vector.NewVec(types.T_any.ToType(), mp)
 	defer published.Free(mp)
 	require.NoError(t, published.UnmarshalBinary(literal.Data))
 
@@ -2840,7 +2840,7 @@ func TestIvfCentroidPrefixFilterLenMatchesCompactedPayload(t *testing.T) {
 	literal := filter.GetF().Args[1].GetVec()
 	require.NotNil(t, literal)
 
-	published := vector.NewVec(types.T_any.ToType())
+	published := vector.NewVec(types.T_any.ToType(), mp)
 	defer published.Free(mp)
 	require.NoError(t, published.UnmarshalBinary(literal.Data))
 
@@ -2881,7 +2881,7 @@ func TestIvfInInt64ExprPublishesSortedMembershipSet(t *testing.T) {
 	literal := expr.GetF().Args[1].GetVec()
 	require.NotNil(t, literal)
 
-	published := vector.NewVec(types.T_any.ToType())
+	published := vector.NewVec(types.T_any.ToType(), mp)
 	defer published.Free(mp)
 	require.NoError(t, published.UnmarshalBinary(literal.Data))
 

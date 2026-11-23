@@ -96,9 +96,9 @@ type container struct {
 	condBatIdx   int
 	condStart    int
 	condEnd      int
-	// condWindow owns only its range bitmaps; vector data/area borrow the build
-	// batch. It must live as long as condVec because a column expression may
-	// return one of the window vectors directly.
+	// condWindow is a copy of a build-batch range, each vector in its source
+	// vector's pool. It must live as long as condVec because a column
+	// expression may return one of the window vectors directly.
 	condWindow   *batch.Batch
 	condWindowMP *mpool.MPool
 	// Bounded-cardinality joins scan the build before emitting their one result
@@ -122,10 +122,12 @@ type container struct {
 	buildCopyBatch *batch.Batch
 	inBat          *batch.Batch
 	resBat         *batch.Batch
-	joinBat        *batch.Batch
-	expr           colexec.ExpressionExecutor
-	cfs            []func(*vector.Vector, *vector.Vector, int64, int) error
-	mp             *message.JoinMap
+	// resBatMP is the pool resBat was created with (the result view).
+	resBatMP *mpool.MPool
+	joinBat  *batch.Batch
+	expr     colexec.ExpressionExecutor
+	cfs      []func(*vector.Vector, *vector.Vector, int64, int) error
+	mp       *message.JoinMap
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
@@ -303,7 +305,7 @@ func (ctr *container) clearBulkCopy() {
 
 func (ctr *container) clearConditionResult() {
 	if ctr.condWindow != nil {
-		ctr.condWindow.Clean(ctr.condWindowMP)
+		ctr.condWindow.FreeWindow()
 	}
 	ctr.condVec = nil
 	ctr.condProbeIdx = 0
@@ -333,8 +335,9 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	ctr.clearProbeResume()
 	ctr.clearBulkCopy()
 	if ctr.resBat != nil {
-		ctr.resBat.Clean(mp)
+		ctr.resBat.Clean(ctr.resBatMP)
 		ctr.resBat = nil
+		ctr.resBatMP = nil
 	}
 	if ctr.joinBat != nil {
 		ctr.joinBat.Clean(mp)

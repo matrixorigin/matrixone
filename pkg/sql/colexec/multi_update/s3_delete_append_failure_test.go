@@ -44,12 +44,12 @@ func TestPrepareDeleteBatchesAppendFailure(t *testing.T) {
 			defer mpool.DeleteMPool(mp)
 
 			rowID := types.BuildTestRowid(1, 1)
-			src := batch.NewOffHeap([]string{"rowid", "pk"})
-			src.Vecs[RowIDIdx] = vector.NewOffHeapVecWithType(types.T_Rowid.ToType())
+			src := batch.New([]string{"rowid", "pk"})
+			src.Vecs[RowIDIdx] = vector.NewVec(types.T_Rowid.ToType(), mp)
 			if tc.varlenPK {
-				src.Vecs[PkIdx] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+				src.Vecs[PkIdx] = vector.NewVec(types.T_varchar.ToType(), mp)
 			} else {
-				src.Vecs[PkIdx] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				src.Vecs[PkIdx] = vector.NewVec(types.T_int64.ToType(), mp)
 			}
 			require.NoError(t, vector.AppendFixed(src.Vecs[RowIDIdx], rowID, false, mp))
 			if tc.varlenPK {
@@ -63,7 +63,7 @@ func TestPrepareDeleteBatchesAppendFailure(t *testing.T) {
 			writer := &s3WriterDelegate{deleteBlockMap: make([]map[types.Blockid]*deleteBlockData, 1)}
 			blockID := rowID.CloneBlockID()
 			if tc.preallocateRow {
-				block := newDeleteBlockData(src, 1)
+				block := newDeleteBlockData(src, 1, mp)
 				require.NoError(t, block.bat.Vecs[RowIDIdx].PreExtend(1, mp))
 				if tc.varlenPK {
 					require.NoError(t, block.bat.Vecs[PkIdx].PreExtend(1, mp))

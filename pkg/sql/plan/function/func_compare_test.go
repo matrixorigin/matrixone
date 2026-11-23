@@ -47,7 +47,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 		return data
 	}
 	makeJSON := func(t *testing.T, values []any, nullAt ...uint64) *vector.Vector {
-		v := vector.NewVec(types.T_json.ToType())
+		v := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		t.Cleanup(func() { v.Free(proc.Mp()) })
 		nullsAt := make(map[uint64]bool)
 		for _, i := range nullAt {
@@ -168,7 +168,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 
 	t.Run("mixed numeric selection nulls empty and result reuse", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{int64(1), uint64(math.MaxUint64), nil})
-		numbers := vector.NewVec(types.T_int64.ToType())
+		numbers := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		t.Cleanup(func() { numbers.Free(proc.Mp()) })
 		for _, v := range []int64{1, 1, 0} {
 			require.NoError(t, vector.AppendFixed(numbers, v, false, proc.Mp()))
@@ -199,7 +199,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 
 	t.Run("mixed JSON boolean operators preserve scalar category", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{true, false, float64(1), float64(0), "true", "false", nil, nil, true}, 7)
-		booleanValues := vector.NewVec(types.T_bool.ToType())
+		booleanValues := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 		t.Cleanup(func() { booleanValues.Free(proc.Mp()) })
 		for i, value := range []bool{true, true, true, false, true, false, true, false, false} {
 			require.NoError(t, vector.AppendFixed(booleanValues, value, i == 7 || i == 8, proc.Mp()))
@@ -316,7 +316,7 @@ func TestJSONComparisonCoercion(t *testing.T) {
 		} {
 			// Deliberately bypass admission to retain this internal defensive
 			// decoder probe; public raw JSON construction now rejects these bytes.
-			malformedJSON := vector.NewVec(types.T_blob.ToType())
+			malformedJSON := vector.NewVec(types.T_blob.ToType(), proc.Mp())
 			defer malformedJSON.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(malformedJSON, encoded, false, proc.Mp()))
 			malformedJSON.SetType(types.T_json.ToType())
@@ -399,7 +399,7 @@ func BenchmarkJSONBooleanComparison(b *testing.B) {
 	defer proc.Free()
 	const length = 1024
 
-	jsonValues := vector.NewVec(types.T_json.ToType())
+	jsonValues := vector.NewVec(types.T_json.ToType(), proc.Mp())
 	defer jsonValues.Free(proc.Mp())
 	for row := 0; row < length; row++ {
 		value := any(row&1 == 0)
@@ -473,14 +473,14 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 			var err error
 			leftVector, err = vector.NewConstBytes(types.T_json.ToType(), left, length, proc.Mp())
 			require.NoError(b, err)
-			rightVector = vector.NewVec(types.T_json.ToType())
+			rightVector = vector.NewVec(types.T_json.ToType(), proc.Mp())
 			defer leftVector.Free(proc.Mp())
 			defer rightVector.Free(proc.Mp())
 			for row := 0; row < length; row++ {
 				require.NoError(b, vector.AppendBytes(rightVector, right, false, proc.Mp()))
 			}
 		} else {
-			leftVector = vector.NewVec(types.T_json.ToType())
+			leftVector = vector.NewVec(types.T_json.ToType(), proc.Mp())
 			var err error
 			rightVector, err = vector.NewConstBytes(types.T_json.ToType(), right, length, proc.Mp())
 			require.NoError(b, err)
@@ -508,8 +508,8 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 	}
 
 	runColumns := func(b *testing.B, left, right []byte) {
-		leftVector := vector.NewVec(types.T_json.ToType())
-		rightVector := vector.NewVec(types.T_json.ToType())
+		leftVector := vector.NewVec(types.T_json.ToType(), proc.Mp())
+		rightVector := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		defer leftVector.Free(proc.Mp())
 		defer rightVector.Free(proc.Mp())
 		for row := 0; row < length; row++ {
@@ -534,7 +534,7 @@ func BenchmarkJSONDirectComparisonWideAndNestedArrays(b *testing.B) {
 	}
 
 	runConstantNull := func(b *testing.B, column []byte) {
-		leftVector := vector.NewVec(types.T_json.ToType())
+		leftVector := vector.NewVec(types.T_json.ToType(), proc.Mp())
 		rightVector := vector.NewConstNull(types.T_json.ToType(), length, proc.Mp())
 		defer leftVector.Free(proc.Mp())
 		defer rightVector.Free(proc.Mp())

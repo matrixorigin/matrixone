@@ -45,7 +45,7 @@ func TestParquetUUIDLogicalToTextBoundaries(t *testing.T) {
 			{parquet.NullValue().Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_varchar, 36, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 36, 0), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 36, NotNullable: false})
@@ -61,7 +61,7 @@ func TestParquetUUIDLogicalToTextBoundaries(t *testing.T) {
 			{parquet.FixedLenByteArrayValue(uuidLogicalFixtureBytes[0][:]).Level(0, 0, 0)},
 		})
 
-		vec := vector.NewVec(types.New(types.T_varchar, 35, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 35, 0), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), Width: 35, NotNullable: true})

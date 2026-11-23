@@ -198,7 +198,9 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
+// An equivalent but distinct view is a different pool under the strict
+// per-vector pool contract, so appending through it is rejected.
+func TestCopyIntoBatchesRejectsEquivalentAllocationSelection(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -220,9 +222,9 @@ func TestCopyIntoBatchesAcceptsEquivalentAllocationSelection(t *testing.T) {
 
 	var batches Batches
 	require.NoError(t, batches.CopyIntoBatchesWithAllocation(input, proc, first))
-	require.NoError(t, batches.CopyIntoBatchesWithAllocation(input, proc, second))
+	require.Error(t, batches.CopyIntoBatchesWithAllocation(input, proc, second))
 	require.Len(t, batches.Buf, 1)
-	require.Equal(t, 64, batches.RowCount())
+	require.Equal(t, 32, batches.RowCount())
 	require.Same(t, first, batches.Allocation())
 
 	batches.Clean(proc.Mp())

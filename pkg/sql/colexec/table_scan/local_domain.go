@@ -158,7 +158,7 @@ func (tableScan *TableScan) applyLocalDomains(proc *process.Process) error {
 	if len(rows) == bat.RowCount() {
 		return nil
 	}
-	return shrinkPopulatedVecs(bat, rows, proc.Mp())
+	return shrinkPopulatedVecs(bat, rows, tableScan.mp(proc))
 }
 
 // selectLocalDomains returns a borrowed mapping without mutating payload. The

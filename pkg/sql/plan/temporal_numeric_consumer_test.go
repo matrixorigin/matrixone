@@ -472,7 +472,7 @@ func temporalNumericColumn(typ types.Type) *Expr {
 func newTemporalNumericColumnBatch(t *testing.T, proc *process.Process, typ types.Type, values any, nulls []bool) *batch.Batch {
 	t.Helper()
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(typ)
+	input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 	var err error
 	switch values := values.(type) {
 	case []types.Date:

@@ -771,7 +771,7 @@ func executeLegacyFloatScope(t *testing.T, compiler *MockCompilerContext, def *p
 	defer exec.Free()
 	bat := batch.NewWithSize(1)
 	defer bat.Clean(proc.Mp())
-	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], -1.2345678901234567e-15, false, proc.Mp()))
 	bat.SetRowCount(1)
 	result, err := exec.Eval(proc, []*batch.Batch{bat}, nil)

@@ -60,7 +60,7 @@ func TestUnboundGroupMedianAcrossResultChunks(t *testing.T) {
 		inputs = append(inputs, input)
 		input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
 		input.Vecs[1] = testutil.MakeInt32Vector(values, nullRows, proc.Mp())
-		input.Vecs[2] = vector.NewVec(decimalType)
+		input.Vecs[2] = vector.NewVec(decimalType, proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[2], decimals, isNull, proc.Mp()))
 		input.SetRowCount(rows)
 	}

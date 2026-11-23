@@ -118,7 +118,7 @@ func (u *fulltext2CompactState) start(tf *TableFunction, proc *process.Process, 
 		return err
 	}
 	u.policy = policy
-	u.batch = tf.createResultBatch()
+	u.batch = tf.createResultBatch(proc.Mp())
 	u.inited = true
 	return nil
 }

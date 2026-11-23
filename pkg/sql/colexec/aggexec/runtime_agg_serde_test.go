@@ -162,7 +162,7 @@ func TestOptSplitResultReadsLegacyDistinctMapCountFrames(t *testing.T) {
 	// Reproduce the pre-M3 wire exactly: the outer field was the selected map
 	// count, while each physical chunk still emitted its own count-prefixed
 	// distinctHash frame.
-	combined := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	combined := vector.NewVec(types.T_int64.ToType(), mp)
 	defer combined.Free(mp)
 	require.NoError(t, combined.UnionBatch(
 		source.resultList[0], 0, 2, nil, mp))
@@ -305,11 +305,11 @@ func TestRuntimeAggSerdeEmptyChunkIsOneCompleteRecord(t *testing.T) {
 	ret.optInformation.chunkSize = 2
 	ret.resultList = append(
 		ret.resultList,
-		vector.NewOffHeapVecWithType(types.T_int64.ToType()),
+		vector.NewVec(types.T_int64.ToType(), mp),
 	)
 	ret.emptyList = append(
 		ret.emptyList,
-		vector.NewOffHeapVecWithType(types.T_bool.ToType()),
+		vector.NewVec(types.T_bool.ToType(), mp),
 	)
 	ret.bsFromEmptyList = append(ret.bsFromEmptyList, nil)
 
@@ -508,7 +508,7 @@ func TestRuntimeAggSerdeSparseChunkSelectionSkipsOmittedGroups(t *testing.T) {
 
 func TestOptSplitResultRejectsCorruptCountsBeforeAllocation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	source := vector.NewVec(types.T_int64.ToType(), mp)
 	defer func() {
 		source.Free(mp)
 		require.Zero(t, mp.CurrNB())

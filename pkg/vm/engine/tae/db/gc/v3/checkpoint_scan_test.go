@@ -88,7 +88,7 @@ func writeScanCatalogRow(t *testing.T, fs fileservice.FileService, mp *mpool.MPo
 	seqnums := make([]uint16, len(bat.Vecs))
 	for i, typ := range catalog.MoTablesTypes {
 		seqnums[i] = uint16(i)
-		bat.Vecs[i] = vector.NewVec(typ)
+		bat.Vecs[i] = vector.NewVec(typ, mp)
 		var value any
 		switch i {
 		case 0:
@@ -108,7 +108,7 @@ func writeScanCatalogRow(t *testing.T, fs fileservice.FileService, mp *mpool.MPo
 	}
 	n := len(catalog.MoTablesTypes)
 	seqnums[n], seqnums[n+1] = objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT
-	bat.Vecs[n], bat.Vecs[n+1] = vector.NewVec(objectio.TSType), vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[n], bat.Vecs[n+1] = vector.NewVec(objectio.TSType, mp), vector.NewVec(types.T_bool.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[n], types.BuildTS(ts, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[n+1], false, false, mp))
 	bat.SetRowCount(1)
@@ -123,7 +123,7 @@ func writeScanCatalogRow(t *testing.T, fs fileservice.FileService, mp *mpool.MPo
 
 func writeScanCheckpoint(t *testing.T, fs fileservice.FileService, mp *mpool.MPool, start, end int64, objects ...objectio.ObjectStats) *checkpoint.CheckpointEntry {
 	t.Helper()
-	bat := ckputil.NewObjectListBatch()
+	bat := ckputil.NewObjectListBatch(mp)
 	defer bat.Clean(mp)
 	packer := types.NewPacker()
 	defer packer.Close()

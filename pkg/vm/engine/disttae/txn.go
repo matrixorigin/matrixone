@@ -351,7 +351,7 @@ func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 	txn.unaccountInsertKeyOffsetsLocked(entry)
 	delete(txn.batchSelectList, bat)
 	entry.pkRange = insertKeyRange{}
-	bat.Clean(txn.proc.GetMPool())
+	bat.Clean(txn.workspaceMP())
 	entry.bat = nil
 }
 
@@ -385,13 +385,11 @@ func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) (
 		return false, nil
 	}
 
-	// The entry is workspace-owned: materializing borrowed data charges the
+	// The entry is workspace-owned: copying read-only columns charges the
 	// workspace account.
 	wmp := txn.workspaceMP()
-	for _, vec := range bat.Vecs {
-		if err := vec.PrepareDataForInplaceMutation(wmp); err != nil {
-			return false, err
-		}
+	if err := bat.OwnReadOnlyVectors(wmp); err != nil {
+		return false, err
 	}
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
@@ -463,7 +461,7 @@ func (txn *Transaction) mergeWorkspaceEntryBatchesLocked(
 	unionInsertKeyRange(dst, src)
 	txn.unaccountInsertKeyOffsetsLocked(src)
 	delete(txn.batchSelectList, src.bat)
-	src.bat.Clean(txn.proc.GetMPool())
+	src.bat.Clean(txn.workspaceMP())
 	src.bat = nil
 	return nil
 }
@@ -600,6 +598,24 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		return nil, err
 	}
 
+	// The workspace owns one pool. A caller batch (catalog tuples, raw
+	// WriteBatch input) is in the caller's pool: copy it into the workspace.
+	// The caller keeps ownership of its batch and frees it; the workspace
+	// never holds it.
+	if bat != nil && !txn.isWorkspaceCopy(bat) {
+		owned, copyErr := txn.copyWorkspaceBatch(bat)
+		if copyErr != nil {
+			return nil, copyErr
+		}
+		bat = owned
+		defer func() {
+			if err != nil {
+				txn.takeWorkspaceCopy(owned)
+				owned.Clean(txn.workspaceMP())
+			}
+		}()
+	}
+
 	txn.readOnly.Store(false)
 
 	pkCheckPos := -1
@@ -639,7 +655,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		rowIdVec, err := txn.batchAllocNewRowIds(ll)
 		defer func() {
 			if rowIdVec != nil {
-				rowIdVec.Free(txn.proc.Mp())
+				rowIdVec.Free(txn.workspaceMP())
 			}
 		}()
 
@@ -647,22 +663,14 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 			return nil, err
 		}
 
-		// A normal INSERT already owns both vectors through this workspace.
-		// Adopt the generated buffer instead of charging and copying it twice.
-		if txn.takeWorkspaceCopy(bat) {
-			genRowidVec = rowIdVec
-			bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
-			rowIdVec = nil // the batch is now the sole release owner
-		} else {
-			// Raw WriteBatch callers own their batch outside the workspace
-			// account. Their rowids cross an ownership boundary, so an
-			// independent, unaccounted copy is needed.
-			genRowidVec, err = rowIdVec.CloneToFlatCompact(txn.proc.Mp())
-			if err != nil {
-				return nil, err
-			}
-			bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+		// The batch is a workspace copy (caller batches were copied above):
+		// adopt the generated rowids, which share its pool.
+		if !txn.takeWorkspaceCopy(bat) {
+			return nil, moerr.NewInternalErrorNoCtx("workspace insert batch is not a workspace copy")
 		}
+		genRowidVec = rowIdVec
+		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+		rowIdVec = nil // the batch is now the sole release owner
 
 	}
 
@@ -708,7 +716,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		bat != nil && bat.RowCount() > 1 {
 
 		// attr: row_id, pk
-		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
+		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.workspaceMP()); err != nil {
 			return nil, err
 		}
 
@@ -2946,7 +2954,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 
 		fileName = stats[0].ObjectLocation().String()
-		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
+		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.Mp()); err != nil {
 			return false, err
 		}
 
@@ -3012,7 +3020,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 				// (issue #26796 ownership).
 				txn.unaccountInsertKeyOffsetsLocked(&writes[i])
 				txn.unaccountWorkspaceEntryLocked(&writes[i])
-				writes[i].bat.Clean(txn.proc.GetMPool())
+				writes[i].bat.Clean(txn.workspaceMP())
 				continue
 			}
 			writes[w] = writes[i]
@@ -3213,7 +3221,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 		fileName = stats[0].ObjectLocation().String()
 
-		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
+		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.Mp()); err != nil {
 			return false, err
 		}
 
@@ -3278,7 +3286,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 				// entry could never reach this delete-dump retirement.
 				txn.unaccountInsertKeyOffsetsLocked(&writes[i])
 				txn.unaccountWorkspaceEntryLocked(&writes[i])
-				writes[i].bat.Clean(txn.proc.GetMPool())
+				writes[i].bat.Clean(txn.workspaceMP())
 				continue
 			}
 			writes[w] = writes[i]
@@ -3724,7 +3732,7 @@ func (txn *Transaction) stageWorkspaceRecordLocked(
 	// workspace, so nothing else owns it — and fails this write with
 	// the workspace untouched.
 	if err := txn.registerUnpublishedObjectRecordLocked(typ, inputBat); err != nil {
-		copied.Clean(txn.proc.Mp())
+		copied.Clean(txn.workspaceMP())
 		return nil, err
 	}
 
@@ -4468,16 +4476,14 @@ func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
 	)
 }
 
+// deleteBatch filters bat, a delete batch of batMP, in place.
 func (txn *Transaction) deleteBatch(
 	bat *batch.Batch,
 	databaseId, tableId uint64,
+	batMP *mpool.MPool,
 ) (*batch.Batch, error) {
-	// bat is the caller's delete input, not a workspace copy. It carries no
-	// allocation account, so materializing borrowed data is unaccounted.
-	for _, vec := range bat.Vecs {
-		if err := vec.PrepareDataForInplaceMutation(txn.proc.Mp()); err != nil {
-			return bat, err
-		}
+	if err := bat.OwnReadOnlyVectors(batMP); err != nil {
+		return bat, err
 	}
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
@@ -4514,7 +4520,7 @@ func (txn *Transaction) deleteBatch(
 		// update workspace
 	}
 	// cn rowId antiShrink
-	if err := bat.Shrink(cnRowIdOffsets, true, txn.proc.Mp()); err != nil {
+	if err := bat.Shrink(cnRowIdOffsets, true, batMP); err != nil {
 		return bat, err
 	}
 	if bat.RowCount() == 0 {
@@ -4531,7 +4537,7 @@ func (txn *Transaction) deleteBatch(
 			sels = append(sels, int64(k))
 		}
 	}
-	if err := bat.Shrink(sels, true, txn.proc.Mp()); err != nil {
+	if err := bat.Shrink(sels, true, batMP); err != nil {
 		return bat, err
 	}
 	return bat, nil
@@ -4648,7 +4654,7 @@ func (txn *Transaction) batchAllocNewRowIds(count int) (ret *vector.Vector, err 
 	}
 	defer func() {
 		if err != nil {
-			ret.Free(txn.proc.Mp())
+			ret.Free(mp)
 			ret = nil
 		}
 	}()
@@ -4788,7 +4794,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				continue
 			}
 
-			mp := txn.proc.GetMPool()
+			mp := txn.workspaceMP()
 
 			var rowIdVector *vector.Vector
 			if a.typ == INSERT {
@@ -4900,7 +4906,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
 				if err := mergeutil.SortColumnsByIndexWithBuf(
-					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); err != nil {
+					txn.writes[i].bat.Vecs, 0, txn.workspaceMP(), &sortBuf, &shuffleBuf); err != nil {
 					return err
 				}
 			}
@@ -5195,7 +5201,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	// an aborting pass leaves the workspace exactly as it found it.
 	cleanStagedRepubs := func() {
 		for k := range staged {
-			staged[k].bat.Clean(txn.proc.Mp())
+			staged[k].bat.Clean(txn.workspaceMP())
 		}
 		staged = staged[:0]
 	}
@@ -5258,7 +5264,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 					return moerr.NewInternalErrorNoCtx(
 						"fault injection: object compaction publish failed")
 				}
-				bat := colexec.AllocCNS3ResultBat(false)
+				bat := colexec.AllocCNS3ResultBat(false, txn.proc.Mp())
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
 					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
 					bat.Clean(txn.proc.Mp())
@@ -5456,7 +5462,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		for _, st := range recordStages {
 			txn.retractUnpublishedRecordAdmissionLocked(st)
 			if st.bat != nil {
-				st.bat.Clean(txn.proc.Mp())
+				st.bat.Clean(txn.workspaceMP())
 				st.bat = nil
 			}
 		}
@@ -6236,7 +6242,7 @@ func (txn *Transaction) delTransaction() {
 		}
 		txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
 		txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
-		txn.writes[i].bat.Clean(txn.proc.Mp())
+		txn.writes[i].bat.Clean(txn.workspaceMP())
 	}
 	txn.assertWorkspaceAccountingLocked()
 

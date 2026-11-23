@@ -32,7 +32,7 @@ import (
 func TestTopNVectorAppliesDistanceRangeBeforeHeap(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
 	defer entries.Free(mp)
 	for _, value := range []float32{1, 2, 3, 4} {
 		require.NoError(t, vector.AppendArray(entries, []float32{value}, false, mp))
@@ -65,7 +65,7 @@ func TestTopNVectorAppliesDistanceRangeBeforeHeap(t *testing.T) {
 func TestTopNVectorL1BoundComparesInPublicFloat32Domain(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	entries := vector.NewVec(types.New(types.T_array_float64, 1, 0))
+	entries := vector.NewVec(types.New(types.T_array_float64, 1, 0), mp)
 	defer entries.Free(mp)
 	require.NoError(t, vector.AppendArray(entries, []float64{1.00000001}, false, mp))
 
@@ -86,7 +86,7 @@ func TestTopNVectorL1BoundComparesInPublicFloat32Domain(t *testing.T) {
 func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
 	defer entries.Free(mp)
 	require.NoError(t, vector.AppendArray(entries, []float32{1}, false, mp))
 
@@ -110,7 +110,7 @@ func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
 func TestTopNVectorDoesNotMutateSelectedRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
 	defer entries.Free(mp)
 	require.NoError(t, vector.AppendArray(entries, []float32{1}, false, mp))
 	require.NoError(t, vector.AppendArray(entries, []float32(nil), true, mp))
@@ -160,7 +160,7 @@ func TestTopNVectorBoundsDescendingCandidatesByLimit(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	entries := vector.NewVec(types.New(types.T_array_float32, 1, 0), mp)
 	defer entries.Free(mp)
 	for row := 0; row < rows; row++ {
 		require.NoError(t, vector.AppendArray(entries, []float32{float32(rows - row)}, false, mp))

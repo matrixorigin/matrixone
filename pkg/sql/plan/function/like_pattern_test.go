@@ -164,7 +164,7 @@ func TestLikeRegexpBatchHonorsCancellation(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/constant=%v", tc.name, constant), func(t *testing.T) {
 				proc := newLikeTestProcess(t)
 				const rows = 3
-				values := vector.NewVec(types.T_varchar.ToType())
+				values := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				defer values.Free(proc.Mp())
 				for range rows {
 					require.NoError(t, vector.AppendBytes(values, []byte(tc.value), false, proc.Mp()))
@@ -175,7 +175,7 @@ func TestLikeRegexpBatchHonorsCancellation(t *testing.T) {
 					patterns, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.pattern), rows, proc.Mp())
 					require.NoError(t, err)
 				} else {
-					patterns = vector.NewVec(types.T_varchar.ToType())
+					patterns = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 					for range rows {
 						require.NoError(t, vector.AppendBytes(patterns, []byte(tc.pattern), false, proc.Mp()))
 					}
@@ -231,7 +231,7 @@ func TestLikeFastPathBatchHonorsCancellation(t *testing.T) {
 				proc := newLikeTestProcess(t)
 				// The smallest batch crossing the 256-row cancellation interval.
 				const rows = 257
-				values := vector.NewVec(types.T_varchar.ToType())
+				values := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				defer values.Free(proc.Mp())
 				for range rows {
 					require.NoError(t, vector.AppendBytes(values, []byte(tc.value), false, proc.Mp()))

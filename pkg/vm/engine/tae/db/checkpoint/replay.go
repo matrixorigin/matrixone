@@ -288,7 +288,7 @@ func (c *CkpReplayer) replayObjectList(
 	ctx context.Context,
 	forSys bool,
 ) (maxTS types.TS, maxLsn uint64, err error) {
-	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	tmpBatch := ckputil.MakeDataScanTableIDBatch(common.CheckpointAllocator)
 	defer tmpBatch.Clean(common.CheckpointAllocator)
 	defer c.ckpReader.Reset(ctx)
 	for {

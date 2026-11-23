@@ -28,7 +28,7 @@ import (
 func TestDecimalAssignmentChecksDeclaredPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typ := types.New(types.T_decimal64, 5, 2)
-	source := vector.NewVec(typ)
+	source := vector.NewVec(typ, proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(source, types.Decimal64(100000), false, proc.Mp()))
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -132,7 +132,7 @@ func TestDecimalAssignmentRangeAdjustsOutsideStrictMode(t *testing.T) {
 			proc.WarningSink = warnings
 			sourceType := types.New(types.T_decimal64, 7, 2)
 			targetType := types.New(types.T_decimal64, 5, 2)
-			source := vector.NewVec(sourceType)
+			source := vector.NewVec(sourceType, proc.Mp())
 			defer source.Free(proc.Mp())
 			require.NoError(t, vector.AppendFixed(source, types.Decimal64(123456), false, proc.Mp()))
 			target := vector.NewConstNull(targetType, 1, proc.Mp())
@@ -235,7 +235,7 @@ func BenchmarkDecimalAssignmentWidening(b *testing.B) {
 			b.Run(tc.name+"/"+mode.name, func(b *testing.B) {
 				proc := testutil.NewProcess(b)
 				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "STRICT_TRANS_TABLES", nil })
-				src := vector.NewVec(tc.src)
+				src := vector.NewVec(tc.src, proc.Mp())
 				defer src.Free(proc.Mp())
 				for i := 0; i < n; i++ {
 					if err := vector.AppendFixed(src, types.Decimal64(i*101), false, proc.Mp()); err != nil {
@@ -292,7 +292,7 @@ func TestDecimalAssignmentFromMaterializedByteString(t *testing.T) {
 			defer proc.Free()
 			warnings := &numericWarningSession{}
 			proc.WarningSink = warnings
-			source := vector.NewVec(types.New(types.T_varbinary, 8, 0))
+			source := vector.NewVec(types.New(types.T_varbinary, 8, 0), proc.Mp())
 			defer source.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(source, []byte(tc.text), false, proc.Mp()))
 			typ := types.New(types.T_decimal64, 4, 1)

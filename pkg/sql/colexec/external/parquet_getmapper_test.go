@@ -100,7 +100,7 @@ func TestGetMapper_WideningConversions(t *testing.T) {
 		vals := []parquet.Value{parquet.Int32Value(123), parquet.Int32Value(-456)}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -115,7 +115,7 @@ func TestGetMapper_WideningConversions(t *testing.T) {
 		vals := []parquet.Value{parquet.Int32Value(100), parquet.Int32Value(200)}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_uint64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -130,7 +130,7 @@ func TestGetMapper_WideningConversions(t *testing.T) {
 		vals := []parquet.Value{parquet.FloatValue(1.5), parquet.FloatValue(2.5)}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -266,7 +266,7 @@ func TestGetMapper_StringToNumeric(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(tc.targetType, 0, 0))
+			vec := vector.NewVec(types.New(tc.targetType, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.targetType), NotNullable: true})
 			require.NotNil(t, mp)
@@ -337,7 +337,7 @@ func TestGetMapper_StringToTemporal(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(tc.targetType, 0, 0))
+			vec := vector.NewVec(types.New(tc.targetType, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.targetType), NotNullable: true})
 			require.NotNil(t, mp)
@@ -398,7 +398,7 @@ func TestGetMapper_StringToDecimal(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(tc.targetType, tc.width, tc.scale))
+			vec := vector.NewVec(types.New(tc.targetType, tc.width, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.targetType), NotNullable: true, Width: tc.width, Scale: tc.scale})
 			require.NotNil(t, mp)
@@ -421,7 +421,7 @@ func TestGetMapper_DictionaryEncoding(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -438,7 +438,7 @@ func TestGetMapper_DictionaryEncoding(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_uint64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -455,7 +455,7 @@ func TestGetMapper_DictionaryEncoding(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -500,7 +500,7 @@ func TestGetMapper_StringConversionErrors(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(tc.targetType, 0, 0))
+			vec := vector.NewVec(types.New(tc.targetType, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.targetType), NotNullable: true})
 			require.NotNil(t, mp)
@@ -524,7 +524,7 @@ func TestGetMapper_StringConversionWithDictionary(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_uint8, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint8, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint8), NotNullable: true})
 		require.NotNil(t, mp)
@@ -543,7 +543,7 @@ func TestGetMapper_StringConversionWithDictionary(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
 		require.NotNil(t, mp)
@@ -580,7 +580,7 @@ func TestGetMapper_FixedLenByteArrayConversions(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_uint8, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint8, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_uint8), NotNullable: true})
 		require.NotNil(t, mp)
@@ -617,7 +617,7 @@ func TestGetMapper_RemainingTypes(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_char, 3, 0))
+		vec := vector.NewVec(types.New(types.T_char, 3, 0), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_char), Width: 3, NotNullable: true})
@@ -648,7 +648,7 @@ func TestGetMapper_RemainingTypes(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_text, 0, 0))
+		vec := vector.NewVec(types.New(types.T_text, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_text), NotNullable: true})
 		require.NotNil(t, mp)
@@ -678,7 +678,7 @@ func TestGetMapper_RemainingTypes(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_binary, 0, 0))
+		vec := vector.NewVec(types.New(types.T_binary, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_binary), NotNullable: true})
 		require.NotNil(t, mp)
@@ -715,7 +715,7 @@ func TestGetMapper_ByteArrayWithNulls(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_int32)})
 		require.NotNil(t, mp)
@@ -751,7 +751,7 @@ func TestGetMapper_ByteArrayWithNulls(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64)})
 		require.NotNil(t, mp)
@@ -784,7 +784,7 @@ func TestGetMapper_ByteArrayWithNulls(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_date, 0, 0))
+		vec := vector.NewVec(types.New(types.T_date, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_date)})
 		require.NotNil(t, mp)
@@ -817,7 +817,7 @@ func TestGetMapper_ByteArrayWithNulls(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2})
 		require.NotNil(t, mp)
@@ -878,7 +878,7 @@ func TestGetMapper_FixedLenByteArray(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(tc.targetType, 0, 0))
+			vec := vector.NewVec(types.New(tc.targetType, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.targetType), NotNullable: true})
 			require.NotNil(t, mp)
@@ -902,7 +902,7 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_int16, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int16, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int16), NotNullable: true})
 		require.NotNil(t, mp)
@@ -921,7 +921,7 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_uint16, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint16, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint16), NotNullable: true})
 		require.NotNil(t, mp)
@@ -940,7 +940,7 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -959,7 +959,7 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_uint64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -978,7 +978,7 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_float32, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float32, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float32), NotNullable: true})
 		require.NotNil(t, mp)
@@ -997,7 +997,7 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -1016,7 +1016,7 @@ func TestGetMapper_DictByteArray_MoreTypes(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_decimal128, 10, 2))
+		vec := vector.NewVec(types.New(types.T_decimal128, 10, 2), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_decimal128), NotNullable: true, Width: 10, Scale: 2})
 		require.NotNil(t, mp)
@@ -1098,7 +1098,7 @@ func TestGetMapper_FixedLenByteArrayDecimal(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_decimal64), NotNullable: true, Width: 10, Scale: 2})
 		require.NotNil(t, mp)
@@ -1138,7 +1138,7 @@ func TestGetMapper_FixedLenByteArrayDecimal(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_decimal128, 20, 2))
+		vec := vector.NewVec(types.New(types.T_decimal128, 20, 2), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_decimal128), NotNullable: true, Width: 20, Scale: 2})
 		require.NotNil(t, mp)
@@ -1178,7 +1178,7 @@ func TestGetMapper_FixedLenByteArrayDecimalWithDict(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		vec := vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_decimal64), NotNullable: true, Width: 10, Scale: 2})
 		require.NotNil(t, mp)

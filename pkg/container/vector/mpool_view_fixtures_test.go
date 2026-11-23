@@ -102,9 +102,9 @@ func finalizeTestVectorAllocationAccount(
 	require.NoError(t, err)
 }
 
-// newAccountedTestVector returns an empty vector for a test that allocates it
-// through an accounted view (state.view). The vector itself carries no account.
-func newAccountedTestVector(t testing.TB, typ types.Type) *Vector {
+// newAccountedTestVector returns an empty vector created with mp, normally an
+// accounted view (state.view): a vector's pool is fixed when it is created.
+func newAccountedTestVector(t testing.TB, typ types.Type, mp *mpool.MPool) *Vector {
 	t.Helper()
-	return NewOffHeapVecWithType(typ)
+	return NewVec(typ, mp)
 }

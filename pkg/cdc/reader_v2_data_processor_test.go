@@ -260,8 +260,8 @@ func buildBatch(t *testing.T, mp *mpool.MPool, pkVals []int32, ts types.TS) *bat
 	}
 
 	bat := batch.New([]string{"pk", "ts"})
-	pkVec := vector.NewVec(types.T_int32.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
+	pkVec := vector.NewVec(types.T_int32.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 
 	for range pkVals {
 		if err := vector.AppendFixed(tsVec, ts, false, mp); err != nil {
@@ -369,7 +369,7 @@ func TestDataProcessor_ProcessChange_Snapshot(t *testing.T) {
 
 	// Create a non-empty batch (empty batch is skipped after Bug #4 fix)
 	bat := batch.New([]string{"id"})
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	_ = vector.AppendFixed(vec, int32(1), false, mp)
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
@@ -421,7 +421,7 @@ func TestDataProcessor_ProcessChange_Snapshot_WithSplitTxn(t *testing.T) {
 
 	// Create a non-empty batch (empty batch is skipped after Bug #4 fix)
 	bat := batch.New([]string{"id"})
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	_ = vector.AppendFixed(vec, int32(1), false, mp)
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)

@@ -40,7 +40,7 @@ func TestPrefilterMembership(t *testing.T) {
 	idx := NewIndex([]*Segment{seg}, nil)
 
 	// Membership over the EVEN pks {0,2,4,6,8}, built exactly as the pushdown does.
-	vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+	vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 	for i := int64(0); i < 10; i += 2 {
 		require.NoError(t, vector.AppendFixed(vec, i, false, mp))
 	}
@@ -119,7 +119,7 @@ func TestPhraseDfFilterIndependent(t *testing.T) {
 
 	// WHERE prefilter allowing only {0,1} — df must stay 4 (corpus), so doc 0's score
 	// is unchanged; before the fix df shrank to 2 and the score differed.
-	vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+	vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 	require.NoError(t, vector.AppendFixed(vec, int64(0), false, mp))
 	require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
 	fb, err := docfilter.Build(vec)

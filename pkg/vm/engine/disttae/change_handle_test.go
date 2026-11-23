@@ -142,7 +142,7 @@ func TestPartitionChangesHandleCloseCleansBufferedBatches(t *testing.T) {
 	baseline := mp.CurrNB()
 
 	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(1), false, mp))
 	data.SetRowCount(1)
 
@@ -189,7 +189,7 @@ func TestPartitionChangesHandleVisibleStateResourcesUseBufferedReplay(t *testing
 	defer mpool.DeleteMPool(mp)
 
 	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(7), false, mp))
 	data.SetRowCount(1)
 	defer data.Clean(mp)
@@ -518,7 +518,7 @@ func (h *batchThenErrorChangesHandle) Next(
 		return nil, nil, engine.ChangesHandle_Tail_done, h.err
 	}
 	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	if err := vector.AppendFixed(data.Vecs[0], int64(1), false, mp); err != nil {
 		return data, nil, engine.ChangesHandle_Tail_done, err
 	}
@@ -535,7 +535,7 @@ func (s *stubChangesHandle) Next(_ context.Context, mp *mpool.MPool) (*batch.Bat
 	}
 	s.remaining--
 	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	const rowsPerBatch = 4096
 	if err := data.Vecs[0].PreExtend(rowsPerBatch, mp); err != nil {
 		return nil, nil, engine.ChangesHandle_Tail_done, err

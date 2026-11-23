@@ -64,7 +64,7 @@ func TestLegacyTimestampRuntimeNullAssignment(t *testing.T) {
 			// prepared executions do; no wall-clock sleep or RNG oracle.
 			for _, null := range []bool{true, false, true} {
 				b := batch.NewWithSize(1)
-				b.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+				b.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 				require.NoError(t, vector.AppendFixed(b.Vecs[0], literal, null, proc.Mp()))
 				b.SetRowCount(1)
 				executor.ResetForNextQuery()

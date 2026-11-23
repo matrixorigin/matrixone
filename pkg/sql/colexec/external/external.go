@@ -262,7 +262,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			attrs[i] = attr.ColName
 		}
-		external.ctr.buf = batch.NewOffHeap(attrs)
+		external.ctr.buf = batch.New(attrs)
 		flag := param.ParallelLoad
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -275,7 +275,8 @@ func (external *External) Prepare(proc *process.Process) error {
 			colType := &param.Cols[colIndex].Typ
 			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)) ||
 				loadAttributedDecimalTextInput(param, colType))
-			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+			// Readers grow the output through param.outputPool.
+			external.ctr.buf.Vecs[i] = vector.NewVec(typ, param.outputPool(proc))
 		}
 	}
 	return nil
@@ -393,11 +394,19 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	if external.ctr.buf != nil {
-		external.ctr.buf.CleanOnlyData()
+	// A publishing reader (Arrow) returns a batch it owns; every other reader
+	// fills the operator's own buffer.
+	out := external.ctr.buf
+	var fileFinished bool
+	var err error
+	if publisher, ok := external.reader.(BatchPublisher); ok {
+		out, fileFinished, err = publisher.PublishBatch(ctx, proc, analyzer)
+	} else {
+		if out != nil {
+			out.CleanOnlyData()
+		}
+		fileFinished, err = external.reader.ReadBatch(ctx, out, proc, analyzer)
 	}
-
-	fileFinished, err := external.reader.ReadBatch(ctx, external.ctr.buf, proc, analyzer)
 	if err != nil {
 		external.reader.Close()
 		external.fileOpened = false
@@ -407,8 +416,8 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		return result, err
 	}
-	if external.ctr.buf != nil && external.ctr.buf.RowCount() > 0 {
-		if err := external.applyIcebergDeletes(ctx, external.ctr.buf, proc); err != nil {
+	if out != nil && out.RowCount() > 0 {
+		if err := external.applyIcebergDeletes(ctx, out, proc); err != nil {
 			external.reader.Close()
 			external.fileOpened = false
 			param.Fileparam.End = true
@@ -417,6 +426,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if fileFinished {
+		// Closing the file keeps a published batch: it is this call's output.
 		if err := external.reader.Close(); err != nil {
 			external.fileOpened = false
 			param.Fileparam.End = true
@@ -428,12 +438,12 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		external.finishCurrentFile(param)
 	}
 
-	analyzer.Input(external.ctr.buf)
+	analyzer.Input(out)
 
-	result.Batch = external.ctr.buf
-	if external.ctr.buf != nil {
-		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
-		param.addParquetProfile(process.ParquetProfileStats{PeakBatchBytes: int64(external.ctr.buf.Size())})
+	result.Batch = out
+	if out != nil {
+		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, out.Size())
+		param.addParquetProfile(process.ParquetProfileStats{PeakBatchBytes: int64(out.Size())})
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 

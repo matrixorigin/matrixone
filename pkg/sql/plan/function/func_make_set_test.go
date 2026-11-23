@@ -93,7 +93,7 @@ func TestMakeSetDecimal(t *testing.T) {
 				if constant {
 					n = 3
 				}
-				bits := vector.NewVec(group.typ)
+				bits := vector.NewVec(group.typ, proc.Mp())
 				t.Cleanup(func() { bits.Free(proc.Mp()) })
 				for _, r := range rows {
 					isNull := r.value == "NULL"

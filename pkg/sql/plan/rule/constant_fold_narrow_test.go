@@ -43,7 +43,7 @@ func TestGetConstantValueNarrowVec(t *testing.T) {
 		{types.T_array_uint8, types.ArrayToBytes([]uint8{1, 2, 3})},
 	}
 	for _, c := range cases {
-		vec := vector.NewVec(c.oid.ToType())
+		vec := vector.NewVec(c.oid.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, c.data, false, mp))
 		lit := GetConstantValue(vec, true, 0, types.StringSourceExpression)
 		require.NotNilf(t, lit, "%s should fold", c.oid)
@@ -58,7 +58,7 @@ func TestGetConstantValueEncodesExplicitStringSource(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytesList(vec, [][]byte{[]byte("value"), nil}, []bool{false, true}, mp))
 	defer vec.Free(mp)
 

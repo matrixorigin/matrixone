@@ -50,7 +50,7 @@ func TestLegacyClassDecodeNormalization(t *testing.T) {
 			case "constant_null":
 				source = NewConstNull(types.T_int64.ToType(), 3, mp)
 			case "fixed":
-				source = NewVec(types.T_int64.ToType())
+				source = NewVec(types.T_int64.ToType(), mp)
 				for row, value := range []int64{11, 22, 33} {
 					require.NoError(t, AppendFixed(source, value, row == 1, mp))
 				}
@@ -61,7 +61,7 @@ func TestLegacyClassDecodeNormalization(t *testing.T) {
 					typ = types.T_json.ToType()
 					values = [][]byte{jsonAdmissionValue(t, `[1]`), nil, jsonAdmissionValue(t, `{"value":"longer than inline storage"}`)}
 				}
-				source = NewVec(typ)
+				source = NewVec(typ, mp)
 				for row, value := range values {
 					require.NoError(t, AppendBytes(source, value, row == 1, mp))
 				}
@@ -87,7 +87,7 @@ func TestLegacyClassDecodeNormalization(t *testing.T) {
 							}
 							encoded[0] = class.tag
 							before := bytes.Clone(encoded)
-							target := NewVec(types.T_any.ToType())
+							target := NewVec(types.T_any.ToType(), mp)
 							t.Cleanup(func() { target.Free(mp) })
 							var decodeErr error
 							switch mode {
@@ -95,7 +95,7 @@ func TestLegacyClassDecodeNormalization(t *testing.T) {
 								decodeErr = target.UnmarshalBinary(encoded)
 							case "trusted":
 								if !class.invalid {
-									checked := NewVec(types.T_any.ToType())
+									checked := NewVec(types.T_any.ToType(), mp)
 									t.Cleanup(func() { checked.Free(mp) })
 									require.NoError(t, checked.UnmarshalBinary(encoded))
 								}

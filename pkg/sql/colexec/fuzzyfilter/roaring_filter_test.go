@@ -25,7 +25,7 @@ import (
 // makeVec creates a vector with explicit NULLs for testing.
 func makeVec[T canUseRoaring](t *testing.T, mp *mpool.MPool, typ types.Type, vals []T, isNull []bool) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixedList(vec, vals, isNull, mp))
 	return vec
 }
@@ -222,7 +222,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 
 	t.Run("int8", func(t *testing.T) {
 		f := newRoaringFilter(types.T_int8)
-		vec := vector.NewVec(types.T_int8.ToType())
+		vec := vector.NewVec(types.T_int8.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(vec, []int8{1, 0, 3}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
 		f.addFunc(f, vec)
@@ -231,7 +231,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 
 	t.Run("int16", func(t *testing.T) {
 		f := newRoaringFilter(types.T_int16)
-		vec := vector.NewVec(types.T_int16.ToType())
+		vec := vector.NewVec(types.T_int16.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(vec, []int16{100, 0, 200}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
 		f.addFunc(f, vec)
@@ -240,7 +240,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 
 	t.Run("uint8", func(t *testing.T) {
 		f := newRoaringFilter(types.T_uint8)
-		vec := vector.NewVec(types.T_uint8.ToType())
+		vec := vector.NewVec(types.T_uint8.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(vec, []uint8{10, 0, 20}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
 		f.addFunc(f, vec)
@@ -249,7 +249,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 
 	t.Run("uint16", func(t *testing.T) {
 		f := newRoaringFilter(types.T_uint16)
-		vec := vector.NewVec(types.T_uint16.ToType())
+		vec := vector.NewVec(types.T_uint16.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(vec, []uint16{1000, 0, 2000}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
 		f.addFunc(f, vec)
@@ -258,7 +258,7 @@ func TestRoaringMultipleTypes(t *testing.T) {
 
 	t.Run("uint32", func(t *testing.T) {
 		f := newRoaringFilter(types.T_uint32)
-		vec := vector.NewVec(types.T_uint32.ToType())
+		vec := vector.NewVec(types.T_uint32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(vec, []uint32{50000, 0, 60000}, []bool{false, true, false}, mp))
 		defer vec.Free(mp)
 		f.addFunc(f, vec)

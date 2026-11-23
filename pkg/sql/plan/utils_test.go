@@ -3505,7 +3505,7 @@ func TestConstantTransposeArithmeticSemantics(t *testing.T) {
 			normalized, err := ConstantTranspose(DeepCopyExpr(source), proc)
 			require.NoError(t, err)
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(typ)
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			defer input.Clean(proc.Mp())
 			if tc.overflow {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(math.MaxInt64), false, proc.Mp()))

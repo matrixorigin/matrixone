@@ -185,7 +185,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		nameVecType := types.T_varchar.ToType()
 
 		// a. varchar vector ("value1", "value2", "value3")
-		arg1AsColValuesVec := vector.NewVec(inVecType)
+		arg1AsColValuesVec := vector.NewVec(inVecType, nil)
 		if err := arg1AsColValuesVec.UnmarshalBinary(args[1].GetVec().GetData()); err != nil {
 			return -1, -1
 		}
@@ -214,7 +214,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		// use the checked physical serializers instead.
 		function.PhysicalSerialHelper(arg0AsColNameVec, nil, ps, true)
 		function.PhysicalSerialHelper(arg1AsColValuesVec, nil, ps, true)
-		arg1ForPrefixInVec := vector.NewVec(nameVecType)
+		arg1ForPrefixInVec := vector.NewVec(nameVecType, mp)
 		defer arg1ForPrefixInVec.Free(mp)
 		for i := 0; i < inExprListLen; i++ {
 			if err := vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp); err != nil {

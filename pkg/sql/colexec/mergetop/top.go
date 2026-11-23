@@ -58,7 +58,10 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	} else {
 		mergeTop.OpAnalyzer.Reset()
 	}
-	if err = mergeTop.ctr.allocationViews(proc.Mp()); err != nil {
+	if err = mergeTop.ctr.ensureBufMP(proc); err != nil {
+		return err
+	}
+	if err = mergeTop.ctr.allocationViews(mergeTop.ctr.bufMP); err != nil {
 		return err
 	}
 	if mergeTop.OrderedStreams {
@@ -206,7 +209,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			} else {
 				vec, err := ctr.executorsForOrderList[i].EvalWithoutResultReusing(proc, []*batch.Batch{bat}, nil)
 				if err != nil {
-					bat.Clean(proc.Mp())
+					ctr.cleanOwned(proc, bat)
 					return false, err
 				}
 				ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
@@ -224,9 +227,14 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 			}
 
 			if ctr.bat == nil {
-				ctr.bat = batch.NewOffHeapWithSize(len(bat.Vecs))
+				retainedMP, err := ctr.retainedMP(proc)
+				if err != nil {
+					ctr.cleanOwned(proc, bat)
+					return false, err
+				}
+				ctr.bat = batch.NewWithSize(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
-					ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+					ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType(), retainedMP)
 				}
 			}
 
@@ -251,10 +259,10 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 		}
 
 		if err := ctr.processBatch(ap.ctr.limit, bat, proc); err != nil {
-			bat.Clean(proc.Mp())
+			ctr.cleanOwned(proc, bat)
 			return false, err
 		}
-		bat.Clean(proc.Mp())
+		ctr.cleanOwned(proc, bat)
 	}
 }
 
@@ -359,7 +367,7 @@ func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process
 		return err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-		ctr.bat.Vecs[i].Free(proc.Mp())
+		ctr.bat.Vecs[i].Free(ctr.ownPool(proc, ctr.bat.Vecs[i]))
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	result.Batch = ctr.bat
@@ -379,7 +387,7 @@ func cloneMergeTopBatch(
 		return nil, err
 	}
 	if err = source.CloneTo(destination, view); err != nil {
-		destination.Clean(proc.Mp())
+		destination.Clean(view)
 		return nil, err
 	}
 	return destination, nil

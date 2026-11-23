@@ -62,7 +62,7 @@ func TestTopOrderedResidentDoesNotRequireSpillResources(t *testing.T) {
 			}
 			for range 2 {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 				resetChildren(tc.arg, []*batch.Batch{bat})
 				for next := 12; next > 0; next-- {
 					key := next
@@ -195,8 +195,8 @@ func testTopResidentWinnerAdmission(t *testing.T, ordered bool) {
 			tc.arg.ctr.residentByteLimit = 4096
 			for attempt := 0; attempt < 2; attempt++ {
 				bat := batch.NewWithSize(2)
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
+				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 				for row := 0; row < 128; row++ {
 					key := int64(128 - row)
 					// Keep this input non-monotone so the test still exercises
@@ -272,8 +272,8 @@ func benchmarkSmallVarlenTop(b *testing.B, ordered bool) {
 		payload := bytes.Repeat([]byte("x"), 64)
 		for k := range bats {
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 			for j := 0; j < 8192; j++ {
 				require.NoError(b, vector.AppendFixed(bat.Vecs[0], int64(k*8192+j), false, tc.proc.Mp()))
 				require.NoError(b, vector.AppendBytes(bat.Vecs[1], payload, false, tc.proc.Mp()))

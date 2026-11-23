@@ -116,9 +116,9 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.rbat = batch.NewWithSize(len(productl2.Result))
 				for i, rp := range productl2.Result {
 					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType(), proc.Mp())
 					} else {
-						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType(), proc.Mp())
 					}
 				}
 			} else {
@@ -198,9 +198,9 @@ func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyz
 	// AppendWithCopy clone inherit the producer's allocation selection.
 	for i := range batches {
 		if ctr.bat == nil {
-			ctr.bat = batch.NewOffHeapWithSize(len(batches[i].Vecs))
+			ctr.bat = batch.NewWithSize(len(batches[i].Vecs))
 			for j, source := range batches[i].Vecs {
-				ctr.bat.Vecs[j] = vector.NewOffHeapVecWithType(*source.GetType())
+				ctr.bat.Vecs[j] = vector.NewVec(*source.GetType(), proc.Mp())
 			}
 		}
 		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), batches[i])

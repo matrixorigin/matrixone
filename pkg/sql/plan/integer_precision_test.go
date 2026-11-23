@@ -122,7 +122,7 @@ func TestIntegerPrecisionOldConsumerExecutesWidenedSignature(t *testing.T) {
 	require.NoError(t, err)
 	defer executor.Free()
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int8.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
 	defer input.Clean(proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int8(100), false, proc.Mp()))
 	input.SetRowCount(1)

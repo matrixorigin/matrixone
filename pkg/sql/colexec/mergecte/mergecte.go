@@ -260,11 +260,11 @@ func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, 
 	}
 	replacement, err := ctr.memory.BeginReplacement(proc.Ctx, cached, b)
 	if err != nil {
-		b.Clean(proc.Mp())
+		ctr.allocation.CleanBatch(proc, b)
 		return nil, err
 	}
 	if err = replacement.Commit(b); err != nil {
-		b.Clean(proc.Mp())
+		ctr.allocation.CleanBatch(proc, b)
 		replacement.Rollback()
 		return nil, err
 	}
@@ -272,7 +272,7 @@ func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, 
 		ctr.freeBats = append(ctr.freeBats, b)
 	} else {
 		if ctr.freeBats[ctr.i] != nil {
-			ctr.freeBats[ctr.i].Clean(proc.Mp())
+			ctr.allocation.CleanBatch(proc, ctr.freeBats[ctr.i])
 		}
 		ctr.freeBats[ctr.i] = b
 	}
@@ -295,7 +295,7 @@ func (ctr *container) bindMemory(proc *process.Process) error {
 	}
 	for _, bat := range ctr.freeBats {
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			ctr.allocation.CleanBatch(proc, bat)
 		}
 	}
 	ctr.buf = nil
@@ -311,7 +311,7 @@ func makeRecursiveBatch(proc *process.Process) (*batch.Batch, error) {
 	b.Attrs = []string{
 		"recursive_col",
 	}
-	b.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+	b.SetVector(0, vector.NewVec(types.T_varchar.ToType(), proc.Mp()))
 	if err := fillRecursiveBatch(proc, b); err != nil {
 		b.Clean(proc.Mp())
 		return nil, err

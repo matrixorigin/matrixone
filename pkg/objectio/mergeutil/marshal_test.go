@@ -30,8 +30,8 @@ func TestMergeSortBatchesPreservesOwnedVarlena(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	newBatch := func() *batch.Batch {
-		return batch.NewWithSchema(false, []string{"id", "payload"},
-			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})
+		return batch.NewWithSchema([]string{"id", "payload"},
+			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp)
 	}
 	values := []string{"first value stored in the area", "inline", "third value stored in the area",
 		"fourth value stored in the area", "", "sixth value stored in the area"}
@@ -81,8 +81,8 @@ func TestMergeSortBatchesPreservesOwnedVarlena(t *testing.T) {
 func BenchmarkMergeSortBatchesOverlappingVarlenaMarshal(b *testing.B) {
 	mp := mpool.MustNewZero()
 	newBatch := func() *batch.Batch {
-		return batch.NewWithSchema(false, []string{"id", "payload"},
-			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})
+		return batch.NewWithSchema([]string{"id", "payload"},
+			[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp)
 	}
 	batches := []*batch.Batch{newBatch(), newBatch()}
 	for _, input := range batches {

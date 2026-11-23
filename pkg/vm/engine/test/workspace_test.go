@@ -110,7 +110,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
 				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
-				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
 				bat2.SetRowCount(len(waitedDeletes))
 			})
@@ -131,7 +131,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -199,7 +199,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
 	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	{
 		reader, err := testutil.GetRelationReader(
 			ctx,
@@ -214,7 +214,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 
 		ret := batch.NewWithSize(1)
 		ret.Attrs = []string{catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -261,7 +261,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -392,7 +392,7 @@ func issue25557ReadRowCount(
 	reader, err := testutil.GetRelationReader(ctx, e, txn, relation, nil, mp, t)
 	require.NoError(t, err)
 	total := 0
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
@@ -773,7 +773,7 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 
 			tombstoneBat = batch.NewWithSize(1)
 			tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-			tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 
 			blk := objectio.DecodeBlockInfo(entry.Bat().GetVector(0).GetBytesAt(0))
 			for i := 0; i < deleteCnt; i++ {
@@ -813,7 +813,7 @@ func Test_Issue25557ObjectCompactionNoDeadlock(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
@@ -892,8 +892,8 @@ func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
 	deleteRows := 10
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(schema.GetPrimaryKey().Type)
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(schema.GetPrimaryKey().Type, mp)
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
@@ -905,8 +905,8 @@ func Test_Issue25557MultiEntryDeleteDumpAtCommit(t *testing.T) {
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
 		ret.Vecs = []*vector.Vector{
-			vector.NewVec(schema.GetPrimaryKey().Type),
-			vector.NewVec(types.T_Rowid.ToType()),
+			vector.NewVec(schema.GetPrimaryKey().Type, mp),
+			vector.NewVec(types.T_Rowid.ToType(), mp),
 		}
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1028,8 +1028,8 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
@@ -1047,7 +1047,7 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1113,7 +1113,7 @@ func Test_MultiTxnInsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -1198,8 +1198,8 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	{
 		reader, err := testutil.GetRelationReader(
@@ -1215,7 +1215,7 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1266,7 +1266,7 @@ func Test_MultiTxnS3InsertDelete(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	cnt := 0
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1346,8 +1346,8 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	{
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
@@ -1365,7 +1365,7 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1432,7 +1432,7 @@ func Test_MultiTxnS3Tombstones(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema)
+	ret := testutil.EmptyBatchFromSchema(schema, mp)
 	cnt := 0
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1524,7 +1524,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				tombstoneBat = batch.NewWithSize(1)
 				tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
 				tombstoneBat.SetRowCount(len(waitedDeletes))
 			})
@@ -1554,7 +1554,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -1632,7 +1632,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
 	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	{
 		reader, err := testutil.GetRelationReader(
 			ctx,
@@ -1647,7 +1647,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 
 		ret := batch.NewWithSize(1)
 		ret.Attrs = []string{catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1699,7 +1699,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -1832,8 +1832,8 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 	require.NoError(t, err)
@@ -1851,7 +1851,7 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -1928,7 +1928,7 @@ func Test_MultiTxnRollbackStatement(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 	require.NoError(t, err)
 
@@ -2018,8 +2018,8 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, schema.GetPrimaryKey().Name}
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	{
 		reader, err := testutil.GetRelationReader(
@@ -2035,7 +2035,7 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 
 		ret := batch.NewWithSize(2)
 		ret.Attrs = []string{schema.GetPrimaryKey().Name, catalog.Row_ID}
-		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type), vector.NewVec(types.T_Rowid.ToType())}
+		ret.Vecs = []*vector.Vector{vector.NewVec(schema.GetPrimaryKey().Type, mp), vector.NewVec(types.T_Rowid.ToType(), mp)}
 
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -2097,7 +2097,7 @@ func Test_MultiTxnRollbackStatementS3(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 	cnt := 0
 	for {
 		done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -2189,7 +2189,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 
 				bat2 = batch.NewWithSize(1)
 				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
-				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 
 				blk := objectio.DecodeBlockInfo(entry.Bat().GetVector(0).GetBytesAt(0))
 				for i := 0; i < deleteCnt; i++ {
@@ -2217,7 +2217,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
@@ -2300,7 +2300,7 @@ func Test_BigDeleteWriteS3(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		_, err = reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		require.NoError(t, err)
 		//require.Equal(t, insertCnt-deleteCnt, ret.RowCount())
@@ -2372,15 +2372,15 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 	// read row id and pk data
 	tombstoneBat := batch.NewWithSize(2)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), p.Mp)
 	{
 		txn, _, reader, err := testutil.GetTableTxnReader(
 			ctx, p.D, databaseName, tableName, nil, p.Mp, t,
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema)
+		ret := testutil.EmptyBatchFromSchema(schema, p.Mp)
 
 		for {
 			done, err := reader.Read(ctx,
@@ -2443,7 +2443,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 		tbat := batch.NewWithSize(1)
 		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		err = vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp)
 		require.NoError(t, err)
 
@@ -2631,7 +2631,7 @@ func TestGCFiles(t *testing.T) {
 			objectio.SetObjectStatsBlkCnt(&files[i], 1)
 			objectio.SetObjectStatsRowCnt(&files[i], 1)
 			func() {
-				bat := colexec.AllocCNS3ResultBat(false)
+				bat := colexec.AllocCNS3ResultBat(false, p.Mp)
 				defer bat.Clean(p.Mp)
 				colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
 				err = txn.WriteFile(
@@ -2809,7 +2809,7 @@ func Test_WorkspaceForceDumpOnGlobalAccumulation(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		totalRows := 0
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
@@ -2945,7 +2945,7 @@ func Test_WorkspaceForceDumpNoIncrStatement(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
 		totalRows := 0
 		for {
 			done, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)

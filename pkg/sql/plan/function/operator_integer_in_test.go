@@ -28,7 +28,7 @@ import (
 func checkIntegerMembership[T constraints.Integer](t *testing.T, typ types.T, members, probes []T, sorted, nullable bool) {
 	t.Helper()
 	proc := testutil.NewProcess(t)
-	list := vector.NewVec(typ.ToType())
+	list := vector.NewVec(typ.ToType(), proc.Mp())
 	defer list.Free(proc.Mp())
 	for i, v := range members {
 		require.NoError(t, vector.AppendFixed(list, v, nullable && i == 0, proc.Mp()))
@@ -44,7 +44,7 @@ func checkIntegerMembership[T constraints.Integer](t *testing.T, typ types.T, me
 			for _, mode := range []string{"flat", "all_null", "constant", "const_null"} {
 				constant := mode == "constant" || mode == "const_null"
 				t.Run(mode, func(t *testing.T) {
-					input := vector.NewVec(typ.ToType())
+					input := vector.NewVec(typ.ToType(), proc.Mp())
 					defer input.Free(proc.Mp())
 					for _, v := range probes {
 						require.NoError(t, vector.AppendFixed(input, v, false, proc.Mp()))
@@ -153,7 +153,7 @@ func TestIntegerMembershipBitmapAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			list := vector.NewVec(types.T_int64.ToType())
+			list := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			defer list.Free(proc.Mp())
 			for i := 0; i < tc.count-1; i++ {
 				require.NoError(t, vector.AppendFixed(list, int64(i), false, proc.Mp()))
