@@ -620,36 +620,29 @@ func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
 	}
 }
 
-func TestInetNtoaPreparedParameterKinds(t *testing.T) {
+func TestInetNtoaPreparedParameterTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	// Prepared parameters reach execution as typed values. Typed numeric
+	// inputs use the static INET_NTOA overloads (see the typed-input test
+	// above); the dynamic overload covers BOOLEAN and an untyped NULL.
 	for _, test := range []struct {
 		name     string
-		kind     vector.PrepareParamKind
-		value    string
+		input    func() *vector.Vector
 		want     string
-		null     bool
 		wantNull bool
 	}{
-		{name: "float preserves numeric rounding", kind: vector.PrepareParamFloat, value: "1.6", want: "0.0.0.2"},
-		{name: "decimal uses decimal rounding", kind: vector.PrepareParamDecimal, value: "1.5", want: "0.0.0.2"},
-		{name: "boolean true", kind: vector.PrepareParamBoolean, value: "true", want: "0.0.0.1"},
-		{name: "integer prefix", kind: vector.PrepareParamInteger, value: "4294967295.9", want: "255.255.255.255"},
-		{name: "untyped NULL", kind: vector.PrepareParamNone, value: "", null: true, wantNull: true},
-		{name: "invalid float", kind: vector.PrepareParamFloat, value: "bad", wantNull: true},
-		{name: "invalid decimal", kind: vector.PrepareParamDecimal, value: "bad", wantNull: true},
-		{name: "decimal overflow", kind: vector.PrepareParamDecimal, value: "9223372036854775808", wantNull: true},
-		{name: "boolean false", kind: vector.PrepareParamBoolean, value: "false", want: "0.0.0.0"},
-		{name: "boolean zero", kind: vector.PrepareParamBoolean, value: "0", want: "0.0.0.0"},
-		{name: "boolean fallback", kind: vector.PrepareParamBoolean, value: "unexpected", want: "0.0.0.0"},
+		{name: "boolean true", input: func() *vector.Vector {
+			return newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true}, nil)
+		}, want: "0.0.0.1"},
+		{name: "boolean false", input: func() *vector.Vector {
+			return newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{false}, nil)
+		}, want: "0.0.0.0"},
+		{name: "untyped NULL", input: func() *vector.Vector {
+			return vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+		}, wantNull: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var input *vector.Vector
-			if test.null {
-				input = vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
-			} else {
-				input = newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{test.value}, nil)
-			}
-			input.SetPrepareParamKind(test.kind)
+			input := test.input()
 			t.Cleanup(func() { input.Free(proc.Mp()) })
 
 			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
@@ -670,7 +663,7 @@ func TestInetNtoaDynamicRejectsNonNullAny(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	data, err := proc.Mp().Alloc(types.VarlenaSize, false)
 	require.NoError(t, err)
-	input := vector.NewVecWithData(types.T_any.ToType(), 1, data, nil)
+	input := vector.NewVecWithData(types.T_any.ToType(), 1, data, nil, proc.Mp())
 	input.SetClass(vector.CONSTANT)
 	defer input.Free(proc.Mp())
 

@@ -107,6 +107,10 @@ func receiveWorkerMsg(ctx context.Context, mailbox *WorkerJoinMailbox) (*WorkerJ
 // its own and marks the bucket. First-wins semantics across workers: the
 // merger retains whichever worker's values arrive first.
 func (ctr *container) mergeCaptured(ap *DedupJoin, msg *WorkerJoinMsg, proc *process.Process) error {
+	stateMP, err := ap.stateMP(proc)
+	if err != nil {
+		return err
+	}
 	if ctr.capturedVecs == nil || msg.capturedVecs == nil {
 		return nil
 	}
@@ -120,7 +124,7 @@ func (ctr *container) mergeCaptured(ap *DedupJoin, msg *WorkerJoinMsg, proc *pro
 			if err := ctr.capturedVecs[cIdx].Copy(
 				msg.capturedVecs[cIdx],
 				int64(bucket), int64(bucket),
-				proc.Mp(),
+				stateMP,
 			); err != nil {
 				return err
 			}
@@ -547,25 +551,23 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 		// supported here.
 		return moerr.NewInternalError(proc.Ctx, "dedup join old-col capture requires hashOnUnique build")
 	}
+	stateMP, err := ap.stateMP(proc)
+	if err != nil {
+		return err
+	}
 	n := len(ap.OldColCapturePlaceholderIdxList)
+	ctr.capturedMP = stateMP
 	ctr.capturedVecs = make([]*vector.Vector, n)
 	for i, probePos := range ap.OldColCaptureProbeIdxList {
 		typ := ap.LeftTypes[probePos]
-		vec, err := vector.NewOffHeapVecWithTypeAndAllocation(
-			typ,
-			ap.stateAllocation,
-		)
-		if err != nil {
-			return err
-		}
-		if err := vector.AppendMultiFixed(vec, 0, true, int(ctr.batchRowCount), proc.Mp()); err != nil {
-			vec.Free(proc.Mp())
+		vec := vector.NewVec(typ, stateMP)
+		if err := vector.AppendMultiFixed(vec, 0, true, int(ctr.batchRowCount), stateMP); err != nil {
+			vec.Free(stateMP)
 			ctr.capturedVecs[i] = nil
 			return err
 		}
 		ctr.capturedVecs[i] = vec
 	}
-	var err error
 	ctr.captured, err = colexec.NewRowBitmap(ctr.batchRowCount)
 	if err != nil {
 		ctr.cleanCaptured(proc)
@@ -595,14 +597,18 @@ func (ctr *container) appendBuildSelectionRow(
 	sel int32,
 	proc *process.Process,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 	for j, rp := range ap.Result {
 		if rp.Rel == 1 {
 			if err := dst.Vecs[j].UnionOne(
-				ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+				ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), resMP); err != nil {
 				return err
 			}
-		} else if err := dst.Vecs[j].UnionNull(proc.Mp()); err != nil {
+		} else if err := dst.Vecs[j].UnionNull(resMP); err != nil {
 			return err
 		}
 	}
@@ -622,7 +628,7 @@ func (ctr *container) finalizeODKUActionRows(
 		return nil
 	}
 	if !ctr.updateSuspended {
-		if err := ap.resetRBat(); err != nil {
+		if err := ap.resetRBat(proc); err != nil {
 			return err
 		}
 	}
@@ -796,7 +802,10 @@ func (ctr *container) finalizeODKUActionRows(
 }
 
 func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
-	var err error
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	if ap.EmitActionRows && ctr.finalizePrepared {
 		return ctr.finalizeODKUActionRows(ap, proc)
 	}
@@ -915,26 +924,9 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 	}
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {
 		if ctr.matched.Count() == 0 {
-			// constructDedupJoin copies node.ProjectList into ap.Result without
-			// dedup, and the REPLACE planner can alias multiple projections onto
-			// the same build column, so a non-capture build position may be
-			// referenced more than once. Ownership transfer (steal the build
-			// vector and nil it out) is only safe when a position is referenced
-			// exactly once; duplicates must copy, otherwise the second reference
-			// reads a nil vector. Count references first.
-			buildPosRefCount := make(map[int32]int, len(ap.Result))
-			for j, rp := range ap.Result {
-				if rp.Rel != 1 {
-					continue
-				}
-				if len(ctr.captureResultIdx) > 0 && ctr.captureResultIdx[j] >= 0 {
-					continue
-				}
-				buildPosRefCount[rp.Pos]++
-			}
 			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
 			for i := range ap.ctr.buf {
-				ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
+				ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
 				bat := ctr.batches[i]
 				ap.ctr.buf[i].Attrs = bat.Attrs
 				batSize := bat.RowCount()
@@ -955,48 +947,42 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 							cIdx := ctr.captureResultIdx[j]
 							if ctr.captured != nil && ctr.captured.Count() > 0 {
 								typ := ap.RightTypes[rp.Pos]
-								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ)
+								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ, proc)
 								if err != nil {
 									return err
 								}
-								if err := ap.ctr.buf[i].Vecs[j].UnionBatch(ctr.capturedVecs[cIdx], capOffset, batSize, nil, proc.Mp()); err != nil {
+								if err := ap.ctr.buf[i].Vecs[j].UnionBatch(ctr.capturedVecs[cIdx], capOffset, batSize, nil, resMP); err != nil {
 									return err
 								}
 							} else {
-								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 								if err != nil {
 									return err
 								}
-								if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
+								if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, resMP); err != nil {
 									return err
 								}
 							}
-						} else if buildPosRefCount[rp.Pos] == 1 {
-							// Non-capture build column referenced exactly once:
-							// transfer ownership from the build batch to avoid a
-							// full copy.
-							ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
-							bat.Vecs[rp.Pos] = nil
 						} else {
-							// Non-capture build column referenced more than once
-							// (aliased projections). Copy so every reference gets
-							// its own valid vector; ownership transfer here would
-							// leave later references reading a nil vector.
+							// Copy the build column into the result. Build
+							// vectors belong to the hash build's own pool, which
+							// is deleted with the JoinMap, so they cannot move
+							// into the result.
 							typ := ap.RightTypes[rp.Pos]
-							ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ)
+							ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ, proc)
 							if err != nil {
 								return err
 							}
-							if err := vector.GetUnionAllFunction(typ, proc.Mp())(ap.ctr.buf[i].Vecs[j], bat.Vecs[rp.Pos]); err != nil {
+							if err := vector.GetUnionAllFunction(typ, resMP)(ap.ctr.buf[i].Vecs[j], bat.Vecs[rp.Pos]); err != nil {
 								return err
 							}
 						}
 					} else {
-						ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+						ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 						if err != nil {
 							return err
 						}
-						if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
+						if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, resMP); err != nil {
 							return err
 						}
 					}
@@ -1036,22 +1022,22 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			} else {
 				newSels = sels[i*colexec.DefaultBatchSize:]
 			}
-			ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
+			ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
 			for j, rp := range ap.Result {
 				if rp.Rel == 1 {
-					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
-					if err := unionSelsByBatch(ap.ctr.buf[i].Vecs[j], ctr.batches, rp.Pos, newSels, proc); err != nil {
+					if err := unionSelsByBatch(ap.ctr.buf[i].Vecs[j], ctr.batches, rp.Pos, newSels, resMP); err != nil {
 						return err
 					}
 				} else {
-					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
-					if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, len(newSels), proc.Mp()); err != nil {
+					if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, len(newSels), resMP); err != nil {
 						return err
 					}
 				}
@@ -1087,25 +1073,25 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if fillCnt+batSize > len(sels) {
 				batSize = len(sels) - fillCnt
 			}
-			ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+			ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 			for i, rp := range ap.Result {
 				if rp.Rel == 1 {
-					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
 					for _, sel := range sels[fillCnt : fillCnt+batSize] {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						if err := ap.ctr.buf[batIdx].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+						if err := ap.ctr.buf[batIdx].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), resMP); err != nil {
 							return err
 						}
 					}
 				} else {
-					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
-					if err := vector.AppendMultiFixed(ap.ctr.buf[batIdx].Vecs[i], 0, true, batSize, proc.Mp()); err != nil {
+					if err := vector.AppendMultiFixed(ap.ctr.buf[batIdx].Vecs[i], 0, true, batSize, resMP); err != nil {
 						return err
 					}
 				}
@@ -1131,15 +1117,15 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				continue
 			}
 			if rowIdx == 0 {
-				ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+				ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 				for i, rp := range ap.Result {
 					if rp.Rel == 1 {
-						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 						if err != nil {
 							return err
 						}
 					} else {
-						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 						if err != nil {
 							return err
 						}
@@ -1170,12 +1156,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					logicalAffectedRows := uint64(1)
 					for actionIdx, sel := range sels[1:] {
 						if rowIdx == 0 {
-							ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+							ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 							for j, rp := range ap.Result {
 								if rp.Rel == 1 {
-									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 								} else {
-									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 								}
 								if err != nil {
 									return err
@@ -1221,11 +1207,11 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if len(sels) == 1 {
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
-						if err := ap.ctr.buf[batIdx].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+						if err := ap.ctr.buf[batIdx].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), resMP); err != nil {
 							return err
 						}
 					} else {
-						if err := ap.ctr.buf[batIdx].Vecs[j].UnionNull(proc.Mp()); err != nil {
+						if err := ap.ctr.buf[batIdx].Vecs[j].UnionNull(resMP); err != nil {
 							return err
 						}
 					}
@@ -1264,18 +1250,18 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						if handled, err := appendODKUMetadata(
 							ap.ctr.buf[batIdx].Vecs[j], ap.HasODKUAffectedRows, int32(j),
 							ap.AffectedRowsResultPos, ap.PhysicalChangedResultPos,
-							logicalAffectedRows, anyActionChanged, proc.Mp()); handled || err != nil {
+							logicalAffectedRows, anyActionChanged, resMP); handled || err != nil {
 							if err != nil {
 								return err
 							}
 							continue
 						}
 						if rp.Rel == 1 {
-							if err := ap.ctr.buf[batIdx].Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
+							if err := ap.ctr.buf[batIdx].Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, resMP); err != nil {
 								return err
 							}
 						} else {
-							if err := ap.ctr.buf[batIdx].Vecs[j].UnionNull(proc.Mp()); err != nil {
+							if err := ap.ctr.buf[batIdx].Vecs[j].UnionNull(resMP); err != nil {
 								return err
 							}
 						}
@@ -1407,7 +1393,7 @@ func (ctr *container) stabilizeUpdateVectors(proc *process.Process) error {
 			}
 		}
 		if dst == nil {
-			dst = vector.NewVec(*ctr.joinBat1.Vecs[pos].GetType())
+			dst = vector.NewVec(*ctr.joinBat1.Vecs[pos].GetType(), proc.Mp())
 			ctr.stableUpdateVecs[pos] = append(ctr.stableUpdateVecs[pos], dst)
 		}
 		dst.CleanOnlyData()
@@ -1868,10 +1854,14 @@ func (ctr *container) appendProbeActionRow(
 	fkEligibility []bool,
 	proc *process.Process,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	for j, rp := range ap.Result {
 		if handled, err := appendODKUActionMetadata(
 			dst.Vecs[j], ap, int32(j), affectedRows, physicalChanged,
-			actionFinal, fkEligibility, proc.Mp(),
+			actionFinal, fkEligibility, resMP,
 		); handled || err != nil {
 			if err != nil {
 				return err
@@ -1885,10 +1875,10 @@ func (ctr *container) appendProbeActionRow(
 			} else {
 				srcVec = ctr.joinBat1.Vecs[rp.Pos]
 			}
-			if err := dst.Vecs[j].UnionOne(srcVec, 0, proc.Mp()); err != nil {
+			if err := dst.Vecs[j].UnionOne(srcVec, 0, resMP); err != nil {
 				return err
 			}
-		} else if err := dst.Vecs[j].UnionOne(probe.Vecs[rp.Pos], probeRow, proc.Mp()); err != nil {
+		} else if err := dst.Vecs[j].UnionOne(probe.Vecs[rp.Pos], probeRow, resMP); err != nil {
 			return err
 		}
 	}
@@ -1904,10 +1894,14 @@ func (ctr *container) appendFinalizeActionRow(
 	fkEligibility []bool,
 	proc *process.Process,
 ) error {
+	resMP, err := ap.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	for j, rp := range ap.Result {
 		if handled, err := appendODKUActionMetadata(
 			dst.Vecs[j], ap, int32(j), affectedRows, physicalChanged,
-			actionFinal, fkEligibility, proc.Mp(),
+			actionFinal, fkEligibility, resMP,
 		); handled || err != nil {
 			if err != nil {
 				return err
@@ -1915,10 +1909,10 @@ func (ctr *container) appendFinalizeActionRow(
 			continue
 		}
 		if rp.Rel == 1 {
-			if err := dst.Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
+			if err := dst.Vecs[j].UnionOne(ctr.joinBat1.Vecs[rp.Pos], 0, resMP); err != nil {
 				return err
 			}
-		} else if err := dst.Vecs[j].UnionNull(proc.Mp()); err != nil {
+		} else if err := dst.Vecs[j].UnionNull(resMP); err != nil {
 			return err
 		}
 	}
@@ -1964,7 +1958,7 @@ func (ctr *container) probeODKUActionRows(
 	result *vm.CallResult,
 ) error {
 	if !ctr.updateSuspended {
-		if err := ap.resetRBat(); err != nil {
+		if err := ap.resetRBat(proc); err != nil {
 			return err
 		}
 	}
@@ -2088,13 +2082,17 @@ func (ctr *container) probeODKUActionRows(
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
+	stateMP, err := ap.stateMP(proc)
+	if err != nil {
+		return err
+	}
 	if ap.EmitActionRows {
 		return ctr.probeODKUActionRows(bat, ap, proc, result)
 	}
-	if err := ap.resetRBat(); err != nil {
+	if err := ap.resetRBat(proc); err != nil {
 		return err
 	}
-	err := ctr.evalJoinCondition(bat, proc)
+	err = ctr.evalJoinCondition(bat, proc)
 	if err != nil {
 		return err
 	}
@@ -2177,7 +2175,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					bucket := uint64(vals[k] - 1)
 					if !ctr.captured.Contains(bucket) {
 						for cIdx, probePos := range ap.OldColCaptureProbeIdxList {
-							if err := ctr.capturedVecs[cIdx].Copy(bat.Vecs[probePos], int64(bucket), int64(i+k), proc.Mp()); err != nil {
+							if err := ctr.capturedVecs[cIdx].Copy(bat.Vecs[probePos], int64(bucket), int64(i+k), stateMP); err != nil {
 								return err
 							}
 						}
@@ -2296,11 +2294,11 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	return nil
 }
 
-func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, sels []int32, proc *process.Process) error {
+func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, sels []int32, resMP *mpool.MPool) error {
 	if len(sels) <= 16 {
 		for _, sel := range sels {
 			idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-			if err := dst.UnionOne(batches[idx1].Vecs[colPos], int64(idx2), proc.Mp()); err != nil {
+			if err := dst.UnionOne(batches[idx1].Vecs[colPos], int64(idx2), resMP); err != nil {
 				return err
 			}
 		}
@@ -2313,7 +2311,7 @@ func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, 
 		idx2 := int64(sel % colexec.DefaultBatchSize)
 		if idx1 != prevIdx {
 			if prevIdx >= 0 && len(offsets) > 0 {
-				if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, proc.Mp()); err != nil {
+				if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, resMP); err != nil {
 					return err
 				}
 				offsets = offsets[:0]
@@ -2323,33 +2321,53 @@ func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, 
 		offsets = append(offsets, idx2)
 	}
 	if len(offsets) > 0 {
-		if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, proc.Mp()); err != nil {
+		if err := dst.Union(batches[prevIdx].Vecs[colPos], offsets, resMP); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func (dedupJoin *DedupJoin) newResultVector(typ types.Type) (*vector.Vector, error) {
-	return vector.NewOffHeapVecWithTypeAndAllocation(typ, dedupJoin.resultAllocation)
+func (dedupJoin *DedupJoin) newResultVector(typ types.Type, proc *process.Process) (*vector.Vector, error) {
+	mp, err := dedupJoin.resultMP(proc)
+	if err != nil {
+		return nil, err
+	}
+	return vector.NewVec(typ, mp), nil
 }
 
-func (dedupJoin *DedupJoin) resetRBat() error {
+// resultMP returns the pool result vectors grow through: the result account
+// view when an account is bound, otherwise proc's pool.
+func (dedupJoin *DedupJoin) resultMP(proc *process.Process) (*mpool.MPool, error) {
+	mp, err := dedupJoin.resultAllocation.MP(proc.Mp())
+	if err == nil {
+		// Every result vector is created with this pool; cleanup frees the
+		// result batches with it.
+		dedupJoin.ctr.resultVecMP = mp
+	}
+	return mp, err
+}
+
+// stateMP returns the pool captured old-column vectors grow through.
+func (dedupJoin *DedupJoin) stateMP(proc *process.Process) (*mpool.MPool, error) {
+	return dedupJoin.stateAllocation.MP(proc.Mp())
+}
+
+func (dedupJoin *DedupJoin) resetRBat(proc *process.Process) error {
+	resultMP, err := dedupJoin.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	ctr := &dedupJoin.ctr
 	if ctr.rbat != nil {
 		ctr.rbat.CleanOnlyData()
 	} else {
-		ctr.rbat = batch.NewOffHeapWithSize(len(dedupJoin.Result))
+		ctr.rbat = batch.NewWithSize(len(dedupJoin.Result))
 		for i, rp := range dedupJoin.Result {
 			if rp.Rel == 0 {
-				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(dedupJoin.LeftTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewVec(dedupJoin.LeftTypes[rp.Pos], resultMP)
 			} else {
-				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(dedupJoin.RightTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewVec(dedupJoin.RightTypes[rp.Pos], resultMP)
 			}
-		}
-		if err := ctr.rbat.SetAllocationAccount(dedupJoin.resultAllocation); err != nil {
-			ctr.rbat.Clean(nil)
-			ctr.rbat = nil
-			return err
 		}
 	}
 	return nil

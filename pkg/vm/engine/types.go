@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -1311,27 +1312,24 @@ const (
 // ReaderSelectionScratch contains non-owning call operands, never payload owners.
 // Its vectors are cleared by the reader on every terminal path.
 type ReaderSelectionScratch struct {
-	Seqnums   []uint16
-	Types     []types.Type
-	Columns   []int
-	Sources   []*vector.Vector
-	Vectors   []*vector.Vector
-	Headers   []*vector.Vector
-	Snapshots []*vector.DictionaryVectorSlot
+	Seqnums []uint16
+	Types   []types.Type
+	Columns []int
+	Sources []*vector.Vector
+	Vectors []*vector.Vector
+	Headers []*vector.Vector
 }
 
 func (s *ReaderSelectionScratch) Clear() {
 	clear(s.Sources)
 	clear(s.Vectors)
 	clear(s.Headers)
-	clear(s.Snapshots)
 	s.Seqnums = s.Seqnums[:0]
 	s.Types = s.Types[:0]
 	s.Columns = s.Columns[:0]
 	s.Sources = s.Sources[:0]
 	s.Vectors = s.Vectors[:0]
 	s.Headers = s.Headers[:0]
-	s.Snapshots = s.Snapshots[:0]
 }
 
 type ReaderFilterRequest struct {
@@ -1349,19 +1347,16 @@ type ReaderFilterRequest struct {
 	scopedColumns    *objectio.CachedColumnScope
 	// Select evaluates the same ordered predicate chain without shrinking its
 	// input. Sels uses the original live-row domain and is borrowed until the
-	// next callback. A supporting reader retains views or gathers that mapping
-	// once; unsupported readers continue calling Apply.
-	// Workspace contains caller-owned original read vectors displaced by selected
-	// publication. The caller retires published views, restores these slots, then
-	// reclaims unique backing before its next read; terminal cleanup frees both.
-	Workspace []*vector.Vector
-	// ReusableHeaders are cleared publication headers owned by the same caller.
-	SnapshotSlots    []*vector.DictionaryVectorSlot
-	SelectionSlot    *vector.DictionaryVectorSlot
-	ReusableHeaders  []*vector.Vector
+	// next callback. A supporting reader gathers that mapping once; unsupported
+	// readers continue calling Apply.
 	Select           ReaderSelection
-	OutputAllocation *vector.AllocationAccountSelection
-	ObserveSelection func(rows, columns int, logicalBytes int64)
+	OutputAllocation *mpool.MPool
+	// PublishSelection, when set, lets a Select read keep its columns'
+	// physical rows (read-only cache references) and publish the selected rows
+	// as the batch's selection, held in this caller-owned bitmap, instead of
+	// compacting them. Readers fall back to compaction when the block's rows
+	// are not its physical rows (deletes, storage row selections).
+	PublishSelection *bitmap.Bitmap
 	Apply            ReaderFilter
 	Exact            *objectio.ExactScanState
 	Observe          func(objectio.ExactScanStats)
@@ -1392,15 +1387,16 @@ type ReaderMembershipFilter struct {
 // cached block. The row map is accounted; Sources/Views are non-owning operands
 // cleared before every read returns. Scope cannot escape the synchronous read.
 type ReaderMembershipScratch struct {
-	Physical       *vector.Vector
-	Scope          vector.DictionarySelectionScope
+	Physical *vector.Vector
+	// physicalMP is the pool Physical was created with.
+	physicalMP     *mpool.MPool
 	Sources, Views []*vector.Vector
 	// Separate non-owning operands stay stable while nested key/publication
 	// reads reuse the ordinary request scratch inside the predicate I/O scope.
 	PredicateRead ReaderSelectionScratch
 }
 
-func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScratch, error) {
+func (r *ReaderFilterRequest) MembershipScratch(width int, mp *mpool.MPool) (*ReaderMembershipScratch, error) {
 	if r.Membership.scratch == nil {
 		r.Membership.scratch = &ReaderMembershipScratch{
 			Sources: make([]*vector.Vector, width), Views: make([]*vector.Vector, width),
@@ -1408,11 +1404,13 @@ func (r *ReaderFilterRequest) MembershipScratch(width int) (*ReaderMembershipScr
 	}
 	s := r.Membership.scratch
 	if s.Physical == nil {
-		var err error
-		s.Physical, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), r.OutputAllocation)
-		if err != nil {
-			return nil, err
+		// The scratch belongs to the request: it lives in the output pool.
+		owner := mp
+		if r.OutputAllocation != nil {
+			owner = r.OutputAllocation
 		}
+		s.Physical = vector.NewVec(types.T_int64.ToType(), owner)
+		s.physicalMP = owner
 	}
 	return s, nil
 }
@@ -1424,9 +1422,9 @@ func (r *ReaderFilterRequest) FreeMembership(mp *mpool.MPool) {
 		return
 	}
 	s := r.Membership.scratch
-	s.Scope.Free(mp)
 	if s.Physical != nil {
-		s.Physical.Free(mp)
+		// Freed with the pool MembershipScratch created it with.
+		s.Physical.Free(s.physicalMP)
 	}
 	r.Membership.scratch = nil
 }
@@ -1485,9 +1483,6 @@ func (r *ReaderFilterRequest) SelectionScratch(width int) *ReaderSelectionScratc
 	}
 	if cap(s.Headers) < width {
 		s.Headers = make([]*vector.Vector, 0, width)
-	}
-	if cap(s.Snapshots) < width {
-		s.Snapshots = make([]*vector.DictionaryVectorSlot, 0, width)
 	}
 	return s
 }
@@ -1672,6 +1667,7 @@ type StatsRefresherWithOptions interface {
 // collection. The relation owns snapshot visibility and physical range
 // selection; callers provide only bounded policy inputs and resolved columns.
 type AnalyzeTableRequest struct {
+	ResourceProcess   any
 	Process           any
 	Columns           []string
 	FullScan          bool

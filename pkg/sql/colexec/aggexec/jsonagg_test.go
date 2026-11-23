@@ -44,7 +44,7 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 		require.NoError(t, err)
 		return data
 	}
-	values := vector.NewVec(types.T_json.ToType())
+	values := vector.NewVec(types.T_json.ToType(), mp)
 	for _, value := range [][]byte{
 		jsonValue(int64(1)),
 		jsonValue("two"),
@@ -60,12 +60,7 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 	upper, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.123456", 6)
 	require.NoError(t, err)
 	timestamps := buildFixedVec(t, mp, types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{upper})
-	defer timestamps.Free(mp)
 	boundaryKey := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"v"})
-	defer boundaryKey.Free(mp)
-	defer values.Free(mp)
-	defer keys.Free(mp)
-	defer years.Free(mp)
 
 	for _, tc := range []struct {
 		name     string
@@ -141,7 +136,7 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 				bytes.NewReader(spill.Bytes()), mp))
 			results, err := restored.Flush()
 			require.NoError(t, err)
-			defer results[0].Free(mp)
+			defer results[0].Free(results[0].MPool())
 			visible, err := types.DecodeJson(results[0].GetBytesAt(0)).MarshalJSON()
 			require.NoError(t, err)
 			require.JSONEq(t, tc.want, string(visible))
@@ -149,6 +144,11 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 	}
 
 	finishTestAggregateAllocation(t, registry, account)
+	years.Free(mp)
+	keys.Free(mp)
+	values.Free(mp)
+	boundaryKey.Free(mp)
+	timestamps.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -168,7 +168,7 @@ func TestAccountedJSONPreflightOneByteShortDoesNotPublish(t *testing.T) {
 		{
 			name: "json", typ: types.T_json.ToType(),
 			build: func(mp *mpool.MPool) *vector.Vector {
-				input := vector.NewVec(types.T_json.ToType())
+				input := vector.NewVec(types.T_json.ToType(), mp)
 				require.NoError(t, vector.AppendBytes(input, raw, false, mp))
 				return input
 			},
@@ -527,7 +527,7 @@ func runJSONArrayAggregate(
 	require.NoError(t, err)
 	data := append([]byte(nil), results[0].GetBytesAt(0)...)
 	result := types.DecodeJson(data)
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	if allocation != nil {
 		require.NoError(t, owner.ClearAllocationAccount(allocation))
@@ -555,7 +555,7 @@ func runJSONObjectAggregate(
 	results, err := exec.Flush()
 	require.NoError(t, err)
 	result := types.DecodeJson(append([]byte(nil), results[0].GetBytesAt(0)...))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	keys.Free(mp)
 	exec.Free()
 	return result
@@ -563,7 +563,7 @@ func runJSONObjectAggregate(
 
 func buildFixedVec[T types.FixedSizeTExceptStrType](t *testing.T, mp *mpool.MPool, typ types.Type, vals []T, onCreate ...func(*vector.Vector)) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 	for _, own := range onCreate {
 		own(v)
 	}
@@ -573,7 +573,7 @@ func buildFixedVec[T types.FixedSizeTExceptStrType](t *testing.T, mp *mpool.MPoo
 
 func buildVarlenVec(t *testing.T, mp *mpool.MPool, typ types.Type, vals []string, onCreate ...func(*vector.Vector)) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 	for _, own := range onCreate {
 		own(v)
 	}
@@ -587,7 +587,7 @@ func fromValueListToVector(
 	typ types.Type, values any, isNull []bool) *vector.Vector {
 	var err error
 
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 
 	if typ.IsVarlen() {
 		sts := values.([]string)
@@ -677,7 +677,7 @@ func TestJSONAggregateOpaqueValueSurfaces(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			input := vector.NewVec(tc.typ)
+			input := vector.NewVec(tc.typ, mg)
 			require.NoError(t, tc.append(input))
 			defer input.Free(mg)
 
@@ -735,7 +735,7 @@ func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
 			t.Run("array-distinct", func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				buildValues := func(values [][]byte, nulls []bool) *vector.Vector {
-					v := vector.NewVec(tc.typ)
+					v := vector.NewVec(tc.typ, mp)
 					t.Cleanup(func() { v.Free(mp) })
 					for i, raw := range values {
 						if tc.typ.Oid == types.T_bit {
@@ -808,7 +808,7 @@ func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
 				t.Cleanup(func() {
 					for _, result := range results {
 						if result != nil {
-							result.Free(mp)
+							freeAccountedVector(t, account, result, mp)
 						}
 					}
 				})
@@ -828,7 +828,7 @@ func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
 			t.Run("object-last-wins", func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				buildValues := func(values [][]byte, nulls []bool) *vector.Vector {
-					v := vector.NewVec(tc.typ)
+					v := vector.NewVec(tc.typ, mp)
 					t.Cleanup(func() { v.Free(mp) })
 					for i, raw := range values {
 						if tc.typ.Oid == types.T_bit {
@@ -906,7 +906,7 @@ func TestAccountedOpaqueJSONPartialsMergeSpillPreserveBytes(t *testing.T) {
 				t.Cleanup(func() {
 					for _, result := range results {
 						if result != nil {
-							result.Free(mp)
+							freeAccountedVector(t, account, result, mp)
 						}
 					}
 				})
@@ -1024,26 +1024,26 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 		{"timestamp", buildFixedVec(t, mg, types.T_timestamp.ToType(), []types.Timestamp{types.Timestamp(1)}), 0, "0001-01-01 00:00:00.000001", ""},
 		{"string", buildVarlenVec(t, mg, types.T_varchar.ToType(), []string{"hi"}), 0, "hi", ""},
 		{"array-f32", func() *vector.Vector {
-			v := vector.NewVec(types.T_array_float32.ToType())
+			v := vector.NewVec(types.T_array_float32.ToType(), mg)
 			data := types.ArrayToBytes([]float32{1.5, 2.5})
 			require.NoError(t, vector.AppendBytes(v, data, false, mg))
 			return v
 		}(), 0, []any{1.5, 2.5}, ""},
 		{"array-f64", func() *vector.Vector {
-			v := vector.NewVec(types.T_array_float64.ToType())
+			v := vector.NewVec(types.T_array_float64.ToType(), mg)
 			data := types.ArrayToBytes([]float64{3.5, 4.5})
 			require.NoError(t, vector.AppendBytes(v, data, false, mg))
 			return v
 		}(), 0, []any{3.5, 4.5}, ""},
 		{"uuid", func() *vector.Vector {
-			v := vector.NewVec(types.T_uuid.ToType())
+			v := vector.NewVec(types.T_uuid.ToType(), mg)
 			id, err := types.ParseUuid("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 			require.NoError(t, err)
 			require.NoError(t, vector.AppendFixedList[types.Uuid](v, []types.Uuid{id}, nil, mg))
 			return v
 		}(), 0, "6ba7b810-9dad-11d1-80b4-00c04fd430c8", ""},
 		{"json", func() *vector.Vector {
-			v := vector.NewVec(types.T_json.ToType())
+			v := vector.NewVec(types.T_json.ToType(), mg)
 			bj, err := bytejson.CreateByteJSONWithCheck(map[string]any{"a": float64(1)})
 			require.NoError(t, err)
 			raw, err := bj.Marshal()
@@ -1059,24 +1059,24 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 		// in the rounding: -128/127 for int8 and 0/255 for uint8 alias the same
 		// two bytes, so a shared arm would swap them.
 		{"array_bf16", func() *vector.Vector {
-			v := vector.NewVec(types.T_array_bf16.ToType())
+			v := vector.NewVec(types.T_array_bf16.ToType(), mg)
 			require.NoError(t, vector.AppendArrayList[types.BF16](v, [][]types.BF16{
 				{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.5)}}, nil, mg))
 			return v
 		}(), 0, []any{1.5, -2.5}, ""},
 		{"array_float16", func() *vector.Vector {
-			v := vector.NewVec(types.T_array_float16.ToType())
+			v := vector.NewVec(types.T_array_float16.ToType(), mg)
 			require.NoError(t, vector.AppendArrayList[types.Float16](v, [][]types.Float16{
 				{types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.5)}}, nil, mg))
 			return v
 		}(), 0, []any{1.5, -2.5}, ""},
 		{"array_int8", func() *vector.Vector {
-			v := vector.NewVec(types.T_array_int8.ToType())
+			v := vector.NewVec(types.T_array_int8.ToType(), mg)
 			require.NoError(t, vector.AppendArrayList[int8](v, [][]int8{{-128, 127}}, nil, mg))
 			return v
 		}(), 0, []any{float64(-128), float64(127)}, ""},
 		{"array_uint8", func() *vector.Vector {
-			v := vector.NewVec(types.T_array_uint8.ToType())
+			v := vector.NewVec(types.T_array_uint8.ToType(), mg)
 			require.NoError(t, vector.AppendArrayList[uint8](v, [][]uint8{{0, 255}}, nil, mg))
 			return v
 		}(), 0, []any{float64(0), float64(255)}, ""},
@@ -1194,7 +1194,7 @@ func TestJsonAggDistinctAndMergeErrorPaths(t *testing.T) {
 	arrayExec := newJsonArrayAggExec(mg, arrayInfo)
 	require.NoError(t, arrayExec.GroupGrow(1))
 	require.True(t, arrayExec.IsDistinct())
-	values := vector.NewVec(types.T_varchar.ToType())
+	values := vector.NewVec(types.T_varchar.ToType(), mg)
 	require.NoError(t, vector.AppendBytes(values, []byte("x"), false, mg))
 	require.NoError(t, vector.AppendBytes(values, []byte("x"), false, mg))
 	require.NoError(t, vector.AppendBytes(values, nil, true, mg))

@@ -118,7 +118,7 @@ func transferTombstoneObjects(
 					zap.Int("tail", len(tail)))
 			}
 
-			bat := colexec.AllocCNS3ResultBat(true)
+			bat := colexec.AllocCNS3ResultBat(true, flow.mp)
 			defer bat.Clean(txn.proc.Mp())
 			if err = bat.PreExtend(txn.proc.Mp(), len(slist)); err != nil {
 				return err
@@ -286,12 +286,12 @@ func transferTombstones(
 					}
 				}
 
-				transferIntents = vector.NewVec(types.T_Rowid.ToType())
-				targetRowids = vector.NewVec(types.T_Rowid.ToType())
-				searchPKColumn = vector.NewVec(*pkColumn.GetType())
-				searchEntryPos = vector.NewVec(types.T_int32.ToType())
-				searchBatPos = vector.NewVec(types.T_int32.ToType())
-				readPKColumn = vector.NewVec(*pkColumn.GetType())
+				transferIntents = vector.NewVec(types.T_Rowid.ToType(), mp)
+				targetRowids = vector.NewVec(types.T_Rowid.ToType(), mp)
+				searchPKColumn = vector.NewVec(*pkColumn.GetType(), mp)
+				searchEntryPos = vector.NewVec(types.T_int32.ToType(), mp)
+				searchBatPos = vector.NewVec(types.T_int32.ToType(), mp)
+				readPKColumn = vector.NewVec(*pkColumn.GetType(), mp)
 			}
 
 			if err = vector.AppendFixed[types.Rowid](transferIntents, rowId, false, mp); err != nil {
@@ -362,7 +362,8 @@ func transferTombstones(
 
 		if !catalog.IsSystemTable(entry.tableId) &&
 			entry.bat != nil && entry.bat.RowCount() > 1 {
-			if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, mp); err != nil {
+			// Workspace entries belong to the workspace pool.
+			if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, table.getTxn().workspaceMP()); err != nil {
 				return
 			}
 		}
@@ -427,8 +428,8 @@ func batchTransferToTombstones(
 		comp.Set(0, searchPKColumn)
 		comp.Set(1, readPKColumn)
 
-		errPKVec1 := vector.NewVec(*typ)
-		errPKVec2 := vector.NewVec(*typ)
+		errPKVec1 := vector.NewVec(*typ, mp)
+		errPKVec2 := vector.NewVec(*typ, mp)
 		errCnt := 0
 		defer func() {
 			errPKVec1.Free(mp)
@@ -574,7 +575,7 @@ func doTransferRowids(
 		*readPKColumn.GetType(),
 		objectio.RowidType,
 	}
-	bat := batch.NewWithSchema(true, attrs, attrTypes)
+	bat := batch.NewWithSchema(attrs, attrTypes, mp)
 	defer func() {
 		bat.Clean(mp)
 	}()

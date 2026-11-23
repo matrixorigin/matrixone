@@ -131,6 +131,7 @@ func (c *cursor) readSource(ctx context.Context) (*pullTask, error) {
 			}
 			c.sourcePosition++
 			c.input, c.ownedInput = b, b
+			c.ownedInputMP = edge.source.BatchMP()
 			return nil, nil
 		}
 		c.sourcePending = true

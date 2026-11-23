@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -77,8 +76,7 @@ func TestPreparedJSONStorageRejectsEnumAndRecovers(t *testing.T) {
 			got, err := evaluate(defines.MYSQL_TYPE_VAR_STRING)
 			require.NoError(t, err)
 			require.Equal(t, wantText, got, "ordinary text remains valid for %s", functionName)
-			require.Equal(t, types.T_any, cw.proc.GetPrepareParamType(0))
-			require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(0))
+			require.Nil(t, cw.proc.GetTypedPrepareParam(0), "text keeps the TEXT transport")
 			cw.proc.SetPrepareParams(nil)
 			prepareStmt.clearBinaryParamState(cw.proc)
 
@@ -86,8 +84,6 @@ func TestPreparedJSONStorageRejectsEnumAndRecovers(t *testing.T) {
 			require.Equal(t, int64(0), got)
 			require.Error(t, err, "ENUM must not be accepted as text by %s", functionName)
 			require.ErrorContains(t, err, "invalid argument function "+functionName)
-			require.Equal(t, types.T_enum, cw.proc.GetPrepareParamType(0),
-				"COM_STMT metadata must retain ENUM source domain")
 			cw.proc.SetPrepareParams(nil)
 			prepareStmt.clearBinaryParamState(cw.proc)
 

@@ -27,7 +27,7 @@ import (
 // lpVec builds a vector of oid (bf16, float16, float8 or float4) from vals.
 func lpVec(t *testing.T, oid types.T, mp *mpool.MPool, vals ...float32) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for _, v := range vals {
 		var err error
 		switch oid {

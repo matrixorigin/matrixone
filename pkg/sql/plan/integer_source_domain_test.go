@@ -55,7 +55,7 @@ func TestPreparedIntegerSourceDomainBoundaries(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 				for _, value := range tc.params {
 					p := value.(ParamValue)

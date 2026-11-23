@@ -103,7 +103,7 @@ data branch diff byte_branch against byte_base output as byte_diff;
 select __mo_diff_flag, id, b is null as is_null, octet_length(b) as bytes,
 hex(b) = hex(serial_extract(serial(x'00ff005c27'), 0 as binary(255))) as exact_special
 from byte_diff order by id;
-➤ __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  is_null[-7,1,0]  ¦  bytes[-5,64,0]  ¦  exact_special[-7,1,0]  𝄀
+➤ __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  is_null[-6,8,0]  ¦  bytes[-5,64,0]  ¦  exact_special[-6,8,0]  𝄀
 UPDATE  ¦  1  ¦  0  ¦  0  ¦  0  𝄀
 UPDATE  ¦  2  ¦  1  ¦  null  ¦  null  𝄀
 UPDATE  ¦  3  ¦  0  ¦  5  ¦  1  𝄀
@@ -113,7 +113,7 @@ data branch diff byte_branch against byte_base output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 0
 select id, b is null as is_null, octet_length(b) as bytes, v from byte_base order by id;
-➤ id[4,32,0]  ¦  is_null[-7,1,0]  ¦  bytes[-5,64,0]  ¦  v[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  is_null[-6,8,0]  ¦  bytes[-5,64,0]  ¦  v[4,32,0]  𝄀
 1  ¦  0  ¦  0  ¦  11  𝄀
 2  ¦  1  ¦  null  ¦  21  𝄀
 3  ¦  0  ¦  5  ¦  31  𝄀
@@ -125,7 +125,7 @@ data branch diff byte_branch against byte_pick output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 0
 select id, b is null as is_null, octet_length(b) as bytes, v from byte_pick order by id;
-➤ id[4,32,0]  ¦  is_null[-7,1,0]  ¦  bytes[-5,64,0]  ¦  v[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  is_null[-6,8,0]  ¦  bytes[-5,64,0]  ¦  v[4,32,0]  𝄀
 1  ¦  0  ¦  0  ¦  12  𝄀
 2  ¦  1  ¦  null  ¦  22  𝄀
 3  ¦  0  ¦  5  ¦  32  𝄀

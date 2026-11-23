@@ -159,11 +159,11 @@ func TestCheckStateBeforeUpdate_NoRows(t *testing.T) {
 
 func makeThreeColBatch(t *testing.T, mp *mpool.MPool, state int8, iterState int8, lsn uint64) *batch.Batch {
 	bat := batch.NewWithSize(3)
-	v0 := vector.NewVec(types.T_int8.ToType())
+	v0 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v0, state, false, mp))
-	v1 := vector.NewVec(types.T_int8.ToType())
+	v1 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v1, iterState, false, mp))
-	v2 := vector.NewVec(types.T_uint64.ToType())
+	v2 := vector.NewVec(types.T_uint64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v2, lsn, false, mp))
 	bat.Vecs[0] = v0
 	bat.Vecs[1] = v1
@@ -232,13 +232,13 @@ func TestCheckStateBeforeUpdate_Success(t *testing.T) {
 
 func makeFourColBatch(t *testing.T, mp *mpool.MPool, cnUUID string, iterState int8, lsn uint64, subState int8) *batch.Batch {
 	bat := batch.NewWithSize(4)
-	v0 := vector.NewVec(types.T_varchar.ToType())
+	v0 := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(v0, []byte(cnUUID), false, mp))
-	v1 := vector.NewVec(types.T_int8.ToType())
+	v1 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v1, iterState, false, mp))
-	v2 := vector.NewVec(types.T_uint64.ToType())
+	v2 := vector.NewVec(types.T_uint64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v2, lsn, false, mp))
-	v3 := vector.NewVec(types.T_int8.ToType())
+	v3 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v3, subState, false, mp))
 	bat.Vecs[0] = v0
 	bat.Vecs[1] = v1
@@ -344,13 +344,13 @@ func TestCheckIterationStatus_NullCNUUID(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	// Create batch with null varchar for cn_uuid
 	bat := batch.NewWithSize(4)
-	v0 := vector.NewVec(types.T_varchar.ToType())
+	v0 := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(v0, nil, true, mp)) // null
-	v1 := vector.NewVec(types.T_int8.ToType())
+	v1 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v1, IterationStateRunning, false, mp))
-	v2 := vector.NewVec(types.T_uint64.ToType())
+	v2 := vector.NewVec(types.T_uint64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v2, uint64(1), false, mp))
-	v3 := vector.NewVec(types.T_int8.ToType())
+	v3 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v3, SubscriptionStateRunning, false, mp))
 	bat.Vecs[0] = v0
 	bat.Vecs[1] = v1
@@ -436,16 +436,16 @@ func TestCheckIterationStatus_MultipleRows(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	// Create batch with 2 rows
 	bat := batch.NewWithSize(4)
-	v0 := vector.NewVec(types.T_varchar.ToType())
+	v0 := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(v0, []byte("cn1"), false, mp))
 	require.NoError(t, vector.AppendBytes(v0, []byte("cn1"), false, mp))
-	v1 := vector.NewVec(types.T_int8.ToType())
+	v1 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v1, IterationStateRunning, false, mp))
 	require.NoError(t, vector.AppendFixed(v1, IterationStateRunning, false, mp))
-	v2 := vector.NewVec(types.T_uint64.ToType())
+	v2 := vector.NewVec(types.T_uint64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v2, uint64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(v2, uint64(1), false, mp))
-	v3 := vector.NewVec(types.T_int8.ToType())
+	v3 := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(v3, SubscriptionStateRunning, false, mp))
 	require.NoError(t, vector.AppendFixed(v3, SubscriptionStateRunning, false, mp))
 	bat.Vecs[0] = v0

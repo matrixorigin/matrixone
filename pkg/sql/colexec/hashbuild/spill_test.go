@@ -27,7 +27,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -329,7 +328,7 @@ func TestDirectSpillKeepsAdmittedRecoveryUntilBuildEnds(t *testing.T) {
 			for _, value := range []int64{1, 2} {
 				input := batch.NewWithSize(1)
 				child.WithBatchs([]*batch.Batch{input})
-				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), h.proc.Mp())
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, h.proc.Mp()))
 				input.SetRowCount(1)
 			}
@@ -519,13 +518,12 @@ func TestEstimatedResidentBuildBytesUsesRowCountUpperBound(t *testing.T) {
 	var nilBuilder *HashmapBuilder
 	_, err = nilBuilder.EstimatedHashMapBytes(1)
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
-	var grouping bool
-	got, err = builder.EstimatedResidentBuildBytesForInput(math.MaxUint64, 1, nil, &grouping)
+	got, err = builder.EstimatedResidentBuildBytesForInput(math.MaxUint64, 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(math.MaxUint64), got)
-	_, err = builder.EstimatedResidentBuildBytesForInput(0, -1, nil, &grouping)
+	_, err = builder.EstimatedResidentBuildBytesForInput(0, -1)
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
-	_, err = builder.EstimatedResidentBuildBytesForInput(0, 1, nil, nil)
+	_, err = nilBuilder.EstimatedResidentBuildBytesForInput(0, 1)
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 }
 
@@ -569,106 +567,42 @@ func BenchmarkAutoSpillRetainedProjection(b *testing.B) {
 	}
 }
 
-func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		column   int
-		row      uint64
-		want     bool
-		borrowed bool
-	}{
-		{name: "first key sentinel", column: 0, row: 0, want: true},
-		{name: "non-key sentinel", column: 1, row: 0},
-		{name: "out-of-range key bit", column: 0, row: 513},
-		{name: "borrowed key sentinel", column: 0, want: true, borrowed: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-			defer proc.Free()
-			input := testutil.NewBatch([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, true, 513, proc.Mp())
-			defer input.Clean(proc.Mp())
-			if tc.borrowed {
-				validity := make([]byte, (input.RowCount()+7)/8)
-				for i := range validity {
-					validity[i] = 0xff
-				}
-				validity[0] &^= 1
-				lease, err := bufferlease.NewRefCounted(validity, int64(len(validity)), nil)
-				require.NoError(t, err)
-				defer lease.Release()
-				require.NoError(t, input.Vecs[0].GetGrouping().InstallBorrowedValidity(validity, 0, input.RowCount(), 1, lease))
-			} else {
-				input.Vecs[tc.column].GetGrouping().Add(tc.row)
-			}
-			expr := newExpr(0, types.T_int64.ToType())
-			expr.GetCol().RelPos = 1 // Direct keys still resolve against the single build batch.
-			executor, err := colexec.NewExpressionExecutor(proc, expr)
-			require.NoError(t, err)
-			defer executor.Free()
-			inputBytes := int64(input.Size())
-			intBytes := hashtable.EstimateInt64HashMapSize(513)
-			strBytes := hashtable.EstimateStringHashMapSize(513)
-			require.Greater(t, strBytes, intBytes)
-			limit := uint64(inputBytes) + (intBytes+strBytes)/2
-			budget := process.MustNewExecutionResourceBudget(limit, limit)
-			generation, err := budget.OpenGeneration(1)
-			require.NoError(t, err)
-			participant, err := generation.RegisterMemoryGrowthParticipant()
-			require.NoError(t, err)
-			defer participant.Release()
-			op := &HashBuild{IsShuffle: true, NeedHashMap: true}
-			op.ctr.setSpillThreshold(0)
-			op.ctr.memoryGrowthParticipant = participant
-			op.ctr.hashmapBuilder.keyWidth = 8
-			op.ctr.hashmapBuilder.InputBatchRowCount = 513
-			op.ctr.hashmapBuilder.executors = []colexec.ExpressionExecutor{executor}
-			spill, err := op.shouldSpillBeforeRetain(inputBytes, input)
-			require.NoError(t, err)
-			require.Equal(t, tc.want, spill)
-			require.Equal(t, tc.want, op.ctr.autoSpillHasGrouping)
-			// Recovery uses the same pending-input invariant, independently of
-			// ingress state and without rescanning previously copied batches.
-			var recoveryGrouping bool
-			projected, err := op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
-				uint64(inputBytes), 513, input, &recoveryGrouping)
-			require.NoError(t, err)
-			wantMapBytes := intBytes
-			if tc.want {
-				wantMapBytes = strBytes
-			}
-			require.Equal(t, uint64(inputBytes)+wantMapBytes, projected)
-			require.Equal(t, tc.want, recoveryGrouping)
-			if tc.borrowed {
-				require.True(t, input.Vecs[0].GetGrouping().HasBorrowedValidity(), "projection must not mutate upstream-owned metadata")
-			}
-
-			// A sentinel first appearing in a later input changes the projected
-			// map kind before that input is copied into the retained relation.
-			input.Vecs[0].GetGrouping().Add(0)
-			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
-				uint64(inputBytes), 513, input, &recoveryGrouping)
-			require.NoError(t, err)
-			require.Equal(t, uint64(inputBytes)+strBytes, projected)
-			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
-			require.NoError(t, err)
-			require.True(t, spill)
-			// Reusing the upstream buffer cannot erase the retained fact.
-			input.Vecs[0].GetGrouping().Clear()
-			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
-				uint64(inputBytes), 513, nil, &recoveryGrouping)
-			require.NoError(t, err)
-			require.Equal(t, uint64(inputBytes)+strBytes, projected)
-			// A new bucket starts a new observation lifetime.
-			recoveryGrouping = false
-			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
-				uint64(inputBytes), 513, input, &recoveryGrouping)
-			require.NoError(t, err)
-			require.Equal(t, uint64(inputBytes)+intBytes, projected)
-			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
-			require.NoError(t, err)
-			require.True(t, spill)
-		})
-	}
+func TestAutoSpillProjectsIncomingKeys(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	input := testutil.NewBatch([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, true, 513, proc.Mp())
+	defer input.Clean(proc.Mp())
+	// A NULL key no longer changes the projected map kind.
+	input.Vecs[0].GetNulls().Add(0)
+	expr := newExpr(0, types.T_int64.ToType())
+	expr.GetCol().RelPos = 1 // Direct keys still resolve against the single build batch.
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	inputBytes := int64(input.Size())
+	intBytes := hashtable.EstimateInt64HashMapSize(513)
+	strBytes := hashtable.EstimateStringHashMapSize(513)
+	require.Greater(t, strBytes, intBytes)
+	limit := uint64(inputBytes) + (intBytes+strBytes)/2
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	participant, err := generation.RegisterMemoryGrowthParticipant()
+	require.NoError(t, err)
+	defer participant.Release()
+	op := &HashBuild{IsShuffle: true, NeedHashMap: true}
+	op.ctr.setSpillThreshold(0)
+	op.ctr.memoryGrowthParticipant = participant
+	op.ctr.hashmapBuilder.keyWidth = 8
+	op.ctr.hashmapBuilder.InputBatchRowCount = 513
+	op.ctr.hashmapBuilder.executors = []colexec.ExpressionExecutor{executor}
+	spill, err := op.shouldSpillBeforeRetain(inputBytes, input)
+	require.NoError(t, err)
+	require.False(t, spill)
+	projected, err := op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+		uint64(inputBytes), 513)
+	require.NoError(t, err)
+	require.Equal(t, uint64(inputBytes)+intBytes, projected)
 }
 
 func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
@@ -699,7 +633,7 @@ func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
 func TestAccountedSpillBroadcastsPreparedParamKey(t *testing.T) {
 	h := newSpillTestHarness(t, 80<<10)
 	defer h.close(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), h.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, h.proc.Mp()))
 	defer func() {
 		h.op.ctr.freeSpillExprExecs()

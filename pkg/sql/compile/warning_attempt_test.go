@@ -281,11 +281,11 @@ func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
 	attempt := newWarningAttempt(proc, false)
 	require.NotNil(t, attempt)
 
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
 	target := types.New(types.T_varchar, 3, 0)
-	destination := vector.NewVec(target)
+	destination := vector.NewVec(target, proc.Mp())
 	defer destination.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
 	defer result.Free()

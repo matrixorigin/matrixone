@@ -97,10 +97,9 @@ select x from deuz.u;
 update deuz.u set x = 7.5 where x = 5.5;
 select x from deuz.u;
 
--- diagnostics: rejections carry wire 1264/22003 with the destination column
--- name; the row ordinal is the admission evaluation index, which is 1 under
--- the per-row VALUES evaluation this engine performs
--- (MySQL reports the VALUES-tuple index instead; residual parity gap)
+-- Strict rejections carry wire 1264/22003 and the destination column name.
+-- Strict errors currently report the per-row admission index; non-strict
+-- warnings report the VALUES tuple ordinal.
 set session sql_mode='STRICT_TRANS_TABLES';
 insert into deuz.u values (1.5),(-2.5);
 insert into deuz.u values (1.5),(2.5),(-3.5);

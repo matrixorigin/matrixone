@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -56,7 +57,7 @@ func dependentFunction(t *testing.T, proc *process.Process, name string, args ..
 
 type dependentTestFactory struct {
 	t          *testing.T
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	opened     []uint32
 	closed     []uint32
 	fail       map[uint32]error
@@ -72,12 +73,9 @@ func (f *dependentTestFactory) Open(proc *process.Process, call *plan.DependentE
 	if len(inputs) > 0 {
 		value = vector.GetFixedAtNoTypeCheck[int64](inputs[0], 0)
 	}
-	v, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), f.allocation)
-	if err != nil {
-		return nil, err
-	}
-	if err = vector.AppendFixed(v, value, false, proc.Mp()); err != nil {
-		v.Free(proc.Mp())
+	v := vector.NewVec(types.T_int64.ToType(), f.allocation)
+	if err := vector.AppendFixed(v, value, false, f.allocation); err != nil {
+		v.Free(f.allocation)
 		return nil, err
 	}
 	b := batch.NewWithSize(1)
@@ -102,7 +100,7 @@ func (i *dependentTestInvocation) Accept(vm.Continuation) error { return nil }
 func (i *dependentTestInvocation) Result() *batch.Batch         { return i.result }
 func (i *dependentTestInvocation) Close(error) error {
 	i.factory.closed = append(i.factory.closed, i.id)
-	i.result.Clean(i.proc.Mp())
+	i.result.Clean(i.factory.allocation)
 	i.result = nil
 	return i.factory.closeErr
 }

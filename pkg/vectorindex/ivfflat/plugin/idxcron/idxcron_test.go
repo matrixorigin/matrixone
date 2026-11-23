@@ -178,7 +178,7 @@ func TestUpdatable(t *testing.T) {
 		t.Run(ta.name, func(t *testing.T) {
 			stub := gostub.Stub(&RunGetCountSql, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+				bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 				require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], ta.dsize, false, mp))
 				bat.SetRowCount(1)
 				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil

@@ -88,7 +88,7 @@ func (intersectAll *IntersectAll) Reset(proc *process.Process, pipelineFailed bo
 	ctr := &intersectAll.ctr
 	ctr.state = Build
 	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
-	if intersectAll.ExpressionAllocation() != nil {
+	if intersectAll.HasAllocationAccount() {
 		intersectAll.Free(proc, pipelineFailed, err)
 		return
 	}
@@ -112,7 +112,7 @@ func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed boo
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Free()
 	if ctr.buf != nil {
-		ctr.buf.Clean(proc.Mp())
+		intersectAll.CleanBatch(proc, ctr.buf)
 		ctr.buf = nil
 	}
 	intersectAll.FreeMetadata()

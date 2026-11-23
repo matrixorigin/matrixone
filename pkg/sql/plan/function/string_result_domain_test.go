@@ -287,7 +287,7 @@ func TestToBase64RegisteredBinaryExecutors(t *testing.T) {
 			require.Equal(t, tc.result, resolved.GetReturnType().Oid)
 			require.Equal(t, tc.width, resolved.GetReturnType().Width)
 			require.Equal(t, types.CharsetUTF8, resolved.GetReturnType().Charset)
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, proc.Mp())
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(input, []byte("f"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(input, nil, true, proc.Mp()))

@@ -55,7 +55,7 @@ func TestEmptyOrFilterFallsBackWithoutDroppingMembership(t *testing.T) {
 			block, err := ConstructBlockPKFilter(false, base, member)
 			require.NoError(t, err)
 			require.True(t, block.Valid)
-			pk := vector.NewVec(types.T_int64.ToType())
+			pk := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(pk, []int64{1, 2, 3}, nil, proc.Mp()))
 			require.Equal(t, []int64{0, 2}, block.UnSortedSearchFunc(containers.Vectors{*pk}))
 			pk.Free(proc.Mp())

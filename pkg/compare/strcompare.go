@@ -33,18 +33,15 @@ func (c *strCompare) Set(idx int, v *vector.Vector) {
 }
 
 func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
-	if c.typ.Oid == types.T_any && !c.vs[vecSrc].IsNull(uint64(src)) &&
-		!c.vs[vecSrc].GetGrouping().Contains(uint64(src)) {
+	if c.typ.Oid == types.T_any && !c.vs[vecSrc].IsNull(uint64(src)) {
 		return moerr.NewNotSupportedNoCtx("non-NULL ANY comparison")
 	}
-	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
+	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, c.vs[vecDst].MPool())
 }
 
 func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
-	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi)) ||
-		c.vs[veci].GetGrouping().Contains(uint64(vi))
-	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj)) ||
-		c.vs[vecj].GetGrouping().Contains(uint64(vj))
+	n0 := c.isConstNull[veci] || c.vs[veci].GetNulls().Contains(uint64(vi))
+	n1 := c.isConstNull[vecj] || c.vs[vecj].GetNulls().Contains(uint64(vj))
 	// ANY is the domainless NULL type. Reuse NULL comparison without reading
 	// payload bytes; concrete values still require a concrete comparison type.
 	if c.typ.Oid == types.T_any && (!n0 || !n1) {

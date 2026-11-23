@@ -70,7 +70,7 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		require.NoError(t, err)
 		raw, err := types.EncodeJson(json)
 		require.NoError(t, err)
-		values := vector.NewVec(types.T_json.ToType())
+		values := vector.NewVec(types.T_json.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(values, raw, false, mp))
 
 		source := newCountColumnExec(
@@ -99,7 +99,7 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
 
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		target.Free()
 		legacy.Free()
 		source.Free()
@@ -111,8 +111,8 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		mp := mpool.MustNewZero()
 		leftType := types.New(types.T_char, 2, 0)
 		rightType := types.New(types.T_char, 2, 0)
-		left := vector.NewVec(leftType)
-		right := vector.NewVec(rightType)
+		left := vector.NewVec(leftType, mp)
+		right := vector.NewVec(rightType, mp)
 		require.NoError(t, vector.AppendBytes(left, []byte("a "), false, mp))
 		require.NoError(t, vector.AppendBytes(right, []byte("b"), false, mp))
 		raw := encodeTuple([]byte("a "), []byte("b"))
@@ -143,7 +143,7 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
 
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		target.Free()
 		legacy.Free()
 		source.Free()
@@ -158,7 +158,7 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		require.NoError(t, err)
 		raw, err := types.EncodeJson(json)
 		require.NoError(t, err)
-		values := vector.NewVec(types.T_json.ToType())
+		values := vector.NewVec(types.T_json.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(values, raw, false, mp))
 
 		source := newCountColumnExec(
@@ -197,7 +197,7 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
 
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		target.Free()
 		legacy.Free()
 		restored.Free()
@@ -253,7 +253,7 @@ func TestLegacyDistinctRestoreCanonicalizesBeforeAppendAndMerge(t *testing.T) {
 			argTypes: []types.Type{types.New(types.T_char, 2, 0)},
 			legacy:   []byte("a "),
 			newVectors: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
-				vec := vector.NewVec(types.New(types.T_char, 2, 0))
+				vec := vector.NewVec(types.New(types.T_char, 2, 0), mp)
 				require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, mp))
 				return []*vector.Vector{vec}
 			},
@@ -267,7 +267,7 @@ func TestLegacyDistinctRestoreCanonicalizesBeforeAppendAndMerge(t *testing.T) {
 				require.NoError(t, err)
 				raw, err := types.EncodeJson(value)
 				require.NoError(t, err)
-				vec := vector.NewVec(types.T_json.ToType())
+				vec := vector.NewVec(types.T_json.ToType(), mp)
 				require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
 				return []*vector.Vector{vec}
 			},
@@ -283,14 +283,14 @@ func TestLegacyDistinctRestoreCanonicalizesBeforeAppendAndMerge(t *testing.T) {
 				[]byte("a"),
 			),
 			newVectors: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
-				floatVec := vector.NewVec(types.T_float64.ToType())
+				floatVec := vector.NewVec(types.T_float64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(
 					floatVec,
 					math.Float64frombits(0xfff8000000000001),
 					false,
 					mp,
 				))
-				charVec := vector.NewVec(types.New(types.T_char, 2, 0))
+				charVec := vector.NewVec(types.New(types.T_char, 2, 0), mp)
 				require.NoError(t, vector.AppendBytes(charVec, []byte("a"), false, mp))
 				return []*vector.Vector{floatVec, charVec}
 			},
@@ -329,7 +329,7 @@ func TestLegacyDistinctRestoreCanonicalizesBeforeAppendAndMerge(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, int64(1),
 					vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-				result[0].Free(mp)
+				result[0].Free(result[0].MPool())
 				target.Free()
 				require.Zero(t, mp.CurrNB())
 			})
@@ -344,7 +344,7 @@ func TestCanonicalDistinctSpillRestorePreservesMembershipKey(t *testing.T) {
 		require.NoError(t, err)
 		raw, err := types.EncodeJson(value)
 		require.NoError(t, err)
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
 		return vec
 	}
@@ -368,7 +368,7 @@ func TestCanonicalDistinctSpillRestorePreservesMembershipKey(t *testing.T) {
 				types.T_json.ToType(),
 			},
 			newValues: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
-				floatVec := vector.NewVec(types.T_float64.ToType())
+				floatVec := vector.NewVec(types.T_float64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(
 					floatVec,
 					math.Float64frombits(0x7ff8000000000001),
@@ -433,7 +433,7 @@ func TestCanonicalDistinctSpillRestorePreservesMembershipKey(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(1),
 				vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 		})
 	}
 }
@@ -452,8 +452,8 @@ func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
 		emptyNull: true,
 	}
 
-	left := vector.NewVec(types.T_varchar.ToType())
-	right := vector.NewVec(types.T_int64.ToType())
+	left := vector.NewVec(types.T_varchar.ToType(), mp)
+	right := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(left, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(left, []byte("b"), false, mp))
 	require.NoError(t, vector.AppendFixedList(right, []int64{1, 2}, nil, mp))
@@ -474,7 +474,7 @@ func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, "a1,b2", string(results[0].GetBytesAt(0)))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	restored.Free()
 }
@@ -491,7 +491,7 @@ func TestGroupConcatLegacyIntermediateWireRemainsReadable(t *testing.T) {
 		retType:   types.T_text.ToType(),
 		emptyNull: true,
 	}
-	values := vector.NewVec(types.T_varchar.ToType())
+	values := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(values, []byte("b"), false, mp))
 	defer values.Free(mp)
@@ -515,7 +515,7 @@ func TestGroupConcatLegacyIntermediateWireRemainsReadable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, "a|b", string(results[0].GetBytesAt(0)))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	writer.Free()
 	reader.Free()
 }
@@ -564,7 +564,7 @@ func TestAccountedDistinctGroupConcatLegacyIntermediateUsesSingleFallbackOrdinal
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, "aa|b", string(results[0].GetBytesAt(0)))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 
 	sink := &groupConcatWarningSink{}
 	ReportGroupConcatWarnings(target, sink)
@@ -587,8 +587,8 @@ func TestOrderedGroupConcatIntermediateRoundTrip(t *testing.T) {
 	}
 	config := testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "|")
 
-	values := vector.NewVec(types.T_varchar.ToType())
-	orderKeys := vector.NewVec(types.T_int64.ToType())
+	values := vector.NewVec(types.T_varchar.ToType(), mp)
+	orderKeys := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, []byte("b"), false, mp))
 	require.NoError(t, vector.AppendBytes(values, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(values, []byte("a"), false, mp))
@@ -616,7 +616,7 @@ func TestOrderedGroupConcatIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, "a|b", string(results[0].GetBytesAt(0)))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	restored.Free()
 }
@@ -648,7 +648,7 @@ func TestGroupConcatUntrustedEmptyPartialForcesFallbackOrdinal(t *testing.T) {
 	require.False(t, GroupConcatSourceRowsTrusted(target))
 	SetGroupConcatMultiGroupContext(target, true)
 
-	values := vector.NewVec(types.T_varchar.ToType())
+	values := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, []byte("aa"), false, mp))
 	require.NoError(t, vector.AppendBytes(values, []byte("bbb"), false, mp))
 	defer values.Free(mp)
@@ -694,7 +694,7 @@ func TestGroupConcatUntrustedEmptyPartialForcesFallbackOrdinal(t *testing.T) {
 	result, err := target.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "aa|b", string(result[0].GetBytesAt(0)))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	sink := &groupConcatWarningSink{}
 	ReportGroupConcatWarnings(target, sink)
 	require.Equal(t, uint64(1), sink.total)
@@ -751,7 +751,7 @@ func TestAccountedDistinctGroupConcatIntermediateKeepsSourceRows(t *testing.T) {
 		"Row 8 was cut by GROUP_CONCAT()",
 	}, sink.messages)
 
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	values.Free(mp)
 	source.Free()
 	target.Free()
@@ -775,8 +775,8 @@ func TestJsonObjectAggIntermediateRoundTrip(t *testing.T) {
 		emptyNull: true,
 	}
 
-	keyVec := vector.NewVec(types.T_varchar.ToType())
-	valVec := vector.NewVec(types.T_int64.ToType())
+	keyVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	valVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(keyVec, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(keyVec, []byte("b"), false, mp))
 	require.NoError(t, vector.AppendFixedList(valVec, []int64{1, 2}, nil, mp))
@@ -800,7 +800,7 @@ func TestJsonObjectAggIntermediateRoundTrip(t *testing.T) {
 	text, err := types.DecodeJson(results[0].GetBytesAt(0)).MarshalJSON()
 	require.NoError(t, err)
 	require.JSONEq(t, `{"a":1,"b":2}`, string(text))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	restored.Free()
 }
@@ -817,7 +817,7 @@ func TestJSONOpaqueAggregateIntermediateRoundTrip(t *testing.T) {
 		retType:   types.T_json.ToType(),
 		emptyNull: true,
 	}
-	values := vector.NewVec(types.T_varbinary.ToType())
+	values := vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, []byte{0, 0xff, 'A'}, false, mp))
 	require.NoError(t, vector.AppendBytes(values, []byte{}, false, mp))
 
@@ -837,8 +837,8 @@ func TestJSONOpaqueAggregateIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `["base64:type15:AP9B","base64:type15:"]`, string(arrayJSON))
 
-	key := vector.NewVec(types.T_varchar.ToType())
-	bitValues := vector.NewVec(types.New(types.T_bit, 8, 0))
+	key := vector.NewVec(types.T_varchar.ToType(), mp)
+	bitValues := vector.NewVec(types.New(types.T_bit, 8, 0), mp)
 	require.NoError(t, vector.AppendBytes(key, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(key, []byte("b"), false, mp))
 	require.NoError(t, vector.AppendFixedList(bitValues, []uint64{0xaa, 7}, nil, mp))
@@ -909,7 +909,7 @@ func TestJSONOpaqueArrayDistinctUsesSourceValueEquality(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			values := vector.NewVec(tc.typ)
+			values := vector.NewVec(tc.typ, mp)
 			tc.append(values)
 			exec := newJsonArrayAggExec(mp, multiAggInfo{
 				aggID: AggIdOfJsonArrayAgg, distinct: true,
@@ -942,7 +942,7 @@ func TestMedianIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, exec.GroupGrow(1))
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 3, 2, 4}, nil, mp))
 	defer vec.Free(mp)
 	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
@@ -958,7 +958,7 @@ func TestMedianIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Equal(t, 2.5, vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	exec.Free()
 	restored.Free()
 }

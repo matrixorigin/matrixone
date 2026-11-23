@@ -160,9 +160,6 @@ func (exec *sumDecimal64FastExec) BulkFill(groupIndex int, vectors []*vector.Vec
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
-	if vectors[0].IsDictionary() {
-		return exec.bulkFillSingleGroupDictionary(groupIndex, vectors)
-	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
 
@@ -216,12 +213,6 @@ func (exec *sumDecimal64FastExec) bulkFillSingleGroup(groupIndex int, vectors []
 func (exec *sumDecimal64FastExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
-	}
-	if vectors[0].IsDictionary() {
-		if len(exec.state) == 1 && exec.state[0].length > 0 && exec.state[0].length <= 256 {
-			return exec.batchFillDenseGroupsDictionary(offset, groups, vectors)
-		}
-		return exec.batchFillDictionary(offset, groups, vectors)
 	}
 
 	if vectors[0].IsConst() && vectors[0].IsConstNull() {
@@ -429,7 +420,7 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -484,7 +475,7 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
 			if exec.isSum && exec.widenSumResult {
-				resultVec, err := exec.allocation.newVector(resultType)
+				resultVec, err := exec.allocation.newVector(resultType, exec.mp)
 				if err != nil {
 					return nil, err
 				}
@@ -630,9 +621,6 @@ func (exec *sumDecimal128FastExec) BulkFill(groupIndex int, vectors []*vector.Ve
 	if exec.IsDistinct() {
 		return exec.bulkFillDistinctArgs(groupIndex, vectors)
 	}
-	if vectors[0].IsDictionary() {
-		return exec.bulkFillSingleGroupDictionary(groupIndex, vectors)
-	}
 	return exec.bulkFillSingleGroup(groupIndex, vectors)
 }
 
@@ -700,9 +688,6 @@ func (exec *sumDecimal128FastExec) bulkFillSingleGroup(groupIndex int, vectors [
 func (exec *sumDecimal128FastExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if exec.IsDistinct() {
 		return exec.batchFillArgs(offset, groups, vectors, true)
-	}
-	if vectors[0].IsDictionary() {
-		return exec.batchFillDictionary(offset, groups, vectors)
 	}
 
 	return exec.batchFill(offset, groups, vectors)
@@ -864,7 +849,7 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 	if exec.IsDistinct() {
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(resultType)
+			vecs[i], err = exec.allocation.newVector(resultType, exec.mp)
 			if err != nil {
 				return nil, err
 			}
@@ -924,7 +909,7 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 			cntVec := exec.state[i].vecs[1]
 			cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
 			if exec.isSum && exec.widenSumResult {
-				resultVec, err := exec.allocation.newVector(resultType)
+				resultVec, err := exec.allocation.newVector(resultType, exec.mp)
 				if err != nil {
 					return nil, err
 				}

@@ -56,9 +56,9 @@ type liveMarkerContextKey struct{}
 func newReplayRecoveryChangesHandle(t *testing.T, owner uint32, mp *mpool.MPool) *replayRecoveryChangesHandle {
 	t.Helper()
 	recovered := batch.NewWithSize(2)
-	recovered.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	recovered.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(recovered.Vecs[0], types.Rowid{}, false, mp))
-	recovered.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	recovered.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(recovered.Vecs[1], int64(42), false, mp))
 	recovered.SetRowCount(1)
 	return &replayRecoveryChangesHandle{owner: owner, recovered: recovered}
@@ -80,7 +80,7 @@ func (h *replayRecoveryChangesHandle) Next(
 	}
 	out := batch.NewWithSize(h.recovered.VectorCount())
 	for i := range h.recovered.Vecs {
-		out.Vecs[i] = vector.NewVec(*h.recovered.Vecs[i].GetType())
+		out.Vecs[i] = vector.NewVec(*h.recovered.Vecs[i].GetType(), mp)
 		if err := out.Vecs[i].UnionBatch(h.recovered.Vecs[i], 0, h.recovered.RowCount(), nil, mp); err != nil {
 			return nil, nil, engine.ChangesHandle_Tail_done, err
 		}
@@ -219,7 +219,7 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 			readBatch := batch.NewWithSize(len(attrs))
 			mp := ses.proc.Mp()
 			for i := range attrs {
-				readBatch.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+				readBatch.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 				if i == 0 {
 					if err := vector.AppendBytes(readBatch.Vecs[i], []byte("k1"), false, mp); err != nil {
 						return err
@@ -255,7 +255,7 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 		tblStuff.def.pkColIdx = 0
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendBytes(tBat.Vecs[0], []byte("k1"), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		return tBat, tblStuff

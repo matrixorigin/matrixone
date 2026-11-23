@@ -1193,9 +1193,9 @@ func TestExtractPartitionPredicates_InVec(t *testing.T) {
 	partColSet := map[string]bool{"year": true}
 
 	// Simulate a folded Expr_Vec (what constant-fold produces from IN list)
-	vec := vector.NewVec(types.T_int32.ToType())
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, int32(2024), false, mp))
 	require.NoError(t, vector.AppendFixed(vec, int32(2025), false, mp))
 	data, err := vec.MarshalBinary()
@@ -1224,9 +1224,9 @@ func TestExtractPartitionPredicates_InVecLengthMismatch(t *testing.T) {
 	td := makeTableDef("year", "data")
 	partColSet := map[string]bool{"year": true}
 
-	vec := vector.NewVec(types.T_int32.ToType())
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, int32(2024), false, mp))
 	require.NoError(t, vector.AppendFixed(vec, int32(2025), false, mp))
 	data, err := vec.MarshalBinary()
@@ -1253,9 +1253,9 @@ func TestExtractPartitionPredicates_InVecVarchar(t *testing.T) {
 	td := makeTableDef("country", "data")
 	partColSet := map[string]bool{"country": true}
 
-	vec := vector.NewVec(types.T_varchar.ToType())
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte("US"), false, mp))
 	require.NoError(t, vector.AppendBytes(vec, []byte("CN"), false, mp))
 	data, err := vec.MarshalBinary()
@@ -1504,7 +1504,7 @@ func TestMatchPartitionValue_SetWithEnumvalues(t *testing.T) {
 func TestFillConstantVector_Int64FloatFallback(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	col := &plan.ColDef{Name: "big", Typ: plan.Type{Id: int32(types.T_int64)}}
 
 	err := fillConstantVector(vec, "1.5", col, 3, proc, "/test")
@@ -1516,24 +1516,24 @@ func TestFillConstantVector_Int64FloatFallback(t *testing.T) {
 
 func TestFillConstantVector_Int64OverflowRejects(t *testing.T) {
 	proc := testutil.NewProc(t)
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	col := &plan.ColDef{Name: "big", Typ: plan.Type{Id: int32(types.T_int64)}}
 
 	// 9223372036854775808 = MaxInt64 + 1 → ParseInt ErrRange → reject (no float fallback)
 	err := fillConstantVector(vec, "9223372036854775808", col, 1, proc, "/test")
 	require.Error(t, err, "int64 overflow must be rejected")
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 func TestFillConstantVector_Uint64OverflowRejects(t *testing.T) {
 	proc := testutil.NewProc(t)
-	vec := vector.NewVec(types.T_uint64.ToType())
+	vec := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 	col := &plan.ColDef{Name: "big", Typ: plan.Type{Id: int32(types.T_uint64)}}
 
 	// 18446744073709551616 = MaxUint64 + 1 → ParseUint ErrRange → reject
 	err := fillConstantVector(vec, "18446744073709551616", col, 1, proc, "/test")
 	require.Error(t, err, "uint64 overflow must be rejected")
-	vec.Free(nil)
+	vec.Free(vec.MPool())
 }
 
 // TestFillConstantVector_Int64DecimalBoundaryRejects guards the 64-bit float
@@ -1565,10 +1565,10 @@ func TestFillConstantVector_Int64DecimalBoundaryRejects(t *testing.T) {
 	}
 	for _, s := range cases {
 		t.Run(s, func(t *testing.T) {
-			vec := vector.NewVec(types.T_int64.ToType())
+			vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			err := fillConstantVector(vec, s, col, 1, proc, "/test")
 			require.Error(t, err, "%q must be rejected (would overflow int64 or be ambiguous)", s)
-			vec.Free(nil)
+			vec.Free(vec.MPool())
 		})
 	}
 }
@@ -1594,7 +1594,7 @@ func TestFillConstantVector_Int64DecimalBoundaryAccepts(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.s, func(t *testing.T) {
-			vec := vector.NewVec(types.T_int64.ToType())
+			vec := vector.NewVec(types.T_int64.ToType(), mp)
 			err := fillConstantVector(vec, c.s, col, 1, proc, "/test")
 			require.NoError(t, err)
 			val := vector.MustFixedColNoTypeCheck[int64](vec)[0]
@@ -1621,10 +1621,10 @@ func TestFillConstantVector_Uint64DecimalBoundaryRejects(t *testing.T) {
 	}
 	for _, s := range cases {
 		t.Run(s, func(t *testing.T) {
-			vec := vector.NewVec(types.T_uint64.ToType())
+			vec := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 			err := fillConstantVector(vec, s, col, 1, proc, "/test")
 			require.Error(t, err, "%q must be rejected", s)
-			vec.Free(nil)
+			vec.Free(vec.MPool())
 		})
 	}
 }
@@ -1644,7 +1644,7 @@ func TestFillConstantVector_Uint64DecimalBoundaryAccepts(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.s, func(t *testing.T) {
-			vec := vector.NewVec(types.T_uint64.ToType())
+			vec := vector.NewVec(types.T_uint64.ToType(), mp)
 			err := fillConstantVector(vec, c.s, col, 1, proc, "/test")
 			require.NoError(t, err)
 			val := vector.MustFixedColNoTypeCheck[uint64](vec)[0]
@@ -1687,10 +1687,10 @@ func TestFillConstantVector_SmallIntFloatBoundaryRejects(t *testing.T) {
 		name := fmt.Sprintf("%s_%s", c.typId, c.val)
 		t.Run(name, func(t *testing.T) {
 			col := &plan.ColDef{Name: "n", Typ: plan.Type{Id: int32(c.typId)}}
-			vec := vector.NewVec(c.typId.ToType())
+			vec := vector.NewVec(c.typId.ToType(), proc.Mp())
 			err := fillConstantVector(vec, c.val, col, 1, proc, "/test")
 			require.Error(t, err, "%s value %q must be rejected (float bound)", c.typId, c.val)
-			vec.Free(nil)
+			vec.Free(vec.MPool())
 		})
 	}
 }
@@ -1722,7 +1722,7 @@ func TestFillConstantVector_SmallIntFloatBoundaryAccepts(t *testing.T) {
 		name := fmt.Sprintf("%s_%s", c.typId, c.val)
 		t.Run(name, func(t *testing.T) {
 			col := &plan.ColDef{Name: "n", Typ: plan.Type{Id: int32(c.typId)}}
-			vec := vector.NewVec(c.typId.ToType())
+			vec := vector.NewVec(c.typId.ToType(), mp)
 			err := fillConstantVector(vec, c.val, col, 1, proc, "/test")
 			require.NoError(t, err)
 			var got int64
@@ -1756,7 +1756,7 @@ func TestFillConstantVector_SmallIntFloatBoundaryAccepts(t *testing.T) {
 		name := fmt.Sprintf("%s_%s", c.typId, c.val)
 		t.Run(name, func(t *testing.T) {
 			col := &plan.ColDef{Name: "n", Typ: plan.Type{Id: int32(c.typId)}}
-			vec := vector.NewVec(c.typId.ToType())
+			vec := vector.NewVec(c.typId.ToType(), mp)
 			err := fillConstantVector(vec, c.val, col, 1, proc, "/test")
 			require.NoError(t, err)
 			var got uint64
@@ -1847,7 +1847,7 @@ func TestRefreshPartitionValues_ValidatesUnprojectedPartitionValue(t *testing.T)
 func TestFillConstantVector_Int(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	col := &plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}}
 
 	err := fillConstantVector(vec, "2025", col, 10, proc, "/test")
@@ -1861,7 +1861,7 @@ func TestFillConstantVector_Int(t *testing.T) {
 func TestFillConstantVector_IntFloatFallback(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	col := &plan.ColDef{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}}
 
 	err := fillConstantVector(vec, "1.5", col, 5, proc, "/test")
@@ -1874,7 +1874,7 @@ func TestFillConstantVector_IntFloatFallback(t *testing.T) {
 func TestFillConstantVector_Varchar(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	col := &plan.ColDef{Name: "country", Typ: plan.Type{Id: int32(types.T_varchar)}}
 
 	err := fillConstantVector(vec, "US", col, 3, proc, "/test")
@@ -1888,7 +1888,7 @@ func TestFillConstantVector_Varchar(t *testing.T) {
 func TestFillConstantVector_Bool(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
-	vec := vector.NewVec(types.T_bool.ToType())
+	vec := vector.NewVec(types.T_bool.ToType(), mp)
 	col := &plan.ColDef{Name: "flag", Typ: plan.Type{Id: int32(types.T_bool)}}
 
 	err := fillConstantVector(vec, "true", col, 2, proc, "/test")
@@ -1907,7 +1907,7 @@ func TestFillConstantVector_UnsupportedVector(t *testing.T) {
 		types.T_array_int8, types.T_array_uint8,
 	} {
 		t.Run(id.String(), func(t *testing.T) {
-			vec := vector.NewVec(id.ToType())
+			vec := vector.NewVec(id.ToType(), proc.Mp())
 			col := &plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(id)}}
 
 			err := fillConstantVector(vec, "[1,2,3]", col, 1, proc, "/test")
@@ -1921,7 +1921,7 @@ func TestFillPartitionColumns_DefaultPartNull(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 	bat.SetRowCount(5)
 
@@ -1945,7 +1945,7 @@ func TestFillPartitionColumns_DefaultPartNotNull(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 	bat.SetRowCount(5)
 
@@ -1969,7 +1969,7 @@ func TestFillPartitionColumns_NotNullViaTypNotNullable_NegativeCase(t *testing.T
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 	bat.SetRowCount(3)
 
@@ -1993,7 +1993,7 @@ func TestFillPartitionColumns_NotPresent(t *testing.T) {
 	proc := testutil.NewProc(t)
 	mp := proc.Mp()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 	bat.SetRowCount(3)
 
@@ -2029,7 +2029,7 @@ func TestFillPartitionColumns_RelPathWithExtern(t *testing.T) {
 	//   2) not-found-in-path (partition key missing from file path)
 
 	t.Run("not-null default partition prints relative path", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), mp)
 		bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 		bat.SetRowCount(5)
 
@@ -2058,7 +2058,7 @@ func TestFillPartitionColumns_RelPathWithExtern(t *testing.T) {
 	})
 
 	t.Run("missing partition key prints relative path", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), mp)
 		bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 		bat.SetRowCount(2)
 
@@ -2084,7 +2084,7 @@ func TestFillPartitionColumns_RelPathWithExtern(t *testing.T) {
 	})
 
 	t.Run("type conversion failure prints relative path", func(t *testing.T) {
-		vec := vector.NewVec(types.T_int32.ToType())
+		vec := vector.NewVec(types.T_int32.ToType(), mp)
 		bat := &batch.Batch{Vecs: []*vector.Vector{vec}}
 		bat.SetRowCount(3)
 

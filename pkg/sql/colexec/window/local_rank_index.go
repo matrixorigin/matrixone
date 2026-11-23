@@ -44,7 +44,11 @@ func (ctr *container) fallbackLocalRankIndex(start, end int, width uint64) {
 // Rank results are fresh fixed-width vectors: a failed append has not
 // published a row. Optional index memory must yield before output is rejected.
 func (ctr *container) appendLocalRankResult(proc *process.Process, result *vector.Vector, value uint64, isNull bool) error {
-	err := vector.AppendFixed(result, value, isNull, proc.Mp())
+	mp, err := ctr.allocation.MP(proc)
+	if err != nil {
+		return err
+	}
+	err = vector.AppendFixed(result, value, isNull, mp)
 	if err == nil || ctr.localRank == nil || ctr.localRank.charge == 0 {
 		return err
 	}
@@ -55,7 +59,7 @@ func (ctr *container) appendLocalRankResult(proc *process.Process, result *vecto
 		return err
 	}
 	ctr.fallbackLocalRankIndex(ctr.localRank.start, ctr.localRank.end, ctr.localRank.width)
-	return vector.AppendFixed(result, value, isNull, proc.Mp())
+	return vector.AppendFixed(result, value, isNull, mp)
 }
 
 func (ctr *container) freeLocalRankIndex() {

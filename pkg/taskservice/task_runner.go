@@ -321,9 +321,20 @@ func (r *taskRunner) Stop() error {
 	}
 
 	r.stopper.Stop()
+	// Once every worker has joined, only parked retries still hold slots.
+	for range r.retryTasks.s {
+		r.releaseParallel()
+	}
+	r.retryTasks.s = nil
 	close(r.waitTasksC)
-	close(r.parallelismC)
+	for range r.waitTasksC {
+	}
 	close(r.doneC)
+	for range r.doneC {
+	}
+	close(r.parallelismC)
+	clear(r.runningTasks.m)
+	clear(r.runningTasks.completedTasks)
 	return nil
 }
 
@@ -759,6 +770,7 @@ func (r *taskRunner) retryDueTasks(now time.Time, needRetryTasks []runningTask) 
 func (r *taskRunner) runTask(ctx context.Context, rt runningTask) {
 	select {
 	case <-ctx.Done():
+		r.removeRunningTask(rt, nil)
 	case r.parallelismC <- struct{}{}:
 		r.run(rt)
 	}
@@ -790,7 +802,7 @@ func (r *taskRunner) run(rt runningTask) {
 				r.releaseParallel()
 				return
 			}
-			r.taskExecResult(rt, err, false)
+			r.taskExecResult(ctx, rt, err, false)
 		} else {
 			var disposition sqlTaskRunnerDisposition
 			execCtx := rt.ctx
@@ -831,10 +843,12 @@ func (r *taskRunner) run(rt runningTask) {
 				}
 				return
 			}
-			r.taskExecResult(rt, err, err != nil)
+			r.taskExecResult(ctx, rt, err, err != nil)
 		}
 	})
 	if err != nil {
+		r.removeRunningTask(rt, nil)
+		r.releaseParallel()
 		r.logger.Error("run task failed", zap.Error(err))
 	}
 }
@@ -894,7 +908,7 @@ func sqlTaskRunnerStopOnly(err, stop error) bool {
 	return true
 }
 
-func (r *taskRunner) taskExecResult(rt runningTask, err error, mayRetry bool) {
+func (r *taskRunner) taskExecResult(ctx context.Context, rt runningTask, err error, mayRetry bool) {
 	if err == nil {
 		rt.task.ExecuteResult = &task.ExecuteResult{
 			Code: task.ResultCode_Success,
@@ -919,12 +933,16 @@ func (r *taskRunner) taskExecResult(rt runningTask, err error, mayRetry bool) {
 		}
 		return
 	}
-	r.addDoneTask(rt)
-}
-
-func (r *taskRunner) addDoneTask(rt runningTask) {
+	// The completion writer is independent of execution. A stalled write must
+	// not hold a shared slot needed by tasks with their own completion path.
 	r.releaseParallel()
-	r.doneC <- rt
+	select {
+	case r.doneC <- rt:
+		return
+	case <-ctx.Done():
+	case <-rt.ctx.Done():
+	}
+	r.removeRunningTask(rt, nil)
 }
 
 func (r *taskRunner) addRetryTask(task runningTask) bool {
@@ -967,27 +985,44 @@ func (r *taskRunner) done(ctx context.Context) {
 	}
 }
 
-func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
+func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) {
+	defer r.removeRunningTask(rt, nil)
+	var retryTimer *time.Timer
+	defer func() {
+		if retryTimer != nil {
+			retryTimer.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			return
 		case <-rt.ctx.Done():
-			return false
+			return
 		default:
 			err := r.service.Complete(rt.ctx, r.runnerID, rt.task, *rt.task.ExecuteResult)
 			if err == nil || moerr.IsMoErrCode(err, moerr.ErrInvalidTask) {
-				r.removeRunningTask(rt, nil)
 				r.logger.Info("task completed",
 					zap.String("task", rt.task.DebugString()),
 					zap.Error(err))
-				return true
+				return
 			}
 
 			r.logger.Error("task done failed, retry later",
 				zap.String("task", rt.task.DebugString()),
 				zap.Error(err))
-			time.Sleep(r.options.retryInterval)
+			if retryTimer == nil {
+				retryTimer = time.NewTimer(r.options.retryInterval)
+			} else {
+				retryTimer.Reset(r.options.retryInterval)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-rt.ctx.Done():
+				return
+			case <-retryTimer.C:
+			}
 		}
 	}
 }

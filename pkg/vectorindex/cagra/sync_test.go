@@ -88,7 +88,7 @@ func installNextChunkIdMock(t *testing.T, proc *process.Process, nextId int64) f
 			t.Fatalf("unexpected runSql call from sync: %s", sql)
 		}
 		b := batch.NewWithSize(1)
-		b.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		b.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 		vector.AppendFixed[int64](b.Vecs[0], nextId, false, proc.Mp())
 		b.SetRowCount(1)
 		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{b}}, nil
@@ -471,7 +471,7 @@ func TestCagraSync_MultiFlush(t *testing.T) {
 		nextId := int64(calls)
 		calls++
 		b := batch.NewWithSize(1)
-		b.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		b.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 		vector.AppendFixed[int64](b.Vecs[0], nextId, false, proc.Mp())
 		b.SetRowCount(1)
 		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{b}}, nil

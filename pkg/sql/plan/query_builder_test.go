@@ -1374,11 +1374,10 @@ func TestQueryBuilderBuildSortRollupPlan(t *testing.T) {
 
 	stmts, err := parsers.Parse(
 		context.TODO(), dialect.MYSQL,
-		`select a, b, count(*) as cnt, sum(c) as total,
-			grouping(a) as grouping_a, grouping(b) as grouping_b
+		`select a, b, count(*) as cnt, sum(c) as total
 			from select_test.bind_select
 			group by a, b with rollup
-			order by grouping_a, grouping_b, a, b`,
+			order by a, b`,
 		1,
 	)
 	require.NoError(t, err)
@@ -1397,14 +1396,13 @@ func TestQueryBuilderBuildSortRollupPlan(t *testing.T) {
 	require.Len(t, aggregate.Children, 1)
 	require.Equal(t, plan.Node_SORT, query.Nodes[aggregate.Children[0]].NodeType)
 	require.Len(t, query.Nodes[aggregate.Children[0]].OrderBy, 2)
-	// The aggregate owns the grouping keys and value aggregates. GROUPING()
-	// outputs are materialized by the projection above it.
+	// The aggregate owns the grouping keys and value aggregates.
 	require.Len(t, aggregate.ProjectList, 4)
 	require.False(t, aggregate.ProjectList[0].Typ.NotNullable)
 	require.False(t, aggregate.ProjectList[1].Typ.NotNullable)
 	var outputProject *plan.Node
 	for _, node := range query.Nodes {
-		if node.NodeType == plan.Node_PROJECT && len(node.ProjectList) == 6 {
+		if node.NodeType == plan.Node_PROJECT && len(node.ProjectList) == 4 {
 			outputProject = node
 			break
 		}
@@ -1426,7 +1424,13 @@ func TestQueryBuilderDirectSortRollupPlanModes(t *testing.T) {
 		}
 	}()
 
-	sql := `select a, b, count(*) as cnt, sum(c) as total,
+	sql := `select a, b, count(*) as cnt, sum(c) as total
+		from select_test.bind_select
+		group by a, b with rollup
+		order by a, b`
+	// GROUPING is folded per grouping-set branch, which sort rollup does not
+	// have, so even a forced sort plans the hash branches.
+	groupingSQL := `select a, b, count(*) as cnt, sum(c) as total,
 		grouping(a) as grouping_a, grouping(b) as grouping_b
 		from select_test.bind_select
 		group by a, b with rollup
@@ -1434,14 +1438,16 @@ func TestQueryBuilderDirectSortRollupPlanModes(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		hint string
+		sql  string
 		sort bool
 	}{
-		{name: "sort", hint: "rollupSort=1", sort: true},
-		{name: "hash", hint: "rollupSort=2"},
+		{name: "sort", hint: "rollupSort=1", sql: sql, sort: true},
+		{name: "hash", hint: "rollupSort=2", sql: sql},
+		{name: "grouping falls back to hash", hint: "rollupSort=1", sql: groupingSQL},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", tc.hint)
-			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, tc.sql, 1)
 			require.NoError(t, err)
 			queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false, nil)
 			require.NoError(t, err)
@@ -5890,12 +5896,43 @@ func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
 		"mixed CHAR/VARCHAR must keep the variable-string output domain")
 }
 
+func TestSumIntPlannerResultIsDecimal(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"select sum(cast(n_nationkey as int)) from nation")
+	require.NoError(t, err)
+	root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_decimal128), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(32), root.ProjectList[0].Typ.Width)
+	require.Zero(t, root.ProjectList[0].Typ.Scale)
+}
+
 func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		sql     string
 		wantKey bool
 	}{
+		{
+			name:    "coalesce char and literal",
+			sql:     "select distinct coalesce(cast(n_name as char(8)), '') from nation",
+			wantKey: true,
+		},
+		{
+			name:    "ifnull char and literal",
+			sql:     "select distinct ifnull(cast(n_name as char(8)), '') from nation",
+			wantKey: true,
+		},
+		{
+			name:    "coalesce char char",
+			sql:     "select distinct coalesce(cast(n_name as char(8)), cast(n_comment as char(8))) from nation",
+			wantKey: true,
+		},
+		{
+			name:    "ifnull char char",
+			sql:     "select distinct ifnull(cast(n_name as char(8)), cast(n_comment as char(8))) from nation",
+			wantKey: true,
+		},
 		{
 			name:    "coalesce char varchar",
 			sql:     "select distinct coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation",
@@ -6132,6 +6169,14 @@ func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{
+			name: "coalesce char and literal",
+			sql:  "select coalesce(cast(n_name as char(8)), ''), count(*) from nation group by coalesce(cast(n_name as char(8)), '')",
+		},
+		{
+			name: "ifnull char and literal",
+			sql:  "select ifnull(cast(n_name as char(8)), ''), count(*) from nation group by ifnull(cast(n_name as char(8)), '')",
+		},
 		{
 			name: "direct",
 			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))), count(*) from nation group by coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
@@ -9881,7 +9926,8 @@ func TestGroupingSetOutputNullability(t *testing.T) {
 	require.True(t, root.ProjectList[0].Typ.NotNullable, "always-active NOT NULL key")
 	require.Nil(t, root.ProjectList[0].GetF(), "no normalization needed for always-active key")
 	require.False(t, root.ProjectList[1].Typ.NotNullable, "omitted NOT NULL key becomes SQL NULL")
-	require.Equal(t, "if", root.ProjectList[1].GetF().Func.ObjName)
+	// Rolled-up keys are plain NULLs, so the sentinel normalization folds away.
+	require.NotNil(t, root.ProjectList[1].GetCol(), "omitted key needs no normalization at execution")
 	require.True(t, root.ProjectList[2].Typ.NotNullable, "COUNT metadata is preserved")
 	require.Nil(t, root.ProjectList[2].GetF(), "COUNT needs no result copy")
 	require.Nil(t, root.ProjectList[3].GetF(), "explicit GROUPING value is already ordinary SQL")

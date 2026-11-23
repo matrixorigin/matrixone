@@ -158,7 +158,7 @@ func TestSerializedLiteralRedactionAppliesAcrossExpressionLayouts(t *testing.T) 
 
 func TestCompositeKeyInExplainShowsRedaction(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte{0, 1, 2}, false, mp))
 	data, err := vec.MarshalBinary()
@@ -201,7 +201,7 @@ func TestNonPrintableStringLiteralExplainUsesHex(t *testing.T) {
 
 func TestLiteralVecExplainNeverWritesRawNonTextBytes(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	if err := vector.AppendBytes(vec, []byte{0xff, 0x00}, false, mp); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestJSONExplainPreservesTimestampPrecisionAndCompleteLiteralVector(t *testi
 	}
 
 	mp := mpool.MustNew(t.Name())
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	for i := 1; i <= 17; i++ {
 		if err := vector.AppendFixed[int32](vec, int32(i), false, mp); err != nil {
 			t.Fatal(err)
@@ -286,7 +286,7 @@ func TestJSONExplainPreservesTimestampPrecisionAndCompleteLiteralVector(t *testi
 func TestLiteralVecExplainPreservesTypedScaleBoundariesAndNulls(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	datetimeType := types.T_datetime.ToTypeWithScale(6)
-	datetimeVec := vector.NewVec(datetimeType)
+	datetimeVec := vector.NewVec(datetimeType, mp)
 	dt, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +304,7 @@ func TestLiteralVecExplainPreservesTypedScaleBoundariesAndNulls(t *testing.T) {
 	}
 
 	decimalType := types.T_decimal64.ToTypeWithScale(2)
-	decimalVec := vector.NewVec(decimalType)
+	decimalVec := vector.NewVec(decimalType, mp)
 	first, err := types.ParseDecimal64("1.20", decimalType.Width, decimalType.Scale)
 	if err != nil {
 		t.Fatal(err)
@@ -407,7 +407,7 @@ func TestLiteralVecExplainRendersLowPrecisionTypes(t *testing.T) {
 	}
 
 	// an invalid vecf8 cell renders as its bytes
-	vec := vector.NewVec(types.T_array_float8.ToType())
+	vec := vector.NewVec(types.T_array_float8.ToType(), mp)
 	defer vec.Free(mp)
 	if err := vector.AppendBytes(vec, []byte{1, 2, 3}, false, mp); err != nil {
 		t.Fatal(err)
@@ -419,7 +419,7 @@ func TestLiteralVecExplainRendersLowPrecisionTypes(t *testing.T) {
 
 // marshalFixedAndNull returns a marshaled vector of typ holding v and a NULL.
 func marshalFixedAndNull[T any](t *testing.T, mp *mpool.MPool, typ types.T, v T) []byte {
-	vec := vector.NewVec(typ.ToType())
+	vec := vector.NewVec(typ.ToType(), mp)
 	defer vec.Free(mp)
 	var zero T
 	if err := vector.AppendFixed(vec, v, false, mp); err != nil {
@@ -437,7 +437,7 @@ func marshalFixedAndNull[T any](t *testing.T, mp *mpool.MPool, typ types.T, v T)
 
 // marshalCells returns a marshaled vector of typ holding cells.
 func marshalCells(t *testing.T, mp *mpool.MPool, typ types.T, cells ...[]byte) []byte {
-	vec := vector.NewVec(typ.ToType())
+	vec := vector.NewVec(typ.ToType(), mp)
 	defer vec.Free(mp)
 	for _, c := range cells {
 		if err := vector.AppendBytes(vec, c, false, mp); err != nil {
@@ -594,7 +594,7 @@ func TestJSONSerializedVectorValuesAndErrors(t *testing.T) {
 	for _, count := range []int{1, 18} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			mp := mpool.MustNew(t.Name())
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer vec.Free(mp)
 			for i := 0; i < count; i++ {
 				value := []byte{byte(i), 0xff}
@@ -638,8 +638,9 @@ func TestJSONSerializedVectorValuesAndErrors(t *testing.T) {
 		require.NoError(t, describeExpr(t.Context(), expr, NewExplainDefaultOptions(), &buf))
 		require.Equal(t, "<invalid-vector>", buf.String())
 	}
-	vec := vector.NewVec(types.T_int32.ToType())
-	defer vec.Free(nil)
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
+	defer vec.Free(mp)
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)
 	_, err = sqlJSONExpr(t.Context(), &planpb.Expr{Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Data: data, IsSerialized: true}}}, &ExplainOptions{CompleteLiteralVectors: true})

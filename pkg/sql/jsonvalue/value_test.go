@@ -136,7 +136,7 @@ func TestFromVectorMySQLConstructorTypes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			v := vector.NewVec(tc.typ)
+			v := vector.NewVec(tc.typ, mp)
 			require.NoError(t, tc.append(v, mp))
 			defer v.Free(mp)
 
@@ -194,7 +194,7 @@ func TestOpaqueValueSizeAppendBuildConsistency(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			v := vector.NewVec(tc.typ)
+			v := vector.NewVec(tc.typ, mp)
 			defer v.Free(mp)
 			require.NoError(t, tc.append(v))
 
@@ -214,7 +214,7 @@ func TestOpaqueValueSizeAppendBuildConsistency(t *testing.T) {
 		})
 	}
 
-	nulls := vector.NewVec(types.T_binary.ToType())
+	nulls := vector.NewVec(types.T_binary.ToType(), mp)
 	defer nulls.Free(mp)
 	require.NoError(t, vector.AppendBytes(nulls, nil, true, mp))
 	size, err := OpaqueValueSize(context.Background(), nulls, 0)
@@ -224,12 +224,12 @@ func TestOpaqueValueSizeAppendBuildConsistency(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte{byte(bytejson.TpCodeLiteral), bytejson.LiteralNull}, encoded)
 
-	unsupported := vector.NewVec(types.T_varchar.ToType())
+	unsupported := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer unsupported.Free(mp)
 	require.NoError(t, vector.AppendBytes(unsupported, []byte("x"), false, mp))
 	_, err = OpaqueValueSize(context.Background(), unsupported, 0)
 	require.ErrorContains(t, err, "unsupported opaque type")
-	invalidBit := vector.NewVec(types.New(types.T_bit, 65, 0))
+	invalidBit := vector.NewVec(types.New(types.T_bit, 65, 0), mp)
 	defer invalidBit.Free(mp)
 	require.NoError(t, vector.AppendFixed(invalidBit, uint64(1), false, mp))
 	_, err = OpaqueValueSize(context.Background(), invalidBit, 0)
@@ -238,7 +238,7 @@ func TestOpaqueValueSizeAppendBuildConsistency(t *testing.T) {
 
 func TestFromVectorGeometryAndNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	geometry := vector.NewVec(types.T_geometry.ToType())
+	geometry := vector.NewVec(types.T_geometry.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(geometry, []byte("wkb"), false, mp))
 	defer geometry.Free(mp)
 
@@ -254,7 +254,7 @@ func TestFromVectorGeometryAndNull(t *testing.T) {
 	_, err = FromVector(context.Background(), geometry, 0, time.UTC, bytejson.MySQLOpaqueProtocolVersion, nil)
 	require.ErrorContains(t, err, "geometry JSON conversion is unavailable")
 
-	nulls := vector.NewVec(types.T_year.ToType())
+	nulls := vector.NewVec(types.T_year.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(nulls, types.MoYear(0), true, mp))
 	defer nulls.Free(mp)
 	value, err = FromVector(context.Background(), nulls, 0, time.UTC, bytejson.MySQLOpaqueProtocolVersion, nil)
@@ -264,7 +264,7 @@ func TestFromVectorGeometryAndNull(t *testing.T) {
 
 func TestFromVectorRejectsInvalidBitWidth(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.New(types.T_bit, 65, 0))
+	v := vector.NewVec(types.New(types.T_bit, 65, 0), mp)
 	require.NoError(t, vector.AppendFixed(v, uint64(1), false, mp))
 	defer v.Free(mp)
 

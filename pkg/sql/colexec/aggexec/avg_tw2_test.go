@@ -28,7 +28,7 @@ func TestAvgTwCacheNumericRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	input := vector.NewVec(types.T_int32.ToType())
+	input := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input, []int32{3, 5}, nil, mp))
 
 	exec := newAvgTwCacheNumericExec[int32](mp, 1, types.T_int32.ToType())
@@ -50,7 +50,7 @@ func TestAvgTwCacheNumericRoundTrip(t *testing.T) {
 	require.Equal(t, 8.0, types.DecodeFloat64(payload[0:]))
 	require.Equal(t, int64(2), types.DecodeInt64(payload[8:]))
 
-	vecs[0].Free(mp)
+	vecs[0].Free(vecs[0].MPool())
 	exec.Free()
 	restored.Free()
 	input.Free(mp)
@@ -60,7 +60,7 @@ func TestAvgTwResultFloatRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	input := vector.NewVec(types.T_int32.ToType())
+	input := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input, []int32{2, 4, 6}, nil, mp))
 
 	cacheExec := newAvgTwCacheNumericExec[int32](mp, 1, types.T_int32.ToType())
@@ -103,7 +103,7 @@ func TestAvgTwDecimalRoundTrip(t *testing.T) {
 	v2, err := types.ParseDecimal64("2.30", 10, 2)
 	require.NoError(t, err)
 
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixedList(input, []types.Decimal64{v1, v2}, nil, mp))
 
 	cacheExec := newAvgTwCacheDecimalExec[types.Decimal64](mp, 1, typ)
@@ -236,7 +236,7 @@ func TestAvgTwDecimalAndResultWrapperPaths(t *testing.T) {
 	require.NoError(t, cacheRight.GroupGrow(1))
 	require.NoError(t, cacheLeft.SetExtraInformation(nil, 0))
 
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixedList(input, mustDecimal64s(t, "1.00", "3.00"), nil, mp))
 	require.NoError(t, cacheLeft.Fill(0, 0, []*vector.Vector{input}))
 	require.NoError(t, cacheLeft.BulkFill(0, []*vector.Vector{input}))
@@ -295,7 +295,7 @@ func TestAvgTwResultFloatWrapperPaths(t *testing.T) {
 	require.False(t, vecs[0].IsNull(0))
 
 	cacheVecs[0].Free(mp)
-	vecs[0].Free(mp)
+	vecs[0].Free(vecs[0].MPool())
 	input.Free(mp)
 	cacheExec.Free()
 	left.Free()

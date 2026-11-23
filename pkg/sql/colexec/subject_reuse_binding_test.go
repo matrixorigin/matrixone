@@ -129,7 +129,7 @@ func TestORLikeSubjectReusePublicBinding(t *testing.T) {
 			input := batch.NewWithSize(int(column.GetCol().ColPos) + 1)
 			defer input.Clean(proc.Mp())
 			values := []string{"ERROR", "ordinary", "TİMEOUT", "RETRY", ""}
-			input.Vecs[column.GetCol().ColPos] = vector.NewVec(test.oid.ToType())
+			input.Vecs[column.GetCol().ColPos] = vector.NewVec(test.oid.ToType(), proc.Mp())
 			for row, value := range values {
 				require.NoError(t, vector.AppendBytes(input.Vecs[column.GetCol().ColPos], []byte(value), row == 4, proc.Mp()))
 			}

@@ -70,6 +70,8 @@ type container struct {
 	spillThreshold int64
 	autoSpill      bool
 	resultBatch    *batch.Batch
+	// resultBatchMP is the pool resultBatch was created with.
+	resultBatchMP *mpool.MPool
 }
 
 type RightDedupJoin struct {
@@ -97,7 +99,7 @@ type RightDedupJoin struct {
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
 	allocationAccount *mpool.AllocationAccount
-	resultAllocation  *vector.AllocationAccountSelection
+	resultAllocation  *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -115,11 +117,10 @@ func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
 	if rightDedupJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		rightDedupJoinAllocationSiteResultData,
-		rightDedupJoinAllocationSiteResultArea,
 	)
 	if err != nil {
 		return err
@@ -251,36 +252,43 @@ func (ctr *container) resetResultBatch() {
 	}
 }
 
-func (rightDedupJoin *RightDedupJoin) resetResultBatch() error {
+func (rightDedupJoin *RightDedupJoin) resetResultBatch(proc *process.Process) error {
+	resultMP, err := rightDedupJoin.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	ctr := &rightDedupJoin.ctr
 	ctr.resetResultBatch()
 	if ctr.resultBatch != nil {
 		return nil
 	}
-	ctr.resultBatch = batch.NewOffHeapWithSize(len(rightDedupJoin.Result))
+	ctr.resultBatch = batch.NewWithSize(len(rightDedupJoin.Result))
+	ctr.resultBatchMP = resultMP
 	for i, rp := range rightDedupJoin.Result {
 		if rp.Rel == 0 {
-			ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(
-				rightDedupJoin.LeftTypes[rp.Pos],
+			ctr.resultBatch.Vecs[i] = vector.NewVec(
+				rightDedupJoin.LeftTypes[rp.Pos], resultMP,
 			)
 		} else {
-			ctr.resultBatch.Vecs[i] = vector.NewOffHeapVecWithType(
-				rightDedupJoin.RightTypes[rp.Pos],
+			ctr.resultBatch.Vecs[i] = vector.NewVec(
+				rightDedupJoin.RightTypes[rp.Pos], resultMP,
 			)
 		}
-	}
-	if err := ctr.resultBatch.SetAllocationAccount(rightDedupJoin.resultAllocation); err != nil {
-		ctr.resultBatch.Clean(nil)
-		ctr.resultBatch = nil
-		return err
 	}
 	return nil
 }
 
+// resultMP returns the pool result vectors grow through: the result account
+// view when an account is bound, otherwise proc's pool.
+func (rightDedupJoin *RightDedupJoin) resultMP(proc *process.Process) (*mpool.MPool, error) {
+	return rightDedupJoin.resultAllocation.MP(proc.Mp())
+}
+
 func (ctr *container) cleanResultBatch(proc *process.Process) {
 	if ctr.resultBatch != nil {
-		ctr.resultBatch.Clean(proc.Mp())
+		ctr.resultBatch.Clean(ctr.resultBatchMP)
 		ctr.resultBatch = nil
+		ctr.resultBatchMP = nil
 	}
 }
 

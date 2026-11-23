@@ -180,7 +180,7 @@ func (exec *jsonArrayAggExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}()
 	for i, st := range exec.state {
-		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
+		vecs[i] = vector.NewVec(exec.retType, exec.mp)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
 			return nil, err
 		}
@@ -394,7 +394,7 @@ func (exec *jsonObjectAggExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}()
 	for i, st := range exec.state {
-		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
+		vecs[i] = vector.NewVec(exec.retType, exec.mp)
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
 			return nil, err
 		}
@@ -1036,7 +1036,7 @@ func (exec *jsonArrayAggExec) flushAccounted() (_ []*vector.Vector, retErr error
 	for chunk := range exec.state {
 		state := &exec.state[chunk]
 		var err error
-		vecs[chunk], err = exec.allocation.newVector(exec.retType)
+		vecs[chunk], err = exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -1129,7 +1129,7 @@ func (exec *jsonObjectAggExec) flushAccounted() (_ []*vector.Vector, retErr erro
 	for chunk := range exec.state {
 		state := &exec.state[chunk]
 		var err error
-		vecs[chunk], err = exec.allocation.newVector(exec.retType)
+		vecs[chunk], err = exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}

@@ -132,7 +132,7 @@ func TestHandleCommitStaleTableGenerationRequestsDefinitionRetry(t *testing.T) {
 
 	softDeleteBatch := batch.NewWithSize(1)
 	softDeleteBatch.SetAttributes([]string{"object_id"})
-	softDeleteBatch.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	softDeleteBatch.Vecs[0] = vector.NewVec(types.T_binary.ToType(), h.m)
 	objectID := types.NewObjectid()
 	require.NoError(t, vector.AppendBytes(softDeleteBatch.Vecs[0], objectID[:], false, h.m))
 	softDeleteBatch.SetRowCount(1)
@@ -635,7 +635,7 @@ func TestColumnSequenceExhaustionRollsBackEarlierDDL(t *testing.T) {
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{"alter_table"}
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), h.m)
 	defer bat.Clean(h.m)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], encoded, false, h.m))
 	bat.SetRowCount(1)

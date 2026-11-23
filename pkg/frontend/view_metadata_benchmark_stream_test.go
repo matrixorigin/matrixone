@@ -60,8 +60,7 @@ func TestViewMetadataBenchStreamDrainsAfterConsumerError(t *testing.T) {
 			for range 3 {
 				bat := batch.NewWithSize(1)
 				t.Cleanup(func() { bat.Clean(mp) }) // 负控失败时也收尾；正常关闭的 batch 可重复清理。
-				// 显式 off-heap，避免把 on-heap 分配误当作 CurrNB 的计费域。
-				bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 				if err := vector.AppendFixed(bat.Vecs[0], int64(1), false, mp); err != nil {
 					bat.Clean(mp)
 					return executor.Result{}, err

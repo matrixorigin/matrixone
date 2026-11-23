@@ -240,7 +240,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	sourceProc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), sourceProc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, sourceProc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, sourceProc.Mp()))
 	t.Cleanup(func() { params.Free(sourceProc.Mp()) })
@@ -296,10 +296,6 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.Equal(t, "text", compile.proc.GetPrepareParams().GetStringAt(1))
 	require.True(t, compile.proc.GetPrepareParamIsBin(0))
 	require.False(t, compile.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, vector.PrepareParamNone, compile.proc.GetPrepareParamKind(0))
-	require.Equal(t, vector.PrepareParamFloat, compile.proc.GetPrepareParamKind(1))
-	require.True(t, compile.proc.GetPrepareParamIsBinaryString(0))
-	require.False(t, compile.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
 	require.True(t, compile.proc.IsSelectStatement())
@@ -382,7 +378,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 
 	// Create a valid ProcessInfo
 	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
 	t.Cleanup(func() { params.Free(proc.Mp()) })
@@ -957,51 +953,9 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 
 }
 
-func TestMessageReceiverSendBatchOldProtocolDropsStringSourceOnly(t *testing.T) {
-	runtime := rt.ServiceRuntime("")
-	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
-	t.Cleanup(func() {
-		if hadOriginal {
-			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
-		} else {
-			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-	})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion11)
-
-	mp := mpool.MustNewZero()
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("literal"), false, mp))
-	require.NoError(t, bat.Vecs[0].SetStringSource(types.StringSourceLiteral))
-	bat.SetRowCount(1)
-	defer bat.Clean(mp)
-
-	ctrl := gomock.NewController(t)
-	session := mock_morpc.NewMockClientSession(ctrl)
-	var sent *pipeline.Message
-	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, message any) error {
-			sent = message.(*pipeline.Message)
-			return nil
-		})
-	receiver := &messageReceiverOnServer{
-		messageCtx:      context.Background(),
-		connectionCtx:   context.Background(),
-		messageId:       405,
-		clientSession:   session,
-		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
-		maxMessageSize:  1 << 20,
-	}
-	require.NoError(t, receiver.sendBatch(bat))
-	require.NotNil(t, sent)
-	decoded := batch.NewOffHeapEmpty()
-	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.False(t, decoded.Vecs[0].HasStringSourceMetadata())
-}
-
-func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testing.T) {
+// Binary-string provenance is carried by the static vector type, so a
+// binary result no longer needs a per-row metadata trailer or a protocol gate.
+func TestMessageReceiverSendBatchCarriesStaticBinaryType(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -1014,15 +968,9 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
-	require.NoError(t, bat.Vecs[0].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
-		types.RuntimeStringBinary, types.RuntimeStringText,
-	}, mp))
-	require.NoError(t, bat.Vecs[0].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
-		vector.PrepareParamInteger, vector.PrepareParamNone,
-	}, mp))
 	bat.SetRowCount(2)
 	defer bat.Clean(mp)
 
@@ -1036,58 +984,27 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
 		maxMessageSize:  1 << 20,
 	}
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion18")
-
 	var sent *pipeline.Message
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, message any) error {
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion22)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion23")
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion23)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
-	decoded := batch.NewOffHeapEmpty()
+	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
-	require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(1))
-	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
-
-	require.NoError(t, bat.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceCOMStmt, types.StringSourceSQLPrepare,
-	}, mp))
-	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, message any) error {
-			sent = message.(*pipeline.Message)
-			return nil
-		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion36)
-	require.NoError(t, receiver.sendBatch(bat))
-	decodedWithoutSources := batch.NewOffHeapEmpty()
-	defer decodedWithoutSources.Clean(mp)
-	require.NoError(t, decodedWithoutSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.False(t, decodedWithoutSources.Vecs[0].HasStringSourceMetadata())
-
-	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, message any) error {
-			sent = message.(*pipeline.Message)
-			return nil
-		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion37)
-	require.NoError(t, receiver.sendBatch(bat))
-	decodedWithSources := batch.NewOffHeapEmpty()
-	defer decodedWithSources.Clean(mp)
-	require.NoError(t, decodedWithSources.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
-	require.Equal(t, types.StringSourceCOMStmt, decodedWithSources.Vecs[0].GetStringSourceAt(0))
-	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
+	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(sent.Data, mp))
+	require.Equal(t, types.T_varbinary, decoded.Vecs[0].GetType().Oid)
+	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(*decoded.Vecs[0].GetType()))
+	require.Equal(t, "raw", decoded.Vecs[0].GetStringAt(0))
+	require.Equal(t, "text", decoded.Vecs[0].GetStringAt(1))
 }
 
-func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
+// Rolled-up ROLLUP keys are plain NULL constants, so sending them needs no
+// protocol gate: any peer version receives the stable batch.
+func TestMessageReceiverSendBatchSendsRolledUpNullsUngated(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() { runtime.SetGlobalVariables(rt.MOProtocolVersion, original) })
@@ -1095,7 +1012,7 @@ func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	bat := batch.NewWithSize(1)
 	t.Cleanup(func() { bat.Clean(mp) })
-	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, mp)
+	bat.Vecs[0] = vector.NewConstNull(types.T_int32.ToType(), 2, mp)
 	bat.SetRowCount(2)
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
@@ -1104,20 +1021,20 @@ func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
 		maxMessageSize: 1 << 20,
 	}
-	for _, version := range []any{nil, "unknown", int64(86)} {
-		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
-		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion87")
-	}
+	versions := []any{nil, "unknown", int64(86), int64(87)}
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, message any) error {
 			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data)
 			require.NoError(t, err)
 			defer decoded.Clean(mp)
-			require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
+			require.Equal(t, 2, decoded.RowCount())
+			require.True(t, decoded.Vecs[0].IsConstNull())
 			return nil
-		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(87))
-	require.NoError(t, receiver.sendBatch(bat))
+		}).Times(len(versions))
+	for _, version := range versions {
+		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
+		require.NoError(t, receiver.sendBatch(bat))
+	}
 }
 
 func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {

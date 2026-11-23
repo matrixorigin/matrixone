@@ -44,6 +44,16 @@ GitHub secrets and does not contact cloud object storage. The job is initially
 advisory/non-blocking; after enough stable PR runs it can become a required
 check.
 
+For the separately configured 4 MiB append budget regression, run
+`go run test/iceberg/iceberg_e2e_local.go --low-budget-regression` against a
+**test-owned** service with `dml-max-memory = 4194304` and its isolated Nessie
+and MinIO fixture. Set `--namespace`, `--mo-db`, `--mo-catalog`, and
+`--report-dir` to test-owned names and paths. The selected cases assert file
+rotation, error details, snapshot atomicity, and cleanup. Run twice with the
+same names on the same service to verify reuse; the catalog and its audit
+records are service-level fixture state and are retained until that service is
+removed. The flag is not a substitute for the default-budget smoke.
+
 `test-iceberg-external-templates` validates JSON structure, external runner
 compatibility, and the golden-real cross-engine scenario schema. It also checks
 that the golden-real template covers `ICE-TEST-156..159`. The same gate runs a

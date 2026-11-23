@@ -22,6 +22,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -70,11 +71,6 @@ func (si *snapshotItem) Exists() bool {
 	return err == nil
 }
 
-// Remove implements the ISnapshotItem interface.
-func (si *snapshotItem) Remove() error {
-	return si.fs.RemoveAll(si.dir)
-}
-
 // Valid implements the ISnapshotItem interface.
 func (si *snapshotItem) Valid() (bool, error) {
 	names, err := si.fs.List(si.dir)
@@ -113,6 +109,15 @@ type snapshotRecord struct {
 	// publish a final directory, even after StopReplica returns.
 	activeExports      int
 	lateExportPossible bool
+	// Keep the Dragonboat result after the caller's shorter context expires.
+	// The truncation worker owns and consumes this single pending result.
+	pendingExport *dragonboat.RequestState
+	// StartReplica has confirmed that the previous replica's snapshot worker
+	// has stopped. Wait for its caller to return before reconciling old files.
+	previousReplicaStopped bool
+	// A confirmed failed export left an abandoned directory that could not
+	// be removed. Retry cleanup before the next export at the same index.
+	failedExportCleanup bool
 }
 
 var errSnapshotExportPending = moerr.NewInternalErrorNoCtx("exported snapshot may still be written")
@@ -173,16 +178,51 @@ func (ss *snapshotRecord) add(index snapshotIndex, dir string) error {
 	return nil
 }
 
-// removeFirst removes the first snapshot from snapshot item list.
-func (ss *snapshotRecord) removeFirst() error {
-	if first := ss.first(); first != nil {
-		if err := first.Remove(); err != nil {
+// removeAt renames a completed export before deleting its contents. Once the
+// canonical name is gone, the item must leave the inventory even if cleanup
+// fails: the durable .removing name owns the retry across a process restart.
+func (ss *snapshotRecord) removeAt(i int) error {
+	item := ss.items[i]
+	parent := filepath.Dir(item.dir)
+	removing := ss.fs.PathJoin(parent,
+		fmt.Sprintf(snapshotPathPattern+"-%d.removing", item.index, ss.nodeID.replicaID))
+	renamed := true
+	if err := ss.fs.Rename(item.dir, removing); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+		// A missing export cannot be renamed. Confirm the canonical path is
+		// gone before releasing its inventory slot; an ENOENT from Rename
+		// while the source still exists or a transient Stat error must retry.
+		if _, statErr := ss.fs.Stat(item.dir); !errors.Is(statErr, os.ErrNotExist) {
+			return errors.Join(err, statErr)
+		}
+		renamed = false
 	}
-	putSnapshotItem(ss.items[0])
-	ss.items = ss.items[1:]
+	copy(ss.items[i:], ss.items[i+1:])
+	ss.items[len(ss.items)-1] = nil
+	ss.items = ss.items[:len(ss.items)-1]
+	putSnapshotItem(item)
+	if !renamed {
+		return nil
+	}
+	if err := syncExportDir(ss.fs, parent); err != nil {
+		ss.failedExportCleanup = true
+		return err
+	}
+	if err := ss.fs.RemoveAll(removing); err != nil {
+		ss.failedExportCleanup = true
+		return err
+	}
 	return nil
+}
+
+// removeFirst removes the first snapshot from snapshot item list.
+func (ss *snapshotRecord) removeFirst() error {
+	if len(ss.items) == 0 {
+		return nil
+	}
+	return ss.removeAt(0)
 }
 
 // removeLast removes the last (newest) snapshot from the snapshot item
@@ -194,29 +234,41 @@ func (ss *snapshotRecord) removeLast() error {
 	if l == 0 {
 		return nil
 	}
-	last := ss.items[l-1]
-	if err := last.Remove(); err != nil {
-		return err
+	return ss.removeAt(l - 1)
+}
+
+// removeIndex removes a known unusable export without disturbing newer or
+// older candidates. The Raft log is compacted only after a successful import.
+func (ss *snapshotRecord) removeIndex(index snapshotIndex) (bool, error) {
+	for i, item := range ss.items {
+		if item.index != index {
+			continue
+		}
+		if err := ss.removeAt(i); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	putSnapshotItem(last)
-	ss.items = ss.items[:l-1]
-	return nil
+	return false, nil
 }
 
 // remove the snapshots whose index is LE than the index.
 func (ss *snapshotRecord) remove(index snapshotIndex) error {
-	items := make([]*snapshotItem, len(ss.items))
-	copy(items, ss.items)
-	for _, si := range items {
-		if si.index <= index {
-			if err := ss.removeFirst(); err != nil {
-				return err
+	var cleanupErr error
+	for first := ss.first(); first != nil && first.index <= index; first = ss.first() {
+		count := len(ss.items)
+		if err := ss.removeFirst(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			if len(ss.items) == count {
+				// Rename failed, so the current item is still canonical and
+				// retained in the inventory for an explicit retry.
+				return cleanupErr
 			}
-		} else {
-			break
+			// A tombstone owns this item's retry. Finish removing the other
+			// images already covered by the successful Raft import.
 		}
 	}
-	return nil
+	return cleanupErr
 }
 
 // snapshotManager manages the exported snapshots created by dragonboat.
@@ -283,10 +335,9 @@ func (sm *snapshotManager) prepareDir(path string) error {
 	return nil
 }
 
-// ReconcileInterruptedExport removes exports abandoned by a crashed replica:
-// temporary generating directories and final directories still carrying the
-// Dragonboat completion flag. Call this only during store startup, before the
-// replica can export again.
+// ReconcileInterruptedExport removes exports abandoned by a stopped worker.
+// A final directory is renamed before deletion so partial deletion remains
+// discoverable on the next retry or after a process restart.
 func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64) error {
 	path := sm.exportPath(shardID, replicaID)
 	if err := sm.prepareDir(path); err != nil {
@@ -296,18 +347,34 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 	if err != nil {
 		return err
 	}
+	// Finish removals from earlier attempts before renaming new candidates.
 	for _, name := range names {
 		var index uint64
 		var from uint64
-		count, err := fmt.Sscanf(name, snapshotPathPattern+"-%d.generating", &index, &from)
+		count, err := fmt.Sscanf(name, snapshotPathPattern+"-%d.removing", &index, &from)
 		if err == nil && count == 2 && from == replicaID &&
-			name == fmt.Sprintf(snapshotPathPattern+"-%d.generating", index, replicaID) {
+			name == fmt.Sprintf(snapshotPathPattern+"-%d.removing", index, replicaID) {
+			// A previous parent sync may have failed. Make the tombstone durable
+			// before a retry can remove the flag and metadata beneath it.
+			if err := syncExportDir(sm.cfg.FS, path); err != nil {
+				return err
+			}
 			if err := sm.cfg.FS.RemoveAll(sm.cfg.FS.PathJoin(path, name)); err != nil {
 				return err
 			}
 			continue
 		}
-		count, err = fmt.Sscanf(name, snapshotPathPattern, &index)
+		count, err = fmt.Sscanf(name, snapshotPathPattern+"-%d.generating", &index, &from)
+		if err == nil && count == 2 && from == replicaID &&
+			name == fmt.Sprintf(snapshotPathPattern+"-%d.generating", index, replicaID) {
+			if err := sm.cfg.FS.RemoveAll(sm.cfg.FS.PathJoin(path, name)); err != nil {
+				return err
+			}
+		}
+	}
+	for _, name := range names {
+		var index uint64
+		count, err := fmt.Sscanf(name, snapshotPathPattern, &index)
 		if err != nil || count != 1 || name != fmt.Sprintf(snapshotPathPattern, index) {
 			continue
 		}
@@ -319,11 +386,29 @@ func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64)
 		if err != nil {
 			return err
 		}
-		if err := sm.cfg.FS.RemoveAll(dir); err != nil {
+		removing := sm.cfg.FS.PathJoin(path,
+			fmt.Sprintf(snapshotPathPattern+"-%d.removing", index, replicaID))
+		if err := sm.cfg.FS.Rename(dir, removing); err != nil {
+			return err
+		}
+		// Make the recovery name durable before RemoveAll can erase the flag
+		// and metadata that identified the original directory.
+		if err := syncExportDir(sm.cfg.FS, path); err != nil {
+			return err
+		}
+		if err := sm.cfg.FS.RemoveAll(removing); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func syncExportDir(fs vfs.FS, path string) error {
+	parent, err := fs.OpenDir(path)
+	if err != nil {
+		return err
+	}
+	return errors.Join(parent.Sync(), parent.Close())
 }
 
 // Init implements the ISnapshotManager interface.
@@ -343,6 +428,9 @@ func (sm *snapshotManager) initLocked(shardID uint64, replicaID uint64) error {
 		snapshots.uncertainExport = current.uncertainExport
 		snapshots.activeExports = current.activeExports
 		snapshots.lateExportPossible = current.lateExportPossible
+		snapshots.pendingExport = current.pendingExport
+		snapshots.previousReplicaStopped = current.previousReplicaStopped
+		snapshots.failedExportCleanup = current.failedExportCleanup
 		current.release()
 	}
 	sm.snapshots[nid] = snapshots
@@ -420,8 +508,79 @@ func (sm *snapshotManager) MarkExportUncertain(shardID, replicaID uint64) {
 	ss.uncertainExport = true
 }
 
-// BeginExport is called while store.mu protects the local retirement marker.
-func (sm *snapshotManager) BeginExport(shardID, replicaID uint64) {
+// RetainPendingExport transfers a timed-out caller's request to the
+// truncation worker. Its Dragonboat result remains authoritative even though
+// the caller no longer waits for it.
+func (sm *snapshotManager) RetainPendingExport(shardID, replicaID uint64, rs *dragonboat.RequestState) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	ss.pendingExport = rs
+	ss.activeExports--
+	ss.uncertainExport = true
+	ss.lateExportPossible = true
+}
+
+func (sm *snapshotManager) HasUnresolvedExport(shardID, replicaID uint64) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	return ss != nil && (ss.activeExports > 0 || ss.pendingExport != nil || ss.lateExportPossible)
+}
+
+// MarkPreviousReplicaStopped is called only after Dragonboat accepts a new
+// incarnation. StartReplica rejects it while the old snapshot worker remains
+// loaded, so this is a safe point to schedule cleanup of the old export.
+func (sm *snapshotManager) MarkPreviousReplicaStopped(shardID, replicaID uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	if ss == nil || (ss.activeExports == 0 && ss.pendingExport == nil && !ss.lateExportPossible) {
+		return
+	}
+	ss.previousReplicaStopped = true
+	ss.failedExportCleanup = true
+	ss.uncertainExport = true
+}
+
+// PollPendingExport returns only a final Dragonboat result. An unresolved
+// request keeps the replica fenced so cleanup cannot race its worker.
+func (sm *snapshotManager) PollPendingExport(shardID, replicaID uint64) (dragonboat.RequestResult, bool, bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	if ss == nil {
+		return dragonboat.RequestResult{}, false, false
+	}
+	if ss.previousReplicaStopped {
+		if ss.activeExports > 0 {
+			return dragonboat.RequestResult{}, false, true
+		}
+		if ss.pendingExport != nil {
+			ss.pendingExport.Release()
+			ss.pendingExport = nil
+		}
+		ss.lateExportPossible = false
+		ss.previousReplicaStopped = false
+		return dragonboat.RequestResult{}, false, false
+	}
+	if ss.pendingExport == nil {
+		return dragonboat.RequestResult{}, false, ss.lateExportPossible
+	}
+	select {
+	case result := <-ss.pendingExport.AppliedC():
+		ss.pendingExport.Release()
+		ss.pendingExport = nil
+		if result.Completed() || result.Rejected() || result.Aborted() || result.Error() != nil {
+			ss.lateExportPossible = false
+		}
+		return result, true, ss.lateExportPossible
+	default:
+		return dragonboat.RequestResult{}, false, true
+	}
+}
+
+func (sm *snapshotManager) MarkFailedExportCleanup(shardID, replicaID uint64) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	nid := nodeID{shardID: shardID, replicaID: replicaID}
@@ -430,11 +589,44 @@ func (sm *snapshotManager) BeginExport(shardID, replicaID uint64) {
 		ss = newNodeSnapshot(sm.cfg.FS, nid)
 		sm.snapshots[nid] = ss
 	}
-	ss.activeExports++
+	ss.failedExportCleanup = true
 }
 
-// FinishExport keeps an uncertain request fenced until process restart. The
-// Dragonboat API does not expose completion after returning an early error.
+func (sm *snapshotManager) NeedsFailedExportCleanup(shardID, replicaID uint64) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	return ss != nil && ss.failedExportCleanup
+}
+
+func (sm *snapshotManager) ClearFailedExportCleanup(shardID, replicaID uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]; ss != nil {
+		ss.failedExportCleanup = false
+	}
+}
+
+// BeginExport is called while store.mu protects the local retirement marker.
+// Only one request may own a replica's export directory at a time.
+func (sm *snapshotManager) BeginExport(shardID, replicaID uint64) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	nid := nodeID{shardID: shardID, replicaID: replicaID}
+	ss, ok := sm.snapshots[nid]
+	if !ok {
+		ss = newNodeSnapshot(sm.cfg.FS, nid)
+		sm.snapshots[nid] = ss
+	}
+	if ss.activeExports > 0 || ss.pendingExport != nil || ss.lateExportPossible || ss.failedExportCleanup {
+		return false
+	}
+	ss.activeExports++
+	return true
+}
+
+// FinishExport keeps a request with an unknown result fenced until process
+// restart. Asynchronous requests are instead retained and polled to completion.
 func (sm *snapshotManager) FinishExport(shardID, replicaID uint64, mayFinishLater bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -447,8 +639,8 @@ func (sm *snapshotManager) FinishExport(shardID, replicaID uint64, mayFinishLate
 }
 
 // ReconcileUncertainExports reloads completed snapshots after an export with
-// an unknown result. The flag remains set because an early-returned request may
-// finish after any individual scan. Ordinary replicas avoid the disk scan.
+// an unknown result. Other callers can mark an export uncertain without
+// retaining its request, so keep scanning for their late completion.
 func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, maxCount int) (uint64, bool, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -470,6 +662,9 @@ func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, 
 	trimmed := false
 	for len(next.items) > limit {
 		if err := next.removeLast(); err != nil {
+			if next.failedExportCleanup {
+				ss.failedExportCleanup = true
+			}
 			next.release()
 			return 0, trimmed, err
 		}
@@ -478,6 +673,9 @@ func (sm *snapshotManager) ReconcileUncertainExports(shardID, replicaID uint64, 
 	next.uncertainExport = true
 	next.activeExports = ss.activeExports
 	next.lateExportPossible = ss.lateExportPossible
+	next.pendingExport = ss.pendingExport
+	next.previousReplicaStopped = ss.previousReplicaStopped
+	next.failedExportCleanup = ss.failedExportCleanup
 	sm.snapshots[nid] = next
 	ss.release()
 	if last := next.last(); last != nil {
@@ -598,6 +796,18 @@ func (sm *snapshotManager) DropNewest(shardID uint64, replicaID uint64) (uint64,
 		return 0, err
 	}
 	return idx, nil
+}
+
+// DropInvalid removes an exported snapshot whose contents have been checked
+// and found unusable. A failed filesystem removal keeps it tracked for retry.
+func (sm *snapshotManager) DropInvalid(shardID, replicaID, index uint64) (bool, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	ss := sm.snapshots[nodeID{shardID: shardID, replicaID: replicaID}]
+	if ss == nil {
+		return false, nil
+	}
+	return ss.removeIndex(snapshotIndex(index))
 }
 
 // EvalImportSnapshot implements the ISnapshotManager interface.

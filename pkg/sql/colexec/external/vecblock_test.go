@@ -41,7 +41,7 @@ func TestParquetStringToVecBlock(t *testing.T) {
 				{parquet.NullValue().Level(0, 0, 0)},
 				{parquet.ByteArrayValue([]byte(" [0.5,0.5,0.5,0.5] ")).Level(0, 1, 0)},
 			})
-			vec := vector.NewVec(types.New(oid, 4, 0))
+			vec := vector.NewVec(types.New(oid, 4, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 4})
 			require.NotNil(t, mp)
@@ -54,7 +54,7 @@ func TestParquetStringToVecBlock(t *testing.T) {
 			// declared dimension mismatch
 			mp = h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 3})
 			require.NotNil(t, mp)
-			require.Error(t, mp.mapping(page, proc, vector.NewVec(types.New(oid, 3, 0))))
+			require.Error(t, mp.mapping(page, proc, vector.NewVec(types.New(oid, 3, 0), proc.Mp())))
 		})
 	}
 }
@@ -89,7 +89,7 @@ func TestParquetListToVecBlock(t *testing.T) {
 				var h ParquetHandler
 				_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 4})
 				require.NotNil(t, mp)
-				vec := vector.NewVec(types.New(oid, 4, 0))
+				vec := vector.NewVec(types.New(oid, 4, 0), proc.Mp())
 				require.NoError(t, mp.mapper(mp, page, proc, vec))
 				require.Equal(t, 2, vec.Length())
 				require.Equal(t, "[1, -3, 0, 6]", vec.RowToString(0))
@@ -102,7 +102,7 @@ func TestParquetListToVecBlock(t *testing.T) {
 				// declared dimension mismatch rolls back
 				_, mp = h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 3})
 				require.NotNil(t, mp)
-				bad := vector.NewVec(types.New(oid, 3, 0))
+				bad := vector.NewVec(types.New(oid, 3, 0), proc.Mp())
 				require.Error(t, mp.mapper(mp, page, proc, bad))
 				require.Equal(t, 0, bad.Length())
 			})
@@ -190,7 +190,7 @@ func TestParquetStringExactTextToVecBlock(t *testing.T) {
 				{parquet.ByteArrayValue([]byte(text)).Level(0, 1, 0)},
 				{parquet.NullValue().Level(0, 0, 0)},
 			})
-			vec := vector.NewVec(types.New(oid, 4, 0))
+			vec := vector.NewVec(types.New(oid, 4, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 4})
 			require.NotNil(t, mp)
@@ -202,7 +202,7 @@ func TestParquetStringExactTextToVecBlock(t *testing.T) {
 			// declared dimension mismatch
 			mp = h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 3})
 			require.NotNil(t, mp)
-			require.Error(t, mp.mapping(page, proc, vector.NewVec(types.New(oid, 3, 0))))
+			require.Error(t, mp.mapping(page, proc, vector.NewVec(types.New(oid, 3, 0), proc.Mp())))
 		})
 	}
 }
@@ -229,7 +229,7 @@ func TestParquetBinaryToVecBlock(t *testing.T) {
 					rows = append(rows, parquet.Row{parquet.ByteArrayValue(types.ArrayToBytes(values)).Level(0, 1, 0)})
 				}
 				f, page := writeColumnAndGetPage(t, node, rows)
-				vec := vector.NewVec(types.New(oid, 4, 0))
+				vec := vector.NewVec(types.New(oid, 4, 0), proc.Mp())
 				var h ParquetHandler
 				mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 4})
 				require.NotNil(t, mp)
@@ -243,7 +243,7 @@ func TestParquetBinaryToVecBlock(t *testing.T) {
 				// text is not read from a binary column
 				mp = h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(oid), Width: 3})
 				require.NotNil(t, mp)
-				require.Error(t, mp.mapping(page, proc, vector.NewVec(types.New(oid, 3, 0))))
+				require.Error(t, mp.mapping(page, proc, vector.NewVec(types.New(oid, 3, 0), proc.Mp())))
 			}
 		})
 	}
@@ -349,7 +349,7 @@ func TestVecBlockParquetResource(t *testing.T) {
 		require.NotNil(t, col, c.name)
 		var h ParquetHandler
 		typ := plan.Type{Id: int32(c.oid), Width: c.dim}
-		vec := vector.NewVec(types.New(c.oid, c.dim, 0))
+		vec := vector.NewVec(types.New(c.oid, c.dim, 0), proc.Mp())
 		if col.Leaf() {
 			mp := h.getMapper(col, typ)
 			require.NotNil(t, mp, c.name)

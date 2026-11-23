@@ -15,6 +15,7 @@
 package ckputil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -134,10 +135,10 @@ var MetaTypes = []types.Type{
 
 var MetaSeqnums = []uint16{0, 1, 2, 3, 4}
 
-func NewObjectListBatch() *batch.Batch {
-	return batch.NewWithSchema(false, TableObjectsAttrs, TableObjectsTypes)
+func NewObjectListBatch(mp *mpool.MPool) *batch.Batch {
+	return batch.NewWithSchema(TableObjectsAttrs, TableObjectsTypes, mp)
 }
 
-func NewMetaBatch() *batch.Batch {
-	return batch.NewWithSchema(false, MetaAttrs, MetaTypes)
+func NewMetaBatch(mp *mpool.MPool) *batch.Batch {
+	return batch.NewWithSchema(MetaAttrs, MetaTypes, mp)
 }

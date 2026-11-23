@@ -34,6 +34,9 @@ import (
 )
 
 func TestExpressionDefaultNullIfStringSource(t *testing.T) {
+	// IF/CASE/COALESCE follow MySQL collation aggregation: a binary literal arm
+	// (COERCIBLE) loses to a text column (IMPLICIT), so the result is text;
+	// binary columns, casts and explicit COLLATE binary keep it binary.
 	for _, tc := range []struct {
 		name, sourceType, expression, input, wantHex string
 		nullInput, nullResult, integerResult         bool
@@ -95,7 +98,7 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(makeTypeByPlan2Expr(&Expr{Typ: cols[0].Typ}))
+			input.Vecs[0] = vector.NewVec(makeTypeByPlan2Expr(&Expr{Typ: cols[0].Typ}), proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(tc.input), tc.nullInput, proc.Mp()))
 			input.SetRowCount(1)
 			executor, err := colexec.NewExpressionExecutor(proc, expr)

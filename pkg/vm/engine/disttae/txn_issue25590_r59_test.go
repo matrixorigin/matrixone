@@ -129,8 +129,8 @@ func TestIssue25590RCTombstoneTransferBoundToTheAdmissionLedger(t *testing.T) {
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objID, 0, 0)
 		bat := batch.NewWithSize(2)
 		bat.SetAttributes(attrs)
-		rowids := vector.NewVec(types.T_Rowid.ToType())
-		pks := vector.NewVec(types.T_int64.ToType())
+		rowids := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
+		pks := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixed(rowids, rowID, false, txn.proc.Mp()))
 		require.NoError(t, vector.AppendFixed(pks, int64(1), false, txn.proc.Mp()))
 		bat.Vecs[0] = rowids
@@ -167,7 +167,7 @@ func TestIssue25590RCTombstoneTransferBoundToTheAdmissionLedger(t *testing.T) {
 	// (transfer.go:142-152), with the transaction lock held exactly as
 	// forEachTableHasDeletesLocked holds it.
 	recordTransfer := func(stats objectio.ObjectStats) error {
-		recBat := colexec.AllocCNS3ResultBat(true)
+		recBat := colexec.AllocCNS3ResultBat(true, txn.proc.Mp())
 		defer recBat.Clean(txn.proc.Mp())
 		require.NoError(t, colexec.ExpandObjectStatsToBatch(
 			txn.proc.Mp(), true, recBat, false, stats))

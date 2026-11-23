@@ -105,7 +105,7 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 				}
 				fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(target, emptyCastTargetValues(target), nil)}, NewFunctionTestResult(target, false, wanted, nil), NewCast)
 				t.Cleanup(fc.Free)
-				fc.parameters[0].SetIsBin(true)
+				fc.result.SetArgumentIsBin([]bool{true})
 				fc.fnLength = 2
 				ok, info := fc.Run()
 				require.True(t, ok, info)

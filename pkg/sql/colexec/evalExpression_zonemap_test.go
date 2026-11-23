@@ -462,7 +462,7 @@ func makeVarcharMembershipExpr(t *testing.T, ctx context.Context, op, value stri
 func makeVarcharInVecExpr(t *testing.T, ctx context.Context, proc *process.Process, value string, withNull bool) *plan.Expr {
 	t.Helper()
 
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(vec, []byte(value), false, proc.Mp()))
 	if withNull {
 		require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
@@ -515,7 +515,7 @@ func evalVarcharPredicate(t *testing.T, proc *process.Process, expr *plan.Expr, 
 
 	input := batch.NewWithSize(1)
 	defer input.Clean(proc.Mp())
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	input.Vecs[0] = vec
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(vec, []byte(value), value == "", proc.Mp()))
@@ -840,7 +840,7 @@ func TestEvaluateFilterByZoneMapCharComparisonKeepsPadSpaceMatch(t *testing.T) {
 	rhs.Typ.Width = 8
 	expr := bindZoneMapFunction(t, proc, "=", col, rhs)
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.New(types.T_char, 8, 0))
+	input.Vecs[0] = vector.NewVec(types.New(types.T_char, 8, 0), proc.Mp())
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("MO"), false, proc.Mp()))
 	input.SetRowCount(1)
@@ -887,7 +887,7 @@ func TestEvaluateFilterByZoneMapVaryingFunctionArguments(t *testing.T) {
 					oid = types.T_int64
 				}
 				col.Typ.Id = int32(oid)
-				input.Vecs[0] = vector.NewVec(oid.ToType())
+				input.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 				zm := index.NewZM(oid, 0)
 				for _, v := range tc.values {
 					var n any = v
@@ -904,8 +904,8 @@ func TestEvaluateFilterByZoneMapVaryingFunctionArguments(t *testing.T) {
 				}
 				value = bindZoneMapFunction(t, proc, name, one, col)
 			} else {
-				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+				input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				for i, values := range [][]int64{tc.values, tc.precision} {
 					zm := index.NewZM(types.T_int64, 0)
 					for _, v := range values {
@@ -966,7 +966,7 @@ func TestEvaluateFilterByZoneMapCharInKeepsPadSpaceMatch(t *testing.T) {
 	}
 	expr := bindZoneMapFunction(t, proc, "in", col, list)
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.New(types.T_char, 8, 0))
+	input.Vecs[0] = vector.NewVec(types.New(types.T_char, 8, 0), proc.Mp())
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("MO"), false, proc.Mp()))
 	input.SetRowCount(1)
@@ -1029,7 +1029,7 @@ func TestEvaluateFilterByZoneMapEndpointContract(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
 			col := &plan.Expr{Typ: plan.Type{Id: int32(tc.oid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
-			input.Vecs[0] = vector.NewVec(tc.oid.ToType())
+			input.Vecs[0] = vector.NewVec(tc.oid.ToType(), proc.Mp())
 			zm := index.NewZM(tc.oid, 0)
 			for _, v := range tc.values {
 				require.NoError(t, vector.AppendAny(input.Vecs[0], v, false, proc.Mp()))
@@ -1041,7 +1041,7 @@ func TestEvaluateFilterByZoneMapEndpointContract(t *testing.T) {
 			case "in_range":
 				expr = bindZoneMapFunction(t, proc, "in_range", col, plan2.MakePlan2Int64ConstExprWithType(3), plan2.MakePlan2Int64ConstExprWithType(7), plan2.MakePlan2Uint8ConstExprWithType(3))
 			case "date_sub":
-				input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				amountZM := index.NewZM(types.T_int64, 0)
 				for _, v := range tc.amounts {
 					require.NoError(t, vector.AppendFixed(input.Vecs[1], v, false, proc.Mp()))
@@ -1085,7 +1085,7 @@ func TestEvaluateFilterByZoneMapDecimalPrecisionControl(t *testing.T) {
 			typ := plan.Type{Id: int32(oid), Width: width, Scale: 2}
 			col := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(types.New(oid, width, 2))
+			input.Vecs[0] = vector.NewVec(types.New(oid, width, 2), proc.Mp())
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			meta := objectio.BuildMetaData(1, 1).GetBlockMeta(0)
 			zm := index.NewZM(oid, 2)
@@ -1154,7 +1154,7 @@ func TestEvaluateFilterByZoneMapPositiveEndpointControls(t *testing.T) {
 			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(tc.oid.ToType())
+			input.Vecs[0] = vector.NewVec(tc.oid.ToType(), proc.Mp())
 			zm := index.NewZM(tc.oid, 0)
 			for _, value := range tc.values {
 				require.NoError(t, vector.AppendAny(input.Vecs[0], value, false, proc.Mp()))
@@ -1500,7 +1500,7 @@ func TestEvaluateFilterByZoneMapPointDivisionControls(t *testing.T) {
 				t.Cleanup(func() { input.Clean(proc.Mp()) })
 				meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
 				for i, values := range [][]int64{{1, 5, 9}, {denominator, denominator, denominator}} {
-					input.Vecs[i] = vector.NewVec(tc.oid.ToType())
+					input.Vecs[i] = vector.NewVec(tc.oid.ToType(), proc.Mp())
 					zm := index.NewZM(tc.oid, 0)
 					for _, v := range values {
 						var n any = v
@@ -1581,7 +1581,7 @@ func TestEvaluateFilterByZoneMapPointDivisionDiagnostics(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			meta := objectio.BuildMetaData(1, 2).GetBlockMeta(0)
 			for i, value := range []any{tc.numerator, tc.denominator} {
-				input.Vecs[i] = vector.NewVec(tc.oid.ToType())
+				input.Vecs[i] = vector.NewVec(tc.oid.ToType(), proc.Mp())
 				isNull := i == 1 && tc.null
 				require.NoError(t, vector.AppendAny(input.Vecs[i], value, isNull, proc.Mp()))
 				zm := index.NewZM(tc.oid, 0)
@@ -1634,7 +1634,7 @@ func TestEvaluateFilterByZoneMapArithmeticScaleAnnotations(t *testing.T) {
 					proc := testutil.NewProcess(t)
 					t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
 					input := batch.NewWithSize(1)
-					input.Vecs[0] = vector.NewVec(oid.ToType())
+					input.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 					t.Cleanup(func() { input.Clean(proc.Mp()) })
 					meta := objectio.BuildMetaData(1, 1).GetBlockMeta(0)
 					zm := index.NewZM(oid, -1)

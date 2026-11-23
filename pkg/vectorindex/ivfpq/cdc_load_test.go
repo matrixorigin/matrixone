@@ -36,8 +36,8 @@ import (
 
 func makeCdcChunkBatch(proc *process.Process, chunks []cuvscdc.EventChunk) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0), proc.Mp())
 	for _, ch := range chunks {
 		vector.AppendFixed[int64](bat.Vecs[0], ch.ChunkId, false, proc.Mp())
 		vector.AppendBytes(bat.Vecs[1], ch.Data, false, proc.Mp())

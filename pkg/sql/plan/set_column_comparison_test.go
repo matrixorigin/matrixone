@@ -54,9 +54,9 @@ func TestSetColumnComparisonUsesMemberValues(t *testing.T) {
 			setComparisonInputRelPos(expr)
 			input := batch.NewWithSize(3)
 			defer input.Clean(proc.Mp())
-			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-			input.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
-			input.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), proc.Mp())
+			input.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 			left := []uint64{1, 2, 1, 2, 0, 3, 0}
 			right := []uint64{2, 1, 1, 2, 0, 3, 1}
 			numeric := []int32{1, 2, 1, 2, 0, 3, 0}

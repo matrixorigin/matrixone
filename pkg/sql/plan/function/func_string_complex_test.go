@@ -211,29 +211,20 @@ func Test_BuiltInConcatReuseAndOwnership(t *testing.T) {
 		[]string{long + "!", "你!", "", ""}, []bool{false, false, true, true}), builtInConcat).
 		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
 	t.Cleanup(tc.Free)
-	require.NoError(t, tc.parameters[0].SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
-		types.RuntimeStringBinary, types.RuntimeStringInherit, types.RuntimeStringBinary, types.RuntimeStringBinary,
-	}, proc.Mp()))
 	for range 2 {
 		ok, info := tc.Run()
 		require.True(t, ok, info)
-		require.Equal(t, types.RuntimeStringBinary, tc.GetResultVectorDirectly().GetRuntimeStringDomainAt(0))
-		require.Equal(t, types.RuntimeStringInherit, tc.GetResultVectorDirectly().GetRuntimeStringDomainAt(1))
-		require.Equal(t, types.RuntimeStringInherit, tc.GetResultVectorDirectly().GetRuntimeStringDomainAt(2))
-		require.Equal(t, types.RuntimeStringInherit, tc.GetResultVectorDirectly().GetRuntimeStringDomainAt(3))
 	}
 
 	// The result owns its bytes even when the input is subsequently changed.
 	tc.parameters[0].GetBytesAt(0)[0] = 'z'
 	require.Equal(t, long+"!", string(tc.GetResultVectorDirectly().GetBytesAt(0)))
 	tc.parameters[0].GetNulls().Reset()
-	require.NoError(t, tc.parameters[0].SetRuntimeStringDomainsWithMP(make([]types.RuntimeStringDomain, 4), proc.Mp()))
 	tc.selectList = nil
 	tc.expected.wanted = []string{"z" + long[1:] + "!", "你!", "null!", "masked!"}
 	tc.expected.nullList = nil
 	ok, info := tc.Run()
 	require.True(t, ok, info)
-	require.False(t, tc.GetResultVectorDirectly().HasBinaryStringMetadata())
 
 	for i, input := range tc.parameters {
 		input.Free(proc.Mp())
@@ -1376,9 +1367,9 @@ func Test_BuiltInCharIsBin(t *testing.T) {
 
 	for _, c := range cases {
 		input := testutil.MakeVarlenaVector([][]byte{c.input}, nil, types.T_varchar.ToType(), mp)
-		input.SetIsBin(true)
 
 		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		result.SetArgumentIsBin([]bool{true})
 		require.NoError(t, result.PreExtendAndReset(1))
 
 		err := builtInChar([]*vector.Vector{input}, result, proc, 1, nil)

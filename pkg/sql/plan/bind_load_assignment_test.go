@@ -351,9 +351,9 @@ func TestLoadTimeAssignmentExecution(t *testing.T) {
 			require.NoError(t, err)
 			defer executor.Free()
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(types.T_time.ToTypeWithScale(6))
+			input.Vecs[0] = vector.NewVec(types.T_time.ToTypeWithScale(6), proc.Mp())
 			if staged {
-				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			}
 			defer input.Clean(proc.Mp())
 			for _, value := range []types.Time{-3020399000001, 3020399000001, -3020400000000, 3020400000000} {

@@ -70,7 +70,7 @@ func BenchmarkSpillReadMergedSmallRecords(b *testing.B) {
 		mergeRecords: true,
 		allocation:   state.allocation,
 	}
-	reuse := batch.NewOffHeapWithSize(0)
+	reuse := batch.NewWithSize(0)
 
 	b.ReportAllocs()
 	b.SetBytes(int64(len(payload)))

@@ -839,6 +839,56 @@ func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A SQL set materializes its branches in a common string domain. A raw
+// radix literal supplies bytes here, while its character-shaped type still
+// describes the literal to other expressions and protocol consumers.
+func setOperationMaterializedStringType(ctx context.Context, branches []*Expr, target Type) (Type, error) {
+	chosen, _, err := resolveExpressionCollation(ctx, "union",
+		expressionCollationCandidates(branches, expressionCollationIndexes("union", len(branches))))
+	if err != nil {
+		return Type{}, err
+	}
+	if chosen.charset != uint32(types.CharsetBinary) {
+		chosen.apply(&target)
+		applyMixedTextBinaryCollationType(&target)
+		if oid := types.T(target.Id); oid == types.T_char || oid == types.T_varchar {
+			for _, expr := range branches {
+				if types.T(expr.Typ.Id).IsMySQLString() {
+					target.Width = max(target.Width, expr.Typ.Width)
+				}
+			}
+		}
+		return target, nil
+	}
+
+	var width uint64
+	for _, expr := range branches {
+		input := makeTypeByPlan2Expr(expr)
+		if function.IsBinaryCharacterType(input) {
+			if literal := expr.GetLit(); literal != nil && !literal.Isnull && literal.Src == nil &&
+				expr.GetPreparedNumeric().GetStringDomainSource() == nil {
+				if value, ok := literal.Value.(*plan.Literal_Sval); ok {
+					width = max(width, uint64(len(value.Sval)))
+					continue
+				}
+			}
+		}
+		bound, known := function.StringResultByteBound(input)
+		if !known || bound > uint64(types.MaxVarBinaryLen) {
+			width = uint64(types.MaxVarBinaryLen) + 1
+			break
+		}
+		width = max(width, bound)
+	}
+	byteType := types.T_blob.ToType()
+	if width <= uint64(types.MaxVarBinaryLen) {
+		byteType = types.New(types.T_varbinary, int32(width), 0)
+	}
+	target = makePlan2TypeValue(&byteType)
+	chosen.apply(&target)
+	return target, nil
+}
+
 // A set operation whose value-bearing branches are all legal BIT columns keeps
 // the BIT domain. The coalesce resolver falls back to the integer domain and
 // silently drops the declared bit width, which changes LENGTH bytes and the
@@ -1652,10 +1702,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		tag := node.BindingTags[0]
 		newTableDef := CloneTableDefForPlan(node.TableDef, false)
+		// The watch operator materializes its fixed protocol row before the
+		// surrounding SQL applies a filter or an output projection.
+		fixedWatchSchema := node.NodeType == plan.Node_FUNCTION_SCAN &&
+			node.TableDef.GetTblFunc().GetName() == moChangedTablesName
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
+			if !fixedWatchSchema && colRefCnt[globalRef] == 0 {
 				continue
 			}
 
@@ -4416,7 +4470,7 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 		node.Children[i] = builder.removeUnnecessaryProjections(childID)
 	}
 
-	if node.NodeType != plan.Node_PROJECT {
+	if node.NodeType != plan.Node_PROJECT || node.ValuesWarningRow() != 0 {
 		return nodeID
 	}
 	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
@@ -4434,6 +4488,21 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 	return childNodeID
 }
 
+func (builder *QueryBuilder) appendValidationPrivilegeCarriers() {
+	if builder.qry == nil {
+		return
+	}
+	for _, carrier := range builder.validationPrivilegeCarriers {
+		if carrier == nil {
+			continue
+		}
+		carrier.NodeId = int32(len(builder.qry.Nodes))
+		carrier.ExtraOptions = validationPrivilegeCarrierExtraOptions
+		builder.qry.Nodes = append(builder.qry.Nodes, carrier)
+		builder.ctxByNode = append(builder.ctxByNode, nil)
+	}
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	if err := builder.qry.ValidateIntegerPrecision(); err != nil {
 		return nil, err
@@ -4447,8 +4516,20 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 	builder.finalizeCTEIdentity()
+	builder.addAggregateGroupingFlags()
+	if err := builder.foldGroupingFunctions(builder.groupingFlags); err != nil {
+		return nil, err
+	}
 	if builder.qry.Correlation != nil {
-		return builder.createDependentQuery()
+		query, err := builder.createDependentQuery()
+		if err != nil {
+			return nil, err
+		}
+		if err := builder.validateZeroScalarLiveNodes(); err != nil {
+			return nil, err
+		}
+		builder.appendValidationPrivilegeCarriers()
+		return query, nil
 	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
@@ -4501,6 +4582,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
 		builder.removeUnobservedCountSorts(rootID)
+		if err = builder.distributeTextDomainInQuery(); err != nil {
+			return nil, err
+		}
 		// Safe derived aliases now expose the existing singleton proof shape.
 		if err = builder.rewriteNumericDomainFilters(rootID, plan.Node_JOIN); err != nil {
 			return nil, err
@@ -4743,13 +4827,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 	builder.hintQueryType()
-	for _, scan := range builder.windowValidationScans {
-		if scan == nil {
-			continue
-		}
-		scan.NodeId = int32(len(builder.qry.Nodes))
-		builder.qry.Nodes = append(builder.qry.Nodes, scan)
+	if err := builder.validateZeroScalarLiveNodes(); err != nil {
+		return nil, err
 	}
+	builder.appendValidationPrivilegeCarriers()
 	// Empty BlockFilterList can mean either a stats choice or an explicit
 	// blockFilter=2 hint. Preserve the latter in the prepared plan so physical
 	// compilation cannot backfill a block predicate for a later binding.
@@ -4807,72 +4888,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
 
-	// get Union selectStmts
 	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
-	}
-
-	if len(selectStmts) == 1 {
-		var nodeID int32
-		switch sltStmt := selectStmts[0].(type) {
-		case *tree.Select:
-			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
-				sltClause.Distinct = true
-				nodeID, err = builder.bindSelect(sltStmt, ctx, isRoot)
-			} else {
-				// rewrite sltStmt to select distinct * from (sltStmt) a
-				tmpSltStmt := &tree.Select{
-					Select: &tree.SelectClause{
-						Distinct: true,
-
-						Exprs: []tree.SelectExpr{
-							{Expr: tree.StarExpr()},
-						},
-						From: &tree.From{
-							Tables: tree.TableExprs{
-								&tree.AliasedTableExpr{
-									Expr: &tree.ParenTableExpr{
-										Expr: sltStmt,
-									},
-									As: tree.AliasClause{
-										Alias: "a",
-									},
-								},
-							},
-						},
-					},
-					Limit:   astLimit,
-					OrderBy: astOrderBy,
-				}
-				nodeID, err = builder.bindSelect(tmpSltStmt, ctx, isRoot)
-			}
-
-		case *tree.SelectClause:
-			if !sltStmt.Distinct {
-				sltStmt.Distinct = true
-			}
-			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
-		}
-		if err == nil {
-			// Identical UNION branches can collapse to one DISTINCT SELECT,
-			// but its SQL result still crosses a set-operation boundary.
-			var integerIDs []uint32
-			if builder.integerPrecision != nil {
-				integerIDs = make([]uint32, len(ctx.headings))
-				for i := range integerIDs {
-					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
-				}
-			}
-			ctx.clearOutputColumnProvenance()
-			for i, id := range integerIDs {
-				if !shareGroupingInput {
-					id = builder.integerPrecision.reference(id)
-				}
-				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
-			}
-		}
-		return nodeID, err
 	}
 
 	// build selects
@@ -5127,10 +5145,25 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			for i, id := range nodes {
 				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
 			}
-			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
+			materialize := !shareGroupingInput && groupingOrderResolve == nil &&
+				types.T(targetType.Id).IsMySQLString() && slices.ContainsFunc(tmpArgsType, function.IsBinaryCharacterType)
+			if materialize {
+				valueBranches := branchExprs[:0]
+				for i, expr := range branchExprs {
+					if argsType[i].Oid != types.T_any && !setBranchPureNull[i][columnIdx] {
+						valueBranches = append(valueBranches, expr)
+					}
+				}
+				targetType, err = setOperationMaterializedStringType(builder.GetContext(), valueBranches, targetType)
+				if err != nil {
+					return 0, err
+				}
+			} else if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
 				return 0, err
 			}
-			if mixedTextBinary {
+			if materialize && targetType.Charset == uint32(types.CharsetBinary) {
+				setOperationKeyRequired[columnIdx] = false
+			} else if mixedTextBinary || materialize {
 				applyMixedTextBinaryCollationType(&targetType)
 				if types.T(targetType.Id) == types.T_varchar || types.T(targetType.Id) == types.T_text {
 					for _, typ := range tmpArgsType {
@@ -5142,6 +5175,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					}
 				}
 			}
+
 			targetArgType = makeTypeByPlan2Type(targetType)
 
 			preparedDeferredColumn := false
@@ -5160,17 +5194,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
 					argsType[idx].Scale == targetArgType.Scale &&
 					argsType[idx].Width != targetArgType.Width
+				node := builder.qry.Nodes[tmpID]
 				if !needsCast && sameMediumIntStorageWidth {
-					// MEDIUMINT and INT share the same physical int32/uint32
-					// vector. Widen the branch metadata without adding a per-row
-					// conversion or mutating an expression shared by another node.
-					projected := builder.qry.Nodes[tmpID].ProjectList[columnIdx]
-					widened := *projected
-					widened.Typ.Width = targetArgType.Width
-					builder.qry.Nodes[tmpID].ProjectList[columnIdx] = &widened
+					projected := node.ProjectList[columnIdx]
+					if projected.GetCorr() != nil {
+						// Keep the capture's declared type on the leaf. Only the
+						// branch result has the set operation's common width.
+						needsCast = true
+					} else {
+						// MEDIUMINT and INT share a physical vector type. Widen
+						// the branch metadata without a per-row conversion.
+						widened := *projected
+						widened.Typ.Width = targetArgType.Width
+						node.ProjectList[columnIdx] = &widened
+					}
 				}
 				if needsCast {
-					node := builder.qry.Nodes[tmpID]
 					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
@@ -5435,7 +5474,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// semantic keys so duplicate output aliases retain normal ORDER BY
 		// first-match/ambiguity behavior above the grouping-set UNION.
 		ctx.projectSemanticKeys = make([]string, resultLen)
-		for _, field := range subCtxList[0].projectByAst {
+		first := subCtxList[0]
+		ctx.sampledProjectFields = first.sampleFunc.hasSampleFunc || first.sampledProjectFields
+		for _, field := range first.projectByAst {
 			if field.pos < 0 || int(field.pos) >= resultLen {
 				continue
 			}
@@ -11975,6 +12016,7 @@ func (builder *QueryBuilder) appendAggNode(
 	if ctx.sortRollup {
 		extraOptions = EncodeSortRollupOption()
 	}
+	builder.recordGroupingFlags(ctx.groupTag, len(groupBy), groupingFlag, ctx.sortRollup)
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:       plan.Node_AGG,
 		Children:       []int32{nodeID},
@@ -14391,6 +14433,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return
 		}
 		nodeID, err = builder.buildTableFunction(tbl, ctx, tableInput)
+		if err == nil && tbl.Id() == moChangedTablesName {
+			err = builder.addBinding(nodeID, tree.AliasClause{Alias: moChangedTablesName}, ctx, sqlDatabase)
+		}
 		return
 
 	case *tree.ParenTableExpr:
@@ -14402,7 +14447,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, "", moerr.NewDerivedMustHaveAlias(builder.GetContext())
 		}
 		targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, string(tbl.As.Alias))]
-		if derivedSelect != nil && len(targets) > 0 {
+		if tf, ok := tbl.Expr.(*tree.TableFunction); ok && tf.Id() == moChangedTablesName {
+			// Build the scan directly so only the explicit alias is bound.
+			nodeID, err = builder.buildTableFunction(tf, ctx, tableInput)
+		} else if derivedSelect != nil && len(targets) > 0 {
 			subCtx := NewBindContext(builder, ctx)
 			subCtx.numericProjectionTypes = targets
 			savedIsForUpdate := builder.isForUpdate
@@ -14892,7 +14940,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		scope.context = leftCtx
 	}
 
-	if _, ok := tbl.Right.(*tree.TableFunction); ok {
+	if tf, ok := tbl.Right.(*tree.TableFunction); ok && tf.Id() != moChangedTablesName {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
 	rightChildID, _, err := builder.buildTable(tbl.Right, rightCtx, &tableFunctionInput{
@@ -15152,6 +15200,9 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	if err != nil {
 		return 0, err
 	}
+	if builder.qry.Nodes[rightChildID].GetTableDef().GetTblFunc().GetName() == moChangedTablesName {
+		return 0, moerr.NewNotSupported(builder.GetContext(), "mo_changed_tables must run as an independent table function")
+	}
 
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
@@ -15254,6 +15305,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, nil)
 		case "current_account":
 			nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, nil)
+		case moChangedTablesName:
+			nodeId, err = builder.buildMoChangedTables(ctx, exprs)
 		case "change_watermark":
 			nodeId, err = builder.buildChangeWatermark(tbl, ctx, exprs, nil)
 		case "table_changes":

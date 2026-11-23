@@ -72,14 +72,15 @@ func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
 	bat.SetRowCount(1)
 
 	arg := &DedupJoin{}
 	arg.ctr.state = Finalize
 	arg.ctr.buf = []*batch.Batch{bat}
+	arg.ctr.resultVecMP = proc.Mp()
 	arg.ctr.lastPos = 1
 	arg.ctr.spillEngine = newDedupTestSpillEngine(
 		t,
@@ -92,6 +93,7 @@ func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
 	require.Nil(t, arg.ctr.buf)
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	proc.Free()
 }
@@ -129,7 +131,7 @@ func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, valu
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	var payload bytes.Buffer
-	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&payload))
+	require.NoError(t, bat.MarshalBinaryForSpillTo(&payload))
 	rows, size, magic := int64(1), int64(payload.Len()), uint64(spillutil.SpillMagic)
 	for _, part := range [][]byte{
 		types.EncodeInt64(&rows),
@@ -207,6 +209,7 @@ func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
 	require.Nil(t, arg.ctr.buf)
 
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	proc.Free()
 }
@@ -249,8 +252,8 @@ func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			baseline := proc.Mp().CurrNB()
 			typ := types.T_int32.ToType()
-			bat := batch.NewOffHeapWithSize(1)
-			bat.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(42), false, proc.Mp()))
 			bat.SetRowCount(1)
 
@@ -296,6 +299,7 @@ func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
 			require.Empty(t, mailbox.ch)
 
 			arg.Free(proc, false, nil)
+			freeTestChildren(arg)
 			require.Equal(t, baseline, proc.Mp().CurrNB())
 			proc.Free()
 		})
@@ -374,6 +378,7 @@ func TestDedupPrepareFailureCanRetry(t *testing.T) {
 	require.Len(t, arg.ctr.evecs, 1)
 	require.Len(t, arg.ctr.exprExecs, 2)
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	proc.Free()
 }
 
@@ -414,14 +419,18 @@ func TestDedupJoin(t *testing.T) {
 	installTestAllocation(t, arg, buildArg)
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		buildArg.Free(proc, false, nil)
+		freeTestChildren(buildArg)
 		require.Zero(t, proc.Mp().CurrNB())
 		require.Zero(t, proc.Mp().OnHeapCurrNB())
 	})
 	for generation, action := range []plan.Node_OnDuplicateAction{plan.Node_FAIL, plan.Node_FAIL, plan.Node_IGNORE} {
 		if generation == 2 {
 			arg.Free(proc, false, nil)
+			freeTestChildren(arg)
 			buildArg.Free(proc, false, nil)
+			freeTestChildren(buildArg)
 		}
 		arg.OnDuplicateAction = action
 		buildArg.OnDuplicateAction = action
@@ -576,10 +585,12 @@ func TestDedupJoinCapture(t *testing.T) {
 
 	// Set up children
 	buildOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat})
+	freeTestChildren(buildArg)
 	buildArg.Children = nil
 	buildArg.AppendChild(buildOp)
 
 	probeOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat})
+	freeTestChildren(dedupArg)
 	dedupArg.Children = nil
 	dedupArg.AppendChild(probeOp)
 
@@ -623,7 +634,9 @@ func TestDedupJoinCapture(t *testing.T) {
 	require.True(t, res.Batch == nil)
 
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -678,9 +691,11 @@ func TestDedupJoinCapturePartialMatch(t *testing.T) {
 	installTestAllocation(t, dedupArg, buildArg)
 
 	buildOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat})
+	freeTestChildren(buildArg)
 	buildArg.Children = nil
 	buildArg.AppendChild(buildOp)
 	probeOp := colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat})
+	freeTestChildren(dedupArg)
 	dedupArg.Children = nil
 	dedupArg.AppendChild(probeOp)
 
@@ -723,7 +738,9 @@ func TestDedupJoinCapturePartialMatch(t *testing.T) {
 	require.True(t, res.Batch == nil)
 
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -776,8 +793,10 @@ func TestDedupJoinCaptureReset(t *testing.T) {
 	buildBat1 := makeInt32Batch(proc.Mp(), [][]int32{{10, 20}, {0, 0}}, [][]uint64{nil, {0, 1}})
 	probeBat1 := makeInt32Batch(proc.Mp(), [][]int32{{10, 20}, {100, 200}}, nil)
 
+	freeTestChildren(buildArg)
 	buildArg.Children = nil
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat1}))
+	freeTestChildren(dedupArg)
 	dedupArg.Children = nil
 	dedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat1}))
 
@@ -812,8 +831,10 @@ func TestDedupJoinCaptureReset(t *testing.T) {
 	buildBat2 := makeInt32Batch(proc.Mp(), [][]int32{{30}, {0}}, [][]uint64{nil, {0}})
 	probeBat2 := makeInt32Batch(proc.Mp(), [][]int32{{30}, {999}}, nil)
 
+	freeTestChildren(buildArg)
 	buildArg.Children = nil
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat2}))
+	freeTestChildren(dedupArg)
 	dedupArg.Children = nil
 	dedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat2}))
 
@@ -837,7 +858,9 @@ func TestDedupJoinCaptureReset(t *testing.T) {
 	require.Equal(t, int32(999), col1[0])
 
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -849,7 +872,7 @@ func TestDedupJoinCaptureReset(t *testing.T) {
 func makeCaptureFixture(t *testing.T, proc *process.Process, bucketCnt int) (*container, *WorkerJoinMsg) {
 	int32Typ := types.T_int32.ToType()
 	mkVec := func() *vector.Vector {
-		v := vector.NewOffHeapVecWithType(int32Typ)
+		v := vector.NewVec(int32Typ, proc.Mp())
 		require.NoError(t, vector.AppendMultiFixed(v, int32(0), true, bucketCnt, proc.Mp()))
 		return v
 	}
@@ -874,7 +897,7 @@ func makeCaptureFixture(t *testing.T, proc *process.Process, bucketCnt int) (*co
 // writeBucketValue sets capturedVecs[0][bucket] = val and records the bucket
 // in the accompanying captured bitmap.
 func writeBucketValue(t *testing.T, vecs []*vector.Vector, captured *bitmap.Bitmap, bucket uint64, val int32, proc *process.Process) {
-	src := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	src := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	defer src.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(src, val, false, proc.Mp()))
 	require.NoError(t, vecs[0].Copy(src, int64(bucket), 0, proc.Mp()))
@@ -1110,7 +1133,7 @@ func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
 
 	for range 32 {
 		mailbox := NewWorkerJoinMailbox(2)
-		captured := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		captured := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(captured, int32(1), false, proc.Mp()))
 
 		start := make(chan struct{})
@@ -1239,7 +1262,7 @@ func TestDedupFinalizeConcurrentCancellationReturns(t *testing.T) {
 func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
-	captured := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	captured := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(captured, int32(1), false, proc.Mp()))
 
 	workerErr := moerr.NewInternalErrorNoCtx("worker failed")
@@ -1263,6 +1286,7 @@ func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
 	}())
 	t.Cleanup(func() {
 		arg.Free(proc, true, workerErr)
+		freeTestChildren(arg)
 		proc.Free()
 	})
 
@@ -1296,6 +1320,7 @@ func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
 			<-resultC
 		}
 		arg.Free(proc, true, workerErr)
+		freeTestChildren(arg)
 		proc.Free()
 	})
 	sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true, err: workerErr})
@@ -1490,7 +1515,7 @@ func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseline := proc.Mp().CurrNB()
 	typ := types.T_int32.ToType()
-	build := batch.NewOffHeapWithSize(1)
+	build := batch.NewWithSize(1)
 	build.Vecs[0] = testutil.MakeInt32Vector([]int32{42}, nil, proc.Mp())
 	build.SetRowCount(1)
 	joinMap := message.NewJoinMap(
@@ -1520,6 +1545,7 @@ func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
 	arg.ctr.matched.InitWithSize(1)
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		require.Equal(t, baseline, proc.Mp().CurrNB())
 		proc.Free()
 	})
@@ -1552,12 +1578,13 @@ func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
 	t.Cleanup(func() {
 		if !cleaned {
 			arg.Free(proc, false, nil)
+			freeTestChildren(arg)
 			proc.Free()
 		}
 	})
 
 	run := func(buildValues []int32, mergerMatches, workerMatches []uint64, want []int32) {
-		build := batch.NewOffHeapWithSize(1)
+		build := batch.NewWithSize(1)
 		build.Vecs[0] = testutil.MakeInt32Vector(buildValues, nil, proc.Mp())
 		build.SetRowCount(len(buildValues))
 		joinMap := message.NewJoinMap(
@@ -1603,7 +1630,9 @@ func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
 	workerArg.Reset(proc, false, nil)
 	arg.Reset(proc, false, nil)
 	arg.Free(proc, false, nil)
+	freeTestChildren(arg)
 	workerArg.Free(proc, false, nil)
+	freeTestChildren(workerArg)
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 	proc.Free()
 	cleaned = true

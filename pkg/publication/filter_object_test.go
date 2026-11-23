@@ -79,7 +79,7 @@ func TestRewriteTombstoneRowidsBatch_MappingWithoutRowOffsetMap(t *testing.T) {
 	upstreamObjID := types.NewObjectid()
 	rid := types.NewRowIDWithObjectIDBlkNumAndRowID(upstreamObjID, 0, 42)
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(rowidVec, rid, false, mp))
 
 	bat := &batch.Batch{Vecs: []*vector.Vector{rowidVec}}
@@ -397,8 +397,8 @@ func TestRewriteNonAppendableTombstoneSyncErrorHandsOffCleanup(t *testing.T) {
 	writer := ioutil.ConstructTombstoneWriter(
 		objectio.HiddenColumnSelection_None, sourceFS)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	dataObjectID := objectio.NewObjectid()
 	row := types.NewRowIDWithObjectIDBlkNumAndRowID(dataObjectID, 0, 0)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], row, false, mp))
@@ -489,8 +489,8 @@ func TestCCPRTombstoneSinkerOwnsEveryUniqueSpill(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(pkType)
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(pkType, mp)
 		objectID := objectio.NewObjectid()
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objectID, 0, 0)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, mp))
@@ -579,7 +579,7 @@ func TestRewriteTombstoneRowidsBatch_WithRowOffsetMapRewrite(t *testing.T) {
 	upstreamObjID := types.NewObjectid()
 	rid := types.NewRowIDWithObjectIDBlkNumAndRowID(upstreamObjID, 0, 10)
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(rowidVec, rid, false, mp))
 
 	bat := &batch.Batch{Vecs: []*vector.Vector{rowidVec}}

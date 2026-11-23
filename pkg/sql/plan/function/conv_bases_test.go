@@ -122,7 +122,7 @@ func TestConvBaseBindingAndUnsignedBoundaries(t *testing.T) {
 	}
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	v := vector.NewVec(types.T_uint64.ToType())
+	v := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 	defer v.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixedList(v, []uint64{2, 36, 37, math.MaxUint64, math.MaxUint64 - 9}, nil, proc.Mp()))
 	base, err := newConvBase(v)

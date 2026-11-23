@@ -1,0 +1,16 @@
+-- #27332: prepared INSERT/UPDATE bind ENUM and SET label parameters.
+drop database if exists issue_27332_prepared_enum_set;
+create database issue_27332_prepared_enum_set;
+use issue_27332_prepared_enum_set;
+create table t(id int primary key,e enum('red','blue'),s set('x','y'));
+prepare ins from 'insert into t values (?,?,?)';
+set @id=1,@e='blue',@s='x,y';
+execute ins using @id,@e,@s;
+deallocate prepare ins;
+select id,e,e+0,s,s+0 from t;
+prepare upd from 'update t set e=?,s=? where id=?';
+set @e='red',@s='y';
+execute upd using @e,@s,@id;
+deallocate prepare upd;
+select id,e,e+0,s,s+0 from t;
+drop database issue_27332_prepared_enum_set;

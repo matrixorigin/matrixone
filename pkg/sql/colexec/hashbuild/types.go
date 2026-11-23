@@ -96,6 +96,8 @@ const (
 	_ // reserved: was HashBuildAllocationSiteDedupDeleteOnlyGrouping
 )
 
+const HashBuildAllocationSiteBatchRowEnds mpool.AllocationSite = 61
+
 type container struct {
 	state           int
 	runtimeFilterIn bool
@@ -122,7 +124,6 @@ type container struct {
 	autoSpillLimitAtTrigger uint64
 	// Monotone while ingress can retain batches; Prepare starts a new generation.
 	// Only the spill projection uses this bit, not the final hashmap selection.
-	autoSpillHasGrouping bool
 
 	// reusable buffers for spill operations
 	spillHashValues []uint64
@@ -135,7 +136,7 @@ type container struct {
 	spillBucketOffsets     [spillNumBuckets + 1]int32
 	spillBucketWriteRows   [spillNumBuckets]int64
 	spillKeyVecs           []*vector.Vector
-	spillBatchAllocation   *vector.AllocationAccountSelection
+	spillBatchAllocation   *mpool.AccountBinding
 	spillAllocationMP      *mpool.MPool
 	spillAccountedWrite    *mpool.AccountedBuffer
 	spillAccountedBuckets  [spillNumBuckets]*mpool.AccountedBuffer
@@ -515,22 +516,6 @@ type HashBuild struct {
 	vm.OperatorBase
 }
 
-// AcceptsDictionary admits direct-column builds whose ingress is copied into
-// existing owned retained storage or gathered into flat spill partitions.
-// Computed-key and dedup modes retain the compatibility boundary until their
-// specialized expression and destructive-update paths are converted.
-func (hashBuild *HashBuild) AcceptsDictionary(child int) bool {
-	if child != 0 || hashBuild.IsDedup {
-		return false
-	}
-	for _, condition := range hashBuild.Conditions {
-		if condition == nil || condition.GetCol() == nil {
-			return false
-		}
-	}
-	return true
-}
-
 func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
 	return &hashBuild.OperatorBase
 }
@@ -541,11 +526,10 @@ func (hashBuild *HashBuild) GetOperatorBase() *vm.OperatorBase {
 func (hashBuild *HashBuild) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
 	)
 	if err != nil {
 		return err
@@ -584,11 +568,10 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 		_ = capacity.Close()
 		return err
 	}
-	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+	selection, err := mpool.NewAccountBindingWithCapacityClass(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
 		class,
 	)
 	if err != nil {
@@ -638,11 +621,10 @@ func (hashBuild *HashBuild) releaseRecoveryCapacity(
 		ctr.spillBatchAllocation = nil
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
-		HashBuildSpillAllocationSiteSelectedArea,
 	)
 	if err != nil {
 		ctr.spillBatchAllocation = nil
@@ -683,20 +665,18 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	if err != nil {
 		return err
 	}
-	batchSelection, err := vector.NewAllocationAccountSelection(
+	batchSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteBatchData,
-		HashBuildAllocationSiteBatchArea,
 	)
 	if err != nil {
 		return err
 	}
-	uniqueKeySelection, err := vector.NewAllocationAccountSelection(
+	uniqueKeySelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteUniqueKeyData,
-		HashBuildAllocationSiteUniqueKeyArea,
 	)
 	if err != nil {
 		return err
@@ -751,6 +731,7 @@ func (hb *HashmapBuilder) ClearAllocationAccount(
 	}
 	if builder.IntHashMap != nil || builder.StrHashMap != nil ||
 		len(builder.Batches.Buf) != 0 || builder.Sels.Size() != 0 ||
+		builder.batchRowEnds != nil ||
 		len(builder.executors) != 0 || len(builder.curVecs) != 0 ||
 		len(builder.uniqueKeys.first.vecs) != 0 ||
 		len(builder.uniqueKeys.rest) != 0 || builder.uniqueKeys.directory != nil ||
@@ -951,7 +932,7 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 		return process.ErrExecutionResourceInvalid
 	}
 	if bat := hb.Batches.Buf[idx]; bat != nil {
-		bat.Clean(proc.Mp())
+		bat.Clean(hb.batchesPool(proc))
 	}
 	copy(hb.Batches.Buf[idx:], hb.Batches.Buf[idx+1:])
 	hb.Batches.Buf = hb.Batches.Buf[:len(hb.Batches.Buf)-1]
@@ -991,7 +972,7 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 			}
 		}
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			bat.Clean(hb.batchesPool(proc))
 			hb.Batches.Buf[idx] = nil
 		}
 	}
@@ -1014,8 +995,10 @@ func (ctr *container) releaseMemoryGrowthParticipant() {
 	ctr.memoryGrowthParticipant = nil
 }
 
-// Admitted build ingress is copied into owned retained batches or flat spill
-// partitions. Prefer owned scan columns without disabling selected filtering.
-func (hashBuild *HashBuild) PrefersOwnedDictionaryInput(child int) bool {
-	return hashBuild.AcceptsDictionary(child)
+// batchesPool is the pool the retained build batches were created with.
+func (hb *HashmapBuilder) batchesPool(proc *process.Process) *mpool.MPool {
+	if mp := hb.Batches.Pool(); mp != nil {
+		return mp
+	}
+	return proc.Mp()
 }

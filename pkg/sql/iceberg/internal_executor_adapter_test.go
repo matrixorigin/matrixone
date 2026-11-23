@@ -33,9 +33,9 @@ import (
 func TestInternalSQLExecutorAdapterScansRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_datetime.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_text.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_datetime.ToType(), mp)
 	requireNoErr(t, vector.AppendFixed(bat.Vecs[0], uint32(7), false, mp))
 	requireNoErr(t, vector.AppendBytes(bat.Vecs[1], []byte("ksa_gold"), false, mp))
 	requireNoErr(t, vector.AppendFixed(bat.Vecs[2], types.DatetimeFromUnix(time.UTC, 1767225600), false, mp))
@@ -63,7 +63,7 @@ func TestInternalSQLExecutorAdapterScansRows(t *testing.T) {
 func TestInternalSQLExecutorAdapterScansCatalogLifecycleLockProjection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), mp)
 	requireNoErr(t, vector.AppendFixed(bat.Vecs[0], uint64(7), false, mp))
 	bat.SetRowCount(1)
 
@@ -102,7 +102,7 @@ func TestInternalSQLExecutorAdapterExec(t *testing.T) {
 func TestInternalSQLExecutorAdapterExecTxnUsesTransaction(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), mp)
 	requireNoErr(t, vector.AppendFixed(bat.Vecs[0], uint64(7), false, mp))
 	bat.SetRowCount(1)
 
@@ -190,8 +190,8 @@ func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
 	if err := scanVectorValue(new(string), nil, 0); err == nil {
 		t.Fatalf("expected nil vector error")
 	}
-	vec := vector.NewVec(types.T_varchar.ToType())
 	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 	requireNoErr(t, vector.AppendBytes(vec, []byte("x"), false, mp))
 	var unsupported struct{}
@@ -203,25 +203,25 @@ func TestInternalSQLExecutorAdapterErrorBranches(t *testing.T) {
 func TestInternalSQLExecutorAdapterScanVectorTypeBranches(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	uint8Vec := vector.NewVec(types.T_uint8.ToType())
+	uint8Vec := vector.NewVec(types.T_uint8.ToType(), mp)
 	defer uint8Vec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[uint8](uint8Vec, 8, false, mp))
-	uint16Vec := vector.NewVec(types.T_uint16.ToType())
+	uint16Vec := vector.NewVec(types.T_uint16.ToType(), mp)
 	defer uint16Vec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[uint16](uint16Vec, 16, false, mp))
-	uint64Vec := vector.NewVec(types.T_uint64.ToType())
+	uint64Vec := vector.NewVec(types.T_uint64.ToType(), mp)
 	defer uint64Vec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[uint64](uint64Vec, 64, false, mp))
-	int8Vec := vector.NewVec(types.T_int8.ToType())
+	int8Vec := vector.NewVec(types.T_int8.ToType(), mp)
 	defer int8Vec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[int8](int8Vec, 8, false, mp))
-	int16Vec := vector.NewVec(types.T_int16.ToType())
+	int16Vec := vector.NewVec(types.T_int16.ToType(), mp)
 	defer int16Vec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[int16](int16Vec, 16, false, mp))
-	int32Vec := vector.NewVec(types.T_int32.ToType())
+	int32Vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer int32Vec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[int32](int32Vec, 32, false, mp))
-	int64Vec := vector.NewVec(types.T_int64.ToType())
+	int64Vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer int64Vec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[int64](int64Vec, 64, false, mp))
 	for _, tc := range []struct {
@@ -238,13 +238,13 @@ func TestInternalSQLExecutorAdapterScanVectorTypeBranches(t *testing.T) {
 		}
 	}
 
-	negVec := vector.NewVec(types.T_int64.ToType())
+	negVec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer negVec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[int64](negVec, -1, false, mp))
 	if _, err := scanVectorUint64(negVec, 0); err == nil {
 		t.Fatalf("expected negative integer error")
 	}
-	overflowVec := vector.NewVec(types.T_uint64.ToType())
+	overflowVec := vector.NewVec(types.T_uint64.ToType(), mp)
 	defer overflowVec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[uint64](overflowVec, math.MaxUint32+1, false, mp))
 	var small uint32
@@ -254,14 +254,14 @@ func TestInternalSQLExecutorAdapterScanVectorTypeBranches(t *testing.T) {
 	if _, err := scanVectorString(int64Vec, 0); err == nil {
 		t.Fatalf("expected string type error")
 	}
-	if _, err := scanVectorUint64(vector.NewVec(types.T_varchar.ToType()), 0); err == nil {
+	if _, err := scanVectorUint64(vector.NewVec(types.T_varchar.ToType(), mp), 0); err == nil {
 		t.Fatalf("expected integer type error")
 	}
 }
 
 func TestInternalSQLExecutorAdapterScanVectorTimeBranches(t *testing.T) {
 	mp := mpool.MustNewZero()
-	tsVec := vector.NewVec(types.T_timestamp.ToType())
+	tsVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	defer tsVec.Free(mp)
 	requireNoErr(t, vector.AppendFixed[types.Timestamp](tsVec, types.UnixMicroToTimestamp(1767225600000000), false, mp))
 	ts, err := scanVectorTime(tsVec, 0)
@@ -271,19 +271,19 @@ func TestInternalSQLExecutorAdapterScanVectorTimeBranches(t *testing.T) {
 	}
 
 	for _, raw := range []string{"2026-01-01T00:00:00Z", "2026-01-01 00:00:00.123456", "2026-01-01 00:00:00", "2026-01-01", "1767225600000"} {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		requireNoErr(t, vector.AppendBytes(vec, []byte(raw), false, mp))
 		_, err := scanVectorTime(vec, 0)
 		vec.Free(mp)
 		requireNoErr(t, err)
 	}
-	bad := vector.NewVec(types.T_varchar.ToType())
+	bad := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer bad.Free(mp)
 	requireNoErr(t, vector.AppendBytes(bad, []byte("not-a-time"), false, mp))
 	if _, err := scanVectorTime(bad, 0); err == nil {
 		t.Fatalf("expected invalid timestamp string")
 	}
-	if _, err := scanVectorTime(vector.NewVec(types.T_bool.ToType()), 0); err == nil {
+	if _, err := scanVectorTime(vector.NewVec(types.T_bool.ToType(), mp), 0); err == nil {
 		t.Fatalf("expected unsupported time vector")
 	}
 }

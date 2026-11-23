@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -104,7 +105,7 @@ func TestMedianFlushAcrossResultChunks(t *testing.T) {
 					result, err := exec.Flush()
 					t.Cleanup(func() {
 						for _, v := range result {
-							v.Free(mp)
+							v.Free(v.MPool())
 						}
 					})
 					require.NoError(t, err)
@@ -205,22 +206,34 @@ func TestPreallocatedMedianAndPercentileChunks(t *testing.T) {
 
 func TestMedianFlushErrorKeepsResultsOwned(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	typ := types.New(types.T_decimal128, 38, 0)
-	exec, err := MakeAgg(mp, AggIdOfMedian, false, typ)
-	require.NoError(t, err)
+	// A singleton can fit Decimal256 at scale zero but overflow when the
+	// MEDIAN result adds a scale digit. The first result chunk still succeeds.
+	typ := types.New(types.T_decimal256, 76, 0)
+	// Public construction rejects this input width. Construct the executor
+	// directly to exercise its cleanup after a failing Flush.
+	exec := newMedianColumnDecimalExec[types.Decimal256, types.Decimal256](mp, singleAggInfo{
+		aggID: AggIdOfMedian, argType: typ, retType: MedianReturnType([]types.Type{typ}), emptyNull: true,
+	})
 	t.Cleanup(exec.Free)
 	SyncAggregatorsToChunkSize([]AggFuncExec{exec}, 2)
 	require.NoError(t, exec.GroupGrow(3))
-	large, err := types.ParseDecimal128("99999999999999999999999999999999999999", 38, 0)
+	large, err := types.ParseDecimal256(strings.Repeat("9", 76), 76, 0)
 	require.NoError(t, err)
-	input := medianTestVector(t, mp, typ, []types.Decimal128{{B0_63: 1}, large})
+	input := vector.NewVec(typ, mp)
 	t.Cleanup(func() { input.Free(mp) })
+	require.NoError(t, vector.AppendFixedList(input, []types.Decimal256{{B0_63: 1}, large}, nil, mp))
 	require.NoError(t, exec.BatchFill(0, []uint64{1, 3}, []*vector.Vector{input}))
 	result, err := exec.Flush()
+	for _, v := range result {
+		if v != nil {
+			t.Cleanup(func() { v.Free(mp) })
+		}
+	}
 	require.Nil(t, result)
 	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error: %v", err)
-	require.ErrorContains(t, err, "Decimal128 scale overflow")
+	require.ErrorContains(t, err, "Decimal256 scale overflow")
 }
 
 func TestPreallocatedRowNumberChunks(t *testing.T) {

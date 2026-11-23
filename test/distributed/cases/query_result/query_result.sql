@@ -258,5 +258,7 @@ select id from result_scan(last_query_id()) as u where name is null;
 select id, name, tag from result_scan(last_query_id()) as u where tag is null order by id;
 /* save_result */select * from t_30571 order by id;
 select id, qty from result_scan(last_query_id()) as u where qty is null;
+/* save_result */select id, name as __mo_filepath from t_30571 order by id;
+select u.__mo_filepath from result_scan(last_query_id()) as u where u.__mo_filepath = 'banana';
 drop table t_30571;
 set save_query_result = off;

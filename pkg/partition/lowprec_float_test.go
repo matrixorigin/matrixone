@@ -26,7 +26,7 @@ import (
 // lpVec builds a vector of oid (bf16, float16, float8 or float4) from vals.
 func lpVec(t *testing.T, oid types.T, mp *mpool.MPool, vals ...float32) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for _, v := range vals {
 		var err error
 		switch oid {
@@ -91,7 +91,7 @@ func TestBlockScaledPartition(t *testing.T) {
 		z := cell(`{` + g + `"s":[1],"v":[2]}`)
 		require.NotEqual(t, x, y)
 
-		vec := vector.NewVec(types.New(oid, 1, 0))
+		vec := vector.NewVec(types.New(oid, 1, 0), mp)
 		for _, c := range [][]byte{x, y, x, z} {
 			require.NoError(t, vector.AppendBytes(vec, c, false, mp))
 		}
@@ -105,7 +105,7 @@ func TestBlockScaledPartition(t *testing.T) {
 		vec.Free(mp)
 
 		// without nulls
-		vec = vector.NewVec(types.New(oid, 1, 0))
+		vec = vector.NewVec(types.New(oid, 1, 0), mp)
 		for _, c := range [][]byte{x, y, x, z} {
 			require.NoError(t, vector.AppendBytes(vec, c, false, mp))
 		}
