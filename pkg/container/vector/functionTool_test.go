@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"testing"
@@ -672,4 +673,55 @@ func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
 	require.ErrorIs(t, MustFunctionResult[bool](wrapper).PreExtendAndResetNonNull(128), mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, wrapper.GetResultVector().Length())
 	require.Zero(t, account.Snapshot().Used)
+}
+
+// Function and cast results are where text values are produced, so every
+// byte writer of a native Unicode result rejects invalid text without adding
+// a row, and the same bytes are accepted for a legacy text result.
+func TestFunctionResultValidatesUnicodeText(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	mb4 := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	mb3 := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB3UnicodeCI)
+	writers := map[string]func(*FunctionResult[types.Varlena], []byte) error{
+		"AppendBytes": func(fr *FunctionResult[types.Varlena], v []byte) error { return fr.AppendBytes(v, false) },
+		"AppendMultiBytes": func(fr *FunctionResult[types.Varlena], v []byte) error {
+			return fr.AppendMultiBytes(v, false, 2)
+		},
+		"AppendMustBytesValue": func(fr *FunctionResult[types.Varlena], v []byte) error { return fr.AppendMustBytesValue(v) },
+		"AppendBytesWithWriter": func(fr *FunctionResult[types.Varlena], v []byte) error {
+			return fr.AppendBytesWithWriter(len(v), func(dst []byte) error { copy(dst, v); return nil })
+		},
+	}
+	for name, write := range writers {
+		for _, tc := range []struct {
+			name  string
+			typ   types.Type
+			value []byte
+			bad   bool
+		}{
+			{"mb4_valid", mb4, []byte("😀"), false},
+			{"mb4_invalid_inline", mb4, []byte{0xff}, true},
+			{"mb4_invalid_area", mb4, append(bytes.Repeat([]byte("x"), 40), 0xff), true},
+			{"mb3_non_bmp", mb3, []byte("😀"), true},
+			{"legacy_invalid", types.T_varchar.ToType(), []byte{0xff}, false},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				fr := MustFunctionResult[types.Varlena](NewFunctionResultWrapper(tc.typ, mp))
+				defer fr.Free()
+				require.NoError(t, fr.PreExtendAndReset(4))
+				err := write(fr, tc.value)
+				if tc.bad {
+					require.Error(t, err)
+					require.Zero(t, fr.GetResultVector().Length())
+					require.Empty(t, fr.GetResultVector().GetArea())
+					// A NULL row carries no text to validate.
+					require.NoError(t, fr.AppendBytes(tc.value, true))
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.value, fr.GetResultVector().GetBytesAt(0))
+			})
+		}
+	}
 }

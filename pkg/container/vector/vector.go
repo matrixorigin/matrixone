@@ -3923,15 +3923,12 @@ type FixedSourceRow struct {
 }
 
 // TryUnionFlatFixedRows copies fixed-size payloads across source vectors without
-// changing their order, including legacy inline CHAR/VARCHAR descriptors. A
+// changing their order, including inline CHAR/VARCHAR descriptors. A
 // false result leaves v untouched, allowing the caller to use UnionOne.
 // A true result transfers no source ownership; v owns every copied payload.
 func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
 	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
 	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings {
-		return false, nil
-	}
-	if inlineStrings && types.IsUnicodeCollation(v.typ.Charset) {
 		return false, nil
 	}
 	size := v.typ.TypeSize()
@@ -4216,8 +4213,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// With both areas empty, valid non-NULL descriptors are either inline
 		// or empty non-inline values at offset zero. Neither needs area growth
 		// or rebasing, so copy them directly without a separate sizing pass.
-		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0 &&
-			!types.IsUnicodeCollation(v.typ.Charset)
+		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0
 		if !emptyAreas {
 			for _, sel := range sels {
 				if hasNull && w.nsp.Contains(uint64(sel)) {
@@ -4234,13 +4230,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		}
 		// Reuse the area sizing pass to select an inline-copy batch. The small
 		// check still handles non-inline zero-length descriptors correctly.
-		// Mixed/area payloads and Unicode admission keep the original loops.
+		// Mixed/area payloads keep the original loops.
 		if emptyAreas {
 			target := vCol[oldLen : oldLen+len(sels)]
 			for i, sel := range sels {
 				target[i] = wCol[sel]
 			}
-		} else if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+		} else if total == 0 {
 			if hasNull {
 				for i, sel := range sels {
 					if w.nsp.Contains(uint64(sel)) {
@@ -5531,9 +5527,6 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 		}
 		value.SetOffsetLen(uint32(offset), uint32(size))
 	}
-	if err = types.ValidateCollationValue(vec.typ, value.GetByteSlice(vec.area)); err != nil {
-		return err
-	}
 	return appendOneOwnedVarlena(vec, value, mp)
 }
 
@@ -6097,7 +6090,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 
 // A fresh, empty destination cannot own any input bytes, so reserving its
 // area cannot invalidate a caller's source slices. These types also have no
-// per-value JSON or Unicode admission that could change error precedence.
+// per-value admission that could change error precedence.
 func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 	if cap(vec.data) != 0 || cap(vec.area) != 0 || len(isNulls) != 0 ||
 		vec.length != 0 {
@@ -6107,7 +6100,7 @@ func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 	case types.T_varbinary:
 		return true
 	case types.T_varchar:
-		return !types.IsUnicodeCollation(vec.typ.Charset)
+		return true
 	default:
 		return false
 	}
@@ -7994,13 +7987,6 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 	if err := vec.checkMP(m); err != nil {
 		return err
 	}
-	// Legacy domains need no collation admission. Check the domain before
-	// extracting bytes, especially for inline values copied in merge loops.
-	if types.IsUnicodeCollation(vec.typ.Charset) {
-		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-			return err
-		}
-	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)
 		return nil
@@ -8012,9 +7998,6 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 
 func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
 	if err := vec.checkMP(m); err != nil {
-		return err
-	}
-	if err := types.ValidateCollationValue(vec.typ, *bs); err != nil {
 		return err
 	}
 	vlen := len(*bs)

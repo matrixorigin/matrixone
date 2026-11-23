@@ -216,18 +216,6 @@ func TestAppendVarlenListSlowPath(t *testing.T) {
 		require.Equal(t, long, vec.GetBytesAt(2))
 	})
 
-	t.Run("unicode validation rolls back", func(t *testing.T) {
-		vec, mp := newAppendTestVec(t, types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8MB4UnicodeCI))
-		require.False(t, canPregrowRawByteList(vec, nil))
-		invalid := string(append([]byte{0xff}, bytes.Repeat([]byte("x"), 127)...))
-		values := make([]string, 32)
-		for i := range values {
-			values[i] = invalid
-		}
-		err := AppendStringList(vec, values, nil, mp)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "got %v", err)
-		require.Zero(t, vec.Length())
-	})
 }
 
 // TestAppendVarlenListPregrowFailureRollsBack fails the pre-grow on a full
