@@ -122,3 +122,53 @@ func TestGetIrregularIndexes(t *testing.T) {
 		assert.Nil(t, getIrregularIndexes(tableDef))
 	})
 }
+
+func TestHasSyncIrregularIndex(t *testing.T) {
+	asyncParam := `{"async":"true"}`
+	cases := []struct {
+		name    string
+		indexes []*plan.IndexDef
+		want    bool
+		wantErr bool
+	}{
+		{name: "no indexes"},
+		{name: "regular only", indexes: []*plan.IndexDef{
+			{IndexAlgo: catalog.MoIndexDefaultAlgo.ToString()},
+			{IndexAlgo: catalog.MoIndexBTreeAlgo.ToString()},
+		}},
+		{name: "always async", indexes: []*plan.IndexDef{
+			{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()},
+			{IndexAlgo: catalog.MoIndexCagraAlgo.ToString()},
+			{IndexAlgo: catalog.MoIndexIvfpqAlgo.ToString()},
+			{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+		}},
+		{name: "opted-in async", indexes: []*plan.IndexDef{
+			{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoParams: asyncParam},
+			{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString(), IndexAlgoParams: asyncParam},
+		}},
+		{name: "sync ivfflat", want: true, indexes: []*plan.IndexDef{
+			{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()},
+			{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		}},
+		{name: "sync fulltext", want: true, indexes: []*plan.IndexDef{
+			{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()},
+		}},
+		{name: "master", want: true, indexes: []*plan.IndexDef{
+			{IndexAlgo: catalog.MOIndexMasterAlgo.ToString()},
+		}},
+		{name: "invalid async param", wantErr: true, indexes: []*plan.IndexDef{
+			{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoParams: `{"async":1}`},
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := hasSyncIrregularIndex(&plan.TableDef{Indexes: c.indexes})
+			if c.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, c.want, got)
+		})
+	}
+}

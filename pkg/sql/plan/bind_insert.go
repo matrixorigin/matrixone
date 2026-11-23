@@ -272,6 +272,24 @@ func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrre
 	return
 }
 
+// hasSyncIrregularIndex reports whether tableDef has an irregular index that is
+// not maintained asynchronously by CDC.
+func hasSyncIrregularIndex(tableDef *plan.TableDef) (bool, error) {
+	for _, idxDef := range tableDef.Indexes {
+		if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			continue
+		}
+		async, err := indexplugin.IsAsync(idxDef.IndexAlgo, idxDef.IndexAlgoParams)
+		if err != nil {
+			return false, err
+		}
+		if !async {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // isModernMaintainedIrregularAlgo reports whether an irregular index algorithm has
 // the modern maintenance plumbing (both insert and delete sub-plans). IVF,
 // fulltext, and MASTER qualify (the master index table has an independent

@@ -372,7 +372,13 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	for i, tableDef := range dmlCtx.tableDefs {
 		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
 		if hasIrregularIndex && !stmt.HasReturning() {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+			syncIrregular, err := hasSyncIrregularIndex(tableDef)
+			if err != nil {
+				return 0, err
+			}
+			if syncIrregular {
+				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+			}
 		}
 		tableDef.Indexes = validIndexes
 
