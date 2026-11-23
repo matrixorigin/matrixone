@@ -1,5 +1,6 @@
 """Exercise the HA resource agent using isolated Docker, Compose and OCF stubs."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -30,9 +31,12 @@ COMPOSE = """\
 printf 'compose %s\\n' "$*" >> "$TRACE"
 case "$3" in
     config)
-        [ "$4" = --services ] || exit 99
         [ "${CONFIG_ERROR:-0}" = 0 ] || exit "$CONFIG_ERROR"
-        printf '%s\\n' "$SERVICES"
+        case "$4 $5" in
+            "--format json") printf '%s\\n' "$CONFIG_JSON" ;;
+            "--services ") printf '%s\\n' "$SERVICES" ;;
+            *) exit 99 ;;
+        esac
         ;;
     ps)
         [ "${COMPOSE_PS_ERROR:-0}" = 0 ] || exit "$COMPOSE_PS_ERROR"
@@ -85,6 +89,13 @@ case "$1" in
         ;;
     inspect)
         [ "${INSPECT_ERROR:-0}" = 0 ] || exit "$INSPECT_ERROR"
+        if [ "$2" = '--format={{.State.Status}}' ]; then
+            shift 2
+            for id do
+                if [ -f "$TRACE.$id.stopped" ]; then echo exited; else echo running; fi
+            done
+            exit 0
+        fi
         if [ "$2" = '--format={{.State.Running}}' ]; then
             case "$3" in
                 stopped|init-exited|init-failed|oneoff) echo false ;;
@@ -101,6 +112,9 @@ case "$1" in
             fi
             case "$id" in
                 stopped) echo 'false|exited|0||worker|' ;;
+                recoverable)
+                    if [ -f "$COMPOSE_STARTED" ]; then echo 'true|running|0||worker|'
+                    else echo 'false|exited|0||worker|'; fi ;;
                 init-exited) echo 'false|exited|0||init|' ;;
                 init-failed) echo 'false|exited|1||init|' ;;
                 invalid) echo unknown ;;
@@ -152,7 +166,7 @@ class ResourceAgentTests(unittest.TestCase):
     def add_container(self, name, project="", config="", oneoff="False", container_id="owned"):
         (self.containers / container_id).write_text(f"{name}\t{project}\t{config}\t{oneoff}\n")
 
-    def action(self, action, expected, **settings):
+    def action(self, action, expected, model=None, **settings):
         env = dict(
             PATH=f"{self.root}:/usr/bin:/bin",
             OCF_FUNCTIONS_DIR=str(self.root),
@@ -167,6 +181,9 @@ class ResourceAgentTests(unittest.TestCase):
             AFTER_UP_IDS="running",
         )
         env.update(settings)
+        if model is None:
+            model = {name: {} for name in env["SERVICES"].splitlines()}
+        env["CONFIG_JSON"] = json.dumps({"services": model})
 
         result = subprocess.run(
             [os.environ.get("AGENT_TEST_SHELL", "/bin/sh"), str(AGENT), action],
@@ -199,7 +216,7 @@ class ResourceAgentTests(unittest.TestCase):
         self.action("monitor", 7, COMPOSE_IDS="stopped")
 
     def test_monitor_partially_running(self):
-        self.action("monitor", 1, COMPOSE_IDS="running\nstopped")
+        self.action("monitor", 1, SERVICES="app\nworker", COMPOSE_IDS="running\nstopped")
 
     def test_monitor_ignores_one_off_containers(self):
         self.action("monitor", 7, COMPOSE_IDS="oneoff")
@@ -221,7 +238,45 @@ class ResourceAgentTests(unittest.TestCase):
         self.assert_no_mutation(self.action("monitor", 1, COMPOSE_IDS="running", CONFIG_ERROR="9"))
 
     def test_monitor_failed_initialization_service(self):
-        self.action("monitor", 1, COMPOSE_IDS="app\ninit-failed")
+        self.action("monitor", 1, SERVICES="app\ninit", COMPOSE_IDS="app\ninit-failed")
+
+    def test_renamed_service_blocks_repair_even_with_matching_ownership(self):
+        self.add_container("my-project-worker-1", "my-project", self.yaml, container_id="worker")
+        for ids in ("worker", "", "app\nworker"):
+            with self.subTest(ids=ids):
+                self.assert_no_mutation(self.action("start", 1, COMPOSE_IDS=ids))
+                self.assert_no_mutation(self.action("monitor", 1, COMPOSE_IDS=ids))
+
+    def test_exited_retired_service_does_not_affect_health(self):
+        self.action("monitor", 0, COMPOSE_IDS="app\nstopped\ninit-failed")
+
+    def test_zero_replica_service_is_optional_until_it_runs(self):
+        for disabled in ({"scale": 0}, {"deploy": {"replicas": 0}}):
+            model = {"app": {}, "worker": disabled}
+            self.action("monitor", 0, model=model, SERVICES="app\nworker", COMPOSE_IDS="app\nstopped")
+            self.assert_no_mutation(self.action("start", 1, model=model, COMPOSE_IDS="app\nworker"))
+            self.action("start", 0, model=model, SERVICES="app\nworker", AFTER_UP_IDS="app")
+            (self.root / "started").unlink()
+            self.trace.write_text("")
+
+    def test_owned_oneoff_blocks_start_without_healthy_services(self):
+        self.add_container("my-project-app-run", "my-project", self.yaml, "True", "task")
+        for ids in ("", "task", "stopped"):
+            with self.subTest(ids=ids):
+                self.assert_no_mutation(self.action("monitor", 1, COMPOSE_IDS=ids))
+                self.assert_no_mutation(self.action("start", 1, COMPOSE_IDS=ids))
+        self.action("monitor", 0, COMPOSE_IDS="app\ntask")
+
+    def test_owned_oneoff_blocks_partial_repair_even_when_compose_omits_it(self):
+        self.add_container("helper", "my-project", self.yaml, container_id="helper")
+        self.add_container("app-run", "my-project", self.yaml, "True", "task")
+        self.assert_no_mutation(self.action("start", 1, SERVICES="app\nhelper", COMPOSE_IDS="helper"))
+
+    def test_monitor_counts_distinct_replicas_from_both_sources(self):
+        self.add_container("app-1", "my-project", self.yaml, container_id="app")
+        model = {"app": {"deploy": {"replicas": 2}}}
+        self.action("monitor", 1, model=model, COMPOSE_IDS="app")
+        self.action("monitor", 0, model=model, COMPOSE_IDS="app\nrunning")
 
     def test_monitor_compose_failed(self):
         self.action("monitor", 1, COMPOSE_PS_ERROR="9")
@@ -260,9 +315,9 @@ class ResourceAgentTests(unittest.TestCase):
 
     def test_start_when_partially_running(self):
         self.add_container("app-1", "my-project", self.yaml, container_id="running")
-        self.add_container("worker-1", "my-project", self.yaml, container_id="stopped")
-        calls = self.action("start", 0, SERVICES="app\nworker", COMPOSE_IDS="running\nstopped",
-                            AFTER_UP_IDS="running\nworker")
+        self.add_container("worker-1", "my-project", self.yaml, container_id="recoverable")
+        ids = "running\nrecoverable"
+        calls = self.action("start", 0, SERVICES="app\nworker", COMPOSE_IDS=ids, AFTER_UP_IDS=ids)
         self.assertEqual(calls.count("compose -f docker-compose.yaml up -d"), 1)
 
     def test_start_repairs_missing_service_and_verifies_result(self):
@@ -288,7 +343,7 @@ class ResourceAgentTests(unittest.TestCase):
         self.action("start", 1, AFTER_UP_IDS="")
 
     def test_start_rejects_partial_startup(self):
-        calls = self.action("start", 1, AFTER_UP_IDS="running\nstopped")
+        calls = self.action("start", 1, SERVICES="app\nworker", AFTER_UP_IDS="running\nstopped")
         self.assertIn("compose -f docker-compose.yaml up -d", calls)
 
     def test_stop_compose_success(self):

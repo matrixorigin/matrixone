@@ -46,7 +46,7 @@ sudo ./mo-ha-deploy.sh --config node1.env --bootstrap --format-drbd --yes
 sudo ./mo-ha-deploy.sh --config node1.env --stages check --yes
 ```
 
-`pkg` 阶段在两台节点安装随包提供的 MatrixOne 资源代理。已有集群可以在两台节点的部署目录单独安装代理，省去重跑整个 `pkg` 阶段。
+`pkg` 阶段在两台节点安装随包提供的 MatrixOne 资源代理和 Python 3。已有集群如果已具备 Python 3 和支持 `config --format json` 的 Docker Compose 插件，可以在两台节点的部署目录单独安装代理。
 
 ```bash
 sudo install -D -m 0755 agents/heartbeat/docker-compose /usr/lib/ocf/resource.d/matrixone/docker-compose
@@ -57,6 +57,8 @@ sudo install -D -m 0755 agents/heartbeat/docker-compose /usr/lib/ocf/resource.d/
 停机或迁移时，资源代理也会停止能确认属于该配置的活动 `docker compose run` 任务，以便释放共享数据。请在维护前完成需要保留运行的任务。已经退出的临时容器会保留；使用 `--rm` 启动的任务由 Docker 自动清理。
 
 如果 Compose 配置丢失，且仍有属于该配置的活动容器，监控会报错。恢复原配置后，代理才能核对 MatrixOne 等预期服务是否运行。如果配置可读、部分服务缺失，且容器归属清楚，`start` 会尝试一次 `compose up -d` 并重新检查。
+
+服务改名或缩容到零后，如果旧容器仍在运行，代理会报错并阻止启动替代容器。请先确认旧容器已释放数据目录。如果常驻服务已经停止，但同项目的临时任务仍在运行，代理也会阻止启动，直到任务退出或由停机操作结束。
 
 ## 三、验证
 

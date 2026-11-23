@@ -161,14 +161,14 @@ labeled_container_ids()
 			oneoff = (tolower($5) == "true")
 			active = ($6 != "exited" && $6 != "created")
 		}
-		oneoff && (selection == "monitor" || (!active && selection != "reconcile")) { next }
+		oneoff && !active && selection != "reconcile" { next }
 		$3 != "" && $4 == ENVIRON["OCF_COMPOSE_CONFIG"] {
 			if (project != "" && project != $3) ambiguous = 1
 			project = $3
 			if (selection == "reconcile") {
-				if (active && !oneoff && !($1 in unverified)) ambiguous = 1
+				if (active && (oneoff || !($1 in unverified))) ambiguous = 1
 				delete unverified[$1]
-			} else if (selection == "active" ? active : !oneoff) print $1
+			} else if (selection == "monitor" || (selection == "active" ? active : !oneoff)) print $1
 			next
 		}
 		$2 == "matrixone" ||
@@ -202,6 +202,19 @@ remove_containers()
 	return "$failed"
 }
 
+desired_services()
+(
+	# Ask Compose to resolve profiles, interpolation and deploy/scale settings.
+	model=$(run_compose config --format json) || exit 1
+	printf '%s\n' "$model" | python3 -I -c '
+import json
+import sys
+for name, service in json.load(sys.stdin)["services"].items():
+    replicas = service.get("scale", service.get("deploy", {}).get("replicas", 1))
+    print(name, replicas)
+'
+)
+
 docker_container_status()
 {
 	expected_services=$1
@@ -215,13 +228,31 @@ docker_container_status()
 
 	# Compose records service_completed_successfully dependencies on the
 	# dependent container. Only a successful exit satisfies that condition.
-	printf '%s\n' "$states" | OCF_EXPECTED_SERVICES="$expected_services" awk -F '[|]' -v not_running="$OCF_NOT_RUNNING" -v partial="$COMPOSE_PARTIAL" '
+	printf '%s\n' "$states" | OCF_EXPECTED_SERVICES="$expected_services" awk -F '[|]' \
+		-v containers="$#" -v not_running="$OCF_NOT_RUNNING" -v partial="$COMPOSE_PARTIAL" '
+		BEGIN {
+			n = split(ENVIRON["OCF_EXPECTED_SERVICES"], lines, "\n")
+			for (i = 1; i <= n; i++) {
+				split(lines[i], fields, " ")
+				desired[fields[1]] = fields[2] + 0
+			}
+		}
 		NF != 6 || ($1 != "true" && $1 != "false") { invalid = 1; next }
-		tolower($4) == "true" { next }
 		{
-			seen[$5] = 1
-			if ($1 == "true") running = 1
-			else if ($2 == "exited" && $3 == "0") exited[$5] = 1
+			active = ($2 != "created" && $2 != "exited")
+			if (tolower($4) == "true") {
+				if (active) task = 1
+				next
+			}
+			if (!($5 in desired) || desired[$5] == 0) {
+				if (active) orphan = 1
+				next
+			}
+			if ($1 == "true" && $2 == "running") {
+				running = 1
+				ready[$5]++
+			} else if ($2 == "exited" && $3 == "0") exited[$5]++
+			else if (active) invalid = 1
 			else stopped = 1
 
 			count = split($6, dependencies, ",")
@@ -232,13 +263,16 @@ docker_container_status()
 			}
 		}
 		END {
-			if (invalid) exit 2
-			if (!running) exit not_running
-			count = split(ENVIRON["OCF_EXPECTED_SERVICES"], services, "\n")
-			for (i = 1; i <= count; i++)
-				if (services[i] != "" && !(services[i] in seen)) stopped = 1
-			for (service in exited)
-				if (!(service in init)) stopped = 1
+			if (invalid || NR != containers) exit 2
+			if (orphan) exit 3
+			if (!running) exit (task ? 4 : not_running)
+			for (service in desired) {
+				if (service in init) ready[service] += exited[service]
+				else if (exited[service]) stopped = 1
+				if (ready[service] < desired[service]) stopped = 1
+				if (ready[service] > desired[service]) exit 2
+			}
+			if (stopped && task) exit 4
 			exit stopped ? partial : 0
 		}
 	'
@@ -246,7 +280,9 @@ docker_container_status()
 	case "$result" in
 		"$OCF_SUCCESS"|"$OCF_NOT_RUNNING") return "$result" ;;
 		"$COMPOSE_PARTIAL") ocf_log warn "only some Compose services are running"; return "$result" ;;
-		*) ocf_log err "invalid state for Docker containers of $CONFIG_FILE" ;;
+		3) ocf_log err "unexpected service container still active for $CONFIG_FILE" ;;
+		4) ocf_log err "one-off container still active while services are stopped or incomplete for $CONFIG_FILE" ;;
+		*) ocf_log err "cannot confirm safe service state for $CONFIG_FILE" ;;
 	esac
 	return "$OCF_ERR_GENERIC"
 }
@@ -259,7 +295,7 @@ docker_compose_status()
 		ocf_log err "containers are active but cannot verify expected services without $CONFIG_FILE"
 		return "$OCF_ERR_GENERIC"
 	fi
-	services=$(run_compose config --services) && [ -n "$services" ] || {
+	services=$(desired_services) && [ -n "$services" ] || {
 		ocf_log err "cannot determine the configured services for $CONFIG_FILE"
 		return "$OCF_ERR_GENERIC"
 	}
@@ -267,11 +303,10 @@ docker_compose_status()
 		ocf_log err "failed to enumerate Compose containers for $CONFIG_FILE"
 		return "$OCF_ERR_GENERIC"
 	}
-	docker_container_status "$services" $compose_ids
-	result=$?
-	[ "$result" = "$OCF_NOT_RUNNING" ] || return "$result"
-
-	ids=$(labeled_container_ids monitor) || return "$OCF_ERR_GENERIC"
+	# Compose may omit old services or one-off jobs. Inspect the union only
+	# once per ID so the replica count reflects actual containers.
+	owned_ids=$(labeled_container_ids monitor) || return "$OCF_ERR_GENERIC"
+	ids=$(printf '%s\n' "$compose_ids" "$owned_ids" | awk 'NF && !seen[$1]++') || return "$OCF_ERR_GENERIC"
 	docker_container_status "$services" $ids
 }
 
@@ -281,12 +316,11 @@ docker_compose_start()
 	docker_compose_status
 	case "$?" in
 		"$OCF_SUCCESS") return "$OCF_SUCCESS" ;;
-		"$COMPOSE_PARTIAL")
+		"$COMPOSE_PARTIAL"|"$OCF_NOT_RUNNING")
 			# up targets the current project. Prove that its IDs belong to
 			# this config and no other project still runs its services.
 			labeled_container_ids reconcile "$compose_ids" >/dev/null || return "$OCF_ERR_GENERIC"
 			;;
-		"$OCF_NOT_RUNNING") ;;
 		*) return "$OCF_ERR_GENERIC" ;;
 	esac
 
@@ -303,8 +337,14 @@ docker_compose_start()
 
 confirm_containers_stopped()
 {
-	docker_container_status "" "$@"
-	[ "$?" = "$OCF_NOT_RUNNING" ] && return "$OCF_SUCCESS"
+	[ "$#" -gt 0 ] || return "$OCF_SUCCESS"
+	states=$(docker inspect --format='{{.State.Status}}' "$@") || return "$OCF_ERR_GENERIC"
+	if printf '%s\n' "$states" | awk -v count="$#" '
+		$0 != "exited" && $0 != "created" { active = 1 }
+		END { exit (NR != count || active) }
+	'; then
+		return "$OCF_SUCCESS"
+	fi
 	ocf_log err "Compose containers could not be confirmed stopped"
 	return "$OCF_ERR_GENERIC"
 }

@@ -395,11 +395,11 @@ stage_pkg(){
     rpm)
       enable_ha_repo
       runq "$PKG install -y epel-release"
-      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all sbd"
+      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all sbd python3"
       ensure_drbd_module_rpm
       ;;
     deb)
-      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra sbd"
+      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra sbd python3"
       # drbd 内核模块在 linux-modules-extra，必须与当前运行内核版本匹配
       if [ "$DRY_RUN" = 1 ] || ! runq "modprobe drbd"; then
         runq "DEBIAN_FRONTEND=noninteractive apt-get install -y linux-modules-extra-\$(uname -r)"
