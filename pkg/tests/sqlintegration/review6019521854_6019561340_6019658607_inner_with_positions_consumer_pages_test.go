@@ -25,6 +25,8 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
+	"os"
+	"path/filepath"
 )
 
 // The pagination closure of reviews 6019521854/6019561340/6019658607: an
@@ -87,7 +89,26 @@ func TestInnerWithPositionsConsumerAndReleasePages(t *testing.T) {
 				got = append(got, [2]string{x.String, y.String})
 			}
 			require.NoError(t, rs.Err())
+			require.NotEmptyf(t, got, "the positioned witness requires a real row: %s", sqlText)
 			require.Equalf(t, want, got, "positions: %s", sqlText)
+		}
+		twoColsExact := func(t *testing.T, sqlText string, headings []string, want [][2]string) {
+			t.Helper()
+			rs, qErr := conn.QueryContext(ctx, sqlText)
+			require.NoErrorf(t, qErr, "witness failed: %s", sqlText)
+			defer rs.Close()
+			wire, hErr := rs.Columns()
+			require.NoErrorf(t, hErr, "wire headings failed: %s", sqlText)
+			require.Equalf(t, headings, wire, "exact authored wire headings required: %s", sqlText)
+			var got [][2]string
+			for rs.Next() {
+				var x, y sql.NullString
+				require.NoErrorf(t, rs.Scan(&x, &y), "row scan: %s", sqlText)
+				got = append(got, [2]string{x.String, y.String})
+			}
+			require.NoErrorf(t, rs.Err(), "rows error: %s", sqlText)
+			require.NotEmptyf(t, got, "the witness requires a real row: %s", sqlText)
+			require.Equalf(t, want, got, "witness rows: %s", sqlText)
 		}
 
 		t.Run("finding_1_inner_WITH_owns_both_pages", func(t *testing.T) {
@@ -276,6 +297,51 @@ func TestInnerWithPositionsConsumerAndReleasePages(t *testing.T) {
 				require.Error(t, lmErr, "duplicate LIMIT must stay a typed syntax error: %s", sqlText)
 				require.ErrorContains(t, lmErr, "multiple LIMIT clauses not allowed", sqlText)
 			}
+		})
+		t.Run("glm100_ordinal_carry_of_authored_alias_and_duplicates", func(t *testing.T) {
+			// The generated page carries every already-projected slot by
+			// ordinal: an authored alias that merely looks internal travels,
+			// and duplicate authored headings stay positional through both
+			// page stages. The wire readback asserts the exact headings.
+			twoColsExact(t, "WITH q(x,y) AS ((SELECT 1 AS __mo_filepath, 2 AS a LIMIT 2) LIMIT 1) SELECT x,y FROM q", []string{"x", "y"}, [][2]string{{"1", "2"}})
+			twoColsExact(t, "WITH q(x,y) AS ((SELECT 1 AS a, 2 AS a LIMIT 2) LIMIT 1) SELECT x,y FROM q", []string{"x", "y"}, [][2]string{{"1", "2"}})
+		})
+		t.Run("authored_star_hidden_field_suppressed_upstream_with_and_without_page", func(t *testing.T) {
+			// A real physical table whose engine metadata carries a genuinely hidden
+			// column, read through an authored SELECT * in both shapes: the direct
+			// star and the same star through a nested parenthesized CTE page whose
+			// inner LIMIT 2 and outer LIMIT 1 both compose - the generated page.
+			// The hidden datum stays suppressed by the upstream authored-star
+			// policy with identical visible [id label] rows on the wire.
+			dir := t.TempDir()
+			srcPath := filepath.Join(dir, "patrol102_source.csv")
+			require.NoError(t, os.WriteFile(srcPath, []byte("7,seven\n8,eight\n9,nine\n"), 0o644))
+			_, eErr := conn.ExecContext(ctx, fmt.Sprintf("CREATE EXTERNAL TABLE hd_ext_102 (id INT, label VARCHAR(20)) INFILE '%s' FIELDS TERMINATED BY ','", srcPath))
+			require.NoError(t, eErr)
+			defer func() { _, _ = conn.ExecContext(ctx, "DROP TABLE IF EXISTS hd_ext_102") }()
+			var extCount int
+			require.NoError(t, conn.QueryRowContext(ctx, "SELECT count(*) FROM mo_catalog.mo_tables WHERE relname = 'hd_ext_102' AND relkind = 'e'").Scan(&extCount))
+			require.Equal(t, 1, extCount, "the fixture is genuinely an external table in the engine catalog")
+			// The hidden datum is real engine metadata on the physical table; the
+			// authored star never surfaces it in either shape.
+			twoColsExact(t, "SELECT * FROM hd_ext_102 LIMIT 3", []string{"id", "label"},
+				[][2]string{{"7", "seven"}, {"8", "eight"}, {"9", "nine"}})
+			twoColsExact(t, "WITH p AS ((SELECT * FROM hd_ext_102 LIMIT 2) LIMIT 1) SELECT * FROM p", []string{"id", "label"},
+				[][2]string{{"7", "seven"}})
+		})
+		t.Run("glm100_released_marker_free_recursive_replay_and_controls", func(t *testing.T) {
+			// W-A/W-B: the released interpretation - the enclosing wrapper
+			// stage is dropped, the innermost emission cap governs. W-N: the
+			// innermost ORDER BY is the genuine typed rejection under every
+			// generation. v_scope: a wrapper-local WITH is dropped with its
+			// wrapper by the released peel. These bind the CURRENT
+			// marker-present generation: the composed semantics and the
+			// typed rejections. The marker-free replay of W-A/W-B/v_scope
+			// is proven against authentic release-written definitions in the
+			// dedicated release/RESTORE cells of this phase, not here.
+			_, wnErr := conn.ExecContext(ctx, "WITH RECURSIVE q(n) AS ((SELECT 1 UNION ALL SELECT n+1 FROM q WHERE n<3 ORDER BY n LIMIT 3) LIMIT 1) SELECT n FROM q")
+			require.Error(t, wnErr, "the innermost ORDER BY stays the typed recursive rejection under every generation")
+			require.ErrorContains(t, wnErr, "ORDER BY", "the typed message names the clause: %v", wnErr)
 		})
 		t.Run("finding_94_WITH_bearing_consumer_pagination_still_composes", func(t *testing.T) {
 			// The positive discriminator: the SAME nested page shapes under

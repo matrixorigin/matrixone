@@ -6549,28 +6549,6 @@ func selectTreePreservingWith(s *tree.Select) *tree.Select {
 // single-clause selects that the existing binder and pager already validate;
 // no stage is overwritten, skipped or reordered, and any WITH stays with the
 // select it belongs to (a WITH-bearing level is never wrapped).
-// releasePeelPageStages reproduces the released binders' interpretation of a
-// stored body's parenthesized query expression: every enclosing wrapper's
-// stage is discarded while stepping through the parens, and the binding keeps
-// whichever select the peel stops at together with its own attached clauses,
-// its WITH and its region. Only a generation-authored definition is ever
-// routed here (legacyCTEScope), so fresh and ALTERed definitions keep the
-// composed inside-out pages.
-func releasePeelPageStages(s *tree.Select) *tree.Select {
-	cur := s
-	for cur != nil {
-		paren, ok := cur.Select.(*tree.ParenSelect)
-		if !ok || paren.Select == nil {
-			break
-		}
-		if cur.RankOption != nil || cur.TimeWindow != nil || cur.With != nil {
-			break
-		}
-		cur = paren.Select
-	}
-	return cur
-}
-
 // registerSyntheticPages marks the wrap's generated page selects by pointer
 // identity for the duration of one body bind: the star expansion then carries
 // the sole derived binding's columns by ordinal, and never a user-authored
@@ -6749,40 +6727,50 @@ func (builder *QueryBuilder) bindCte(
 	var fullBody *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
 	case *tree.Select:
-		s = selectTreePreservingWith(stmt)
 		fullBody = stmt
 	case *tree.ParenSelect:
-		s = selectTreePreservingWith(stmt.Select)
 		fullBody = stmt.Select
 	default:
 		err = moerr.NewParseErrorf(builder.GetContext(), "unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		return
 	}
 
-	// Wrappers outside the first WITH-bearing select still own pagination of
-	// the same query expression; their clauses must survive the
-	// scope-preserving peel above and join the enclosing chain as the
-	// outermost stages so no owner is silently discarded.
+	// A marker-free stored definition replays the released interpretation:
+	// the historical pure parenthesis peel selects the terminal select with
+	// the clauses owned by it, before recursive/ordinary classification or
+	// any stage collection below. Enclosing wrapper stages - and a
+	// wrapper-local WITH - are dropped exactly as the released binder did;
+	// marker-present definitions keep the full composed chain.
 	var outerClauses []*tree.Limit
 	var outerOrderBy tree.OrderBy
-	for outer := fullBody; outer != nil && outer != s; {
-		if outer.Limit != nil {
-			outerClauses = append(outerClauses, outer.Limit)
+	if !ctx.legacyCTEScope {
+		// Wrappers outside the first WITH-bearing select still own pagination of
+		// the same query expression; their clauses must survive the
+		// scope-preserving peel above and join the enclosing chain as the
+		// outermost stages so no owner is silently discarded. The marker-free
+		// path never collects them: see the released peel above.
+		s = selectTreePreservingWith(fullBody)
+		for outer := fullBody; outer != nil && outer != s; {
+			if outer.Limit != nil {
+				outerClauses = append(outerClauses, outer.Limit)
+			}
+			if len(outerOrderBy) == 0 && len(outer.OrderBy) > 0 {
+				outerOrderBy = outer.OrderBy
+			}
+			inner := outer
+			switch sel := inner.Select.(type) {
+			case *tree.ParenSelect:
+				inner = sel.Select
+			case *tree.Select:
+				inner = sel
+			}
+			if inner == outer {
+				break
+			}
+			outer = inner
 		}
-		if len(outerOrderBy) == 0 && len(outer.OrderBy) > 0 {
-			outerOrderBy = outer.OrderBy
-		}
-		inner := outer
-		switch sel := inner.Select.(type) {
-		case *tree.ParenSelect:
-			inner = sel.Select
-		case *tree.Select:
-			inner = sel
-		}
-		if inner == outer {
-			break
-		}
-		outer = inner
+	} else {
+		s = getSelectTree(fullBody)
 	}
 
 	var outputCtx *BindContext
@@ -6834,7 +6822,7 @@ func (builder *QueryBuilder) bindCte(
 		// current generation composes each enclosing page inside out as the
 		// equivalent derived-table nest.
 		if ctx.legacyCTEScope {
-			bodyForBinding = releasePeelPageStages(fullBody)
+			bodyForBinding = s
 		} else if wrapped, pages, rewritten := ordinaryPaginationWrap(fullBody); rewritten {
 			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 			defer unregisterSyntheticPages()
@@ -13327,7 +13315,14 @@ func appendSelectListWithGroupingOrder(
 						displayCols = binding.cols
 					}
 					for i, col := range binding.cols {
-						if binding.colIsHidden[i] || catalog.ContainExternalHidenCol(col) {
+						// The page's inventory is the sole derived relation's
+						// logical, already-projected slots, so visibility is decided
+						// per ordinal only: a genuinely hidden slot skips by its bit,
+						// while an authored alias keeps its slot even when its chosen
+						// spelling collides with a reserved internal name. Table-star
+						// hidden/external/privilege filtering stays upstream where the
+						// user authored the projection.
+						if binding.colIsHidden[i] {
 							continue
 						}
 						if accountId != catalog.System_Account && binding.isClusterTable && util.IsClusterTableAttribute(col) {
