@@ -7,8 +7,8 @@ The mo-bot reviewer does not stop at reading the code. It **runs probes**: real 
 entry points, a storage fake gated per offset, budgets shrunk to a few units, and a
 passing control next to every failing probe. On one fileservice PR, each review round found 1–4
 new transition bugs this way. Running the same process before the push leaves the bot
-nothing to find. A finding requires a probe that fails; severity is calibrated as in
-the review contract.
+nothing to find. A transition finding requires a probe that fails; severity is
+calibrated as in the review contract.
 
 ## 1. Transition inventory (from the diff, not from memory)
 
@@ -28,10 +28,10 @@ For each changed function, list:
 | **Policies** | Every policy flag the path must honor (cache skips, exact reads, per-object modes …). Does each **new** exit or join point check them? |
 | **Lifecycle events** | Delete, close, cancel, scan end, idle timeout. Can each one reach work in **every** state (created, waiting-slot, waiting-conn, waiting-buffer, registered, reading, ended)? |
 | **Check-then-act pairs** | Two lookups in different structures (cache, then registry) that a concurrent actor moves an item between. |
-| **Cache tiers as sources** | Every tier a read can be served from (memory, disk, index-file, remote). What does the read do when the tier's bytes are short, missing or unreadable? Does it fall through to storage and drop the bad entry, while still returning the caller's and the decoder's errors? |
+| **Cache tiers as sources** | Every tier a read can be served from (memory, disk, index-file, remote). What does the read do when the tier's bytes are short, missing or unreadable? Does a read whose contract promises the data fall through to the source and drop the bad entry, while still returning the caller's and the decoder's errors? |
 | **Waits before registration** | Every wait (slot, conn, budget, path) a unit enters **before** it is registered where a lifecycle event can find it. Which signal wakes it on delete or close? |
 | **Reentrancy** | Every callback, hook or observer the code runs. Can it call back into the same subsystem (submit, flush, close) while holding a slot, a lock or a turn that the nested call waits for? |
-| **Scale inputs** | The supported maxima (4,096 columns → about 2,048 ranges, a whole object, zero memory headroom). |
+| **Scale inputs** | The supported maxima (for example the most columns or ranges one request can carry, the largest object, zero memory headroom). |
 
 ## 2. Probe matrix (derive it; do not reuse a remembered case list)
 
@@ -61,8 +61,9 @@ convenience. Write down why each cell was pruned.
 
 Every probe:
 
-1. **Drives a public entry point** (read, prefetch, delete, close),
-   with `-race`.
+1. **Drives a public entry point** (read, prefetch, delete, close), in the mode its
+   oracle needs (§7): `-race` for a timing or ownership oracle, normal mode when race
+   bookkeeping would change what the probe measures, such as allocations.
 2. **Gates storage per offset** so the test, not the scheduler, decides completion
    order: one channel per unit. Reuse the package's existing storage fakes and helpers.
 3. **Asserts invariants after every transition**, not only the final result:
@@ -78,11 +79,15 @@ Every probe:
 5. **Pairs every failing probe with a control** in the same run: a direct or bypass
    read that skips the cache, an exact read, or a live variant that must
    succeed. If the control also fails, the fixture is broken, not the code.
-6. **Runs on the baseline and on the candidate (§7).** A probe for a finding fails on
-   the baseline and passes on the fix; record both results. A probe that clears a
-   matrix cell may pass on both: it shows the behavior is preserved. A cell may also be
-   cleared by source evidence or retained results that close its contract, under the
-   shared evidence rules.
+6. **Runs on the revisions its claim needs (§7).**
+   - A **finding** is a probe that fails on the reviewed head while its control
+     passes. When the claim is that the PR introduced the defect, the probe also passes
+     on the PR's base. A finding needs no fix to be reported.
+   - A **fix** is proven when the finding's probe fails on the revision before the fix
+     and passes on the fixed revision; record both results.
+   - A probe that clears a matrix cell may pass on every revision: it shows the
+     behavior is preserved. A cell may also be cleared by source evidence or retained
+     results that close its contract, under the shared evidence rules.
 
 
 ## 4. Race-window widening (check-then-act)
@@ -90,7 +95,7 @@ Every probe:
 For each pair from §1, insert a temporary `time.Sleep(5 * time.Millisecond)` between
 the two lookups and run the probe:
 
-- If it fails with the sleep, the window is real. Fix it with an order that closes it
+- If it fails with the sleep, the window is real. In self mode, fix it with an order that closes it
   (for example, look in the registry first and the cache second when the producer
   publishes to the cache before it unregisters), not with retries.
 - The fixed code must pass **with the sleep still in**. Then remove the sleep and
@@ -116,30 +121,32 @@ were class **A**.
 
 ## 7. Validation and report
 
-- **Baseline.** Pick the revision the comparison needs: the PR's merge-base for
-  behavior the PR introduces, or the known-bad revision for a fix made within the PR.
-  Never assume `HEAD~`. Verify that it lacks the change under test (`git diff
-  <baseline> HEAD -- <files>`). Check it out in a disposable `git worktree add --detach
-  <baseline>`, copy in only the probe test files, and run there; never overwrite files
-  in the active checkout, and don't use `git stash`, whose list every worktree shares.
-  In zsh, loop over an explicit word list; an unquoted `$VAR` holding several names is
-  not split.
+- **Revisions.** Pick each revision the claim needs (§3.6): the reviewed head; the PR's
+  merge-base for a defect the PR introduces; the revision before a fix to prove the
+  fix. Never assume `HEAD~`. Check that the revision lacks or holds the change under
+  test (`git diff <rev> HEAD -- <files>`).
+- **Isolation.** Check each revision out in its own disposable worktree:
+  `git worktree add --detach <scratch-path> <rev>`, then confirm that
+  `git -C <scratch-path> rev-parse HEAD` is `<rev>` before testing. Copy in only the
+  probe test files and run there. Never overwrite files in the active checkout, and
+  don't use `git stash`, whose list every worktree shares. In zsh, loop over an
+  explicit word list; an unquoted `$VAR` holding several names is not split.
 - When the review is split into parallel agents (one per axis), give each its own
-  `git worktree add --detach`, and never build or test in a checkout another session is
+  worktree the same way, and never build or test in a checkout another session is
   using.
 
-- Run each probe on the baseline and the candidate (§3.6), in both completion orders.
+- Run each probe on the revisions of §3.6, in each completion order of its matrix cell.
   Choose the mode, the repetition budget and the package scope by the
   [race protocol](../../mo-dev/references/race-validation.md) and the
   [validation scope](../../mo-dev/references/validation-evidence.md#2-assign-risk-per-closure-not-per-pr).
 - Save the **full output** to a file. Never filter failure output down to `ok`, `FAIL`
   or `---` lines: the error message, the line number and `WARNING: DATA RACE` are the
   evidence.
-- Keep a probe as a regression test only when it proves a distinct behavior, and fold
+- In self mode, keep a probe as a regression test only when it proves a distinct behavior, and fold
   it into the existing table-driven test where it fits.
 - Report the inventory, the matrix with pruned cells and their reasons, and for each
-  finding: inputs and state → observed vs expected, its control, and its baseline and
-  candidate results.
+  finding: inputs and state → observed vs expected, its control, and its result on
+  each revision run.
 
 This method adds executable evidence to the change map, closure tracing and
 `unhappy-path-audit` (Q1–Q3); it does not replace them.
