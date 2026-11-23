@@ -44,8 +44,8 @@ type PipelineSpool struct {
 	// it supports push-index and pop-index methods.
 	rs []receiver
 
-	// cache manage all the reuse memories.
-	cache *cachedBatch
+	// cache owns every batch copied into the spool and reuses released ones.
+	cache *batchCache
 	// free element index on shardPool.
 	freeShardPool chan uint32
 
@@ -56,21 +56,14 @@ type PipelineSpool struct {
 
 	// drainedReceivers counts how many receivers have already reached their
 	// End-message (i.e. how many csDoneSignal values have been consumed by the
-	// close/cleanup path). It is only touched from the single owner goroutine
-	// that runs Close / CloseWithTimeout / forceCleanup, never concurrently.
+	// close path). It is only touched from the single owner goroutine that
+	// runs Close / CloseWithTimeout, never concurrently.
 	drainedReceivers int
 
 	abortOnce sync.Once
 	abortDone chan struct{}
 	aborted   bool
 	abortErr  error
-
-	cleanupOnce sync.Once
-	// cleanupDone means the cache-wide cleanup pass has already run. A typed
-	// terminal receiver can still release its current batch afterward; that late
-	// release must free directly instead of putting memory back into a cache that
-	// will not be cleaned again.
-	cleanupDone bool
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
@@ -79,11 +72,11 @@ type pipelineSpoolMessage struct {
 	dataContent *batch.Batch
 	errContent  error
 
-	// use cache or not,
-	// and which cache pool does dataContent's memory allocated from.
-	// we should put this memory back after the use of dataContent.
-	useCache bool
-	cacheID  uint32
+	// owned reports whether dataContent is a spool-owned copy that goes back
+	// to the cache once its last receiver releases it; aliased reports whether
+	// several of its columns share one vector.
+	owned   bool
+	aliased bool
 }
 
 // SendBatch do copy for data, and send it to any or all data receiver.
@@ -106,12 +99,12 @@ func (ps *PipelineSpool) SendBatch(
 		return true, ps.abortErr
 	}
 
-	dst, useCache, cacheID, err := ps.cache.GetCopiedBatch(data)
+	dst, owned, aliased, err := ps.cache.copyBatch(data)
 	if err != nil {
 		ps.freeShardPool <- messageIdx
 		return false, err
 	}
-	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
+	ps.updateSpoolMessage(messageIdx, dst, info, owned, aliased)
 
 	if receiverID == SendToAllLocal {
 		ps.sendToAll(messageIdx)
@@ -151,7 +144,8 @@ func (ps *PipelineSpool) ReceiveBatch(idx int) (data *batch.Batch, info error) {
 	return data, info
 }
 
-// Close the sender and receivers, and do memory clean.
+// Close waits until every receiver has reached its End-message, then frees the
+// cached batches.
 func (ps *PipelineSpool) Close() {
 	ps.CloseWithTimeout(0)
 }
@@ -185,84 +179,17 @@ func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
 		}
 	}
 
-	ps.ForceCleanup()
+	ps.cache.free()
 	return true
 }
 
-// ForceCleanup reclaims spool-owned batch memory during query teardown, but
-// only once every receiver is confirmed done.
-//
-// Delivery through the spool is two-staged: SendBatch first stores a batch in a
-// slot, and only then is a GetFromSpool signal enqueued on the receiver channel.
-// A receiver that is merely backlogged during teardown can still hold a pending
-// GetFromSpool signal pointing at a slot with real data. Freeing the backing
-// buffer then (cache.free releases the whole buffer) would make that receiver
-// later read emptied memory -> silent batch loss / early EOS.
-//
-// So we reclaim only after draining one csDoneSignal per receiver (each receiver
-// emits it once it has read its End-message and therefore released every
-// real-data slot it consumed). If some receiver has not finished yet, we leave
-// the spool memory intact - it is bounded and reclaimed when the owning MPool is
-// destroyed - and do NOT consume cleanupOnce, so a later call can still reclaim
-// once the spool has fully drained.
-func (ps *PipelineSpool) ForceCleanup() {
+// ReleaseCache frees the batches receivers have already released. It is safe
+// at any time: batches released afterwards are freed directly. Call it once the
+// producer is done, e.g. after a typed EventEnd has been delivered.
+func (ps *PipelineSpool) ReleaseCache() {
 	if ps == nil {
 		return
 	}
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if ps.aborted {
-		return
-	}
-
-	for ps.drainedReceivers < len(ps.rs) {
-		select {
-		case <-ps.csDoneSignal:
-			ps.drainedReceivers++
-		default:
-			return
-		}
-	}
-
-	ps.cleanupOnce.Do(ps.forceCleanup)
-}
-
-// ForceCleanupAfterTerminalSignal reclaims cache memory after a typed terminal
-// signal has been delivered outside the spool.
-//
-// Typed terminal receivers do not consume a nil End-message from the spool, so
-// they never write csDoneSignal. The caller must invoke this only after the
-// paired receiver cleanup loop has returned. On the normal path that loop drains
-// queued GetFromSpool signals; on the timeout path it releases its current batch
-// reference and exits, so no receiver goroutine can later read the pending
-// signals.
-func (ps *PipelineSpool) ForceCleanupAfterTerminalSignal() {
-	if ps == nil {
-		return
-	}
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if ps.aborted {
-		return
-	}
-
-	ps.cleanupOnce.Do(ps.forceCleanup)
-}
-
-// ReleaseReusableCacheAfterProducerQuiesced returns buffers from batches that
-// receivers have already released. The producer must have stopped, so no new
-// SendBatch call can race to reuse those buffers. Receivers may still return
-// current batches afterward; FinalizeAfterConsumersQuiesced performs the final
-// cache pass once those receivers have joined.
-func (ps *PipelineSpool) ReleaseReusableCacheAfterProducerQuiesced() {
-	if ps == nil {
-		return
-	}
-
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
 	ps.cache.free()
 }
 
@@ -287,7 +214,7 @@ func (ps *PipelineSpool) FinalizeAfterConsumersQuiesced() {
 	for i := range ps.rs {
 		ps.rs[i].flagLastPopRelease()
 	}
-	ps.cleanupOnce.Do(ps.forceCleanup)
+	ps.cache.free()
 }
 
 // Abort terminates the spool without waiting for receiver acknowledgement.
@@ -314,16 +241,6 @@ func (ps *PipelineSpool) Abort(cause error) {
 	})
 }
 
-func (ps *PipelineSpool) forceCleanup() {
-	// Close/ForceCleanup callers only reach here after all receivers have
-	// reached End. Typed-terminal callers can reach here after receiver cleanup
-	// has returned but before a slower receiver's final ReleaseCurrent. In both
-	// cases this is the final cache-wide cleanup pass; any later release frees
-	// directly instead of returning memory to the cache.
-	ps.cache.free()
-	ps.cleanupDone = true
-}
-
 func (ps *PipelineSpool) getFreeIdFromSharedPool(
 	ctx context.Context) (queryDone bool, id uint32) {
 	select {
@@ -336,12 +253,11 @@ func (ps *PipelineSpool) getFreeIdFromSharedPool(
 	}
 }
 
-func (ps *PipelineSpool) updateSpoolMessage(idx uint32, data *batch.Batch, err error, useCache bool, cacheID uint32) {
+func (ps *PipelineSpool) updateSpoolMessage(idx uint32, data *batch.Batch, err error, owned, aliased bool) {
 	ps.shardPool[idx].dataContent = data
 	ps.shardPool[idx].errContent = err
-
-	ps.shardPool[idx].useCache = useCache
-	ps.shardPool[idx].cacheID = cacheID
+	ps.shardPool[idx].owned = owned
+	ps.shardPool[idx].aliased = aliased
 }
 
 func (ps *PipelineSpool) sendToAll(sharedPoolIndex uint32) {
@@ -371,21 +287,12 @@ func (ps *PipelineSpool) releaseCurrentLocked(idx int) {
 				ps.cleanSlotLocked(last)
 			}
 		} else if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
-			if ps.cleanupDone {
-				ps.cleanSlotLocked(last)
-			} else {
-				// The slot and batch pools have independent reuse orders, so a
-				// returned batch may be assigned to a different slot immediately.
-				// Detach the batch before either object is republished; otherwise
-				// this slot can retain an alias that later cleanup frees prematurely.
-				msg := &ps.shardPool[last]
-				data := msg.dataContent
-				useCache := msg.useCache
-				cacheID := msg.cacheID
-				ps.clearSlotLocked(last)
-				ps.cache.CacheBatch(useCache, cacheID, data)
-				ps.freeShardPool <- last
+			msg := ps.shardPool[last]
+			ps.clearSlotLocked(last)
+			if msg.owned && msg.dataContent != nil {
+				ps.cache.put(msg.dataContent, msg.aliased)
 			}
+			ps.freeShardPool <- last
 		}
 		ps.rs[idx].flagLastPopRelease()
 	}
@@ -402,10 +309,9 @@ func (ps *PipelineSpool) abortLocked() {
 	//   - all other slots can be cleaned immediately.
 	//
 	// cleanSlotLocked releases per-batch vector memory for each non-current slot
-	// and clears the slot so the batch cannot be released twice. cache.free only
-	// cleans byte slices that have already been returned to the spool cache; it
-	// does not own current batches still held by receivers. Those are released
-	// later by releaseCurrentLocked when their last receiver drops the ref.
+	// and clears the slot so the batch cannot be released twice. Current
+	// batches still held by receivers are released later by
+	// releaseCurrentLocked when their last receiver drops the ref.
 	currentRefs := make([]int32, len(ps.shardPool))
 	for i := range ps.rs {
 		if last, hasLast := ps.rs[i].getLastPop(); hasLast {
@@ -421,13 +327,12 @@ func (ps *PipelineSpool) abortLocked() {
 		}
 		ps.cleanSlotLocked(uint32(i))
 	}
-
-	ps.cleanupOnce.Do(ps.forceCleanup)
+	ps.cache.free()
 }
 
 func (ps *PipelineSpool) cleanSlotLocked(idx uint32) {
 	msg := &ps.shardPool[idx]
-	if msg.useCache && msg.dataContent != nil {
+	if msg.owned && msg.dataContent != nil {
 		msg.dataContent.Clean(ps.cache.mp)
 	}
 	ps.clearSlotLocked(idx)

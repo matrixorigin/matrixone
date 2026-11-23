@@ -90,12 +90,12 @@ func TestCachedBatchCopiesMixedShapes(t *testing.T) {
 			}
 			mp := mpool.MustNewZeroNoFixed()
 			t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
-			cache := initCachedBatch(mp, 1)
+			cache := newBatchCache(mp, 1)
 			t.Cleanup(cache.free)
 			copyAndReturn := func(src *batch.Batch, checkMemory bool) {
-				copied, useCache, id, err := cache.GetCopiedBatch(src)
+				copied, _, id, err := cache.copyBatch(src)
 				require.NoError(t, err)
-				defer cache.CacheBatch(useCache, id, copied)
+				defer cache.put(copied, id)
 				require.Equal(t, src.RowCount(), copied.RowCount())
 				var required int64
 				for i, vec := range src.Vecs {
@@ -132,11 +132,11 @@ func TestCachedBatchMixedShapeFailureReturnsBacking(t *testing.T) {
 	mp, err := mpool.NewMPool(t.Name(), limit, mpool.NoFixed)
 	require.NoError(t, err)
 	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
-	cache := initCachedBatch(mp, 1)
+	cache := newBatchCache(mp, 1)
 	t.Cleanup(cache.free)
-	copied, useCache, id, err := cache.GetCopiedBatch(seed)
+	copied, _, id, err := cache.copyBatch(seed)
 	require.NoError(t, err)
-	cache.CacheBatch(useCache, id, copied)
+	cache.put(copied, id)
 	retained := mp.CurrNB()
 	filler, err := mp.Alloc(limit-int(retained)-512, true)
 	require.NoError(t, err)
@@ -146,45 +146,46 @@ func TestCachedBatchMixedShapeFailureReturnsBacking(t *testing.T) {
 		}
 	})
 	for range 2 {
-		copied, useCache, id, err = cache.GetCopiedBatch(source)
+		copied, _, id, err = cache.copyBatch(source)
 		if err == nil {
-			cache.CacheBatch(useCache, id, copied)
+			cache.put(copied, id)
 		}
 		require.Error(t, err)
-		require.Len(t, cache.buffer.readyToUse, 1)
+		require.Len(t, cache.bats, 1)
 		require.LessOrEqual(t, mp.CurrNB(), int64(len(filler))+retained)
 	}
 	mp.Free(filler)
 	filler = nil
-	copied, useCache, id, err = cache.GetCopiedBatch(source)
+	copied, _, id, err = cache.copyBatch(source)
 	require.NoError(t, err)
-	defer cache.CacheBatch(useCache, id, copied)
+	defer cache.put(copied, id)
 	for i, vec := range source.Vecs {
 		require.Equal(t, vec.GetBytesAt(0), copied.Vecs[i].GetBytesAt(0))
 	}
 	require.Same(t, copied.Vecs[2], copied.Vecs[3])
 }
 
-func TestCachedBatchPrefersSmallestSufficientBacking(t *testing.T) {
+// Stable column positions reuse their cached backing without new allocations.
+func TestCachedBatchReusesBackingByPosition(t *testing.T) {
 	sourceMP := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { defer mpool.DeleteMPool(sourceMP); require.Zero(t, sourceMP.CurrNB()) })
 	seed := newSpoolSizeBatch(t, sourceMP, []int{64, 128, 256}, false)
 	source := newSpoolSizeBatch(t, sourceMP, []int{50, 100, 0}, false)
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
-	cache := initCachedBatch(mp, 1)
+	cache := newBatchCache(mp, 1)
 	t.Cleanup(cache.free)
-	copied, use, id, err := cache.GetCopiedBatch(seed)
+	copied, _, id, err := cache.copyBatch(seed)
 	require.NoError(t, err)
-	small, medium := cap(copied.Vecs[0].GetArea()), cap(copied.Vecs[1].GetArea())
-	cache.CacheBatch(use, id, copied)
+	small, medium, large := cap(copied.Vecs[0].GetArea()), cap(copied.Vecs[1].GetArea()), cap(copied.Vecs[2].GetArea())
+	cache.put(copied, id)
 	before := mp.CurrNB()
-	copied, use, id, err = cache.GetCopiedBatch(source)
+	copied, _, id, err = cache.copyBatch(source)
 	require.NoError(t, err)
-	defer cache.CacheBatch(use, id, copied)
+	defer cache.put(copied, id)
 	require.Equal(t, small, cap(copied.Vecs[0].GetArea()))
 	require.Equal(t, medium, cap(copied.Vecs[1].GetArea()))
-	require.Zero(t, cap(copied.Vecs[2].GetArea()))
+	require.Equal(t, large, cap(copied.Vecs[2].GetArea()))
 	require.Equal(t, before, mp.CurrNB())
 	for i, vec := range source.Vecs {
 		require.Equal(t, vec.GetBytesAt(0), copied.Vecs[i].GetBytesAt(0))
@@ -202,12 +203,12 @@ func TestCachedBatchPreservesAliasesAcrossReservation(t *testing.T) {
 	}
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
-	cache := initCachedBatch(mp, 1)
+	cache := newBatchCache(mp, 1)
 	t.Cleanup(cache.free)
 	copyAndReturn := func(src *batch.Batch) {
-		copied, use, id, err := cache.GetCopiedBatch(src)
+		copied, _, id, err := cache.copyBatch(src)
 		require.NoError(t, err)
-		defer cache.CacheBatch(use, id, copied)
+		defer cache.put(copied, id)
 		require.Equal(t, src.RowCount(), copied.RowCount())
 		for i, vec := range src.Vecs {
 			if vec == nil {

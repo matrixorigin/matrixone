@@ -15,565 +15,177 @@
 package pSpool
 
 import (
-	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// cachedBatch is just like the cachedVectorPool in the original code,
+// batchCache keeps the batches receivers have released, so the next copy
+// reuses their batch shell and the vectors (with their backing) in the same
+// column positions. Every cached vector is owned by mp.
 //
-// it will support
-// 1. GetCopiedBatch: generate a copied batch.
-// 2. CacheBatch: put the byte slices of batch's vectors into the cache.
-// 3. free: free the cached byte slices.
-type cachedBatch struct {
+// The number of batches is bounded by the spool's slot count: a batch is only
+// created when the cache is empty, and every live batch occupies a slot.
+//
+// free closes the cache. It may be called at any time: the cache only holds
+// batches nobody references, and after it is closed released batches are
+// freed directly instead of cached.
+type batchCache struct {
 	mp *mpool.MPool
 
-	// buffer save all the memory using by this structure.
-	buffer *spoolBuffer
+	mu     sync.Mutex
+	closed bool
+	bats   []*batch.Batch
 }
 
-type oneBatchMemoryCache struct {
-	buffers []vector.DetachedBuffer
+func newBatchCache(mp *mpool.MPool, capacity uint32) *batchCache {
+	return &batchCache{
+		mp:   mp,
+		bats: make([]*batch.Batch, 0, capacity),
+	}
 }
 
-func initCachedBatch(mp *mpool.MPool, capacity uint32) *cachedBatch {
-	if capacity < 1 {
-		capacity = 1
-	}
-
-	cb := &cachedBatch{
-		mp:     mp,
-		buffer: initSpoolBuffer(capacity),
-	}
-
-	return cb
-}
-
-func (cb *cachedBatch) CacheBatch(useCache bool, whichCacheDoesThisDataUse uint32, data *batch.Batch) {
-	if !useCache {
-		return
-	}
-	cb.buffer.putCacheID(cb.mp, whichCacheDoesThisDataUse, data)
-}
-
-// GetCopiedBatch copy the src from a ready memory cache.
-//
-// if this is a special batch which will never be released, just return it and do not using any cache.
-func (cb *cachedBatch) GetCopiedBatch(
-	src *batch.Batch) (dst *batch.Batch, useCache bool, cacheID uint32, err error) {
-
-	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
-		return src, false, 0, nil
-	}
-
-	cacheID, dst = cb.buffer.getCacheID()
-	dst.Recursive = src.Recursive
-	dst.ShuffleIDX = src.ShuffleIDX
-
-	if cap(dst.Vecs) >= len(src.Vecs) {
-		dst.Vecs = dst.Vecs[:len(src.Vecs)]
-		for i := range dst.Vecs {
-			dst.Vecs[i] = nil
-		}
-	} else {
-		dst.Vecs = make([]*vector.Vector, len(src.Vecs))
-	}
-
-	if cap(dst.Attrs) >= len(src.Attrs) {
-		dst.Attrs = dst.Attrs[:len(src.Attrs)]
-	} else {
-		dst.Attrs = make([]string, len(src.Attrs))
-	}
-	// copy attrs.
-	for i := range dst.Attrs {
-		dst.Attrs[i] = src.Attrs[i]
-	}
-
-	memoryCache := &cb.buffer.bytesCache[cacheID]
-	planned := false
-	hasAliases := false
-
-copyVectors:
-	for i := range dst.Vecs {
-		vec := src.Vecs[i]
-		if vec == nil {
-			continue
-		}
-		if dst.Vecs[i] != nil {
-			if !planned {
-				continue
-			}
-			if hasAliases {
-				for _, previous := range src.Vecs[:i] {
-					if previous == vec {
-						continue copyVectors
-					}
-				}
-			}
-		}
-		// Every source is copied, aliased ones included: an alias is valid only
-		// while its lender (the producer's batch) holds the lent backing, which
-		// ends at the producer's next call, before consumers read this copy.
-		typ := *vec.GetType()
-		if dst.Vecs[i] == nil {
-			dst.Vecs[i] = vector.NewVec(typ, cb.mp)
-		}
-
-		destination := dst.Vecs[i]
-		if vec.IsConst() {
-			if err = vector.GetConstSetFunction(typ, cb.mp)(destination, vec, 0, vec.Length()); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
-				return nil, false, 0, err
-			}
-
-		} else {
-			planned, hasAliases, err = memoryCache.prepareCopyBacking(src, dst, i, planned, hasAliases)
-			if err != nil {
-				cb.CacheBatch(true, cacheID, dst)
-				return nil, false, 0, err
-			}
-
-			destination.Reset(typ)
-			if err = vector.GetUnionAllFunction(typ, cb.mp)(
-				destination,
-				vec); err != nil {
-				cb.CacheBatch(true, cacheID, dst)
-				return nil, false, 0, err
-			}
-
-			destination.SetSorted(vec.GetSorted())
-		}
-		if !planned {
-			// range src and found the same vector.
-			for j := i + 1; j < len(src.Vecs); j++ {
-				if dst.Vecs[j] == nil && src.Vecs[j] == vec {
-					dst.Vecs[j] = dst.Vecs[i]
-				}
-			}
-		}
-	}
-
-	dst.MoveExtraBufferFrom(src)
-
-	// set row count.
-	dst.SetRowCount(src.RowCount())
-
-	return dst, true, cacheID, nil
-}
-
-// prepareCopyBacking keeps whole-batch reservation off the copy loop's
-// common path. A final column cannot compete with a later request.
-func (mc *oneBatchMemoryCache) prepareCopyBacking(src, dst *batch.Batch, column int, planned, aliases bool) (bool, bool, error) {
-	if planned || len(mc.buffers) == 0 {
-		return planned, aliases, nil
-	}
-	source := src.Vecs[column]
-	dataSize := source.Length() * source.GetType().TypeSize()
-	areaSize := len(source.GetArea())
-	if column == len(src.Vecs)-1 {
-		return false, aliases, mc.setSuitableDataAreaToVector(dataSize, areaSize, dst.Vecs[column])
-	}
-	exact, err := mc.setExactBuffers(dataSize, areaSize, dst.Vecs[column])
-	if err != nil || exact || len(mc.buffers) == 0 {
-		return false, aliases, err
-	}
-	// A current unmet request that dominates every later need is already
-	// in the same position as descending batch matching. Reserve its best-fit
-	// backing directly, without preparing any future destination shells.
-	largestLater := 0
-	for i := column + 1; i < len(src.Vecs); i++ {
-		future := src.Vecs[i]
-		if future == nil || future.IsConst() || dst.Vecs[i] != nil {
-			continue
-		}
-		if size := future.Length() * future.GetType().TypeSize(); size > largestLater {
-			largestLater = size
-		}
-		if size := len(future.GetArea()); size > largestLater {
-			largestLater = size
-		}
-		if largestLater > max(dataSize, areaSize) {
-			break
-		}
-	}
-	first := batchMemoryRequest{dst.Vecs[column], dataSize, vector.DetachedDataBuffer}
-	second := batchMemoryRequest{dst.Vecs[column], areaSize, vector.DetachedAreaBuffer}
-	if second.size > first.size {
-		first, second = second, first
-	}
-	if first.size >= largestLater && first.size > 0 && first.capacity() == 0 {
-		if err = mc.attachSufficient(first); err != nil {
-			return false, aliases, err
-		}
-	}
-	if second.size >= largestLater && second.size > 0 && second.capacity() == 0 {
-		if err = mc.attachSufficient(second); err != nil {
-			return false, aliases, err
-		}
-	}
-	if (dataSize == 0 || cap(dst.Vecs[column].GetData()) > 0) && (areaSize == 0 || cap(dst.Vecs[column].GetArea()) > 0) {
-		return false, aliases, nil
-	}
-	aliases, err = prepareSpoolSuffix(src, dst, column, dst.Vecs[column].MPool())
-	if err != nil {
-		return false, aliases, err
-	}
-	if err = mc.setSuitableBatchBuffers(src, dst, column); err != nil {
-		return false, aliases, err
-	}
-	return true, aliases, nil
-}
-
-// prepareSpoolSuffix creates owned shells only. Payload allocation stays in
-// the source-order copy loop.
-func prepareSpoolSuffix(src, dst *batch.Batch, first int, mp *mpool.MPool) (bool, error) {
-	aliases := false
-	for i := first; i < len(src.Vecs); i++ {
-		source := src.Vecs[i]
-		if source == nil {
-			continue
-		}
-		if dst.Vecs[i] == nil {
-			dst.Vecs[i] = vector.NewVec(*source.GetType(), mp)
-		} else if i > first {
-			aliases = true
-		}
-		for j := i + 1; j < len(src.Vecs); j++ {
-			if dst.Vecs[j] == nil && src.Vecs[j] == source {
-				dst.Vecs[j] = dst.Vecs[i]
-				aliases = true
-			}
-		}
-	}
-	return aliases, nil
-}
-
-// Exact matches cannot be improved by considering later requests. Defer the
-// whole-batch search until a request cannot reuse an exact compatible block.
-// setSuitableDataAreaToVector get two long-enough bytes slices from the cache, and set them to the vector.
-// if not found, set the last one to the vector.
-func (mc *oneBatchMemoryCache) setSuitableDataAreaToVector(
-	dataSize, areaSize int,
-	vec *vector.Vector,
-) error {
-	// return directly once cache was empty.
-	if len(mc.buffers) == 0 {
+func (c *batchCache) get() *batch.Batch {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := len(c.bats)
+	if n == 0 {
 		return nil
 	}
-
-	setDataFirst := dataSize >= areaSize
-
-	first, second := dataSize, areaSize
-	firstKind := vector.DetachedDataBuffer
-	secondKind := vector.DetachedAreaBuffer
-	if !setDataFirst {
-		first, second = areaSize, dataSize
-		firstKind, secondKind = secondKind, firstKind
-	}
-
-	if first > 0 {
-		suitIdx := -1
-		suitDifference := math.MaxInt
-
-		for i := range mc.buffers {
-			if !mc.buffers[i].CanAttachTo(vec, firstKind) {
-				continue
-			}
-			if difference := mc.buffers[i].Capacity() - first; difference >= 0 {
-				if difference < suitDifference {
-					suitIdx = i
-					suitDifference = difference
-				}
-			}
-		}
-
-		if suitIdx != -1 {
-			mem := mc.removeItemAndArrange(suitIdx)
-			if err := mem.AttachTo(vec, firstKind); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return err
-			}
-		}
-	}
-
-	if second > 0 {
-		suitIdx := -1
-		suitDifference := math.MaxInt
-
-		for i := range mc.buffers {
-			if !mc.buffers[i].CanAttachTo(vec, secondKind) {
-				continue
-			}
-			if difference := mc.buffers[i].Capacity() - second; difference >= 0 {
-				if difference < suitDifference {
-					suitIdx = i
-					suitDifference = difference
-				}
-			}
-		}
-
-		if suitIdx != -1 {
-			mem := mc.removeItemAndArrange(suitIdx)
-			if err := mem.AttachTo(vec, secondKind); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return err
-			}
-		}
-	}
-
-	if cap(vec.GetData()) == 0 && dataSize > 0 {
-		if idx := mc.lastAttachable(
-			vec,
-			vector.DetachedDataBuffer,
-		); idx >= 0 {
-			mem := mc.removeItemAndArrange(idx)
-			if err := mem.AttachTo(
-				vec,
-				vector.DetachedDataBuffer,
-			); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return err
-			}
-		}
-	}
-	if cap(vec.GetArea()) == 0 && areaSize > 0 {
-		if idx := mc.lastAttachable(
-			vec,
-			vector.DetachedAreaBuffer,
-		); idx >= 0 {
-			mem := mc.removeItemAndArrange(idx)
-			if err := mem.AttachTo(
-				vec,
-				vector.DetachedAreaBuffer,
-			); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return err
-			}
-		}
-	}
-	return nil
+	bat := c.bats[n-1]
+	c.bats[n-1] = nil
+	c.bats = c.bats[:n-1]
+	return bat
 }
 
-func (mc *oneBatchMemoryCache) setExactBuffers(dataSize, areaSize int, vec *vector.Vector) (bool, error) {
-	matched := true
-	if dataSize > 0 {
-		found := false
-		for i := range mc.buffers {
-			if mc.buffers[i].Capacity() != dataSize || !mc.buffers[i].CanAttachTo(vec, vector.DetachedDataBuffer) {
-				continue
-			}
-			mem := mc.removeItemAndArrange(i)
-			if err := mem.AttachTo(vec, vector.DetachedDataBuffer); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return false, err
-			}
-			found = true
-			break
-		}
-		matched = found
-	}
-	if areaSize > 0 {
-		found := false
-		for i := range mc.buffers {
-			if mc.buffers[i].Capacity() != areaSize || !mc.buffers[i].CanAttachTo(vec, vector.DetachedAreaBuffer) {
-				continue
-			}
-			mem := mc.removeItemAndArrange(i)
-			if err := mem.AttachTo(vec, vector.DetachedAreaBuffer); err != nil {
-				mc.buffers = append(mc.buffers, mem)
-				return false, err
-			}
-			found = true
-			break
-		}
-		matched = matched && found
-	}
-	return matched, nil
-}
-
-// batchMemoryRequest names one owned destination backing. Matching the uncopied
-// suffix prevents a small column from consuming a later column's only suitable
-// cached block.
-type batchMemoryRequest struct {
-	vec  *vector.Vector
-	size int
-	kind vector.DetachedBufferKind
-}
-
-func (request batchMemoryRequest) capacity() int {
-	if request.kind == vector.DetachedDataBuffer {
-		return cap(request.vec.GetData())
-	}
-	return cap(request.vec.GetArea())
-}
-
-// setSuitableBatchBuffers uses destination backing to record assignment.
-// It builds no request slice and retains no planning state.
-func (mc *oneBatchMemoryCache) setSuitableBatchBuffers(src, dst *batch.Batch, first int) error {
-	// The caller already attempted both exact fits for the first column.
-	for column := first + 1; column < len(src.Vecs) && len(mc.buffers) > 0; column++ {
-		source := src.Vecs[column]
-		if source == nil || source.IsConst() {
-			continue
-		}
-		target := dst.Vecs[column]
-		if cap(target.GetData()) == 0 || cap(target.GetArea()) == 0 {
-			// Aliased destinations may already have backing attached.
-			for kind := vector.DetachedDataBuffer; kind <= vector.DetachedAreaBuffer; kind++ {
-				need := source.Length() * source.GetType().TypeSize()
-				if kind == vector.DetachedAreaBuffer {
-					need = len(source.GetArea())
-				}
-				request := batchMemoryRequest{target, need, kind}
-				if need <= 0 || request.capacity() != 0 {
-					continue
-				}
-				for i := range mc.buffers {
-					if mc.buffers[i].Capacity() == need && mc.buffers[i].CanAttachTo(target, kind) {
-						if err := mc.attachBuffer(i, request); err != nil {
-							return err
-						}
-						break
-					}
-				}
-			}
-		}
-	}
-	// Enumerate unmet needs in descending size and source order without
-	// materializing/sorting a request list. A cursor skips needs for which no
-	// compatible backing was sufficient. Best-fit selection keeps smaller blocks
-	// in use when larger blocks are not needed by any remaining column.
-	beforeSize, beforeColumn, beforeKind := math.MaxInt, -1, vector.DetachedAreaBuffer
-	for len(mc.buffers) > 0 {
-		best := batchMemoryRequest{}
-		bestColumn := -1
-		for column := first; column < len(src.Vecs); column++ {
-			source := src.Vecs[column]
-			if source == nil || source.IsConst() {
-				continue
-			}
-			target := dst.Vecs[column]
-			if cap(target.GetData()) == 0 {
-				need := source.Length() * source.GetType().TypeSize()
-				if need > best.size && (need < beforeSize || need == beforeSize && column > beforeColumn) {
-					best = batchMemoryRequest{target, need, vector.DetachedDataBuffer}
-					bestColumn = column
-				}
-			}
-			if cap(target.GetArea()) == 0 {
-				need := len(source.GetArea())
-				if need > best.size && (need < beforeSize || need == beforeSize && (column > beforeColumn || column == beforeColumn && beforeKind == vector.DetachedDataBuffer)) {
-					best = batchMemoryRequest{target, need, vector.DetachedAreaBuffer}
-					bestColumn = column
-				}
-			}
-		}
-		if best.vec == nil {
-			break
-		}
-		beforeSize, beforeColumn, beforeKind = best.size, bestColumn, best.kind
-		suitable, difference := -1, math.MaxInt
-		for index := range mc.buffers {
-			if extra := mc.buffers[index].Capacity() - best.size; extra >= 0 && extra < difference && mc.buffers[index].CanAttachTo(best.vec, best.kind) {
-				suitable, difference = index, extra
-				if extra == 0 {
+// put takes back a batch produced by copyBatch. aliased reports whether
+// copyBatch made several columns share one vector.
+func (c *batchCache) put(bat *batch.Batch, aliased bool) {
+	if aliased {
+		// Keep each vector once, at its first position, so a later copy can
+		// reuse every cached vector independently.
+		for i := 1; i < len(bat.Vecs); i++ {
+			for j := 0; j < i; j++ {
+				if bat.Vecs[i] != nil && bat.Vecs[j] == bat.Vecs[i] {
+					bat.Vecs[i] = nil
 					break
 				}
 			}
 		}
-		if suitable >= 0 {
-			if err := mc.attachBuffer(suitable, best); err != nil {
-				return err
-			}
-		}
 	}
-	// Old undersized blocks must be used in the order their replacements are
-	// copied, so their release is not postponed behind unrelated allocations.
-	for column := first; column < len(src.Vecs) && len(mc.buffers) > 0; column++ {
-		source := src.Vecs[column]
-		if source == nil || source.IsConst() {
+	bat.DropExtraBuffer()
+	bat.ReleaseLeases()
+	bat.SetRowCount(0)
+
+	c.mu.Lock()
+	if !c.closed {
+		c.bats = append(c.bats, bat)
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	bat.Clean(c.mp)
+}
+
+func (c *batchCache) free() {
+	c.mu.Lock()
+	bats := c.bats
+	c.bats = nil
+	c.closed = true
+	c.mu.Unlock()
+	for _, bat := range bats {
+		bat.Clean(c.mp)
+	}
+}
+
+// copyBatch returns a deep copy of src whose vectors are owned by the cache's
+// pool, whether the returned batch is owned by the spool (and must be given
+// back with put), and whether several of its columns share one vector.
+//
+// The special marker batches are never released, so they are returned as is.
+//
+// Every source vector is copied, borrowed ones included: a borrowed vector is
+// valid only while its lender (the producer's batch) holds the lent backing,
+// which ends at the producer's next call, before consumers read this copy.
+// A vector shared by several columns of src is copied once and shared by the
+// same columns of the copy.
+func (c *batchCache) copyBatch(src *batch.Batch) (dst *batch.Batch, owned, aliased bool, err error) {
+	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
+		return src, false, false, nil
+	}
+
+	dst = c.get()
+	if dst == nil {
+		dst = batch.NewWithSize(len(src.Vecs))
+	} else {
+		dst.Vecs = c.reshape(dst.Vecs, len(src.Vecs))
+	}
+	dst.Recursive = src.Recursive
+	dst.ShuffleIDX = src.ShuffleIDX
+	dst.Attrs = append(dst.Attrs[:0], src.Attrs...)
+
+copyVectors:
+	for i, vec := range src.Vecs {
+		target := dst.Vecs[i]
+		if vec == nil {
+			if target != nil {
+				target.Free(c.mp)
+				dst.Vecs[i] = nil
+			}
 			continue
 		}
-		target := dst.Vecs[column]
-		for kind := vector.DetachedDataBuffer; kind <= vector.DetachedAreaBuffer; kind++ {
-			need := source.Length() * source.GetType().TypeSize()
-			if kind == vector.DetachedAreaBuffer {
-				need = len(source.GetArea())
-			}
-			request := batchMemoryRequest{target, need, kind}
-			if need <= 0 || request.capacity() != 0 {
-				continue
-			}
-			if index := mc.lastAttachable(target, kind); index >= 0 {
-				if err := mc.attachBuffer(index, request); err != nil {
-					return err
+		for j := 0; j < i; j++ {
+			if src.Vecs[j] == vec {
+				if target != nil {
+					target.Free(c.mp)
 				}
+				dst.Vecs[i] = dst.Vecs[j]
+				aliased = true
+				continue copyVectors
 			}
 		}
-	}
-	return nil
-}
 
-// attachSufficient transfers a best-fit block without taking undersized
-// fallback away from the later source-order pass.
-func (mc *oneBatchMemoryCache) attachSufficient(request batchMemoryRequest) error {
-	if request.vec == nil || request.capacity() != 0 {
-		return nil
-	}
-	suitable, difference := -1, math.MaxInt
-	for index := range mc.buffers {
-		if extra := mc.buffers[index].Capacity() - request.size; extra >= 0 && extra < difference && mc.buffers[index].CanAttachTo(request.vec, request.kind) {
-			suitable, difference = index, extra
-			if extra == 0 {
-				break
-			}
+		typ := *vec.GetType()
+		if target == nil {
+			target = vector.NewVec(typ, c.mp)
+			dst.Vecs[i] = target
+		} else {
+			target.Reset(typ)
+		}
+		if vec.IsConst() {
+			err = vector.GetConstSetFunction(typ, c.mp)(target, vec, 0, vec.Length())
+		} else {
+			err = vector.GetUnionAllFunction(typ, c.mp)(target, vec)
+			target.SetSorted(vec.GetSorted())
+		}
+		if err != nil {
+			// Aliases are only made to earlier columns, so dst is consistent
+			// up to here; the uncopied suffix still holds cached vectors.
+			c.put(dst, aliased)
+			return nil, false, false, err
 		}
 	}
-	if suitable >= 0 {
-		return mc.attachBuffer(suitable, request)
-	}
-	return nil
+
+	dst.MoveExtraBufferFrom(src)
+	dst.SetRowCount(src.RowCount())
+	return dst, true, aliased, nil
 }
 
-func (mc *oneBatchMemoryCache) attachBuffer(index int, request batchMemoryRequest) error {
-	backing := mc.removeItemAndArrange(index)
-	if err := backing.AttachTo(request.vec, request.kind); err != nil {
-		mc.buffers = append(mc.buffers, backing)
-		return err
-	}
-	return nil
-}
-
-func (mc *oneBatchMemoryCache) lastAttachable(
-	vec *vector.Vector,
-	kind vector.DetachedBufferKind,
-) int {
-	for i := len(mc.buffers) - 1; i >= 0; i-- {
-		if mc.buffers[i].CanAttachTo(vec, kind) {
-			return i
+// reshape resizes a cached batch's vector slice to n columns, freeing the
+// vectors of dropped columns. Entries past len(vecs) are always nil.
+func (c *batchCache) reshape(vecs []*vector.Vector, n int) []*vector.Vector {
+	for i := n; i < len(vecs); i++ {
+		if vecs[i] != nil {
+			vecs[i].Free(c.mp)
+			vecs[i] = nil
 		}
 	}
-	return -1
-}
-
-// removeItemAndArrange return and remove the idx item of cache.
-func (mc *oneBatchMemoryCache) removeItemAndArrange(
-	idx int,
-) vector.DetachedBuffer {
-	last := len(mc.buffers) - 1
-	dst := mc.buffers[idx]
-
-	if idx != last {
-		mc.buffers[idx] = mc.buffers[last]
+	if n <= cap(vecs) {
+		return vecs[:n]
 	}
-	mc.buffers[last] = vector.DetachedBuffer{}
-	mc.buffers = mc.buffers[:last]
-	return dst
-}
-
-func (cb *cachedBatch) free() {
-	cb.buffer.clean(cb.mp)
+	grown := make([]*vector.Vector, n)
+	copy(grown, vecs)
+	return grown
 }

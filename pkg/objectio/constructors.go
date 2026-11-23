@@ -539,10 +539,7 @@ func copyCachedVector(
 			// admitting a fresh, exactly-sized private copy; unused capacity must
 			// not consume the next block's budget. Inline-only and fixed columns
 			// keep reuse.
-			data := vector.DetachVectorData(toVec)
-			area := vector.DetachVectorArea(toVec)
-			data.Free(mp)
-			area.Free(mp)
+			toVec.Free(mp)
 		}
 		return toVec.UnionBatch(&source, 0, source.Length(), nil, mp)
 	}
