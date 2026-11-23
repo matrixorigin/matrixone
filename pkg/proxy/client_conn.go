@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -936,8 +937,8 @@ func (c *clientConn) Close() error {
 	if c.mysqlProto != nil {
 		tcpConn := c.mysqlProto.GetTcpConnection()
 		if tcpConn != nil {
-			if err := tcpConn.Close(); err != nil {
-				c.log.Error("failed to close tcp connection", zap.Error(err))
+			if err := tcpConn.Close(); err != nil && !logutil.IsExpectedConnectionCloseError(err) {
+				c.log.Error("failed to close tcp connection", zap.String("phase", "cleanup"), zap.Error(err))
 			}
 		}
 		c.mysqlProto.Close()

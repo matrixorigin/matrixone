@@ -34,6 +34,7 @@ import (
 	moconfig "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -288,7 +289,9 @@ func (h *handler) handle(c goetty.IOSession) error {
 	var st *stopper.Stopper
 	defer func() {
 		if cc != nil && cc.RawConn() != nil {
-			_ = cc.RawConn().Close()
+			if err := cc.RawConn().Close(); err != nil && !logutil.IsExpectedConnectionCloseError(err) {
+				h.logger.Error("failed to close tcp connection", zap.Uint32("ConnID", cc.ConnID()), zap.String("phase", "interrupt"), zap.Error(err))
+			}
 		}
 		_ = t.Close()
 		if st != nil {
