@@ -2402,6 +2402,12 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 				return nil, invalidBinaryDecimalParameter(proc.Ctx, paramValue.Value)
 			}
 		}
+		// A fixed-width numeric or Boolean parameter is planned from its value,
+		// not from a TEXT spelling that every consumer would parse again: give
+		// the planner the same native value the typed parameter batch holds.
+		if native, ok := binaryProtocolNativeParamValue(paramValue); ok {
+			paramValue.Value = native
+		}
 		// COM_STMT_EXECUTE values are binary-protocol values even when their
 		// declared MySQL type is VAR_STRING. Keep this provenance separate from
 		// RuntimeType so text values can safely participate in numeric overload
@@ -2409,6 +2415,32 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 		*store.Ref(i) = paramValue
 	}
 	return values, nil
+}
+
+// binaryProtocolNativeParamValue parses the canonical text of a COM_STMT
+// parameter whose runtime type is a fixed-width integer, float or Boolean into
+// the Go value SQL EXECUTE user variables use for that type (int64, uint64,
+// float64, bool). ok is false for every other type, which keeps its text.
+func binaryProtocolNativeParamValue(param plan2.ParamValue) (any, bool) {
+	text, isText := param.Value.(string)
+	if !isText || !param.HasRuntimeType {
+		return nil, false
+	}
+	switch oid := param.RuntimeType.Oid; {
+	case oid == types.T_bool:
+		v, err := strconv.ParseBool(text)
+		return v, err == nil
+	case oid.IsSignedInt():
+		v, err := strconv.ParseInt(text, 10, 64)
+		return v, err == nil
+	case oid.IsUnsignedInt():
+		v, err := strconv.ParseUint(text, 10, 64)
+		return v, err == nil
+	case oid == types.T_float32 || oid == types.T_float64:
+		v, err := strconv.ParseFloat(text, 64)
+		return v, err == nil
+	}
+	return nil, false
 }
 
 func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
