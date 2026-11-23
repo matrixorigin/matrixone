@@ -324,7 +324,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		require.NoError(t, secondScope.Begin(ctx, secondReq))
 		mp := mpool.MustNewZero()
 		bat := batch.New([]string{"id", "region", "amount"})
-		bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType()), vector.NewVec(types.T_varchar.ToType()), vector.NewVec(types.T_varchar.ToType())}
+		bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)}
 		defer bat.Clean(mp)
 		for i := 0; i < 100; i++ {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
@@ -385,7 +385,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, next.Begin(ctx, nextReq))
 		nextBatch := batch.New([]string{"id", "region", "amount"})
-		nextBatch.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType()), vector.NewVec(types.T_varchar.ToType()), vector.NewVec(types.T_varchar.ToType())}
+		nextBatch.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)}
 		defer nextBatch.Clean(mp)
 		require.NoError(t, vector.AppendFixed(nextBatch.Vecs[0], int64(1), false, mp))
 		require.NoError(t, vector.AppendBytes(nextBatch.Vecs[1], []byte("p"), false, mp))

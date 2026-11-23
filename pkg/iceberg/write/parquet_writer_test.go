@@ -1019,7 +1019,7 @@ func TestFanoutMemoryPressureRotatesUnpartitioned(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id"})
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	for i := int32(0); i < 3; i++ {
 		require.NoError(t, vector.AppendFixed[int32](vec, i, false, mp))
 	}
@@ -1055,7 +1055,7 @@ func TestFanoutMemoryPressureClosesPartitionsInLRUOrder(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"region"})
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range []string{"a", "b", "a"} {
 		require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 	}
@@ -1096,7 +1096,7 @@ func TestFanoutCloseEncodingFailurePreservesCleanupError(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id"})
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int32](vec, 1, false, mp))
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
@@ -1132,7 +1132,7 @@ func TestFanoutMemoryPressureThresholdBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			bat := batch.New([]string{"id"})
-			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 			defer bat.Clean(mp)
 			require.NoError(t, vector.AppendFixed[int32](bat.Vecs[0], 1, false, mp))
 			bat.SetRowCount(1)
@@ -1184,7 +1184,7 @@ func TestFanoutActiveSizeAfterWriteFailure(t *testing.T) {
 	bat := batch.New([]string{"id", "missing"})
 	defer bat.Clean(mp)
 	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int32](bat.Vecs[i], 1, false, mp))
 	}
 	bat.SetRowCount(1)

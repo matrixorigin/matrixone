@@ -405,7 +405,7 @@ func TestReplacementFanoutSharedBudgetRotates(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"name"})
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < 8; i++ {
 		require.NoError(t, vector.AppendBytes(vec, bytes.Repeat([]byte{byte('a' + i)}, 64<<10), false, mp))
 	}
@@ -464,9 +464,9 @@ func TestFanoutSharedBudgetPartitionedOutput(t *testing.T) {
 					func() {
 						mp := mpool.MustNewZero()
 						bat := batch.New([]string{"id", "region", "payload"})
-						bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-						bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-						bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+						bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+						bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+						bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 						defer bat.Clean(mp)
 						require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], id, false, mp))
 						require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(region), part == 0, mp))
