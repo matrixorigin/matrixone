@@ -34,7 +34,8 @@ update indexed_t set body = 'updated base row' where id = 1 returning id, email,
 select count(*) from indexed_t where match(body) against('only');
 select count(*) from indexed_t where match(body) against('updated');
 update indexed_t set id = 2 where id = 1 returning id;
-delete from indexed_t where id = 1 returning id, email, body;
+select id from indexed_t where match(body) against('updated');
+delete from indexed_t where id = 2 returning id, email, body;
 select count(*) from indexed_t where match(body) against('updated');
 
 set experimental_ivf_index = 1;
