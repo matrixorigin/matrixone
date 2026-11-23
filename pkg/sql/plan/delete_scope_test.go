@@ -499,3 +499,20 @@ func TestLegacyMultiTableDeleteNormalizesSpecialOldValues(t *testing.T) {
 		require.Empty(t, setExpr.GetF().Args[1].Typ.Enumvalues)
 	}
 }
+
+func TestLegacyDeleteRejectsUnmaintainedSyncIrregularIndex(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, idx := range mock.ctxt.tables["docs_ft"].Indexes {
+		if !catalog.IsRegularIndexAlgo(idx.IndexAlgo) {
+			idx.IndexAlgo = "unknown_algo"
+		}
+	}
+
+	_, err := runOneStmt(
+		mock,
+		t,
+		"delete s,d from constraint_test.docs_ft d join constraint_test.dept s on d.id = s.deptno",
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err.Error())
+}

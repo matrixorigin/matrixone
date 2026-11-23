@@ -6685,8 +6685,18 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 				if err != nil {
 					return err
 				}
-			} else if isModernMaintainedIrregularAlgo(indexdef.IndexAlgo) {
-				irregularIndexes = append(irregularIndexes, indexdef)
+			} else {
+				sync, maintained, err := syncIrregularIndex(indexdef)
+				if err != nil {
+					return err
+				}
+				if sync && !maintained {
+					return moerr.NewNotSupportedf(builder.GetContext(),
+						"DML on a table with a synchronous %s index", indexdef.IndexAlgo)
+				}
+				if sync {
+					irregularIndexes = append(irregularIndexes, indexdef)
+				}
 			}
 		}
 
