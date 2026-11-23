@@ -218,7 +218,7 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 		fieldTypes:         fieldTypes,
 		temporalTypes:      temporalTypes,
 		fieldSchemas:       fieldSchemas,
-		paramVals:          append([]any(nil), cwft.paramVals...),
+		paramVals:          plan2.CopyParamValues(cwft.paramVals),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,
 		diagnosticFreeJoin: cwft.preparedJoinDiagnosticFree,

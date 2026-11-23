@@ -71,3 +71,17 @@ func TestParamValueStoreReuse(t *testing.T) {
 	require.Len(t, store.Reset(1), 1)
 	require.Len(t, store.Reset(5), 5)
 }
+
+func TestCopyParamValuesDetachesFromStorage(t *testing.T) {
+	var store ParamValueStore
+	values := store.Reset(2)
+	*store.Ref(0) = ParamValue{Value: "a"}
+	values[1] = "raw"
+	snapshot := CopyParamValues(values)
+	*store.Ref(0) = ParamValue{Value: "rewritten"}
+	got, ok := AsParamValue(snapshot[0])
+	require.True(t, ok)
+	require.Equal(t, "a", got.Value, "a snapshot does not follow the storage")
+	require.Equal(t, "raw", snapshot[1])
+	require.Nil(t, CopyParamValues(nil))
+}

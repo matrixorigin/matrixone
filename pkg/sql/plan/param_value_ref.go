@@ -74,3 +74,21 @@ func (s *ParamValueStore) Reset(n int) []any {
 func (s *ParamValueStore) Ref(i int) *ParamValue {
 	return &s.params[i]
 }
+
+// CopyParamValues returns values with every prepared parameter value copied
+// out of the statement's storage, for a snapshot that must not change when the
+// storage is rewritten (a retry of the same execution, for example).
+func CopyParamValues(values []any) []any {
+	if values == nil {
+		return nil
+	}
+	out := make([]any, len(values))
+	for i, v := range values {
+		if param, ok := AsParamValue(v); ok {
+			out[i] = param
+		} else {
+			out[i] = v
+		}
+	}
+	return out
+}

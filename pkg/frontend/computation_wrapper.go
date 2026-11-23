@@ -2130,7 +2130,7 @@ func newPreparedExecutionRetry(paramVals []any) *preparedExecutionRetry {
 	if len(paramVals) == 0 {
 		return nil
 	}
-	return &preparedExecutionRetry{paramVals: append([]any(nil), paramVals...)}
+	return &preparedExecutionRetry{paramVals: plan2.CopyParamValues(paramVals)}
 }
 
 func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPositions []int32, paramVals []any) error {
