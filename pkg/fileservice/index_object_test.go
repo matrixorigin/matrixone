@@ -425,34 +425,55 @@ func TestIndexObjectShortCacheFileReadsStorage(t *testing.T) {
 	require.True(t, cached, "a decoding error keeps the entry")
 }
 
-// An entry whose file cannot be opened is read from storage.
+// A missing entry file whose path another holder owns is not dropped, and the delete mark
+// is kept, so the holder's work is not canceled.
+func TestIndexObjectMissingFileOwnedIsKept(t *testing.T) {
+	fs, storage, data := newIndexObjectFS(t, true)
+	cacheIndexObject(t, fs, "object", data)
+	diskPath, ok := fs.indexObjectCached("object")
+	require.True(t, ok)
+	require.NoError(t, os.Remove(filepath.Join(diskPath, IndexObjectFile)))
+	d := fs.indexFileCache.disk
+	owner, ok := d.paths.tryAcquire(diskPath, nil)
+	require.True(t, ok)
+	mark := fs.indexFileCache.DeleteMark()
+	storage.reads.Store(0)
+	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache | SkipDiskCacheWrites,
+		Entries: []IOEntry{{Offset: 2000, Size: 10}}}
+	require.NoError(t, fs.Read(context.Background(), vec))
+	require.Equal(t, data[2000:2010], vec.Entries[0].Data)
+	vec.Release()
+	require.True(t, d.cache.Contains(diskPath))
+	require.Equal(t, mark, fs.indexFileCache.DeleteMark())
+	require.NoError(t, owner.release())
+}
+
+// An entry whose file cannot be opened, or is missing, is dropped and read from storage,
+// and the read fills it again.
 func TestIndexObjectUnopenableEntryReadsStorage(t *testing.T) {
-	for _, what := range []string{"file", "dir"} {
+	for _, what := range []string{"file", "dir", "missing"} {
 		t.Run(what, func(t *testing.T) {
 			fs, storage, data := newIndexObjectFS(t, true)
 			cacheIndexObject(t, fs, "object", data)
 			diskPath, ok := fs.indexObjectCached("object")
 			require.True(t, ok)
-			target := filepath.Join(diskPath, IndexObjectFile)
-			if what == "dir" {
-				target = diskPath
+			file := filepath.Join(diskPath, IndexObjectFile)
+			switch what {
+			case "file":
+				require.NoError(t, os.Remove(file))
+				require.NoError(t, os.Symlink(IndexObjectFile, file))
+			case "dir":
+				require.NoError(t, os.RemoveAll(diskPath))
+				require.NoError(t, os.WriteFile(diskPath, nil, 0o644))
+			case "missing":
+				require.NoError(t, os.Remove(file))
 			}
-			require.NoError(t, os.Chmod(target, 0))
-			t.Cleanup(func() {
-				matches, _ := filepath.Glob(diskPath + "*")
-				for _, m := range matches {
-					_ = os.Chmod(m, 0o755)
-					_ = os.Chmod(filepath.Join(m, IndexObjectFile), 0o644)
-				}
-			})
 			require.Equal(t, data[3000:3010], readIndexObjectRange(t, fs, IndexFileObject|SkipAllCache, 3000, 10))
 			storage.reads.Store(0)
-			vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache, Entries: []IOEntry{{Offset: 2000, Size: 10}}}
-			err := fs.Read(context.Background(), vec)
-			require.NoError(t, err)
-			require.Equal(t, data[2000:2010], vec.Entries[0].Data)
-			vec.Release()
+			require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject, 2000, 10))
 			require.Equal(t, int64(1), storage.reads.Load())
+			require.Equal(t, data[len(data)-10:], readIndexObjectRange(t, fs, IndexFileObject, int64(len(data)-10), 10))
+			require.Equal(t, int64(1), storage.reads.Load(), "the read filled the entry again")
 		})
 	}
 }

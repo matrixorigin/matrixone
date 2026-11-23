@@ -93,6 +93,10 @@ type diskCacheAsyncState struct {
 	callbackHead    *asyncCallbackTurn
 	callbackTail    *asyncCallbackTurn
 	callbackRunning bool
+	// flightCopies are the bytes of the copies kept for the write callbacks of memory
+	// flights, at most flightCopiesMax.
+	flightCopies    atomic.Int64
+	flightCopiesMax int64
 
 	mu struct {
 		sync.Mutex
@@ -145,6 +149,7 @@ func (d *DiskCache) initAsyncUpdates() {
 	d.async.done = make(chan struct{})
 	d.async.mu.pending = make(map[string]struct{})
 	d.async.mu.maxPendingBytes = diskCacheAsyncMaxPendingBytes
+	d.async.flightCopiesMax = diskCacheAsyncMaxPendingBytes
 	d.async.mu.idle = make(chan struct{})
 	close(d.async.mu.idle)
 }

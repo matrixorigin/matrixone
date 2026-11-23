@@ -167,9 +167,11 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			// The entry cannot be opened: it is dropped and the entries are read from the
-			// other caches or storage.
+		// The entry cannot be opened, or is indexed without its file: it is dropped and
+		// the entries are read from the other caches or storage.
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			s.indexFileCache.dropMissing(ctx, name, IndexObjectFile)
+		} else {
 			_ = s.indexFileCache.Delete(ctx, name)
 		}
 		return nil

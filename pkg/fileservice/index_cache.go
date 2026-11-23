@@ -653,6 +653,31 @@ func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+// dropMissing removes entry name when it is indexed while its file is missing, unless
+// another holder owns its path.
+func (c *IndexFileCache) dropMissing(ctx context.Context, name string, file string) {
+	diskPath, err := c.disk.pathForDir(name)
+	if err != nil {
+		return
+	}
+	owner, ok := c.disk.paths.tryAcquire(diskPath, nil)
+	if !ok {
+		return
+	}
+	defer owner.release()
+	if !c.disk.cache.Contains(diskPath) {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(diskPath, file)); !os.IsNotExist(err) {
+		return
+	}
+	c.disk.deletes.deleted(diskPath)
+	if err := removeCacheDir(diskPath); err != nil && !os.IsNotExist(err) {
+		return
+	}
+	c.disk.cache.Delete(ctx, diskPath)
+}
+
 type dirHolds struct {
 	mu sync.Mutex
 	m  map[string]int

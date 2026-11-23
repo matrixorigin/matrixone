@@ -101,17 +101,33 @@ func (d *DiskCacheCallbacks) Value(key any) any {
 }
 
 // deferWriteCallbacks returns ctx, whose write callbacks record copies of the entries
-// written instead of running, and the function running ctx's write callbacks on them.
-func deferWriteCallbacks(ctx context.Context) (context.Context, func()) {
+// written instead of running; reserve, which reports whether n bytes of copies fit in
+// the copies d keeps, and reserves them; and run, which runs ctx's write callbacks on the
+// copies and releases them.
+func (d *DiskCache) deferWriteCallbacks(ctx context.Context) (_ context.Context, reserve func(n int64) bool, run func()) {
 	callbacks, _ := ctx.Value(CtxKeyDiskCacheCallbacks).(*DiskCacheCallbacks)
 	if callbacks == nil || len(callbacks.OnWritten) == 0 {
-		return ctx, func() {}
+		return ctx, func(int64) bool { return true }, func() {}
 	}
 	type written struct {
 		filePath string
 		entry    IOEntry
 	}
 	var entries []written
+	var reserved int64
+	copies := &d.async.flightCopies
+	reserve = func(n int64) bool {
+		for {
+			cur := copies.Load()
+			if cur+n > d.async.flightCopiesMax {
+				return false
+			}
+			if copies.CompareAndSwap(cur, cur+n) {
+				reserved += n
+				return true
+			}
+		}
+	}
 	record := &DiskCacheCallbacks{
 		OnWritten: []OnDiskCacheWrittenFunc{func(filePath string, entry IOEntry) {
 			entry.Data = bytes.Clone(entry.Data)
@@ -120,7 +136,8 @@ func deferWriteCallbacks(ctx context.Context) (context.Context, func()) {
 		OnEvict:     callbacks.OnEvict,
 		upstreamCtx: ctx,
 	}
-	return record, func() {
+	return record, reserve, func() {
+		defer copies.Add(-reserved)
 		for _, w := range entries {
 			for _, fn := range callbacks.OnWritten {
 				fn(w.filePath, w.entry)
