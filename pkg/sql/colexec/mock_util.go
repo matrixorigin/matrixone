@@ -90,7 +90,15 @@ func (op *MockOperator) Reset(proc *process.Process, pipelineFailed bool, err er
 func (op *MockOperator) Free(proc *process.Process, pipelineFailed bool, err error) {
 	for i := range op.batchs {
 		if op.batchs[i] != nil && op.batchs[i] != batch.EmptyBatch {
-			op.batchs[i].Clean(proc.Mp())
+			// The mock does not own a pool: each test vector is freed with
+			// the pool it was created with.
+			for j, vec := range op.batchs[i].Vecs {
+				if vec != nil {
+					vec.Free(vec.MPool())
+					op.batchs[i].Vecs[j] = nil
+				}
+			}
+			op.batchs[i].Clean(nil)
 		}
 	}
 	op.batchs = nil
@@ -220,3 +228,17 @@ func MakeMockBatchsWithNullVec1(mp *mpool.MPool) *batch.Batch {
 }
 
 //@todo make more test batchs
+
+// FreeMockChildren frees the batches of op's MockOperator children. Operators
+// never free their children, so tests release their mock inputs with it.
+func FreeMockChildren(op vm.Operator) {
+	if op == nil {
+		return
+	}
+	base := op.GetOperatorBase()
+	for i := 0; i < base.NumChildren(); i++ {
+		if mock, ok := base.GetChildren(i).(*MockOperator); ok {
+			mock.Free(nil, false, nil)
+		}
+	}
+}

@@ -192,6 +192,20 @@ func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []t
 	return hit, err
 }
 
+// destinationMP returns the pool a load into vec must use: vec's own pool.
+// An empty read-only vec is first turned into an owned vector of m.
+func destinationMP(vec *vector.Vector, m *mpool.MPool) *mpool.MPool {
+	if vec.IsReadOnly() && vec.Length() == 0 && m != nil {
+		typ := *vec.GetType()
+		vec.Free(nil)
+		vec.InitVec(typ, m)
+	}
+	if mp := vec.MPool(); mp != nil {
+		return mp
+	}
+	return m
+}
+
 func loadColumnsDataInto(
 	ctx context.Context,
 	columns []uint16,
@@ -334,9 +348,13 @@ func loadColumnsDataInto(
 			}
 			publication.Publish(columns[i], reader)
 		}
+		// A destination is filled through its own pool. An empty read-only
+		// destination (a column borrowed by an earlier block) becomes an owned
+		// vector of m again.
+		dm := destinationMP(destinations[i], m)
 		if keeper != nil && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
 			var borrowed bool
-			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, m, keeper)
+			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, dm, keeper)
 			if err != nil {
 				publication.Disable()
 				return
@@ -344,25 +362,25 @@ func loadColumnsDataInto(
 			if borrowed {
 				continue
 			}
-			err = objectio.CopyCachedVectorAll(destinations[i], ioVectors.Entries[i].CachedData, m)
+			err = objectio.CopyCachedVectorAll(destinations[i], ioVectors.Entries[i].CachedData, destinationMP(destinations[i], dm))
 		} else if readonlyArea {
 			err = objectio.CopyCachedVectorAllReadonly(
 				destinations[i],
 				ioVectors.Entries[i].CachedData,
-				m,
+				dm,
 			)
 		} else if sels == nil {
 			err = objectio.CopyCachedVectorAll(
 				destinations[i],
 				ioVectors.Entries[i].CachedData,
-				m,
+				dm,
 			)
 		} else {
 			err = objectio.CopyCachedVectorRows(
 				destinations[i],
 				ioVectors.Entries[i].CachedData,
 				sels,
-				m,
+				dm,
 			)
 		}
 		if err != nil {

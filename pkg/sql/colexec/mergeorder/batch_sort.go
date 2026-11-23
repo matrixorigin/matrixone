@@ -90,14 +90,11 @@ func sortBatch(
 					orderCols = ctr.orderCols[i]
 				}
 				freeOrderColumns(proc.Mp(), ctr.batchList[i], orderCols)
-				ctr.batchList[i].Clean(proc.Mp())
+				ctr.batchList[i].Clean(ctr.residentMP(proc))
 			}
 		}
 		ctr.cleanupSpill(proc)
-		if ctr.buf != nil {
-			ctr.buf.Clean(proc.Mp())
-			ctr.buf = nil
-		}
+		ctr.cleanBuf()
 		for i := range ctr.executors {
 			if ctr.executors[i] != nil {
 				ctr.executors[i].Free()
@@ -279,7 +276,7 @@ func sortBatchWithColumns(
 	orderCount := len(orderCols)
 	if sorted == nil || len(sorted.Vecs) != dataCols+orderCount+len(extra) {
 		if sorted != nil {
-			sorted.Clean(proc.Mp())
+			sorted.Clean(mp)
 		}
 		return nil, nil, nil, moerr.NewInternalErrorNoCtx("merge-order carry vector count mismatch")
 	}
@@ -340,7 +337,7 @@ func (ctr *container) appendSortedChunk(
 		return err
 	}
 	chunk, err := window.Dup(ctr.sortAllocator(proc))
-	window.Clean(proc.Mp())
+	window.FreeWindow()
 	if err != nil {
 		return err
 	}
@@ -348,7 +345,7 @@ func (ctr *container) appendSortedChunk(
 	orderCols, err := ctr.evaluateOrderColumns(proc, chunk)
 	if err != nil {
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
-		chunk.Clean(proc.Mp())
+		chunk.Clean(ctr.sortAllocator(proc))
 		return err
 	}
 
@@ -359,14 +356,14 @@ func (ctr *container) appendSortedChunk(
 	mosort.SortByVectorsWithTypes(sels, orderCols, desc, nullsLast, ctr.orderTypes)
 	if err = chunk.Shuffle(sels, ctr.sortAllocator(proc)); err != nil {
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
-		chunk.Clean(proc.Mp())
+		chunk.Clean(ctr.sortAllocator(proc))
 		return err
 	}
 	for _, vec := range orderCols {
 		if vec != nil && !batchContainsVector(chunk, vec) {
-			if err = vec.Shuffle(sels, ctr.sortAllocator(proc)); err != nil {
+			if err = vec.Shuffle(sels, vec.MPool()); err != nil {
 				freeOrderColumns(proc.Mp(), chunk, orderCols)
-				chunk.Clean(proc.Mp())
+				chunk.Clean(ctr.sortAllocator(proc))
 				return err
 			}
 		}
@@ -376,13 +373,13 @@ func (ctr *container) appendSortedChunk(
 		if !ctr.spilling {
 			if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
 				freeOrderColumns(proc.Mp(), chunk, orderCols)
-				chunk.Clean(proc.Mp())
+				chunk.Clean(ctr.sortAllocator(proc))
 				return err
 			}
 		}
 		err = ctr.spillEvaluatedBatch(proc, chunk, orderCols, analyzer)
 		freeOrderColumns(proc.Mp(), chunk, orderCols)
-		chunk.Clean(proc.Mp())
+		chunk.Clean(ctr.sortAllocator(proc))
 		return err
 	}
 
@@ -403,7 +400,7 @@ func (ctr *container) collectSortedBatch(
 	var output *batch.Batch
 	defer func() {
 		if err != nil && output != nil {
-			output.Clean(proc.Mp())
+			output.Clean(ctr.sortAllocator(proc))
 		}
 	}()
 	if ctr.spilling {
@@ -455,7 +452,7 @@ func (ctr *container) collectSpillResult(proc *process.Process) (*batch.Batch, e
 	)
 	defer func() {
 		if err != nil && output != nil {
-			output.Clean(proc.Mp())
+			output.Clean(ctr.sortAllocator(proc))
 		}
 	}()
 	for {

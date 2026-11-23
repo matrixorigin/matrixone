@@ -28,7 +28,7 @@ import (
 
 func TestPartition(t *testing.T) {
 	mp := mpool.MustNewZero()
-	v0 := vector.NewVec(types.T_int8.ToType())
+	v0 := vector.NewVec(types.T_int8.ToType(), mp)
 	vector.AppendFixedList(v0, []int8{3, 4, 5, 6, 7, 8}, nil, mp)
 	partitions := make([]int64, 2)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
@@ -37,7 +37,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v1 := vector.NewVec(types.T_int16.ToType())
+	v1 := vector.NewVec(types.T_int16.ToType(), mp)
 	vector.AppendFixedList(v1, []int16{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -45,7 +45,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v2 := vector.NewVec(types.T_int32.ToType())
+	v2 := vector.NewVec(types.T_int32.ToType(), mp)
 	vector.AppendFixedList(v2, []int32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -53,7 +53,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v3 := vector.NewVec(types.T_int64.ToType())
+	v3 := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixedList(v3, []int64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -61,7 +61,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v4 := vector.NewVec(types.T_uint8.ToType())
+	v4 := vector.NewVec(types.T_uint8.ToType(), mp)
 	vector.AppendFixedList(v4, []uint8{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -69,7 +69,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v5 := vector.NewVec(types.T_uint16.ToType())
+	v5 := vector.NewVec(types.T_uint16.ToType(), mp)
 	vector.AppendFixedList(v5, []uint16{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -77,7 +77,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v6 := vector.NewVec(types.T_uint32.ToType())
+	v6 := vector.NewVec(types.T_uint32.ToType(), mp)
 	vector.AppendFixedList(v6, []uint32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -85,7 +85,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v7 := vector.NewVec(types.T_uint64.ToType())
+	v7 := vector.NewVec(types.T_uint64.ToType(), mp)
 	vector.AppendFixedList(v7, []uint64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -93,7 +93,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v8 := vector.NewVec(types.T_date.ToType())
+	v8 := vector.NewVec(types.T_date.ToType(), mp)
 	vector.AppendFixedList(v8, []types.Date{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -101,7 +101,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v9 := vector.NewVec(types.T_float32.ToType())
+	v9 := vector.NewVec(types.T_float32.ToType(), mp)
 	vector.AppendFixedList(v9, []float32{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -109,7 +109,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v10 := vector.NewVec(types.T_float64.ToType())
+	v10 := vector.NewVec(types.T_float64.ToType(), mp)
 	vector.AppendFixedList(v10, []float64{3, 4, 5, 6, 7, 8}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -117,7 +117,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v11 := vector.NewVec(types.T_char.ToType())
+	v11 := vector.NewVec(types.T_char.ToType(), mp)
 	vector.AppendStringList(v11, []string{"hello", "Gut", "konichiwa", "nihao", "nihao", "nihao", "nihao"}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -126,7 +126,7 @@ func TestPartition(t *testing.T) {
 	require.Equal(t, []int64{0, 1}, partitions)
 
 	// Keep this vector-only package independent of process/service test fixtures.
-	v12 := vector.NewVec(types.T_bit.ToType())
+	v12 := vector.NewVec(types.T_bit.ToType(), mp)
 	defer v12.Free(mp)
 	require.NoError(t, vector.AppendFixedList(v12, []uint64{3, 4, 5, 6, 7, 8}, nil, mp))
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
@@ -135,7 +135,7 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v12)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v13 := vector.NewVec(types.T_blob.ToType())
+	v13 := vector.NewVec(types.T_blob.ToType(), mp)
 	_ = vector.AppendStringList(v13, []string{"abc", "def", "xyz", "abc", "def", "xyz"}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v13)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -143,12 +143,12 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v13)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v14 := vector.NewVec(types.T_binary.ToType())
+	v14 := vector.NewVec(types.T_binary.ToType(), mp)
 	_ = vector.AppendStringList(v14, []string{"abc", "def", "xyz", "abc", "def", "xyz"}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v14)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v15 := vector.NewVec(types.T_varbinary.ToType())
+	v15 := vector.NewVec(types.T_varbinary.ToType(), mp)
 	_ = vector.AppendStringList(v15, []string{"abc", "def", "xyz", "abc", "def", "xyz"}, nil, mp)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v15)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -179,7 +179,7 @@ func TestPartitionConstantKeys(t *testing.T) {
 				require.Equal(t, []int64{0, 1, 3}, partition.run(sels, diffs, []int64{99}, vec))
 				require.Equal(t, []bool{true, true, false, true}, diffs)
 			}
-			unsupported := vector.NewVec(types.T_any.ToType())
+			unsupported := vector.NewVec(types.T_any.ToType(), mp)
 			defer unsupported.Free(mp)
 			unsupported.SetLength(1)
 			func() {
@@ -196,7 +196,7 @@ func TestPartitionConstantKeys(t *testing.T) {
 
 func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_float64.ToType())
+	vec := vector.NewVec(types.T_float64.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixedList(vec, []float64{
 		math.Copysign(0, -1), 0,
@@ -214,7 +214,7 @@ func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
 
 func TestPartitionForOrderUnicodeCollationPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI))
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendStringList(vec, []string{"Z", "a", "A", "b"}, nil, mp))
 
@@ -225,7 +225,7 @@ func TestPartitionForOrderUnicodeCollationPeers(t *testing.T) {
 
 func TestPartitionForOrderGeneralCIPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8))
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendStringList(vec, []string{"A", "a", "b", "C", "c"}, nil, mp))
 
@@ -242,7 +242,7 @@ func TestPartitionForOrderGeneralCIPeers(t *testing.T) {
 
 func TestPartitionForOrderKeepsBytePeersForBinaryCollation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin))
+	vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendStringList(vec, []string{"A", "a"}, nil, mp))
 
@@ -253,7 +253,7 @@ func TestPartitionForOrderKeepsBytePeersForBinaryCollation(t *testing.T) {
 
 func TestPartitionForOrderJSONNumericPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	defer vec.Free(mp)
 	for _, text := range []string{"1", "1.0", "2"} {
 		value, err := bytejson.ParseFromString(text)
@@ -282,12 +282,12 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 	t.Run("fixed_width_null_null_preserves_prior_boundary", func(t *testing.T) {
 		// Simulates the multi-key path in sortAndSend.
 		// First key: int32 [1, 1, 2, 2] → boundary at indices 0 and 2.
-		k1 := vector.NewVec(types.T_int32.ToType())
+		k1 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
 
 		// Second key: int32 with all NULLs → on its own would be one
 		// partition, but it must NOT erase k1's boundaries.
-		k2 := vector.NewVec(types.T_int32.ToType())
+		k2 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(k2, []int32{0, 0, 0, 0},
 			[]bool{true, true, true, true}, mp))
 
@@ -304,7 +304,7 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 
 	t.Run("fixed_width_const_preserves_prior_boundary", func(t *testing.T) {
 		// First key: int32 [1, 1, 2, 2].
-		k1 := vector.NewVec(types.T_int32.ToType())
+		k1 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
 
 		// Second key: const non-null. Must preserve k1's boundaries.
@@ -336,10 +336,10 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 	}
 
 	t.Run("bytes_null_null_preserves_prior_boundary", func(t *testing.T) {
-		k1 := vector.NewVec(types.T_int32.ToType())
+		k1 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
 
-		k2 := vector.NewVec(types.T_varchar.ToType())
+		k2 := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendStringList(k2,
 			[]string{"", "", "", ""},
 			[]bool{true, true, true, true}, mp))
@@ -356,7 +356,7 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 	})
 
 	t.Run("bytes_const_preserves_prior_boundary", func(t *testing.T) {
-		k1 := vector.NewVec(types.T_int32.ToType())
+		k1 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
 
 		k2, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("x"), 4, mp)
@@ -374,9 +374,9 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 
 	t.Run("fixed_width_or_with_existing_diff", func(t *testing.T) {
 		// Both keys contribute new boundaries; final partitioning is the union.
-		k1 := vector.NewVec(types.T_int32.ToType())
+		k1 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(k1, []int32{1, 1, 2, 2}, nil, mp))
-		k2 := vector.NewVec(types.T_int32.ToType())
+		k2 := vector.NewVec(types.T_int32.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(k2, []int32{5, 6, 7, 7}, nil, mp))
 
 		sels := []int64{0, 1, 2, 3}
@@ -394,7 +394,7 @@ func TestPartitionJSONValueIdentity(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	jsonVec := func(values ...any) *vector.Vector {
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), mp)
 		for _, v := range values {
 			if s, ok := v.(string); ok {
 				bj, err := types.ParseStringToByteJson(s)
@@ -431,7 +431,7 @@ func TestPartitionJSONValueIdentity(t *testing.T) {
 	require.Equal(t, []int64{0, 2}, run(vec2, 4))
 
 	// Scoped change: non-JSON strings keep byte-identity partitioning.
-	sv := vector.NewVec(types.T_varchar.ToType())
+	sv := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(sv, []byte("1"), false, mp))
 	require.NoError(t, vector.AppendBytes(sv, []byte("1.0"), false, mp))
 	require.Equal(t, []int64{0, 1}, run(sv, 2))

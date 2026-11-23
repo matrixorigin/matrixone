@@ -259,10 +259,10 @@ func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
 
 	input := batch.NewWithSize(len(snapshotSchemaTypes) + 2)
 	for i, typ := range snapshotSchemaTypes {
-		input.Vecs[i] = vector.NewVec(typ)
+		input.Vecs[i] = vector.NewVec(typ, mp)
 	}
-	input.Vecs[len(snapshotSchemaTypes)] = vector.NewVec(objectio.TSType)
-	input.Vecs[len(snapshotSchemaTypes)+1] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[len(snapshotSchemaTypes)] = vector.NewVec(objectio.TSType, mp)
+	input.Vecs[len(snapshotSchemaTypes)+1] = vector.NewVec(types.T_bool.ToType(), mp)
 	for row, ts := range []int64{100, 200} {
 		require.NoError(t, vector.AppendFixed(input.Vecs[ColSnapshotId], uint64(row+1), false, mp))
 		require.NoError(t, vector.AppendBytes(input.Vecs[ColSName], []byte("snapshot"), false, mp))

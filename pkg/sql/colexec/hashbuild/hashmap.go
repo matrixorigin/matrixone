@@ -94,8 +94,11 @@ type HashmapBuilder struct {
 	mapAllocation                    *hashtable.AllocationAccountSelection
 	iteratorAllocation               *hashmap.IteratorAllocation
 	batchAllocation                  *mpool.AccountBinding
-	uniqueKeyAllocation              *mpool.AccountBinding
-	recoveryCapacityClass            mpool.AllocationCapacityClass
+	// bufMP is the builder's own pool for the retained build batches; it is
+	// handed to the JoinMap with them.
+	bufMP                 *mpool.MPool
+	uniqueKeyAllocation   *mpool.AccountBinding
+	recoveryCapacityClass mpool.AllocationCapacityClass
 }
 
 func (hb *HashmapBuilder) GetSize() int64 {
@@ -138,6 +141,9 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	hb.Sels = message.GroupSels{}
 	jmDelRows := hb.DelRows
 	jm := message.NewJoinMap(sels, hb.IntHashMap, hb.StrHashMap, jmDelRows, hb.Batches.Buf, mp)
+	jm.SetBatchesPool(hb.Batches.Pool())
+	jm.TakeOwnedPool(hb.bufMP)
+	hb.bufMP = nil
 	jm.SetBatchRowEnds(hb.batchRowEnds)
 	hb.batchRowEnds = nil
 	jm.SetHasNullKey(hb.HasNullKey)
@@ -198,15 +204,13 @@ func (hb *HashmapBuilder) observeNullKeys(keyVecs []*vector.Vector) {
 		}
 		rows := uint64(vec.Length())
 		if vec.IsConstNull() {
-			if vec.GetGrouping().GetBitmap().CountRange(0, rows) < vec.Length() {
+			if vec.Length() > 0 {
 				hb.HasNullKey = true
 				return
 			}
 			continue
 		}
-		if vec.GetNulls().GetBitmap().AnySetNotIn(
-			vec.GetGrouping().GetBitmap(), 0, rows,
-		) {
+		if vec.GetNulls().GetBitmap().CountRange(0, rows) > 0 {
 			hb.HasNullKey = true
 			return
 		}
@@ -366,6 +370,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 	hb.retainedSpillTailSelected = 0
 	hb.freeIgnoreRows(proc.Mp())
 	hb.freeDelRows(proc.Mp())
+	colexec.FreeOperatorMPool(&hb.bufMP)
 }
 
 // evalBatch evaluates join key expressions for one batch, storing results in hb.curVecs.
@@ -399,7 +404,7 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 			if viewErr != nil {
 				return viewErr
 			}
-			hb.curVecs[idx], evalErr = vec.DupOffHeap(dupMP)
+			hb.curVecs[idx], evalErr = vec.Dup(dupMP)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -426,43 +431,6 @@ func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process) {
 	// Destroy the complete executor tree so every exact allocation is released.
 	hb.FreeTemporaryVectors(proc)
 	hb.FreeExecutors()
-}
-
-// hasGroupingKey reports whether a direct build key column contains any
-// GROUPING sentinel in any retained batch. Such maps use the string encoder's
-// explicit key domains; an IntHashMap cannot represent a sentinel outside the
-// complete uint64 raw-value domain without collisions.
-func (hb *HashmapBuilder) hasGroupingKey() bool {
-	return hb.hasGroupingKeyInBatches(hb.Batches.Buf)
-}
-
-func (hb *HashmapBuilder) hasGroupingKeyInBatches(batches []*batch.Batch) bool {
-	for _, executor := range hb.executors {
-		if !executor.IsColumnExpr() {
-			continue
-		}
-		column, ok := executor.(*colexec.ColumnExpressionExecutor)
-		if !ok {
-			continue
-		}
-		// HashBuild evaluates every key against one retained build batch.
-		// Some join planners preserve the original build relation index in a
-		// direct column expression, but ColumnExpressionExecutor deliberately
-		// resolves that expression against the only input batch.  Inspect the
-		// same physical column here; filtering on RelPos would miss GROUPING
-		// sentinels for DedupJoin and RightDedupJoin.
-		position := column.GetColIndex()
-		for _, bat := range batches {
-			if bat != nil && position >= 0 && position < len(bat.Vecs) &&
-				bat.Vecs[position] != nil &&
-				bat.Vecs[position].GetGrouping().CountRange(
-					0, uint64(bat.Vecs[position].Length()),
-				) > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (hb *HashmapBuilder) hasNonReflexiveFloatKey() bool {
@@ -656,9 +624,8 @@ func (hb *HashmapBuilder) buildHashmap(
 
 	var err error
 	var itr hashmap.Iterator
-	hasGroupingKey := hb.hasGroupingKey()
 	rejectNaN := hb.hasNonReflexiveFloatKey()
-	useIntHashMap := hb.keyWidth <= 8 && !hasGroupingKey
+	useIntHashMap := hb.keyWidth <= 8
 	if hb.mapAllocation == nil || hb.mapAllocationAccount == nil ||
 		hb.iteratorAllocation == nil || hb.batchAllocation == nil {
 		return mpool.ErrAllocationAccountInvalid
@@ -704,11 +671,6 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		if rejectNaN {
 			if err = hb.StrHashMap.SetRejectNaN(); err != nil {
-				return err
-			}
-		}
-		if hasGroupingKey {
-			if err = hb.StrHashMap.SetGroupingAware(); err != nil {
 				return err
 			}
 		}
@@ -1307,11 +1269,11 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 			hb.dedupDeleteKeepColIdxList = append(hb.dedupDeleteKeepColIdxList, hb.delColIdx)
 		}
 	}
-	deleteOnlyBat, err := hb.makeDeleteOnlyBatch(discardedWithDeletes, proc)
+	deleteOnlyBat, deleteOnlyMP, err := hb.makeDeleteOnlyBatch(discardedWithDeletes, proc)
 	if err != nil {
 		return err
 	}
-	defer deleteOnlyBat.Clean(proc.Mp())
+	defer deleteOnlyBat.Clean(deleteOnlyMP)
 
 	if err := hb.Batches.Shrink(hb.IgnoreRows, proc); err != nil {
 		return err
@@ -1339,16 +1301,18 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 	return nil
 }
 
-func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Process) (*batch.Batch, error) {
+// makeDeleteOnlyBatch also returns the pool the batch is created with; the
+// caller frees the batch with it.
+func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Process) (*batch.Batch, *mpool.MPool, error) {
 	keepCols := make(map[int32]struct{}, len(hb.dedupDeleteKeepColIdxList))
 	for _, colIdx := range hb.dedupDeleteKeepColIdxList {
 		keepCols[colIdx] = struct{}{}
 	}
 
-	bat := batch.NewOffHeapWithSize(len(hb.Batches.Buf[0].Vecs))
+	bat := batch.NewWithSize(len(hb.Batches.Buf[0].Vecs))
 	if hb.mapAllocationAccount == nil {
 		bat.Clean(proc.Mp())
-		return nil, mpool.ErrAllocationAccountInvalid
+		return nil, nil, mpool.ErrAllocationAccountInvalid
 	}
 	deleteOnlyMP, err := proc.Mp().WithAccount(
 		hb.mapAllocationAccount,
@@ -1358,17 +1322,17 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 	)
 	if err != nil {
 		bat.Clean(proc.Mp())
-		return nil, err
+		return nil, nil, err
 	}
 	bat.Attrs = hb.Batches.Buf[0].Attrs
 	for colIdx, vec := range hb.Batches.Buf[0].Vecs {
-		bat.SetVector(int32(colIdx), vector.NewOffHeapVecWithType(*vec.GetType()))
+		bat.SetVector(int32(colIdx), vector.NewVec(*vec.GetType(), deleteOnlyMP))
 	}
 
 	cleanOnErr := true
 	defer func() {
 		if cleanOnErr {
-			bat.Clean(proc.Mp())
+			bat.Clean(deleteOnlyMP)
 		}
 	}()
 
@@ -1379,17 +1343,17 @@ func (hb *HashmapBuilder) makeDeleteOnlyBatch(rows []int32, proc *process.Proces
 			src := hb.Batches.Buf[srcBatIdx].Vecs[colIdx]
 			if _, keep := keepCols[int32(colIdx)]; keep || src.IsNull(uint64(srcRowIdx)) {
 				if err := dst.UnionOne(src, srcRowIdx, deleteOnlyMP); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			} else if err := dst.UnionNull(deleteOnlyMP); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		bat.AddRowCount(1)
 	}
 
 	cleanOnErr = false
-	return bat, nil
+	return bat, deleteOnlyMP, nil
 }
 
 // ExtractCachedIteratorsForReuse detaches and returns cached iterators so they

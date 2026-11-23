@@ -436,7 +436,7 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 
 	current := cw.proc.GetPrepareParams()
-	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType()))
+	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType(), cw.proc.Mp()))
 	require.Zero(t, current.Length())
 	require.Nil(t, current.GetData())
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
@@ -452,9 +452,10 @@ func TestBinaryProtocolPreparedParamRebindsStringDomain(t *testing.T) {
 	}()
 
 	install := func(mysqlType defines.MysqlType) *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte("中中"), false, cw.proc.Mp()))
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 		return params
 	}
@@ -1432,7 +1433,7 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 112, "select ?")
 	defer prepareStmt.Close()
 
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
 	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	defer func() {
@@ -1499,7 +1500,8 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 
 			// Connector/ODBC sends integer bindings as MYSQL_TYPE_STRING in
 			// COM_STMT_EXECUTE, so reproduce that wire representation directly.
-			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepareStmt.paramsMP = cw.proc.Mp()
 			prepareStmt.ParamTypes = make([]byte, 0, len(test.values)*2)
 			wantParamVals := make([]any, 0, len(test.values))
 			for valueIndex, value := range test.values {
@@ -1569,7 +1571,8 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 		if prepareStmt.params != nil {
 			prepareStmt.params.Free(cw.proc.Mp())
 		}
-		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+		prepareStmt.paramsMP = cw.proc.Mp()
 		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), isNull, cw.proc.Mp()))
 		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 		execCtx.prepareColDef = ordinaryColDef
@@ -1693,7 +1696,8 @@ func TestPreparedInetNtoaReusesDecimalRuntimePlan(t *testing.T) {
 			}
 			prepareStmt.params.Free(cw.proc.Mp())
 		}
-		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+		prepareStmt.paramsMP = cw.proc.Mp()
 		require.NoError(t, vector.AppendBytes(
 			prepareStmt.params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
@@ -1766,7 +1770,8 @@ func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) 
 	}()
 	require.Equal(t, []int32{0}, prepareStmt.directResultParamPositions)
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("text"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{
@@ -1916,7 +1921,8 @@ func TestInitExecuteStmtParamDirectNumericPreservesTextSibling(t *testing.T) {
 	}()
 	require.Equal(t, []int32{0, 1}, prepareStmt.directResultParamPositions)
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("text"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{
@@ -1946,7 +1952,8 @@ func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 		prepareStmt.Close()
 	}()
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
 	prepareStmt.directResultParamPositions = []int32{0}
@@ -1966,7 +1973,8 @@ func TestInitExecuteStmtParamValidatesCachedLagLeadOffsets(t *testing.T) {
 		*testing.T, *Session, *PrepareStmt, *TxnComputationWrapper,
 	) *plan.Execute {
 		return func(t *testing.T, _ *Session, prepareStmt *PrepareStmt, cw *TxnComputationWrapper) *plan.Execute {
-			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepareStmt.paramsMP = cw.proc.Mp()
 			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
 			prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 			return nil
@@ -2191,7 +2199,7 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
 			cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 			t.Cleanup(func() {
@@ -2244,7 +2252,7 @@ func TestPreparedParamValuesPreservesTemporalScale(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
 			cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 			t.Cleanup(func() {
@@ -2268,7 +2276,7 @@ func TestPreparedParamValuesScopesTemporalRuntimeToConsumer(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 222, "select ?, ?")
 	defer prepareStmt.Close()
 
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("2024-01-02"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("2024-01-03"), false, cw.proc.Mp()))
 	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false, false})
@@ -2658,7 +2666,7 @@ func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
 	defer prepareStmt.Close()
 
 	payload := strings.Repeat("x", 1<<20)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte(payload), false, cw.proc.Mp()))
 	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	defer func() {
@@ -2678,7 +2686,7 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	defer prepareStmt.Close()
 
 	value := "12345678901234567890123456789012345.6789"
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 	defer func() {
 		cw.proc.SetPrepareParams(nil)
@@ -2729,7 +2737,7 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 	defer prepareStmt.Close()
 
 	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		params,
 		[]byte("-12345678901234567890.123456789"),
@@ -2737,6 +2745,7 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 		cw.proc.Mp(),
 	))
 	prepareStmt.params = params
+	prepareStmt.paramsMP = cw.proc.Mp()
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
 	prepareStmt.directResultParamPositions = []int32{0}
 
@@ -2911,7 +2920,8 @@ func TestInitExecuteStmtParamKeepsDirectResultSpecializationAcrossNoOpPlanScan(t
 	}()
 
 	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	for _, value := range []string{"7", "same", "same"} {
 		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
 	}
@@ -3027,9 +3037,10 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(manualPlan)
 
 	install := func(value string) *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
 		return params
 	}
@@ -3106,9 +3117,10 @@ func TestPreparedNumericOverloadSpecializationReusesRuntimeCategory(t *testing.T
 	require.Equal(t, []int32{0}, prepareStmt.numericOverloadParamPositions)
 
 	install := func(value string, mysqlType defines.MysqlType) *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 		return params
 	}
@@ -3178,9 +3190,10 @@ func TestPreparedBitCountPreservesRepreparedNumericProtocolType(t *testing.T) {
 	}
 
 	install := func(value string, mysqlType defines.MysqlType, kind types.StringConversionKind) *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 		return params
 	}
@@ -3429,10 +3442,11 @@ func TestPreparedBitCountStateAdvancesAlongsideOtherNumericOverloads(t *testing.
 		"separate fallback ownership must retain both native temporal packet domains")
 
 	install := func(absValue, bitCountValue string, bitCountType defines.MysqlType) *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(absValue), false, cw.proc.Mp()))
 		require.NoError(t, vector.AppendBytes(params, []byte(bitCountValue), false, cw.proc.Mp()))
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 		prepareStmt.ParamTypes = []byte{
 			byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(bitCountType), 0,
 		}
@@ -3487,7 +3501,8 @@ func TestPreparedExplicitDoubleAbsReusesBoundCompile(t *testing.T) {
 		if prepared.params != nil {
 			prepared.params.Free(cw.proc.Mp())
 		}
-		prepared.params = vector.NewVec(types.T_text.ToType())
+		prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+		prepared.paramsMP = cw.proc.Mp()
 		require.NoError(t, vector.AppendBytes(prepared.params, []byte(tc.value), false, cw.proc.Mp()))
 		prepared.ParamTypes = []byte{byte(tc.typ), 0}
 		comp, p, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
@@ -3530,9 +3545,10 @@ func TestPreparedDiagnosticFreeFilterReusesPlan(t *testing.T) {
 			}
 			old.Free(cw.proc.Mp())
 		}
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 	}
 	execute := func() (*compile.Compile, *plan.Plan) {
@@ -3588,13 +3604,14 @@ func TestPreparedArithmeticDMLReusesStableRuntimeCategory(t *testing.T) {
 			}
 			oldParams.Free(cw.proc.Mp())
 		}
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		paramTypes := make([]byte, 0, len(mysqlTypes)*2)
 		for i, value := range values {
 			require.NoError(t, vector.AppendBytes(params, []byte(value), nulls[i], cw.proc.Mp()))
 			paramTypes = append(paramTypes, byte(mysqlTypes[i]), 0)
 		}
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 		prepareStmt.ParamTypes = paramTypes
 	}
 	freeStmt := func(stmt tree.Statement, owned bool) {
@@ -3734,7 +3751,8 @@ func TestPreparedSignedNarrowingCacheGuard(t *testing.T) {
 				if prepared.params != nil {
 					prepared.params.Free(cw.proc.Mp())
 				}
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				prepared.ParamTypes = nil
 				for i, value := range values {
 					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == nullAt, cw.proc.Mp()))
@@ -3930,7 +3948,8 @@ func TestPreparedDecimalIntegerConsumerCacheGuard(t *testing.T) {
 				if prepared.params != nil {
 					prepared.params.Free(cw.proc.Mp())
 				}
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				prepared.ParamTypes = nil
 				for i, value := range values {
 					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == nullAt, cw.proc.Mp()))
@@ -4008,7 +4027,8 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 		cw.proc.SetPrepareParams(nil)
 		prepareStmt.Close()
 	}()
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	for _, value := range []string{"1", "7"} {
 		require.NoError(b, vector.AppendBytes(
 			prepareStmt.params, []byte(value), false, cw.proc.Mp()))
@@ -4076,7 +4096,8 @@ func BenchmarkPreparedNarrowingCacheAdmission(b *testing.B) {
 					return protocol.MakeColumnDefData(ctx, cols)
 				}
 			}
-			prepared.params = vector.NewVec(types.T_text.ToType())
+			prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepared.paramsMP = cw.proc.Mp()
 			for range strings.Count(tc.sql, "?") {
 				require.NoError(b, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
 				prepared.ParamTypes = append(prepared.ParamTypes, byte(tc.mysqlType), 0)
@@ -4163,7 +4184,8 @@ func TestPreparedIntegerAssignmentReusesBoundCompile(t *testing.T) {
 					cw.proc.SetPrepareParams(nil)
 					old.Free(cw.proc.Mp())
 				}
-				prepareStmt.params = vector.NewVec(types.T_text.ToType())
+				prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepareStmt.paramsMP = cw.proc.Mp()
 				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(tc.value), false, cw.proc.Mp()))
 				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("7"), false, cw.proc.Mp()))
 				prepareStmt.ParamTypes = []byte{byte(tc.mysqlType), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0}
@@ -4218,7 +4240,8 @@ func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
 				cw.proc.SetPrepareParams(nil)
 				prepareStmt.Close()
 			}()
-			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepareStmt.paramsMP = cw.proc.Mp()
 			for _, value := range tc.values {
 				require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
 				prepareStmt.ParamTypes = append(prepareStmt.ParamTypes, byte(defines.MYSQL_TYPE_LONGLONG), 0)
@@ -4261,7 +4284,8 @@ func BenchmarkInitExecuteStmtParamRepeatedNonConsumerDecimal(b *testing.B) {
 		cw.proc.SetPrepareParams(nil)
 		prepareStmt.Close()
 	}()
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(b, vector.AppendBytes(
 		prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
@@ -4300,7 +4324,8 @@ func TestPreparedOrdinaryFloatRuntimeCacheReusesCompile(t *testing.T) {
 		if prepared.params != nil {
 			prepared.params.Free(cw.proc.Mp())
 		}
-		prepared.params = vector.NewVec(types.T_text.ToType())
+		prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+		prepared.paramsMP = cw.proc.Mp()
 		require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), false, cw.proc.Mp()))
 		cached, executionPlan, _, _, _, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
 		require.NoError(t, err)
@@ -4340,9 +4365,10 @@ func TestCOMStmtCharRuntimeCacheReusesTextSourceAcrossSignedness(t *testing.T) {
 				if prepareStmt.params != nil {
 					prepareStmt.params.Free(cw.proc.Mp())
 				}
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 				prepareStmt.params = params
+				prepareStmt.paramsMP = cw.proc.Mp()
 				// VAR_STRING is the real COM_STMT text shape: it has no numeric
 				// PrepareParamKind or RuntimeType. CHAR keeps it as text and
 				// evaluates its signed/unsigned prefix through private CAST7.
@@ -4528,7 +4554,8 @@ func BenchmarkInitExecuteStmtParamRepeatedDecimalSemanticCategoryNoPagination(b 
 	prepareStmt.refreshFixedIntegerParamPositions(manualPlan)
 	require.Empty(b, prepareStmt.fixedIntegerParamPositions,
 		"the no-pagination hot path must reuse empty fixed-position metadata")
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte("9.0"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
 	_, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
@@ -4579,7 +4606,7 @@ func TestTransparentPrepareParamKind(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 109, "select ?")
 	defer prepareStmt.Close()
 
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, cw.proc.Mp()))
 	defer params.Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(params)
@@ -4609,9 +4636,10 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	defer prepareStmt.Close()
 
 	install := func(value string) *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params
+		prepareStmt.paramsMP = cw.proc.Mp()
 
 		_, _, stmt, _, _, err := initExecuteStmtParam(
 			execCtx, ses, cw, nil, prepareStmt.Name)
@@ -4637,9 +4665,10 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
 	require.Equal(t, int32(65), param.RuntimeType.Width)
 
-	overflow := vector.NewVec(types.T_text.ToType())
+	overflow := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(overflow, []byte(strings.Repeat("9", 77)), false, cw.proc.Mp()))
 	prepareStmt.params = overflow
+	prepareStmt.paramsMP = cw.proc.Mp()
 	third.Free(cw.proc.Mp())
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.ErrorContains(t, err, "exceeds DECIMAL(76)")
@@ -4694,7 +4723,8 @@ func TestInitExecuteStmtParamKeepsConcreteTypeOnlyForJSONComparison(t *testing.T
 		t, 117, "select json_extract('18446744073709551615', '$') = ?")
 	defer prepareStmt.Close()
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(
 		prepareStmt.params, []byte("9223372036854775807"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
@@ -4750,7 +4780,8 @@ func TestInitExecuteStmtParamPreservesPreparedBitMemberOf(t *testing.T) {
 		t, 126, "select ? member of ('[1]')")
 	defer prepareStmt.Close()
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(
 		prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BIT), 0}
@@ -5455,7 +5486,8 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 func TestInitExecuteStmtParamReusesCachedCompileForTextParameter(t *testing.T) {
 	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 111, "select ?")
 	defer func() { cw.proc.SetPrepareParams(nil); prepared.Close() }()
-	prepared.params = vector.NewVec(types.T_text.ToType())
+	prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepared.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("plain text"), false, cw.proc.Mp()))
 	prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
 	comp, first, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)
@@ -6592,7 +6624,8 @@ func TestInitExecuteStmtParamKeepsConcreteTypeForMemberOf(t *testing.T) {
 	prepareStmt.jsonMemberOfParamPositions = plan2.PreparedJSONMemberOfParamPositions(
 		prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
 	require.Equal(t, []int32{0}, prepareStmt.jsonMemberOfParamPositions)
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(
 		prepareStmt.params, []byte("9223372036854775807"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
@@ -6633,7 +6666,7 @@ func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 122, "select ?")
 	defer prepareStmt.Close()
 
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, nil, true, cw.proc.Mp()))
 	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	defer func() {
@@ -6673,7 +6706,8 @@ func TestInitExecuteStmtParamSpecializesDirectTypedNullBlob(t *testing.T) {
 		if prepareStmt.params != nil {
 			prepareStmt.params.Free(cw.proc.Mp())
 		}
-		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+		prepareStmt.paramsMP = cw.proc.Mp()
 		require.NoError(t, vector.AppendBytes(prepareStmt.params, nil, true, cw.proc.Mp()))
 		if setPacketType {
 			prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
@@ -6711,7 +6745,8 @@ func TestInitExecuteStmtParamSetsCOMStmtBinaryStringMetadata(t *testing.T) {
 		prepareStmt.Close()
 	}()
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(
 		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(
@@ -6740,7 +6775,8 @@ func TestInitExecuteStmtParamSpecializesCOMStmtBinaryFunction(t *testing.T) {
 		prepareStmt.Close()
 	}()
 
-	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepareStmt.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(
 		prepareStmt.params, []byte("\xe4\xbd\xa0"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
@@ -6934,14 +6970,14 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 			target := &plan.Expr{Typ: plan.Type{Id: int32(tc.target)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
 			cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{param, target})
 			require.NoError(t, err)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
 			defer params.Free(proc.Mp())
 			flag := byte(0)
 			if tc.unsigned {
 				flag = 0x80
 			}
-			prepared := &PrepareStmt{params: params, ParamTypes: []byte{byte(tc.mysqlType), flag}}
+			prepared := &PrepareStmt{params: params, paramsMP: proc.Mp(), ParamTypes: []byte{byte(tc.mysqlType), flag}}
 			if tc.longData {
 				prepared.getFromSendLongData = map[int]struct{}{0: {}}
 			}
@@ -6968,12 +7004,13 @@ func TestPreparedBinaryIntegerCastDiagnosticProofBoundary(t *testing.T) {
 
 func TestPreparedBinaryIntegerSerialDiagnosticProofBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 	prepared := &PrepareStmt{
-		params: params,
+		params:   params,
+		paramsMP: proc.Mp(),
 		ParamTypes: []byte{
 			byte(defines.MYSQL_TYPE_LONG), 0,
 			byte(defines.MYSQL_TYPE_LONG), 0,
@@ -7289,7 +7326,8 @@ func TestPreparedGenerationSurvivesSmallStatsDrift(t *testing.T) {
 				if prepared.params != nil {
 					prepared.params.Free(cw.proc.Mp())
 				}
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				prepared.ParamTypes = nil
 				for i := 0; i < tc.params; i++ {
 					v := 1
@@ -7359,7 +7397,8 @@ func BenchmarkPreparedStatsDrift(b *testing.B) {
 			_, table, err := base.Resolve("tpch", "nation", nil, nil)
 			require.NoError(b, err)
 			installStatsAdmissionStorage(b, ses, table, func() *pbstats.StatsInfo { return ctx.stats })
-			prepared.params = vector.NewVec(types.T_text.ToType())
+			prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepared.paramsMP = cw.proc.Mp()
 			require.NoError(b, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONG), 0}
 			execute := func() {

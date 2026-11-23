@@ -141,13 +141,13 @@ func TestGroupingSetProjectionExpandsOneInputBatch(t *testing.T) {
 
 		for key := 0; key < 2; key++ {
 			active := arg.GroupingFlags[set*2+key]
-			require.Equal(t, !active, result.Batch.Vecs[key].HasGrouping())
+			require.Equal(t, !active, result.Batch.Vecs[key].IsConstNull())
 			if active {
 				require.Equal(t, []int32{int32(1 + key*9), int32(2 + key*18)},
 					vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[key]))
 			} else {
-				require.True(t, result.Batch.Vecs[key].GetGrouping().Contains(0))
-				require.True(t, result.Batch.Vecs[key].GetGrouping().Contains(1))
+				require.True(t, result.Batch.Vecs[key].IsNull(0))
+				require.True(t, result.Batch.Vecs[key].IsNull(1))
 			}
 		}
 		require.Equal(t, []int32{100, 200},
@@ -194,7 +194,7 @@ func TestGroupingSetProjectionEmitsEmptySetOnRuntimeEmptyInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecNext, result.Status)
 	require.Equal(t, 1, result.Batch.RowCount())
-	require.True(t, result.Batch.Vecs[0].GetGrouping().Contains(0))
+	require.True(t, result.Batch.Vecs[0].IsNull(0))
 	require.True(t, result.Batch.Vecs[1].IsNull(0))
 	require.True(t, vector.GetFixedAtNoTypeCheck[bool](result.Batch.Vecs[2], 0))
 	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], 0))

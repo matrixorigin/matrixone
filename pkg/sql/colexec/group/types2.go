@@ -288,9 +288,6 @@ type container struct {
 	// legacyH8CharSemantics keeps pre-v78 CHAR bytes intact when this
 	// container must merge a short variable-length H8 partial.
 	legacyH8CharSemantics bool
-	// groupingAware selects the collision-free HStr key grammar whenever a
-	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
-	groupingAware bool
 
 	// x, y of `group by x, y`.
 	groupByEvaluate colexec.ExprEvalVector
@@ -514,6 +511,53 @@ func (ctr *container) unbindAllocationViews() {
 	ctr.spillGroupByAllocation = nil
 }
 
+// ownPool returns the operator pool vec belongs to: the private pool or one
+// of its accounted views. A vector of any other pool is returned ctr.mp, so
+// freeing it reports the mismatch.
+func (ctr *container) ownPool(vec *vector.Vector) *mpool.MPool {
+	mp := vec.MPool()
+	if mp == nil {
+		return ctr.mp
+	}
+	switch mp {
+	case ctr.mp, ctr.groupByAllocation, ctr.rollupAllocation, ctr.spillGroupByAllocation:
+		return mp
+	}
+	if ctr.aggregateAllocation.OwnsVectorMP(mp) || ctr.spillAggregateAllocation.OwnsVectorMP(mp) {
+		return mp
+	}
+	return ctr.mp
+}
+
+// freeGroupVector frees a vector of the operator's buffered data.
+func (ctr *container) freeGroupVector(vec *vector.Vector) {
+	if vec != nil {
+		vec.Free(ctr.ownPool(vec))
+	}
+}
+
+// cleanGroupBatch frees a batch of the operator's buffered data. After the
+// final flush a group-by batch holds key vectors of the group-by view and
+// aggregate results of the aggregates' pool; each is freed with its own.
+func (ctr *container) cleanGroupBatch(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	seen := make(map[*vector.Vector]struct{}, len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if _, ok := seen[vec]; !ok {
+			seen[vec] = struct{}{}
+			ctr.freeGroupVector(vec)
+		}
+		bat.Vecs[i] = nil
+	}
+	// Every vector is released; Clean drops the batch's remaining state.
+	bat.Clean(ctr.mp)
+}
+
 // groupByMP returns the pool through which resident group-by key storage
 // allocates and grows.
 func (ctr *container) groupByMP() *mpool.MPool {
@@ -729,7 +773,7 @@ func (ctr *container) freeSpillAggList() {
 func (ctr *container) freeSpillReloadStaging() {
 	ctr.freeSpillAggList()
 	if ctr.spillGbBatch != nil {
-		ctr.spillGbBatch.Clean(ctr.mp)
+		ctr.cleanGroupBatch(ctr.spillGbBatch)
 		ctr.spillGbBatch = nil
 	}
 }
@@ -750,13 +794,13 @@ func (ctr *container) freeSpillBkts() {
 func (ctr *container) freeGroupByBatches() {
 	for i := range ctr.groupByBatches {
 		if ctr.groupByBatches[i] != nil {
-			ctr.groupByBatches[i].Clean(ctr.mp)
+			ctr.cleanGroupBatch(ctr.groupByBatches[i])
 			ctr.groupByBatches[i] = nil
 		}
 	}
 	ctr.groupByBatches = nil
 	if ctr.groupByStandby != nil {
-		ctr.groupByStandby.Clean(ctr.mp)
+		ctr.cleanGroupBatch(ctr.groupByStandby)
 		ctr.groupByStandby = nil
 	}
 	ctr.clearGroupByPreflights()
@@ -805,7 +849,7 @@ func (ctr *container) freeGroupingRollups() {
 	}
 	for i := range ctr.groupingRollup {
 		if ctr.groupingRollup[i] != nil {
-			ctr.groupingRollup[i].Free(ctr.mp)
+			ctr.freeGroupVector(ctr.groupingRollup[i])
 			ctr.groupingRollup[i] = nil
 		}
 	}
@@ -829,7 +873,7 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	ctr.freeGroupByBatches()
 	ctr.freeGroupingRollups()
 	if ctr.sortRollup != nil {
-		ctr.sortRollup.free(ctr.mp)
+		ctr.sortRollup.free(ctr)
 		ctr.sortRollup = nil
 	}
 	ctr.freeAggList()
@@ -983,7 +1027,7 @@ func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.
 	// grouping flag
 	for i, flag := range group.GroupingFlag {
 		if !flag {
-			rollup := vector.NewRollupConst(
+			rollup := vector.NewConstNull(
 				group.ctr.groupByEvaluate.Typ[i],
 				group.ctr.groupByEvaluate.Vec[i].Length(),
 				group.ctr.rollupMP(),
@@ -1138,9 +1182,9 @@ type MergeGroup struct {
 	Aggs []aggexec.AggFuncExecExpression
 
 	GroupByHashKey []int32
-	// GroupingAware is fixed by the producer plan, not inferred from one
-	// partial's data. Dynamic grouping streams can legally alternate partials
-	// with and without an actual rollup sentinel.
+	// GroupingAware declares, from the producer plan, that partials carry
+	// grouping-set rows. Dynamic grouping streams can legally alternate partials
+	// with and without an actual rolled-up key.
 	GroupingAware bool
 	// EmptyGroupingSet declares that a legacy/static all-rolled branch must
 	// produce one row even when no partial reaches this final merge boundary.

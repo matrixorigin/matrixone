@@ -12,11 +12,12 @@ package objectio
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCollationMetadataLegacyObjectReader(t *testing.T) {
@@ -25,7 +26,7 @@ func TestCollationMetadataLegacyObjectReader(t *testing.T) {
 	for _, revision := range []uint8{0, 1} {
 		typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
 		typ.CollationVersion = revision
-		source := vector.NewVec(typ)
+		source := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(source, []byte("x"), false, mp))
 		encoded := marshalLegacyTestColumn(t, source)
 		layout, err := readLegacyColumnLayout(bytes.NewReader(encoded), int64(len(encoded)))

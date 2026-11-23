@@ -1753,7 +1753,7 @@ func textMinForShowCreateTest(t *testing.T, typ plan.Type) string {
 	mp := mpool.MustNewZero()
 	runtimeType := types.NewWithCharset(
 		types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
-	input := vector.NewVec(runtimeType)
+	input := vector.NewVec(runtimeType, mp)
 	defer input.Free(mp)
 	for _, value := range []string{"a", "B"} {
 		require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))

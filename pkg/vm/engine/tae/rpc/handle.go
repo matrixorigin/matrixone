@@ -486,7 +486,7 @@ func (h *Handle) apiEntryToWriteEntry(
 	prefetch bool,
 ) *cmd_util.WriteReq {
 
-	moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
+	moBat, err := batch.ProtoBatchToBatch(pe.GetBat(), nil)
 	if err != nil {
 		panic(err)
 	}

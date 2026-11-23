@@ -347,6 +347,7 @@ func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
 	require.Equal(t, []int64{10, 20}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -360,7 +361,7 @@ func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
 	require.NoError(t, err)
 
 	in := batch.New([]string{"ts", "val"})
-	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 	in.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
 		mustDatetimeScale(t, "2026-08-12 10:00:00.000100", 6),
@@ -382,6 +383,7 @@ func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
 	require.Equal(t, []int64{30, 50, 30}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -405,6 +407,7 @@ func TestBoundedGapFillZeroTemporalLiteralFallsBackToObservedRange(t *testing.T)
 	require.False(t, arg.ctr.boundedGapFill)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -418,7 +421,7 @@ func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testi
 			require.NoError(t, err)
 
 			in := batch.New([]string{"ts", "val"})
-			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(scale))
+			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(scale), proc.Mp())
 			in.Vecs[1] = testutil.MakeInt32Vector([]int32{10}, nil, proc.Mp())
 			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
 				mustDatetimeScale(t, "2026-08-12 10:00:00", scale),
@@ -448,6 +451,7 @@ func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testi
 			require.Equal(t, types.Datetime(1), end-start)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			in.Clean(proc.Mp())
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -457,7 +461,7 @@ func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testi
 
 func TestBoundedGapFillPreparedZeroFallbackReevaluatesAfterReset(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		params, []byte("0000-00-00 00:00:00"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -480,7 +484,7 @@ func TestBoundedGapFillPreparedZeroFallbackReevaluatesAfterReset(t *testing.T) {
 	arg.Reset(proc, false, nil)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
-	params = vector.NewVec(types.T_text.ToType())
+	params = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		params, []byte("0001-01-01 00:00:00"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -490,6 +494,7 @@ func TestBoundedGapFillPreparedZeroFallbackReevaluatesAfterReset(t *testing.T) {
 	require.True(t, arg.ctr.boundedGapFill)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
@@ -528,6 +533,7 @@ func TestTimeWinSlidingPartitionResetsWindowState(t *testing.T) {
 	require.Equal(t, []int64{1, 1, 2, 2}, parts)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -558,6 +564,7 @@ func TestTimeWinPartitionEmitsTrailingWindows(t *testing.T) {
 	require.Len(t, starts, 4)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -606,6 +613,7 @@ func TestGapFillGeneratesOnlyInteriorBuckets(t *testing.T) {
 			require.Equal(t, want, starts)
 			require.Equal(t, tc.wantNull, nulls)
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			in.Clean(proc.Mp())
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -638,6 +646,7 @@ func TestBoundedGapFillCoversLeadingAndTrailingBuckets(t *testing.T) {
 	require.Equal(t, int64(6), arg.ctr.partitionWindows)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -666,6 +675,7 @@ func TestBoundedGapFillPreservesSlidingWindowOverlap(t *testing.T) {
 	require.Equal(t, []int64{10, 10, 0, 0}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -706,6 +716,7 @@ func TestBoundedGapFillSlidingReplaysAllBoundaryTiesAcrossBatches(t *testing.T) 
 	require.Equal(t, []int64{6, 6, 10, 13, 20}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	for _, bat := range bats {
 		bat.Clean(proc.Mp())
 	}
@@ -733,7 +744,7 @@ func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
 	observed, err := types.ParseTimestamp(zone, "2023-08-01 00:00:05", 6)
 	require.NoError(t, err)
 	in := batch.New([]string{"ts", "val"})
-	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixed(in.Vecs[0], types.Datetime(observed), false, proc.Mp()))
 	in.Vecs[1] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
 	in.SetRowCount(1)
@@ -747,6 +758,7 @@ func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
 	require.Equal(t, []int64{0, 7, 0}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -789,7 +801,7 @@ func TestTimestampDayWindowsPreserveDSTCivilBoundaries(t *testing.T) {
 				require.NoError(t, parseErr)
 
 				in := batch.New([]string{"ts", "val"})
-				in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+				in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
 					types.Datetime(startTS),
 					types.Datetime(secondDay.ToTimestamp(zone)),
@@ -805,6 +817,7 @@ func TestTimestampDayWindowsPreserveDSTCivilBoundaries(t *testing.T) {
 				require.Equal(t, []int64{1, 2}, sums)
 
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				in.Clean(proc.Mp())
 				proc.Free()
 				require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -831,7 +844,7 @@ func TestTimestampFoldGapFillKeepsBothCivilOccurrences(t *testing.T) {
 			proc.GetSessionInfo().TimeZone = zone
 
 			in := batch.New([]string{"ts", "val"})
-			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
 				types.Datetime(first),
 				types.Datetime(second),
@@ -847,6 +860,7 @@ func TestTimestampFoldGapFillKeepsBothCivilOccurrences(t *testing.T) {
 			require.Equal(t, []int64{1, 2}, sums)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			in.Clean(proc.Mp())
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -871,7 +885,7 @@ func TestBoundedTimestampNonDivisorFoldGapFill(t *testing.T) {
 	second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
 
 	in := batch.New([]string{"ts", "val"})
-	in.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	in.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Timestamp{first, second}, nil, proc.Mp()))
 	in.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
 	in.SetRowCount(2)
@@ -884,6 +898,7 @@ func TestBoundedTimestampNonDivisorFoldGapFill(t *testing.T) {
 	}, starts)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -911,6 +926,7 @@ func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
 	require.Equal(t, []int64{0, 0}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -954,6 +970,7 @@ func TestBoundedGapFillExecutesNormalizedTimeAndYearBounds(t *testing.T) {
 			require.Len(t, starts, tc.wantRows)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
@@ -983,6 +1000,7 @@ func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
 	require.Equal(t, int64(3), arg.ctr.gapFillWindows)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1149,6 +1167,7 @@ func TestUnboundedGapFillEmptyInputDoesNotSynthesizeRows(t *testing.T) {
 	require.Empty(t, parts)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1171,6 +1190,7 @@ func TestBoundedGapFillSkipsEmptyChildBatches(t *testing.T) {
 	require.Equal(t, []int64{0, 0, 0}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1205,6 +1225,7 @@ func TestBoundedGapFillValidatesDomain(t *testing.T) {
 			}
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
@@ -1216,7 +1237,7 @@ func TestBoundedGapFillDoesNotPublishInferredBoundWarnings(t *testing.T) {
 	defer func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) }()
 	warnings := &process.WarningProbe{}
 	proc.WarningSink = warnings
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("bad"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -1241,7 +1262,7 @@ func TestBoundedGapFillDoesNotPublishInferredBoundWarnings(t *testing.T) {
 
 func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
 	proc.SetPrepareParams(params)
 
@@ -1258,7 +1279,7 @@ func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t 
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
 
-	params = vector.NewVec(types.T_text.ToType())
+	params = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(
 		params, []byte("2023-08-01 00:00:00"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -1266,6 +1287,7 @@ func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t 
 	require.Len(t, starts, 3)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.SetPrepareParams(nil)
 	params.Free(proc.Mp())
 	proc.Free()
@@ -1287,6 +1309,7 @@ func TestBoundedGapFillReuseAfterReset(t *testing.T) {
 	require.Equal(t, sums1, sums2)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1312,6 +1335,7 @@ func TestBoundedGapFillEmptyInputAcrossInternalFlushes(t *testing.T) {
 	require.Equal(t, int64(windowCount), arg.ctr.gapFillWindows)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1346,6 +1370,7 @@ func TestBoundedGapFillObservedRowAcrossInternalFlushes(t *testing.T) {
 			}
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			in.Clean(proc.Mp())
 			proc.Free()
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1379,6 +1404,7 @@ func TestBoundedGapFillAppliesDomainPerObservedPartition(t *testing.T) {
 	require.Equal(t, int64(6), arg.ctr.gapFillWindows)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1398,6 +1424,7 @@ func TestBoundedGapFillRejectsOversizedDomainBeforeReading(t *testing.T) {
 	require.ErrorContains(t, err, "partition")
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1484,6 +1511,7 @@ func TestTimeWinPartitionNullKeysGroupTogether(t *testing.T) {
 	require.Equal(t, []int64{30}, sums)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1510,6 +1538,7 @@ func TestTimeWinAnyNullPartitionKey(t *testing.T) {
 	require.Equal(t, []int64{nullPart, nullPart}, parts)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1566,6 +1595,7 @@ func TestTimeWinIntervalPathForwardsPartitionKeys(t *testing.T) {
 		"each input row keeps its own key on the pass-through path")
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -1620,6 +1650,7 @@ func TestTimeWinReuseAfterReset(t *testing.T) {
 			require.Equal(t, parts1, parts2)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			for _, b := range bats1 {
 				b.Clean(proc.Mp())
 			}
@@ -1680,6 +1711,7 @@ func TestTimeWinIntervalPathReuseAfterReset(t *testing.T) {
 	require.Equal(t, parts1, parts2)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	in1.Clean(proc.Mp())
 	in2.Clean(proc.Mp())
 	proc.Free()
@@ -1756,6 +1788,7 @@ func BenchmarkBoundedGapFillEmptyRange(b *testing.B) {
 	}
 	b.StopTimer()
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(b, int64(0), proc.Mp().CurrNB())
 }
@@ -1802,7 +1835,7 @@ func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
 	base := mustDatetime(t, "2023-08-01 00:00:00")
 	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
 
-	ts := vector.NewVec(types.T_datetime.ToType())
+	ts := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
 	defer ts.Free(proc.Mp())
 
@@ -1834,7 +1867,7 @@ func TestTimeWinDoesNotSkipGapFillEmptySlidingWindows(t *testing.T) {
 	base := mustDatetime(t, "2023-08-01 00:00:00")
 	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
 
-	ts := vector.NewVec(types.T_datetime.ToType())
+	ts := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
 	defer ts.Free(proc.Mp())
 
@@ -1892,6 +1925,7 @@ func TestTimeWinGapFillInternalFlushKeepsWindowsUnique(t *testing.T) {
 			require.Equal(t, int64(tc.gap+1), arg.ctr.gapFillWindows)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			for _, bat := range bats {
 				bat.Clean(proc.Mp())
 			}
@@ -1928,6 +1962,7 @@ func TestTimeWinInternalFlushPreservesDenseWindowsWithoutGapFill(t *testing.T) {
 	require.Zero(t, arg.ctr.gapFillWindows)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	for _, bat := range bats {
 		bat.Clean(proc.Mp())
 	}
@@ -1963,6 +1998,7 @@ func TestTimeWinGapFillInternalFlushResetsPerPartition(t *testing.T) {
 	require.Equal(t, int64(2*maxTimeWindowRows+5), arg.ctr.gapFillWindows)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	for _, bat := range bats {
 		bat.Clean(proc.Mp())
 	}
@@ -1996,6 +2032,7 @@ func TestTimeWinGapFillInternalFlushReuseAfterReset(t *testing.T) {
 	require.Equal(t, parts1, parts2)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	for _, bat := range bats1 {
 		bat.Clean(proc.Mp())
 	}
@@ -2062,6 +2099,7 @@ func TestTimeWinPartitionAcrossChildBatches(t *testing.T) {
 			}
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			for _, b := range bats {
 				b.Clean(proc.Mp())
 			}

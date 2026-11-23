@@ -2470,7 +2470,7 @@ func TestUniqueIndexRuntimeFilterUsesSelectedHashSlot(t *testing.T) {
 	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
 	require.True(t, ok)
 	require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
-	payload := vector.NewVec(types.T_any.ToType())
+	payload := vector.NewVec(types.T_any.ToType(), proc.Mp())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 	require.Equal(t, []int32{11, 12, 13},
 		vector.MustFixedColNoTypeCheck[int32](payload))
@@ -2532,7 +2532,7 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 	require.NoError(t, err)
 	packer := types.NewPacker()
 	expected := make(map[string]struct{}, len(values))
-	fullKeys := vector.NewVec(types.T_varchar.ToType())
+	fullKeys := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	for i := range values {
 		packer.Reset()
 		encoder(inputVec, i, packer)
@@ -2580,7 +2580,7 @@ func TestIndexJoinGeneratedSerializedRuntimeFilterExecutesEndToEnd(t *testing.T)
 	require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
 	require.Equal(t, int32(len(values)), runtimeFilter.Card)
 
-	payload := vector.NewVec(types.T_any.ToType())
+	payload := vector.NewVec(types.T_any.ToType(), proc.Mp())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 	require.Equal(t, len(values), payload.Length())
 	for i := 0; i < payload.Length(); i++ {

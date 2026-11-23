@@ -155,7 +155,7 @@ func TestStrIffFnBinarySelectsBranchBytes(t *testing.T) {
 	mp := proc.Mp()
 	binType := types.New(types.T_binary, -1, -1)
 
-	condVec := vector.NewVec(types.T_bool.ToType())
+	condVec := vector.NewVec(types.T_bool.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(condVec, []bool{true, false}, nil, mp))
 	thenVec := testutil.MakeVarlenaVector([][]byte{[]byte("hello-long"), []byte("hello-long")}, nil, binType, mp)
 	elseVec := testutil.MakeVarlenaVector([][]byte{nil, nil}, []uint64{0, 1}, binType, mp)

@@ -28,11 +28,11 @@ import (
 	"go.uber.org/zap"
 )
 
-func MakeMetadataBatch() *batch.Batch {
+func MakeMetadataBatch(mp *mpool.MPool) *batch.Batch {
 	return batch.NewWithSchema(
-		false,
 		CheckpointSchema.Attrs(),
 		CheckpointSchema.Types(),
+		mp,
 	)
 }
 

@@ -138,7 +138,7 @@ func TestPushdownGroupingExpressionPreservesRowsAndSlots(t *testing.T) {
 			evaluate := func(expr *planpb.Expr, values []string) []string {
 				input := batch.NewWithSize(1)
 				defer input.Clean(proc.Mp())
-				input.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 64, 0))
+				input.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 64, 0), proc.Mp())
 				for _, value := range values {
 					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), value == "", proc.Mp()))
 				}

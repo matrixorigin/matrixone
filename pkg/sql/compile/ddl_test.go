@@ -2882,8 +2882,8 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	})
 
 	t.Run("insert needed", func(t *testing.T) {
-		v1 := vector.NewVec(types.T_uint64.ToType())
-		v2 := vector.NewVec(types.T_varchar.ToType())
+		v1 := vector.NewVec(types.T_uint64.ToType(), mp)
+		v2 := vector.NewVec(types.T_varchar.ToType(), mp)
 		// no data in vectors
 		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
@@ -2894,9 +2894,9 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	})
 
 	t.Run("update needed", func(t *testing.T) {
-		v1 := vector.NewVec(types.T_uint64.ToType())
+		v1 := vector.NewVec(types.T_uint64.ToType(), mp)
 		_ = vector.AppendFixed(v1, uint64(5), false, mp)
-		v2 := vector.NewVec(types.T_varchar.ToType())
+		v2 := vector.NewVec(types.T_varchar.ToType(), mp)
 		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
 		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
@@ -2907,9 +2907,9 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	})
 
 	t.Run("update needed with catalog tinyint length", func(t *testing.T) {
-		v1 := vector.NewVec(types.T_uint8.ToType())
+		v1 := vector.NewVec(types.T_uint8.ToType(), mp)
 		_ = vector.AppendFixed(v1, uint8(5), false, mp)
-		v2 := vector.NewVec(types.T_varchar.ToType())
+		v2 := vector.NewVec(types.T_varchar.ToType(), mp)
 		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
 		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
@@ -2920,9 +2920,9 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	})
 
 	t.Run("no update needed", func(t *testing.T) {
-		v1 := vector.NewVec(types.T_uint64.ToType())
+		v1 := vector.NewVec(types.T_uint64.ToType(), mp)
 		_ = vector.AppendFixed(v1, uint64(20), false, mp)
-		v2 := vector.NewVec(types.T_varchar.ToType())
+		v2 := vector.NewVec(types.T_varchar.ToType(), mp)
 		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
 		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
 		assert.NoError(t, err)
@@ -2933,9 +2933,9 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	})
 
 	t.Run("mixed month and days use stable envelope", func(t *testing.T) {
-		v1 := vector.NewVec(types.T_uint64.ToType())
+		v1 := vector.NewVec(types.T_uint64.ToType(), mp)
 		_ = vector.AppendFixed(v1, uint64(1), false, mp)
-		v2 := vector.NewVec(types.T_varchar.ToType())
+		v2 := vector.NewVec(types.T_varchar.ToType(), mp)
 		_ = vector.AppendBytes(v2, []byte("mo"), false, mp)
 		needInsert, needUpdate, length, unit, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 30, "d")
 		assert.NoError(t, err)

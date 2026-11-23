@@ -113,8 +113,8 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 					} else {
 						mp := mpool.MustNewZero()
 						bat := batch.NewWithSize(2)
-						bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-						bat.Vecs[1] = vector.NewVec(types.New(types.T_bit, width, 0))
+						bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+						bat.Vecs[1] = vector.NewVec(types.New(types.T_bit, width, 0), mp)
 						defer func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()) }()
 						for n := 0; n <= len(values); n++ {
 							var value uint64

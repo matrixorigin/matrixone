@@ -128,7 +128,7 @@ func TestSumAvgPreparedExecutionBinaryNumericLiteral(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			proc := newPlanTestProcess(t)
 			mock := NewMockOptimizer(false, proc)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
 			proc.SetPrepareParams(params)

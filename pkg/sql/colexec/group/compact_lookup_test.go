@@ -34,7 +34,7 @@ import (
 func TestCompactTupleLookupScratchAndOffsets(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	vecs := []*vector.Vector{vector.NewVec(types.New(types.T_char, 1, 0)), vector.NewVec(types.New(types.T_char, 1, 0))}
+	vecs := []*vector.Vector{vector.NewVec(types.New(types.T_char, 1, 0), mp), vector.NewVec(types.New(types.T_char, 1, 0), mp)}
 	for col, values := range [][]string{
 		{"ignored", "A ", " ", "\x00", "\xff", "A"},
 		{"ignored", "B", "", "\x00", "\xfe", "B "},
@@ -116,7 +116,7 @@ func BenchmarkCompactGroupLookup(b *testing.B) {
 					b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
 					vecs := make([]*vector.Vector, columns)
 					for col := range vecs {
-						vec := vector.NewVec(types.New(types.T_char, 1, 0))
+						vec := vector.NewVec(types.New(types.T_char, 1, 0), mp)
 						vecs[col] = vec
 						b.Cleanup(func() { vec.Free(mp) })
 						for row := 0; row < rows; row++ {
@@ -167,7 +167,7 @@ func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			exprs := make([]*plan.Expr, tc.columns)
 			for col := range tc.columns {
-				input.Vecs[col] = vector.NewVec(typ)
+				input.Vecs[col] = vector.NewVec(typ, proc.Mp())
 				exprs[col] = colExprWithType(int32(col), typ)
 			}
 			const rows = 4 * hashmap.UnitLimit
@@ -232,7 +232,7 @@ func TestCompactGroupCanonicalKeysAndSpill(t *testing.T) {
 func TestCompactGroupFallbackAndGeneration(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	vec := vector.NewVec(types.New(types.T_char, 1, 0))
+	vec := vector.NewVec(types.New(types.T_char, 1, 0), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendBytes(vec, []byte("A"), false, mp))
 	ctr := container{mp: mp}
@@ -270,7 +270,7 @@ func TestCompactGroupFallbackAndGeneration(t *testing.T) {
 func TestCompactGroupAdmissionFailure(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	vec := vector.NewVec(types.New(types.T_char, 1, 0))
+	vec := vector.NewVec(types.New(types.T_char, 1, 0), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendBytes(vec, []byte("A"), false, mp))
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)

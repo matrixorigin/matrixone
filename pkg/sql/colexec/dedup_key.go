@@ -103,7 +103,7 @@ func FormatDedupKeyFromRow(proc *process.Process, exprs []*plan.Expr, input *bat
 	if err != nil {
 		return "", err
 	}
-	defer one.Clean(nil)
+	defer one.FreeWindow()
 	items := make([]string, len(exprs))
 	for i, expr := range exprs {
 		value, err := formatDedupPart(proc, expr, one)

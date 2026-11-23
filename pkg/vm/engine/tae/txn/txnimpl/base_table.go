@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -316,7 +315,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 			types.EmptyRowid,
 			true,
 			pks.Length(),
-			common.WorkspaceAllocator,
+			objectRowIDs.GetAllocator(),
 		)
 		if err == nil {
 			err = obj.GetObjectData().GetDuplicatedRows(
@@ -326,7 +325,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 				nil,
 				types.TS{}, types.MaxTs(),
 				objectRowIDs,
-				common.WorkspaceAllocator,
+				objectRowIDs.GetAllocator(),
 			)
 		}
 		if err == nil || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
@@ -623,7 +622,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		types.EmptyRowid,
 		true,
 		pks.Length(),
-		common.WorkspaceAllocator,
+		rowIDs.GetAllocator(),
 	)
 	err = foreachIncrementalObjectInPhase(snapshot, tbl.isTombstone, from, to, metricPhase, func(obj *catalog.ObjectEntry) error {
 		if isEmptyDroppedAppendableObject(obj) {
@@ -640,7 +639,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			nil,
 			from, to,
 			rowIDs,
-			common.WorkspaceAllocator,
+			rowIDs.GetAllocator(),
 		)
 		return err
 	})

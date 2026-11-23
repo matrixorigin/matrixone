@@ -186,7 +186,7 @@ func TestJSONNumericDirectTypesAndResolution(t *testing.T) {
 			if typ.IsDecimal() {
 				numericType.Scale = 2
 			}
-			numbers := vector.NewVec(numericType)
+			numbers := vector.NewVec(numericType, proc.Mp())
 			t.Cleanup(func() { numbers.Free(proc.Mp()) })
 			for range 2 {
 				switch typ {
@@ -276,7 +276,7 @@ func BenchmarkJSONNumericDirectComparison(b *testing.B) {
 				require.NoError(b, err)
 				encoded, err := types.EncodeJson(j)
 				require.NoError(b, err)
-				jsonValues := vector.NewVec(types.T_json.ToType())
+				jsonValues := vector.NewVec(types.T_json.ToType(), proc.Mp())
 				defer jsonValues.Free(proc.Mp())
 				for range length {
 					require.NoError(b, vector.AppendBytes(jsonValues, encoded, false, proc.Mp()))
@@ -287,12 +287,12 @@ func BenchmarkJSONNumericDirectComparison(b *testing.B) {
 					if constant {
 						numbers, err = vector.NewConstFixed(typ, types.Decimal128{B0_63: 100}, length, proc.Mp())
 					} else {
-						numbers = vector.NewVec(typ)
+						numbers = vector.NewVec(typ, proc.Mp())
 					}
 				} else if constant {
 					numbers, err = vector.NewConstFixed(types.T_int64.ToType(), int64(1), length, proc.Mp())
 				} else {
-					numbers = vector.NewVec(types.T_int64.ToType())
+					numbers = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				}
 				require.NoError(b, err)
 				defer numbers.Free(proc.Mp())

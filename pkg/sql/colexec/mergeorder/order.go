@@ -318,7 +318,7 @@ func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) erro
 		heap.Remove(ctr.inMemoryHeap, ctr.inMemoryHeapPos[index])
 	}
 	freeOrderColumns(proc.GetMPool(), bat, cols)
-	bat.Clean(proc.GetMPool())
+	bat.Clean(ctr.residentMP(proc))
 	ctr.batchList[index] = nil
 	ctr.orderCols[index] = nil
 	ctr.indexList[index] = -1
@@ -330,6 +330,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	if err != nil {
 		return false, err
 	}
+	if ctr.buf != nil && ctr.bufMP != mp {
+		ctr.cleanBuf()
+	}
 	if ctr.buf == nil {
 		ctr.buf, err = newBatchWithAllocation(
 			proc,
@@ -339,6 +342,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 		if err != nil {
 			return false, err
 		}
+		ctr.bufMP = mp
 	} else {
 		ctr.buf.CleanOnlyData()
 	}
@@ -630,7 +634,7 @@ func (mergeOrder *MergeOrder) Call(
 					ctr.generateCompares(mergeOrder.OrderBySpecs)
 					if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
 						freeOrderColumns(proc.Mp(), input.Batch, orderCols)
-						input.Batch.Clean(proc.Mp())
+						cleanOwned(input.Batch)
 						return vm.CancelResult, err
 					}
 				}
@@ -641,11 +645,11 @@ func (mergeOrder *MergeOrder) Call(
 					analyzer,
 				); err != nil {
 					freeOrderColumns(proc.Mp(), input.Batch, orderCols)
-					input.Batch.Clean(proc.Mp())
+					cleanOwned(input.Batch)
 					return vm.CancelResult, err
 				}
 				freeOrderColumns(proc.Mp(), input.Batch, orderCols)
-				input.Batch.Clean(proc.Mp())
+				cleanOwned(input.Batch)
 				continue
 			}
 
@@ -672,7 +676,7 @@ func (mergeOrder *MergeOrder) Call(
 					analyzer,
 				)
 				freeOrderColumns(proc.Mp(), input.Batch, orderCols)
-				input.Batch.Clean(proc.Mp())
+				cleanOwned(input.Batch)
 				if err != nil {
 					return vm.CancelResult, err
 				}
@@ -706,11 +710,9 @@ func (mergeOrder *MergeOrder) Call(
 					ctr.orderCols[0],
 				)
 				ctr.orderCols[0] = nil
-				if ctr.buf != nil {
-					ctr.buf.Clean(proc.Mp())
-					ctr.buf = nil
-				}
+				ctr.cleanBuf()
 				ctr.buf = ctr.batchList[0]
+				ctr.bufMP = ctr.residentMP(proc)
 				ctr.batchList[0] = nil
 				result := vm.NewCallResult()
 				result.Batch = ctr.buf

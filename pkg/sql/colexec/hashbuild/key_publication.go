@@ -153,10 +153,15 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterRuns(proc *process
 		return nil, nil, 0, false, err
 	}
 	defer lease.Release()
+	// Each run is created with the unique-key view of proc's pool.
+	runMP, err := hb.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
 	runs := make([]*vector.Vector, 0, count)
 	defer func() {
 		for _, v := range runs {
-			v.Free(proc.Mp())
+			v.Free(runMP)
 		}
 	}()
 	executors, ok, err := hashBuild.serializedRuntimeFilterExecutors(proc, spec)
@@ -215,7 +220,7 @@ func (hashBuild *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process,
 		return err
 	}
 	defer lease.Release()
-	keyMP, err := hb.uniqueKeyAllocation.MP(proc.Mp())
+	keyMP, err := hb.uniqueKeyMP(proc)
 	if err != nil {
 		return err
 	}

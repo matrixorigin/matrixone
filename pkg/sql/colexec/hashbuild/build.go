@@ -76,7 +76,6 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
 	hashBuild.ctr.autoSpillTriggered = false
 	hashBuild.ctr.autoSpillLimitAtTrigger = 0
-	hashBuild.ctr.autoSpillHasGrouping = false
 	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
 	budget, err := proc.GetExecutionResourceBudget()
@@ -1011,16 +1010,6 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 			return nil
 		}
 		rowCount := ctr.hashmapBuilder.uniqueKeys.count()
-		hasGrouping := false
-		_ = ctr.hashmapBuilder.uniqueKeys.visit(func(keys []*vector.Vector) error {
-			hasGrouping = hasGrouping || keys[0].GetGrouping().GetBitmap().CountRange(0, uint64(keys[0].Length())) > 0
-			return nil
-		})
-		if hasGrouping {
-			runtimeFilter.Typ = message.RuntimeFilter_PASS
-			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
-			return nil
-		}
 
 		// Always send the unique join keys; the consumer (ivfflat / fulltext
 		// search) decides whether to use them as an exact pk IN filter or to
@@ -1103,7 +1092,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		return nil
 	}
 
-	keyMP, err := ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
+	keyMP, err := ctr.hashmapBuilder.uniqueKeyMP(proc)
 	if err != nil {
 		return err
 	}
@@ -1211,9 +1200,8 @@ func (hashBuild *HashBuild) handleScalarRuntimeFilter(
 		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return nil
 	}
-	if keyVec.GetGrouping().GetBitmap().CountRange(0, 1) != 0 ||
-		runtimefilter.ExactKeyEncoding(spec, *keyVec.GetType()) !=
-			keycodec.ExactRuntimeFilterRaw {
+	if runtimefilter.ExactKeyEncoding(spec, *keyVec.GetType()) !=
+		keycodec.ExactRuntimeFilterRaw {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return nil
@@ -1343,9 +1331,15 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		return nil, nil, 0, false, err
 	}
 	defer freeRuntimeFilterExecutors(executors)
+	// The chunk payload is created with the unique-key view of proc's pool
+	// (cached by the binding, so the chunk gets this same pool).
+	payloadMP, err := hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
 	payload, rows, usable, err := hashBuild.materializeSerializedRuntimeFilterChunk(proc, spec, componentTypes, rowCount, hashBuild.ctr.hashmapBuilder.uniqueKeys.first.vecs, executors)
 	if payload != nil {
-		defer payload.Free(proc.Mp())
+		defer payload.Free(payloadMP)
 	}
 	if err != nil || !usable || rows == 0 {
 		return nil, nil, rows, usable, err
@@ -1442,10 +1436,10 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 	if err != nil {
 		return nil, 0, false, err
 	}
-	payload := vector.NewOffHeapVecWithType(payloadType)
+	payload := vector.NewVec(payloadType, payloadMP)
 	defer func() {
 		if err != nil || !usable {
-			payload.Free(proc.Mp())
+			payload.Free(payloadMP)
 		}
 	}()
 	if err = payload.PreExtendWithArea(

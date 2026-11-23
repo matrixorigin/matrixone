@@ -269,7 +269,7 @@ func (ag *aggState) initWithAllocation(
 	if !info.saveArg {
 		ag.vecs = make([]*vector.Vector, len(info.stateTypes))
 		for i, typ := range info.stateTypes {
-			ag.vecs[i], err = allocation.newVector(typ)
+			ag.vecs[i], err = allocation.newVector(typ, mp)
 			if err != nil {
 				for j := 0; j < i; j++ {
 					ag.vecs[j].Free(mp)
@@ -1185,7 +1185,7 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 	if !info.saveArg {
 		for _, vec := range ag.vecs {
 			err := func() error {
-				bufVec, err := ag.allocation.newVector(*vec.GetType())
+				bufVec, err := ag.allocation.newVector(*vec.GetType(), mp)
 				if err != nil {
 					return err
 				}
@@ -2698,6 +2698,8 @@ func (ae *aggExec) SetAllocationAccount(allocation *AllocationAccount) error {
 			"aggregate %d has opaque allocation state", ae.aggInfo.aggId)
 	}
 	if ae.mp != nil {
+		// The descriptor caches one view per pool, so every state vector of
+		// this executor uses the same view pointer end to end.
 		view, err := allocation.VectorMP(ae.mp)
 		if err != nil {
 			return err

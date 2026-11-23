@@ -475,8 +475,8 @@ func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 	producerMP, err := mp.WithAccount(account, 1, 102, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	src := batch.NewOffHeapWithSize(1)
-	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	src := batch.NewWithSize(1)
+	src.SetVector(0, vector.NewVec(types.T_int64.ToType(), producerMP))
 	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, producerMP))
 	src.SetRowCount(1)
 	sourceUsed := account.Snapshot().Used
@@ -513,7 +513,7 @@ func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, conn.DrainAllocationAccount(account))
 	require.NoError(t, conn.ClearAllocationAccount(account))
 	require.Nil(t, conn.cleanupSpool)
-	src.Clean(mp)
+	src.Clean(producerMP)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	_, err = registry.Finalize(account)
@@ -523,7 +523,7 @@ func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 func newConnectorSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	t.Helper()
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 	values := make([]int64, rows)
 	for i := range values {
 		values[i] = int64(i + 1)

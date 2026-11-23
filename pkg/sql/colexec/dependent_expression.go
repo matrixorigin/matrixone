@@ -231,6 +231,12 @@ type DependentExpressionFrame struct {
 	closed           bool
 }
 
+// pool is the pool the frame's owned cell values are created with and
+// operated through: the frame's allocation view, or the process pool.
+func (f *DependentExpressionFrame) pool() *mpool.MPool {
+	return expressionAllocationMP(f.proc.Mp(), f.allocation)
+}
+
 func (p *DependentExpressionProgram) NewFrame(proc *process.Process, inputs []DependentInput, factory DependentProgramFactory, allocation *mpool.MPool) (*DependentExpressionFrame, error) {
 	if p == nil || proc == nil || allocation == nil {
 		return nil, moerr.NewInternalErrorNoCtx("dependent frame requires owner")
@@ -283,7 +289,7 @@ func (f *DependentExpressionFrame) Close() {
 			c.executor.Free()
 		}
 		if c.owned && c.value != nil {
-			c.value.Free(f.proc.Mp())
+			c.value.Free(f.pool())
 		}
 	}
 	f.cells = nil
@@ -396,9 +402,9 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		if err := f.reserve(uint64(unsafe.Sizeof(vector.Vector{}))); err != nil {
 			return vm.ContinuationStep{}, err
 		}
-		cell.value = vector.NewOffHeapVecWithType(typ)
+		cell.value = vector.NewVec(typ, f.pool())
 		cell.owned = true
-		set := vector.GetConstSetFunction(typ, f.allocation)
+		set := vector.GetConstSetFunction(typ, f.pool())
 		if err := set(cell.value, input.Batch.Vecs[col.ColPos], int64(input.Row), 1); err != nil {
 			return vm.ContinuationStep{}, err
 		}
@@ -423,7 +429,7 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		}()
 		for i, index := range instruction.args {
 			typ := f.program.instructions[index].typ
-			null := vector.NewConstNull(typ, 1, f.allocation)
+			null := vector.NewConstNull(typ, 1, f.pool())
 			args[i] = &dependentValueReference{frame: f, index: index, null: null}
 		}
 		executor, err := instruction.native(f.proc, f.allocation, args)
@@ -464,9 +470,9 @@ func (t *dependentExpressionTask) Accept(child vm.Continuation) error {
 	if err := f.reserve(uint64(unsafe.Sizeof(vector.Vector{}))); err != nil {
 		return err
 	}
-	cell.value = vector.NewOffHeapVecWithType(typ)
+	cell.value = vector.NewVec(typ, f.pool())
 	cell.owned = true
-	if err := cell.value.UnionOne(result.Vecs[0], 0, f.allocation); err != nil {
+	if err := cell.value.UnionOne(result.Vecs[0], 0, f.pool()); err != nil {
 		return err
 	}
 	cell.ready = true
@@ -511,7 +517,7 @@ func (r *dependentValueReference) EvalWithoutResultReusing(proc *process.Process
 }
 func (r *dependentValueReference) Free() {
 	if r.null != nil {
-		r.null.Free(r.frame.proc.Mp())
+		r.null.Free(r.frame.pool())
 		r.null = nil
 	}
 }

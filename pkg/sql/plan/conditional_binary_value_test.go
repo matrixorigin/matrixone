@@ -71,9 +71,9 @@ func TestConditionalBinaryCoercionPreservesSelectedBytes(t *testing.T) {
 			ctx.binder = binder
 			input := batch.NewWithSize(3)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
-			input.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 10000, 0))
-			input.Vecs[2] = vector.NewVec(types.New(types.T_binary, 1, 0))
+			input.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 10000, 0), proc.Mp())
+			input.Vecs[2] = vector.NewVec(types.New(types.T_binary, 1, 0), proc.Mp())
 			for row := 0; row < 4; row++ {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], row == 0 || row == 3, row == 2, proc.Mp()))
 				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(strings.Repeat("😀", 10000)), row == 3, proc.Mp()))

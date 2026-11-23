@@ -69,7 +69,7 @@ func TestTemporalCBOTimestampKeyTypedSelectionAndResidual(t *testing.T) {
 	defer encoder.Free()
 	raw := batch.NewWithSize(1)
 	defer raw.Clean(proc.Mp())
-	raw.Vecs[0] = vector.NewVec(types.New(types.T_timestamp, 0, 6))
+	raw.Vecs[0] = vector.NewVec(types.New(types.T_timestamp, 0, 6), proc.Mp())
 	at := bound.ToTimestamp(time.UTC)
 	values := []types.Timestamp{types.ZeroTimestamp, at - 1, at, at + 1, at + 1000000}
 	require.NoError(t, vector.AppendFixedList(raw.Vecs[0], values, nil, proc.Mp()))

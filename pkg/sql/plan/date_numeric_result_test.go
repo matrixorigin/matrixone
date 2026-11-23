@@ -56,7 +56,7 @@ func TestDateNumericSerializedExecution(t *testing.T) {
 				proc.Base.SessionInfo.DefaultWeekFormatSet = true
 				input := batch.NewWithSize(1)
 				defer input.Clean(proc.Mp())
-				input.Vecs[0] = vector.NewVec(tc.input.ToType())
+				input.Vecs[0] = vector.NewVec(tc.input.ToType(), proc.Mp())
 				dates := []types.Date{types.DateFromCalendar(2024, 12, 31), types.ZeroDate, types.DateFromCalendar(2025, 1, 1)}
 				for i, d := range dates {
 					if tc.input == types.T_date {

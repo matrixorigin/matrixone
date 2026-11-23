@@ -44,7 +44,7 @@ func (s admissionLockService) Lock(ctx context.Context, table uint64, rows [][]b
 
 func admissionKeys(t *testing.T, proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("SNAPSHOT"), false, proc.Mp()))
 	return bat
 }
@@ -265,7 +265,7 @@ func TestLockRowsAdmissionRefusesWideningAndInvalidOwners(t *testing.T) {
 func TestExactMutationRowsKeepsHiddenIndexDMLExact(t *testing.T) {
 	runLockOpTest(t, func(proc *process.Process) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 		defer bat.Clean(proc.Mp())
 		for _, id := range []uint64{2, 4, 6} {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, proc.Mp()))

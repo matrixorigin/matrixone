@@ -119,7 +119,7 @@ func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err
 	}
 	ctr.unmatched = nil
 	if ctr.buf != nil {
-		ctr.buf.Clean(proc.Mp())
+		intersect.CleanBatch(proc, ctr.buf)
 		ctr.buf = nil
 	}
 	intersect.FreeMetadata()

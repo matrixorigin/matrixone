@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -43,10 +44,10 @@ func foreignTVFTestCols() []*plan.ColDef {
 	}
 }
 
-func newForeignTVFBatch(param *ExternalParam) *batch.Batch {
+func newForeignTVFBatch(param *ExternalParam, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(param.Cols))
 	for i, col := range param.Cols {
-		bat.Vecs[i] = vector.NewVec(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale), mp)
 		bat.Attrs = append(bat.Attrs, col.Name)
 	}
 	return bat
@@ -67,7 +68,7 @@ func TestForeignTVFReaderSQLDialect(t *testing.T) {
 	require.NoError(t, err)
 	defer r.Close()
 
-	bat := newForeignTVFBatch(param)
+	bat := newForeignTVFBatch(param, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
@@ -99,7 +100,7 @@ func TestForeignTVFReaderESQLDialect(t *testing.T) {
 	require.NoError(t, err)
 	defer r.Close()
 
-	bat := newForeignTVFBatch(param)
+	bat := newForeignTVFBatch(param, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
@@ -130,7 +131,7 @@ func TestForeignTVFReaderPrunedColumns(t *testing.T) {
 	require.NoError(t, err)
 	defer r.Close()
 
-	bat := newForeignTVFBatch(param)
+	bat := newForeignTVFBatch(param, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	finished, err := r.ReadBatch(context.Background(), bat, proc, nil)
 	require.NoError(t, err)
@@ -153,7 +154,7 @@ func TestForeignTVFReaderBadValue(t *testing.T) {
 	r, err := NewForeignTVFReader(param, io.NopCloser(strings.NewReader(csv)))
 	require.NoError(t, err)
 	defer r.Close()
-	bat := newForeignTVFBatch(param)
+	bat := newForeignTVFBatch(param, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	_, err = r.ReadBatch(context.Background(), bat, proc, nil)
 	require.Error(t, err)

@@ -50,7 +50,7 @@ func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *v
 	defer func() {
 		proc.WarningRowOffset = previousWarningRowOffset
 		if inputWindow != nil {
-			inputWindow.Clean(nil)
+			inputWindow.FreeWindow()
 		}
 	}()
 
@@ -79,7 +79,7 @@ func evalRowsetData(proc *process.Process, rowsetExpr []*plan.RowsetExpr, vec *v
 			}
 			if inputWindow == nil || inputWindowRow != rowPos {
 				if inputWindow != nil {
-					inputWindow.Clean(nil)
+					inputWindow.FreeWindow()
 				}
 				var err error
 				inputWindow, err = input.Window(int(rowPos), int(rowPos)+1)
@@ -365,6 +365,8 @@ func (valueScan *ValueScan) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := valueScan.OpAnalyzer
 	var err error
 	result := vm.NewCallResult()
+	// The previous Call's window is no longer referenced downstream.
+	valueScan.runningCtx.freeWindow()
 	if valueScan.runningCtx.nowIdx < len(valueScan.Batchs) {
 		result.Batch, err = valueScan.genSubBatchFromOriginBatch(proc)
 		if err != nil {
@@ -408,5 +410,6 @@ func (valueScan *ValueScan) genSubBatchFromOriginBatch(proc *process.Process) (*
 	if err != nil {
 		return nil, err
 	}
+	valueScan.runningCtx.window = subBatch
 	return subBatch, nil
 }

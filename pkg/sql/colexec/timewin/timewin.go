@@ -1193,10 +1193,10 @@ func appendTimestampBoundaryVector(
 	if len(views) > 0 && views[0] != nil {
 		mp = views[0]
 	}
-	vec = vector.NewOffHeapVecWithType(tsType)
+	vec = vector.NewVec(tsType, mp)
 	defer func() {
 		if err != nil {
-			vec.Free(proc.Mp())
+			vec.Free(mp)
 			vec = nil
 		}
 	}()
@@ -1227,10 +1227,10 @@ func appendTimestampIntervalBoundaryVector(
 	if len(views) > 0 && views[0] != nil {
 		mp = views[0]
 	}
-	vec = vector.NewOffHeapVecWithType(tsType)
+	vec = vector.NewVec(tsType, mp)
 	defer func() {
 		if err != nil {
-			vec.Free(proc.Mp())
+			vec.Free(mp)
 			vec = nil
 		}
 	}()
@@ -1302,7 +1302,7 @@ func timestampIntervalBoundaryInDomain(value types.Timestamp) bool {
 }
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
-	ctr.freeFlushedAggVecs(proc.Mp())
+	ctr.freeFlushedAggVecs(proc)
 	vecMP, err := ctr.allocation.MP(proc)
 	if err != nil {
 		return err
@@ -1310,14 +1310,14 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	// Aggregate results can carry a statement allocation account.  The result
 	// batch takes ownership of those vectors and therefore must preserve their
 	// off-heap/accounted storage class.
-	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
+	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for _, agg := range ctr.aggs {
 		vecs, err := agg.Flush()
 		if err != nil {
 			return err
 		}
-		result, err := aggexec.MergeSplitResult(vecs, vecMP)
+		result, err := aggexec.MergeSplitResult(vecs)
 		if err != nil {
 			return err
 		}
@@ -1341,7 +1341,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		}
 		return nil
 	}
-	bat := batch.NewOffHeapWithSize(1)
+	bat := batch.NewWithSize(1)
 	if ap.WStart {
 		if ap.timestampWindow() {
 			ctr.startVec, err = appendTimestampBoundaryVector(ctr.wStart, ap.TsType, proc, vecMP)
@@ -1356,7 +1356,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 				ctr.startVec.CleanOnlyData()
 				ctr.startVec.SetTypeScale(ap.TsType.Scale)
 			} else {
-				ctr.startVec, err = ctr.allocation.NewVector(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
+				ctr.startVec, err = ctr.allocation.NewVector(proc, types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
 				if err != nil {
 					return err
 				}
@@ -1390,7 +1390,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 				ctr.endVec.CleanOnlyData()
 				ctr.endVec.SetTypeScale(ap.TsType.Scale)
 			} else {
-				ctr.endVec, err = ctr.allocation.NewVector(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
+				ctr.endVec, err = ctr.allocation.NewVector(proc, types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
 				if err != nil {
 					return err
 				}
@@ -1423,14 +1423,14 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 }
 
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
-	ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
+	ctr.freeIntervalTimestampBoundaryVecs(proc)
 	vecMP, err := ctr.allocation.MP(proc)
 	if err != nil {
 		return err
 	}
 	// Input expressions can forward allocation-accounted vectors.  Both the
 	// result owner and the temporary expression batch must keep them off-heap.
-	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
+	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for _, vecs := range ctr.aggVec[ctr.i-1] {
 		ctr.bat.SetVector(int32(i), vecs[0])
@@ -1470,7 +1470,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 		ctr.clearWindowBounds()
 		return nil
 	}
-	bat := batch.NewOffHeapWithSize(1)
+	bat := batch.NewWithSize(1)
 	if ap.WStart {
 		bat.SetVector(0, ctr.tsVec[ctr.i-1])
 		batch.SetLength(bat, ctr.tsVec[ctr.i-1].Length())
@@ -1518,23 +1518,23 @@ func (ctr *container) setPartVecsForInterval(slot int) {
 // owned; TIMESTAMP boundary vectors are also batch owned because they bypass
 // cast executors. Without this, every flush after the first orphans vectors,
 // which partitioning makes routine rather than rare.
-func (ctr *container) freeFlushedAggVecs(mp *mpool.MPool) {
+func (ctr *container) freeFlushedAggVecs(proc *process.Process) {
 	if ctr.bat == nil {
 		return
 	}
 	for i := 0; i < len(ctr.aggs) && i < len(ctr.bat.Vecs); i++ {
 		if vec := ctr.bat.Vecs[i]; vec != nil {
-			vec.Free(mp)
+			ctr.allocation.FreeVector(proc, vec)
 			ctr.bat.SetVector(int32(i), nil)
 		}
 	}
 	if ctr.startVecInBatch && ctr.startVec != nil {
-		ctr.startVec.Free(mp)
+		ctr.allocation.FreeVector(proc, ctr.startVec)
 		ctr.startVec = nil
 	}
 	ctr.startVecInBatch = false
 	if ctr.endVecInBatch && ctr.endVec != nil {
-		ctr.endVec.Free(mp)
+		ctr.allocation.FreeVector(proc, ctr.endVec)
 		ctr.endVec = nil
 	}
 	ctr.endVecInBatch = false
@@ -1545,7 +1545,7 @@ func (ctr *container) freeFlushedAggVecs(mp *mpool.MPool) {
 // The interval path also places borrowed aggregate and partition vectors in
 // ctr.bat, so cleaning the whole batch here would free buffers still owned by
 // the input-vector cache.
-func (ctr *container) freeIntervalTimestampBoundaryVecs(mp *mpool.MPool) {
+func (ctr *container) freeIntervalTimestampBoundaryVecs(proc *process.Process) {
 	if ctr.bat != nil {
 		for i, vec := range ctr.bat.Vecs {
 			if vec != nil && ((ctr.startVecInBatch && vec == ctr.startVec) || (ctr.endVecInBatch && vec == ctr.endVec)) {
@@ -1555,13 +1555,13 @@ func (ctr *container) freeIntervalTimestampBoundaryVecs(mp *mpool.MPool) {
 	}
 
 	if ctr.startVecInBatch && ctr.startVec != nil {
-		ctr.startVec.Free(mp)
+		ctr.allocation.FreeVector(proc, ctr.startVec)
 		ctr.startVec = nil
 	}
 	ctr.startVecInBatch = false
 
 	if ctr.endVecInBatch && ctr.endVec != nil {
-		ctr.endVec.Free(mp)
+		ctr.allocation.FreeVector(proc, ctr.endVec)
 		ctr.endVec = nil
 	}
 	ctr.endVecInBatch = false
@@ -1599,7 +1599,7 @@ func (ctr *container) setPartVecsForWindows(slot, length int, proc *process.Proc
 	for p, src := range ctr.partVec[ctr.partIdx] {
 		if ctr.partOut[p] == nil {
 			var err error
-			ctr.partOut[p], err = ctr.allocation.NewVector(*src.GetType())
+			ctr.partOut[p], err = ctr.allocation.NewVector(proc, *src.GetType())
 			if err != nil {
 				return err
 			}
@@ -1655,11 +1655,10 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 			sels = append(sels, int64(i))
 		}
 	}
-	vecMP, err := ctr.allocation.MP(proc)
-	if err != nil {
-		return false, err
-	}
-	if err := ts.Shrink(sels, false, vecMP); err != nil {
+	// The time vector and the input columns are compacted in place; each
+	// belongs to its producer (executor or child), so it is compacted through
+	// its own pool.
+	if err := ts.Shrink(sels, false, ts.MPool()); err != nil {
 		return false, err
 	}
 	for i, vec := range bat.Vecs {
@@ -1674,7 +1673,7 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 			}
 		}
 		if !duplicate {
-			if err := vec.Shrink(sels, false, vecMP); err != nil {
+			if err := vec.Shrink(sels, false, vec.MPool()); err != nil {
 				return false, err
 			}
 		}

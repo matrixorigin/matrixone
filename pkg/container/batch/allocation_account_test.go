@@ -72,9 +72,8 @@ func newBatchAllocationTestSource(
 ) *Batch {
 	t.Helper()
 	bat := NewWithSchema(
-		true,
 		[]string{"id", "value"},
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp,
 	)
 	for i := 0; i < 32; i++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
@@ -134,23 +133,21 @@ func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	require.NotZero(t, sourceUsed)
 
 	// A plain pool copy is unaccounted.
-	plain, err := source.Clone(mp, false)
+	plain, err := source.Clone(mp)
 	require.NoError(t, err)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 	plain.Clean(mp)
 
-	// A view copy is off-heap and charged, whatever offHeap says.
-	cloned, err := source.Clone(view, false)
+	cloned, err := source.Clone(view)
 	require.NoError(t, err)
-	require.True(t, cloned.offHeap)
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
-	cloned.Clean(mp)
+	cloned.Clean(view)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
 	dup, err := source.Dup(view)
 	require.NoError(t, err)
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
-	dup.Clean(mp)
+	dup.Clean(view)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
 	selectedColumns, err := source.CloneSelectedColumns(
@@ -160,42 +157,50 @@ func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
-	selectedColumns.Clean(mp)
+	selectedColumns.Clean(view)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
+	// A window is a read-only reference: it allocates and charges nothing.
 	window, err := source.Window(4, 12)
 	require.NoError(t, err)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
-	window.Clean(mp)
+	window.FreeWindow()
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
 	var encoded bytes.Buffer
 	data, err := source.MarshalBinaryWithBuffer(&encoded, true)
 	require.NoError(t, err)
-	decoded := NewOffHeapEmpty()
+	decoded := NewWithSize(0)
 	require.NoError(t, decoded.UnmarshalFromReader(bytes.NewReader(data), view))
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
-	decoded.Clean(mp)
+	decoded.Clean(view)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
-	aliasDecoded := NewWithSchema(
-		true,
+	// A receiver owned by another pool is not the decoder's to free.
+	foreign := NewWithSchema(
 		source.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp,
+	)
+	require.Error(t, foreign.UnmarshalBinaryWithAnyMp(data, view))
+	foreign.Clean(mp)
+
+	aliasDecoded := NewWithSchema(
+		source.Attrs,
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view,
 	)
 	require.NoError(t, aliasDecoded.UnmarshalBinaryWithAnyMp(data, view))
-	// Alias decoding allocates nothing.
-	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
+	// Decoding with a pool copies into it.
+	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
 	require.NoError(
 		t,
 		aliasDecoded.UnmarshalFromReader(bytes.NewReader(data), view),
 	)
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
 	require.Equal(t, source.RowCount(), aliasDecoded.RowCount())
-	aliasDecoded.Clean(mp)
+	aliasDecoded.Clean(view)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
-	source.Clean(mp)
+	source.Clean(view)
 	require.Zero(t, mp.CurrNB())
 	finalizeTestBatchAllocationAccount(t, state)
 }
@@ -204,7 +209,7 @@ func TestBatchAccountedWindowBroadcastsScalarConstant(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 16)
 	mp := mpool.MustNewZero()
 	source := NewWithSize(2)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		source.Vecs[0], []int64{10, 20, 30, 40}, nil, mp,
 	))
@@ -232,7 +237,8 @@ func TestBatchAccountedWindowBroadcastsScalarConstant(t *testing.T) {
 func TestBatchDupThroughBasePoolCrossesStatementBoundary(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
-	source := newBatchAllocationTestSource(t, state.view(t, mp))
+	view := state.view(t, mp)
+	source := newBatchAllocationTestSource(t, view)
 	sourceUsed := state.account.Snapshot().Used
 	require.Positive(t, sourceUsed)
 
@@ -241,7 +247,7 @@ func TestBatchDupThroughBasePoolCrossesStatementBoundary(t *testing.T) {
 	require.Equal(t, source.RowCount(), cloned.RowCount())
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
-	source.Clean(mp)
+	source.Clean(view)
 	finalizeTestBatchAllocationAccount(t, state)
 	require.Equal(
 		t,
@@ -267,7 +273,7 @@ func TestBatchAccountedReaderAcceptsBitmapCapacityBeyondLogicalRows(t *testing.T
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalBinaryTo(&encoded))
-	decoded := NewOffHeapEmpty()
+	decoded := NewWithSize(0)
 	require.NoError(t, decoded.UnmarshalFromReader(&encoded, view))
 	require.Equal(t, 5, decoded.RowCount())
 	require.Equal(
@@ -276,7 +282,7 @@ func TestBatchAccountedReaderAcceptsBitmapCapacityBeyondLogicalRows(t *testing.T
 		vector.GetFixedAtWithTypeCheck[int64](decoded.Vecs[0], 0),
 	)
 
-	decoded.Clean(mp)
+	decoded.Clean(view)
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }
@@ -289,8 +295,8 @@ func TestBatchAccountedReaderPreservesRowsWhenVectorCountChanges(t *testing.T) {
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalBinaryTo(&encoded))
-	decoded := NewOffHeapWithSize(1)
-	decoded.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	decoded := NewWithSize(1)
+	decoded.Vecs[0] = vector.NewVec(types.T_int64.ToType(), view)
 	decoded.SetRowCount(7)
 	require.NoError(t, decoded.UnmarshalFromReader(&encoded, view))
 	require.Equal(t, source.RowCount(), decoded.RowCount())
@@ -301,49 +307,50 @@ func TestBatchAccountedReaderPreservesRowsWhenVectorCountChanges(t *testing.T) {
 		vector.GetFixedAtWithTypeCheck[int64](decoded.Vecs[0], 31),
 	)
 
-	decoded.Clean(mp)
+	decoded.Clean(view)
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
-func TestBatchGroupingCodecRoundTrip(t *testing.T) {
+func TestBatchSpillCodecRoundTrip(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
 	view := state.view(t, mp)
 	source := newBatchAllocationTestSource(t, mp)
-	source.Vecs[0].GetGrouping().Add(1, 7, 31)
-	source.Vecs[1].GetGrouping().Add(2, 9)
 	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
 
 	var encoded bytes.Buffer
-	spillSize, err := source.MarshalBinaryWithGroupingSize()
+	spillSize, err := source.MarshalBinaryForSpillSize()
 	require.NoError(t, err)
 	stableSize, err := source.MarshalBinarySize()
 	require.NoError(t, err)
 	require.Greater(t, stableSize-spillSize, len(source.ExtraBuf)/2)
-	require.NoError(t, source.MarshalBinaryWithGroupingTo(&encoded))
-	decoded := NewOffHeapEmpty()
-	require.NoError(t, decoded.UnmarshalFromReaderWithGrouping(&encoded, view))
+	require.NoError(t, source.MarshalBinaryForSpillTo(&encoded))
+	decoded := NewWithSize(0)
+	require.NoError(t, decoded.UnmarshalFromReaderForSpill(&encoded, view))
 	require.Empty(t, decoded.Attrs)
 	require.Empty(t, decoded.ExtraBuf)
-	for i := range source.Vecs {
-		require.True(t, decoded.Vecs[i].GetGrouping().IsSame(source.Vecs[i].GetGrouping()))
-	}
-	withoutGrouping := newBatchAllocationTestSource(t, mp)
-	encoded.Reset()
-	require.NoError(t, withoutGrouping.MarshalBinaryWithGroupingTo(&encoded))
-	require.NoError(t, decoded.UnmarshalFromReaderWithGrouping(&encoded, view))
-	for _, vec := range decoded.Vecs {
-		require.True(t, vec.GetGrouping().IsEmpty())
-	}
+	require.Equal(t, source.RowCount(), decoded.RowCount())
+	require.Len(t, decoded.Vecs, len(source.Vecs))
+	require.Equal(t,
+		vector.MustFixedColWithTypeCheck[int64](source.Vecs[0]),
+		vector.MustFixedColWithTypeCheck[int64](decoded.Vecs[0]))
+	require.Equal(t, source.Vecs[1].GetBytesAt(31), decoded.Vecs[1].GetBytesAt(31))
+	require.Zero(t, encoded.Len(), "spill codec must consume its whole frame")
 
-	decoded.Clean(mp)
-	withoutGrouping.Clean(mp)
+	// Reusing the decoded batch for a second frame overwrites it in place.
+	second := newBatchAllocationTestSource(t, mp)
+	require.NoError(t, second.MarshalBinaryForSpillTo(&encoded))
+	require.NoError(t, decoded.UnmarshalFromReaderForSpill(&encoded, view))
+	require.Equal(t, second.RowCount(), decoded.RowCount())
+
+	decoded.Clean(view)
+	second.Clean(mp)
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
-func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.T) {
+func TestBatchSpillCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 32)
 	mp := mpool.MustNewZero()
 	view := state.view(t, mp)
@@ -376,10 +383,10 @@ func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testi
 			encoded.Write(types.EncodeInt64(&payloadSize))
 			encoded.Write(payload.Bytes())
 
-			decoded := NewOffHeapEmpty()
+			decoded := NewWithSize(0)
 			require.ErrorContains(
 				t,
-				decoded.UnmarshalFromReaderWithGrouping(&encoded, view),
+				decoded.UnmarshalFromReaderForSpill(&encoded, view),
 				test.want,
 			)
 			require.Zero(t, state.account.Snapshot().Used)
@@ -390,25 +397,25 @@ func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testi
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
-func TestBatchGroupingCodecRejectsMismatchedRowCount(t *testing.T) {
+func TestBatchSpillCodecRejectsMismatchedRowCount(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 32)
 	mp := mpool.MustNewZero()
 	view := state.view(t, mp)
 	source := NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
 	source.SetRowCount(2)
 
 	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalBinaryWithGroupingTo(&encoded))
-	decoded := NewOffHeapEmpty()
+	require.NoError(t, source.MarshalBinaryForSpillTo(&encoded))
+	decoded := NewWithSize(0)
 	require.ErrorContains(
 		t,
-		decoded.UnmarshalFromReaderWithGrouping(&encoded, view),
+		decoded.UnmarshalFromReaderForSpill(&encoded, view),
 		"vector length does not match row count",
 	)
 
-	decoded.Clean(mp)
+	decoded.Clean(view)
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }
@@ -455,7 +462,7 @@ func TestBatchAccountedReaderRejectsInvalidLengthsBeforeAllocation(t *testing.T)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			decoded := NewOffHeapEmpty()
+			decoded := NewWithSize(0)
 			require.NotPanics(t, func() {
 				require.Error(t, decoded.UnmarshalFromReader(bytes.NewReader(test.data), view))
 			})
@@ -463,114 +470,6 @@ func TestBatchAccountedReaderRejectsInvalidLengthsBeforeAllocation(t *testing.T)
 			require.Zero(t, state.account.Snapshot().Used)
 		})
 	}
-	finalizeTestBatchAllocationAccount(t, state)
-}
-
-// newMixedBatchAllocationSource charges column 0 through accounted and
-// leaves column 1 on the base pool mp.
-func newMixedBatchAllocationSource(
-	t *testing.T,
-	mp *mpool.MPool,
-	accounted *mpool.MPool,
-	rows int,
-) *Batch {
-	t.Helper()
-	bat := NewOffHeapWithSize(2)
-	bat.Attrs = []string{"accounted", "unaccounted"}
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
-	for i := 0; i < rows; i++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, accounted))
-		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("unaccounted"), false, mp))
-	}
-	bat.SetRowCount(rows)
-	return bat
-}
-
-func TestBatchViewClonesPromoteOffHeap(t *testing.T) {
-	state := newTestBatchAllocationAccount(t, 16)
-	mp := mpool.MustNewZero()
-	view := state.view(t, mp)
-	source := NewWithSize(2)
-	source.Attrs = []string{"a", "b"}
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
-	require.NoError(t, vector.AppendFixed(source.Vecs[1], int64(2), false, mp))
-	source.SetRowCount(1)
-	require.Zero(t, state.account.Snapshot().Used)
-
-	dup, err := source.Dup(view)
-	require.NoError(t, err)
-	require.True(t, dup.offHeap)
-	require.Positive(t, state.account.Snapshot().Used)
-	dup.Clean(mp)
-	require.Zero(t, state.account.Snapshot().Used)
-
-	selected, err := source.CloneSelectedColumns(
-		[]int{0},
-		[]string{"a"},
-		view,
-	)
-	require.NoError(t, err)
-	require.True(t, selected.offHeap)
-	require.Positive(t, state.account.Snapshot().Used)
-	selected.Clean(mp)
-	require.Zero(t, state.account.Snapshot().Used)
-
-	source.Clean(mp)
-	finalizeTestBatchAllocationAccount(t, state)
-}
-
-// Batches carry no allocation account, so a BatchSet coalesces chunks from
-// any producer into one tail.
-func TestBatchSetFillsTailAcrossProducers(t *testing.T) {
-	state := newTestBatchAllocationAccount(t, 128)
-	mp := mpool.MustNewZero()
-	view := state.view(t, mp)
-	set := NewBatchSet(4)
-	first := newMixedBatchAllocationSource(t, mp, view, 2)
-	second := newMixedBatchAllocationSource(t, mp, mp, 2)
-
-	_, err := set.Extend(view, first, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, set.ReadyDeltaFor(second, second.RowCount()))
-	_, err = set.Extend(view, second, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, set.Length())
-	require.Equal(t, 1, set.ReadyCount())
-	require.Equal(t, 4, set.Get(0).RowCount())
-
-	first.Clean(mp)
-	second.Clean(mp)
-	set.Clean(mp)
-	finalizeTestBatchAllocationAccount(t, state)
-}
-
-func TestBatchSetCoalescesEquivalentParallelProducerChunks(t *testing.T) {
-	const (
-		batchMaxRows = 8192
-		chunkRows    = 72
-		chunkCount   = 114
-	)
-	state := newTestBatchAllocationAccount(t, 256)
-	mp := mpool.MustNewZero()
-	view := state.view(t, mp)
-	set := NewBatchSet(batchMaxRows)
-
-	for range chunkCount {
-		source := newMixedBatchAllocationSource(t, mp, view, chunkRows)
-		_, err := set.Extend(view, source, nil)
-		require.NoError(t, err)
-		source.Clean(mp)
-	}
-
-	require.Equal(t, 2, set.Length())
-	require.Equal(t, 1, set.ReadyCount())
-	require.Equal(t, batchMaxRows, set.Get(0).RowCount())
-	require.Equal(t, chunkRows*chunkCount-batchMaxRows, set.Get(1).RowCount())
-
-	set.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
@@ -595,10 +494,11 @@ func TestBatchSetChargesCopiesToView(t *testing.T) {
 	require.Equal(t, 2, set.Length())
 	require.Equal(t, 28, set.RowCount())
 
+	// A reuse buffer is consumed only when it belongs to the pool the set
+	// copies through.
 	reuse := NewWithSchema(
-		true,
 		first.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view,
 	)
 	third := newBatchAllocationTestSource(t, mp)
 	require.NoError(t, third.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
@@ -610,7 +510,7 @@ func TestBatchSetChargesCopiesToView(t *testing.T) {
 	first.Clean(mp)
 	second.Clean(mp)
 	third.Clean(mp)
-	set.Clean(mp)
+	set.Clean(view)
 	require.Zero(t, mp.CurrNB())
 	finalizeTestBatchAllocationAccount(t, state)
 }
@@ -622,9 +522,8 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	source := newBatchAllocationTestSource(t, mp)
 
 	destination := NewWithSchema(
-		true,
 		source.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view,
 	)
 	require.NoError(t, source.CloneTo(destination, view))
 	require.NotZero(t, state.account.Snapshot().Used)
@@ -637,14 +536,14 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	snapshot := state.account.Snapshot()
 	require.Equal(t, snapshot.Used, snapshot.Peak)
 
-	destination.FreeColumns(mp)
+	destination.FreeColumns(view)
 	require.Zero(t, state.account.Snapshot().Used)
 
 	require.NoError(t, destination.Union(source, []int64{1, 3, 5, 7}, view))
 	require.Equal(t, 4, destination.RowCount())
 	require.NotZero(t, state.account.Snapshot().Used)
 
-	destination.Clean(mp)
+	destination.Clean(view)
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }
@@ -653,21 +552,20 @@ func TestBatchAllocationAccountCloneRollback(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 1)
 	mp := mpool.MustNewZero()
 	source := NewWithSchema(
-		true,
 		[]string{"left", "right"},
-		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp,
 	)
 	for i := range source.Vecs {
 		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i), false, mp))
 	}
 	source.SetRowCount(1)
 
+	view := state.view(t, mp)
 	destination := NewWithSchema(
-		true,
 		source.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, view,
 	)
-	err := source.CloneTo(destination, state.view(t, mp))
+	err := source.CloneTo(destination, view)
 	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
 	require.Zero(t, state.account.Snapshot().Used)
 	require.Zero(t, state.registry.LiveAllocationMetadata())

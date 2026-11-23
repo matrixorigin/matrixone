@@ -352,7 +352,7 @@ func (hr *ResHashRelated) IsEmpty() bool {
 func (hr *ResHashRelated) BuildHashTable(
 	ctx context.Context, mp *mpool.MPool,
 	rebuild bool,
-	isStrHash bool, keyNullable bool, groupingAware bool, preAllocated uint64,
+	isStrHash bool, keyNullable bool, preAllocated uint64,
 	hashAllocation *hashtable.AllocationAccountSelection,
 	iteratorAllocation *hashmap.IteratorAllocation,
 ) error {
@@ -392,12 +392,6 @@ func (hr *ResHashRelated) BuildHashTable(
 		}
 		if err != nil {
 			return err
-		}
-		if groupingAware {
-			if err = h.SetGroupingAware(); err != nil {
-				h.Free()
-				return err
-			}
 		}
 		hr.Hash = h
 		if !reuseIterator {
@@ -1518,18 +1512,18 @@ func (ctr *container) newRuntimeEmptyGroupingSetBatch(
 		rows = len(setIDs)
 		rollupColumns--
 	}
-	output := batch.NewOffHeapWithSize(len(groupTypes))
+	output := batch.NewWithSize(len(groupTypes))
 	groupByMP := ctr.groupByMP()
 	for i := 0; i < rollupColumns; i++ {
-		output.Vecs[i] = vector.NewRollupConst(
+		output.Vecs[i] = vector.NewConstNull(
 			groupTypes[i], rows, groupByMP)
 	}
 	if setIDs != nil {
-		setIDVector := vector.NewOffHeapVecWithType(
-			groupTypes[len(groupTypes)-1])
+		setIDVector := vector.NewVec(
+			groupTypes[len(groupTypes)-1], groupByMP)
 		output.Vecs[len(output.Vecs)-1] = setIDVector
 		if err := vector.AppendFixedList(setIDVector, setIDs, nil, groupByMP); err != nil {
-			output.Clean(ctr.mp)
+			ctr.cleanGroupBatch(output)
 			return nil, err
 		}
 	}

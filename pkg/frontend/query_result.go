@@ -386,7 +386,7 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 			if ses.queryRowCount == 0 && ses.blockIdx == 0 && ses.rs != nil && len(ses.rs.ResultCols) > 0 {
 				empty := batch.NewWithSize(len(ses.rs.ResultCols))
 				for i, col := range ses.rs.ResultCols {
-					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ), ses.GetMemPool())
 				}
 				empty.SetRowCount(0)
 				if err := saveBatch(newCtx, ses, empty); err != nil {
@@ -757,7 +757,7 @@ func buildQueryResultMetaBatch(m *catalog.Meta, mp *mpool.MPool) (*batch.Batch, 
 	}()
 	bat.SetAttributes(catalog.MetaColNames)
 	for i, t := range catalog.MetaColTypes {
-		bat.Vecs[i] = vector.NewVec(t)
+		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
 	if err = vector.AppendFixed(bat.Vecs[catalog.QUERY_ID_IDX], types.Uuid(m.QueryId), false, mp); err != nil {
 		return nil, err
@@ -1111,7 +1111,7 @@ func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
 	}
 	empty := batch.NewWithSize(len(ses.rs.ResultCols))
 	for i, col := range ses.rs.ResultCols {
-		empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+		empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ), ses.proc.Mp())
 	}
 	defer empty.Clean(ses.proc.Mp())
 	empty.SetRowCount(0)

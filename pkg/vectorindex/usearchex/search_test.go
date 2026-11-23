@@ -59,7 +59,7 @@ func generateTestVector(dimensions uint) []float32 {
 // usearch keys map to), as hnsw does: a dense cbitmap, else the smaller of CRoaring and
 // a C sorted64.
 func buildMembership(t *testing.T, mp *mpool.MPool, keys []int64) docfilter.MembershipFilter {
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	defer v.Free(mp)
 	for _, k := range keys {
 		require.NoError(t, vector.AppendFixed(v, k, false, mp))
@@ -72,7 +72,7 @@ func buildMembership(t *testing.T, mp *mpool.MPool, keys []int64) docfilter.Memb
 // buildBloomMembership builds a CBloomFilter-backed MembershipFilter (the
 // approximate, non-integer-PK path).
 func buildBloomMembership(t *testing.T, mp *mpool.MPool, keys []uint64) docfilter.MembershipFilter {
-	v := vector.NewVec(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer v.Free(mp)
 	for _, k := range keys {
 		b := make([]byte, 8)
@@ -190,7 +190,7 @@ func TestFilteredSearchMembershipRejectsGoSorted64(t *testing.T) {
 	vec := generateTestVector(defaultTestDimensions)
 	require.NoError(t, index.Add(uint64(100), vec))
 
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendFixed(v, int64(100), false, mp))
 	require.NoError(t, vector.AppendFixed(v, int64(1)<<40, false, mp))

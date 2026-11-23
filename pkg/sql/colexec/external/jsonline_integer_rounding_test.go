@@ -122,7 +122,7 @@ func TestJSONLineIntegerAssignmentRounding(t *testing.T) {
 			}
 			resolveExternalErrorMode(param)
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(typ)
+			bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			defer bat.Clean(proc.Mp())
 			err := readJSONLineText(t, param, proc, bat, tc.record+"\n")
 			if tc.wantErr {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,7 +30,7 @@ import (
 
 var (
 	cacheJSONVectorSize = reflect.TypeFor[vector.Vector]().Size()
-	cacheJSONLeaseSize  = reflect.TypeFor[vector.RefCountedBufferLease]().Size()
+	cacheJSONLeaseSize  = reflect.TypeFor[bufferlease.RefCounted]().Size()
 	cacheJSONReaderSize = reflect.TypeFor[cacheJSONReader]().Size()
 	cacheJSONResultSize = reflect.TypeFor[cacheJSONQueryResult]().Size()
 	cacheJSONCursorSize = reflect.TypeFor[cacheJSONCursor]().Size()
@@ -41,7 +42,7 @@ var (
 type cacheJSONReader struct {
 	rows        *vector.Vector
 	column      *vector.Vector
-	lease       *vector.RefCountedBufferLease
+	lease       *bufferlease.RefCounted
 	view        *mpool.MPool
 	start       int
 	length      int
@@ -97,7 +98,7 @@ func newCacheJSONReader(data fscache.Data, marked validatedVectorCacheDataMarker
 		}
 		return nil, moerr.NewInvalidInputNoCtx("JSON cache reader requires a JSON column")
 	}
-	lease, err := vector.NewRefCountedBufferLease(nil, capacity, release)
+	lease, err := bufferlease.NewRefCounted(nil, capacity, release)
 	if err != nil {
 		release()
 		if releaseMeta != nil {
@@ -194,7 +195,7 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 	if mp, err = r.allocationMP(mp); err != nil {
 		return nil, err
 	}
-	mapping := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	mapping := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, row := range rows {
 		if err = vector.AppendFixed(mapping, int64(r.physicalRow(int(row))), false, mp); err != nil {
 			mapping.Free(mp)
@@ -207,7 +208,7 @@ func (r *cacheJSONReader) Select(rows []int64, mp *mpool.MPool) (vector.JSONRead
 		return nil, io.ErrClosedPipe
 	}
 	ownedMeta := ownerMeta
-	lease, err := vector.NewRefCountedBufferLease(nil, int64(mapping.Allocated()), func() {
+	lease, err := bufferlease.NewRefCounted(nil, int64(mapping.Allocated()), func() {
 		mapping.Free(mp)
 		parent.Release()
 		if ownedMeta != nil {
@@ -258,7 +259,7 @@ func (r *cacheJSONReader) Materialize(mp *mpool.MPool) (*vector.Vector, error) {
 	if err != nil {
 		return nil, err
 	}
-	destination := vector.NewOffHeapVecWithType(*r.column.GetType())
+	destination := vector.NewVec(*r.column.GetType(), mp)
 	for row := 0; row < r.length; row++ {
 		physicalRow := r.physicalRow(row)
 		null := r.column.IsNull(uint64(physicalRow))
@@ -405,7 +406,7 @@ type cacheJSONQueryResult struct {
 	value        bytejson.ByteJson
 	exists       bool
 	sqlNull      bool
-	lease        *vector.RefCountedBufferLease
+	lease        *bufferlease.RefCounted
 	releaseMeta  func()
 	releaseValue func()
 	view         *mpool.MPool

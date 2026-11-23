@@ -42,7 +42,7 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for i, values := range [][]bool{{true, true, false, false}, {true, false, true, false}} {
-				input.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+				input.Vecs[i] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
 			}
 			input.SetRowCount(4)
@@ -105,7 +105,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 				if oid.IsDecimal() && side == 0 {
 					typ.Scale = 2
 				}
-				v := vector.NewVec(typ)
+				v := vector.NewVec(typ, proc.Mp())
 				input.Vecs[side] = v
 				values := []uint64{100, 150, 90, 200}
 				if side == 1 {
@@ -157,7 +157,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 }
 
 func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
-	for _, shape := range []string{"constant", "grouping"} {
+	for _, shape := range []string{"constant"} {
 		t.Run(shape, func(t *testing.T) {
 			proc, allocation, _ := dependentTestAllocation(t)
 			input := batch.NewWithSize(2)
@@ -168,9 +168,6 @@ func TestBooleanValidityConservativeMetadataAndConstants(t *testing.T) {
 				require.NoError(t, err)
 			}
 			input.SetRowCount(4)
-			if shape == "grouping" {
-				input.Vecs[0].GetGrouping().Add(1)
-			}
 			cols := make([]*plan.Expr, 0, 2)
 			for side := range 2 {
 				cols = append(cols, &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(side)}}})
@@ -202,7 +199,7 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 	require.NoError(t, err)
 	input := batch.NewWithSize(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, true, false, true, false, true, false}, nil, proc.Mp()))
 	input.SetRowCount(8)
 	column := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}

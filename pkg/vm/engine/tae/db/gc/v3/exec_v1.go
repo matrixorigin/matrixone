@@ -178,7 +178,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		return err
 	}
 
-	e.result.vecToGC = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	e.result.vecToGC = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0), e.mp)
 	finalSinker, err := MakeFinalCanGCSinker(e.result.vecToGC, e.mp)
 	if err != nil {
 		return err
@@ -206,7 +206,7 @@ func (e *CheckpointBasedGCJob) Result() (*vector.Vector, []objectio.ObjectStats)
 }
 
 func dataProcess(b *bloomfilter.BloomFilter, vec *vector.Vector, pool *mpool.MPool) error {
-	gcVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	gcVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0), pool)
 	for i := 0; i < vec.Length(); i++ {
 		stats := objectio.ObjectStats(vec.GetBytesAt(i))
 		if err := vector.AppendBytes(
@@ -264,7 +264,7 @@ func MakeBloomfilterCoarseFilter(
 		dropTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
-		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0), mp)
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
 			if err = vector.AppendBytes(

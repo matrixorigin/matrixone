@@ -276,7 +276,7 @@ func TestBoundedWorkspaceFailureRetainsNamesWithoutDeleting(t *testing.T) {
 
 func boundedInput(t *testing.T, mp *mpool.MPool, values ...string) *batch.Batch {
 	t.Helper()
-	bat := batch.NewWithSchema(false, []string{"id", "value"}, []types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+	bat := batch.NewWithSchema([]string{"id", "value"}, []types.Type{types.T_int32.ToType(), types.T_text.ToType()}, mp)
 	for i, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(value), false, mp))
@@ -565,20 +565,19 @@ func (*metadataCaptureSink) Sync(context.Context) (*objectio.ObjectStats, error)
 func (*metadataCaptureSink) Reset()       {}
 func (*metadataCaptureSink) Close() error { return nil }
 
-func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
+func TestBoundedRunsPreserveNullsAtSink(t *testing.T) {
 	for _, sortKey := range []int{-1, 0} {
 		t.Run(fmt.Sprintf("sort=%d", sortKey), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			attrs := []string{"id", "value"}
 			typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-			input := batch.NewWithSchema(false, attrs, typs)
+			input := batch.NewWithSchema(attrs, typs, mp)
 			defer input.Clean(mp)
 			for i := 0; i < 4; i++ {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(3-i), false, mp))
-				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(strings.Repeat("x", 200)), false, mp))
+				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(strings.Repeat("x", 200)), i%2 == 1, mp))
 			}
 			input.SetRowCount(4)
-			input.Vecs[1].GetGrouping().Add(1, 3)
 			seen := make(map[int32]bool)
 			file := &metadataCaptureSink{visit: func(got *batch.Batch) {
 				ids := vector.MustFixedColNoTypeCheck[int32](got.Vecs[0])
@@ -586,7 +585,10 @@ func TestBoundedRunsPreserveTransientMetadataAtSink(t *testing.T) {
 					original := 3 - int(id)
 					require.False(t, seen[id])
 					seen[id] = true
-					require.Equal(t, input.Vecs[1].GetGrouping().Contains(uint64(original)), got.Vecs[1].GetGrouping().Contains(uint64(row)))
+					require.Equal(t, input.Vecs[1].IsNull(uint64(original)), got.Vecs[1].IsNull(uint64(row)))
+					if !got.Vecs[1].IsNull(uint64(row)) {
+						require.Equal(t, strings.Repeat("x", 200), got.Vecs[1].GetStringAt(row))
+					}
 				}
 			}}
 			sink := NewSinker(sortKey, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, mp, nil,
@@ -620,7 +622,7 @@ func TestBoundedRunDoesNotRepeatedlyChargeDeadAliasedArea(t *testing.T) {
 		t.Run(fmt.Sprintf("null=%v", nullsOnly), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_text.ToType()
-			input := batch.NewWithSchema(false, []string{"value"}, []types.Type{typ})
+			input := batch.NewWithSchema([]string{"value"}, []types.Type{typ}, mp)
 			defer input.Clean(mp)
 			const rows = objectio.BlockMaxRows
 			alias, err := vector.NewConstBytes(typ, []byte(strings.Repeat("x", 16360)), rows, mp)
@@ -847,7 +849,7 @@ func TestBoundedRunSortFailureReleasesAndResets(t *testing.T) {
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	attrs := []string{"id", "value"}
 	typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-	input := batch.NewWithSchema(true, attrs, typs)
+	input := batch.NewWithSchema(attrs, typs, mp)
 	t.Cleanup(func() { input.Clean(mp) })
 	const rows = 128
 	for i := 0; i < rows; i++ {

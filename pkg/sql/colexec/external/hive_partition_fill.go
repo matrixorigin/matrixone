@@ -104,7 +104,7 @@ func validatePartitionValue(strVal, colName string, colType tree.HivePartColType
 	if typ == types.T_any {
 		return nil
 	}
-	vec := vector.NewVec(types.NewWithCharset(typ, colType.Width, colType.Scale, uint8(colType.Charset)))
+	vec := vector.NewVec(types.NewWithCharset(typ, colType.Width, colType.Scale, uint8(colType.Charset)), proc.Mp())
 	col := &plan.ColDef{
 		Name: colName,
 		Typ: plan.Type{

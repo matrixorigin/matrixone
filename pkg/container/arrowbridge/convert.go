@@ -73,8 +73,8 @@ type ConvertStats struct {
 	UnalignedFallbacks        int64
 }
 
-func newOutputVector(typ types.Type) (*vector.Vector, error) {
-	return vector.NewOffHeapVecWithType(typ), nil
+func newOutputVector(typ types.Type, mp *mpool.MPool) (*vector.Vector, error) {
+	return vector.NewVec(typ, mp), nil
 }
 
 // Convert builds a complete batch transactionally. Borrowed columns alias
@@ -138,7 +138,7 @@ func (p *Plan) convert(
 	}
 
 	rows := int(record.NumRows())
-	bat := batch.NewOffHeap(p.attrs)
+	bat := batch.New(p.attrs)
 	defer func() {
 		if err != nil {
 			bat.Clean(mp)
@@ -358,7 +358,7 @@ func convertFixed(
 	buffers := data.Buffers()
 	if len(buffers) < 2 || buffers[1] == nil {
 		if column.Len() == 0 {
-			vec, err := newOutputVector(target)
+			vec, err := newOutputVector(target, mp)
 			return vec, stats, err
 		}
 		return nil, stats, moerr.NewInvalidInput(ctx, "Arrow fixed-width value buffer is missing")
@@ -389,11 +389,9 @@ func convertFixed(
 	if err := holdArrayData(keeper, data, view, int64(buffers[1].Cap())); err != nil {
 		return nil, stats, err
 	}
-	vec, err := vector.NewBorrowedFixedVector(target, column.Len(), view)
-	if err != nil {
-		return nil, stats, err
-	}
-	if err = installValidity(column, vec, nullCount); err != nil {
+	// A read-only reference vector over the Arrow buffer the keeper holds.
+	vec := vector.NewVecWithData(target, column.Len(), view, nil, nil)
+	if err := installValidity(column, vec, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, stats, err
 	}
@@ -412,7 +410,7 @@ func materializeFixedLayout(
 	mp *mpool.MPool,
 ) (*vector.Vector, ConvertStats, error) {
 	stats := ConvertStats{MaterializedPayloadBytes: int64(len(view)), MaterializedColumns: 1}
-	vec, err := newOutputVector(target)
+	vec, err := newOutputVector(target, mp)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -554,17 +552,30 @@ func convertVarlen(
 		return vec, stats, err
 	}
 
-	vec, err := newOutputVector(target)
+	// The vector is a read-only reference: its descriptors live in a buffer
+	// of mp handed to the keeper together with the Arrow values it points
+	// into, and both are released when the keeper drops its leases.
+	if keeper == nil {
+		return nil, ConvertStats{}, moerr.NewInternalErrorNoCtx("borrowed Arrow buffer has no lender")
+	}
+	descriptorBuf, err := mp.Alloc(column.Len()*types.VarlenaSize, true)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
-	if err = vec.PreExtend(column.Len(), mp); err != nil {
-		// Keep failure transactional even when PreExtend performed partial work;
-		// Convert cannot clean this vector until it is installed in the batch.
-		vec.Free(mp)
+	for i := range descriptorBuf {
+		descriptorBuf[i] = 0
+	}
+	descriptorLease, err := bufferlease.NewRefCounted(descriptorBuf, int64(len(descriptorBuf)), func() { mp.Free(descriptorBuf) })
+	if err != nil {
+		mp.Free(descriptorBuf)
 		return nil, ConvertStats{}, err
 	}
-	vec.SetLength(column.Len())
+	err = keeper.HoldLease(descriptorLease)
+	descriptorLease.Release()
+	if err != nil {
+		return nil, ConvertStats{}, err
+	}
+	vec := vector.NewVecWithData(target, column.Len(), descriptorBuf, nil, nil)
 	descriptors := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
 	for row := 0; row < column.Len(); row++ {
 		if column.IsNull(row) {
@@ -589,10 +600,8 @@ func convertVarlen(
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}
-	if err = vec.InstallBorrowedArea(view.values); err != nil {
-		vec.Free(mp)
-		return nil, ConvertStats{}, err
-	}
+	vec.Free(nil)
+	vec = vector.NewVecWithData(target, column.Len(), descriptorBuf, view.values, nil)
 	if err = installValidity(column, vec, nullCount); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
@@ -761,7 +770,7 @@ func materializeVarlen(
 	view varlenView,
 	mp *mpool.MPool,
 ) (*vector.Vector, ConvertStats, error) {
-	vec, err := newOutputVector(target)
+	vec, err := newOutputVector(target, mp)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
@@ -796,7 +805,7 @@ func materializeConverted(
 	if binding.kind == conversionMaterializeDictionary {
 		return materializeDictionary(ctx, column, binding, mp, location)
 	}
-	vec, err := newOutputVector(binding.target.Type)
+	vec, err := newOutputVector(binding.target.Type, mp)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
@@ -1166,7 +1175,7 @@ func materializeDictionary(
 		return nil, ConvertStats{}, moerr.NewInvalidInputf(ctx, "invalid Arrow Dictionary value type %s", values.DataType())
 	}
 
-	vec, err := newOutputVector(binding.target.Type)
+	vec, err := newOutputVector(binding.target.Type, mp)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}

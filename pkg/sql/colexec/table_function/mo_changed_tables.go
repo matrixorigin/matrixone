@@ -124,7 +124,7 @@ func (s *moChangedTablesState) call(tf *TableFunction, proc *process.Process) (v
 		return vm.CancelResult, err
 	}
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		s.batch.CleanOnlyData()
 	}

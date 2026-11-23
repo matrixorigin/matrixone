@@ -31,7 +31,7 @@ func TestUnionPlainFixedSelectionReuse(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/%s/int32=%t", oid, backing, index32), func(t *testing.T) {
 					mp := mpool.MustNewZero()
 					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-					src, dst := NewOffHeapVecWithType(oid.ToType()), NewOffHeapVecWithType(oid.ToType())
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
 					t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
 					require.NoError(t, src.PreExtend(4, mp))
 					src.SetLength(4)
@@ -52,14 +52,9 @@ func TestUnionPlainFixedSelectionReuse(t *testing.T) {
 							data, allocErr := mp.Alloc(4*width, true)
 							require.NoError(t, allocErr)
 							copy(data, src.data[:4*width])
-							lease, leaseErr := NewRefCountedBufferLease(data, int64(cap(data)), func() { mp.Free(data) })
-							if leaseErr != nil {
-								mp.Free(data)
-							}
-							require.NoError(t, leaseErr)
-							input, err = NewBorrowedFixedVector(oid.ToType(), 4, data)
+							input = NewVecWithData(oid.ToType(), 4, data, nil, nil)
 							// The test is the lender: it frees data after input.
-							t.Cleanup(lease.Release)
+							t.Cleanup(func() { mp.Free(data) })
 						}
 						require.NoError(t, err)
 						t.Cleanup(func() { input.Free(mp) })
@@ -98,7 +93,7 @@ func TestUnionFixedSelection(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/int32=%t/nullable=%t", oid, index32, nullable), func(t *testing.T) {
 					mp := mpool.MustNewZero()
 					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-					src, dst := NewVec(oid.ToType()), NewVec(oid.ToType())
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
 					t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
 					require.NoError(t, src.PreExtend(4, mp))
 					src.SetLength(4)
@@ -118,7 +113,6 @@ func TestUnionFixedSelection(t *testing.T) {
 						}
 						copy(src.data[row*width:(row+1)*width], expected[row])
 					}
-					src.GetGrouping().Add(2)
 					if nullable {
 						src.GetNulls().Add(1)
 					}
@@ -144,7 +138,6 @@ func TestUnionFixedSelection(t *testing.T) {
 						for row, sourceRow := range []int{0, 3, 2, 2, 1} {
 							isNull := nullable && sourceRow == 1
 							require.Equal(t, isNull, dst.IsNull(uint64(row)))
-							require.Equal(t, sourceRow == 2, dst.GetGrouping().Contains(uint64(row)))
 							if !isNull {
 								require.Equal(t, expected[sourceRow], dst.data[row*width:(row+1)*width])
 							}

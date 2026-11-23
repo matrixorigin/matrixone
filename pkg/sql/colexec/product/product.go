@@ -117,12 +117,17 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.inBat = nil
 					continue
 				}
-				ctr.rbat = batch.NewOffHeapWithSize(len(product.Result))
+				resMP, err := product.resultAllocation.MP(proc.Mp())
+				if err != nil {
+					return result, err
+				}
+				ctr.rbat = batch.NewWithSize(len(product.Result))
+				ctr.rbatMP = resMP
 				for i, rp := range product.Result {
 					if rp.Rel == 0 {
-						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.inBat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewVec(*ctr.inBat.Vecs[rp.Pos].GetType(), resMP)
 					} else {
-						ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(*buildBat.Vecs[rp.Pos].GetType())
+						ctr.rbat.Vecs[i] = vector.NewVec(*buildBat.Vecs[rp.Pos].GetType(), resMP)
 					}
 				}
 			} else {

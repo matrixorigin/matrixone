@@ -75,8 +75,10 @@ func TestUnboundedAggregateChunkAndReuse(t *testing.T) {
 			var child *colexec.MockOperator
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				if child != nil {
 					child.Free(proc, false, nil)
+					colexec.FreeMockChildren(child)
 				}
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
@@ -124,6 +126,7 @@ func TestUnboundedAggregateChunkAndReuse(t *testing.T) {
 				}
 				arg.Reset(proc, false, nil)
 				child.Free(proc, false, nil)
+				colexec.FreeMockChildren(child)
 				child = nil
 			}
 		})
@@ -143,7 +146,7 @@ func TestUnboundedTimestampRangeFoldAndMonotonic(t *testing.T) {
 			require.NoError(t, err)
 			proc.GetSessionInfo().TimeZone = location
 			const rows = 160
-			order := vector.NewVec(types.T_timestamp.ToType())
+			order := vector.NewVec(types.T_timestamp.ToType(), mp)
 			values := make([]int32, rows)
 			peers := make([]int64, 0, rows)
 			for i := range values {
@@ -193,7 +196,7 @@ func TestUnboundedTimestampRangeFoldAndMonotonic(t *testing.T) {
 				}
 				require.Equal(t, types.Decimal128FromInt64(want), value, "row %d", row)
 			}
-			result.Free(mp)
+			result.Free(result.MPool())
 			if fold {
 				require.Nil(t, ctr.runningAgg)
 				return
@@ -205,7 +208,7 @@ func TestUnboundedTimestampRangeFoldAndMonotonic(t *testing.T) {
 				prefix += int64(values[end+row])
 				require.Equal(t, types.Decimal128FromInt64(prefix), value)
 			}
-			result.Free(mp)
+			result.Free(result.MPool())
 			require.Nil(t, ctr.runningAgg)
 		})
 	}
@@ -236,6 +239,7 @@ func TestUnboundedDistinctFullAndRange(t *testing.T) {
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				child.Free(proc, false, nil)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())

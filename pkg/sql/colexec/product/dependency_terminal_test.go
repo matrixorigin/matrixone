@@ -50,6 +50,7 @@ func TestProductProbeBuildOutcomes(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
 				proc.GetMessageBoard().Reset()
 				require.NoError(t, arg.ClearAllocationAccount(account))
 				_, _, err := registry.CompleteTerminal(account)
@@ -61,6 +62,7 @@ func TestProductProbeBuildOutcomes(t *testing.T) {
 			// Empty batches are not EOF. Repeat with the same operator/board
 			// generation boundary so a failed dependency cannot poison reuse.
 			for _, buildErr := range []error{tc.err, nil} {
+				freeTestChildren(arg)
 				arg.Children = nil
 				batches := []*batch.Batch{batch.EmptyBatch}
 				if !tc.empty {
@@ -90,6 +92,7 @@ func TestProductProbeBuildOutcomes(t *testing.T) {
 				}
 				arg.Reset(proc, err != nil, err)
 				probe.Free(proc, false, nil)
+				freeTestChildren(probe)
 				proc.GetMessageBoard().Reset()
 				require.Zero(t, account.Snapshot().Used)
 			}
@@ -101,7 +104,9 @@ func TestProductBuildReferencesOnProbeReuse(t *testing.T) {
 	tc := newTestCase(t, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)})
 	t.Cleanup(func() {
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		for _, child := range tc.arg.Children {
 			child.Free(tc.proc, false, nil)
 		}
@@ -116,6 +121,7 @@ func TestProductBuildReferencesOnProbeReuse(t *testing.T) {
 		if !empty {
 			probe.WithBatchs([]*batch.Batch{colexec.MakeMockBatchs(tc.proc.Mp())})
 		}
+		freeTestChildren(tc.arg)
 		tc.arg.Children = nil
 		tc.arg.AppendChild(probe)
 		resetHashBuildChildren(tc.barg, tc.proc.Mp())
@@ -142,6 +148,7 @@ func TestProductBuildReferencesOnProbeReuse(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		probe.Free(tc.proc, false, nil)
+		freeTestChildren(probe)
 		for _, child := range tc.barg.Children {
 			child.Free(tc.proc, false, nil)
 		}

@@ -39,10 +39,11 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 				LeftTypes: []types.Type{types.T_int64.ToType()}, RightTypes: []types.Type{typ},
 				ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}},
 			}
-			want := vector.NewVec(typ)
+			want := vector.NewVec(typ, proc.Mp())
 			sources := make([]*batch.Batch, 0, 2)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
 				for _, source := range sources {
 					source.Clean(proc.Mp())
 				}
@@ -53,7 +54,7 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 			account := installTestAllocation(t, arg)
 			for range 2 {
 				bat := batch.NewWithSize(1)
-				v := vector.NewVec(typ)
+				v := vector.NewVec(typ, proc.Mp())
 				bat.Vecs[0] = v
 				sources = append(sources, bat)
 				for _, value := range []string{"a non-inline build payload", "unselected", "null", "tail"} {
@@ -69,7 +70,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					values, _ := vector.MustVarlenaRawData(v)
 					values[2].SetOffsetLen(1<<30, 65536) // Never read NULL payload.
 				}
-				v.GetGrouping().Add(2)
 				bat.SetRowCount(4)
 			}
 			// Resolved build ordinals use DefaultBatchSize stride; only the
@@ -99,7 +99,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					for row := range want.Length() {
 						require.True(t, result.Batch.Vecs[0].IsNull(uint64(row)))
 						require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
-						require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
 						if !want.IsNull(uint64(row)) {
 							require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 						}
@@ -130,7 +129,7 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			}
 			source := batch.NewWithSize(2)
 			for i, typ := range arg.RightTypes {
-				source.Vecs[i] = vector.NewVec(typ)
+				source.Vecs[i] = vector.NewVec(typ, proc.Mp())
 			}
 			t.Cleanup(func() {
 				source.Clean(proc.Mp())
@@ -147,6 +146,7 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() {
 				arg.Free(proc, true, nil)
+				freeTestChildren(arg)
 				require.NoError(t, arg.ClearAllocationAccount(account))
 				require.Zero(t, account.Seal().Used)
 				_, err := registry.Finalize(account)

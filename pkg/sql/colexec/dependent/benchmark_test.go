@@ -85,7 +85,7 @@ func BenchmarkDependentExecutionScaling(b *testing.B) {
 					bat := batch.NewWithSize(cols)
 					for i := range cols {
 						var err error
-						bat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+						bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), a)
 						for row := range rows {
 							value := int32(row + 1)
 							if isOuter {

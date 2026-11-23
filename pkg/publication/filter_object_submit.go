@@ -112,7 +112,7 @@ func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOpe
 		deleteBat.SetAttributes([]string{catalog.ObjectMeta_ObjectStats})
 
 		// ObjectStats column (T_binary)
-		statsVec := vector.NewVec(types.T_binary.ToType())
+		statsVec := vector.NewVec(types.T_binary.ToType(), mp)
 		deleteBat.Vecs[0] = statsVec
 
 		// Append ObjectStats to the batch using Marshal()
@@ -186,11 +186,11 @@ func submitObjectsAsInsert(ctx context.Context, taskID string, txn client.TxnOpe
 		bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 
 		// First column: BlockInfo (T_text)
-		blockInfoVec := vector.NewVec(types.T_text.ToType())
+		blockInfoVec := vector.NewVec(types.T_text.ToType(), mp)
 		bat.Vecs[0] = blockInfoVec
 
 		// Second column: ObjectStats (T_binary)
-		statsVec := vector.NewVec(types.T_binary.ToType())
+		statsVec := vector.NewVec(types.T_binary.ToType(), mp)
 		bat.Vecs[1] = statsVec
 
 		// Use ExpandObjectStatsToBatch to properly expand ObjectStats to batch

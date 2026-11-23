@@ -250,7 +250,7 @@ func TestTopMultiKeyThresholdAndReset(t *testing.T) {
 							bat := batch.NewWithSize(len(typs))
 							child.WithBatchs([]*batch.Batch{bat})
 							for col, value := range row {
-								bat.Vecs[col] = vector.NewVec(typs[col])
+								bat.Vecs[col] = vector.NewVec(typs[col], tc.proc.Mp())
 								require.NoError(t, vector.AppendFixed(bat.Vecs[col], value, false, tc.proc.Mp()))
 							}
 							if mode != "fixed" {
@@ -258,7 +258,7 @@ func TestTopMultiKeyThresholdAndReset(t *testing.T) {
 								if mode == "migrate" && i == 2 {
 									width = 2048
 								}
-								bat.Vecs[2] = vector.NewVec(typs[2])
+								bat.Vecs[2] = vector.NewVec(typs[2], tc.proc.Mp())
 								require.NoError(t, vector.AppendBytes(bat.Vecs[2], bytes.Repeat([]byte("x"), width), false, tc.proc.Mp()))
 							}
 							bat.SetRowCount(1)
@@ -663,7 +663,7 @@ func newTopInt64ValueBatch(t *testing.T, proc *process.Process, value int64, nul
 	if null {
 		vec = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 	} else {
-		vec = vector.NewVec(types.T_int64.ToType())
+		vec = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(vec, []int64{value}, nil, proc.Mp()))
 	}
 	bat.Vecs[0] = vec
@@ -689,7 +689,7 @@ func newTopVarcharBatch(t *testing.T, proc *process.Process, null bool) *batch.B
 	if null {
 		bat.Vecs[0] = vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
 	} else {
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("b"), false, proc.Mp()))
 	}
 	bat.SetRowCount(1)
@@ -708,11 +708,11 @@ func TestTopCopiesNullVarlenaRow(t *testing.T) {
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
 	err = vector.AppendFixedList(bat.Vecs[0], []int64{2, 1}, nil, tc.proc.Mp())
 	require.NoError(t, err)
 
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 	err = vector.AppendBytes(bat.Vecs[1], []byte("seed"), false, tc.proc.Mp())
 	require.NoError(t, err)
 	err = vector.AppendBytes(bat.Vecs[1], nil, true, tc.proc.Mp())
@@ -764,14 +764,14 @@ func TestTopOrdersFloatNaNLastAndUsesSecondaryKey(t *testing.T) {
 			require.NoError(t, testCase.arg.Prepare(testCase.proc))
 
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), testCase.proc.Mp())
 			for _, value := range []float64{
 				math.Float64frombits(0x7ff8000000000002), 1, -1,
 				math.Float64frombits(0x7ff8000000000001),
 			} {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, testCase.proc.Mp()))
 			}
-			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), testCase.proc.Mp())
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{2, 20, 10, 1}, nil, testCase.proc.Mp()))
 			bat.SetRowCount(4)
 			resetChildren(testCase.arg, []*batch.Batch{bat, batch.EmptyBatch})
@@ -824,8 +824,8 @@ func TestTopUniqueOrderPrefixes(t *testing.T) {
 				resetChildren(tc.arg, bats)
 				for i, ids := range [][]int64{{7, 2, 8, 3}, {5, 1, 6, 4}} {
 					bat := bats[i]
-					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-					bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+					bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 					require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 1, 2, 2}, nil, tc.proc.Mp()))
 					require.NoError(t, vector.AppendFixedList(bat.Vecs[1], ids, nil, tc.proc.Mp()))
 					bat.SetRowCount(len(ids))
@@ -963,8 +963,8 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 	for highest := inputRows; highest > 0; {
 		rows := min(batchRows, highest)
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 		for i := range rows {
 			key := int64(highest - i)
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, tc.proc.Mp()))

@@ -343,7 +343,7 @@ func (st *jsonTableState) nextRow(proc *process.Process) ([]jsonvalue.Result, er
 
 func (st *jsonTableState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
 	if st.batch == nil {
-		st.batch = tf.createResultBatch()
+		st.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		st.batch.CleanOnlyData()
 	}

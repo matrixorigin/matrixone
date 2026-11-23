@@ -64,12 +64,12 @@ func BenchmarkCachedBatchProducerShapes(b *testing.B) {
 					b.Cleanup(func() { source.Clean(sm) })
 					for column := range tc.columns {
 						if tc.fixed {
-							source.Vecs[column] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+							source.Vecs[column] = vector.NewVec(types.T_int64.ToType(), sm)
 							if e := vector.AppendFixedList(source.Vecs[column], make([]int64, tc.rows), nil, sm); e != nil {
 								b.Fatal(e)
 							}
 						} else {
-							source.Vecs[column] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+							source.Vecs[column] = vector.NewVec(types.T_text.ToType(), sm)
 							size := tc.size
 							if tc.ragged {
 								size += column*17 + version*(64+column*14)

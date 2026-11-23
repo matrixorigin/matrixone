@@ -110,7 +110,7 @@ func TestParquet_StringToInt_BasicTypes(t *testing.T) {
 			require.NoError(t, err)
 
 			// Test conversion
-			vec := vector.NewVec(types.New(tc.dt, 0, 0))
+			vec := vector.NewVec(types.New(tc.dt, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.dt), NotNullable: true})
 			require.NotNil(t, mp, "STRING → %s conversion should be supported", tc.dt)
@@ -189,7 +189,7 @@ func TestParquet_StringToInt_InvalidValues(t *testing.T) {
 			require.NoError(t, err)
 
 			// Test conversion - should fail
-			vec := vector.NewVec(types.New(tc.dt, 0, 0))
+			vec := vector.NewVec(types.New(tc.dt, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.dt), NotNullable: true})
 			require.NotNil(t, mp)
@@ -245,7 +245,7 @@ func TestParquet_StringToInt_ExtremeValues(t *testing.T) {
 			require.NoError(t, err)
 
 			// Test conversion
-			vec := vector.NewVec(types.New(tc.dt, 0, 0))
+			vec := vector.NewVec(types.New(tc.dt, 0, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.dt), NotNullable: true})
 			require.NotNil(t, mp)
@@ -311,7 +311,7 @@ func TestParquet_StringToInt8_Negative(t *testing.T) {
 	page, err := col.Pages().ReadPage()
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.New(types.T_int8, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int8, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{Id: int32(types.T_int8), NotNullable: true})
 	require.NotNil(t, mp)
@@ -337,7 +337,7 @@ func TestParquet_StringToInt64_Dictionary(t *testing.T) {
 	}
 	f, page := writeDictAndGetPage(t, node, vals)
 
-	vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 	require.NotNil(t, mp, "STRING → INT64 with dictionary encoding should be supported")
@@ -362,7 +362,7 @@ func TestParquet_StringToUInt32_Dictionary(t *testing.T) {
 	}
 	f, page := writeDictAndGetPage(t, node, vals)
 
-	vec := vector.NewVec(types.New(types.T_uint32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_uint32, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint32), NotNullable: true})
 	require.NotNil(t, mp, "STRING → UINT32 with dictionary encoding should be supported")
@@ -397,7 +397,7 @@ func TestParquet_StringToInt_WithNulls(t *testing.T) {
 	page, err := col.Pages().ReadPage()
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{Id: int32(types.T_int64) /* nullable */})
 	require.NotNil(t, mp, "STRING → INT64 with NULL values should be supported")
@@ -438,7 +438,7 @@ func TestParquet_StringToInt_MixedSizes(t *testing.T) {
 	page, err := col.Pages().ReadPage()
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{Id: int32(types.T_int32), NotNullable: true})
 	require.NotNil(t, mp)

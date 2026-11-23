@@ -4519,6 +4519,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		}
 	}
 	builder.finalizeCTEIdentity()
+	builder.addAggregateGroupingFlags()
+	if err := builder.foldGroupingFunctions(builder.groupingFlags); err != nil {
+		return nil, err
+	}
 	if builder.qry.Correlation != nil {
 		query, err := builder.createDependentQuery()
 		if err != nil {
@@ -12015,6 +12019,7 @@ func (builder *QueryBuilder) appendAggNode(
 	if ctx.sortRollup {
 		extraOptions = EncodeSortRollupOption()
 	}
+	builder.recordGroupingFlags(ctx.groupTag, len(groupBy), groupingFlag, ctx.sortRollup)
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:       plan.Node_AGG,
 		Children:       []int32{nodeID},

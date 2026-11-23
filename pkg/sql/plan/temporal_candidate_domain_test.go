@@ -134,7 +134,7 @@ func checkInteriorTemporalUnion(t *testing.T, proc *process.Process, clock int64
 	}
 	bat := batch.NewWithSize(1)
 	defer bat.Clean(proc.Mp())
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, scale))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, scale), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], rows, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Datetime(0), true, proc.Mp()))
 	bat.SetRowCount(len(rows) + 1)

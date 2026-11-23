@@ -124,7 +124,6 @@ type container struct {
 	autoSpillLimitAtTrigger uint64
 	// Monotone while ingress can retain batches; Prepare starts a new generation.
 	// Only the spill projection uses this bit, not the final hashmap selection.
-	autoSpillHasGrouping bool
 
 	// reusable buffers for spill operations
 	spillHashValues []uint64
@@ -933,7 +932,7 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 		return process.ErrExecutionResourceInvalid
 	}
 	if bat := hb.Batches.Buf[idx]; bat != nil {
-		bat.Clean(proc.Mp())
+		bat.Clean(hb.batchesPool(proc))
 	}
 	copy(hb.Batches.Buf[idx:], hb.Batches.Buf[idx+1:])
 	hb.Batches.Buf = hb.Batches.Buf[:len(hb.Batches.Buf)-1]
@@ -973,7 +972,7 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 			}
 		}
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			bat.Clean(hb.batchesPool(proc))
 			hb.Batches.Buf[idx] = nil
 		}
 	}
@@ -994,4 +993,12 @@ func (ctr *container) releaseMemoryGrowthParticipant() {
 	}
 	ctr.memoryGrowthParticipant.Release()
 	ctr.memoryGrowthParticipant = nil
+}
+
+// batchesPool is the pool the retained build batches were created with.
+func (hb *HashmapBuilder) batchesPool(proc *process.Process) *mpool.MPool {
+	if mp := hb.Batches.Pool(); mp != nil {
+		return mp
+	}
+	return proc.Mp()
 }

@@ -133,15 +133,41 @@ func (a *SetOperationAllocation) NewBatch(proc *process.Process, input *batch.Ba
 		}
 		a.budget, a.metadata = budget, a.metadata+size
 	}
+	mp, err := a.MP(proc)
+	if err != nil {
+		return nil, err
+	}
 	b := batch.NewWithSize(len(input.Vecs))
 	for i, v := range input.Vecs {
-		if a.account == nil {
-			b.Vecs[i] = vector.NewVec(*v.GetType())
-		} else {
-			b.Vecs[i] = vector.NewOffHeapVecWithType(*v.GetType())
-		}
+		b.Vecs[i] = vector.NewVec(*v.GetType(), mp)
 	}
 	return b, nil
+}
+
+// CleanBatch frees a batch the operator owns. Each vector is freed with the
+// pool it belongs to when that is the operator's accounted view or proc's
+// pool; any other pool is passed proc's pool so the mismatch is reported.
+func (a *SetOperationAllocation) CleanBatch(proc *process.Process, bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	seen := make(map[*vector.Vector]struct{}, len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if _, ok := seen[vec]; !ok {
+			seen[vec] = struct{}{}
+			mp := vec.MPool()
+			if mp == nil || mp == a.vectors || mp == proc.Mp() {
+				vec.Free(mp)
+			} else {
+				vec.Free(proc.Mp())
+			}
+		}
+		bat.Vecs[i] = nil
+	}
+	bat.Clean(proc.Mp())
 }
 
 func (a *SetOperationAllocation) FreeMetadata() {

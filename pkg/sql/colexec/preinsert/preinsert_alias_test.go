@@ -56,7 +56,7 @@ func TestPreInsertIgnoreDetachAliasedSourceVectors(t *testing.T) {
 		proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
 		defer proc.Free()
 
-		shared := vector.NewVec(types.T_int64.ToType())
+		shared := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(shared, []int64{10, 0, 12}, nil, proc.Mp()))
 		shared.GetNulls().Add(1)
 		bat := batch.New([]string{"a", "b"})
@@ -98,6 +98,7 @@ func TestPreInsertIgnoreDetachAliasedSourceVectors(t *testing.T) {
 		require.Equal(t, []uint16{moerr.ER_BAD_NULL_ERROR}, session.codes)
 		require.Equal(t, []string{"Column 'a' cannot be null"}, session.messages)
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 	})
 
 	t.Run("two NOT NULL destinations share one source", func(t *testing.T) {
@@ -108,7 +109,7 @@ func TestPreInsertIgnoreDetachAliasedSourceVectors(t *testing.T) {
 		proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
 		defer proc.Free()
 
-		shared := vector.NewVec(types.T_int64.ToType())
+		shared := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(shared, []int64{10, 0, 12}, nil, proc.Mp()))
 		shared.GetNulls().Add(1)
 		bat := batch.New([]string{"a", "b"})
@@ -152,6 +153,7 @@ func TestPreInsertIgnoreDetachAliasedSourceVectors(t *testing.T) {
 			"Column 'b' cannot be null",
 		}, session.messages)
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 	})
 
 	t.Run("detached storage is reused cleanly across batches", func(t *testing.T) {
@@ -163,7 +165,7 @@ func TestPreInsertIgnoreDetachAliasedSourceVectors(t *testing.T) {
 		defer proc.Free()
 
 		buildShared := func(vals []int64, nullRow int) *vector.Vector {
-			v := vector.NewVec(types.T_int64.ToType())
+			v := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(v, vals, nil, proc.Mp()))
 			if nullRow >= 0 {
 				v.GetNulls().Add(uint64(nullRow))
@@ -223,6 +225,7 @@ func TestPreInsertIgnoreDetachAliasedSourceVectors(t *testing.T) {
 			"Column 'a' cannot be null",
 		}, session.messages)
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 	})
 }
 
@@ -239,10 +242,10 @@ func TestPreInsertIgnoreDropSurvivesAliasedSourceVectors(t *testing.T) {
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
 	defer proc.Free()
 
-	idVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(idVec, []int64{0, 1, 2}, nil, proc.Mp()))
 	idVec.GetNulls().Add(0)
-	shared := vector.NewVec(types.T_int64.ToType())
+	shared := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(shared, []int64{9, 10, 20}, nil, proc.Mp()))
 	bat := batch.New([]string{"id", "a", "b"})
 	bat.Vecs = []*vector.Vector{idVec, shared, shared}
@@ -280,4 +283,5 @@ func TestPreInsertIgnoreDropSurvivesAliasedSourceVectors(t *testing.T) {
 	require.Equal(t, []uint16{moerr.ER_BAD_NULL_ERROR}, session.codes)
 	require.Equal(t, []string{"Column 'id' cannot be null"}, session.messages)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 }

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,30 +47,6 @@ import (
 type emptyDispatchChild struct {
 	*value_scan.ValueScan
 	called chan struct{}
-}
-
-func TestMarshalRemoteBatchGroupingProtocolGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, proc.Mp())
-	bat.SetRowCount(2)
-	defer bat.Clean(proc.Mp())
-	runtime := moruntime.ServiceRuntime(proc.GetService())
-	original, _ := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() { runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original) })
-	for _, version := range []any{nil, "unknown", int64(86)} {
-		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
-		require.ErrorContains(t, err, "MORPCVersion87")
-	}
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(87))
-	data, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
-	require.NoError(t, err)
-	decoded := batch.NewOffHeapEmpty()
-	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinaryForPipeline(data, proc.Mp()))
-	require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
 }
 
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
@@ -218,7 +193,7 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	}
 
 	legacy := batch.NewWithSize(1)
-	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(legacy.Vecs[0], []byte("plain"), false, proc.Mp()))
 	legacy.SetRowCount(1)
 	defer legacy.Clean(proc.Mp())
@@ -1108,8 +1083,8 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 	producerMP, err := mp.WithAccount(account, 1, 102, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	src := batch.NewOffHeapWithSize(1)
-	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	src := batch.NewWithSize(1)
+	src.SetVector(0, vector.NewVec(types.T_int64.ToType(), producerMP))
 	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, producerMP))
 	src.SetRowCount(1)
 	sourceUsed := account.Snapshot().Used
@@ -1147,7 +1122,7 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, d.ClearAllocationAccount(account))
 	require.Nil(t, d.cleanupSpool)
 
-	src.Clean(mp)
+	src.Clean(producerMP)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	_, err = registry.Finalize(account)
@@ -1286,7 +1261,7 @@ func TestSendBatchRetiresCertifiedStop(t *testing.T) {
 func newDispatchSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	t.Helper()
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 	values := make([]int64, rows)
 	for i := range values {
 		values[i] = int64(i + 1)

@@ -64,7 +64,7 @@ func TestBitOpsInt64(t *testing.T) {
 	typ := types.T_int64.ToType()
 
 	makeInputVec := func(values []int64, nulls []bool) *vector.Vector {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		for i, v := range values {
 			isNull := false
 			if nulls != nil && nulls[i] {
@@ -211,7 +211,7 @@ func TestBitOpsMultipleGroups(t *testing.T) {
 	typ := types.T_int64.ToType()
 
 	makeInputVec := func(values []int64) *vector.Vector {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		for _, v := range values {
 			require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 		}
@@ -268,7 +268,7 @@ func TestBitOpsBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	makeInputVec := func(typ types.Type, values [][]byte, nulls []bool) *vector.Vector {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		for i, v := range values {
 			isNull := false
 			if nulls != nil && nulls[i] {
@@ -474,8 +474,8 @@ func TestBitOpsBytes(t *testing.T) {
 				}
 
 				// Input vector from a normal (unlimited) mpool.
-				inputVec := vector.NewVec(typ)
-				t.Cleanup(func() { inputVec.Free(mp) })
+				inputVec := vector.NewVec(typ, mp)
+				t.Cleanup(func() { inputVec.Free(inputVec.MPool()) })
 				val := make([]byte, 64)
 				for i := range val {
 					val[i] = byte(i)
@@ -523,8 +523,8 @@ func TestBitOpsBytes(t *testing.T) {
 				exec2 := makeBitAggExec(mp, AggIdOfBitAnd, typ)
 				t.Cleanup(exec2.Free)
 				require.NoError(t, exec2.GroupGrow(1))
-				inputVec := vector.NewVec(typ)
-				t.Cleanup(func() { inputVec.Free(mp) })
+				inputVec := vector.NewVec(typ, mp)
+				t.Cleanup(func() { inputVec.Free(inputVec.MPool()) })
 				val := make([]byte, 64)
 				for i := range val {
 					val[i] = byte(i)
@@ -573,7 +573,7 @@ func TestBitOpsBlob(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 			typ := types.T_blob.ToType()
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			require.NoError(t, vector.AppendBytesList(input,
 				[][]byte{{0x0F, 0}, {0xF0, 255}, {}, nil, bytes.Repeat([]byte{0xAA}, 511)},
@@ -621,7 +621,7 @@ func TestBitOpsBlobPartialRoundTrip(t *testing.T) {
 				t.Cleanup(e.Free)
 				return e
 			}
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			require.NoError(t, vector.AppendBytesList(input, [][]byte{{15}, {240}}, nil, mp))
 			source := newExec()
@@ -667,7 +667,7 @@ func TestBitOpsBlobOperandValidation(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 			typ := types.T_blob.ToType()
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			require.NoError(t, vector.AppendBytesList(input, tc.values, tc.nulls, mp))
 			exec := makeBitAggExec(mp, AggIdOfBitOr, typ)
@@ -695,7 +695,7 @@ func TestBitOpsBlobPreflightValidation(t *testing.T) {
 			require.NoError(t, exec.SetAllocationAccount(allocation))
 			t.Cleanup(func() { exec.Free(); require.NoError(t, exec.ClearAllocationAccount(allocation)) })
 			require.NoError(t, exec.GroupGrow(1))
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			require.NoError(t, vector.AppendBytesList(input, [][]byte{make([]byte, 511), make([]byte, 512)}, nil, mp))
 			if initialized {
@@ -753,7 +753,7 @@ func BenchmarkBitOpsAccountedPreflight(b *testing.B) {
 				b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
 				registry, account, allocation := newTestAggregateAllocation(b)
 				b.Cleanup(func() { finishTestAggregateAllocation(b, registry, account) })
-				input := vector.NewVec(tc.typ)
+				input := vector.NewVec(tc.typ, mp)
 				b.Cleanup(func() { input.Free(mp) })
 				value := bytes.Repeat([]byte{0xA5}, tc.width)
 				groups := make([]uint64, rows)

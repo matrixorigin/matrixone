@@ -427,7 +427,7 @@ func TestGetSpillFileServiceError(t *testing.T) {
 func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
 	newParams := func(value string) *vector.Vector {
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 		return params
 	}
@@ -466,7 +466,7 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 
 func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
 	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
 

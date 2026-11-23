@@ -184,7 +184,7 @@ func TestUserDefinedVarMigrationRoundTripsJSON(t *testing.T) {
 	encodedJSON, err := jsonValue.Marshal()
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], encodedJSON, false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)

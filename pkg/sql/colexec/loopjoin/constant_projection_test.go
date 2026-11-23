@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoopJoinConstantGroupingProjection(t *testing.T) {
+func TestLoopJoinConstantProjection(t *testing.T) {
 	for _, method := range []string{"scalar-control", "range", "operator-resume", "scalar-build-resume"} {
 		t.Run(method, func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
@@ -39,7 +39,6 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 				var err error
 				bat.Vecs[0], err = vector.NewConstBytes(typ, []byte("constant payload"), 5, proc.Mp())
 				require.NoError(t, err)
-				bat.Vecs[0].GetGrouping().Add(0, 2)
 				bat.SetRowCount(5)
 				return bat
 			}
@@ -51,6 +50,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 			installLoopJoinTestAllocation(t, join)
 			defer func() {
 				join.Free(proc, false, nil)
+				freeTestChildren(join)
 				left.Clean(proc.Mp())
 				right.Clean(proc.Mp())
 				proc.Free()
@@ -77,12 +77,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 					if result.Batch != nil {
 						batches++
 						for row := range result.Batch.RowCount() {
-							for side, v := range result.Batch.Vecs {
-								sourceRow := seen / buildRows
-								if side == 1 {
-									sourceRow = seen % buildRows
-								}
-								require.Equal(t, sourceRow == 0 || sourceRow == 2, v.GetGrouping().Contains(uint64(row)), "side %d output row %d", side, seen)
+							for _, v := range result.Batch.Vecs {
 								require.False(t, v.IsNull(uint64(row)))
 								require.Equal(t, "constant payload", v.GetStringAt(row))
 							}
@@ -100,7 +95,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 				require.Nil(t, join.ctr.buildCopyBatch)
 				return
 			}
-			require.NoError(t, join.resetResultBat())
+			require.NoError(t, join.resetResultBat(proc))
 			if method == "range" {
 				join.ctr.setProbeBatch(left)
 				require.NoError(t, join.ctr.appendJoinedRange(join, proc, left, 2, right, 1, 4))
@@ -109,9 +104,8 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 					require.NoError(t, join.ctr.appendJoinedRow(join, proc, left, 2, right, row))
 				}
 			}
-			for side, v := range join.ctr.resBat.Vecs {
+			for _, v := range join.ctr.resBat.Vecs {
 				for row := range 4 {
-					require.Equal(t, side == 0 || row == 1, v.GetGrouping().Contains(uint64(row)), "side %d row %d", side, row)
 					require.False(t, v.IsNull(uint64(row)))
 					require.Equal(t, "constant payload", v.GetStringAt(row))
 				}
@@ -142,7 +136,7 @@ func TestLoopJoinCopyBindingNewGeneration(t *testing.T) {
 		input.Vecs[0] = source
 		join.ctr.setProbeBatch(input)
 		for _, build := range []*batch.Batch{flat, selectedBuild, flat} {
-			require.NoError(t, join.resetResultBat())
+			require.NoError(t, join.resetResultBat(proc))
 			require.NoError(t, join.ctr.appendJoinedRange(join, proc, input, 0, build, 0, 3))
 			for row := range 3 {
 				require.Equal(t, vector.GetFixedAtNoTypeCheck[int32](source, 0), vector.GetFixedAtNoTypeCheck[int32](join.ctr.resBat.Vecs[0], row))
@@ -157,6 +151,7 @@ func TestLoopJoinCopyBindingNewGeneration(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	join.ctr.setProbeBatch(input)
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	require.Nil(t, join.ctr.probeCopy)
 	require.Nil(t, join.ctr.buildCopyBatch)
 }

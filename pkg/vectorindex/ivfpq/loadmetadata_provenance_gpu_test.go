@@ -35,12 +35,12 @@ import (
 // plus nrow and build_ts.
 func makeMetaBatch6(proc *process.Process, id, checksum string, timestamp, filesize, nrow, buildTS int64) *batch.Batch {
 	bat := batch.NewWithSize(6)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0))
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[4] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[5] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0), proc.Mp())
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
+	bat.Vecs[4] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
+	bat.Vecs[5] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 
 	vector.AppendBytes(bat.Vecs[0], []byte(id), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte(checksum), false, proc.Mp())

@@ -432,6 +432,7 @@ func (sp *ShufflePool) cleanupLocked(m *mpool.MPool) {
 			rows += set.RowCount()
 			for i := 0; i < set.Length(); i++ {
 				sp.forgetBatch(set.Get(i))
+				freeOwnedVectors(set.Get(i))
 			}
 			set.Clean(m)
 		}
@@ -530,6 +531,7 @@ func (sp *ShufflePool) cleanBatchPool(m *mpool.MPool) {
 		shard.Unlock()
 		for _, bat := range pool[:count] {
 			sp.forgetBatch(bat)
+			freeOwnedVectors(bat)
 			bat.Clean(m)
 		}
 	}
@@ -548,7 +550,23 @@ func (sp *ShufflePool) putBatchToPool(buf *batch.Batch, m *mpool.MPool) {
 	}
 	shard.Unlock()
 	sp.forgetBatch(buf)
+	freeOwnedVectors(buf)
 	buf.Clean(m)
+}
+
+// freeOwnedVectors frees the vectors of a pooled batch, each with the pool it
+// was created with: the pool holds batches of several producers' allocation
+// views.
+func freeOwnedVectors(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+			bat.Vecs[i] = nil
+		}
+	}
 }
 
 func (sp *ShufflePool) getBatchFromPool(producer int32) *batch.Batch {
@@ -588,6 +606,7 @@ func (sp *ShufflePool) discardBatch(buf *batch.Batch, m *mpool.MPool) {
 		return
 	}
 	sp.forgetBatch(buf)
+	freeOwnedVectors(buf)
 	buf.Clean(m)
 }
 

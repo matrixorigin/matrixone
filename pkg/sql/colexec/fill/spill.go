@@ -166,6 +166,9 @@ type fillSpill struct {
 	next   *fillSpillFile
 
 	allocation *spillutil.SpillAllocationAccount
+	// linearLeftMP is the retained pool the linearLeft endpoints are created
+	// with (the fill container's retainedPool).
+	linearLeftMP *mpool.MPool
 
 	outputReversePos int64
 	ready            bool
@@ -324,17 +327,14 @@ func addOriginalNullMarkers(
 	rollback := func() {
 		for _, marker := range bat.Vecs[vecCount:] {
 			if marker != nil {
-				marker.Free(mp)
+				marker.Free(allocMP)
 			}
 		}
 		bat.Vecs = bat.Vecs[:vecCount]
 		bat.Attrs = bat.Attrs[:attrCount]
 	}
 	for c := 0; c < colLen; c++ {
-		marker := vector.NewVec(types.T_bool.ToType())
-		if view != nil {
-			marker = vector.NewOffHeapVecWithType(types.T_bool.ToType())
-		}
+		marker := vector.NewVec(types.T_bool.ToType(), allocMP)
 		bat.Vecs = append(bat.Vecs, nil)
 		bat.Attrs = append(bat.Attrs, "")
 		bat.SetVector(int32(len(bat.Vecs)-1), marker)
@@ -387,14 +387,11 @@ func makeLinearDistanceMarkers(
 		allocMP = view
 	}
 	for col := range markers {
-		marker := vector.NewVec(types.T_uint64.ToType())
-		if view != nil {
-			marker = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
-		}
+		marker := vector.NewVec(types.T_uint64.ToType(), allocMP)
 		if err := vector.AppendMultiFixed(marker, uint64(0), false, rows, allocMP); err != nil {
-			marker.Free(mp)
+			marker.Free(allocMP)
 			for _, allocated := range markers[:col] {
-				allocated.Free(mp)
+				allocated.Free(allocMP)
 			}
 			return nil, err
 		}
@@ -412,7 +409,7 @@ func makeBorrowedSpillBatch(
 	if source == nil || colLen < 0 || colLen > len(source.Vecs) {
 		return nil, moerr.NewInvalidInputNoCtx("invalid fill spill input batch")
 	}
-	bat := batch.NewOffHeapWithSize(len(source.Vecs))
+	bat := batch.NewWithSize(len(source.Vecs))
 	copy(bat.Vecs, source.Vecs)
 	bat.Recursive = source.Recursive
 	bat.ShuffleIDX = source.ShuffleIDX
@@ -451,9 +448,10 @@ func stripOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) {
 		return
 	}
 	start := len(bat.Vecs) - colLen
+	// Markers are created with the allocation view of the batch's owner.
 	for _, vec := range bat.Vecs[start:] {
 		if vec != nil {
-			vec.Free(mp)
+			vec.Free(vec.MPool())
 		}
 	}
 	bat.Vecs = bat.Vecs[:start]
@@ -609,7 +607,7 @@ func (s *fillSpill) readRecordReverse(
 	}
 	allocated := reuse == nil
 	if reuse == nil {
-		reuse = batch.NewOffHeapWithSize(0)
+		reuse = batch.NewWithSize(0)
 	} else {
 		reuse.CleanOnlyData()
 	}
@@ -641,15 +639,16 @@ func (s *fillSpill) close(proc *process.Process) {
 		s.next = nil
 	}
 	if s.replay != nil {
-		s.replay.Clean(proc.Mp())
+		cleanOwnedBatch(s.replay)
 		s.replay = nil
 	}
 	for _, vec := range s.linearLeft {
 		if vec != nil {
-			vec.Free(proc.Mp())
+			vec.Free(s.linearLeftMP)
 		}
 	}
 	s.linearLeft = nil
+	s.linearLeftMP = nil
 	s.linearLeftValid = nil
 	s.linearLeftSteps = nil
 	s.forwardPart.free()
@@ -690,12 +689,10 @@ func makeEndpoint(
 	proc *process.Process,
 	view *mpool.MPool,
 ) (*vector.Vector, error) {
-	result := vector.NewVec(*vec.GetType())
-	if view != nil {
-		result = vector.NewOffHeapVecWithType(*vec.GetType())
-	}
-	if err := appendValue(result, vec, row, orMP(view, proc)); err != nil {
-		result.Free(proc.Mp())
+	resultMP := orMP(view, proc)
+	result := vector.NewVec(*vec.GetType(), resultMP)
+	if err := appendValue(result, vec, row, resultMP); err != nil {
+		result.Free(resultMP)
 		return nil, err
 	}
 	return result, nil
@@ -731,7 +728,7 @@ func cloneBatchWindow(
 	result := batch.NewWithSize(len(bat.Vecs))
 	cloneMP := mp
 	if view != nil {
-		result = batch.NewOffHeapWithSize(len(bat.Vecs))
+		result = batch.NewWithSize(len(bat.Vecs))
 		cloneMP = view
 	}
 	result.Attrs = append(result.Attrs, bat.Attrs...)
@@ -762,11 +759,12 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 	rightSteps := make([]uint64, ap.ColLen)
 	defer func() {
 		if reuse != nil {
-			reuse.Clean(proc.Mp())
+			cleanOwnedBatch(reuse)
 		}
+		// next endpoints are created by setEndpoint with the retained pool.
 		for _, vec := range next {
 			if vec != nil {
-				vec.Free(proc.Mp())
+				vec.Free(ctr.retainedPool(proc))
 			}
 		}
 	}()
@@ -995,6 +993,7 @@ func (ctr *container) beginSpill(
 			return err
 		}
 		spill.linearLeft = ctr.linEntry
+		spill.linearLeftMP = ctr.retainedPool(proc)
 		spill.linearLeftValid = ctr.linEntryValid
 		ctr.linEntry = make([]*vector.Vector, ap.ColLen)
 		ctr.linEntryValid = make([]bool, ap.ColLen)
@@ -1028,7 +1027,7 @@ func (ctr *container) beginSpill(
 			analyzer.Spill(written)
 			analyzer.SpillRows(int64(bat.RowCount()))
 		}
-		bat.Clean(proc.Mp())
+		cleanOwnedBatch(bat)
 		ctr.bats[i] = nil
 	}
 	ctr.bats = ctr.bats[:0]
@@ -1138,7 +1137,7 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 		// UnmarshalFromReader clean the batch after setting RowCount, losing the
 		// decoded count. Release it and keep the replay footprint at one fresh
 		// batch instead.
-		s.replay.Clean(proc.Mp())
+		cleanOwnedBatch(s.replay)
 		s.replay = nil
 	}
 	if err := ctr.allocationViews(proc.Mp()); err != nil {
@@ -1152,10 +1151,10 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 		rows := int64(bat.RowCount())
 		if s.safeRows <= 0 {
 			if err = s.writeSuffix(ctr, proc, bat); err != nil {
-				bat.Clean(proc.Mp())
+				cleanOwnedBatch(bat)
 				return nil, err
 			}
-			bat.Clean(proc.Mp())
+			cleanOwnedBatch(bat)
 			continue
 		}
 		if s.safeRows >= rows {
@@ -1182,24 +1181,24 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 			bat, 0, end, proc.Mp(), ctr.outputAllocation,
 		)
 		if err != nil {
-			bat.Clean(proc.Mp())
+			cleanOwnedBatch(bat)
 			return nil, err
 		}
 		suffix, err := cloneBatchWindow(
 			bat, end, bat.RowCount(), proc.Mp(), ctr.retainedAllocation,
 		)
 		if err != nil {
-			prefix.Clean(proc.Mp())
-			bat.Clean(proc.Mp())
+			cleanOwnedBatch(prefix)
+			cleanOwnedBatch(bat)
 			return nil, err
 		}
-		bat.Clean(proc.Mp())
+		cleanOwnedBatch(bat)
 		if err = s.writeSuffix(ctr, proc, suffix); err != nil {
-			prefix.Clean(proc.Mp())
-			suffix.Clean(proc.Mp())
+			cleanOwnedBatch(prefix)
+			cleanOwnedBatch(suffix)
 			return nil, err
 		}
-		suffix.Clean(proc.Mp())
+		cleanOwnedBatch(suffix)
 		s.safeRows = 0
 		s.replay = prefix
 		if ap.FillType == plan.Node_LINEAR {
@@ -1278,7 +1277,7 @@ func (ctr *container) finishSpillReplay(
 			if err != nil {
 				for _, vec := range seed {
 					if vec != nil {
-						vec.Free(proc.Mp())
+						vec.Free(ctr.retainedPool(proc))
 					}
 				}
 				entryPart.free()
@@ -1289,14 +1288,14 @@ func (ctr *container) finishSpillReplay(
 		if err := entryPart.cloneFrom(&spill.forwardPart); err != nil {
 			for _, vec := range seed {
 				if vec != nil {
-					vec.Free(proc.Mp())
+					vec.Free(ctr.retainedPool(proc))
 				}
 			}
 			entryPart.free()
 			return err
 		}
-		ctr.clearLinearSeeds(proc.Mp())
-		ctr.clearLinearEntries(proc.Mp())
+		ctr.clearLinearSeeds(ctr.retainedPool(proc))
+		ctr.clearLinearEntries(ctr.retainedPool(proc))
 		ctr.linSeed = seed
 		ctr.linSeedValid = seedValid
 		ctr.linEntry = spill.linearLeft
@@ -1329,6 +1328,7 @@ func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Pr
 		}
 		for col := 0; col < ap.ColLen; col++ {
 			if !originalNullAt(bat, ap.ColLen, col, row) {
+				s.linearLeftMP = ctr.retainedPool(proc)
 				if err := setEndpoint(
 					&s.linearLeft[col], bat.Vecs[col], row, proc, ctr.retainedAllocation,
 				); err != nil {
@@ -1346,24 +1346,26 @@ func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Pr
 			s.linearLeftSteps[col]++
 			total := s.linearLeftSteps[col] + rightSteps
 			if total == 2 {
-				leftBatch := batch.NewOffHeapWithSize(col + 1)
+				leftBatch := batch.NewWithSize(col + 1)
 				leftBatch.SetVector(int32(col), s.linearLeft[col])
 				leftBatch.SetRowCount(1)
-				rightBatch := batch.NewOffHeapWithSize(col + 1)
+				rightBatch := batch.NewWithSize(col + 1)
 				rightBatch.SetVector(int32(col), bat.Vecs[col])
 				rightBatch.SetRowCount(bat.RowCount())
 				value, owned, err := linearFillValue(ctr, proc, col, leftBatch, 0, rightBatch, row)
 				if err != nil {
 					return err
 				}
+				// An owned value is created by linearFillValue with the
+				// expression pool.
 				if err = setValue(bat.Vecs[col], value, row, 0, batMP); err != nil {
 					if owned {
-						value.Free(proc.Mp())
+						value.Free(orMP(ctr.expressionAllocation, proc))
 					}
 					return err
 				}
 				if owned {
-					value.Free(proc.Mp())
+					value.Free(orMP(ctr.expressionAllocation, proc))
 				}
 				continue
 			}

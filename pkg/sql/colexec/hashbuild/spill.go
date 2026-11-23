@@ -127,7 +127,7 @@ func marshalSpillRecordAccounted(
 	}
 	cnt := int64(bat.RowCount())
 	buf.Reset()
-	batchSize, err := bat.MarshalBinaryWithGroupingSize()
+	batchSize, err := bat.MarshalBinaryForSpillSize()
 	if err != nil || batchSize > math.MaxInt-24 {
 		if err != nil {
 			return 0, err
@@ -145,7 +145,7 @@ func marshalSpillRecordAccounted(
 		return 0, err
 	}
 	batchStart := buf.Len()
-	if err := bat.MarshalBinaryWithGroupingTo(buf); err != nil {
+	if err := bat.MarshalBinaryForSpillTo(buf); err != nil {
 		return 0, err
 	}
 	serializedSize := int64(buf.Len() - batchStart)
@@ -368,7 +368,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	var selected *batch.Batch
 	defer func() {
 		if selected != nil {
-			selected.Clean(proc.Mp())
+			selected.Clean(selectedMP)
 		}
 		for i := range ctr.spillKeyVecs {
 			ctr.spillKeyVecs[i] = nil
@@ -438,12 +438,12 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			continue
 		}
 		if selected == nil {
-			selected = batch.NewOffHeapWithSize(len(bat.Vecs))
+			selected = batch.NewWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				if vec == nil {
 					return process.ErrExecutionResourceInvalid
 				}
-				selected.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+				selected.Vecs[i] = vector.NewVec(*vec.GetType(), selectedMP)
 			}
 		}
 		cursor := start
@@ -661,7 +661,7 @@ func (ctr *container) spillBatchWithPressure(
 			sourceAlreadyCharged,
 		)
 		if current != bat {
-			current.Clean(proc.Mp())
+			current.FreeWindow()
 		}
 		if err == nil {
 			start = end
@@ -988,15 +988,9 @@ func (hashBuild *HashBuild) shouldSpillBeforeRetain(
 		} else {
 			predicted += uint64(inputBatchSize)
 		}
-		// Each retained batch passed through this ingress once. Inspect only the
-		// new input, including the threshold-crossing batch, instead of rescanning
-		// the entire growing build relation on every admission decision.
-		if ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping {
-			ctr.autoSpillHasGrouping = ctr.hashmapBuilder.hasGroupingKeyInBatches([]*batch.Batch{input})
-		}
 		mapBytes, err := estimatedHashMapBytes(
 			int64(ctr.hashmapBuilder.InputBatchRowCount),
-			ctr.hashmapBuilder.keyWidth <= 8 && !ctr.autoSpillHasGrouping,
+			ctr.hashmapBuilder.keyWidth <= 8,
 		)
 		if err != nil {
 			return false, err

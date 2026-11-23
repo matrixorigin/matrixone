@@ -54,8 +54,8 @@ import (
 func exportLifecycleFixture(t *testing.T, ctx context.Context, format string) (*ExportConfig, *backSession, *batch.Batch, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
 	bat.SetRowCount(1)
 	t.Cleanup(func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()) })
@@ -392,8 +392,8 @@ func TestExportJSONLineNullRejectKeepsCompletedSplits(t *testing.T) {
 
 	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
 	convert := func(text string, index int32) {
-		bat := batch.NewOffHeapWithSize(1)
-		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_json.ToType())
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
 		defer bat.Clean(mp)
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], encodeJSONForExportTest(t, text), false, mp))
 		bat.SetRowCount(1)
@@ -460,7 +460,7 @@ func TestExportConversionFailure(t *testing.T) {
 			ep, ses, bat, mp := exportLifecycleFixture(t, context.Background(), format)
 			defer ep.Close()
 			bat.Clean(mp)
-			bat.Vecs = []*vector.Vector{vector.NewOffHeapVecWithType(types.T_TS.ToType())}
+			bat.Vecs = []*vector.Vector{vector.NewVec(types.T_TS.ToType(), mp)}
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.BuildTS(1, 1), false, mp))
 			bat.SetRowCount(1)
 			ep.Index.Store(1)
@@ -519,9 +519,9 @@ func TestExportStatementLifecycle(t *testing.T) {
 				col := &MysqlColumn{}
 				col.SetName("value")
 				col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-				source := batch.NewOffHeapWithSize(1)
+				source := batch.NewWithSize(1)
 				defer source.Clean(ses.pool)
-				source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.pool)
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
 				source.SetRowCount(1)
 				injected := errors.New("runner failed")
@@ -617,9 +617,9 @@ func TestExportStatementPanicAbortsAndKeepsReceiptIncomplete(t *testing.T) {
 				column := &MysqlColumn{}
 				column.SetName("value")
 				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-				source := batch.NewOffHeapWithSize(1)
+				source := batch.NewWithSize(1)
 				defer source.Clean(ses.pool)
-				source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.pool)
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
 				source.SetRowCount(1)
 				injected := moerr.NewInvalidInputNoCtx("runner panic")
@@ -688,9 +688,9 @@ func TestExportJSONLineConversionFailureCompletesPipeWrite(t *testing.T) {
 	column := &MysqlColumn{}
 	column.SetName("value")
 	column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	source := batch.NewOffHeapWithSize(1)
+	source := batch.NewWithSize(1)
 	defer source.Clean(ses.pool)
-	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), ses.pool)
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte{'x', 0xff, 'y'}, false, ses.pool))
 	source.SetRowCount(1)
 

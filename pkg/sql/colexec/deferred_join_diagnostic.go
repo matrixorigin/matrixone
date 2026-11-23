@@ -277,7 +277,7 @@ func (e *deferredJoinConstantExecutor) Free() {
 	e.executor.Free()
 	e.captured = nil
 	if e.null != nil {
-		e.null.Free(nil)
+		e.null.Free(e.selection)
 		e.null = nil
 	}
 }

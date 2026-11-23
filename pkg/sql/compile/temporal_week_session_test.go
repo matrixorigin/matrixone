@@ -59,7 +59,7 @@ func TestWeekRemoteSessionRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	eval := func(p *process.Process) int32 {
 		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_date.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_date.ToType(), p.Mp())
 		defer input.Clean(p.Mp())
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], types.DateFromCalendar(2021, 1, 1), false, p.Mp()))
 		input.SetRowCount(1)

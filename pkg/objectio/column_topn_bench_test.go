@@ -88,7 +88,7 @@ func BenchmarkReadColumnTopN(b *testing.B) {
 				b.Run(name, func(b *testing.B) {
 					ctx := context.Background()
 					mp := newTopNTestMP(b)
-					source := vector.NewVec(types.T_array_float32.ToType())
+					source := vector.NewVec(types.T_array_float32.ToType(), mp)
 					b.Cleanup(func() { source.Free(mp) })
 					const rows, dimensions = 4096, 768
 					values := make([]float32, dimensions)

@@ -583,11 +583,11 @@ func (r *region) close(cause error) error {
 			c.source = nil
 		}
 		if c.ownedInput != nil {
-			c.ownedInput.Clean(r.proc.Mp())
+			c.ownedInput.Clean(c.ownedInputMP)
 			c.ownedInput = nil
 		}
 		if c.output != nil {
-			c.output.Clean(r.proc.Mp())
+			c.output.Clean(r.execution.allocation)
 			c.output = nil
 		}
 		c.input = nil
@@ -611,26 +611,28 @@ type cursor struct {
 	sourcePending  bool
 	edge           *sourceEdge
 	ownedInput     *batch.Batch
-	region         *region
-	template       *nodeTemplate
-	source         Source
-	input          *batch.Batch
-	output         *batch.Batch
-	row            int
-	expr           int
-	frame          *colexec.DependentExpressionFrame
-	eof            bool
-	busy           bool
-	kernel         *nativeKernel
-	pendingInput   int
-	boundFrame     *colexec.DependentExpressionFrame
-	boundPC        int
-	boundDone      bool
-	limit          uint64
-	offset         uint64
-	emitted        uint64
-	foundRows      uint64
-	countedRow     bool
+	// ownedInputMP is the pool ownedInput belongs to (its source's).
+	ownedInputMP *mpool.MPool
+	region       *region
+	template     *nodeTemplate
+	source       Source
+	input        *batch.Batch
+	output       *batch.Batch
+	row          int
+	expr         int
+	frame        *colexec.DependentExpressionFrame
+	eof          bool
+	busy         bool
+	kernel       *nativeKernel
+	pendingInput int
+	boundFrame   *colexec.DependentExpressionFrame
+	boundPC      int
+	boundDone    bool
+	limit        uint64
+	offset       uint64
+	emitted      uint64
+	foundRows    uint64
+	countedRow   bool
 }
 type pullTask struct {
 	maxRows int
@@ -713,7 +715,7 @@ func (t *pullTask) Step(ctx context.Context) (vm.ContinuationStep, error) {
 				return vm.ContinuationStep{Done: true}, nil
 			}
 			if c.ownedInput != nil {
-				c.ownedInput.Clean(r.proc.Mp())
+				c.ownedInput.Clean(c.ownedInputMP)
 				c.ownedInput = nil
 			}
 			c.input = nil
@@ -848,7 +850,7 @@ func (t *pullTask) Step(ctx context.Context) (vm.ContinuationStep, error) {
 			}
 			c.output = batch.NewWithSize(noutputs)
 			for i, typ := range c.template.output[:noutputs] {
-				c.output.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+				c.output.Vecs[i] = vector.NewVec(typ, r.execution.allocation)
 			}
 		}
 		for i, vec := range c.output.Vecs {

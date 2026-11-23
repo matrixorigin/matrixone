@@ -55,7 +55,7 @@ func TestCalcScanStatsSimpleBlockFilters(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	})
 	inVector := func(values ...int64) *planpb.Expr {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), mp)
 		defer v.Free(mp)
 		require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
 		data, err := v.MarshalBinary()

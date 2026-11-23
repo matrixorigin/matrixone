@@ -45,7 +45,9 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				for _, input := range inputs {
 					input.Clean(tc.proc.Mp())
 				}
@@ -77,10 +79,9 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 				}
 				probe := makeInt32Batch(tc.proc, values)
 				inputs = append(inputs, probe)
-				payload := vector.NewVec(types.T_varchar.ToType())
+				payload := vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 				probe.Vecs = append(probe.Vecs, payload)
 				if generation == 3 {
-					// A constant value may still have per-logical-row grouping.
 					require.NoError(t, vector.SetConstBytes(payload, []byte("7"), len(values), tc.proc.Mp()))
 					payload.SetClass(vector.CONSTANT)
 				} else {
@@ -88,7 +89,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 						require.NoError(t, vector.AppendBytes(payload, []byte(strconv.Itoa(row)), row == 3, tc.proc.Mp()))
 					}
 				}
-				payload.GetGrouping().Add(2)
 				build := makeInt32Batch(tc.proc, buildValues)
 				inputs = append(inputs, build)
 				probe.Vecs[0].GetNulls().Add(0)
@@ -126,7 +126,6 @@ func TestHashJoinMembershipProjection(t *testing.T) {
 						output := res.Batch.Vecs[1]
 						nullPayload := next == 3 && generation != 3
 						require.Equal(t, nullPayload, output.IsNull(uint64(row)))
-						require.Equal(t, next == 2, output.GetGrouping().Contains(uint64(row)))
 						if !nullPayload {
 							expected := strconv.Itoa(next)
 							if generation == 3 {
@@ -245,7 +244,7 @@ func TestHashJoinProbeOutputArea(t *testing.T) {
 			if tc.arg.IsRightJoin {
 				tc.arg.ResultCols[0].Rel = 1
 			}
-			payload := vector.NewOffHeapVecWithType(textType)
+			payload := vector.NewVec(textType, mp)
 			value := bytes.Repeat([]byte{'x'}, shape.valueBytes)
 			source.Vecs = append(source.Vecs, payload)
 			for range source.RowCount() {
@@ -301,7 +300,9 @@ func BenchmarkHashJoinMembershipProjection(b *testing.B) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				if probe != nil {
 					probe.Clean(tc.proc.Mp())
 				}
@@ -324,7 +325,7 @@ func BenchmarkHashJoinMembershipProjection(b *testing.B) {
 			_, err := vm.Exec(tc.barg, tc.proc)
 			require.NoError(b, err)
 			require.NoError(b, tc.arg.build(tc.arg.OpAnalyzer, tc.proc))
-			require.NoError(b, tc.arg.resetResultBat())
+			require.NoError(b, tc.arg.resetResultBat(tc.proc))
 			ctr := &tc.arg.ctr
 			b.ReportAllocs()
 			b.ResetTimer()

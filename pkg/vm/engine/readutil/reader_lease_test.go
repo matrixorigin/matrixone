@@ -42,8 +42,8 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 	t.Cleanup(func() { defer mpool.DeleteMPool(writeMP); require.Zero(t, writeMP.CurrNB()) })
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(writeMP) })
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), writeMP)
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType(), writeMP)
 	payload := bytes.Repeat([]byte("borrowed-payload-"), 8)
 	const rows = 64
 	for i := 0; i < rows; i++ {
@@ -88,10 +88,11 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 	mr := NewMergeReader([]engine.Reader{r})
 	t.Cleanup(func() { require.NoError(t, mr.Close()) })
 
-	output := batch.NewOffHeapWithSize(2)
-	output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
-	t.Cleanup(func() { output.Clean(queryMP) })
+	output := batch.NewWithSize(2)
+	output.Vecs[0] = vector.NewVec(types.T_int32.ToType(), allocation)
+	output.Vecs[1] = vector.NewVec(types.T_text.ToType(), allocation)
+	// The owned output column lives in allocation; the cached one is read-only.
+	t.Cleanup(func() { output.Clean(allocation) })
 
 	request := &engine.ReaderFilterRequest{
 		OutputAllocation: allocation,
@@ -103,7 +104,7 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 			return engine.ReaderFilterResult{All: true}, nil
 		},
 	}
-	perBlockLeases := -1
+	perBlockLeases, perBlockUsed := -1, uint64(0)
 	const blocks = 6
 	for block := 0; block < blocks; block++ {
 		source.emitted = false
@@ -111,22 +112,21 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, isEnd)
 		require.Equal(t, rows, output.RowCount())
-		require.True(t, output.Vecs[1].HasBorrowedBacking(), "a retained column stays zero-copy from the cache")
+		require.True(t, output.Vecs[1].IsReadOnly(), "a retained column stays zero-copy from the cache")
 		for row := 0; row < rows; row++ {
 			require.Equal(t, int32(row), vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], row))
 			require.Equal(t, payload, output.Vecs[1].GetBytesAt(row))
 		}
-		// The reader reads through the caller's plain pool and never charges
-		// the output's account itself; the scan charges the emitted batch
-		// (pins included) after the read.
-		require.Zero(t, account.Snapshot().Used, "block %d: the reader must not charge the output account", block)
 		if perBlockLeases < 0 {
-			perBlockLeases = output.HeldLeases()
+			perBlockLeases, perBlockUsed = output.HeldLeases(), account.Snapshot().Used
 			require.Positive(t, perBlockLeases)
+			require.Positive(t, perBlockUsed, "the pinned capacity is charged to the scan's account")
 			continue
 		}
 		require.Equal(t, perBlockLeases, output.HeldLeases(), "block %d: pins must not accumulate", block)
+		require.Equal(t, perBlockUsed, account.Snapshot().Used, "block %d: pin reservations must not accumulate", block)
 	}
 	output.CleanOnlyData()
 	require.Zero(t, output.HeldLeases())
+	require.Less(t, account.Snapshot().Used, perBlockUsed, "reuse returns the pin reservation; only owned scratch capacity stays")
 }

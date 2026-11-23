@@ -37,7 +37,7 @@ func TestWindowPrefixSnapshot(t *testing.T) {
 			id := tc.id
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
-			input := vector.NewOffHeapVecWithType(types.T_float64.ToType())
+			input := vector.NewVec(types.T_float64.ToType(), mp)
 			t.Cleanup(func() { input.Free(mp) })
 			values := []float64{0, math.Copysign(0, -1), 1e16, 1, -1e16, math.Float64frombits(0x7ff8000000000001), math.Inf(1)}
 			for i, value := range values {
@@ -94,7 +94,7 @@ func TestWindowGroupCapacity(t *testing.T) {
 		t.Run(fmt.Sprint(id), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
-			input := vector.NewVec(types.T_float64.ToType())
+			input := vector.NewVec(types.T_float64.ToType(), mp)
 			t.Cleanup(func() { input.Free(mp) })
 			require.NoError(t, vector.AppendFixed(input, float64(7), false, mp))
 			exec, err := MakeAgg(mp, id, false, *input.GetType())

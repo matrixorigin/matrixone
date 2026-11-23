@@ -28,7 +28,7 @@ func TestVarlenaAreaIsDisjointIsComputedFromDescriptors(t *testing.T) {
 	long := func(c string) []byte { return []byte(strings.Repeat(c, 40)) }
 
 	build := func(t *testing.T) *Vector {
-		v := NewVec(types.T_varchar.ToType())
+		v := NewVec(types.T_varchar.ToType(), mp)
 		for _, c := range []string{"a", "b", "c"} {
 			require.NoError(t, AppendBytes(v, long(c), false, mp))
 		}
@@ -73,7 +73,7 @@ func TestVarlenaAreaIsDisjointIsComputedFromDescriptors(t *testing.T) {
 		require.NoError(t, err)
 		defer c.Free(mp)
 		require.False(t, c.VarlenaAreaIsDisjoint())
-		f := NewVec(types.T_int64.ToType())
+		f := NewVec(types.T_int64.ToType(), mp)
 		require.False(t, f.VarlenaAreaIsDisjoint())
 	})
 }

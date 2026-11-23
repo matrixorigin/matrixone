@@ -105,7 +105,7 @@ func TestMedianFlushAcrossResultChunks(t *testing.T) {
 					result, err := exec.Flush()
 					t.Cleanup(func() {
 						for _, v := range result {
-							v.Free(mp)
+							v.Free(v.MPool())
 						}
 					})
 					require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestMedianFlushErrorKeepsResultsOwned(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(3))
 	large, err := types.ParseDecimal256(strings.Repeat("9", 76), 76, 0)
 	require.NoError(t, err)
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	t.Cleanup(func() { input.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(input, []types.Decimal256{{B0_63: 1}, large}, nil, mp))
 	require.NoError(t, exec.BatchFill(0, []uint64{1, 3}, []*vector.Vector{input}))

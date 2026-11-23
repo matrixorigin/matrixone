@@ -128,6 +128,7 @@ func TestPreInsertUnique(t *testing.T) {
 		_, err = vm.Exec(tc.arg, proc)
 		require.NoError(t, err)
 		tc.arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(tc.arg)
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
 
@@ -136,8 +137,8 @@ func TestPreInsertUnique(t *testing.T) {
 func TestPreInsertUniqueSingleVarcharUsesSizedUkType(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("CODE001"), false, proc.Mp()))
 	bat.SetRowCount(1)
@@ -153,7 +154,7 @@ func TestPreInsertUniqueSingleVarcharUsesSizedUkType(t *testing.T) {
 			},
 		},
 	}
-	arg.initBuf(bat, arg.PreInsertCtx.Columns, int(arg.PreInsertCtx.PkColumn), false)
+	arg.initBuf(bat, arg.PreInsertCtx.Columns, int(arg.PreInsertCtx.PkColumn), false, proc.Mp())
 	defer arg.Free(proc, false, nil)
 
 	require.NotZero(t, arg.ctr.buf.Vecs[indexColPos].GetType().TypeSize())
@@ -212,16 +213,16 @@ func TestPreInsertUniqueUpdateKeepsCompactedRowsAligned(t *testing.T) {
 				types.BuildTestRowid(1, 4),
 			}
 			input := batch.NewWithSize(len(tc.indexColumns) + 2)
-			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[0], pks, nil, proc.Mp()))
 			for colIdx, values := range tc.indexColumns {
-				input.Vecs[colIdx+1] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[colIdx+1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				for rowIdx, value := range values {
 					require.NoError(t, vector.AppendFixed(
 						input.Vecs[colIdx+1], value, tc.nullRows[colIdx][rowIdx], proc.Mp()))
 				}
 			}
-			input.Vecs[len(input.Vecs)-1] = vector.NewVec(types.T_Rowid.ToType())
+			input.Vecs[len(input.Vecs)-1] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[len(input.Vecs)-1], rowIDs, nil, proc.Mp()))
 			input.SetRowCount(len(pks))
 			defer input.Clean(proc.Mp())
@@ -328,6 +329,7 @@ func TestInsertIgnoreMultiDedupArbitratesWholeRowsInInputOrder(t *testing.T) {
 				vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			input.Clean(proc.Mp())
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
@@ -364,6 +366,7 @@ func TestInsertIgnoreMultiDedupCarriesAcceptedKeysAcrossBatchesAndReset(t *testi
 		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -387,6 +390,7 @@ func TestInsertIgnoreReordersGeneratedAutoIncrementCandidates(t *testing.T) {
 		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -416,6 +420,7 @@ func TestInsertIgnoreReorderCarriesCandidatesAcrossBatchesAndHonorsExplicitKeys(
 		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1])[:result.Batch.RowCount()])
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -450,6 +455,7 @@ func TestInsertIgnoreReorderPreservesEarlierGeneratedOwnership(t *testing.T) {
 	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -474,6 +480,7 @@ func TestInsertIgnoreReorderAdvancesPastExplicitKeyInSameBatch(t *testing.T) {
 	require.Equal(t, uint64(101), proc.GetStatementLastInsertID())
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -502,6 +509,7 @@ func TestInsertIgnoreReorderAdvancesPastExplicitKeyAcrossBatches(t *testing.T) {
 	require.Equal(t, uint64(101), proc.GetStatementLastInsertID())
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -526,6 +534,7 @@ func TestInsertIgnoreReorderDoesNotAdvancePastNegativeExplicitKey(t *testing.T) 
 	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -554,6 +563,7 @@ func TestInsertIgnoreReorderDoesNotAdvancePastNegativeExplicitKeyAcrossBatches(t
 	require.Equal(t, uint64(2), proc.GetStatementLastInsertID())
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -607,6 +617,7 @@ func TestInsertIgnoreReorderTracksFinalGeneratedPrimaryKeysAcrossBatches(t *test
 	require.True(t, result.Batch.IsEmpty(), "explicit key must conflict with the final generated key")
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -636,6 +647,7 @@ func TestInsertIgnoreReorderAllowsInputCandidateAfterFinalRemap(t *testing.T) {
 		"the old generated candidate 3 was remapped to final key 2 and must not block explicit 3")
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -665,6 +677,7 @@ func TestInsertIgnoreReorderPublishesLastInsertIDOnlyForAcceptedRows(t *testing.
 			require.Equal(t, tc.want, proc.GetStatementLastInsertID())
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			input.Clean(proc.Mp())
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
@@ -673,7 +686,7 @@ func TestInsertIgnoreReorderPublishesLastInsertIDOnlyForAcceptedRows(t *testing.
 
 func TestAutoIncrementCandidateStreamCompressesArithmeticRuns(t *testing.T) {
 	proc := testutil.NewProc(t)
-	source := vector.NewVec(types.T_int32.ToType())
+	source := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	arg := &PreInsertUnique{}
 	const count = 10000
 	for i := int32(0); i < count; i++ {
@@ -684,6 +697,7 @@ func TestAutoIncrementCandidateStreamCompressesArithmeticRuns(t *testing.T) {
 	require.Equal(t, uint64(count), arg.ctr.autoIncrementCandidates.runs[0].count)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	source.Free(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -772,6 +786,7 @@ func TestODKUTargetArbitrationUsesOrderedStatementLocalState(t *testing.T) {
 				vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2])[:result.Batch.RowCount()])
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			require.NoError(t, arg.ClearAllocationAccount(account))
 			input.Clean(proc.Mp())
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -806,6 +821,7 @@ func TestODKUTargetArbitrationCarriesStateAcrossBatchesAndReset(t *testing.T) {
 		"Reset must begin a fresh statement-local arbitration generation")
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.NoError(t, arg.ClearAllocationAccount(account))
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
@@ -815,8 +831,8 @@ func TestODKUTargetArbitrationCarriesStateAcrossBatchesAndReset(t *testing.T) {
 func TestODKUTargetArbitrationSupportsSingleSyntheticIdentityConstraint(t *testing.T) {
 	proc := testutil.NewProc(t)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	for _, value := range []int32{10, 10} {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(0), true, proc.Mp()))
@@ -836,6 +852,7 @@ func TestODKUTargetArbitrationSupportsSingleSyntheticIdentityConstraint(t *testi
 		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[1]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.NoError(t, arg.ClearAllocationAccount(account))
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -862,6 +879,7 @@ func TestODKUTargetArbitrationHandlesConstNullSnapshotTargets(t *testing.T) {
 		vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.NoError(t, arg.ClearAllocationAccount(account))
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -884,6 +902,7 @@ func TestODKUTargetArbitrationRejectsDifferentTargetRepresentation(t *testing.T)
 	require.ErrorContains(t, err, "ODKU target primary-key type mismatch")
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	require.NoError(t, arg.ClearAllocationAccount(account))
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -908,6 +927,7 @@ func TestODKUTargetArbitrationAllocationAccountLifecycle(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	require.NoError(t, arg.ClearAllocationAccount(account))
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -932,6 +952,7 @@ func TestODKUTargetArbitrationHonorsAllocationCapacity(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	require.NoError(t, arg.ClearAllocationAccount(account))
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -957,6 +978,7 @@ func TestOrderedUniqueKeyArbitrationRejectsMalformedContext(t *testing.T) {
 			err := arg.Prepare(proc)
 			require.ErrorContains(t, err, tc.want)
 			arg.Free(proc, true, err)
+			colexec.FreeMockChildren(arg)
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
 	}
@@ -975,7 +997,7 @@ func makeODKUTargetArbitrationBatch(
 	t.Helper()
 	input := batch.NewWithSize(4)
 	for i := range input.Vecs {
-		input.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[i] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	}
 	for row := range ids {
 		uniqueNull := len(uniqueNulls) > row && uniqueNulls[row]
@@ -1029,10 +1051,10 @@ func makeInsertIgnoreMultiDedupBatch(
 ) *batch.Batch {
 	t.Helper()
 	input := batch.NewWithSize(4)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
-	input.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
+	input.Vecs[3] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	for row := range ids {
 		nullUnique := len(uniqueNulls) > row && uniqueNulls[row]
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], ids[row], false, proc.Mp()))
@@ -1052,11 +1074,11 @@ func makeInsertIgnoreAutoIncrementBatch(
 ) *batch.Batch {
 	t.Helper()
 	input := batch.NewWithSize(5)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
-	input.Vecs[3] = vector.NewVec(types.T_bool.ToType())
-	input.Vecs[4] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
+	input.Vecs[3] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
+	input.Vecs[4] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	for row := range ids {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], ids[row], false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(input.Vecs[1], uniqueKeys[row], false, proc.Mp()))
@@ -1105,6 +1127,7 @@ func newInsertIgnoreMultiDedupArgument(inputs ...*batch.Batch) *PreInsertUnique 
 }
 
 func resetChildren(arg *PreInsertUnique, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil

@@ -61,7 +61,7 @@ func runAccountedCountGroup(
 		}
 		input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	case types.T_varchar:
-		input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		for pass := 0; pass < 2; pass++ {
 			for i := range groups {
 				value := []byte("key-" + strconv.Itoa(i) + "-varlen-payload")
@@ -757,7 +757,7 @@ func TestAccountedEmptyGroupingSetRowsReleaseAtOperatorFree(t *testing.T) {
 	})
 }
 
-func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
+func TestResetForSpillReleasesGroupingRollupConst(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	g := newGroupOp(proc, nil, nil)
@@ -765,7 +765,7 @@ func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 
 	before := allocation.account.Snapshot().Used
-	rollup := vector.NewRollupConst(
+	rollup := vector.NewConstNull(
 		types.T_int32.ToType(),
 		hashmap.UnitLimit,
 		g.ctr.rollupMP(),
@@ -888,9 +888,9 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 		source, err := vector.NewConstBytes(
 			types.T_text.ToType(), payload, rows, mp)
 		require.NoError(t, err)
-		destination := vector.NewOffHeapVecWithType(types.T_text.ToType())
+		destination := vector.NewVec(types.T_text.ToType(), view)
 		defer func() {
-			destination.Free(mp)
+			destination.Free(view)
 			source.Free(mp)
 			snapshot := account.Seal()
 			require.Zero(t, snapshot.Used)
@@ -995,7 +995,7 @@ func TestAccountedMergeGroupVectorDistinctSpillConsumer(t *testing.T) {
 			t.Cleanup(generation.Close)
 			require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(keyType.ToType())
+			input.Vecs[0] = vector.NewVec(keyType.ToType(), proc.Mp())
 			var child *colexec.MockOperator
 			t.Cleanup(func() {
 				if child == nil {
@@ -1101,7 +1101,6 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
 	input.Vecs[0].GetNulls().Add(1)
-	input.Vecs[0].GetGrouping().Add(2)
 	input.SetRowCount(rows)
 
 	g := newGroupOp(
@@ -1122,16 +1121,11 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 		destination.GetNulls().GetBitmap().CapWords(),
 		requiredWords,
 	)
-	require.GreaterOrEqual(t,
-		destination.GetGrouping().GetBitmap().CapWords(),
-		requiredWords,
-	)
 
 	before := allocation.account.Snapshot().Used
-	require.NoError(t, destination.UnionBatch(input.Vecs[0], 0, rows, nil, g.ctr.mp))
+	require.NoError(t, destination.UnionBatch(input.Vecs[0], 0, rows, nil, g.ctr.groupByMP()))
 	require.Equal(t, before, allocation.account.Snapshot().Used)
 	require.True(t, destination.GetNulls().Contains(1))
-	require.True(t, destination.GetGrouping().Contains(2))
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1144,7 +1138,7 @@ func TestGroupSelectedPreflightAllocatesNothingAfterHashCommit(t *testing.T) {
 	defer proc.Free()
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t,
 		vector.AppendBytes(input.Vecs[0], []byte("binary"), false, proc.Mp()))
 	require.NoError(t,
@@ -1230,7 +1224,7 @@ func TestGroupExistingAndNewKeysStayPreflightedThroughPublication(t *testing.T) 
 	defer proc.Free()
 	makeInput := func(values []string) *batch.Batch {
 		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(
 				input.Vecs[0], []byte(value), false, proc.Mp()))
@@ -1297,7 +1291,7 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 
 	input := batch.NewWithSize(1)
 	defer input.Clean(proc.Mp())
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	values := []string{
 		strings.Repeat("a", 100),
 		strings.Repeat("b", 200),
@@ -1554,7 +1548,7 @@ func TestAccountedGroupSpillPreservesStringKeys(t *testing.T) {
 
 	const groups = 1024
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	wantKeys := make(map[string]bool, groups)
 	for pass := 0; pass < 2; pass++ {
 		for group := 0; group < groups; group++ {
@@ -1656,18 +1650,18 @@ func makeSupportedAggregateSpillInput(
 
 	input := batch.NewWithSize(len(columnTypes))
 	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, mp)
-	input.Vecs[1] = vector.NewVec(columnTypes[1])
+	input.Vecs[1] = vector.NewVec(columnTypes[1], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[1], integers, nil, mp))
 	input.Vecs[2] = testutil.MakeVarcharVector(texts, nil, mp)
-	input.Vecs[3] = vector.NewVec(columnTypes[3])
+	input.Vecs[3] = vector.NewVec(columnTypes[3], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[3], floats, nil, mp))
-	input.Vecs[4] = vector.NewVec(decimalType)
+	input.Vecs[4] = vector.NewVec(decimalType, mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[4], decimals, nil, mp))
-	input.Vecs[5] = vector.NewVec(columnTypes[5])
+	input.Vecs[5] = vector.NewVec(columnTypes[5], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[5], orders, nil, mp))
-	input.Vecs[6] = vector.NewVec(columnTypes[6])
+	input.Vecs[6] = vector.NewVec(columnTypes[6], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[6], ties, nil, mp))
-	input.Vecs[7] = vector.NewVec(columnTypes[7])
+	input.Vecs[7] = vector.NewVec(columnTypes[7], mp)
 	for row, value := range integers {
 		count := int64(row%3 + 1)
 		sum := float64(value) * float64(count)
@@ -1676,7 +1670,7 @@ func makeSupportedAggregateSpillInput(
 		copy(payload[8:], types.EncodeInt64(&count))
 		require.NoError(t, vector.AppendBytes(input.Vecs[7], payload, false, mp))
 	}
-	input.Vecs[8] = vector.NewVec(columnTypes[8])
+	input.Vecs[8] = vector.NewVec(columnTypes[8], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[8], uint64s, nil, mp))
 	input.SetRowCount(rows)
 	return input, columnTypes
@@ -2038,8 +2032,8 @@ func TestAccountedGroupSpillPreservesVarlenaNullKeys(t *testing.T) {
 	defer proc.Free()
 	const groups = 128
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	for pass := 0; pass < 2; pass++ {
 		for group := range groups {
 			key := []byte("prepared-key-" + strconv.Itoa(group))
@@ -2123,7 +2117,7 @@ func TestAccountedGroupingSetSpillPreservesSentinelDomain(t *testing.T) {
 		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])
 		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
 		for row := range result.Batch.RowCount() {
-			require.True(t, result.Batch.Vecs[1].GetGrouping().Contains(uint64(row)))
+			require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
 			require.Equal(t, int64(2), counts[row])
 			seen[keys[row]] = struct{}{}
 		}
@@ -2959,7 +2953,7 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			inputs := make([]*batch.Batch, 2)
 			for pass := range inputs {
 				input := batch.NewWithSize(1)
-				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				for row := range 512 {
 					key := strings.Repeat("shared prefix ", 6) + strconv.Itoa(row+pass*256)
 					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(key), false, proc.Mp()))
@@ -3055,8 +3049,8 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 			for pass := range inputs {
 				input := batch.NewWithSize(2)
 				defer input.Clean(proc.Mp())
-				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-				input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+				input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				for row := range 512 {
 					id := row + pass*256
 					key := strings.Repeat("shared prefix ", 6) + strconv.Itoa(id)

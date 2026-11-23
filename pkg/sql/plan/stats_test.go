@@ -2597,7 +2597,7 @@ func TestGuardedDiagnosticKeepsLoopJoinSupportedOrientation(t *testing.T) {
 	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{
 		P: &planpb.ParamRef{Pos: 0},
 	}}
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), ctx.proc.Mp())
 	proc := ctx.GetProcess()
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))

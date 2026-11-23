@@ -168,13 +168,14 @@ func (ctr *container) initAsofBuildLeftState(hashJoin *HashJoin, proc *process.P
 	var batchRows []int32
 	var touchedSlots []int32
 	var bestRight *batch.Batch
+	var candidateMP *mpool.MPool
 	committed := false
 	defer func() {
 		if committed {
 			return
 		}
 		if bestRight != nil {
-			bestRight.Clean(proc.Mp())
+			bestRight.Clean(candidateMP)
 		}
 		mpool.FreeSlice(proc.Mp(), bestTimes)
 		mpool.FreeSlice(proc.Mp(), bestSequences)
@@ -262,13 +263,13 @@ func (ctr *container) initAsofBuildLeftState(hashJoin *HashJoin, proc *process.P
 		return err
 	}
 
-	bestRight = batch.NewOffHeapWithSize(len(hashJoin.RightTypes))
-	for column := range hashJoin.RightTypes {
-		bestRight.Vecs[column] = vector.NewOffHeapVecWithType(hashJoin.RightTypes[column])
-	}
-	candidateMP, err := hashJoin.asofCandidateAllocation.MP(proc.Mp())
+	candidateMP, err = hashJoin.asofCandidateAllocation.MP(proc.Mp())
 	if err != nil {
 		return err
+	}
+	bestRight = batch.NewWithSize(len(hashJoin.RightTypes))
+	for column := range hashJoin.RightTypes {
+		bestRight.Vecs[column] = vector.NewVec(hashJoin.RightTypes[column], candidateMP)
 	}
 	for _, vec := range bestRight.Vecs {
 		if err = vec.PreExtend(slotCount, candidateMP); err != nil {
@@ -851,7 +852,7 @@ func (ctr *container) compactAsofBuildLeftCandidates(hashJoin *HashJoin, proc *p
 		if err != nil {
 			for _, created := range clones {
 				if created != nil {
-					created.Free(proc.Mp())
+					created.Free(ctr.asofBuildLeftBestRightMP)
 				}
 			}
 			return err
@@ -860,7 +861,7 @@ func (ctr *container) compactAsofBuildLeftCandidates(hashJoin *HashJoin, proc *p
 	}
 	for i, old := range ctr.asofBuildLeftBestRight.Vecs {
 		if old != nil {
-			old.Free(proc.Mp())
+			old.Free(ctr.asofBuildLeftBestRightMP)
 		}
 		ctr.asofBuildLeftBestRight.Vecs[i] = clones[i]
 	}
@@ -873,7 +874,7 @@ func (ctr *container) finalizeAsofBuildLeft(
 	proc *process.Process,
 	result *vm.CallResult,
 ) error {
-	if err := hashJoin.resetResultBat(); err != nil {
+	if err := hashJoin.resetResultBat(proc); err != nil {
 		return err
 	}
 	outputRows := 0

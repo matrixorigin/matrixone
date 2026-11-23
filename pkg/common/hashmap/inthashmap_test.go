@@ -46,7 +46,7 @@ func TestIntHashMapRejectsJoinNaN(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	keys := vector.NewVec(types.T_float64.ToType())
+	keys := vector.NewVec(types.T_float64.ToType(), mp)
 	defer keys.Free(mp)
 	require.NoError(t, vector.AppendFixed(keys, math.NaN(), false, mp))
 	require.NoError(t, vector.AppendFixed(keys, float64(7), false, mp))
@@ -88,7 +88,7 @@ func TestIntHashMapCharUsesPadSpaceEquality(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	values := vector.NewVec(types.New(types.T_char, 4, 0))
+	values := vector.NewVec(types.New(types.T_char, 4, 0), mp)
 	defer values.Free(mp)
 	for _, value := range []string{"a", "a ", "a  ", "b"} {
 		require.NoError(t, vector.AppendBytes(values, []byte(value), false, mp))
@@ -110,26 +110,6 @@ func TestIntHashMapCharUsesPadSpaceEquality(t *testing.T) {
 	require.Equal(t, []uint64{1, 1, 1}, groups)
 }
 
-func TestIntHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
-	mp := mpool.MustNewZero()
-	hashMap, err := NewIntHashMap(false, mp)
-	require.NoError(t, err)
-	defer hashMap.Free()
-	raw := vector.NewVec(types.T_uint8.ToType())
-	require.NoError(t, vector.AppendFixed(raw, uint8(0), false, mp))
-	grouping := vector.NewRollupConst(types.T_uint8.ToType(), 1, mp)
-	defer raw.Free(mp)
-	defer grouping.Free(mp)
-
-	iterator := hashMap.NewIterator()
-	_, _, err = iterator.Insert(0, 1, []*vector.Vector{raw})
-	require.NoError(t, err)
-	values, zValues, err := iterator.Find(0, 1, []*vector.Vector{grouping})
-	require.NoError(t, err)
-	require.Equal(t, []uint64{0}, values)
-	require.Equal(t, []int64{0}, zValues)
-}
-
 func TestIntHashMapPreviewInsertMatchesPublication(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewIntHashMap(false, mp)
@@ -139,8 +119,8 @@ func TestIntHashMapPreviewInsertMatchesPublication(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	existing := vector.NewVec(types.T_int32.ToType())
-	input := vector.NewVec(types.T_int32.ToType())
+	existing := vector.NewVec(types.T_int32.ToType(), mp)
+	input := vector.NewVec(types.T_int32.ToType(), mp)
 	defer existing.Free(mp)
 	defer input.Free(mp)
 	require.NoError(t, vector.AppendFixed(existing, int32(7), false, mp))
@@ -212,7 +192,7 @@ func testFlatAndConstHashKeys[T interface{ ~int64 | ~uint64 }](t *testing.T, oid
 		_, _, err = itr.Insert(0, 1, []*vector.Vector{constant})
 		require.NoError(t, err)
 	}
-	flat := vector.NewVec(oid.ToType())
+	flat := vector.NewVec(oid.ToType(), mp)
 	t.Cleanup(func() { flat.Free(mp) })
 	raw := []uint64{99, 0, math.MaxUint64, math.MaxUint64, 1 << 63, math.MaxInt64, 1, 88}
 	input := make([]T, len(raw))
@@ -270,7 +250,7 @@ func TestIntHashMapPreviewInsertGrowsBeforePublication(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	input := vector.NewVec(types.T_int32.ToType())
+	input := vector.NewVec(types.T_int32.ToType(), mp)
 	defer input.Free(mp)
 	values := make([]int32, UnitLimit)
 	for i := range values {
@@ -306,7 +286,7 @@ func TestIntHashMapPreviewInsertRejectNaN(t *testing.T) {
 		hashMap.Free()
 		require.Zero(t, mp.CurrNB())
 	}()
-	input := vector.NewVec(types.T_float64.ToType())
+	input := vector.NewVec(types.T_float64.ToType(), mp)
 	defer input.Free(mp)
 	require.NoError(t, vector.AppendFixedList(input,
 		[]float64{math.NaN(), 1, math.NaN()}, nil, mp))
@@ -339,7 +319,7 @@ func TestIntHashMapInsertPlanRejectsWrongOrInvalidatedIterator(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}()
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	defer input.Free(mp)
 	require.NoError(t, vector.AppendFixedList(input, []int64{7, 8}, nil, mp))
 	vecs := []*vector.Vector{input}
@@ -362,28 +342,6 @@ func TestIntHashMapInsertPlanRejectsWrongOrInvalidatedIterator(t *testing.T) {
 	_, _, err = firstIterator.CommitPreview(&plan)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), first.GroupCount())
-}
-
-func TestIntHashMapPartialGroupingRowsDoNotMatchRawKeys(t *testing.T) {
-	mp := mpool.MustNewZero()
-	hashMap, err := NewIntHashMap(false, mp)
-	require.NoError(t, err)
-	defer hashMap.Free()
-	build := vector.NewVec(types.T_int32.ToType())
-	probe := vector.NewVec(types.T_int32.ToType())
-	require.NoError(t, vector.AppendFixedList(build, []int32{7, 8}, nil, mp))
-	require.NoError(t, vector.AppendFixedList(probe, []int32{7, 8}, nil, mp))
-	probe.GetGrouping().Add(0)
-	defer build.Free(mp)
-	defer probe.Free(mp)
-
-	iterator := hashMap.NewIterator()
-	_, _, err = iterator.Insert(0, 2, []*vector.Vector{build})
-	require.NoError(t, err)
-	values, zValues, err := iterator.Find(0, 2, []*vector.Vector{probe})
-	require.NoError(t, err)
-	require.Equal(t, []uint64{0, 2}, values)
-	require.Equal(t, []int64{0, 1}, zValues)
 }
 
 func TestIntHashMap_Iterator(t *testing.T) {

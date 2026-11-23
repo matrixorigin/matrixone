@@ -63,7 +63,7 @@ func TestDecimal128ValidityRuntimeTransitions(t *testing.T) {
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			typ := types.New(tc.oid, 15, 2)
 			for side, values := range [][]int64{{120, -250, 0, 1234}, {200, 300, -500, 10}} {
-				input.Vecs[side] = vector.NewVec(typ)
+				input.Vecs[side] = vector.NewVec(typ, proc.Mp())
 				for _, n := range values {
 					appendValidityDecimal(t, proc, input.Vecs[side], n)
 				}
@@ -143,7 +143,7 @@ func TestDecimal128ValidityCastBounds(t *testing.T) {
 			typ := types.New(types.T_decimal64, tc.width, tc.scale)
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(typ)
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			for _, n := range []int64{120, -250} {
 				appendValidityDecimal(t, proc, input.Vecs[0], n)
 			}
@@ -190,7 +190,7 @@ func TestDecimal128ValidityAdmissionFailure(t *testing.T) {
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for side := range 2 {
-				input.Vecs[side] = vector.NewVec(typ)
+				input.Vecs[side] = vector.NewVec(typ, proc.Mp())
 				for range 4 {
 					appendValidityDecimal(t, proc, input.Vecs[side], 100)
 				}
@@ -236,7 +236,7 @@ func TestDecimal128ValidityPreservesMultiplyOverflow(t *testing.T) {
 	for side, text := range []string{"99999999999999999999999999999999999999", "2"} {
 		value, err := types.ParseDecimal128(text, 38, 0)
 		require.NoError(t, err)
-		input.Vecs[side] = vector.NewVec(typ)
+		input.Vecs[side] = vector.NewVec(typ, proc.Mp())
 		require.NoError(t, vector.AppendFixed(input.Vecs[side], value, false, proc.Mp()))
 	}
 	input.SetRowCount(1)
@@ -257,43 +257,13 @@ func TestDecimal128ValidityPreservesMultiplyOverflow(t *testing.T) {
 	require.Zero(t, root.resultVector.GetResultVector().GetNulls().GetBitmap().CapWords())
 }
 
-func TestDecimal128ValidityMetadataFallback(t *testing.T) {
-	for _, shape := range []string{"cast-grouping"} {
-		t.Run(shape, func(t *testing.T) {
-			proc, allocation, _ := dependentTestAllocation(t)
-			typ := types.New(types.T_decimal64, 15, 2)
-			input := batch.NewWithSize(2)
-			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			for side := range 2 {
-				input.Vecs[side] = vector.NewVec(typ)
-				appendValidityDecimal(t, proc, input.Vecs[side], 100)
-			}
-			input.SetRowCount(1)
-			col := func(i int32) *plan.Expr {
-				return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: i}}}
-			}
-			expression := bindTestFunction(t, proc, "*", col(0), col(1))
-			if shape == "cast-grouping" {
-				expression = bindTestCast(t, proc, 0, col(0), types.New(types.T_decimal128, 38, 2))
-				input.Vecs[0].GetGrouping().Add(0)
-			}
-			executor, err := NewExpressionExecutorWithAllocation(proc, expression, allocation)
-			require.NoError(t, err)
-			t.Cleanup(executor.Free)
-			out, err := executor.Eval(proc, []*batch.Batch{input}, nil)
-			require.NoError(t, err)
-			require.False(t, out.HasNull())
-		})
-	}
-}
-
 func TestDecimal128ValidityQ17Predicate(t *testing.T) {
 	proc, allocation, _ := dependentTestAllocation(t)
 	quantity := types.New(types.T_decimal64, 15, 2)
 	average := aggexec.AvgReturnType([]types.Type{quantity})
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	input.Vecs[0], input.Vecs[1] = vector.NewVec(quantity), vector.NewVec(average)
+	input.Vecs[0], input.Vecs[1] = vector.NewVec(quantity, proc.Mp()), vector.NewVec(average, proc.Mp())
 	averageValue, err := types.ParseDecimal128("10", average.Width, average.Scale)
 	require.NoError(t, err)
 	for _, n := range []int64{120, -250, 0, 1234} {

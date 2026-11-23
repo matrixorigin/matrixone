@@ -213,14 +213,14 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 		}
 
 		insBat := batch.NewWithSize(8)
-		insBat.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0))
-		insBat.Vecs[1] = vector.NewVec(types.New(types.T_bit, 1, 0))
-		insBat.Vecs[2] = vector.NewVec(types.New(types.T_bit, 5, 0))
-		insBat.Vecs[3] = vector.NewVec(types.New(types.T_bit, 8, 0))
-		insBat.Vecs[4] = vector.NewVec(types.New(types.T_bit, 64, 0))
-		insBat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
-		insBat.Vecs[6] = vector.NewVec(types.T_text.ToType())
-		insBat.Vecs[7] = vector.NewVec(types.T_json.ToType())
+		insBat.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0), mp)
+		insBat.Vecs[1] = vector.NewVec(types.New(types.T_bit, 1, 0), mp)
+		insBat.Vecs[2] = vector.NewVec(types.New(types.T_bit, 5, 0), mp)
+		insBat.Vecs[3] = vector.NewVec(types.New(types.T_bit, 8, 0), mp)
+		insBat.Vecs[4] = vector.NewVec(types.New(types.T_bit, 64, 0), mp)
+		insBat.Vecs[5] = vector.NewVec(types.T_varchar.ToType(), mp)
+		insBat.Vecs[6] = vector.NewVec(types.T_text.ToType(), mp)
+		insBat.Vecs[7] = vector.NewVec(types.T_json.ToType(), mp)
 		func() {
 			defer insBat.Clean(mp)
 			for _, r := range wantSingle {
@@ -281,8 +281,8 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 		// Delete single BIT PK rows through CDCStatementBuilder + Executor.
 		func() {
 			delBat := batch.NewWithSize(2)
-			delBat.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0))
-			delBat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+			delBat.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0), mp)
+			delBat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 			owned := true
 			defer func() {
 				if owned {
@@ -336,9 +336,9 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 		}
 		func() {
 			insComp := batch.NewWithSize(3)
-			insComp.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0))
-			insComp.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-			insComp.Vecs[2] = vector.NewVec(types.T_text.ToType())
+			insComp.Vecs[0] = vector.NewVec(types.New(types.T_bit, 16, 0), mp)
+			insComp.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+			insComp.Vecs[2] = vector.NewVec(types.T_text.ToType(), mp)
 			defer insComp.Clean(mp)
 			for _, r := range compRows {
 				require.NoError(t, vector.AppendFixed(insComp.Vecs[0], r.bpk, false, mp))
@@ -359,8 +359,8 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 
 		func() {
 			delComp := batch.NewWithSize(2)
-			delComp.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			delComp.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+			delComp.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			delComp.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 			owned := true
 			defer func() {
 				if owned {

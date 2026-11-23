@@ -15,7 +15,6 @@
 package readutil
 
 import (
-	"bytes"
 	"context"
 	"strings"
 
@@ -178,9 +177,10 @@ func normalizeInPayload(data []byte) ([]byte, int, error) {
 }
 
 func normalizeInPayloadWithPool(data []byte, mp *mpool.MPool) ([]byte, int, error) {
-	owned := vector.NewOffHeapVecWithType(types.T_any.ToType())
+	// Decoding with a pool copies, so data is never mutated.
+	owned := vector.NewVec(types.T_any.ToType(), mp)
 	defer owned.Free(mp)
-	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
+	if err := owned.UnmarshalBinary(data); err != nil {
 		return nil, 0, err
 	}
 	if owned.GetNulls().Any() {
@@ -480,7 +480,7 @@ func MakeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 func MakeInExprForTest[T any](
 	arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.MPool,
 ) *plan.Expr {
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for _, val := range vals {
 		_ = vector.AppendAny(vec, val, false, mp)
 	}

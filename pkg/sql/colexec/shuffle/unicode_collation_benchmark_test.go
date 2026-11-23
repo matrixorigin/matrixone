@@ -30,7 +30,7 @@ func TestUnicodeCollationShuffleConsumerRelease(t *testing.T) {
 			func() {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
-				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset))
+				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, 64, 0, charset), mp)
 				require.NoError(t, vector.AppendBytesList(vec, makeShuffleConsumerValues(64, 64), nil, mp))
 				col, area := vector.MustVarlenaRawData(vec)
 				arg := &Shuffle{}
@@ -64,7 +64,7 @@ func BenchmarkUnicodeCollationShuffleConsumers(b *testing.B) {
 		} {
 			b.Run(fmt.Sprintf("%s/%dB/%drows", tc.name, size, rows), func(b *testing.B) {
 				mp := mpool.MustNewZero()
-				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, int32(size), 0, tc.charset))
+				vec := vector.NewVec(types.NewWithCharset(types.T_varchar, int32(size), 0, tc.charset), mp)
 				if err := vector.AppendBytesList(vec, makeShuffleConsumerValues(size, rows), nil, mp); err != nil {
 					b.Fatal(err)
 				}

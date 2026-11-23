@@ -3937,7 +3937,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType()))
+		batchCase2.Vecs = append(batchCase2.Vecs, vector.NewVec(types.T_any.ToType(), mp))
 		err = getDataFromPipeline(ses, ec, batchCase2, nil)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -4017,7 +4017,7 @@ func allocTestBatch(mp *mpool.MPool, attrName []string, tt []types.Type, batchSi
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.NewVec(tt[i])
+		vec := vector.NewVec(tt[i], mp)
 		if err := vec.PreExtend(batchSize, mp); err != nil {
 			panic(err)
 		}
@@ -6123,7 +6123,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 		prepareStmts: make(map[string]*PrepareStmt),
 	}
 	proc := testutil.NewProc(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("long-data"), false, proc.Mp()))
 	params.GetNulls().Set(0)
 
@@ -6132,6 +6132,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 		Name:                stmtName,
 		proc:                proc,
 		params:              params,
+		paramsMP:            proc.Mp(),
 		getFromSendLongData: map[int]struct{}{0: {}},
 	}
 	defer prepareStmt.Close()
@@ -6253,7 +6254,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.NoError(t, err)
 
 	proc := ses.GetProc()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("leftover"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("leftover"), false, proc.Mp()))
 	params.GetNulls().Set(1)
@@ -6264,6 +6265,7 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 		PrepareStmt:         stmts[0],
 		proc:                proc,
 		params:              params,
+		paramsMP:            proc.Mp(),
 		getFromSendLongData: map[int]struct{}{0: {}},
 	}
 	defer prepareStmt.Close()
@@ -6553,7 +6555,7 @@ func TestPreparedCursorLimitHonorsExplicitZero(t *testing.T) {
 func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	vec := vector.NewVec(types.T_array_uint8.ToType())
+	vec := vector.NewVec(types.T_array_uint8.ToType(), mp)
 	values := make([]uint8, types.MaxArrayDimension)
 	for i := range values {
 		values[i] = 255
@@ -6609,7 +6611,7 @@ func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testi
 			case "int8":
 				oid = types.T_array_int8
 			}
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), mp)
 			require.NoError(t, tc.make(vec))
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vec
@@ -6630,7 +6632,7 @@ func TestEstimatePreparedCursorMaterializedBytesArrayAndDecimalFamilies(t *testi
 		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 4), text: "1234.5678"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			switch tc.typ.Oid {
 			case types.T_decimal64:
 				value, err := types.ParseDecimal64(tc.text, tc.typ.Width, tc.typ.Scale)
@@ -6660,7 +6662,7 @@ func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
 	typ := types.New(types.T_decimal256, 65, 0)
 	value, err := types.ParseDecimal256(strings.Repeat("9", 65), typ.Width, typ.Scale)
 	require.NoError(t, err)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
@@ -6712,7 +6714,7 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		{name: "geometry32", typ: types.T_geometry32, payload: line32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ.ToType())
+			vec := vector.NewVec(tc.typ.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(vec, tc.payload, false, mp))
 			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vec
@@ -8818,7 +8820,7 @@ func TestBuildPlanForCompileRetryReprovesPreparedJoin(t *testing.T) {
 	compilerCtx := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
 	compilerCtx.SetContext(ctx)
 	proc := compilerCtx.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("01:00:00"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
@@ -13177,7 +13179,8 @@ func TestRecordStatementUTF8(t *testing.T) {
 						if tc.params != nil {
 							proc := testutil.NewProc(t)
 							prepared.proc = proc
-							prepared.params = vector.NewVec(types.T_text.ToType())
+							prepared.params = vector.NewVec(types.T_text.ToType(), proc.Mp())
+							prepared.paramsMP = proc.Mp()
 							defer prepared.Close()
 							for i, value := range tc.params {
 								require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), i == tc.nullIndex, proc.Mp()))
@@ -13308,8 +13311,8 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 	defer stmt.Free()
 	compiler := plan.NewMockCompilerContext(true, newPlanTestProcess(t))
 	compiler.SetContext(ctx)
-	params := vector.NewVec(types.T_text.ToType())
 	proc := compiler.GetProcess()
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
 	proc.SetPrepareParams(params)

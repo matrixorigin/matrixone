@@ -51,7 +51,7 @@ func (mergeDelete *MergeDelete) Prepare(proc *process.Process) error {
 	}
 	mergeDelete.ctr.delSource = rel
 	mergeDelete.ctr.affectedRows = 0
-	mergeDelete.ctr.bat = batch.NewOffHeapEmpty()
+	mergeDelete.ctr.bat = batch.NewWithSize(0)
 	return nil
 }
 

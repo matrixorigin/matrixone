@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,9 +65,9 @@ func TestPartitionPKCheckUsesLockedIdentity(t *testing.T) {
 			relation := &mockRelation{}
 			pruned, all := 0, 0
 			input := batch.NewWithSize(6)
-			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero())
 			if tc.rowIDFirst {
-				input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mpool.MustNewZero())
 			}
 			table := &combinedTxnTable{
 				primary: &txnTable{tableDef: def},

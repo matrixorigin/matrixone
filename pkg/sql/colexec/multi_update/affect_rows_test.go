@@ -41,7 +41,7 @@ func TestInsertAffectedRowsUsesChangedRowsMarker(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	changed := vector.NewVec(types.T_bool.ToType())
+	changed := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	defer changed.Free(proc.Mp())
 	for _, value := range []bool{false, true, false, true} {
 		require.NoError(t, vector.AppendFixed(changed, value, false, proc.Mp()))
@@ -59,8 +59,8 @@ func TestFilterODKUPhysicalRowsSeparatesLogicalCount(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	weights := vector.NewVec(types.T_uint64.ToType())
-	physical := vector.NewVec(types.T_bool.ToType())
+	weights := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
+	physical := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	defer weights.Free(proc.Mp())
 	defer physical.Free(proc.Mp())
 	for _, value := range []uint64{6, 4, 0} {
@@ -88,8 +88,8 @@ func TestFilterODKUPhysicalRowsSeparatesLogicalCount(t *testing.T) {
 func TestFilterODKUPhysicalRowsFastPathAndMalformedMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	weights := vector.NewVec(types.T_uint64.ToType())
-	physical := vector.NewVec(types.T_bool.ToType())
+	weights := vector.NewVec(types.T_uint64.ToType(), proc.Mp())
+	physical := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	defer weights.Free(proc.Mp())
 	defer physical.Free(proc.Mp())
 	for _, value := range []uint64{1, 2} {

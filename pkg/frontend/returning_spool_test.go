@@ -169,7 +169,7 @@ func (r *returningStageRecorder) Abort(*ExecCtx) error {
 func returningTestBatch(t *testing.T, ses *Session, values ...int64) *batch.Batch {
 	t.Helper()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, ses.proc.Mp()))
 	}
@@ -214,7 +214,7 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	require.Zero(t, budget.SpillFDUsed())
 
 	final := returningTestBatch(t, ses, 7, 8, 9)
-	binaryValues := vector.NewVec(types.T_varbinary.ToType())
+	binaryValues := vector.NewVec(types.T_varbinary.ToType(), ses.proc.Mp())
 	for _, value := range []string{"a", "b", "c"} {
 		require.NoError(t, vector.AppendBytes(binaryValues, []byte(value), false, ses.proc.Mp()))
 	}

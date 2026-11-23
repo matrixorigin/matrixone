@@ -34,7 +34,7 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 			for _, onlyNulls := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/prefix%d/all_null%t", oid, prefix, onlyNulls), func(t *testing.T) {
 					mp := mpool.MustNewZero()
-					a, b, got, want := NewVec(oid.ToType()), NewVec(oid.ToType()), NewVec(oid.ToType()), NewVec(oid.ToType())
+					a, b, got, want := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
 					t.Cleanup(func() {
 						a.Free(mp)
 						b.Free(mp)
@@ -85,7 +85,6 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 					width := oid.TypeLen()
 					for i := 0; i < got.length; i++ {
 						require.Equal(t, want.IsNull(uint64(i)), got.IsNull(uint64(i)))
-						require.Equal(t, want.gsp.Contains(uint64(i)), got.gsp.Contains(uint64(i)))
 						if !want.IsNull(uint64(i)) {
 							if varlen {
 								require.Equal(t, want.GetBytesAt(i), got.GetBytesAt(i))
@@ -101,7 +100,7 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 }
 
 func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
-	for _, shape := range []string{"const", "grouping", "borrowed", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
+	for _, shape := range []string{"const", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_int64.ToType()
@@ -111,8 +110,8 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 					typ.Charset = types.CharsetUTF8MB4UnicodeCI
 				}
 			}
-			a, b, dst := NewVec(typ), NewVec(typ), NewVec(typ)
-			t.Cleanup(func() { b.cantFreeData = false; a.Free(mp); b.Free(mp); dst.Free(mp); require.Zero(t, mp.CurrNB()) })
+			a, b, dst := NewVec(typ, mp), NewVec(typ, mp), NewVec(typ, mp)
+			t.Cleanup(func() { a.Free(mp); b.Free(mp); dst.Free(mp); require.Zero(t, mp.CurrNB()) })
 			for _, v := range []*Vector{a, b} {
 				if typ.IsVarlen() {
 					require.NoError(t, AppendBytes(v, []byte("inline"), false, mp))
@@ -127,10 +126,6 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			switch shape {
 			case "const":
 				b.class = CONSTANT
-			case "grouping":
-				b.gsp.Add(1)
-			case "borrowed":
-				b.cantFreeData = true
 			case "alias":
 				rows[1] = FixedSourceRow{dst, 0}
 			case "type":
@@ -154,12 +149,12 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 		t.Run(fmt.Sprintf("admission/nullable%t", nullable), func(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1, 16)
 			mp := mpool.MustNewZero()
-			src := NewVec(types.T_int64.ToType())
-			dst := newAccountedTestVector(t, types.T_int64.ToType())
+			src := NewVec(types.T_int64.ToType(), mp)
 			dmp := state.view(t, mp)
+			dst := newAccountedTestVector(t, types.T_int64.ToType(), dmp)
 			t.Cleanup(func() {
 				src.Free(mp)
-				dst.Free(mp)
+				dst.Free(dmp)
 				require.Zero(t, mp.CurrNB())
 				finalizeTestVectorAllocationAccount(t, state)
 			})

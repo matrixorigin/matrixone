@@ -74,7 +74,7 @@ func (d staticCacheData) Release()                 {}
 
 func TestDecodeBlockBatchCleansPartialBatchOnCorruptColumn(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, make([]byte, 4096), false, mp))
 	body, err := vec.MarshalBinary()
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestDecodeBlockBatchCleansPartialBatchOnCorruptColumn(t *testing.T) {
 func TestValidateCommitTSVectorFreesWrongType(t *testing.T) {
 	mp := mpool.MustNewNoLock("object-reader-wrong-type")
 	defer mpool.DeleteMPool(mp)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, make([]byte, 4096), false, mp))
 	require.Positive(t, vec.Allocated())
 
@@ -120,7 +120,7 @@ func TestObjectReaderCloseDeletesMPoolOnceAfterBlockRelease(t *testing.T) {
 	mp := mpool.MustNewNoLock(tag)
 	reader := &ObjectReader{mp: mp}
 
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, make([]byte, 4096), false, mp))
 	require.NotEqual(t, "[]", mpool.ReportMemUsage(tag))
 	vec.Free(mp)
@@ -201,8 +201,8 @@ func writeObjectReaderTestFile(t *testing.T, dir string, filename string) {
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, row := range []struct {
 		id   int32
 		name string

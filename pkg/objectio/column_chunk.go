@@ -257,7 +257,7 @@ func decodeChunkedColumn(
 			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload row count mismatch")
 		}
 		if dst == nil {
-			dst = vector.NewVec(*source.GetType())
+			dst = vector.NewVec(*source.GetType(), mp)
 		} else if *source.GetType() != *dst.GetType() {
 			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
 		}

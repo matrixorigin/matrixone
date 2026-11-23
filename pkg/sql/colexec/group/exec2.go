@@ -75,12 +75,12 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 	return false
 }
 
-// UsesGroupingAwareHash reports whether partial group keys use the extended
-// hash grammar that distinguishes a rolled-up grouping sentinel from SQL NULL.
-// MergeGroup must know this from the plan: an individual partial can contain
-// only the fully active grouping set and therefore carry no sentinel bits even
-// though later partials in the same stream do.
-func (group *Group) UsesGroupingAwareHash() bool {
+// ProducesGroupingSets reports whether this group emits grouping-set rows, in
+// which a rolled-up key is a NULL constant regardless of its declared type.
+// Its hash table must therefore keep NULL keys. MergeGroup must know this from
+// the plan: an individual partial can contain only the fully active grouping
+// set and therefore carry no rolled-up NULLs even though later partials do.
+func (group *Group) ProducesGroupingSets() bool {
 	return group != nil &&
 		(group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag))
 }
@@ -179,7 +179,8 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		group.ctr.groupByEvaluate.ResetForNextQuery()
 	} else {
 		// calculate the key width and key nullable, and hash table type.
-		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
+		// A rolled-up key is a NULL constant even when its expression is NOT NULL.
+		group.ctr.keyWidth, group.ctr.keyNullable = 0, group.ProducesGroupingSets()
 		hashKeyCount := len(group.GroupBy)
 		if len(group.GroupByHashKey) > 0 {
 			hashKeyCount = len(group.GroupByHashKey)
@@ -238,19 +239,6 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		// expects the historical H8 producer behavior. Keep that legacy wire until
 		// the shared rollout gate reaches v78; the planner prevents new plans from
 		// creating a new short-varlen remote boundary before then.
-
-		group.ctr.groupingAware = false
-		if group.DynamicGrouping {
-			group.ctr.mtyp = HStr
-			group.ctr.groupingAware = true
-		}
-		for _, flag := range group.GroupingFlag {
-			if !flag {
-				group.ctr.mtyp = HStr
-				group.ctr.groupingAware = true
-				break
-			}
-		}
 
 		// create group by evaluate
 		group.ctr.groupByEvaluate.Free()
@@ -561,13 +549,13 @@ func (group *Group) ensureRuntimeEmptyGroupingSet() error {
 	if len(group.ctr.aggList) != len(group.Aggs) {
 		group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
 		if err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
 	for _, agg := range group.ctr.aggList {
 		if err = agg.GroupGrow(1); err != nil {
-			output.Clean(group.ctr.mp)
+			group.ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
@@ -659,7 +647,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		count := bat.RowCount()
 		var hashBytesBefore int64
 		var compactHitRows int64
-		compactEligible := !group.DynamicGrouping && !group.ctr.groupingAware && !group.ctr.legacyH8CharSemantics &&
+		compactEligible := !group.ProducesGroupingSets() && !group.ctr.legacyH8CharSemantics &&
 			compactGroupExpressions(group.GroupBy)
 		if !group.ctr.hr.IsEmpty() {
 			hashBytesBefore = group.ctr.hr.Hash.Size()
@@ -985,7 +973,6 @@ func (ctr *container) buildHashTable(ctx context.Context, preAllocated uint64) e
 		false,
 		ctr.mtyp == HStr,
 		ctr.keyNullable,
-		ctr.groupingAware,
 		preAllocated,
 		ctr.hashAllocation,
 		ctr.hashIterator,
@@ -1223,12 +1210,12 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 		}
 	}
 
-	b := batch.NewOffHeapWithSize(len(ctr.groupByTypes))
+	b := batch.NewWithSize(len(ctr.groupByTypes))
 	for i, typ := range ctr.groupByTypes {
-		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		b.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	if err := b.PreExtend(mp, size); err != nil {
-		b.Clean(ctr.mp)
+		ctr.cleanGroupBatch(b)
 		return nil, err
 	}
 	b.SetRowCount(0)

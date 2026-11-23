@@ -398,7 +398,7 @@ func (p *PartitionState) GetEnd() types.TS {
 }
 
 func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
-	data, _ := batch.ProtoBatchToBatch(entry.Bat)
+	data, _ := batch.ProtoBatchToBatch(entry.Bat, nil)
 	logutil.Info(
 		msg,
 		zap.String("table-name", entry.TableName),
@@ -945,7 +945,7 @@ func (p *PartitionState) HandleRowsDelete(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	sourceBatch, err := batch.ProtoBatchToBatch(input)
+	sourceBatch, err := batch.ProtoBatchToBatch(input, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -1051,7 +1051,7 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	sourceBatch, err := batch.ProtoBatchToBatch(input)
+	sourceBatch, err := batch.ProtoBatchToBatch(input, mp)
 	if err != nil {
 		panic(err)
 	}

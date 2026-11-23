@@ -82,7 +82,7 @@ func TestInitFilterColumnsEmptyIsNoop(t *testing.T) {
 // as a stand-in table-function argVec in appendFilterRow tests.
 func singleRowVec[T any](t *testing.T, mp *mpool.MPool, oid types.T, val T) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(types.T_int64.ToType()) // placeholder, overwritten below
+	v := vector.NewVec(types.T_int64.ToType(), mp) // placeholder, overwritten below
 	v.ResetWithSameType()
 	var width int32 = 8
 	switch oid {
@@ -152,10 +152,10 @@ func TestAppendFilterRowAllTypes(t *testing.T) {
 func TestAppendFilterRowNullMarksValidity(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vNull := vector.NewVec(types.T_int64.ToType())
+	vNull := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vNull, int64(0), true, mp)) // null
 
-	vLive := vector.NewVec(types.T_int64.ToType())
+	vLive := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vLive, int64(42), false, mp))
 
 	cols := []cuvsfilter.ColumnMeta{
@@ -261,7 +261,7 @@ func TestEncodeIncludeRowFromArgVecs(t *testing.T) {
 func TestEncodeIncludeRowFromArgVecs_NullMarks(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vNull := vector.NewVec(types.T_int64.ToType())
+	vNull := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vNull, int64(0), true, mp)) // null
 
 	cols := []cuvsfilter.ColumnMeta{{Name: "a", TypeOid: cuvsfilter.ColTypeInt64}}

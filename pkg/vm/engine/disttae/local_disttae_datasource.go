@@ -952,9 +952,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		outBatch.Attrs,
 		objectio.PhysicalAddr_Attr,
 	); physicalColumnPos == -1 {
-		physicalColumn.SetType(objectio.RowidType)
-		physicalColumnPtr = &physicalColumn
 		physicalMP = mp.Base()
+		physicalColumn.InitVec(objectio.RowidType, physicalMP)
+		physicalColumnPtr = &physicalColumn
 		defer physicalColumn.Free(physicalMP)
 	} else {
 		physicalColumnPtr = outBatch.Vecs[physicalColumnPos]

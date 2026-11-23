@@ -42,7 +42,7 @@ func newDependentSlotExecutor(proc *process.Process, slot *plan.CorrelationSlot,
 		}
 	}
 	mp := expressionAllocationMP(proc.Mp(), allocation)
-	value := vector.NewOffHeapVecWithType(typ)
+	value := vector.NewVec(typ, mp)
 	return &dependentSlotExecutor{slot: *slot, value: value, mp: mp}, nil
 }
 
@@ -78,7 +78,7 @@ func (e *dependentSlotExecutor) EvalWithoutResultReusing(proc *process.Process, 
 	if err != nil {
 		return nil, err
 	}
-	return value.DupOffHeap(e.mp)
+	return value.Dup(e.mp)
 }
 func (e *dependentSlotExecutor) ResetForNextQuery() {
 	if e.value != nil {

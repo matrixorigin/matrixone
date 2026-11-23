@@ -79,7 +79,6 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.legacyH8CharSemantics = false
-	mergeGroup.ctr.groupingAware = mergeGroup.GroupingAware
 	mergeGroup.ctr.keyWidth = 0
 	mergeGroup.ctr.mtyp = 0
 	mergeGroup.ctr.setGroupByHashKey(mergeGroup.GroupByHashKey)
@@ -253,16 +252,16 @@ func (mergeGroup *MergeGroup) ensureRuntimeEmptyGroupingSets() error {
 	}
 
 	ctr.mtyp = HStr
-	ctr.groupingAware = true
+	ctr.keyNullable = true
 	aggs, err := ctr.makeAggList(mergeGroup.Aggs)
 	if err != nil {
-		output.Clean(ctr.mp)
+		ctr.cleanGroupBatch(output)
 		return err
 	}
 	for _, agg := range aggs {
 		if err = agg.GroupGrow(rows); err != nil {
 			freeAggList(aggs)
-			output.Clean(ctr.mp)
+			ctr.cleanGroupBatch(output)
 			return err
 		}
 	}
@@ -529,11 +528,8 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 	ctr.legacyH8CharSemantics = incomingType == H8 &&
 		mergeGroupHashKeyNeedsV78(incomingHashVectors, incomingNullable) &&
 		!groupHashStringWireEnabled(proc)
-	incomingGroupingAware := incomingType == HStr &&
-		mergeGroupHashKeyHasGrouping(incomingHashVectors)
 	if ctr.mergePartialMetadataSet &&
-		(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable ||
-			(!ctr.groupingAware && incomingGroupingAware)) {
+		(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable) {
 		return moerr.NewInvalidInputNoCtx(
 			"inconsistent merge-group partial metadata")
 	}
@@ -602,11 +598,6 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 	// decoded. A rejected partial must not poison the mode used by a retry.
 	ctr.mtyp = incomingType
 	ctr.keyNullable = incomingNullable
-	// The plan-level declaration stays true even when this particular partial
-	// contains only the fully active grouping set and no sentinel bits. For
-	// compatibility with an undeclared single grouping partial, the first
-	// partial may still promote the hash grammar before the table is built.
-	ctr.groupingAware = ctr.groupingAware || incomingGroupingAware
 	ctr.mergePartialMetadataSet = true
 
 	if ctr.mtyp == H0 && len(ctr.groupByBatches) == 0 {
@@ -647,10 +638,6 @@ func validateMergeGroupHashMetadata(
 			return moerr.NewInvalidInputNoCtxf(
 				"nil merge-group hash key column %d", i)
 		}
-		if mtyp == H8 && vec.HasGrouping() {
-			return moerr.NewInvalidInputNoCtxf(
-				"merge-group H8 hash metadata cannot encode grouping key column %d", i)
-		}
 		if !nullable && mergeGroupHashKeyHasNull(vec) {
 			return moerr.NewInvalidInputNoCtxf(
 				"merge-group hash metadata marks keys non-nullable but hash key column %d contains null", i)
@@ -670,24 +657,10 @@ func validateMergeGroupHashMetadata(
 }
 
 func mergeGroupHashKeyHasNull(vec *vector.Vector) bool {
-	rows := uint64(vec.Length())
 	if vec.IsConstNull() {
-		return vec.GetGrouping().GetBitmap().CountRange(0, rows) < vec.Length()
+		return vec.Length() > 0
 	}
-	return vec.GetNulls().GetBitmap().AnySetNotIn(
-		vec.GetGrouping().GetBitmap(), 0, rows,
-	)
-}
-
-func mergeGroupHashKeyHasGrouping(vectors []*vector.Vector) bool {
-	for _, vec := range vectors {
-		if vec != nil && vec.GetGrouping().GetBitmap().CountRange(
-			0, uint64(vec.Length()),
-		) > 0 {
-			return true
-		}
-	}
-	return false
+	return vec.GetNulls().GetBitmap().CountRange(0, uint64(vec.Length())) > 0
 }
 
 func mergeGroupHashKeyHasVariableLength(vectors []*vector.Vector) bool {

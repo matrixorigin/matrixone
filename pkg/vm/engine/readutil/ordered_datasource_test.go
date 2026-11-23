@@ -73,7 +73,7 @@ func TestRemoteDataSourceOrderedBlocks(t *testing.T) {
 	for i, values := range [][]int64{{0, 1}, {9, 10}, {8, 9}, {0, 0}} {
 		bat := batch.NewWithSize(1)
 		t.Cleanup(func() { bat.Clean(mp) })
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, i == 3, mp))
 		}

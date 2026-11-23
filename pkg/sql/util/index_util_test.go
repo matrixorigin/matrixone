@@ -131,10 +131,10 @@ func TestBuildUniqueKeyBatchDecimal256(t *testing.T) {
 	}
 	keys := []int64{7, 8, 9}
 
-	decimalVec := vector.NewVec(typ)
+	decimalVec := vector.NewVec(typ, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		decimalVec, values, []bool{false, true, false}, proc.Mp()))
-	keyVec := vector.NewVec(types.T_int64.ToType())
+	keyVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(keyVec, keys, nil, proc.Mp()))
 	defer decimalVec.Free(proc.Mp())
 	defer keyVec.Free(proc.Mp())
@@ -195,7 +195,7 @@ func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing
 	// Build the bytes under a legacy vector type, then attach the native type
 	// metadata. This simulates a decoded/corrupted batch and proves the
 	// composite unique-key boundary validates before serializing.
-	text := vector.NewVec(types.T_varchar.ToType())
+	text := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(text, []byte{0xff, 0xfe}, false, proc.Mp()))
 	text.SetType(native)
 	other := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1})

@@ -77,13 +77,15 @@ func (indexBuild *IndexBuild) Prepare(proc *process.Process) (err error) {
 
 func (indexBuild *IndexBuild) newRuntimeFilterBatch(
 	typ types.Type,
+	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 	if indexBuild.runtimeFilterAllocation == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	vec := vector.NewOffHeapVecWithType(typ)
-	buf := batch.NewOffHeapWithSize(1)
+	vec := vector.NewVec(typ, mp)
+	buf := batch.NewWithSize(1)
 	buf.SetVector(0, vec)
+	indexBuild.ctr.bufMP = mp
 	return buf, nil
 }
 
@@ -132,8 +134,9 @@ func (indexBuild *IndexBuild) finalizeBuildFailure(proc *process.Process) {
 func (ctr *container) abandonRuntimeFilter(proc *process.Process) {
 	ctr.runtimeFilterUsable = false
 	if ctr.buf != nil {
-		ctr.buf.Clean(proc.Mp())
+		ctr.buf.Clean(ctr.bufMP)
 		ctr.buf = nil
+		ctr.bufMP = nil
 	}
 }
 
@@ -218,7 +221,7 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 			if !inputVec.IsConstNull() && inputVec.Length() > 0 {
 				if ctr.buf == nil {
 					ctr.buf, err = indexBuild.newRuntimeFilterBatch(
-						*inputVec.GetType())
+						*inputVec.GetType(), rfMP)
 					if err != nil {
 						return err
 					}
@@ -239,7 +242,7 @@ func (ctr *container) collectBuildBatches(indexBuild *IndexBuild, proc *process.
 				// process pool and can fail open to PASS instead of ending in
 				// an unrecoverable Go-heap OOM.
 				ctr.buf, err = indexBuild.newRuntimeFilterBatch(
-					*inputVec.GetType())
+					*inputVec.GetType(), rfMP)
 				if err != nil {
 					return err
 				}
@@ -316,7 +319,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		// Batch.Dup preserves a first-batch constant vector. Materialize only
 		// its one distinct value: expanding every repeated row would waste
 		// memory and AppendFixed cannot add signed-zero closure to a const vec.
-		flat := vector.NewOffHeapVecWithType(*vec.GetType())
+		flat := vector.NewVec(*vec.GetType(), rfMP)
 		if !vec.IsConstNull() && vec.Length() > 0 {
 			if err := flat.UnionOne(vec, 0, rfMP); err != nil {
 				flat.Free(proc.Mp())

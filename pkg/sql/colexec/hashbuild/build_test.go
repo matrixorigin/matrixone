@@ -110,13 +110,10 @@ func TestBuild(t *testing.T) {
 		tc.marg.Reset(tc.proc, false, nil)
 		tc.proc.GetMessageBoard().Reset()
 
-		// Projection metadata must not leak from a previous execution generation.
-		tc.arg.ctr.autoSpillHasGrouping = true
 		err = tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		require.False(t, tc.arg.ctr.autoSpillHasGrouping)
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(newBatch(tc.types, tc.proc, Rows), nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
@@ -461,7 +458,7 @@ func TestHashBuildFloatRuntimeFilterFallsBackToPass(t *testing.T) {
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	build := batch.NewWithSize(1)
-	build.Vecs[0] = vector.NewVec(buildType)
+	build.Vecs[0] = vector.NewVec(buildType, tc.proc.Mp())
 	require.NoError(t, vector.AppendFixed(build.Vecs[0], float32(1.234), false, tc.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(build.Vecs[0], float32(1.23), false, tc.proc.Mp()))
 	build.SetRowCount(2)
@@ -909,7 +906,7 @@ func TestRuntimeFilterDeduplicatesFanoutBeforeApplyingLimit(t *testing.T) {
 			filter := msgs[0].(message.RuntimeFilterMessage)
 			require.Equal(t, tc.wantType, filter.Typ)
 			if tc.wantType == message.RuntimeFilter_IN {
-				payload := vector.NewVec(types.T_any.ToType())
+				payload := vector.NewVec(types.T_any.ToType(), fixture.proc.Mp())
 				defer payload.Free(fixture.proc.Mp())
 				require.NoError(t, payload.UnmarshalBinary(filter.Data))
 				require.Equal(t, int32(len(tc.wantKeys)), filter.Card)
@@ -1202,7 +1199,7 @@ func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
 			require.NoError(t, tc.arg.Prepare(tc.proc))
 
 			build := batch.NewWithSize(1)
-			build.Vecs[0] = vector.NewVec(test.typ)
+			build.Vecs[0] = vector.NewVec(test.typ, tc.proc.Mp())
 			switch test.typ.Oid {
 			case types.T_float32:
 				zero := float32(0)
@@ -1243,7 +1240,7 @@ func TestHashBuildFloatRuntimeFilterClosesSignedZero(t *testing.T) {
 			require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
 			require.Equal(t, int32(3), runtimeFilter.Card)
 
-			payload := vector.NewVec(types.T_any.ToType())
+			payload := vector.NewVec(types.T_any.ToType(), tc.proc.Mp())
 			require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 			require.Equal(t, test.typ.Oid, payload.GetType().Oid)
 			require.Equal(t, 3, payload.Length())
@@ -1315,11 +1312,12 @@ func TestHashBuildFloatRuntimeFilterAllocationFailureFallsBackToPass(t *testing.
 	require.NoError(t, err)
 	installTestExecutionResourceBudget(t, arg, generation)
 
-	keyVec := vector.NewOffHeapVecWithType(typ)
+	keyVec := vector.NewVec(typ, mp)
 	require.NoError(t, keyVec.PreExtend(256, mp))
 	keyVec.SetLength(keyVec.Capacity())
 	arg.ctr.hashmapBuilder.InputBatchRowCount = keyVec.Length()
 	arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{keyVec}
+	arg.ctr.hashmapBuilder.uniqueKeys.first.mp = keyVec.MPool()
 
 	var filler []byte
 	defer func() {
@@ -1494,12 +1492,14 @@ func TestRuntimeFilterPayloadStateContract(t *testing.T) {
 				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{nil}
 			case "empty":
 				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
-					vector.NewVec(types.T_int32.ToType()),
+					vector.NewVec(types.T_int32.ToType(), tc.proc.Mp()),
 				}
+				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 			case "value":
 				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
 					testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
 				}
+				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 			}
 
 			require.NotPanics(t, func() {
@@ -1582,7 +1582,7 @@ func TestScalarRuntimeFilterUsesActualCardinality(t *testing.T) {
 			if test.wantType == message.RuntimeFilter_IN {
 				require.True(t, tc.arg.ctr.runtimeFilterIn)
 				require.Equal(t, int32(1), runtimeFilter.Card)
-				payload := vector.NewVec(types.T_any.ToType())
+				payload := vector.NewVec(types.T_any.ToType(), tc.proc.Mp())
 				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 				require.Equal(t, []int32{test.wantValue},
 					vector.MustFixedColNoTypeCheck[int32](payload))
@@ -1650,8 +1650,8 @@ func TestRuntimeFilterStaleProbeContractFailsOpen(t *testing.T) {
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
 
 	oracleBatch := batch.NewWithSize(2)
-	oracleBatch.Vecs[0] = vector.NewVec(probeType)
-	oracleBatch.Vecs[1] = vector.NewVec(payloadType)
+	oracleBatch.Vecs[0] = vector.NewVec(probeType, tc.proc.Mp())
+	oracleBatch.Vecs[1] = vector.NewVec(payloadType, tc.proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		oracleBatch.Vecs[0], types.Decimal64(100), false, tc.proc.Mp()))
 	require.NoError(t, vector.AppendFixed(
@@ -1688,9 +1688,10 @@ func TestRuntimeFilterStaleProbeContractFailsOpen(t *testing.T) {
 	// 1.000, while both the build spec and materialized payload use scale 3.
 	// A build-only self-pair check would accept raw value 1000 and could reject
 	// the SQL-equal probe raw value 100.
-	payload := vector.NewVec(payloadType)
+	payload := vector.NewVec(payloadType, tc.proc.Mp())
 	require.NoError(t, vector.AppendFixed(payload, types.Decimal64(1000), false, tc.proc.Mp()))
 	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{payload}
+	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = payload.MPool()
 
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	require.True(t, tc.arg.ctr.runtimeFilterDone)
@@ -1727,10 +1728,11 @@ func TestRuntimeFilterExplicitDecimalContractProducesIn(t *testing.T) {
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	installTestExecutionResourceBudget(t, tc.arg, generation)
-	payload := vector.NewVec(decimalType)
+	payload := vector.NewVec(decimalType, tc.proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		payload, types.Decimal64(1000), false, tc.proc.Mp()))
 	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{payload}
+	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = payload.MPool()
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	require.True(t, tc.arg.ctr.runtimeFilterDone)
 	require.True(t, tc.arg.ctr.runtimeFilterIn)
@@ -1776,6 +1778,7 @@ func TestDirectRuntimeFilterUsesDeclaredHashSlot(t *testing.T) {
 		testutil.MakeInt32Vector([]int32{901, 902}, nil, tc.proc.Mp()),
 		testutil.MakeInt32Vector([]int32{11, 12}, nil, tc.proc.Mp()),
 	}
+	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	receiver := message.NewMessageReceiver(
 		[]int32{spec.Tag},
@@ -1790,7 +1793,7 @@ func TestDirectRuntimeFilterUsesDeclaredHashSlot(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
 
-	payload := vector.NewVec(types.T_any.ToType())
+	payload := vector.NewVec(types.T_any.ToType(), tc.proc.Mp())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 	require.True(t, payload.GetSorted(),
 		"the runtime-filter producer must publish comparator-ordered metadata")
@@ -1886,6 +1889,7 @@ func TestHashBuildSerializedRuntimeFilterCastAllocationFailureFallsBackToPass(t 
 	arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
 		testutil.MakeInt64Vector([]int64{1}, nil, mp),
 	}
+	arg.ctr.hashmapBuilder.uniqueKeys.first.mp = mp
 
 	service := proc.GetService()
 	rt := moruntime.ServiceRuntime(service)
@@ -2011,6 +2015,7 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 				testutil.MakeInt64Vector(test.wide, nil, tc.proc.Mp()),
 				testutil.MakeInt32Vector(test.direct, nil, tc.proc.Mp()),
 			}
+			tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 
 			service := tc.proc.GetService()
 			rt := moruntime.ServiceRuntime(service)
@@ -2042,7 +2047,7 @@ func TestSerializedRuntimeFilterNarrowingExecution(t *testing.T) {
 
 			if test.expectedRF == message.RuntimeFilter_IN {
 				require.Equal(t, int32(len(test.wide)), runtimeFilter.Card)
-				payload := vector.NewVec(types.T_any.ToType())
+				payload := vector.NewVec(types.T_any.ToType(), tc.proc.Mp())
 				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 				require.Equal(t, len(test.wide), payload.Length())
 				expected := make(map[string]struct{}, len(test.wide))
@@ -2104,6 +2109,7 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 		testutil.MakeInt32Vector(first, nil, tc.proc.Mp()),
 		testutil.MakeInt32Vector(second, nil, tc.proc.Mp()),
 	}
+	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 
 	service := tc.proc.GetService()
 	rt := moruntime.ServiceRuntime(service)
@@ -2141,7 +2147,7 @@ func TestSerializedRuntimeFilterUsesTightBudgetAndProducesIn(t *testing.T) {
 	require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
 	require.Equal(t, int32(rowCount), runtimeFilter.Card)
 
-	payload := vector.NewVec(types.T_any.ToType())
+	payload := vector.NewVec(types.T_any.ToType(), tc.proc.Mp())
 	require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 	require.Equal(t, types.T_varchar, payload.GetType().Oid)
 	require.True(t, payload.GetSorted(),
@@ -2185,6 +2191,7 @@ func TestSerializedRuntimeFilterScratchUsesPhysicalAccount(t *testing.T) {
 	arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
 		testutil.MakeVarcharVector([]string{value}, nil, proc.Mp()),
 	}
+	arg.ctr.hashmapBuilder.uniqueKeys.first.mp = proc.Mp()
 	arg.ctr.hashmapBuilder.InputBatchRowCount = 1
 
 	data, release, rows, usable, err :=
@@ -2238,10 +2245,11 @@ func TestSerializedRuntimeFilterActualComponentMismatchFailsOpen(t *testing.T) {
 		t, tc.proc, 107, 100, []types.Type{declaredType}, false)
 	tc.arg.RuntimeFilterSpec = spec
 	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-	actual := vector.NewVec(actualType)
+	actual := vector.NewVec(actualType, tc.proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		actual, types.Decimal64(1000), false, tc.proc.Mp()))
 	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{actual}
+	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = actual.MPool()
 
 	service := tc.proc.GetService()
 	rt := moruntime.ServiceRuntime(service)
@@ -2328,6 +2336,7 @@ func TestSerializedRuntimeFilterMetadataMismatchFailsOpen(t *testing.T) {
 				testutil.MakeInt32Vector(
 					[]int32{1}, nil, tc.proc.Mp()),
 			}
+			tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 
 			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 			receiver := message.NewMessageReceiver(
@@ -2403,10 +2412,12 @@ func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
 				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
 					testutil.MakeVarcharVector([]string{strings.Repeat("x", 8192)}, nil, tc.proc.Mp()),
 				}
+				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 			} else {
 				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
 					testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
 				}
+				tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 			}
 
 			handleErr := tc.arg.handleRuntimeFilter(tc.proc)
@@ -2583,6 +2594,7 @@ func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) 
 	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
 		testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp()),
 	}
+	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.mp = tc.proc.Mp()
 
 	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
 	require.Zero(t, account.Snapshot().Used)
@@ -2609,40 +2621,6 @@ func TestRuntimeFilterMarshalAccountedOneByteShortFallsBackToPass(t *testing.T) 
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 	generation.Close()
-	tc.proc.Free()
-	require.Zero(t, tc.proc.Mp().CurrNB())
-}
-
-func TestRuntimeFilterWithGroupingKeyFallsBackToPass(t *testing.T) {
-	tc := newTestCase(t, []types.Type{types.T_int32.ToType()},
-		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
-	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{
-		Tag:                 105,
-		UpperLimit:          100,
-		UseMembershipFilter: true,
-	}
-	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
-	tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs = []*vector.Vector{
-		vector.NewRollupConst(types.T_int32.ToType(), 1, tc.proc.Mp()),
-	}
-
-	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
-	receiver := message.NewMessageReceiver(
-		[]int32{tc.arg.RuntimeFilterSpec.Tag},
-		message.AddrBroadCastOnCurrentCN(),
-		tc.proc.GetMessageBoard(),
-	)
-	msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
-	require.NoError(t, err)
-	require.False(t, done)
-	require.Len(t, msgs, 1)
-	runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
-	require.True(t, ok)
-	require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
-	require.Empty(t, runtimeFilter.Data)
-	require.Nil(t, tc.arg.ctr.hashmapBuilder.uniqueKeys.first.vecs)
-
-	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }

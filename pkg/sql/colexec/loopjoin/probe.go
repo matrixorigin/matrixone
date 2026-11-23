@@ -210,7 +210,7 @@ func (ctr *container) evalConditionWindow(
 	ownedWindow := window
 	defer func() {
 		if ownedWindow != nil {
-			ownedWindow.Clean(proc.Mp())
+			ownedWindow.FreeWindow()
 			window = nil
 		}
 	}()
@@ -241,9 +241,6 @@ func conditionWindowRowLimit(buildBat *batch.Batch) int {
 	eighthBytesPerRow := 8
 	for _, vec := range buildBat.Vecs {
 		if vec.HasNull() {
-			eighthBytesPerRow++
-		}
-		if vec.HasGrouping() {
 			eighthBytesPerRow++
 		}
 	}

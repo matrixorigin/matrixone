@@ -37,7 +37,7 @@ func writeNullableKeyObject(t *testing.T, fs fileservice.FileService, key int64,
 	t.Helper()
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer bat.Clean(mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, null, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, mp))

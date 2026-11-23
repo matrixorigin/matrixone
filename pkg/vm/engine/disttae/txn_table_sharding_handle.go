@@ -394,7 +394,7 @@ func HandleShardingReadNext(
 		bat.Attrs = append(bat.Attrs, cols...)
 
 		for i := 0; i < len(sr.colTypes); i++ {
-			bat.Vecs[i] = vector.NewVec(sr.colTypes[i])
+			bat.Vecs[i] = vector.NewVec(sr.colTypes[i], mp)
 
 		}
 		return bat

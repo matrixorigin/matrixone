@@ -529,8 +529,8 @@ func TestEnumSmallintUnsignedBoundExpressionExecution(t *testing.T) {
 	// types.Enum batch and a non-constant uint16 batch, with NULL bitmaps.
 	input := batch.NewWithSize(2)
 	defer input.Clean(proc.Mp())
-	input.Vecs[0] = vector.NewVec(types.T_enum.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_uint16.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_enum.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_uint16.ToType(), proc.Mp())
 	enumValues := make([]types.Enum, len(rows))
 	enumNulls := make([]bool, len(rows))
 	uintValues := make([]uint16, len(rows))

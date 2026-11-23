@@ -301,7 +301,7 @@ func typeMatched(vec *vector.Vector, typ types.Type) bool {
 	return t.Oid == typ.Oid && t.Width == typ.Width && t.Scale == typ.Scale
 }
 
-func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombstone bool) *batch.Batch {
+func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombstone bool, mp *mpool.MPool) *batch.Batch {
 	retBatchPool.mu.Lock()
 	defer retBatchPool.mu.Unlock()
 
@@ -325,9 +325,9 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 	if forTombstone {
 		if len(retBatchPool.tList) == 0 {
 			bat = batch.NewWithSize(retBatchPool.tombVecCnt)
-			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType)
-			bat.Vecs[1] = vector.NewVec(retBatchPool.tombRowIDType)
-			bat.Vecs[2] = vector.NewVec(retBatchPool.tombKeyType)
+			bat.Vecs[0] = vector.NewVec(retBatchPool.tombstoneType, mp)
+			bat.Vecs[1] = vector.NewVec(retBatchPool.tombRowIDType, mp)
+			bat.Vecs[2] = vector.NewVec(retBatchPool.tombKeyType, mp)
 			goto done
 		}
 
@@ -354,7 +354,7 @@ func (retBatchPool *retBatchList) acquireRetBatch(tblStuff tableStuff, forTombst
 		if len(retBatchPool.dList) == 0 {
 			bat = batch.NewWithSize(retBatchPool.dataVecCnt)
 			for i := range tblStuff.def.colNames {
-				bat.Vecs[i] = vector.NewVec(retBatchPool.dataTypes[i])
+				bat.Vecs[i] = vector.NewVec(retBatchPool.dataTypes[i], mp)
 			}
 			goto done
 		}
@@ -3403,7 +3403,7 @@ func getDatabaseCreatedTimeLowerBoundByPK(
 	mp := ses.proc.Mp()
 
 	cpKey := packMoDatabaseCPKey(accountID, databaseName)
-	filterVec := vector.NewVec(types.T_varchar.ToType())
+	filterVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer filterVec.Free(mp)
 	if err := vector.AppendBytes(filterVec, cpKey, false, mp); err != nil {
 		return types.TS{}, err
@@ -3486,14 +3486,14 @@ func readTableCatalogCommitTS(
 
 	var filterExpr *plan.Expr
 	if len(catalogKey) != 0 {
-		filterVec := vector.NewVec(types.T_varchar.ToType())
+		filterVec := vector.NewVec(types.T_varchar.ToType(), mp)
 		defer filterVec.Free(mp)
 		if err := vector.AppendBytes(filterVec, catalogKey, false, mp); err != nil {
 			return types.TS{}, false, err
 		}
 		filterExpr, err = readutil.ConstructInExpr(ctx, catalog.SystemRelAttr_CPKey, filterVec)
 	} else {
-		filterVec := vector.NewVec(types.T_uint64.ToType())
+		filterVec := vector.NewVec(types.T_uint64.ToType(), mp)
 		defer filterVec.Free(mp)
 		if err := vector.AppendFixed(filterVec, tableID, false, mp); err != nil {
 			return types.TS{}, false, err
@@ -3717,7 +3717,7 @@ func tryBuildCurrentMoTablesCPKeyFilter(
 	defer replayPacker.Close()
 	replayKey := append([]byte(nil), readutil.EncodePrimaryKey(packedKey, replayPacker)...)
 
-	filterVec := vector.NewVec(types.T_varchar.ToType())
+	filterVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer filterVec.Free(mp)
 	if err := vector.AppendBytes(filterVec, packedKey, false, mp); err != nil {
 		return nil, "", err
