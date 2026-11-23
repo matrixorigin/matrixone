@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -429,16 +430,17 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
-	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
-	require.Nil(t, params.GetData())
+	// The statement owns its parameter storage and every execution rewrites it.
+	require.Same(t, params, cw.proc.GetPrepareParams(), "the statement's parameter storage is reused")
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 
 	current := cw.proc.GetPrepareParams()
 	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType(), cw.proc.Mp()))
-	require.Zero(t, current.Length())
-	require.Nil(t, current.GetData())
+	// The process only borrowed them: installing other parameters frees nothing
+	// of the statement's, which releases its storage when it is closed.
+	require.Equal(t, "now-text", current.GetStringAt(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
@@ -7443,4 +7445,47 @@ func requireTypedParamOid(t *testing.T, proc *process.Process, i int, want types
 	}
 	require.NotNil(t, typed, "parameter %d must carry a typed value", i)
 	require.Equal(t, want, typed.GetType().Oid)
+}
+
+// SQL EXECUTE ... USING binds into storage the statement owns: after the first
+// execution it allocates only when a value needs more room than before.
+func TestBuildExecuteUserParamsReusesStatementStorage(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := map[string]any{}
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) { return values[name], nil })
+	args := []*plan.Expr{
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "n"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "s"}}},
+	}
+	var store executeUserParams
+	t.Cleanup(store.release)
+	bind := func(n int64, s string) *vector.Vector {
+		values["n"], values["s"] = n, s
+		params, vals, _, _, _, _, err := buildExecuteUserParamsInto(&store, proc, nil, args, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, vals, 2)
+		proc.SetPrepareParamsWithIsBin(params, store.isBin)
+		store.lend(proc)
+		return params
+	}
+	long := func(c byte, n int) string { return strings.Repeat(string(c), n) }
+
+	first := bind(1, long('a', 40))
+	allocs := proc.Mp().Stats().NumAlloc.Load()
+	for i, c := range []byte("bcd") {
+		params := bind(int64(i+2), long(c, 40))
+		require.Same(t, first, params)
+		require.Equal(t, strconv.Itoa(i+2), params.GetStringAt(0))
+		require.Equal(t, long(c, 40), params.GetStringAt(1))
+	}
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load(), "re-executing must not allocate")
+
+	// A longer value grows the storage; the same vector is still used.
+	require.Same(t, first, bind(9, long('x', 200)))
+	require.Equal(t, long('x', 200), first.GetStringAt(1))
+
+	// Releasing the statement detaches the process that borrowed it.
+	store.release()
+	require.Nil(t, proc.GetPrepareParams())
+	require.Zero(t, proc.Mp().CurrNB())
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1827,13 +1828,15 @@ func initExecuteStmtParamWithResolverInSession(
 				showPublicationPatternPositions = []int32{0}
 			}
 		}
-		params, paramVals, paramIsBin, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(
-			cwft.proc, executionSes.GetTxnCompileCtx().ResolveVariablePrepareParamKind, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
+		params, paramVals, paramIsBin, _, _, _, err := buildExecuteUserParamsInto(
+			&prepareStmt.userParams, cwft.proc, executionSes.GetTxnCompileCtx().ResolveVariablePrepareParamKind, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
 			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions, showPublicationPatternPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
+		// The statement owns the parameters; the process borrows them.
+		cwft.proc.SetPrepareParamsWithIsBin(params, paramIsBin)
+		prepareStmt.userParams.lend(cwft.proc)
 		cwft.proc.SetPrepareParamsStringSource(types.StringSourceSQLPrepare)
 		cwft.paramVals = paramVals
 		if !sourceBindingQuery {
@@ -2626,6 +2629,76 @@ func untypedUserParamKindForType(typ types.T) (types.StringConversionKind, bool)
 	}
 }
 
+// executeUserParams is the storage SQL EXECUTE ... USING binds its
+// parameters into. A prepared statement owns one for its whole life and every
+// execution rewrites it in place: the TEXT vector restarts from an empty area
+// that keeps its capacity and the slices are reused, so after the first
+// execution binding allocates only when a value needs more room than before.
+// The process borrows the vector.
+type executeUserParams struct {
+	mp           *mpool.MPool
+	vec          *vector.Vector
+	vals         []any
+	isBin        []bool
+	binaryString []bool
+	domains      []types.RuntimeStringDomain
+	kinds        []types.StringConversionKind
+	types        []types.T
+	borrowers    []*process.Process
+}
+
+// release frees the storage, detaching the processes that borrowed it.
+func (u *executeUserParams) release() {
+	if u == nil || u.vec == nil {
+		return
+	}
+	for _, proc := range u.borrowers {
+		if proc != nil && proc.GetPrepareParams() == u.vec {
+			proc.SetPrepareParams(nil)
+		}
+	}
+	u.vec.Free(u.mp)
+	*u = executeUserParams{}
+}
+
+// lend records that proc borrows the storage.
+func (u *executeUserParams) lend(proc *process.Process) {
+	if !slices.Contains(u.borrowers, proc) {
+		u.borrowers = append(u.borrowers, proc)
+	}
+}
+
+func resetSlice[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n)
+	}
+	s = s[:n]
+	clear(s)
+	return s
+}
+
+// prepare readies the storage for an execution with n parameters.
+func (u *executeUserParams) prepare(proc *process.Process, n int) {
+	if u.vec != nil && u.mp != proc.Mp() {
+		// The vector is rewritten through this execution's pool.
+		u.release()
+	}
+	if u.vec == nil {
+		u.mp = proc.Mp()
+		u.vec = vector.NewVec(types.T_text.ToType(), u.mp)
+	} else {
+		u.vec.CleanOnlyData()
+	}
+	u.vals = resetSlice(u.vals, n)
+	u.isBin = resetSlice(u.isBin, n)
+	u.binaryString = resetSlice(u.binaryString, n)
+	u.domains = resetSlice(u.domains, n)
+	u.kinds = resetSlice(u.kinds, n)
+	if u.types != nil {
+		u.types = resetSlice(u.types, n)
+	}
+}
+
 func buildExecuteUserParamsWithMemberOfPositions(
 	proc *process.Process,
 	resolveKind func(name string, system, global bool) (types.StringConversionKind, error),
@@ -2642,17 +2715,47 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramTypes []types.T,
 	err error,
 ) {
-	params = vector.NewVec(types.T_text.ToType(), proc.Mp())
+	var store executeUserParams
+	params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err = buildExecuteUserParamsInto(
+		&store, proc, resolveKind, args, typedPositions, memberOfPositions, inetNtoaPositionsArg...)
+	if err != nil {
+		store.release()
+	}
+	return
+}
+
+// buildExecuteUserParamsInto binds SQL EXECUTE ... USING arguments into store,
+// reusing its storage. The returned vector and slices belong to store.
+func buildExecuteUserParamsInto(
+	store *executeUserParams,
+	proc *process.Process,
+	resolveKind func(name string, system, global bool) (types.StringConversionKind, error),
+	args []*plan.Expr,
+	typedPositions []int32,
+	memberOfPositions []int32,
+	inetNtoaPositionsArg ...[]int32,
+) (
+	params *vector.Vector,
+	paramVals []any,
+	paramIsBin []bool,
+	paramBinaryString []bool,
+	paramKinds []types.StringConversionKind,
+	paramTypes []types.T,
+	err error,
+) {
+	store.prepare(proc, len(args))
+	params = store.vec
+	paramVals = store.vals
+	paramIsBin = store.isBin
+	paramBinaryString = store.binaryString
+	paramDomains := store.domains
+	paramKinds = store.kinds
+	usedTypes := false
 	defer func() {
-		if err != nil {
-			params.Free(proc.Mp())
+		if !usedTypes {
+			paramTypes = nil
 		}
 	}()
-	paramVals = make([]any, len(args))
-	paramIsBin = make([]bool, len(args))
-	paramBinaryString = make([]bool, len(args))
-	paramDomains := make([]types.RuntimeStringDomain, len(args))
-	paramKinds = make([]types.StringConversionKind, len(args))
 	var inetNtoaPositions, showPublicationPatternPositions []int32
 	if len(inetNtoaPositionsArg) > 0 {
 		inetNtoaPositions = inetNtoaPositionsArg[0]
@@ -2720,8 +2823,9 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			if concreteType == types.T_any {
 				concreteType = types.T(inferUserDefinedVarType(param).Id)
 			}
-			if paramTypes == nil {
-				paramTypes = make([]types.T, len(args))
+			if !usedTypes {
+				store.types = resetSlice(store.types, len(args))
+				paramTypes, usedTypes = store.types, true
 			}
 			paramTypes[i] = concreteType
 		}
@@ -2733,8 +2837,9 @@ func buildExecuteUserParamsWithMemberOfPositions(
 				return
 			}
 			if concreteType != types.T_any {
-				if paramTypes == nil {
-					paramTypes = make([]types.T, len(args))
+				if !usedTypes {
+					store.types = resetSlice(store.types, len(args))
+					paramTypes, usedTypes = store.types, true
 				}
 				paramTypes[i] = concreteType
 			}
