@@ -141,7 +141,7 @@ stream of nitpicks.
 | Gate | When | Action |
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
-| **G-PROBE** | The diff changes concurrency, scheduling, caching, admission/budgets or a read path | Run the [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md) method over the whole PR delta: each finding needs a probe through a public entry point that fails on the reviewed head while its control passes; each fix, the same probe failing before it and passing after it; each other matrix cell, a preservation probe or evidence that meets the shared rules. |
+| **G-PROBE** | The diff changes concurrency, scheduling, caching, admission/budgets or a read path | Run the [executable probes](../../../.agents/skills/mo-self-review/references/executable-probes.md) method over the whole PR delta: each finding needs a probe through a public entry point that fails on the reviewed change (the PR head, or in self-review the full working change) while its control passes; each fix, the same probe failing before it and passing after it; each other matrix cell, a preservation probe or evidence that meets the shared rules. |
 | **G-RACE-STRESS** | The diff changes concurrency, lifecycle, shared/global state, background work, synchronization, or behavior with a credible race/timing failure mode | Apply the shared race protocol linked in §6. |
 
 Scope = committed changes vs merge-base, staged changes, unstaged changes, and
@@ -286,7 +286,7 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ every finding either FIXED or written to the decision log (§5.2)
 □ severity calibrated to the merge bar (§5.1) — zero open blockers
 □ every new/modified and directly affected Go behavioral unit test passed a proven non-empty focused run
-□ when G-PROBE applies, the probe matrix is derived, pruned cells are justified, each finding's probe failed on the reviewed head with its control passing, each fix's probe failed before and passed after it, and each other cell is closed
+□ when G-PROBE applies, the probe matrix is derived, pruned cells are justified, each finding's probe failed on the reviewed change with its control passing, each fix's probe failed before and passed after it, and each other cell is closed
 □ when G-RACE-STRESS applies, the required scope and adaptive budget follow the shared race protocol
 □ every !race measurement-only test retains a race-tested functional counterpart when race validation applies
 □ evidence covers the changed behavior and satisfies the shared validity rules

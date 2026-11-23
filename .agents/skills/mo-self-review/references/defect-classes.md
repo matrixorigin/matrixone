@@ -64,8 +64,10 @@ the fix that closed it.
 ## I. Check-then-act across two structures (TOCTOU)
 - **Shape:** the request misses the cache; the producer publishes and unregisters; the
   registry lookup then finds nothing; the work is done again.
-- **Probe:** a 5 ms sleep between the two lookups must not change the backend count.
-- **Fix:** look up in the order the producer publishes.
+- **Probe:** gate the request between the two lookups, let the producer publish and
+  unregister, then release; the backend count must not change.
+- **Fix:** when the producer publishes before it unregisters, look in the registry
+  first and the cache second.
 
 ## J. Callback and publication ordering across workers
 - **Shape:** publication in worker-completion order rather than submission order;

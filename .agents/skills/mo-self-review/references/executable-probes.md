@@ -74,15 +74,16 @@ Every probe:
    - updates of the caller's cache tiers;
    - queue bytes back to 0 after the scans end.
 4. **Adds a bystander:** an unrelated read with a tight deadline (≤ 2 s) while the probe
-   holds its stall. This is what catches pinning: "a completed unit stays charged and
-   starves someone else".
-5. **Pairs every failing probe with a control** in the same run: a direct or bypass
-   read that skips the cache, an exact read, or a live variant that must
-   succeed. If the control also fails, the fixture is broken, not the code.
+   holds its stall; the same read without the stall is its control. This is what
+   catches pinning: "a completed unit stays charged and starves someone else".
+5. **Pairs every failing probe with a control** in the same run that must succeed,
+   such as a direct read that skips the cache, an exact read, or a live variant. If the control also fails, the fixture is broken, not the code.
 6. **Runs on the revisions its claim needs (§7).**
-   - A **finding** is a probe that fails on the reviewed head while its control
-     passes. When the claim is that the PR introduced the defect, the probe also passes
-     on the PR's base. A finding needs no fix to be reported.
+   - A **finding** is a probe that fails on the reviewed change while its control
+     passes. When the claim is that the PR introduced the defect and the base supports
+     the equivalent operation, the probe also passes on the base; for an entry point the PR
+     adds, the source delta establishes where the behavior came from. A finding needs no
+     fix to be reported.
    - A **fix** is proven when the finding's probe fails on the revision before the fix
      and passes on the fixed revision; record both results.
    - A probe that clears a matrix cell may pass on every revision: it shows the
@@ -90,42 +91,49 @@ Every probe:
      results that close its contract, under the shared evidence rules.
 
 
-## 4. Race-window widening (check-then-act)
+## 4. Check-then-act windows
 
-For each pair from §1, insert a temporary `time.Sleep(5 * time.Millisecond)` between
-the two lookups and run the probe:
+For each pair from §1, hold the request between its two lookups with a gate or a test
+hook, not a sleep ([concurrency lifecycle](concurrency-lifecycle.md)). While it is
+held, let the producer move the item (for example publish to the cache, then
+unregister), confirm that the move happened, and release the request.
 
-- If it fails with the sleep, the window is real. In self mode, fix it with an order that closes it
-  (for example, look in the registry first and the cache second when the producer
-  publishes to the cache before it unregisters), not with retries.
-- The fixed code must pass **with the sleep still in**. Then remove the sleep and
-  confirm with `git diff`.
+- The window is real when the specific wrong outcome follows, such as a second backend
+  open for the same bytes. A deadline or cancellation error is not that outcome.
+- In self mode, close it with a lookup order that cannot miss both structures (when
+  the producer publishes before it unregisters, look in the registry first and the
+  cache second), not with retries; the same gated probe must then pass.
 
-A rare stress failure that runs in milliseconds is usually one of these windows. Do
-not settle for "flaky": find the window, widen it, and fix it.
+A temporary sleep may help locate a window while exploring; it is not evidence. A rare
+stress failure that runs in milliseconds is usually one of these windows. Do not settle
+for "flaky": find the window, gate it, and fix it.
 
 ## 5. Exit and policy audit (mechanical)
 
-- `awk` every `return` of each touched function. Every success exit must run the same
-  postconditions (for example `finishCacheUpdates()`), and every error exit the same
-  cleanup.
+- `awk` every `return` of each touched function. Each success exit runs the
+  postconditions the function's contract requires of every success (for example
+  `finishCacheUpdates()`), and each error exit the cleanup its contract requires.
 - For each policy flag, grep its consumers. Each join point or exit added by the diff
   must check it the same way its siblings do.
 
 ## 6. Defect-class sweep
 
-Go through [defect-classes.md](defect-classes.md). For each
-class that matches a §1 item, either write the probe or record why the class cannot
-occur. The classes come from mo-bot findings on a fileservice PR. Three rounds in a row
+Go through [defect-classes.md](defect-classes.md). For each class that matches a §1
+item, write the probe, cite existing evidence that proves its invariant under the
+shared evidence rules, or record why the class cannot occur. The classes come from mo-bot findings on a fileservice PR. Three rounds in a row
 were class **A**.
 
 ## 7. Validation and report
 
-- **Revisions.** Pick each revision the claim needs (§3.6): the reviewed head; the PR's
-  merge-base for a defect the PR introduces; the revision before a fix to prove the
-  fix. Never assume `HEAD~`. Check that the revision lacks or holds the change under
-  test (`git diff <rev> HEAD -- <files>`).
-- **Isolation.** Check each revision out in its own disposable worktree:
+- **Reviewed change.** For an external review, the frozen PR head. For self-review,
+  the full in-scope change: commits, staged, unstaged and untracked files. Run it where it
+  lives, or reproduce it in a disposable worktree and check with `git diff` that the
+  copy matches.
+- **Other revisions.** Pick each one the claim needs (§3.6): the PR's merge-base for a
+  defect the PR introduces; the revision before a fix to prove the fix. Never assume
+  `HEAD~`. Check that the revision lacks or holds the change under test (`git diff
+  <rev> -- <files>` in the reviewed checkout).
+- **Isolation.** Check each other revision out in its own disposable worktree:
   `git worktree add --detach <scratch-path> <rev>`, then confirm that
   `git -C <scratch-path> rev-parse HEAD` is `<rev>` before testing. Copy in only the
   probe test files and run there. Never overwrite files in the active checkout, and
