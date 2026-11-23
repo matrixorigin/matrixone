@@ -186,7 +186,7 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			missing = IndexObjectFile
 		}
-		s.indexFileCache.dropBroken(ctx, name, missing)
+		s.indexFileCache.dropBroken(ctx, name, missing, nil)
 		return nil
 	}
 	ended := false
@@ -214,8 +214,9 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 			}
 			// The entry's file is shorter than the object or unreadable: the entry is
 			// dropped and the entries not done are read from the other caches or storage.
+			read, _ := file.Stat()
 			end()
-			s.indexFileCache.dropBroken(ctx, name, "")
+			s.indexFileCache.dropBroken(ctx, name, "", read)
 			return nil
 		}
 		e.done = true

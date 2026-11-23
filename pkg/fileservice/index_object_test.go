@@ -341,8 +341,10 @@ func TestIndexObjectFillWritesInIndexFileCache(t *testing.T) {
 // of the object closes it.
 func TestIndexObjectReadKeepsFileOpen(t *testing.T) {
 	fs, _, data := newIndexObjectFS(t, true)
-	cacheIndexObject(t, fs, "object", data)
 	d := fs.indexFileCache.disk
+	// The load of the cache owns the entries it indexes, which closes their kept files.
+	<-d.load.done
+	cacheIndexObject(t, fs, "object", data)
 	diskPath, err := d.pathForDir(IndexObjectEntry("object"))
 	require.NoError(t, err)
 	kept := func() *openCacheFile {
@@ -424,6 +426,50 @@ func TestIndexObjectShortCacheFileReadsStorage(t *testing.T) {
 	require.Zero(t, storage.reads.Load())
 	_, cached := fs.indexObjectCached("object")
 	require.True(t, cached, "a decoding error keeps the entry")
+}
+
+// A reader that found the entry short drops only the file it read: a healthy entry that
+// another read filled meanwhile is kept.
+func TestIndexObjectShortReaderKeepsRefill(t *testing.T) {
+	fs, storage, data := newIndexObjectFS(t, true)
+	cacheIndexObject(t, fs, "object", data[:1000])
+	started := make(chan struct{})
+	resume := make(chan struct{})
+	readErr := make(chan error, 1)
+	go func() {
+		vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache, Entries: []IOEntry{
+			{Offset: 100, Size: 10, ToCacheData: func(ctx context.Context, r io.Reader, b []byte, a CacheDataAllocator) (fscache.Data, error) {
+				close(started)
+				<-resume
+				return CacheOriginalData(ctx, r, b, a)
+			}},
+			{Offset: 2000, Size: 10},
+		}}
+		readErr <- fs.Read(context.Background(), vec)
+		vec.Release()
+	}()
+	<-started
+	require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject, 2000, 10))
+	var healthy os.FileInfo
+	require.Eventually(t, func() bool {
+		diskPath, ok := fs.indexObjectCached("object")
+		if !ok {
+			return false
+		}
+		fi, err := os.Stat(filepath.Join(diskPath, IndexObjectFile))
+		healthy = fi
+		return err == nil && fi.Size() == int64(len(data))
+	}, 5*time.Second, time.Millisecond)
+	close(resume)
+	require.NoError(t, <-readErr)
+	diskPath, ok := fs.indexObjectCached("object")
+	require.True(t, ok)
+	fi, err := os.Stat(filepath.Join(diskPath, IndexObjectFile))
+	require.NoError(t, err)
+	require.True(t, os.SameFile(healthy, fi), "the healthy entry is kept")
+	storage.reads.Store(0)
+	require.Equal(t, data[len(data)-10:], readIndexObjectRange(t, fs, IndexFileObject, int64(len(data)-10), 10))
+	require.Zero(t, storage.reads.Load())
 }
 
 // An open failing for lack of resources keeps the entry; other failures drop it.

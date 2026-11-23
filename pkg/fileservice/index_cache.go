@@ -654,9 +654,10 @@ func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 }
 
 // dropBroken removes entry name, unless another holder owns its path; when missing is set,
-// only while the entry is indexed and its file missing does not exist. It is no delete
-// of the object: a fill of it is not canceled.
-func (c *IndexFileCache) dropBroken(ctx context.Context, name string, missing string) {
+// only while the entry is indexed and its file missing does not exist; when read is set,
+// only while its file is still read, the file found broken. It is no delete of the object:
+// a fill of it is not canceled.
+func (c *IndexFileCache) dropBroken(ctx context.Context, name string, missing string, read os.FileInfo) {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
 		return
@@ -666,6 +667,11 @@ func (c *IndexFileCache) dropBroken(ctx context.Context, name string, missing st
 		return
 	}
 	defer owner.release()
+	if read != nil {
+		if cur, err := os.Stat(filepath.Join(diskPath, IndexObjectFile)); err != nil || !os.SameFile(read, cur) {
+			return
+		}
+	}
 	if missing != "" {
 		if !c.disk.cache.Contains(diskPath) {
 			return
