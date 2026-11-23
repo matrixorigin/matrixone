@@ -140,7 +140,7 @@ func TestCurrentRoleClosureCapacityRejectionClosesResult(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	run := func(_ *process.Process, _ string) (executor.Result, error) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		for roleID := int64(1); roleID <= currentRoleClosureMaxRoles; roleID++ {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], roleID, false, mp))
 		}
@@ -264,7 +264,7 @@ func BenchmarkCurrentRoleClosureInternalSQLBoundary(b *testing.B) {
 	defer mpool.DeleteMPool(mp)
 	run := func(_ *process.Process, sql string) (executor.Result, error) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		var grantedID int64
 		switch {
 		case strings.HasSuffix(sql, "(10)"):
@@ -310,7 +310,7 @@ func TestBuildCurrentRoleGrantQuery(t *testing.T) {
 func TestVisitCurrentRoleGrants(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	for _, roleID := range []int64{20, 30} {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], roleID, false, mp))
 	}

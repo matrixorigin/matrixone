@@ -54,7 +54,7 @@ func TestDecimalChainChargeAndFallback(t *testing.T) {
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
 	values := [][]int64{{10000, 20000, -30000}, {5, 10, 20}, {8, 8, 8}}
 	for col := range values {
-		input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
+		input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2), proc.Mp())
 		for row := 0; row < 257; row++ {
 			require.NoError(t, vector.AppendFixed(input.Vecs[col], types.Decimal64(values[col][row%3]), false, proc.Mp()))
 		}
@@ -118,7 +118,7 @@ func BenchmarkDecimalChain(b *testing.B) {
 				input := batch.NewWithSize(3)
 				defer input.Clean(proc.Mp())
 				for col, value := range []types.Decimal64{123456, 5, 8} {
-					input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
+					input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2), proc.Mp())
 					for row := 0; row < n; row++ {
 						require.NoError(b, vector.AppendFixed(input.Vecs[col], value, false, proc.Mp()))
 					}
@@ -155,7 +155,7 @@ func TestDecimalChainAllocationFailureAndRetry(t *testing.T) {
 				_, err := registry.Finalize(account)
 				require.NoError(t, err)
 			})
-			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+			selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			ex, err := newTestDecimalAggregateExecutorWithAllocation(proc, decimalChargeTestPlan(t, proc), selection)
 			require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestDecimalChainAllocationFailureAndRetry(t *testing.T) {
 			input := batch.NewWithSize(3)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for col, value := range []types.Decimal64{10000, 5, 8} {
-				input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
+				input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2), proc.Mp())
 				for i := 0; i < 8192; i++ {
 					require.NoError(t, vector.AppendFixed(input.Vecs[col], value, false, proc.Mp()))
 				}
@@ -188,7 +188,7 @@ func TestDecimalChainAllocationFailureAndRetry(t *testing.T) {
 			out, err := ex.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, "102.600000", vector.GetFixedAtNoTypeCheck[types.Decimal256](out, 0).Format(6))
-			require.Same(t, selection, out.AllocationAccountSelection())
+			requireAccountCovers(t, account, out)
 			ex.ResetForNextQuery()
 			require.LessOrEqual(t, account.Snapshot().Used, account.Snapshot().Limit)
 		})
@@ -215,7 +215,7 @@ func TestDecimalChainExactScaleAlignment(t *testing.T) {
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
 	for col, typ := range []types.Type{aType, bType} {
-		input.Vecs[col] = vector.NewVec(typ)
+		input.Vecs[col] = vector.NewVec(typ, proc.Mp())
 	}
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(12), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal64(3), false, proc.Mp()))
@@ -257,7 +257,7 @@ func TestDecimalSingleNodeSkipsWideningCast(t *testing.T) {
 	require.Len(t, chain.nodes, 1)
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	input.Vecs[1] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
+	input.Vecs[1] = vector.NewVec(types.New(types.T_decimal64, 15, 2), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal64(5), false, proc.Mp()))
 	input.SetRowCount(1)
 	out, err := ex.Eval(proc, []*batch.Batch{input}, nil)

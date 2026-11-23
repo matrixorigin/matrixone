@@ -167,7 +167,7 @@ func newTopNTestMP(t testing.TB) *mpool.MPool {
 }
 
 func newTopNTestVector(t testing.TB, mp *mpool.MPool, values []float32) *vector.Vector {
-	source := vector.NewVec(types.T_array_float32.ToType())
+	source := vector.NewVec(types.T_array_float32.ToType(), mp)
 	t.Cleanup(func() { source.Free(mp) })
 	for _, value := range values {
 		require.NoError(t, vector.AppendArray(source, []float32{value, 0}, false, mp))
@@ -546,7 +546,7 @@ func TestReadColumnTopNChunkTypes(t *testing.T) {
 	} {
 		t.Run(tc.kind.String(), func(t *testing.T) {
 			mp := newTopNTestMP(t)
-			source := vector.NewVec(tc.kind.ToType())
+			source := vector.NewVec(tc.kind.ToType(), mp)
 			t.Cleanup(func() { source.Free(mp) })
 			for _, value := range []float32{6, 1, 1, 0, 3, 2} {
 				require.NoError(t, vector.AppendBytes(source, tc.encode(value), false, mp))
@@ -577,7 +577,7 @@ func TestReadColumnTopNLaterChunkTypeMismatch(t *testing.T) {
 		t.Run(kind.String(), func(t *testing.T) {
 			// Same kind/different width exercises consistency across chunks;
 			// float64 also exercises the declared-kind check after a valid chunk.
-			wrong := vector.NewVec(types.New(kind, 1, 0))
+			wrong := vector.NewVec(types.New(kind, 1, 0), mp)
 			defer wrong.Free(mp)
 			for range 2 {
 				if kind == types.T_array_float32 {

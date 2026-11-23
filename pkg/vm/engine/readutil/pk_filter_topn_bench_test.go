@@ -73,7 +73,7 @@ func BenchmarkConstructedMembershipBlockTopN(b *testing.B) {
 						b.Run(route, func(b *testing.B) {
 							mp := mpool.MustNewZero()
 							b.Cleanup(func() { mpool.DeleteMPool(mp) })
-							members := vector.NewVec(types.T_int32.ToType())
+							members := vector.NewVec(types.T_int32.ToType(), mp)
 							b.Cleanup(func() { members.Free(mp) })
 							if hits.count == membershipTopNBenchRows {
 								for row := 0; row < membershipTopNBenchRows; row++ {
@@ -99,7 +99,7 @@ func BenchmarkConstructedMembershipBlockTopN(b *testing.B) {
 
 							output := batch.NewWithSize(len(fixture.columns))
 							for i, typ := range fixture.columnTypes {
-								output.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+								output.Vecs[i] = vector.NewVec(typ, mp)
 							}
 							b.Cleanup(func() { output.Clean(mp) })
 							cacheVectors := containers.NewVectors(len(fixture.columns) + 1)
@@ -214,7 +214,7 @@ func newMembershipTopNBenchFixture(b *testing.B, compound bool) membershipTopNBe
 	input := batch.NewWithSize(len(columnTypes))
 	defer input.Clean(mp)
 	for i, typ := range columnTypes {
-		input.Vecs[i] = vector.NewVec(typ)
+		input.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	idPos := len(columnTypes) - 2
 	for row := 0; row < membershipTopNBenchRows; row++ {

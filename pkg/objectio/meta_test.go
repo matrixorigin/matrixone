@@ -61,6 +61,61 @@ func TestObjectMetadataReadersRejectEmptyLocation(t *testing.T) {
 	}
 }
 
+func TestCheckedDataBlocks(t *testing.T) {
+	for _, version := range []uint16{IOET_ObjectMeta_V2, IOET_ObjectMeta_V3} {
+		_, raw := cachedColumnFixture(t)
+		DecodeIOEntryHeader(raw).Version = version
+		blocks, ok := ObjectMeta(raw).CheckedDataBlocks(2)
+		require.True(t, ok)
+		require.Len(t, blocks, 2)
+		require.Equal(t, uint16(1), blocks[1].GetID())
+		require.Equal(t, uint32(10), blocks[1].GetRows())
+	}
+
+	for _, scenario := range []string{
+		"header", "type", "location count", "missing data", "data offset", "block count",
+		"start block", "block index", "block offset", "block end", "block sequence", "column count",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			_, raw := cachedColumnFixture(t)
+			expected := uint16(2)
+			meta := objectMetaV3(raw[IOEntryHeaderSize:])
+			data, ok := meta.DataMeta()
+			require.True(t, ok)
+			offset, length := data.BlockIndex().BlockMetaPos(1)
+			switch scenario {
+			case "header":
+				raw = raw[:IOEntryHeaderSize]
+			case "type":
+				DecodeIOEntryHeader(raw).Type = IOET_ColData
+			case "location count":
+				expected--
+			case "missing data":
+				meta.SetDataMetaCount(0)
+			case "data offset":
+				meta.SetDataMetaOffset(^uint32(0))
+			case "block count":
+				data.BlockHeader().SetSequence(1)
+			case "start block":
+				data.BlockHeader().SetStartID(1)
+			case "block index":
+				data.BlockIndex().SetBlockCount(1)
+			case "block offset":
+				data.BlockIndex().SetBlockMetaPos(1, offset-1, length)
+			case "block end":
+				data.BlockIndex().SetBlockMetaPos(1, offset, ^uint32(0))
+			case "block sequence":
+				data.GetBlockMeta(1).BlockHeader().SetSequence(0)
+			case "column count":
+				data.GetBlockMeta(1).BlockHeader().SetMetaColumnCount(2)
+			}
+			blocks, ok := ObjectMeta(raw).CheckedDataBlocks(expected)
+			require.False(t, ok)
+			require.Nil(t, blocks)
+		})
+	}
+}
+
 func TestBuildMetaData(t *testing.T) {
 	objectMeta := BuildMetaData(20, 30)
 	for i := uint16(0); i < 20; i++ {

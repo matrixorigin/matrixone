@@ -75,7 +75,8 @@ func TestPreparedGeometrySRIDUsesCurrentConfiguration(t *testing.T) {
 					cw.proc.SetPrepareParams(nil)
 					prepared.params.Free(cw.proc.Mp())
 				}
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				prepared.ParamTypes = nil
 				for i, value := range run.values {
 					var bytes []byte

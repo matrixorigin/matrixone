@@ -146,7 +146,6 @@ func (proc *Process) NewViewBindingProcess(ctx context.Context) *Process {
 	child.Base.resolveVariableTypeFunc = proc.Base.resolveVariableTypeFunc
 	child.Base.resolveVariableIsBinFunc = proc.Base.resolveVariableIsBinFunc
 	child.Base.resolveVariableStringDomainFunc = proc.Base.resolveVariableStringDomainFunc
-	child.Base.resolveVariablePrepareParamKindFunc = proc.Base.resolveVariablePrepareParamKindFunc
 	child.Session = proc.Session
 	child.WarningSink = proc.WarningSink
 	child.CopyPlanSnapshotFrom(proc)
@@ -341,7 +340,7 @@ func (proc *Process) Free() {
 		proc.Base.cteMemoryBudget = nil
 	}
 	proc.Base.cteMemoryBudgetMu.Unlock()
-	proc.setPrepareParams(nil, nil, nil, false)
+	proc.setPrepareParams(nil, nil, false)
 }
 
 type QueryBaseContext struct {

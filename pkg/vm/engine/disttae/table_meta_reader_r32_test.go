@@ -140,14 +140,14 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 		}
 		delBat := batch.NewWithSize(2)
 		delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
-		rv := vector.NewVec(types.T_Rowid.ToType())
+		rv := vector.NewVec(types.T_Rowid.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(rv, rowids, nil, mp))
-		pv := vector.NewVec(types.T_int64.ToType())
+		pv := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(pv, pks, nil, mp))
 		delBat.Vecs[0] = rv
 		delBat.Vecs[1] = pv
 		delBat.SetRowCount(rows)
-		txn.appendWorkspaceEntryLocked(Entry{
+		appendWorkspaceEntryForTest(t, txn, Entry{
 			typ:          DELETE,
 			accountId:    1,
 			databaseId:   tbl.db.databaseId,
@@ -159,7 +159,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 	}
 	driveTombstone := func() (string, error) {
 		reader := newReader()
-		outBatch := colexec.AllocCNS3ResultBat(true)
+		outBatch := colexec.AllocCNS3ResultBat(true, mp)
 		defer outBatch.Clean(mp)
 		_, err := reader.collectTombstoneOfAObjsAndInMem(
 			ctx, mp, outBatch,
@@ -189,11 +189,11 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 		srcRowids[i] = types.RandomRowid()
 		srcPKs[i] = int64(i + 1)
 	}
-	rv := vector.NewVec(types.T_Rowid.ToType())
+	rv := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rv, srcRowids, nil, mp))
-	av := vector.NewVec(types.T_int64.ToType())
+	av := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(av, srcPKs, nil, mp))
-	vv := vector.NewVec(types.T_int64.ToType())
+	vv := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vv, srcPKs, nil, mp))
 	srcRows.Vecs[0] = rv
 	srcRows.Vecs[1] = av
@@ -212,7 +212,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 		"before the drives only the source object exists")
 
 	reader := newReader()
-	dataOut := colexec.AllocCNS3ResultBat(false)
+	dataOut := colexec.AllocCNS3ResultBat(false, mp)
 	defer dataOut.Clean(mp)
 	seqnums, colTypes, attrs, _, _ := colexec.GetSequmsAttrsSortKeyIdxFromTableDef(tbl.tableDef)
 	objRelData := readutil.ObjListRelData{}
@@ -243,7 +243,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 
 	// The destination relation's record choke converts the reservation -
 	// the same conversion table_clone's dstRel.Write drives.
-	recBat := colexec.AllocCNS3ResultBat(false)
+	recBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer recBat.Clean(mp)
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, r32FirstOutBatchStats(t, dataOut)))
@@ -284,7 +284,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 			"tombstone round %d: the refused attempt persisted nothing", round)
 
 		tombReader := newReader()
-		dataOut2 := colexec.AllocCNS3ResultBat(false)
+		dataOut2 := colexec.AllocCNS3ResultBat(false, mp)
 		_, err = tombReader.collectDataOfAObjsAndInMem(
 			ctx, mp, dataOut2, seqnums, attrs, colTypes, objRelData)
 		dataOut2.Clean(mp)
@@ -427,14 +427,14 @@ func TestIssue25590MaterializingOptionBindsRecordingTxnNotSource(t *testing.T) {
 	}
 	delBat := batch.NewWithSize(2)
 	delBat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
-	rv := vector.NewVec(types.T_Rowid.ToType())
+	rv := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rv, rowids, nil, mp))
-	pv := vector.NewVec(types.T_int64.ToType())
+	pv := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(pv, pks, nil, mp))
 	delBat.Vecs[0] = rv
 	delBat.Vecs[1] = pv
 	delBat.SetRowCount(16)
-	srcTxn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, srcTxn, Entry{
 		typ:          DELETE,
 		accountId:    1,
 		databaseId:   tbl.db.databaseId,
@@ -455,7 +455,7 @@ func TestIssue25590MaterializingOptionBindsRecordingTxnNotSource(t *testing.T) {
 		pState:       logtailreplay.NewPartitionState("", true, 0, false),
 		sinkerOption: recTxn.SinkerCapacityOption(),
 	}
-	outBatch := colexec.AllocCNS3ResultBat(true)
+	outBatch := colexec.AllocCNS3ResultBat(true, mp)
 	defer outBatch.Clean(mp)
 	_, err := reader.collectTombstoneOfAObjsAndInMem(
 		ctx, mp, outBatch,

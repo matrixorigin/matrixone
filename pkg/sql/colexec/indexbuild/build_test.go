@@ -249,7 +249,7 @@ func TestIndexBuildExactRuntimeFilterContract(t *testing.T) {
 		runtimeFilter := receiveIndexBuildRuntimeFilter(t, proc, spec.Tag)
 		require.Equal(t, int32(message.RuntimeFilter_IN), runtimeFilter.Typ)
 		require.Equal(t, int32(2), runtimeFilter.Card)
-		payload := vector.NewVec(types.T_any.ToType())
+		payload := vector.NewVec(types.T_any.ToType(), proc.Mp())
 		require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 		require.Equal(t, types.T_int32, payload.GetType().Oid)
 		require.True(t, payload.GetSorted())
@@ -320,7 +320,7 @@ func TestIndexBuildFloatRuntimeFilterClosesConstSignedZero(t *testing.T) {
 			require.Equal(t, test.wantType, runtimeFilter.Typ)
 			if test.wantType == message.RuntimeFilter_IN {
 				require.Equal(t, int32(2), runtimeFilter.Card)
-				payload := vector.NewVec(types.T_any.ToType())
+				payload := vector.NewVec(types.T_any.ToType(), proc.Mp())
 				require.NoError(t, payload.UnmarshalBinary(runtimeFilter.Data))
 				require.Equal(t, 2, payload.Length())
 				require.True(t, payload.GetSorted(),
@@ -360,7 +360,7 @@ func TestIndexBuildRuntimeFilterCopyFailureFailsOpen(t *testing.T) {
 	proc.SetMessageBoard(message.NewMessageBoard())
 
 	sourceMP := mpool.MustNewZero()
-	sourceVec := vector.NewVec(typ)
+	sourceVec := vector.NewVec(typ, sourceMP)
 	require.NoError(t, vector.AppendBytes(
 		sourceVec, []byte("one-key"), false, sourceMP))
 	sourceBatch := batch.NewWithSize(1)
@@ -434,13 +434,16 @@ func TestIndexBuildRuntimeFilterClosureFailureFailsOpen(t *testing.T) {
 	arg.RuntimeFilterSpec = spec
 	prepareIndexBuild(t, arg, proc)
 
-	arg.ctr.buf = batch.NewOffHeapWithSize(1)
-	arg.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+	rfMP, err := arg.runtimeFilterAllocation.MP(limited)
+	require.NoError(t, err)
+	arg.ctr.buf = batch.NewWithSize(1)
+	arg.ctr.bufMP = rfMP
+	arg.ctr.buf.Vecs[0] = vector.NewVec(typ, rfMP)
 	require.NoError(t, vector.AppendFixed(
-		arg.ctr.buf.Vecs[0], float64(0), false, limited))
+		arg.ctr.buf.Vecs[0], float64(0), false, rfMP))
 	for arg.ctr.buf.Vecs[0].Length() < arg.ctr.buf.Vecs[0].Capacity() {
 		require.NoError(t, vector.AppendFixed(
-			arg.ctr.buf.Vecs[0], float64(1), false, limited))
+			arg.ctr.buf.Vecs[0], float64(1), false, rfMP))
 	}
 	arg.ctr.buf.SetRowCount(arg.ctr.buf.Vecs[0].Length())
 	filler, err := limited.Alloc(
@@ -489,10 +492,13 @@ func TestIndexBuildRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, arg.SetAllocationAccount(account))
 			prepareIndexBuild(t, arg, proc)
+			rfMP, err := arg.runtimeFilterAllocation.MP(proc.Mp())
+			require.NoError(t, err)
 			arg.ctr.buf = indexBuildBatch(
-				testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, proc.Mp()),
+				testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, rfMP),
 				3,
 			)
+			arg.ctr.bufMP = rfMP
 
 			var filler []byte
 			if test.closed {

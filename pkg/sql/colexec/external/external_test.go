@@ -201,7 +201,7 @@ func TestGetColDataParallelLoadEmptyNumericAndJSONNull(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -266,7 +266,7 @@ func TestGetColDataParallelLoadEmptyNumericAsTypedZero(t *testing.T) {
 	typ.Width = 10
 	typ.Scale = 2
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(typ)
+	bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -324,7 +324,7 @@ func TestAppendLoadEmptyNumericZeroAppendsTypedZero(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, proc.Mp())
 			defer vec.Free(proc.Mp())
 
 			require.NoError(t, appendLoadEmptyNumericZero(vec, tc.id, false, proc.Mp()))
@@ -370,7 +370,7 @@ func TestAppendLoadEmptyNumericZeroUnsupportedTypeReturnsError(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	err := appendLoadEmptyNumericZero(bat.Vecs[0], types.T_varchar, false, proc.Mp())
@@ -541,7 +541,7 @@ func TestGetColDataParallelLoadNullNumericRemainsNull(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -576,7 +576,7 @@ func TestGetColDataLoadDataYear(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_year.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_year.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -642,7 +642,7 @@ func TestGetColDataGeometry(t *testing.T) {
 
 	load := func(colTyp plan.Type, val string) (*batch.Batch, error) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T(colTyp.Id), colTyp.Width, colTyp.Scale))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T(colTyp.Id), colTyp.Width, colTyp.Scale), proc.Mp())
 		param := &ExternalParam{
 			ExParamConst: ExParamConst{
 				Ctx:  context.Background(),
@@ -716,11 +716,11 @@ func TestGetOneRowDataLoadDataNonStrictAdjustedValues(t *testing.T) {
 	}
 
 	bat := batch.NewWithSize(len(cols))
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(decType)
-	bat.Vecs[3] = vector.NewVec(types.T_date.ToType())
-	bat.Vecs[4] = vector.NewVec(varcharType)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	bat.Vecs[2] = vector.NewVec(decType, proc.Mp())
+	bat.Vecs[3] = vector.NewVec(types.T_date.ToType(), proc.Mp())
+	bat.Vecs[4] = vector.NewVec(varcharType, proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -770,7 +770,7 @@ func TestGetColDataLoadDataStrictRejectsInvalidInteger(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -822,7 +822,7 @@ func TestGetColDataLoadDataAdjustmentsOnlyLocalCSVNonStrict(t *testing.T) {
 			defer proc.Free()
 
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			param := &ExternalParam{
@@ -897,7 +897,7 @@ func TestGetColDataLoadDataNonStrictAdjustmentRejectsQuotedInvalidNumeric(t *tes
 			defer proc.Free()
 
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(tc.vecType)
+			bat.Vecs[0] = vector.NewVec(tc.vecType, proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			param := &ExternalParam{
@@ -1116,7 +1116,7 @@ func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
 			}
 
 			directBat := batch.NewWithSize(1)
-			directBat.Vecs[0] = vector.NewVec(tc.vecType)
+			directBat.Vecs[0] = vector.NewVec(tc.vecType, proc.Mp())
 			defer directBat.Clean(proc.Mp())
 
 			directParam := &ExternalParam{
@@ -1145,7 +1145,7 @@ func TestGetColDataLoadDataNonStrictTemporalNormalization(t *testing.T) {
 			}
 
 			parallelBat := batch.NewWithSize(1)
-			parallelBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			parallelBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer parallelBat.Clean(proc.Mp())
 
 			parallelParam := &ExternalParam{
@@ -1212,7 +1212,7 @@ func TestGetColDataLoadDataNonStrictAdjustmentLeavesEmptyBoolNull(t *testing.T) 
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -1263,7 +1263,7 @@ func TestGetOneRowDataParallelLoadMissingNumericRemainsNull(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -2523,7 +2523,7 @@ func TestGetColDataYear(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_year.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_year.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -2555,8 +2555,8 @@ func TestGetColDataUnsupportedTypeReportsColumnIndex(t *testing.T) {
 	defer proc.Free()
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -2631,7 +2631,7 @@ func Test_getColData_VecDimensionCheck(t *testing.T) {
 			vecTyp := types.New(tt.typId, tt.width, 0)
 
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(vecTyp)
+			bat.Vecs[0] = vector.NewVec(vecTyp, mp)
 
 			line := []csvparser.Field{
 				{Val: tt.val},
@@ -2677,7 +2677,7 @@ func TestGetColDataParallelLoadVectorIsDecodedDirectly(t *testing.T) {
 
 	vecTyp := types.New(types.T_array_float32, 3, 0)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(vecTyp)
+	bat.Vecs[0] = vector.NewVec(vecTyp, proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{ExParamConst: ExParamConst{
@@ -2721,7 +2721,7 @@ func TestGetColDataLowPrecFloat(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(tc.oid.ToType())
+			bat.Vecs[0] = vector.NewVec(tc.oid.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			param := &ExternalParam{
@@ -2758,7 +2758,7 @@ func TestAppendLoadEmptyNumericZeroLowPrecFloat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
-		vec := vector.NewVec(oid.ToType())
+		vec := vector.NewVec(oid.ToType(), proc.Mp())
 		require.NoError(t, appendLoadEmptyNumericZero(vec, oid, false, proc.Mp()))
 		require.Equal(t, 1, vec.Length())
 		require.False(t, vec.GetNulls().Contains(0))
@@ -2793,7 +2793,7 @@ func TestGetColDataEmptyDomains(t *testing.T) {
 					typ = types.T_varchar.ToType()
 				}
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(typ)
+				bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 				defer bat.Clean(proc.Mp())
 				field := csvparser.Field{Val: tc.input, IsNull: tc.null}
 				err := getColData(bat, []csvparser.Field{field}, 0, param, proc.Mp(), plan.ExternAttr{ColName: "v", ColIndex: 0, ColFieldIndex: 0}, proc)
@@ -2920,7 +2920,7 @@ func TestGetColDataExternalCSVIntegerRounding(t *testing.T) {
 			for _, tc := range cases {
 				t.Run(fmt.Sprintf("%s_quoted_%t", tc.value, tc.quoted), func(t *testing.T) {
 					bat := batch.NewWithSize(1)
-					bat.Vecs[0] = vector.NewVec(typ)
+					bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 					defer bat.Clean(proc.Mp())
 					param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(),
 						Cols: []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(typ.Oid), Width: typ.Width}}},
@@ -2986,7 +2986,7 @@ func TestGetColDataIntegerRoundingScope(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 			param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background(), StrictSqlMode: true,
 				Cols:   []*plan.ColDef{{Name: "i", Typ: plan.Type{Id: int32(types.T_uint64), Enumvalues: tc.enumValues}}},

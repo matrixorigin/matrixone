@@ -266,11 +266,11 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 	if ctr.retained == nil {
 		ctr.retained = batch.NewWithSize(len(input.Vecs))
 		for i, vec := range input.Vecs {
-			ctr.retained.Vecs[i] = vector.NewVec(*vec.GetType())
+			ctr.retained.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 		}
 		ctr.retainedKeys = batch.NewWithSize(len(ctr.orderEval.Vec))
 		for i, vec := range ctr.orderEval.Vec {
-			ctr.retainedKeys.Vecs[i] = vector.NewVec(*vec.GetType())
+			ctr.retainedKeys.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 			ctr.compares[i].Set(0, ctr.retainedKeys.Vecs[i])
 		}
 	}
@@ -607,9 +607,9 @@ func (ctr *topNContainer) emitRows(proc *process.Process, result *vm.CallResult,
 		return err
 	}
 	if ctr.output == nil {
-		ctr.output = batch.NewOffHeapWithSize(len(ctr.retained.Vecs))
+		ctr.output = batch.NewWithSize(len(ctr.retained.Vecs))
 		for i, vec := range ctr.retained.Vecs {
-			ctr.output.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+			ctr.output.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 		}
 	} else {
 		ctr.output.CleanOnlyData()

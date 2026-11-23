@@ -276,7 +276,9 @@ func (u *Scan) returnResult(proc *process.Process, scoremap map[any]float32) (vm
 		for key := range scoremap {
 			doc_id := u.outputDocID(key)
 			// type of id follow primary key column
-			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+			if err := vector.AppendAny(u.batch.Vecs[0], doc_id, false, u.batch.Vecs[0].MPool()); err != nil {
+				return vm.CancelResult, err
+			}
 			delete(u.docIDMap, key)
 		}
 	} else {
@@ -284,10 +286,14 @@ func (u *Scan) returnResult(proc *process.Process, scoremap map[any]float32) (vm
 		for key := range scoremap {
 			doc_id := u.outputDocID(key)
 			// type of id follow primary key column
-			vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+			if err := vector.AppendAny(u.batch.Vecs[0], doc_id, false, u.batch.Vecs[0].MPool()); err != nil {
+				return vm.CancelResult, err
+			}
 
 			// score
-			vector.AppendFixed[float32](u.batch.Vecs[1], scoremap[key], false, proc.Mp())
+			if err := vector.AppendFixed[float32](u.batch.Vecs[1], scoremap[key], false, u.batch.Vecs[1].MPool()); err != nil {
+				return vm.CancelResult, err
+			}
 			delete(u.docIDMap, key)
 		}
 	}
@@ -319,10 +325,14 @@ func (u *Scan) returnResultFromBuffer(proc *process.Process, limit uint64) (vm.C
 		// get result in reversed order
 		sr := u.resbuf[nres-i-1]
 		doc_id := u.outputDocID(sr.Id)
-		vector.AppendAny(u.batch.Vecs[0], doc_id, false, proc.Mp())
+		if err := vector.AppendAny(u.batch.Vecs[0], doc_id, false, u.batch.Vecs[0].MPool()); err != nil {
+			return vm.CancelResult, err
+		}
 
 		if u.batch.VectorCount() > 1 {
-			vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, proc.Mp())
+			if err := vector.AppendFixed[float32](u.batch.Vecs[1], float32(sr.GetDistance()), false, u.batch.Vecs[1].MPool()); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 		delete(u.docIDMap, sr.Id)
 	}

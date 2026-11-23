@@ -391,7 +391,7 @@ func TestFullTextBooleanNumericTruthAndThreeValuedLogic(t *testing.T) {
 			require.Equal(t, int32(types.T_bool), rewritten.Typ.Id, "executable predicates must be BOOL")
 			proc := builder.compCtx.GetProcess()
 			raw := batch.NewWithSize(1)
-			raw.Vecs[0] = vector.NewVec(types.T_float32.ToType())
+			raw.Vecs[0] = vector.NewVec(types.T_float32.ToType(), proc.Mp())
 			defer raw.Clean(proc.Mp())
 			// Cross the four index states (returned with a positive, negative and zero
 			// score, not returned) with all three scalar truth states.
@@ -423,7 +423,7 @@ func TestFullTextBooleanNumericTruthAndThreeValuedLogic(t *testing.T) {
 			input := batch.NewWithSize(3)
 			// These vectors belong to the normalizer and raw, so input cleanup must not free them.
 			input.Vecs[0] = scores
-			input.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+			input.Vecs[1] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 			defer input.Vecs[1].Free(proc.Mp())
 			input.Vecs[2] = raw.Vecs[0]
 			for row := 0; row < 12; row++ {

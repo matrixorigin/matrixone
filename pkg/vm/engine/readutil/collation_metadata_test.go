@@ -11,17 +11,18 @@
 package readutil
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCollationMetadataPKFilterReader(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	source := vector.NewVec(types.NewWithCharset(types.T_varchar, 8, 0, 3))
+	source := vector.NewVec(types.NewWithCharset(types.T_varchar, 8, 0, 3), mp)
 	require.NoError(t, vector.AppendBytes(source, []byte("x"), false, mp))
 	source.SetSorted(true)
 	wire, err := source.MarshalBinary()

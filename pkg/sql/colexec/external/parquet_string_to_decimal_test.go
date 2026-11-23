@@ -99,7 +99,7 @@ func TestParquet_StringToDecimal64_BasicConversions(t *testing.T) {
 			require.NoError(t, err)
 
 			// Test conversion
-			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale))
+			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_decimal64),
@@ -199,7 +199,7 @@ func TestParquet_StringToDecimal64_SpecialFormats(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale))
+			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_decimal64),
@@ -275,7 +275,7 @@ func TestParquet_StringToDecimal64_BoundaryValues(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale))
+			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_decimal64),
@@ -327,7 +327,7 @@ func TestParquet_StringToDecimal64_InvalidFormats(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale))
+			vec := vector.NewVec(types.New(types.T_decimal64, tc.width, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_decimal64),
@@ -396,7 +396,7 @@ func TestParquet_StringToDecimal128_BasicConversions(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(types.T_decimal128, tc.width, tc.scale))
+			vec := vector.NewVec(types.New(types.T_decimal128, tc.width, tc.scale), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{
 				Id:          int32(types.T_decimal128),

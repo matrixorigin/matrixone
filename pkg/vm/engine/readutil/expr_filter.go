@@ -1036,7 +1036,7 @@ func compileFilterExprWithProof(
 				canCompile = false
 				return
 			}
-			vec := vector.NewVec(types.T_any.ToType())
+			vec := vector.NewVec(types.T_any.ToType(), nil)
 			if err := vec.UnmarshalBinary(val); err != nil {
 				canCompile = false
 				return
@@ -1128,7 +1128,7 @@ func compileFilterExprWithProof(
 				canCompile = false
 				return
 			}
-			vec := vector.NewVec(types.T_any.ToType())
+			vec := vector.NewVec(types.T_any.ToType(), nil)
 			if err := vec.UnmarshalBinary(val); err != nil {
 				canCompile = false
 				return

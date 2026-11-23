@@ -964,25 +964,24 @@ func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2)
+	selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
 	source := batch.NewWithSchema(
-		true,
 		[]string{"value"},
-		[]types.Type{types.T_int64.ToType()},
+		[]types.Type{types.T_int64.ToType()}, selection,
 	)
-	require.NoError(t, source.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
 	source.SetRowCount(1)
-	require.Positive(t, account.Snapshot().Used)
+	usedBefore := account.Snapshot().Used
+	require.Positive(t, usedBefore)
 
 	workerBatch, err := cloneExportWorkerBatch(source, mp)
 	require.NoError(t, err)
-	require.Nil(t, workerBatch.AllocationAccountSelection())
-	require.Nil(t, workerBatch.Vecs[0].AllocationAccountSelection())
+	// The worker copy crosses the ownership boundary unaccounted.
+	require.Equal(t, usedBefore, account.Snapshot().Used)
 
-	source.Clean(mp)
+	source.Clean(selection)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	require.Zero(t, registry.LiveAllocationMetadata())
@@ -995,8 +994,8 @@ func TestExportWorkerBatchEndsStatementAllocationOwnership(t *testing.T) {
 
 func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.NewOffHeapWithSize(1)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
 	bat.SetRowCount(1)
 	require.Positive(t, mp.CurrNB())
@@ -1036,8 +1035,8 @@ func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
 	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
 	bytesChan := make(chan *BatchByte, 2)
 
-	badBatch := batch.NewOffHeapWithSize(1)
-	badVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	badBatch := batch.NewWithSize(1)
+	badVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	badBatch.Vecs[0] = badVec
 	defer badBatch.Clean(mp)
 	require.NoError(t, vector.AppendBytes(badVec, []byte("valid"), false, mp))
@@ -1052,8 +1051,8 @@ func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
 	require.Zero(t, len(failed.writeByte), "do not publish a partial batch containing a valid prefix")
 	require.Zero(t, mp.CurrNB(), "conversion failure must release the worker batch")
 
-	goodBatch := batch.NewOffHeapWithSize(1)
-	goodVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	goodBatch := batch.NewWithSize(1)
+	goodVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	goodBatch.Vecs[0] = goodVec
 	defer goodBatch.Clean(mp)
 	require.NoError(t, vector.AppendBytes(goodVec, []byte("next"), false, mp))
@@ -1092,7 +1091,7 @@ func TestVectorValueToJSONTopLevelJSONNull(t *testing.T) {
 			nullViaEncode,
 		} {
 			func() {
-				vec := vector.NewVec(types.T_json.ToType())
+				vec := vector.NewVec(types.T_json.ToType(), mp)
 				defer func() {
 					vec.Free(mp)
 					require.Zero(t, mp.CurrNB())
@@ -1118,7 +1117,7 @@ func TestVectorValueToJSONTopLevelJSONNull(t *testing.T) {
 			{`{"a":1}`, `{"a":1}`},
 		} {
 			func() {
-				vec := vector.NewVec(types.T_json.ToType())
+				vec := vector.NewVec(types.T_json.ToType(), mp)
 				defer func() {
 					vec.Free(mp)
 					require.Zero(t, mp.CurrNB())
@@ -1151,8 +1150,8 @@ func TestConstructJSONLineRejectsTopLevelJSONNullAndReleasesBatch(t *testing.T) 
 	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
 	bytesChan := make(chan *BatchByte, 2)
 
-	badBatch := batch.NewOffHeapWithSize(1)
-	badVec := vector.NewOffHeapVecWithType(types.T_json.ToType())
+	badBatch := batch.NewWithSize(1)
+	badVec := vector.NewVec(types.T_json.ToType(), mp)
 	badBatch.Vecs[0] = badVec
 	defer badBatch.Clean(mp)
 	require.NoError(t, vector.AppendBytes(badVec, encodeJSONForExportTest(t, `{"a":1}`), false, mp))
@@ -1167,8 +1166,8 @@ func TestConstructJSONLineRejectsTopLevelJSONNullAndReleasesBatch(t *testing.T) 
 	require.Zero(t, len(failed.writeByte), "do not publish a partial batch containing a valid prefix")
 	require.Zero(t, mp.CurrNB(), "conversion failure must release the worker batch")
 
-	goodBatch := batch.NewOffHeapWithSize(1)
-	goodVec := vector.NewOffHeapVecWithType(types.T_json.ToType())
+	goodBatch := batch.NewWithSize(1)
+	goodVec := vector.NewVec(types.T_json.ToType(), mp)
 	goodBatch.Vecs[0] = goodVec
 	defer goodBatch.Clean(mp)
 	require.NoError(t, vector.AppendBytes(goodVec, nil, true, mp))
@@ -1345,7 +1344,7 @@ func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
 			for _, value := range []string{"", "plain", "世界", "�", `\N`} {
 				func() {
 					mp := mpool.MustNewZero()
-					vec := vector.NewVec(typ.ToType())
+					vec := vector.NewVec(typ.ToType(), mp)
 					defer func() {
 						vec.Free(mp)
 						require.Zero(t, mp.CurrNB())
@@ -1360,7 +1359,7 @@ func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
 			for _, value := range []string{"\xff", "a\xffb", "\xc3"} {
 				func() {
 					mp := mpool.MustNewZero()
-					vec := vector.NewVec(typ.ToType())
+					vec := vector.NewVec(typ.ToType(), mp)
 					defer func() {
 						vec.Free(mp)
 						require.Zero(t, mp.CurrNB())
@@ -1389,7 +1388,7 @@ func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
 		for _, tc := range values {
 			t.Run(tc.name, func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				vec := vector.NewVec(types.T_datalink.ToType())
+				vec := vector.NewVec(types.T_datalink.ToType(), mp)
 				defer func() {
 					vec.Free(mp)
 					require.Zero(t, mp.CurrNB())
@@ -1752,7 +1751,7 @@ func Test_vectorValueToParquet(t *testing.T) {
 		})
 
 		convey.Convey("timestamp type uses UTC epoch micros", func() {
-			vec := vector.NewVec(types.T_timestamp.ToType())
+			vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 			convey.So(vector.AppendFixed(vec, types.UnixMicroToTimestamp(1234567), false, mp), convey.ShouldBeNil)
 			val, err := vectorValueToParquet(vec, 0, time.FixedZone("UTC+8", 8*60*60))
 			convey.So(err, convey.ShouldBeNil)
@@ -1760,7 +1759,7 @@ func Test_vectorValueToParquet(t *testing.T) {
 		})
 
 		convey.Convey("year type uses canonical string", func() {
-			vec := vector.NewVec(types.T_year.ToType())
+			vec := vector.NewVec(types.T_year.ToType(), mp)
 			convey.So(vector.AppendFixed(vec, types.MoYear(2024), false, mp), convey.ShouldBeNil)
 			val, err := vectorValueToParquet(vec, 0, nil)
 			convey.So(err, convey.ShouldBeNil)
@@ -2059,13 +2058,13 @@ func TestParquetWriterYearColumnNormalizesDateVector(t *testing.T) {
 
 	pw, err := NewParquetWriter(context.Background(), mrs)
 	require.NoError(t, err)
-	vec := vector.NewVec(types.T_date.ToType())
+	vec := vector.NewVec(types.T_date.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, types.DateFromCalendar(2024, 1, 1), false, mp))
-	defer vec.Free(mp)
 
 	value, err := pw.vectorValueToParquet(vec, 0, 0, time.UTC)
 	require.NoError(t, err)
 	require.Equal(t, "2024", value)
+	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -2242,7 +2241,7 @@ func TestParquetBlobFamilySchemaAndBytes(t *testing.T) {
 		writer, err := NewParquetWriter(context.Background(), mrs)
 		require.NoError(t, err)
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(typ)
+		bat.Vecs[0] = vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte{0xff, 0x00}, false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, mp))
 		bat.SetRowCount(2)
@@ -2304,7 +2303,7 @@ func TestParquetWriterExtendedTypes(t *testing.T) {
 			func() {
 				bat := batch.NewWithSize(1)
 				defer bat.Clean(mp)
-				bat.Vecs[0] = vector.NewVec(tc.typ)
+				bat.Vecs[0] = vector.NewVec(tc.typ, mp)
 				require.NoError(t, vector.AppendBytes(bat.Vecs[0], tc.data, false, mp))
 				require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, mp))
 				bat.SetRowCount(2)
@@ -2507,10 +2506,10 @@ func TestOutfileUnenclosedCSVRoundTripsThroughLoadParser(t *testing.T) {
 	idsNulls := make([]bool, len(values))
 	mp := mpool.MustNewZero()
 
-	idVec := vector.NewVec(types.T_int32.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(idVec, ids, idsNulls, mp))
 
-	strVec := vector.NewVec(types.T_varchar.ToType())
+	strVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	nulls := make([]bool, len(values))
 	require.NoError(t, vector.AppendStringList(strVec, values, nulls, mp))
 	// append a genuine NULL value row for the \N sentinel

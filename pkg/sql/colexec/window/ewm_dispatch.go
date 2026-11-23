@@ -213,12 +213,16 @@ func (ctr *container) processEwmFuncRange(
 		}
 	}
 
-	vec, err := ctr.allocation.NewVector(types.T_float64.ToType())
+	vecMP, err := ctr.allocation.MP(proc)
 	if err != nil {
 		return nil, err
 	}
-	if err := vector.AppendFixedList(vec, values, nullList, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
+	vec, err := ctr.allocation.NewVector(proc, types.T_float64.ToType())
+	if err != nil {
+		return nil, err
+	}
+	if err := vector.AppendFixedList(vec, values, nullList, vecMP); err != nil {
+		ctr.allocation.FreeVector(proc, vec)
 		return nil, err
 	}
 	return vec, nil

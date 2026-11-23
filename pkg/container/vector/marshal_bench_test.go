@@ -41,7 +41,7 @@ func BenchmarkMarshalBinaryOwnedVarlena(b *testing.B) {
 	for _, test := range tests {
 		b.Run(test.name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
-			vec := NewVec(types.T_varchar.ToType())
+			vec := NewVec(types.T_varchar.ToType(), mp)
 			for row := 0; row < rows; row++ {
 				if err := AppendBytes(vec, test.value, row == test.nullAt, mp); err != nil {
 					vec.Free(mp)
@@ -71,7 +71,7 @@ func BenchmarkMarshalBinaryOwnedVarlena(b *testing.B) {
 func BenchmarkMarshalBinarySelectedVarlena(b *testing.B) {
 	const rows = 8192
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_varchar.ToType())
+	source := NewVec(types.T_varchar.ToType(), mp)
 	value := bytes.Repeat([]byte{'x'}, 49)
 	sels := make([]int32, rows)
 	for row := 0; row < rows; row++ {
@@ -82,7 +82,7 @@ func BenchmarkMarshalBinarySelectedVarlena(b *testing.B) {
 	}
 	defer source.Free(mp)
 
-	selected := NewVec(types.T_varchar.ToType())
+	selected := NewVec(types.T_varchar.ToType(), mp)
 	if err := selected.PreExtend(rows, mp); err != nil {
 		b.Fatal(err)
 	}

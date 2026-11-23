@@ -44,8 +44,8 @@ func TestValidateInsertBatchReturnsErrorForInvalidBatch(t *testing.T) {
 	require.ErrorContains(t, err, "INVALID-INSERT-BATCH-NIL-VEC")
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], 1, false, mp))
 	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], 2, false, mp))
 	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[1], 1, false, mp))

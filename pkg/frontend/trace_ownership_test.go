@@ -91,6 +91,15 @@ func TestRecordStatementTraceOwnership(t *testing.T) {
 		return ctx, stmt, root
 	}
 
+	t.Run("direct client owns locking read diagnostics", func(t *testing.T) {
+		ses := newSession(t)
+		require.Equal(t, ConnTypeUnset, ses.connType)
+		ses.SetFromRealUser(true)
+		ses.setRoutineManager(&RoutineManager{lockReadLimiter: motrace.NewLockReadLimiter()})
+		_, _, root := start(t, ses)
+		require.True(t, root.LockReadEnabled())
+	})
+
 	t.Run("active transaction and available epoch", func(t *testing.T) {
 		ses := newSession(t)
 		id := uuid.MustParse("01020304-0506-0708-090a-0b0c0d0e0f10")

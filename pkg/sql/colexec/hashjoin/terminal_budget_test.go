@@ -94,6 +94,7 @@ func TestHashJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
 	var callErr error
 	t.Cleanup(func() {
 		arg.Free(proc, true, callErr)
+		freeTestChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})

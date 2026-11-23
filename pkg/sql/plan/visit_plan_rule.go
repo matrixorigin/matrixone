@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -531,7 +530,7 @@ type ResetParamRefRule struct {
 	// deliberately kept on the rule rather than inferred from Expr.Typ: a
 	// prepared marker is TEXT at prepare time while COM_STMT carries the
 	// protocol's actual numeric category.
-	paramKinds  []vector.PrepareParamKind
+	paramKinds  []types.StringConversionKind
 	paramValues []any
 }
 
@@ -1131,14 +1130,14 @@ func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 // that already decoded the protocol metadata.  Production replacement passes
 // the richer ParamValue slice through SetParamValues below; keeping the kind
 // setter makes the rule useful for the small, plan-only helpers as well.
-func (rule *ResetParamRefRule) SetParamKinds(kinds []vector.PrepareParamKind) {
+func (rule *ResetParamRefRule) SetParamKinds(kinds []types.StringConversionKind) {
 	rule.paramKinds = append(rule.paramKinds[:0], kinds...)
 }
 
 func (rule *ResetParamRefRule) SetParamValues(values []any) {
 	rule.paramValues = append(rule.paramValues[:0], values...)
 	if len(rule.paramKinds) == 0 {
-		rule.paramKinds = make([]vector.PrepareParamKind, len(values))
+		rule.paramKinds = make([]types.StringConversionKind, len(values))
 	}
 	for i, value := range values {
 		if i >= len(rule.paramKinds) {
@@ -1150,9 +1149,9 @@ func (rule *ResetParamRefRule) SetParamValues(values []any) {
 	}
 }
 
-func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, vector.PrepareParamKind, bool) {
+func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, types.StringConversionKind, bool) {
 	if pos < 0 {
-		return nil, vector.PrepareParamNone, false
+		return nil, types.StringConversionString, false
 	}
 	if pos < len(rule.paramValues) {
 		value := rule.paramValues[pos]
@@ -1160,7 +1159,7 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, vector.PreparePa
 			return param.Value, param.PrepareParamKind, true
 		}
 		if value != nil {
-			kind := vector.PrepareParamNone
+			kind := types.StringConversionString
 			if pos < len(rule.paramKinds) {
 				kind = rule.paramKinds[pos]
 			}
@@ -1168,10 +1167,10 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, vector.PreparePa
 		}
 	}
 	if pos >= len(rule.params) || rule.params[pos] == nil {
-		return nil, vector.PrepareParamNone, false
+		return nil, types.StringConversionString, false
 	}
 	param := rule.params[pos]
-	kind := vector.PrepareParamNone
+	kind := types.StringConversionString
 	if pos < len(rule.paramKinds) {
 		kind = rule.paramKinds[pos]
 	}
@@ -1297,17 +1296,17 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	switch kind {
-	case vector.PrepareParamInteger:
+	case types.StringConversionInteger:
 		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok && typ.Oid.IsInteger() {
 			return typ, true
 		}
-	case vector.PrepareParamDecimal:
+	case types.StringConversionDecimal:
 		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok && typ.IsDecimal() {
 			return typ, true
 		}
-	case vector.PrepareParamFloat:
+	case types.StringConversionFloat:
 		return types.T_float64.ToType(), true
-	case vector.PrepareParamBoolean:
+	case types.StringConversionBoolean:
 		return types.T_bool.ToType(), true
 	default:
 		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok {
@@ -1323,8 +1322,8 @@ func (rule *ResetParamRefRule) hasNumericRuntimeParam(pos int) bool {
 		return false
 	}
 	switch kind {
-	case vector.PrepareParamInteger, vector.PrepareParamDecimal,
-		vector.PrepareParamFloat, vector.PrepareParamBoolean:
+	case types.StringConversionInteger, types.StringConversionDecimal,
+		types.StringConversionFloat, types.StringConversionBoolean:
 		return true
 	}
 	if pos < 0 || pos >= len(rule.paramValues) {
@@ -1350,7 +1349,7 @@ func (rule *ResetParamRefRule) typedIntegerParamExpr(pos int32) (*Expr, bool) {
 	if !ok || value == nil {
 		return nil, false
 	}
-	if kind != vector.PrepareParamInteger && kind != vector.PrepareParamNone {
+	if kind != types.StringConversionInteger && kind != types.StringConversionString {
 		return nil, false
 	}
 	typ, ok := rule.runtimeParamType(int(pos))
@@ -1373,7 +1372,7 @@ func (rule *ResetParamRefRule) typedIntegerParamExpr(pos int32) (*Expr, bool) {
 
 func (rule *ResetParamRefRule) typedDecimalParamExpr(pos int32) (*Expr, bool, error) {
 	value, kind, ok := rule.runtimeParamValue(int(pos))
-	if !ok || value == nil || (kind != vector.PrepareParamDecimal && kind != vector.PrepareParamNone) {
+	if !ok || value == nil || (kind != types.StringConversionDecimal && kind != types.StringConversionString) {
 		return nil, false, nil
 	}
 	typ, ok := rule.runtimeParamType(int(pos))
@@ -1415,7 +1414,7 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 	if !typOK {
 		return nil, false, nil
 	}
-	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 {
+	if kind != types.StringConversionFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 {
 		if !typ.Oid.IsMySQLString() {
 			return nil, false, nil
 		}
@@ -2567,7 +2566,7 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 				position := int(param.Pos)
 				if position >= 0 && position < len(rule.paramValues) {
 					if value, ok := rule.paramValues[position].(ParamValue); ok &&
-						(value.PrepareParamKind != vector.PrepareParamNone ||
+						(value.PrepareParamKind != types.StringConversionString ||
 							(value.HasSourceType && value.SourceType.IsNumeric()) ||
 							(value.HasRuntimeType && value.RuntimeType.IsNumeric())) {
 						return e, nil
@@ -3477,7 +3476,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					stringType := types.T_varchar.ToType()
 					rewrittenArg.Typ = makePlan2Type(&stringType)
 				} else if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
-					param.Value != nil && param.PrepareParamKind != vector.PrepareParamNone {
+					param.Value != nil && param.PrepareParamKind != types.StringConversionString {
 					// SQL EXECUTE still materializes the value through a text
 					// transport literal. Recreate the assignment-time numeric
 					// literal before rebinding, otherwise the already-selected unit
@@ -4035,6 +4034,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			runtimeType := preparedNumericComparisonTextType()
 			return makePlan2CastExpr(rule.ctx, param, makePlan2Type(&runtimeType))
 		}
+		// A marker bound to a non-string source type receives the TEXT
+		// transport literal. Cast it to that type instead of relabeling the
+		// string literal, so folding and EXPLAIN see a value of the bound type.
+		if param.Typ.Id == int32(types.T_text) && param.GetLit() != nil &&
+			e.Typ.Id != int32(types.T_any) && !types.T(e.Typ.Id).IsMySQLString() {
+			return makePlan2CastExpr(rule.ctx, param, e.Typ)
+		}
 		typ := e.Typ
 		// Most prepared parameters are intentionally replaced as TEXT to retain
 		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
@@ -4127,7 +4133,7 @@ func preparedParamValueUsesStringDomain(value any) bool {
 	// assignment-time PrepareParamKind is the stronger signal: a numeric user
 	// variable must keep the legacy SRID overload even when the marker itself
 	// was provisionally typed VARCHAR during PREPARE.
-	if !param.IsBinaryProtocol && param.PrepareParamKind != vector.PrepareParamNone {
+	if !param.IsBinaryProtocol && param.PrepareParamKind != types.StringConversionString {
 		return false
 	}
 	// SQL EXECUTE transports user variables through a TEXT vector. When the
@@ -4138,7 +4144,7 @@ func preparedParamValueUsesStringDomain(value any) bool {
 		return isStringBackedType(param.RuntimeType)
 	}
 	if param.HasSourceType {
-		if param.SourceType.Oid == types.T_text && param.PrepareParamKind != vector.PrepareParamNone {
+		if param.SourceType.Oid == types.T_text && param.PrepareParamKind != types.StringConversionString {
 			return false
 		}
 		return isStringBackedType(param.SourceType)
@@ -4150,9 +4156,9 @@ func preparedParamValueUsesStringDomain(value any) bool {
 		return false
 	}
 	if param.IsBinaryProtocol {
-		return param.PrepareParamKind == vector.PrepareParamNone
+		return param.PrepareParamKind == types.StringConversionString
 	}
-	return param.PrepareParamKind == vector.PrepareParamNone
+	return param.PrepareParamKind == types.StringConversionString
 }
 
 // preparedComparisonExactIntegerExpr keeps an exact integral text prefix in
@@ -5146,7 +5152,7 @@ func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool
 	if !ok || param.Value == nil {
 		return nil, false, nil
 	}
-	comStmtText := param.IsBinaryProtocol && param.PrepareParamKind == vector.PrepareParamNone &&
+	comStmtText := param.IsBinaryProtocol && param.PrepareParamKind == types.StringConversionString &&
 		(param.Value != nil || param.HasRuntimeType)
 	if !(param.HasSourceType && isStringBackedType(param.SourceType)) &&
 		!(param.HasRuntimeType && isStringBackedType(param.RuntimeType)) && !comStmtText {

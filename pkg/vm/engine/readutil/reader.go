@@ -1045,7 +1045,7 @@ func (r *reader) read(
 			// Reuse the detached distVec when possible to avoid per-batch allocation.
 			distVec := detachedDistVec
 			if distVec == nil {
-				distVec = vector.NewVec(types.T_float64.ToType())
+				distVec = vector.NewVec(types.T_float64.ToType(), mp)
 			}
 			detachedDistVec = nil
 			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {

@@ -1079,6 +1079,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Ignored:      ignored,
 		}
 	case *projection.Projection:
+		if t.ValuesWarningRow != 0 {
+			return -1, nil, moerr.NewInternalError(proc.Ctx, "VALUES warning projection must run on the coordinator")
+		}
 		in.ProjectList = t.ProjectList
 		in.ProjectionGroupingFlags = t.GroupingFlags
 		in.ProjectionGroupingSetCount = int32(t.GroupingSetCount)
@@ -1917,7 +1920,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = value_scan.NewArgument()
 		op.(*value_scan.ValueScan).ProjectList = opr.ProjectList
 		if len(opr.ValueScan.BatchBlock) > 0 {
-			bat := batch.NewOffHeapEmpty()
+			bat := batch.NewWithSize(0)
 			if err := types.Decode([]byte(opr.ValueScan.BatchBlock), bat); err != nil {
 				return nil, err
 			}
@@ -3335,7 +3338,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
-	bat := batch.NewOffHeapEmpty()
+	bat := batch.NewWithSize(0)
 	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err

@@ -49,7 +49,7 @@ var benchSizes = []int{100000, 1000000, 10000000, 20000000}
 
 // makeInt64Vec builds an int64 doc_id vector of n distinct (odd) keys.
 func makeInt64Vec(tb testing.TB, mp *mpool.MPool, n int) *vector.Vector {
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < n; i++ {
 		if err := vector.AppendFixed(v, int64(2*i+1), false, mp); err != nil {
 			tb.Fatal(err)
@@ -62,7 +62,7 @@ func makeInt64Vec(tb testing.TB, mp *mpool.MPool, n int) *vector.Vector {
 // filter) and half absent (even, not in the filter) — a realistic 50% hit mix
 // for a block scan.
 func makeProbeVec(tb testing.TB, mp *mpool.MPool, rows int) *vector.Vector {
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < rows; i++ {
 		val := int64(2*i + 1) // odd: present
 		if i%2 == 0 {
@@ -278,7 +278,7 @@ func BenchmarkSparseExact(b *testing.B) {
 		probeRows = 8192
 	)
 	mp := mpool.MustNewZero()
-	keyvec := vector.NewVec(types.T_uint64.ToType())
+	keyvec := vector.NewVec(types.T_uint64.ToType(), mp)
 	for i := range keys {
 		value := uint64(i)<<32 | uint64(2*i+1)
 		if err := vector.AppendFixed(keyvec, value, false, mp); err != nil {
@@ -287,7 +287,7 @@ func BenchmarkSparseExact(b *testing.B) {
 	}
 	defer keyvec.Free(mp)
 
-	probe := vector.NewVec(types.T_uint64.ToType())
+	probe := vector.NewVec(types.T_uint64.ToType(), mp)
 	for i := range probeRows {
 		idx := i % keys
 		value := uint64(idx)<<32 | uint64(2*idx+1)
@@ -354,7 +354,7 @@ func BenchmarkSparseExact(b *testing.B) {
 // runLen between runs, ~50% global density). Contiguous runs are run_optimize's
 // sweet spot (e.g. a BETWEEN range or a sequential-PK slice).
 func makeClusteredVec(tb testing.TB, mp *mpool.MPool, runs, runLen int) *vector.Vector {
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	for r := 0; r < runs; r++ {
 		base := int64(r) * int64(2*runLen)
 		for j := 0; j < runLen; j++ {
@@ -433,7 +433,7 @@ func BenchmarkTestVectorRunOpt(b *testing.B) {
 		}
 		// Spread probes across the whole range so many containers are touched
 		// (≈50% hit, since runs occupy ~half the range).
-		probe := vector.NewVec(types.T_int64.ToType())
+		probe := vector.NewVec(types.T_int64.ToType(), mp)
 		for i := 0; i < probeRows; i++ {
 			if err := vector.AppendFixed(probe, int64(i)*step, false, mp); err != nil {
 				b.Fatal(err)
@@ -478,7 +478,7 @@ func BenchmarkCbitmapOffset(b *testing.B) {
 	mp := mpool.MustNewZero()
 	const count = 1000 // span = 2*count = 2000, regardless of base
 	for _, base := range []int64{1_000_000, 10_000_000, 100_000_000} {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), mp)
 		for i := 0; i < count; i++ {
 			if err := vector.AppendFixed(v, base+int64(i*2), false, mp); err != nil {
 				b.Fatal(err)
@@ -524,14 +524,14 @@ func BenchmarkTestVectorOffset(b *testing.B) {
 	const count = 1000
 	const probeRows = 8192
 	for _, base := range []int64{1_000_000, 10_000_000, 100_000_000} {
-		v := vector.NewVec(types.T_int64.ToType())
+		v := vector.NewVec(types.T_int64.ToType(), mp)
 		for i := 0; i < count; i++ {
 			if err := vector.AppendFixed(v, base+int64(i*2), false, mp); err != nil {
 				b.Fatal(err)
 			}
 		}
 		// probe spans [base, base+probeRows): even offsets < 2*count hit, rest miss.
-		probe := vector.NewVec(types.T_int64.ToType())
+		probe := vector.NewVec(types.T_int64.ToType(), mp)
 		for i := 0; i < probeRows; i++ {
 			if err := vector.AppendFixed(probe, base+int64(i), false, mp); err != nil {
 				b.Fatal(err)

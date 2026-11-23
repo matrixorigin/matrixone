@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -42,8 +41,10 @@ const (
 )
 
 type container struct {
-	state               int
-	buf                 *batch.Batch
+	state int
+	buf   *batch.Batch
+	// bufMP is the pool buf was created with (the runtime-filter view).
+	bufMP               *mpool.MPool
 	runtimeFilterUsable bool
 	runtimeFilterDone   bool
 }
@@ -52,7 +53,7 @@ type IndexBuild struct {
 	ctr                     container
 	RuntimeFilterSpec       *plan.RuntimeFilterSpec
 	allocationAccount       *mpool.AllocationAccount
-	runtimeFilterAllocation *vector.AllocationAccountSelection
+	runtimeFilterAllocation *mpool.AccountBinding
 	vm.OperatorBase
 }
 
@@ -68,11 +69,10 @@ func (indexBuild *IndexBuild) SetAllocationAccount(
 		}
 		return mpool.ErrAllocationAccountMismatch
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerIndexBuild,
 		indexBuildAllocationSiteRuntimeFilterData,
-		indexBuildAllocationSiteRuntimeFilterArea,
 	)
 	if err != nil {
 		return err
@@ -147,14 +147,16 @@ func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, 
 	indexBuild.ctr.state = ReceiveBatch
 	indexBuild.ctr.runtimeFilterUsable = false
 	if indexBuild.ctr.buf != nil {
-		indexBuild.ctr.buf.Clean(proc.Mp())
+		indexBuild.ctr.buf.Clean(indexBuild.ctr.bufMP)
 		indexBuild.ctr.buf = nil
+		indexBuild.ctr.bufMP = nil
 	}
 }
 
 func (indexBuild *IndexBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if indexBuild.ctr.buf != nil {
-		indexBuild.ctr.buf.Clean(proc.Mp())
+		indexBuild.ctr.buf.Clean(indexBuild.ctr.bufMP)
 		indexBuild.ctr.buf = nil
+		indexBuild.ctr.bufMP = nil
 	}
 }

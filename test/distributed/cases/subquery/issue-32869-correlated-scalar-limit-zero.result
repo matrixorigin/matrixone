@@ -1,0 +1,450 @@
+drop user if exists issue_32869_reader;
+drop role if exists issue_32869_role;
+drop database if exists test_issue_32869;
+create database test_issue_32869;
+use test_issue_32869;
+create table outer_rows (a int);
+create table inner_rows (d int);
+create table restricted_wrapper (d int);
+insert into outer_rows values (1), (1), (11), (null);
+insert into inner_rows values (4), (99);
+insert into restricted_wrapper values (4);
+create function issue_32869_identity(x int) returns int language sql as '$1';
+create function issue_32869_identity_query(x int) returns int language sql as 'select $1';
+create function issue_32869_add_twice(x int) returns int language sql as '$1 + $1';
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 0) as filtered_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  filtered_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a from inner_rows i where i.d > o.a + 1 limit 0) as arithmetic_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  arithmetic_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a from inner_rows limit 0) as unfiltered_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  unfiltered_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a as inner_alias from inner_rows limit 0) as aliased_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  aliased_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select cast(o.a as signed) from inner_rows i order by i.d limit 0) as sorted_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  sorted_zero[-5,64,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 0 offset 1) as offset_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  offset_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select cast(concat(o.a, char(120)) as signed) from inner_rows limit 0) as value_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  value_zero[-5,64,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, (select o.a as alias_value from inner_rows i where i.d > o.a order by i.d limit 0) as alias_order_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  alias_order_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+with unused as (select 1) select o.a,
+(select o.a from inner_rows i where i.d > o.a limit 0) as cte_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  cte_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+with inner_rows as (select 0 as d) select o.a,
+(select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as qualified_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  qualified_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+with unused as (select 1) select o.a,
+(select o.a from inner_rows i where i.d > o.a limit 1) as cte_positive
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  cte_positive[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+11  ¦  11
+select o.a, issue_32869_identity((select (select o.d from inner_rows i limit 0) from inner_rows o limit 1)) as identity_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  identity_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, issue_32869_identity((select o.a from inner_rows i where i.d > o.a limit 0)) as direct_identity_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  direct_identity_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, issue_32869_identity_query((select o.a from inner_rows i where i.d > o.a limit 0)) as query_identity_zero
+from outer_rows o order by o.a;
+SQL UDF query body with a correlated scalar LIMIT 0 argument is not yet implemented
+select o.a, issue_32869_add_twice((select o.a from inner_rows i where i.d > o.a limit 0)) as repeated_argument_zero
+from outer_rows o order by o.a;
+SQL UDF with a repeated correlated scalar LIMIT 0 argument is not yet implemented
+select o.a, (select o.a from inner_rows i where i.d > o.a limit 1) as positive_limit
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  positive_limit[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+11  ¦  11
+select (select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_scalar,
+exists(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_exists;
+➤ control_scalar[12,65535,0]  ¦  control_exists[-6,8,0]  𝄀
+null  ¦  0
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+➤ control_wrapper[12,65535,0]  𝄀
+null
+select (select count(*) from (select d from inner_rows limit 0) q) as nested_count;
+➤ nested_count[-5,64,0]  𝄀
+0
+select null + (select (select c.d from inner_rows r where r.d > c.d limit 0) from restricted_wrapper c limit 1) from outer_rows;
+➤ null + (select (select c.d from inner_rows as r where r.d > c.d limit 0) from restricted_wrapper as c limit 1)[0,2147483647,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+select null + (select null + (select c.d from inner_rows r where r.d > c.d limit 0) from restricted_wrapper c limit 1) from outer_rows;
+➤ null + (select null + (select c.d from inner_rows as r where r.d > c.d limit 0) from restricted_wrapper as c limit 1)[0,2147483647,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+create table secret_rows (s int);
+insert into secret_rows values (5);
+create view issue_32869_view as
+select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
+select * from issue_32869_view order by a;
+➤ a[4,32,0]  ¦  v[-5,22,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+alter view issue_32869_view as
+select o.a, cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) as v from outer_rows o;
+select * from issue_32869_view order by a;
+➤ a[4,32,0]  ¦  v[-5,22,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a from outer_rows o
+window unused_w as (order by null + (select o.a from inner_rows i where i.d > o.a limit 0));
+➤ a[4,32,0]  𝄀
+1  𝄀
+1  𝄀
+11  𝄀
+null
+create view issue_32869_udf_view as
+select o.a, issue_32869_identity(null +
+(select (select i.d from secret_rows s where s.s > i.d limit 0)
+from inner_rows i limit 1)) as v
+from outer_rows o;
+select v from issue_32869_udf_view;
+➤ v[0,2147483647,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+select o.a from outer_rows o
+window unused_w as (order by issue_32869_identity(null +
+(select (select i.d from secret_rows s where s.s > i.d limit 0)
+from inner_rows i limit 1)))
+order by o.a;
+➤ a[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+1  𝄀
+11
+create table issue_32869_dml (a int);
+insert into issue_32869_dml select null + (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o;
+select count(*) as rows_inserted, count(a) as nonnull from issue_32869_dml;
+➤ rows_inserted[-5,64,0]  ¦  nonnull[-5,64,0]  𝄀
+4  ¦  0
+update issue_32869_dml d set a = null + (select d.a from inner_rows i where i.d > d.a limit 0);
+select count(*) as rows_updated, count(a) as nonnull from issue_32869_dml;
+➤ rows_updated[-5,64,0]  ¦  nonnull[-5,64,0]  𝄀
+4  ¦  0
+create table issue_32869_ctas as select cast(null + (select o.a from inner_rows i where i.d > o.a limit 0) as signed) as a from outer_rows o;
+select count(*) as rows_copied, count(a) as nonnull from issue_32869_ctas;
+➤ rows_copied[-5,64,0]  ¦  nonnull[-5,64,0]  𝄀
+4  ¦  0
+select null + (select o.a from secret_rows s where s.s > o.a limit 0)
+from outer_rows o;
+➤ null + (select o.a from secret_rows as s where s.s > o.a limit 0)[0,2147483647,0]  𝄀
+null  𝄀
+null  𝄀
+null  𝄀
+null
+create function issue_32869_keep_second(x int, y int) returns int language sql as '$2';
+select o.a, issue_32869_identity((select o.a from secret_rows s where s.s > o.a limit 0)) as identity_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  identity_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a, issue_32869_identity(
+(select (select i.d from secret_rows s where s.s > i.d limit 0)
+from inner_rows i limit 1)
+) as nested_identity_zero from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  nested_identity_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+select o.a,
+(select (select i.d from secret_rows s where s.s > i.d limit 0)
+from inner_rows i limit 1) as nested_direct_zero
+from outer_rows o order by o.a;
+➤ a[4,32,0]  ¦  nested_direct_zero[4,32,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  null  𝄀
+1  ¦  null  𝄀
+11  ¦  null
+create role issue_32869_role;
+create user issue_32869_reader identified by '111' default role issue_32869_role;
+grant connect on account * to issue_32869_role;
+grant select on table test_issue_32869.outer_rows to issue_32869_role;
+grant select on table test_issue_32869.inner_rows to issue_32869_role;
+grant insert on table test_issue_32869.issue_32869_dml to issue_32869_role;
+grant issue_32869_role to dump;
+set save_query_result = on;
+/* save_result */ select s as a from secret_rows;
+➤ a[4,32,0]  𝄀
+5
+set @issue_32869_saved = last_query_id();
+select (select (select q.a from inner_rows i where i.d > q.a limit 0)
+from result_scan(@issue_32869_saved) q limit 1) as live_saved;
+➤ live_saved[4,32,0]  𝄀
+null
+set role issue_32869_role;
+select * from result_scan(@issue_32869_saved) q;
+internal error: do not have privilege to execute the statement
+select null + (select (select q.a from test_issue_32869.inner_rows i where i.d > q.a limit 0)
+from result_scan(@issue_32869_saved) q limit 1) as folded_saved;
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+select * from meta_scan(@issue_32869_saved) q;
+internal error: do not have privilege to execute the statement
+select null + (select (select q.account_id from test_issue_32869.inner_rows i where i.d > q.account_id limit 0)
+from meta_scan(@issue_32869_saved) q limit 1) as folded_meta;
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by (select null + (select q.a from test_issue_32869.inner_rows r where r.d > q.a limit 0)
+from result_scan(@issue_32869_saved) q limit 1));
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by null + (select i.d from test_issue_32869.inner_rows r where r.d > i.d limit 0),
+(select q.a from result_scan(@issue_32869_saved) q limit 1));
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+select i.d from test_issue_32869.inner_rows i
+window unused_w as (order by issue_32869_identity(null +
+(select (select w.a from test_issue_32869.inner_rows r where r.d > w.a limit 0)
+from test_issue_32869.outer_rows w limit 1)),
+(select q.a from result_scan(@issue_32869_saved) q limit 1));
+special source in correlated scalar LIMIT 0 wrapper is not yet implemented
+set role moadmin;
+set save_query_result = off;
+use test_issue_32869;
+select a from outer_rows order by a;
+➤ a[4,32,0]  𝄀
+null  𝄀
+1  𝄀
+1  𝄀
+11
+select (select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_scalar;
+internal error: do not have privilege to execute the statement
+select exists(select mo_ctl('cn', 'GetProtocolVersion', '') limit 0) as control_exists;
+internal error: do not have privilege to execute the statement
+select (select mo_ctl('cn', 'GetProtocolVersion', '') from outer_rows o
+where (select o.a from inner_rows i where i.d > o.a limit 0) is null limit 0) as control_wrapper;
+internal error: do not have privilege to execute the statement
+insert into test_issue_32869.issue_32869_dml
+select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
+from test_issue_32869.outer_rows o;
+internal error: do not have privilege to execute the statement
+select o.a from test_issue_32869.outer_rows o
+window unused_w as (order by null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0));
+internal error: do not have privilege to execute the statement
+select null + (select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0)
+from test_issue_32869.outer_rows o;
+internal error: do not have privilege to execute the statement
+select o.a from test_issue_32869.outer_rows o
+window unused_w as (order by issue_32869_identity(null +
+(select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+from test_issue_32869.inner_rows i limit 1)));
+internal error: do not have privilege to execute the statement
+select o.a from test_issue_32869.outer_rows o
+window unused_w as (order by issue_32869_identity(null +
+(select null + (select i.d from test_issue_32869.inner_rows s where s.d > i.d limit 0)
+from test_issue_32869.restricted_wrapper i limit 1)));
+internal error: do not have privilege to execute the statement
+select null + (select null + (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0)
+from test_issue_32869.restricted_wrapper c limit 1)
+from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select (select o.a from test_issue_32869.inner_rows i where i.d > o.a limit 0) as root_zero
+from test_issue_32869.outer_rows o
+window unused_w as (order by (select s from test_issue_32869.secret_rows limit 1));
+internal error: do not have privilege to execute the statement
+select issue_32869_keep_second(
+(select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+from test_issue_32869.inner_rows o limit 1),
+a
+) from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select (select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+from test_issue_32869.inner_rows i limit 1)
+from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select (select (select i.d from test_issue_32869.inner_rows s where s.d > i.d limit 0)
+from test_issue_32869.restricted_wrapper i limit 1)
+from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select issue_32869_keep_second(
+(select (select o.d from test_issue_32869.inner_rows s where s.d > o.d limit 0)
+from test_issue_32869.restricted_wrapper o limit 1),
+a
+) from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select issue_32869_keep_second(
+(select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+from test_issue_32869.inner_rows o
+union all select 5 limit 1),
+a
+) from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select cast(null as signed) + (select (select c.d from test_issue_32869.inner_rows r where r.d > c.d limit 0) from test_issue_32869.restricted_wrapper c limit 1) from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select issue_32869_identity((select o.a from test_issue_32869.secret_rows s where s.s > o.a limit 0))
+from test_issue_32869.outer_rows o;
+internal error: do not have privilege to execute the statement
+select issue_32869_identity(
+(select (select o.d from test_issue_32869.secret_rows s where s.s > o.d limit 0)
+from test_issue_32869.inner_rows o limit 1)
+) from test_issue_32869.outer_rows;
+internal error: do not have privilege to execute the statement
+select issue_32869_identity(cast(null as signed) +
+(select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+from test_issue_32869.inner_rows i limit 1)) as folded_identity;
+internal error: do not have privilege to execute the statement
+select issue_32869_identity(cast(null as signed) +
+(select (select i.d from test_issue_32869.inner_rows s where s.d > i.d limit 0)
+from test_issue_32869.restricted_wrapper i limit 1)) as folded_identity;
+internal error: do not have privilege to execute the statement
+select issue_32869_keep_second(cast(null as signed) +
+(select (select i.d from inner_rows s where s.d > i.d limit 0)
+from restricted_wrapper i limit 1), 42) as folded_discarded_wrapper;
+internal error: do not have privilege to execute the statement
+select issue_32869_keep_second(cast(null as signed) +
+(select (select i.d from test_issue_32869.secret_rows s where s.s > i.d limit 0)
+from test_issue_32869.inner_rows i limit 1), 42) as folded_discarded_wrapper;
+internal error: do not have privilege to execute the statement
+select s from test_issue_32869.secret_rows;
+internal error: do not have privilege to execute the statement
+drop user issue_32869_reader;
+drop role issue_32869_role;
+use test_issue_32869;
+create function issue_32869_constant_expr(x int) returns int language sql as '11';
+create function issue_32869_constant_query(x int) returns int language sql as 'select 12';
+create function issue_32869_constant_mixed(x int, y int) returns int language sql as 'select $2';
+select issue_32869_constant_expr((select o.a from inner_rows i where i.d > o.a limit 0)) as expr_value,
+issue_32869_constant_query((select o.a from inner_rows i where i.d > o.a limit 0)) as query_value,
+issue_32869_constant_mixed((select o.a from inner_rows i where i.d > o.a limit 0), 13) as mixed_value
+from outer_rows o where o.a = 11;
+➤ expr_value[-5,64,0]  ¦  query_value[-5,64,0]  ¦  mixed_value[-5,64,0]  𝄀
+11  ¦  12  ¦  13
+create function issue_32869_hex(x int) returns varchar(1) language sql as 'X''31''';
+prepare issue_32869_set_hex from 'set @hex_answer = issue_32869_hex((select d from inner_rows)), @scalar_answer = (select X''31'')';
+execute issue_32869_set_hex;
+select @hex_answer + 0 as hex_value, @scalar_answer + 0 as scalar_value;
+➤ hex_value[8,53,31]  ¦  scalar_value[8,53,31]  𝄀
+49.0  ¦  1.0
+deallocate prepare issue_32869_set_hex;
+prepare issue_32869_set_lazy from 'set @answer = case when exists(select 1 from outer_rows) then 7 else (select (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o) end';
+execute issue_32869_set_lazy;
+select @answer;
+➤ @answer[-5,64,0]  𝄀
+7
+deallocate prepare issue_32869_set_lazy;
+prepare issue_32869_set_replay from 'set @answer = case when not exists(select 1 from outer_rows where a = ?) then ? + (select (select i.d from secret_rows s where s.s > i.d limit 0) from inner_rows i limit 1) else 7 end';
+set @condition = 1, @nullable = null;
+execute issue_32869_set_replay using @condition, @nullable;
+select @answer;
+➤ @answer[8,53,31]  𝄀
+7.0
+set @condition = 999, @nullable = null;
+execute issue_32869_set_replay using @condition, @nullable;
+select @answer;
+➤ @answer[8,53,31]  𝄀
+null
+deallocate prepare issue_32869_set_replay;
+prepare issue_32869_set_decimal from 'set @decimal_answer = round((select cast(1.23 as decimal(4,2))), ?)';
+set @decimal_digits = 1;
+execute issue_32869_set_decimal using @decimal_digits;
+select @decimal_answer;
+➤ @decimal_answer[3,5,2]  𝄀
+1.20
+deallocate prepare issue_32869_set_decimal;
+select issue_32869_identity(cast(null as signed) +
+(select (select i.d from inner_rows s where s.d > i.d limit 0)
+from restricted_wrapper i limit 1)) as folded_identity;
+➤ folded_identity[-5,64,0]  𝄀
+null
+prepare issue_32869_set from 'set @before = ?, @answer = 1 + (select case when o.a = 11 then o.a else cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0) end from outer_rows o where o.a = ? limit 1), @after = ?';
+set @v_before = 21, @v_outer = 1, @v_after = 23;
+execute issue_32869_set using @v_before, @v_outer, @v_after;
+select @before, @answer, @after;
+➤ @before[12,65535,0]  ¦  @answer[-5,64,0]  ¦  @after[12,65535,0]  𝄀
+21  ¦  null  ¦  23
+set @v_before = 31, @v_outer = 11, @v_after = 33;
+execute issue_32869_set using @v_before, @v_outer, @v_after;
+select @before, @answer, @after;
+➤ @before[12,65535,0]  ¦  @answer[-5,64,0]  ¦  @after[12,65535,0]  𝄀
+31  ¦  12  ¦  33
+deallocate prepare issue_32869_set;
+prepare issue_32869_set_simple_case from 'set @case_answer = case (select (select o.a from inner_rows i where i.d > o.a limit 0) from outer_rows o where o.a = 1 limit 1) when 1 then 11 when 2 then 12 else 13 end';
+execute issue_32869_set_simple_case;
+select @case_answer;
+➤ @case_answer[-5,64,0]  𝄀
+13
+deallocate prepare issue_32869_set_simple_case;
+prepare issue_32869_set_udf_null from 'set @udf_answer = (select issue_32869_identity(cast(null as signed) + (select o.a from inner_rows i where i.d > o.a limit 0)) from outer_rows o where o.a = 1 limit 1)';
+execute issue_32869_set_udf_null;
+select @udf_answer;
+➤ @udf_answer[-5,64,0]  𝄀
+null
+deallocate prepare issue_32869_set_udf_null;
+drop database test_issue_32869;

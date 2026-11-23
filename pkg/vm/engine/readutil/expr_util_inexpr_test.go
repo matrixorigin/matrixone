@@ -31,7 +31,7 @@ func TestConstructInExprPublishesOrderedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	src := vector.NewVec(types.T_int64.ToType())
+	src := vector.NewVec(types.T_int64.ToType(), mp)
 	defer src.Free(mp)
 	for _, n := range []int64{30, 10, 20} {
 		require.NoError(t, vector.AppendFixed(src, n, false, mp))
@@ -43,7 +43,7 @@ func TestConstructInExprPublishesOrderedPayload(t *testing.T) {
 	literal := expr.GetF().Args[1].GetVec()
 	require.NotNil(t, literal)
 
-	got := vector.NewVec(types.T_any.ToType())
+	got := vector.NewVec(types.T_any.ToType(), mp)
 	defer got.Free(mp)
 	require.NoError(t, got.UnmarshalBinary(literal.Data))
 
@@ -59,7 +59,7 @@ func TestConstructInExprDoesNotReorderCallerVector(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	src := vector.NewVec(types.T_int64.ToType())
+	src := vector.NewVec(types.T_int64.ToType(), mp)
 	defer src.Free(mp)
 	for _, n := range []int64{30, 10, 20} {
 		require.NoError(t, vector.AppendFixed(src, n, false, mp))
@@ -78,7 +78,7 @@ func TestConstructInExprLenMatchesCompactedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	src := vector.NewVec(types.T_int64.ToType())
+	src := vector.NewVec(types.T_int64.ToType(), mp)
 	defer src.Free(mp)
 	for _, n := range []int64{7, 3, 7, 3, 5} {
 		require.NoError(t, vector.AppendFixed(src, n, false, mp))
@@ -88,7 +88,7 @@ func TestConstructInExprLenMatchesCompactedPayload(t *testing.T) {
 	require.NoError(t, err)
 	literal := expr.GetF().Args[1].GetVec()
 
-	got := vector.NewVec(types.T_any.ToType())
+	got := vector.NewVec(types.T_any.ToType(), mp)
 	defer got.Free(mp)
 	require.NoError(t, got.UnmarshalBinary(literal.Data))
 	require.Equal(t, []int64{3, 5, 7}, vector.MustFixedColWithTypeCheck[int64](got))
@@ -99,7 +99,7 @@ func TestNormalizeInPayloadOrdersAndFlags(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	src := vector.NewVec(types.T_int64.ToType())
+	src := vector.NewVec(types.T_int64.ToType(), mp)
 	defer src.Free(mp)
 	for _, n := range []int64{9, 2, 9, 5} {
 		require.NoError(t, vector.AppendFixed(src, n, false, mp))
@@ -111,7 +111,7 @@ func TestNormalizeInPayloadOrdersAndFlags(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, length, "duplicates are compacted")
 
-	got := vector.NewVec(types.T_any.ToType())
+	got := vector.NewVec(types.T_any.ToType(), mp)
 	defer got.Free(mp)
 	require.NoError(t, got.UnmarshalBinary(out))
 	require.True(t, got.GetSorted())
@@ -133,7 +133,7 @@ func TestConstructInExprPreservesNullablePayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	src := vector.NewVec(types.T_int64.ToType())
+	src := vector.NewVec(types.T_int64.ToType(), mp)
 	defer src.Free(mp)
 	// The duplicate matters: without it compaction never fires and only the
 	// misalignment shows. With it, an unguarded sort rebuilds the vector through
@@ -148,7 +148,7 @@ func TestConstructInExprPreservesNullablePayload(t *testing.T) {
 	literal := expr.GetF().Args[1].GetVec()
 	require.NotNil(t, literal)
 
-	got := vector.NewVec(types.T_any.ToType())
+	got := vector.NewVec(types.T_any.ToType(), mp)
 	defer got.Free(mp)
 	require.NoError(t, got.UnmarshalBinary(literal.Data))
 
@@ -166,7 +166,7 @@ func TestConstructInExprPreservesNullablePayload(t *testing.T) {
 func TestNormalizationTemporaryPoolIsReleased(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input, []int64{3, 1, 3}, nil, mp))
 	data, err := input.MarshalBinary()
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestNormalizationTemporaryPoolIsReleased(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 	require.Equal(t, 2, length)
 	require.Equal(t, before, data)
-	decoded := vector.NewVec(types.T_any.ToType())
+	decoded := vector.NewVec(types.T_any.ToType(), mp)
 	require.NoError(t, decoded.UnmarshalBinary(encoded))
 	require.Equal(t, []int64{1, 3}, vector.MustFixedColNoTypeCheck[int64](decoded))
 	decoded.Free(mp)

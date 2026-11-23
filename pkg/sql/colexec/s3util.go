@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -48,9 +47,11 @@ const (
 )
 
 type CNS3Writer struct {
-	sinker              *ioutil.Sinker
-	isTombstone         bool
-	blockInfoBat        *batch.Batch
+	sinker       *ioutil.Sinker
+	isTombstone  bool
+	blockInfoBat *batch.Batch
+	// blockInfoMP is the pool blockInfoBat was created with.
+	blockInfoMP         *mpool.MPool
 	memorySizeThreshold int
 }
 
@@ -134,7 +135,7 @@ func newCNS3TombstoneWriter(
 		opts...,
 	)
 
-	writer.ResetBlockInfoBat()
+	writer.ResetBlockInfoBat(mp)
 
 	return writer
 }
@@ -272,7 +273,7 @@ func newCNS3DataWriter(
 		sinkerOpts...,
 	)
 
-	writer.ResetBlockInfoBat()
+	writer.ResetBlockInfoBat(mp)
 
 	return writer
 }
@@ -355,19 +356,19 @@ func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, er
 	return
 }
 
-func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch, error) {
+func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context, mp *mpool.MPool) (*batch.Batch, error) {
 	stats, _, err := w.sinker.SyncAndTakeResults(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	w.ResetBlockInfoBat()
+	w.ResetBlockInfoBat(mp)
 	if len(stats) == 0 {
 		return w.blockInfoBat, nil
 	}
 
 	if err = ExpandObjectStatsToBatch(
-		w.sinker.GetMPool(),
+		w.blockInfoMP,
 		w.isTombstone,
 		w.blockInfoBat,
 		true,
@@ -380,16 +381,14 @@ func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch,
 }
 
 func (w *CNS3Writer) Close() (err error) {
-	var mp *mpool.MPool
 	if w.sinker != nil {
-		mp = w.sinker.GetMPool()
 		err = w.sinker.Close()
 		w.sinker = nil
 	}
 
 	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(mp)
-		w.blockInfoBat = nil
+		w.blockInfoBat.Clean(w.blockInfoMP)
+		w.blockInfoBat, w.blockInfoMP = nil, nil
 	}
 
 	return err
@@ -594,14 +593,14 @@ func ExpandObjectStatsToBatch(
 	return nil
 }
 
-func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
+func (w *CNS3Writer) FillBlockInfoBat(mp *mpool.MPool) (*batch.Batch, error) {
 
-	w.ResetBlockInfoBat()
+	w.ResetBlockInfoBat(mp)
 
 	result, _ := w.sinker.GetResult()
 
 	if err := ExpandObjectStatsToBatch(
-		w.sinker.GetMPool(),
+		w.blockInfoMP,
 		w.isTombstone,
 		w.blockInfoBat,
 		true,
@@ -615,6 +614,7 @@ func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
 
 func AllocCNS3ResultBat(
 	isTombstone bool,
+	mp *mpool.MPool,
 ) *batch.Batch {
 
 	var (
@@ -636,19 +636,25 @@ func AllocCNS3ResultBat(
 	blockInfoBat.Attrs = attrs
 
 	for i := range attrs {
-		blockInfoBat.Vecs[i] = vector.NewVec(attrTypes[i])
+		blockInfoBat.Vecs[i] = vector.NewVec(attrTypes[i], mp)
 	}
 
 	return blockInfoBat
 }
 
-func (w *CNS3Writer) ResetBlockInfoBat() {
-
-	if w.blockInfoBat != nil {
+// ResetBlockInfoBat prepares an empty block-info batch of mp. A batch kept
+// from an earlier call with another pool is replaced, since the caller fills
+// it through mp.
+func (w *CNS3Writer) ResetBlockInfoBat(mp *mpool.MPool) {
+	if w.blockInfoBat != nil && w.blockInfoMP == mp {
 		w.blockInfoBat.CleanOnlyData()
-	} else {
-		w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone)
+		return
 	}
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.Clean(w.blockInfoMP)
+	}
+	w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone, mp)
+	w.blockInfoMP = mp
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
@@ -662,7 +668,7 @@ func SortByKey(
 
 	hasNull := false
 	// Not-Null Check, notice that cluster by support null value
-	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
+	if bat.Vecs[sortIndex].GetNulls().Any() {
 		hasNull = true
 		if !allow_null {
 			return moerr.NewConstraintViolationf(proc.Ctx,
@@ -671,10 +677,7 @@ func SortByKey(
 		}
 	}
 	rowCount := int64(bat.RowCount())
-	sels := vector.GetSels()
-	defer func() {
-		vector.PutSels(sels)
-	}()
+	var sels []int64
 	for i := int64(0); i < rowCount; i++ {
 		sels = append(sels, i)
 	}

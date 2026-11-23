@@ -39,9 +39,12 @@ type orderedStream struct {
 	receiver  *process.PipelineSignalReceiver
 	bat       *batch.Batch
 	orderCols []*vector.Vector
-	ownedCols []bool
-	row       int64
-	ended     bool
+	// ownedMPs[i] is the pool of orderCols[i] when the stream owns it (an
+	// evaluated column whose ownership EvalWithoutResultReusing transferred,
+	// in the executor's pool), nil for a pass-through input column.
+	ownedMPs []*mpool.MPool
+	row      int64
+	ended    bool
 }
 
 type streamContainer struct {
@@ -53,8 +56,10 @@ type streamContainer struct {
 	streams       []orderedStream
 	heap          streamHeap
 	output        *batch.Batch
-	primed        bool
-	done          bool
+	// outputMP is the pool output was created with.
+	outputMP *mpool.MPool
+	primed   bool
+	done     bool
 	// A per-instance seam for byte-boundary tests; zero uses the normal window.
 	outputByteLimit int
 }
@@ -165,7 +170,7 @@ func (mergeTop *MergeTop) callStream(
 		return vm.CancelResult, nil
 	}
 	if ctr.output != nil {
-		ctr.output.Clean(proc.Mp())
+		ctr.output.Clean(ctr.outputMP)
 		ctr.output = nil
 	}
 	if ctr.done || ctr.limit == 0 {
@@ -191,8 +196,12 @@ func (mergeTop *MergeTop) callStream(
 
 	first := ctr.streams[ctr.heap.items[0]].bat
 	var err error
-	ctr.output, err = proc.NewBatchFromSrcWithAllocation(
-		first, 0, mergeTop.ctr.retainedAllocation)
+	outputMP, err := mergeTop.ctr.retainedMP(proc)
+	if err != nil {
+		return vm.CancelResult, err
+	}
+	ctr.output, err = proc.NewBatchFromSrcWithAllocation(first, 0, outputMP)
+	ctr.outputMP = outputMP
 	if err != nil {
 		return vm.CancelResult, err
 	}
@@ -212,7 +221,7 @@ func (mergeTop *MergeTop) callStream(
 		chunk := ctr.winnerChunk(winner, int(maxRows)-rows)
 		for col := range ctr.output.Vecs {
 			if err = ctr.output.Vecs[col].UnionBatch(
-				stream.bat.Vecs[col], stream.row, chunk, nil, proc.Mp()); err != nil {
+				stream.bat.Vecs[col], stream.row, chunk, nil, outputMP); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -364,7 +373,7 @@ func (ctr *streamContainer) loadNextBatch(
 		stream.row = 0
 		stream.ended = false
 		stream.orderCols = make([]*vector.Vector, len(ctr.executors))
-		stream.ownedCols = make([]bool, len(ctr.executors))
+		stream.ownedMPs = make([]*mpool.MPool, len(ctr.executors))
 		for i, executor := range ctr.executors {
 			if executor.IsColumnExpr() {
 				col := executor.(*colexec.ColumnExpressionExecutor).GetColIndex()
@@ -383,7 +392,7 @@ func (ctr *streamContainer) loadNextBatch(
 				return evalErr
 			}
 			stream.orderCols[i] = vec
-			stream.ownedCols[i] = true
+			stream.ownedMPs[i] = vec.MPool()
 		}
 		return nil
 	}
@@ -403,12 +412,12 @@ func (ctr *streamContainer) compareRows(left, right int) int {
 
 func (ctr *streamContainer) freeOrderCols(proc *process.Process, stream *orderedStream) {
 	for i, col := range stream.orderCols {
-		if i < len(stream.ownedCols) && stream.ownedCols[i] && col != nil {
-			col.Free(proc.Mp())
+		if i < len(stream.ownedMPs) && stream.ownedMPs[i] != nil && col != nil {
+			col.Free(stream.ownedMPs[i])
 		}
 	}
 	stream.orderCols = nil
-	stream.ownedCols = nil
+	stream.ownedMPs = nil
 }
 
 func (ctr *container) resetStream(
@@ -422,7 +431,7 @@ func (ctr *container) resetStream(
 	s := ctr.stream
 	cleanupDeadline := time.Now().Add(process.PipelineCleanupWaitTimeout)
 	if s.output != nil {
-		s.output.Clean(proc.Mp())
+		s.output.Clean(s.outputMP)
 		s.output = nil
 	}
 	for i := range s.streams {

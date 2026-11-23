@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -56,21 +57,33 @@ func newTxnTableWithItem(
 	process *process.Process,
 	eng engine.Engine,
 ) *txnTable {
+	source := item.SchemaSource()
+	var defs []engine.TableDef
+	var wire []byte
+	if !source.Valid() {
+		var err error
+		defs, err = item.BuildEngineDefs()
+		if err != nil {
+			panic(err)
+		}
+		wire = item.ConstraintBytes()
+	}
 	tbl := &txnTable{
 		db:            db,
 		accountId:     item.AccountId,
 		tableId:       item.Id,
 		version:       item.Version,
 		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
+		source:        source,
+		defs:          defs,
+		tableDef:      item.ReadPlanTableDef(),
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,
 		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
+		constraint:    wire,
 		partitioned:   item.Partitioned,
 		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,
@@ -766,6 +779,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 		)
 	}
 
+	resource.LockReadPKFromContext(ctx).MarkRemotePKSubstagesUnavailable()
 	modify := false
 	keyVector := bat.GetVector(pkIndex)
 	err = tbl.forwardRead(
@@ -891,6 +905,13 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 		return false, err
 	}
 	return modify, nil
+}
+
+func (tbl *txnTableDelegate) ValidatedCatalogKind() (string, bool) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.primary.ValidatedCatalogKind()
+	}
+	return tbl.origin.ValidatedCatalogKind()
 }
 
 func (tbl *txnTableDelegate) TableDefs(
@@ -1042,6 +1063,10 @@ func (tbl *txnTableDelegate) TableColumns(
 		return tbl.combined.tbl.TableColumns(ctx)
 	}
 	return tbl.origin.TableColumns(ctx)
+}
+
+func (tbl *txnTableDelegate) MaxAndMinValuesUsePlannerColumns() bool {
+	return !tbl.combined.is && tbl.origin.MaxAndMinValuesUsePlannerColumns()
 }
 
 func (tbl *txnTableDelegate) MaxAndMinValues(

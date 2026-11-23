@@ -47,7 +47,7 @@ func makeConstArrayVec64(t *testing.T, mp *mpool.MPool, arr []float64, length in
 // makeColArrayVec creates a column vector holding one array per row.
 func makeColArrayVec[T types.RealNumbers](t *testing.T, mp *mpool.MPool, typ types.Type, rows [][]T) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 	for _, row := range rows {
 		require.NoError(t, vector.AppendBytes(v, types.ArrayToBytes[T](row), false, mp))
 	}
@@ -367,7 +367,7 @@ func TestBatchArrayDistanceSync_NullInColumn(t *testing.T) {
 	constVec := makeConstArrayVec[float32](t, mp, query, 3)
 
 	typ := types.T_array_float32.ToType()
-	colVec := vector.NewVec(typ)
+	colVec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendBytes(colVec, types.ArrayToBytes[float32]([]float32{1, 0, 0}), false, mp))
 	require.NoError(t, vector.AppendBytes(colVec, nil, true, mp)) // null row
 	require.NoError(t, vector.AppendBytes(colVec, types.ArrayToBytes[float32]([]float32{0, 1, 0}), false, mp))

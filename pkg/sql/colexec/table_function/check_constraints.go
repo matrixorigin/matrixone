@@ -150,7 +150,7 @@ func (s *checkConstraintsState) start(
 ) error {
 	s.stopStreaming(proc)
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		s.batch.CleanOnlyData()
 	}

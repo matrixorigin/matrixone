@@ -17,10 +17,11 @@ package iceberg
 import (
 	"bytes"
 	"context"
-	"github.com/parquet-go/parquet-go"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 
 	"github.com/stretchr/testify/require"
 
@@ -311,9 +312,9 @@ func TestWriteRuntimeCoordinatorFactoryDispatchesAppendAndDML(t *testing.T) {
 func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "__mo_rowid", "region"})
-	idVec := vector.NewVec(types.T_int64.ToType())
-	hiddenVec := vector.NewVec(types.T_int64.ToType())
-	regionVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	hiddenVec := vector.NewVec(types.T_int64.ToType(), mp)
+	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
 	require.NoError(t, vector.AppendFixed[int64](hiddenVec, 99, false, mp))
 	require.NoError(t, vector.AppendBytes(regionVec, []byte("ksa"), false, mp))
@@ -368,9 +369,9 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 func TestAppendRuntimeVisibleBatchPreservesCaseSensitiveNames(t *testing.T) {
 	bat := batch.New([]string{"ID", "hidden", "id"})
 	bat.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int64.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
+		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
+		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
 	}
 	visible, err := appendRuntimeVisibleBatch([]string{"ID", "id"}, bat)
 	require.NoError(t, err)
@@ -716,9 +717,9 @@ func appendGoldKPIBatch(t *testing.T) (*batch.Batch, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "region", "amount"})
-	idVec := vector.NewVec(types.T_int64.ToType())
-	regionVec := vector.NewVec(types.T_varchar.ToType())
-	amountVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType(), mp)
+	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	amountVec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, row := range []struct {
 		id     int64
 		region string

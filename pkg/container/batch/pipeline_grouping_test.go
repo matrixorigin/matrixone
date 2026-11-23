@@ -30,16 +30,15 @@ func TestPipelineGroupingRoundTrip(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	input := NewWithSize(1)
 	t.Cleanup(func() { input.Clean(mp) })
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{7, 0, 0}, []bool{false, true, true}, mp))
 	input.Vecs[0].GetGrouping().Add(2)
 	input.Attrs = []string{"key"}
 	input.ExtraBuf = []byte{2, 0, 3, 1}
 	input.SetRowCount(3)
-	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
-	data, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	data, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
-	output := NewOffHeapEmpty()
+	output := NewWithSize(0)
 	t.Cleanup(func() { output.Clean(mp) })
 	require.NoError(t, output.UnmarshalBinaryForPipeline(data, mp))
 	require.Equal(t, input.Attrs, output.Attrs)
@@ -49,12 +48,11 @@ func TestPipelineGroupingRoundTrip(t *testing.T) {
 	require.False(t, output.Vecs[0].GetGrouping().Contains(1))
 	require.True(t, output.Vecs[0].IsNull(2))
 	require.True(t, output.Vecs[0].GetGrouping().Contains(2), "remote transport must distinguish ROLLUP NULL from SQL NULL")
-	require.Equal(t, vector.PrepareParamInteger, output.Vecs[0].GetPrepareParamKindAt(0))
 
 	input.Vecs[0].GetGrouping().Reset()
-	plain, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	plain, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
-	legacy, err := input.MarshalBinaryWithPrepareParamKinds(&bytes.Buffer{}, true)
+	legacy, err := input.MarshalBinaryWithBuffer(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	require.Equal(t, legacy, plain, "ordinary batches must retain their legacy wire bytes")
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
@@ -68,10 +66,10 @@ func TestPipelineGroupingConstAndMalformed(t *testing.T) {
 	t.Cleanup(func() { input.Clean(mp) })
 	input.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 3, mp)
 	input.SetRowCount(3)
-	data, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	data, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	t.Run("constant logical rows", func(t *testing.T) {
-		output := NewOffHeapEmpty()
+		output := NewWithSize(0)
 		t.Cleanup(func() { output.Clean(mp) })
 		require.NoError(t, output.UnmarshalBinaryForPipeline(data, mp))
 		for row := uint64(0); row < 3; row++ {
@@ -92,15 +90,15 @@ func TestPipelineGroupingConstAndMalformed(t *testing.T) {
 		{"unknown version", func(b []byte) []byte { b[end+7]++; return b }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			output := NewOffHeapEmpty()
+			output := NewWithSize(0)
 			t.Cleanup(func() { output.Clean(mp) })
 			require.Error(t, output.UnmarshalBinaryForPipeline(tc.mutate(bytes.Clone(data)), mp))
 		})
 	}
 	input.Vecs[0].GetGrouping().Add(3)
-	bad, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	bad, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
-	output := NewOffHeapEmpty()
+	output := NewWithSize(0)
 	t.Cleanup(func() { output.Clean(mp) })
 	require.ErrorContains(t, output.UnmarshalBinaryForPipeline(bad, mp), "exceeds vector length")
 }
@@ -110,13 +108,13 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	input := NewWithSize(1)
 	t.Cleanup(func() { input.Clean(mp) })
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	for _, value := range []string{"one", "two", "three"} {
 		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), false, mp))
 	}
 	input.SetRowCount(3)
 	input.ExtraBuf = []byte(pipelineGroupingMagic)
-	plain, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	plain, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	prefix, err := stableBatchPayloadLength(plain)
 	require.NoError(t, err)
@@ -124,13 +122,13 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	// Magic at the footer candidate position is part of ExtraBuf, not a footer.
 	end := len(plain) - pipelineGroupingFooterSize
 	require.Equal(t, pipelineGroupingMagic, string(plain[end:end+8]))
-	output := NewOffHeapEmpty()
+	output := NewWithSize(0)
 	t.Cleanup(func() { output.Clean(mp) })
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
 	require.Equal(t, input.ExtraBuf, output.ExtraBuf)
 
 	input.Vecs[0].GetGrouping().Add(2)
-	groupOnly, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
+	groupOnly, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	prefix, err = stableBatchPayloadLength(groupOnly)
 	require.NoError(t, err)
@@ -139,28 +137,29 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	require.NoError(t, output.UnmarshalBinaryForPipeline(groupOnly, mp))
 	require.True(t, output.Vecs[0].GetGrouping().Contains(2))
 
-	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
-	require.NoError(t, input.Vecs[0].SetStringSource(types.StringSourceSQLPrepare))
+	// An older writer inserted a version-1 transport trailer between the
+	// stable payload and the grouping section.
+	current := append(legacyV1TransportWire(t, groupOnly[:prefix],
+		[]byte{batchMetadataModeNone | batchMetadataBinaryFlag}), groupOnly[prefix:]...)
 	for _, tc := range []struct {
-		name          string
-		includeSource bool
-		version       byte
+		name    string
+		encoded []byte
+		version byte
 	}{
-		{"v1", false, prepareParamKindBatchVersionV1},
-		{"v2", true, prepareParamKindBatchVersion},
+		{"v1", current, batchMetadataVersionV1},
+		// An older writer's version-2 trailer carries a string-source
+		// section that is validated and dropped.
+		{"v2", legacyV2TransportWire(t, current,
+			legacyUniformStringSource(types.StringSourceSQLPrepare)), batchMetadataVersion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			encoded, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true, tc.includeSource)
-			require.NoError(t, err)
+			encoded := tc.encoded
 			prefix, err := stableBatchPayloadLength(encoded)
 			require.NoError(t, err)
 			require.Equal(t, tc.version, encoded[prefix+3])
 			require.NoError(t, output.UnmarshalBinaryForPipeline(encoded, mp))
 			require.True(t, output.Vecs[0].GetGrouping().Contains(2))
-			require.Equal(t, vector.PrepareParamFloat, output.Vecs[0].GetPrepareParamKindAt(0))
-			if tc.includeSource {
-				require.Equal(t, types.StringSourceSQLPrepare, output.Vecs[0].GetStringSourceAt(0))
-			}
+			requireStringValues(t, output.Vecs[0], "one", "two", "three")
 			end := len(encoded) - pipelineGroupingFooterSize
 			size := binary.LittleEndian.Uint64(encoded[end+8:])
 			crossesStable := bytes.Clone(encoded)
@@ -182,5 +181,5 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	require.Error(t, output.UnmarshalBinaryForPipeline(plain[:len(plain)-1], mp))
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
 	require.False(t, output.HasGrouping())
-	require.Equal(t, vector.PrepareParamNone, output.Vecs[0].GetPrepareParamKindAt(0))
+	requireStringValues(t, output.Vecs[0], "one", "two", "three")
 }

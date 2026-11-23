@@ -31,7 +31,7 @@ func TestVectorWrapper_WriteTo_DirectWrite(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	// Create a simple vector
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	err := vector.AppendFixed(vec, int32(1), false, mp)
@@ -62,7 +62,7 @@ func TestVectorWrapper_WriteTo_DirectWrite(t *testing.T) {
 func TestVectorWrapper_WriteTo_SizeHeader(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 
 	for i := 0; i < 10; i++ {
@@ -89,7 +89,7 @@ func TestVectorWrapper_WriteTo_SizeHeader(t *testing.T) {
 func TestVectorWrapper_WriteTo_NoIntermediateAllocation(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	for i := 0; i < 100; i++ {
@@ -113,7 +113,7 @@ func TestVectorWrapper_WriteTo_NoIntermediateAllocation(t *testing.T) {
 func TestVectorWrapper_WriteToV1_DirectWrite(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	err := vector.AppendFixed(vec, int32(1), false, mp)
@@ -146,7 +146,7 @@ func (e *errorWriter) Write(p []byte) (n int, err error) {
 func TestVectorWrapper_WriteTo_Fallback(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	for i := 0; i < 10; i++ {
@@ -175,7 +175,7 @@ func TestVectorWrapper_WriteTo_Fallback(t *testing.T) {
 func TestVectorWrapper_WriteTo_Error(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	err := vector.AppendFixed(vec, int32(1), false, mp)
@@ -195,7 +195,7 @@ func TestVectorWrapper_WriteTo_Error(t *testing.T) {
 func TestVectorWrapper_WriteTo_BufferGrow(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	// Create a large vector to trigger buffer growth
@@ -224,7 +224,7 @@ func TestVectorWrapper_WriteTo_BufferGrow(t *testing.T) {
 func TestVectorWrapper_WriteTo_SmallEstimatedSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	// Create a small vector (estimated size will be < 256)
@@ -246,7 +246,7 @@ func TestVectorWrapper_WriteTo_SmallEstimatedSize(t *testing.T) {
 func TestVectorWrapper_WriteToV1_Fallback(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	for i := 0; i < 10; i++ {
@@ -275,7 +275,7 @@ func TestVectorWrapper_WriteToV1_Fallback(t *testing.T) {
 func TestVectorWrapper_WriteToV1_Error(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	err := vector.AppendFixed(vec, int32(1), false, mp)
@@ -295,7 +295,7 @@ func TestVectorWrapper_WriteToV1_Error(t *testing.T) {
 func TestVectorWrapper_WriteToV1_BufferGrow(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	// Create a large vector to trigger buffer growth
@@ -324,7 +324,7 @@ func TestVectorWrapper_WriteToV1_BufferGrow(t *testing.T) {
 func TestVectorWrapper_WriteToV1_SmallEstimatedSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	// Create a small vector (estimated size will be < 256)
@@ -346,7 +346,7 @@ func TestVectorWrapper_WriteToV1_SmallEstimatedSize(t *testing.T) {
 func TestVectorWrapper_WriteTo_NoGrowNeeded(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	for i := 0; i < 10; i++ {
@@ -370,7 +370,7 @@ func TestVectorWrapper_WriteTo_NoGrowNeeded(t *testing.T) {
 func TestVectorWrapper_WriteToV1_NoGrowNeeded(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	for i := 0; i < 10; i++ {
@@ -394,7 +394,7 @@ func TestVectorWrapper_WriteToV1_NoGrowNeeded(t *testing.T) {
 func TestVectorWrapper_WriteToV1_WithNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 
 	// Add some values with nulls
@@ -431,7 +431,7 @@ func TestVectorWrapper_WriteToV1_DifferentTypes(t *testing.T) {
 	}
 
 	for _, typ := range testTypes {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		defer vec.Free(mp)
 
 		// Add some data

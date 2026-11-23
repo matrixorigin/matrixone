@@ -79,8 +79,8 @@ func (t *stubTxnExec) Txn() client.TxnOperator { return nil }
 // buildResult constructs executor.Result with two varchar columns.
 func buildResult(dbs, names []string) executor.Result {
 	mp := mpool.MustNewZeroNoFixed()
-	vecDB := vector.NewVec(types.T_varchar.ToType())
-	vecName := vector.NewVec(types.T_varchar.ToType())
+	vecDB := vector.NewVec(types.T_varchar.ToType(), mp)
+	vecName := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, v := range dbs {
 		_ = vector.AppendBytes(vecDB, []byte(v), false, mp)
 	}

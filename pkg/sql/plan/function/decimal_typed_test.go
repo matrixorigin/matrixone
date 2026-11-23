@@ -85,7 +85,7 @@ func TestDecimalArithmeticChunkWidthsAndScales(t *testing.T) {
 						mp := mpool.MustNewZero()
 						t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 						makeVec := func(oid types.T, scale int32, coefficient int64) *vector.Vector {
-							v := vector.NewVec(types.New(oid, 6, scale))
+							v := vector.NewVec(types.New(oid, 6, scale), mp)
 							t.Cleanup(func() { v.Free(mp) })
 							switch oid {
 							case types.T_decimal64:

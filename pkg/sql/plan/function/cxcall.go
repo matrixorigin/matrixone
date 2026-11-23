@@ -133,13 +133,13 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 	}
 
 	resultVec := result.GetResultVector()
-	resultVec.PreExtend(length, proc.Mp())
+	resultVec.PreExtend(length, resultMPool(result, proc))
 	rsNull := resultVec.GetNulls()
 
 	nullsInited := false
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -156,7 +156,7 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 	for _, v := range ivecs {
 		if v.IsConst() {
 			if v.IsConstNull() {
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 				return nil
 			}
 		} else {
@@ -170,7 +170,7 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 		}
 	}
 
-	if err := c_xcall(xcall, proc.Mp(), length, resultVec, ivecs); err != nil {
+	if err := c_xcall(xcall, resultMPool(result, proc), length, resultVec, ivecs); err != nil {
 		return err
 	}
 	// The C kernels accumulate in double and report success whatever comes out, so a result the

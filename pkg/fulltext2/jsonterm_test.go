@@ -532,7 +532,7 @@ func TestStreamJSONProbeMatchesSearch(t *testing.T) {
 	term := JSONStringTerm("foo", "bar")
 	payload := []byte(EncodeJSONProbePayload([]string{term}, nil))
 
-	out := vector.NewVec(types.T_int64.ToType())
+	out := vector.NewVec(types.T_int64.ToType(), mp)
 	err := idx.StreamJSONProbe(payload, TfIdf, nil, false,
 		func(o *vectorindex.SearchOutput) error {
 			e := vectorindex.AppendColumnBuffer(o.Keys, out, mp)
@@ -598,7 +598,7 @@ func TestJSONTupleColumnAcceptsEveryShape(t *testing.T) {
 func streamProbeHits(t *testing.T, idx *Index, terms []string, ranges [][2]string) []int64 {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	out := vector.NewVec(types.T_int64.ToType())
+	out := vector.NewVec(types.T_int64.ToType(), mp)
 	err := idx.StreamJSONProbe([]byte(EncodeJSONProbePayload(terms, ranges)), TfIdf, nil, false,
 		func(o *vectorindex.SearchOutput) error {
 			e := vectorindex.AppendColumnBuffer(o.Keys, out, mp)

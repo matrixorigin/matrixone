@@ -62,8 +62,8 @@ func (r *routedExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) err
 // twoInt64Result is the coverage read's shape: summed rows, and the chunks those flushes span.
 func twoInt64Result(mp *mpool.MPool, a, b int64) executor.Result {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	_ = vector.AppendFixed[int64](bat.Vecs[0], a, false, mp)
 	_ = vector.AppendFixed[int64](bat.Vecs[1], b, false, mp)
 	bat.SetRowCount(1)
@@ -72,7 +72,7 @@ func twoInt64Result(mp *mpool.MPool, a, b int64) executor.Result {
 
 func oneInt64Result(mp *mpool.MPool, v int64) executor.Result {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	_ = vector.AppendFixed[int64](bat.Vecs[0], v, false, mp)
 	bat.SetRowCount(1)
 	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}

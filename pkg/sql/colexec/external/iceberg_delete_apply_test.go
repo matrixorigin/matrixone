@@ -139,9 +139,8 @@ func TestIcebergDeleteApplyMasksHiddenReadColumns(t *testing.T) {
 	// delete only. hidden_key sits before value, so physically dropping it would
 	// shift value's ordinal and corrupt downstream projection. It must instead be
 	// NULL-filled in place, preserving the batch shape a delete-free scan emits.
-	bat := batch.NewWithSchema(false,
-		[]string{"id", "hidden_key", "value"},
-		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+	bat := batch.NewWithSchema([]string{"id", "hidden_key", "value"},
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}, proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(10), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(100), false, proc.Mp()))
@@ -285,7 +284,7 @@ func TestIcebergDeleteApplyVectorEqualityValueSupportedTypes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vec := vector.NewVec(tt.typ)
+			vec := vector.NewVec(tt.typ, proc.Mp())
 			defer vec.Free(proc.Mp())
 			tt.add(vec)
 			got, err := vectorEqualityValue(ctx, vec, 0)
@@ -297,14 +296,14 @@ func TestIcebergDeleteApplyVectorEqualityValueSupportedTypes(t *testing.T) {
 	nilValue, err := vectorEqualityValue(ctx, nil, 0)
 	require.NoError(t, err)
 	require.Nil(t, nilValue)
-	nullVec := vector.NewVec(types.T_int64.ToType())
+	nullVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer nullVec.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(nullVec, int64(0), true, proc.Mp()))
 	nullValue, err := vectorEqualityValue(ctx, nullVec, 0)
 	require.NoError(t, err)
 	require.Nil(t, nullValue)
 
-	unsupported := vector.NewVec(types.T_uuid.ToType())
+	unsupported := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
 	defer unsupported.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(unsupported, types.Uuid{}, false, proc.Mp()))
 	_, err = vectorEqualityValue(ctx, unsupported, 0)
@@ -369,7 +368,7 @@ func TestIcebergDeleteApplyDateEqualityMatchesScanVector(t *testing.T) {
 		},
 	}
 	ext := &External{Es: param}
-	bat := batch.NewWithSchema(false, []string{"d"}, []types.Type{types.T_date.ToType()})
+	bat := batch.NewWithSchema([]string{"d"}, []types.Type{types.T_date.ToType()}, proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.DaysFromUnixEpochToDate(0), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.DaysFromUnixEpochToDate(1), false, proc.Mp()))
 	bat.SetRowCount(2)
@@ -452,7 +451,7 @@ func TestIcebergRowOrdinalSideChannelUsesRowGroupStart(t *testing.T) {
 	}
 	param.Extern.Data = string(data)
 	proc := testutil.NewProc(t)
-	bat := batch.NewWithSchema(false, []string{"id"}, []types.Type{types.T_int64.ToType()})
+	bat := batch.NewWithSchema([]string{"id"}, []types.Type{types.T_int64.ToType()}, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	reader := NewParquetReader(param, proc)
 	empty, err := reader.Open(param, proc)
@@ -500,9 +499,8 @@ func TestIcebergDMLMetadataColumnsSurviveDeleteApplyShrink(t *testing.T) {
 	param.Extern.Data = string(data)
 
 	proc := testutil.NewProc(t)
-	bat := batch.NewWithSchema(false,
-		[]string{"id", IcebergDMLDataFilePathAttr, IcebergDMLRowOrdinalAttr},
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()})
+	bat := batch.NewWithSchema([]string{"id", IcebergDMLDataFilePathAttr, IcebergDMLRowOrdinalAttr},
+		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()}, proc.Mp())
 	defer bat.Clean(proc.Mp())
 	reader := NewParquetReader(param, proc)
 	empty, err := reader.Open(param, proc)
@@ -663,7 +661,7 @@ func writeIcebergDataParquetWithRowGroups(t *testing.T, values []int64, rowsPerG
 
 func icebergInt64Batch(t *testing.T, proc *process.Process, values []int64) *batch.Batch {
 	t.Helper()
-	bat := batch.NewWithSchema(false, []string{"id"}, []types.Type{types.T_int64.ToType()})
+	bat := batch.NewWithSchema([]string{"id"}, []types.Type{types.T_int64.ToType()}, proc.Mp())
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
 	}

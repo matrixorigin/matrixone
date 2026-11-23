@@ -121,7 +121,7 @@ func TestSampleQuantizeBounds(t *testing.T) {
 	var seen string
 	result := func(typ types.T, rows [][]float32) executor.Result {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(typ, 4, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(typ, 4, 0), mp)
 		for _, v := range rows {
 			var b []byte
 			if typ == types.T_array_float16 {
@@ -183,8 +183,8 @@ func TestDictBounds(t *testing.T) {
 
 	rows := func(keys []string, vals []float64) executor.Result {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), mp)
 		for i, k := range keys {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(k), false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], vals[i], false, mp))
@@ -235,8 +235,8 @@ func TestLoadModelsAppliesDictBounds(t *testing.T) {
 	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		if strings.Contains(sql, "`dict`") {
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), mp)
 			for k, v := range map[string]float64{catalog.Hnsw_Dict_QuantizeMin: -0.75, catalog.Hnsw_Dict_QuantizeMax: 1.5} {
 				require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(k), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[1], v, false, mp))

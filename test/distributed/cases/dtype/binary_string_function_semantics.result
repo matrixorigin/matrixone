@@ -78,50 +78,50 @@ insert into domains values
 select id, hex(coalesce(txt, bin)), char_length(coalesce(txt, bin)),
 charset(coalesce(txt, bin)), collation(coalesce(txt, bin))
 from domains order by id;
-➤ id[4,32,0]  ¦  hex(coalesce(txt, bin))[-1,16383,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  charset(coalesce(txt, bin))[12,65535,0]  ¦  collation(coalesce(txt, bin))[12,65535,0]  𝄀
-1  ¦  E4BDA061  ¦  2  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
-2  ¦  E4BDA061  ¦  4  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
-3  ¦  E4BDA061  ¦  2  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ id[4,32,0]  ¦  hex(coalesce(txt, bin))[12,128,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  charset(coalesce(txt, bin))[12,65535,0]  ¦  collation(coalesce(txt, bin))[12,65535,0]  𝄀
+1  ¦  E4BDA061  ¦  2  ¦  binary  ¦  binary  𝄀
+2  ¦  E4BDA061  ¦  4  ¦  binary  ¦  binary  𝄀
+3  ¦  E4BDA061  ¦  2  ¦  binary  ¦  binary
 select id, hex(left(coalesce(txt, bin), 1)), hex(reverse(coalesce(txt, bin))),
 char_length(concat(coalesce(txt, bin), 'x'))
 from domains order by id;
-➤ id[4,32,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  ¦  hex(reverse(coalesce(txt, bin)))[-1,16383,0]  ¦  char_length(concat(coalesce(txt, bin), x))[-5,64,0]  𝄀
-1  ¦  E4BDA0  ¦  61E4BDA0  ¦  3  𝄀
+➤ id[4,32,0]  ¦  hex(left(coalesce(txt, bin), 1))[12,128,0]  ¦  hex(reverse(coalesce(txt, bin)))[12,128,0]  ¦  char_length(concat(coalesce(txt, bin), x))[-5,64,0]  𝄀
+1  ¦  E4BDA0  ¦  61E4BDA0  ¦  5  𝄀
 2  ¦  E4  ¦  61A0BDE4  ¦  5  𝄀
-3  ¦  E4BDA0  ¦  61E4BDA0  ¦  3
+3  ¦  E4BDA0  ¦  61E4BDA0  ¦  5
 select id, field(left(coalesce(txt, bin), 1), '你', X'e4'),
 hex(left(coalesce(txt, bin), 1)) from domains order by id;
-➤ id[4,32,0]  ¦  field(left(coalesce(txt, bin), 1), 你, 0xe4)[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  field(left(coalesce(txt, bin), 1), 你, 0xe4)[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[12,128,0]  𝄀
 1  ¦  1  ¦  E4BDA0  𝄀
 2  ¦  2  ¦  E4  𝄀
 3  ¦  1  ¦  E4BDA0
 select id, hex(upper(coalesce(txt, bin))) from domains order by id;
-➤ id[4,32,0]  ¦  hex(upper(coalesce(txt, bin)))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  hex(upper(coalesce(txt, bin)))[12,128,0]  𝄀
 1  ¦  E4BDA061  𝄀
 2  ¦  E4BDA061  𝄀
 3  ¦  E4BDA061
 select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
 from (select id, coalesce(txt, bin) x from domains) d order by id;
-➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,128,0]  ¦  hex(reverse(x))[12,128,0]  𝄀
 1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
 select id, char_length(coalesce(x, '')), hex(left(coalesce(x, ''), 1)),
 hex(reverse(coalesce(x, '')))
 from (select id, coalesce(txt, bin) x from domains) d order by id;
-➤ id[4,32,0]  ¦  char_length(coalesce(x, ))[-5,64,0]  ¦  hex(left(coalesce(x, ), 1))[-1,16383,0]  ¦  hex(reverse(coalesce(x, )))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(coalesce(x, ))[-5,64,0]  ¦  hex(left(coalesce(x, ), 1))[12,128,0]  ¦  hex(reverse(coalesce(x, )))[12,128,0]  𝄀
 1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
 select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
-➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,2,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,2,0]  ¦  hex(reverse(x))[12,128,0]  𝄀
 1  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  4  ¦  E4  ¦  61A0BDE4
 select id, hex(left(coalesce(x, '你a'), 1)), hex(reverse(coalesce(x, '你a')))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
-➤ id[4,32,0]  ¦  hex(left(coalesce(x, 你a), 1))[-1,16383,0]  ¦  hex(reverse(coalesce(x, 你a)))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  hex(left(coalesce(x, 你a), 1))[12,128,0]  ¦  hex(reverse(coalesce(x, 你a)))[12,128,0]  𝄀
 1  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  E4  ¦  61A0BDE4
@@ -131,14 +131,14 @@ hex(reverse(coalesce(if(id = 2, bin, txt), ''))),
 hex(left(coalesce(case when id = 2 then bin else txt end, ''), 1)),
 hex(reverse(coalesce(case when id = 2 then bin else txt end, '')))
 from domains order by id;
-➤ id[4,32,0]  ¦  char_length(coalesce(if(id = 2, bin, txt), ))[-5,64,0]  ¦  hex(left(coalesce(if(id = 2, bin, txt), ), 1))[12,2040,0]  ¦  hex(reverse(coalesce(if(id = 2, bin, txt), )))[12,2040,0]  ¦  hex(left(coalesce(case when id = 2 then bin else txt end, ), 1))[12,2040,0]  ¦  hex(reverse(coalesce(case when id = 2 then bin else txt end, )))[12,2040,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(coalesce(if(id = 2, bin, txt), ))[-5,64,0]  ¦  hex(left(coalesce(if(id = 2, bin, txt), ), 1))[12,128,0]  ¦  hex(reverse(coalesce(if(id = 2, bin, txt), )))[12,128,0]  ¦  hex(left(coalesce(case when id = 2 then bin else txt end, ), 1))[12,128,0]  ¦  hex(reverse(coalesce(case when id = 2 then bin else txt end, )))[12,128,0]  𝄀
 1  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  E4  ¦  61A0BDE4
 select id, hex(left(coalesce(ifnull(txt, bin), ''), 1)),
 hex(reverse(coalesce(ifnull(txt, bin), '')))
 from domains order by id;
-➤ id[4,32,0]  ¦  hex(left(coalesce(ifnull(txt, bin), ), 1))[12,2040,0]  ¦  hex(reverse(coalesce(ifnull(txt, bin), )))[12,2040,0]  𝄀
+➤ id[4,32,0]  ¦  hex(left(coalesce(ifnull(txt, bin), ), 1))[12,128,0]  ¦  hex(reverse(coalesce(ifnull(txt, bin), )))[12,128,0]  𝄀
 1  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  E4  ¦  61A0BDE4
@@ -148,7 +148,7 @@ hex(reverse(case when txt is not null then txt else _binary '' end)),
 hex(reverse(case when txt is not null then txt else _binary '' collate `binary` end)),
 hex(reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end))
 from domains order by id;
-➤ id[4,32,0]  ¦  char_length(if(txt is not null, txt, ))[-5,64,0]  ¦  hex(left(if(txt is not null, txt, ), 1))[12,128,0]  ¦  hex(reverse(case when txt is not null then txt else  end))[12,128,0]  ¦  hex(reverse(case when txt is not null then txt else () collate binary end))[12,128,0]  ¦  hex(reverse(case when txt is not null then (txt) collate utf8mb4_bin else  end))[12,128,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(if(txt is not null, txt, ))[-5,64,0]  ¦  hex(left(if(txt is not null, txt, ), 1))[12,8,0]  ¦  hex(reverse(case when txt is not null then txt else  end))[12,128,0]  ¦  hex(reverse(case when txt is not null then txt else () collate binary end))[12,128,0]  ¦  hex(reverse(case when txt is not null then (txt) collate utf8mb4_bin else  end))[12,128,0]  𝄀
 1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  ¦  61A0BDE4  ¦  61E4BDA0  𝄀
 2  ¦  0  ¦    ¦    ¦    ¦    𝄀
 3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  ¦  61A0BDE4  ¦  61E4BDA0
@@ -162,7 +162,7 @@ from domains order by id;
 select id, char_length(if(id = 2, _binary '', coalesce(txt, _binary ''))),
 hex(reverse(case when id = 2 then _binary '' else coalesce(txt, _binary '') end))
 from domains order by id;
-➤ id[4,32,0]  ¦  char_length(if(id = 2, , coalesce(txt, )))[-5,64,0]  ¦  hex(reverse(case when id = 2 then  else coalesce(txt, ) end))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(if(id = 2, , coalesce(txt, )))[-5,64,0]  ¦  hex(reverse(case when id = 2 then  else coalesce(txt, ) end))[12,128,0]  𝄀
 1  ¦  2  ¦  61E4BDA0  𝄀
 2  ¦  0  ¦    𝄀
 3  ¦  2  ¦  61E4BDA0
@@ -296,7 +296,7 @@ set @pinned_flag = null, @pinned_value = null, @pinned_number = null;
 select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
 hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),
 hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)));
-➤ char_length((select coalesce(txt, bin) from domains where id = 1 limit 1))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1))[-1,16383,0]  ¦  hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)))[-1,16383,0]  𝄀
+➤ char_length((select coalesce(txt, bin) from domains where id = 1 limit 1))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1))[12,128,0]  ¦  hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)))[12,128,0]  𝄀
 2  ¦  E4BDA0  ¦  61E4BDA0
 select char_length((select distinct coalesce(txt, bin) from domains limit 1)),
 hex(left((select distinct coalesce(txt, bin) from domains limit 1), 1)),
@@ -313,7 +313,7 @@ hex(reverse(coalesce(left(coalesce(txt, bin), 1), ''))),
 char_length(coalesce(repeat(coalesce(txt, bin), 2), '')),
 char_length(coalesce(rpad(coalesce(txt, bin), 3, 'z'), ''))
 from domains order by id;
-➤ id[4,32,0]  ¦  char_length(coalesce(reverse(coalesce(txt, bin)), ))[-5,64,0]  ¦  hex(reverse(coalesce(reverse(coalesce(txt, bin)), )))[-1,16383,0]  ¦  char_length(coalesce(left(coalesce(txt, bin), 1), ))[-5,64,0]  ¦  hex(reverse(coalesce(left(coalesce(txt, bin), 1), )))[-1,16383,0]  ¦  char_length(coalesce(repeat(coalesce(txt, bin), 2), ))[-5,64,0]  ¦  char_length(coalesce(rpad(coalesce(txt, bin), 3, z), ))[-5,64,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(coalesce(reverse(coalesce(txt, bin)), ))[-5,64,0]  ¦  hex(reverse(coalesce(reverse(coalesce(txt, bin)), )))[12,128,0]  ¦  char_length(coalesce(left(coalesce(txt, bin), 1), ))[-5,64,0]  ¦  hex(reverse(coalesce(left(coalesce(txt, bin), 1), )))[12,128,0]  ¦  char_length(coalesce(repeat(coalesce(txt, bin), 2), ))[-5,64,0]  ¦  char_length(coalesce(rpad(coalesce(txt, bin), 3, z), ))[-5,64,0]  𝄀
 1  ¦  2  ¦  E4BDA061  ¦  1  ¦  E4BDA0  ¦  4  ¦  3  𝄀
 2  ¦  4  ¦  E4BDA061  ¦  1  ¦  E4  ¦  8  ¦  3  𝄀
 3  ¦  2  ¦  E4BDA061  ¦  1  ¦  E4BDA0  ¦  4  ¦  3
@@ -324,7 +324,7 @@ char_length(case when id = 2 then bin else coalesce(txt, bin) end),
 hex(left(case when id = 2 then bin else coalesce(txt, bin) end, 1)),
 hex(reverse(case when id = 2 then bin else coalesce(txt, bin) end))
 from domains order by id;
-➤ id[4,32,0]  ¦  char_length(if(id = 2, bin, coalesce(txt, bin)))[-5,64,0]  ¦  hex(left(if(id = 2, bin, coalesce(txt, bin)), 1))[12,2,0]  ¦  hex(reverse(if(id = 2, bin, coalesce(txt, bin))))[-1,16383,0]  ¦  char_length(case when id = 2 then bin else coalesce(txt, bin) end)[-5,64,0]  ¦  hex(left(case when id = 2 then bin else coalesce(txt, bin) end, 1))[12,2,0]  ¦  hex(reverse(case when id = 2 then bin else coalesce(txt, bin) end))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(if(id = 2, bin, coalesce(txt, bin)))[-5,64,0]  ¦  hex(left(if(id = 2, bin, coalesce(txt, bin)), 1))[12,2,0]  ¦  hex(reverse(if(id = 2, bin, coalesce(txt, bin))))[12,128,0]  ¦  char_length(case when id = 2 then bin else coalesce(txt, bin) end)[-5,64,0]  ¦  hex(left(case when id = 2 then bin else coalesce(txt, bin) end, 1))[12,2,0]  ¦  hex(reverse(case when id = 2 then bin else coalesce(txt, bin) end))[12,128,0]  𝄀
 1  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  4  ¦  E4  ¦  61A0BDE4
@@ -340,37 +340,37 @@ select id, locate('a', coalesce(txt, bin)), instr(coalesce(txt, bin), 'a'),
 coalesce(txt, bin) like '__', coalesce(txt, bin) like '____',
 char_length(coalesce(txt, bin)), hex(left(coalesce(txt, bin), 1))
 from domains order by id;
-➤ id[4,32,0]  ¦  locate(a, coalesce(txt, bin))[-5,64,0]  ¦  instr(coalesce(txt, bin), a)[-5,64,0]  ¦  coalesce(txt, bin) like __[-6,8,0]  ¦  coalesce(txt, bin) like ____[-6,8,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  locate(a, coalesce(txt, bin))[-5,64,0]  ¦  instr(coalesce(txt, bin), a)[-5,64,0]  ¦  coalesce(txt, bin) like __[-6,8,0]  ¦  coalesce(txt, bin) like ____[-6,8,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[12,128,0]  𝄀
 1  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0  𝄀
 2  ¦  4  ¦  4  ¦  0  ¦  1  ¦  4  ¦  E4  𝄀
 3  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0
 select id, locate('a', x), instr(x, 'a'), x like '__', x like '____',
 char_length(x), hex(left(x, 1))
 from (select id, coalesce(txt, bin) x from domains) d order by id;
-➤ id[4,32,0]  ¦  locate(a, x)[-5,64,0]  ¦  instr(x, a)[-5,64,0]  ¦  x like __[-6,8,0]  ¦  x like ____[-6,8,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  locate(a, x)[-5,64,0]  ¦  instr(x, a)[-5,64,0]  ¦  x like __[-6,8,0]  ¦  x like ____[-6,8,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,128,0]  𝄀
 1  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0  𝄀
 2  ¦  4  ¦  4  ¦  0  ¦  1  ¦  4  ¦  E4  𝄀
 3  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0
 select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
 from (select id, coalesce(txt, bin) x from domains having id > 0) d order by id;
-➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,2,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,2,0]  ¦  hex(reverse(x))[12,128,0]  𝄀
 1  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  4  ¦  E4  ¦  61A0BDE4
 select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
 from (select id, coalesce(txt, bin) x from domains having true) d order by id;
-➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,2,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,2,0]  ¦  hex(reverse(x))[12,128,0]  𝄀
 1  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  4  ¦  E4  ¦  61A0BDE4
 select char_length((select coalesce(txt, bin) from domains group by coalesce(txt, bin))),
 hex(left((select coalesce(txt, bin) from domains group by coalesce(txt, bin)), 1)),
 hex(reverse((select coalesce(txt, bin) from domains group by coalesce(txt, bin))));
-➤ char_length((select coalesce(txt, bin) from domains group by coalesce(txt, bin)))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from domains group by coalesce(txt, bin)), 1))[12,2,0]  ¦  hex(reverse((select coalesce(txt, bin) from domains group by coalesce(txt, bin))))[-1,16383,0]  𝄀
+➤ char_length((select coalesce(txt, bin) from domains group by coalesce(txt, bin)))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from domains group by coalesce(txt, bin)), 1))[12,2,0]  ¦  hex(reverse((select coalesce(txt, bin) from domains group by coalesce(txt, bin))))[12,128,0]  𝄀
 4  ¦  E4  ¦  61A0BDE4
 select char_length((select coalesce(txt, bin) x from domains where id = 1 having x is not null)),
 hex(left((select coalesce(txt, bin) x from domains where id = 1 having x is not null), 1));
-➤ char_length((select coalesce(txt, bin) as x from domains where id = 1 having x is not null))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) as x from domains where id = 1 having x is not null), 1))[-1,16383,0]  𝄀
+➤ char_length((select coalesce(txt, bin) as x from domains where id = 1 having x is not null))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) as x from domains where id = 1 having x is not null), 1))[12,128,0]  𝄀
 2  ¦  E4BDA0
 create table singleton_domains (id int primary key, txt varchar(16), bin varbinary(16));
 insert into singleton_domains values (1, '你a', null);
@@ -400,14 +400,14 @@ select id, char_length(nullif(coalesce(txt, bin), '')),
 hex(left(nullif(coalesce(txt, bin), ''), 1)),
 hex(reverse(nullif(coalesce(txt, bin), '')))
 from domains order by id;
-➤ id[4,32,0]  ¦  char_length(nullif(coalesce(txt, bin), ))[-5,64,0]  ¦  hex(left(nullif(coalesce(txt, bin), ), 1))[-1,16383,0]  ¦  hex(reverse(nullif(coalesce(txt, bin), )))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(nullif(coalesce(txt, bin), ))[-5,64,0]  ¦  hex(left(nullif(coalesce(txt, bin), ), 1))[12,128,0]  ¦  hex(reverse(nullif(coalesce(txt, bin), )))[12,128,0]  𝄀
 1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
 select id, char_length(nullif(x, '')), hex(left(nullif(x, ''), 1)),
 hex(reverse(nullif(x, '')))
 from (select id, coalesce(txt, bin) x from domains) d order by id;
-➤ id[4,32,0]  ¦  char_length(nullif(x, ))[-5,64,0]  ¦  hex(left(nullif(x, ), 1))[-1,16383,0]  ¦  hex(reverse(nullif(x, )))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  char_length(nullif(x, ))[-5,64,0]  ¦  hex(left(nullif(x, ), 1))[12,128,0]  ¦  hex(reverse(nullif(x, )))[12,128,0]  𝄀
 1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
@@ -435,7 +435,7 @@ select id, bit_count(coalesce(txt, bin)) from domains order by id;
 3  ¦  15
 select id, bit_count(x), char_length(x), hex(left(x, 1))
 from (select id, coalesce(txt, bin) x from domains) d order by id;
-➤ id[4,32,0]  ¦  bit_count(x)[-5,64,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  bit_count(x)[-5,64,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[12,128,0]  𝄀
 1  ¦  15  ¦  2  ¦  E4BDA0  𝄀
 2  ¦  15  ¦  4  ¦  E4  𝄀
 3  ¦  15  ¦  2  ¦  E4BDA0
@@ -466,7 +466,7 @@ char_length(concat_ws(sep, first_value, second_value)),
 charset(concat_ws(sep, first_value, second_value))
 from concat_ws_domains order by id;
 ➤ id[4,32,0]  ¦  hex(concat_ws(sep, first_value, second_value))[12,258,0]  ¦  char_length(concat_ws(sep, first_value, second_value))[-5,64,0]  ¦  charset(concat_ws(sep, first_value, second_value))[12,65535,0]  𝄀
-1  ¦  E4BDA0  ¦  1  ¦  binary  𝄀
+1  ¦  E4BDA0  ¦  3  ¦  binary  𝄀
 2  ¦  E4BDA02D61  ¦  5  ¦  binary
 create table collation_domains (
 ci varchar(16) collate utf8mb4_general_ci,
@@ -510,12 +510,12 @@ set @selected_text = if(false, X'ff', '你a');
 select charset(@selected_text), collation(@selected_text),
 char_length(@selected_text), hex(left(@selected_text, 1));
 ➤ charset(@selected_text)[12,65535,0]  ¦  collation(@selected_text)[12,65535,0]  ¦  char_length(@selected_text)[-5,64,0]  ¦  hex(left(@selected_text, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 select if(false, X'ff', '你a') into @selected_text_into;
 select charset(@selected_text_into), collation(@selected_text_into),
 char_length(@selected_text_into), hex(left(@selected_text_into, 1));
 ➤ charset(@selected_text_into)[12,65535,0]  ¦  collation(@selected_text_into)[12,65535,0]  ¦  char_length(@selected_text_into)[-5,64,0]  ¦  hex(left(@selected_text_into, 1))[-1,16383,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 set @choose_binary = false;
 prepare prepared_set_domain from
 'set @prepared_selected_text = if(?, X''ff'', ''你a'')';
@@ -523,7 +523,7 @@ execute prepared_set_domain using @choose_binary;
 select charset(@prepared_selected_text), collation(@prepared_selected_text),
 char_length(@prepared_selected_text), hex(left(@prepared_selected_text, 1));
 ➤ charset(@prepared_selected_text)[12,65535,0]  ¦  collation(@prepared_selected_text)[12,65535,0]  ¦  char_length(@prepared_selected_text)[-5,64,0]  ¦  hex(left(@prepared_selected_text, 1))[12,16,0]  𝄀
-binary  ¦  binary  ¦  2  ¦  E4BDA0
+binary  ¦  binary  ¦  4  ¦  E4
 deallocate prepare prepared_set_domain;
 set @typed_binary_null = cast(null as binary(8));
 prepare typed_binary_null_stmt from
@@ -547,7 +547,7 @@ from remote_prepare_source;
 ➤ AP QUERY PLAN ON MULTICN(10 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Aggregate  𝄀
-        Aggregate Functions: sum(char_length(@binary_value)), sum(cast((@binary_value like '____') AS TINYINT))  𝄀
+        Aggregate Functions: sum(char_length(@binary_value)), sum(cast((cast(@binary_value AS VARCHAR) like '____') AS TINYINT))  𝄀
         ->  Table Scan on binary_string_function_semantics.remote_prepare_source
 prepare remote_domain_stmt from
 'select sum(char_length(?)), sum(? like ''____'') from remote_prepare_source';
@@ -556,18 +556,18 @@ execute remote_domain_stmt using @binary_value, @binary_value;
 320000  ¦  80000
 execute remote_domain_stmt using @selected_text, @selected_text;
 ➤ sum(char_length(?))[3,38,0]  ¦  sum(? like ____)[-5,64,0]  𝄀
-160000  ¦  0
+320000  ¦  80000
 deallocate prepare remote_domain_stmt;
 prepare remote_bound_stmt from
 'select min(charset(@selected_text)), sum(char_length(@selected_text)),
 min(hex(left(@selected_text, 1))) from remote_prepare_source';
 execute remote_bound_stmt;
 ➤ min(charset(@selected_text))[12,65535,0]  ¦  sum(char_length(@selected_text))[3,38,0]  ¦  min(hex(left(@selected_text, 1)))[-1,16383,0]  𝄀
-binary  ¦  160000  ¦  E4BDA0
+binary  ¦  320000  ¦  E4
 set @selected_text = X'e4bda061';
 execute remote_bound_stmt;
 ➤ min(charset(@selected_text))[12,65535,0]  ¦  sum(char_length(@selected_text))[3,38,0]  ¦  min(hex(left(@selected_text, 1)))[-1,16383,0]  𝄀
-binary  ¦  160000  ¦  E4BDA0
+binary  ¦  320000  ¦  E4
 select charset(@selected_text), char_length(@selected_text), hex(left(@selected_text, 1));
 ➤ charset(@selected_text)[12,65535,0]  ¦  char_length(@selected_text)[-5,64,0]  ¦  hex(left(@selected_text, 1))[-1,16383,0]  𝄀
 binary  ¦  4  ¦  E4

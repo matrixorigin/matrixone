@@ -35,7 +35,7 @@ func BenchmarkJSONReader(b *testing.B) {
 				defer func() { require.Zero(b, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 				path := jsonReaderPath(b, "$.keep")
 				makeReader := func() JSONReader {
-					builder, err := NewJSONReaderBuilder(mp, nil)
+					builder, err := NewJSONReaderBuilder(mp)
 					require.NoError(b, err)
 					defer builder.Close()
 					require.NoError(b, builder.Append(raw, false))

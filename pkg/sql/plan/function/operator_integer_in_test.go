@@ -28,7 +28,7 @@ import (
 func checkIntegerMembership[T constraints.Integer](t *testing.T, typ types.T, members, probes []T, sorted, nullable bool) {
 	t.Helper()
 	proc := testutil.NewProcess(t)
-	list := vector.NewVec(typ.ToType())
+	list := vector.NewVec(typ.ToType(), proc.Mp())
 	defer list.Free(proc.Mp())
 	for i, v := range members {
 		require.NoError(t, vector.AppendFixed(list, v, nullable && i == 0, proc.Mp()))
@@ -41,10 +41,10 @@ func checkIntegerMembership[T constraints.Integer](t *testing.T, typ types.T, me
 			ov, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
 			require.NoError(t, err)
 			fn, _, _, _ := ov.GetExecuteMethod()
-			for _, mode := range []string{"flat", "all_null", "constant", "const_null", "dictionary"} {
+			for _, mode := range []string{"flat", "all_null", "constant", "const_null"} {
 				constant := mode == "constant" || mode == "const_null"
 				t.Run(mode, func(t *testing.T) {
-					input := vector.NewVec(typ.ToType())
+					input := vector.NewVec(typ.ToType(), proc.Mp())
 					defer input.Free(proc.Mp())
 					for _, v := range probes {
 						require.NoError(t, vector.AppendFixed(input, v, false, proc.Mp()))
@@ -60,25 +60,6 @@ func checkIntegerMembership[T constraints.Integer](t *testing.T, typ types.T, me
 					if constant {
 						input.ToConst()
 					}
-					var mapping []int64
-					if mode == "dictionary" {
-						mapping = make([]int64, len(probes))
-						for i := range mapping {
-							mapping[i] = int64(len(probes) - 1 - i)
-						}
-						mapping[len(mapping)-1] = mapping[0]
-						base, err := vector.FreezeVector(input, proc.Mp(), nil)
-						require.NoError(t, err)
-						defer base.Release()
-						selection, err := vector.NewRowSelection(mapping, len(probes), proc.Mp(), nil)
-						require.NoError(t, err)
-						defer selection.Release()
-						selected, err := vector.NewDictionaryVector(base, selection, proc.Mp(), nil)
-						require.NoError(t, err)
-						defer selected.Free(proc.Mp())
-						input = selected
-						require.True(t, ov.DictionaryInputCapability()([]*vector.Vector{input, list}))
-					}
 					out := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
 					defer out.Free()
 					// The same closure processes multiple batches and vector shapes.
@@ -88,9 +69,6 @@ func checkIntegerMembership[T constraints.Integer](t *testing.T, typ types.T, me
 						result := out.GetResultVector()
 						for i := 0; i < rows; i++ {
 							physical := i
-							if mapping != nil {
-								physical = int(mapping[i])
-							}
 							v := probes[physical]
 							if constant {
 								v = probes[0]
@@ -175,7 +153,7 @@ func TestIntegerMembershipBitmapAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			list := vector.NewVec(types.T_int64.ToType())
+			list := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			defer list.Free(proc.Mp())
 			for i := 0; i < tc.count-1; i++ {
 				require.NoError(t, vector.AppendFixed(list, int64(i), false, proc.Mp()))

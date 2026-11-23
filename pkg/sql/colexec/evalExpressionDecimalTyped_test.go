@@ -45,7 +45,7 @@ func TestDecimalTypedBinaryAggregate(t *testing.T) {
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for i, value := range []types.Decimal64{200, 100} {
-				input.Vecs[i] = vector.NewVec(typ)
+				input.Vecs[i] = vector.NewVec(typ, proc.Mp())
 				require.NoError(t, vector.AppendFixed(input.Vecs[i], value, false, proc.Mp()))
 			}
 			input.SetRowCount(1)

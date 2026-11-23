@@ -71,7 +71,7 @@ func TestJSONAggregatesLegacyInvalidUTF8(t *testing.T) {
 				if results != nil {
 					defer func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					}()
 				}
@@ -146,7 +146,7 @@ func TestJSONObjectAggregateLegacyBinaryKey(t *testing.T) {
 			if results != nil {
 				defer func() {
 					for _, result := range results {
-						result.Free(mp)
+						result.Free(result.MPool())
 					}
 				}()
 			}
@@ -209,7 +209,7 @@ func TestJSONAggregatesLegacyUTF8DistinctAndKeys(t *testing.T) {
 				if results != nil {
 					defer func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					}()
 				}

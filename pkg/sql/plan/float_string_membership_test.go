@@ -57,8 +57,8 @@ func TestLegacyFloatStringMembership(t *testing.T) {
 			proc := compiler.GetProcess()
 			bat := batch.NewWithSize(2)
 			t.Cleanup(func() { bat.Clean(proc.Mp()) })
-			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			for row := 0; row < 3; row++ {
 				a := -1.2345678901234567e-15
 				c := "-0.0000000000000012345678901234568"

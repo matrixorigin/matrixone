@@ -85,6 +85,12 @@ func TestExactRowsAdmissionAcrossOwners(t *testing.T) {
 							require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "fixed capacity must reject without widening: %v", err)
 						} else {
 							require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "%v", err)
+							// The shared read can reuse an already coarsened lock. A strict
+							// admission above still rejects the same transaction/table.
+							opts.Mode, opts.ReuseOwnedRange = pb.LockMode_Shared, true
+							result, err := origin.Lock(ctx, table, [][]byte{{3}}, id, opts)
+							require.NoError(t, err)
+							require.False(t, result.NewLockAdd)
 						}
 						if route == "remote-proxy" {
 							require.IsType(t, &localLockTableProxy{}, origin.tableGroups.get(0, table))
@@ -214,4 +220,42 @@ func TestExactRowsWaitingOutcomes(t *testing.T) {
 				})
 			}
 		}, func(cfg *Config) { cfg.MaxLockRowCount = 2 })
+}
+
+func TestSharedRowsDoNotInheritForeignRange(t *testing.T) {
+	const table = uint64(29350)
+	runLockServiceTestsWithAdjustConfig(t, []string{"range-owner", "range-origin"}, 10*time.Second,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			holder, reader, writer := []byte("holder"), []byte("reader"), []byte("writer")
+			defer func() { require.NoError(t, owner.Unlock(ctx, holder, timestamp.Timestamp{})) }()
+			defer func() { require.NoError(t, origin.Unlock(ctx, reader, timestamp.Timestamp{})) }()
+			defer func() { require.NoError(t, owner.Unlock(ctx, writer, timestamp.Timestamp{})) }()
+			_, err := owner.Lock(ctx, table, [][]byte{{1}, {5}}, holder, newTestRangeSharedOptions())
+			require.NoError(t, err)
+			pin := newTestRowSharedOptions()
+			pin.Policy, pin.KeepRows, pin.ReuseOwnedRange = pb.WaitPolicy_FastFail, true, true
+			for _, key := range []byte{1, 3, 5} {
+				_, err = origin.Lock(ctx, table, [][]byte{{key}}, reader, pin)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "key %d: %v", key, err)
+			}
+			// Re-entry on the same range needs no new physical keys or ownership.
+			result, err := owner.Lock(ctx, table, [][]byte{{1}, {3}, {5}}, holder, pin)
+			require.NoError(t, err)
+			require.False(t, result.NewLockAdd)
+			require.NoError(t, owner.Unlock(ctx, holder, timestamp.Timestamp{}))
+			_, err = origin.Lock(ctx, table, [][]byte{{1}, {5}}, reader, pin)
+			require.NoError(t, err)
+			exclusive := newTestRowExclusiveOptions()
+			exclusive.Policy = pb.WaitPolicy_FastFail
+			_, err = owner.Lock(ctx, table, [][]byte{{3}}, writer, exclusive)
+			require.NoError(t, err, "the gap must remain available")
+			_, err = owner.Lock(ctx, table, [][]byte{{5}}, writer, exclusive)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
+			require.NoError(t, origin.Unlock(ctx, reader, timestamp.Timestamp{}))
+			_, err = owner.Lock(ctx, table, [][]byte{{5}}, writer, exclusive)
+			require.NoError(t, err)
+		}, func(cfg *Config) { cfg.EnableRemoteLocalProxy = true })
 }

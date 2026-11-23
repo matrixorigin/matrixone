@@ -338,7 +338,7 @@ func (exec *countColumnExec) Flush() (_ []*vector.Vector, retErr error) {
 
 		for i := range vecs {
 			var err error
-			vecs[i], err = exec.allocation.newVector(types.T_int64.ToType())
+			vecs[i], err = exec.allocation.newVector(types.T_int64.ToType(), exec.mp)
 			if err != nil {
 				return nil, err
 			}

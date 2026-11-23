@@ -70,7 +70,7 @@ func TestJSONNumericPredicatesDoNotDefinePhysicalLockKeys(t *testing.T) {
 						if tc.wantKey {
 							require.NotNil(t, target.LockRows)
 							if payload := target.LockRows.GetVec(); payload != nil {
-								decoded := vector.NewVec(types.T_any.ToType())
+								decoded := vector.NewVec(types.T_any.ToType(), proc.Mp())
 								defer decoded.Free(proc.Mp())
 								require.NoError(t, decoded.UnmarshalBinary(payload.Data))
 								require.Equal(t, target.PrimaryColTyp.Id, int32(decoded.GetType().Oid))
@@ -210,27 +210,6 @@ func TestJSONNumericEqualityDoesNotFixOnePhysicalValue(t *testing.T) {
 		equality, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{column, peer})
 		require.NoError(t, err)
 		require.True(t, filterListHasSingleValueEqualityOnCol([]*planpb.Expr{equality}, 10, 0))
-	}
-	// Prepared transport normalizes to JSON, but its runtime numeric metadata
-	// can select a different comparison domain on each execution.
-	for _, name := range []string{function.JsonComparisonParamFunctionName, function.JsonOrderingParamFunctionName} {
-		adapter, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
-			{Typ: types.T_text.ToType().PlanType(), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
-		})
-		require.NoError(t, err)
-		require.False(t, isMySQLFullGroupBySingleValueExpr(adapter))
-	}
-	for _, reversed := range []bool{false, true} {
-		args := []*planpb.Expr{
-			GetColExpr(types.T_json.ToType().PlanType(), 10, 0),
-			{Typ: types.T_any.ToType().PlanType(), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
-		}
-		if reversed {
-			args[0], args[1] = args[1], args[0]
-		}
-		equality, err := BindFuncExprImplByPlanExpr(ctx, "=", args)
-		require.NoError(t, err)
-		require.False(t, filterListHasSingleValueEqualityOnCol([]*planpb.Expr{equality}, 10, 0))
 	}
 }
 

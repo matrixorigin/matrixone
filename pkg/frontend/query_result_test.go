@@ -524,7 +524,7 @@ func TestSaveBatchPreservesBroadcastConstantRows(t *testing.T) {
 
 		constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, proc.Mp())
 		require.NoError(t, err)
-		totals := vector.NewVec(types.T_int64.ToType())
+		totals := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		for _, value := range []int64{10, 20, 30} {
 			require.NoError(t, vector.AppendFixed(totals, value, false, proc.Mp()))
 		}
@@ -580,7 +580,7 @@ func TestSaveBatchPreservesTrailingFlatNullRows(t *testing.T) {
 			proc:   proc,
 		}
 
-		flatNull := vector.NewVec(types.T_varchar.ToType())
+		flatNull := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		flatNull.GetNulls().Add(0)
 		data := batch.NewWithSize(1)
 		data.SetVector(0, flatNull)
@@ -651,7 +651,7 @@ func TestSaveBatchUsesNormalizedSizeForAdmission(t *testing.T) {
 
 func TestPrepareQueryResultBatchForWriteMaterializesTrailingNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
 	vec.GetNulls().Add(1)
 	bat := batch.NewWithSize(1)
@@ -683,7 +683,7 @@ func TestPrepareQueryResultBatchForWriteRejectsInvalidFlatCardinality(t *testing
 			name: "missing non-null row",
 			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
 				bat := batch.NewWithSize(1)
-				bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
+				bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), mp))
 				bat.SetRowCount(1)
 				return bat
 			},
@@ -692,7 +692,7 @@ func TestPrepareQueryResultBatchForWriteRejectsInvalidFlatCardinality(t *testing
 		{
 			name: "vector longer than batch",
 			makeBatch: func(t *testing.T, mp *mpool.MPool) *batch.Batch {
-				vec := vector.NewVec(types.T_int64.ToType())
+				vec := vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
 				bat := batch.NewWithSize(1)
 				bat.SetVector(0, vec)

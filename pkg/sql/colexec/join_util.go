@@ -28,6 +28,26 @@ import (
 type Batches struct {
 	Buf     []*batch.Batch
 	MemSize int64
+	// allocation is the accounted MPool view the retained batches allocate
+	// through (nil = unaccounted). Every batch in Buf shares it.
+	allocation *mpool.MPool
+	// pool is the pool every vector in Buf was created with: allocation, or
+	// the process pool when unaccounted. Buf is freed with it.
+	pool *mpool.MPool
+}
+
+// Pool returns the pool the retained batches were created with, or nil when
+// there are none.
+func (bs *Batches) Pool() *mpool.MPool {
+	return bs.pool
+}
+
+// cleanPool is the pool Buf is freed with: the recorded pool, else mp.
+func (bs *Batches) cleanPool(mp *mpool.MPool) *mpool.MPool {
+	if bs.pool != nil {
+		return bs.pool
+	}
+	return mp
 }
 
 func (bs *Batches) RowCount() int {
@@ -38,12 +58,23 @@ func (bs *Batches) RowCount() int {
 	return count
 }
 
+// Clean frees the retained batches with the pool they were created with; mp
+// is used only when no batch was ever retained.
 func (bs *Batches) Clean(mp *mpool.MPool) {
+	pool := bs.cleanPool(mp)
 	for i := range bs.Buf {
-		bs.Buf[i].Clean(mp)
+		bs.Buf[i].Clean(pool)
 	}
 	bs.Buf = nil
 	bs.MemSize = 0
+	bs.allocation = nil
+	bs.pool = nil
+}
+
+// Allocation returns the MPool view the retained batches allocate through,
+// or nil when they are unaccounted.
+func (bs *Batches) Allocation() *mpool.MPool {
+	return bs.allocation
 }
 
 func (bs *Batches) CleanOnlyData() {
@@ -52,12 +83,16 @@ func (bs *Batches) CleanOnlyData() {
 	}
 	bs.Buf = nil
 	bs.MemSize = 0
+	bs.pool = nil
 }
+
+// Reset forgets Buf without freeing it; its owner frees it with Pool().
 func (bs *Batches) Reset() {
 	if bs.Buf != nil {
 		bs.Buf = nil
 	}
 	bs.MemSize = 0
+	bs.pool = nil
 }
 
 // copy from input batch into batches
@@ -80,7 +115,7 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 func (bs *Batches) CopyIntoBatchesWithAllocation(
 	src *batch.Batch,
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) (err error) {
 	return bs.copyWithAllocation(src, proc, selection, 0)
 }
@@ -90,7 +125,7 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 func (bs *Batches) CopyIntoBoundedBatches(
 	src *batch.Batch,
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) error {
 	for _, vec := range src.Vecs {
 		if vec == nil {
@@ -103,19 +138,16 @@ func (bs *Batches) CopyIntoBoundedBatches(
 func (bs *Batches) copyWithAllocation(
 	src *batch.Batch,
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 	allocationLimit int64,
 ) (err error) {
-	if len(bs.Buf) > 0 &&
-		!vector.AllocationAccountSelectionsEqual(
-			bs.Buf[len(bs.Buf)-1].AllocationAccountSelection(),
-			selection,
-		) {
+	if len(bs.Buf) > 0 && !mpool.SameView(bs.allocation, selection) {
 		return mpool.ErrAllocationAccountMismatch
 	}
 
 	originalLen := len(bs.Buf)
 	originalMemSize := bs.MemSize
+	originalAllocation := bs.allocation
 	originalNil := bs.Buf == nil
 	var originalTail *batch.Batch
 	originalTailRows := 0
@@ -129,18 +161,23 @@ func (bs *Batches) copyWithAllocation(
 		} else {
 			tailCheckpoints = localTailCheckpoints[:len(originalTail.Vecs)]
 		}
+		if err := originalTail.OwnReadOnlyVectors(allocationMP(proc, selection)); err != nil {
+			return err
+		}
 		for i := range originalTail.Vecs {
-			if err := originalTail.Vecs[i].MaterializeOwned(proc.Mp()); err != nil {
-				return err
-			}
 			tailCheckpoints[i] = originalTail.Vecs[i].MakeAppendCheckpoint()
 		}
+	}
+	originalPool := bs.pool
+	if originalLen == 0 {
+		bs.allocation = selection
+		bs.pool = allocationMP(proc, selection)
 	}
 	if err = bs.copyIntoBatches(src, proc, selection, allocationLimit); err == nil {
 		return nil
 	}
 	for i := originalLen; i < len(bs.Buf); i++ {
-		bs.Buf[i].Clean(proc.Mp())
+		bs.Buf[i].Clean(allocationMP(proc, selection))
 	}
 	clear(bs.Buf[originalLen:])
 	bs.Buf = bs.Buf[:originalLen]
@@ -158,23 +195,23 @@ func (bs *Batches) copyWithAllocation(
 		err = vector.JoinAppendRollbackError(err, rollbackErr)
 	}
 	bs.MemSize = originalMemSize
+	if originalLen == 0 {
+		bs.allocation = originalAllocation
+		bs.pool = originalPool
+	}
 	return err
 }
 
 func (bs *Batches) copyIntoBatches(
 	src *batch.Batch,
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 	allocationLimit int64,
 ) (err error) {
 	if bs.Buf == nil {
 		bs.Buf = make([]*batch.Batch, 0, 16)
 	}
-	if len(bs.Buf) > 0 &&
-		!vector.AllocationAccountSelectionsEqual(
-			bs.Buf[len(bs.Buf)-1].AllocationAccountSelection(),
-			selection,
-		) {
+	if len(bs.Buf) > 0 && !mpool.SameView(bs.allocation, selection) {
 		return mpool.ErrAllocationAccountMismatch
 	}
 
@@ -186,12 +223,12 @@ func (bs *Batches) copyIntoBatches(
 		} else {
 			tmp, err = proc.NewBatchFromSrcWithAllocation(src, 0, selection)
 			if err == nil {
-				err = src.CloneTo(tmp, proc.Mp())
+				err = src.CloneTo(tmp, selection)
 			}
 		}
 		if err != nil {
 			if tmp != nil {
-				tmp.Clean(proc.Mp())
+				tmp.Clean(allocationMP(proc, selection))
 			}
 			return err
 		}
@@ -220,12 +257,6 @@ func (bs *Batches) copyIntoBatches(
 			if len(tmp.Vecs) != len(src.Vecs) {
 				return moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
 			}
-			if !vector.AllocationAccountSelectionsEqual(
-				tmp.AllocationAccountSelection(),
-				selection,
-			) {
-				return mpool.ErrAllocationAccountMismatch
-			}
 			rows = min(length-offset, DefaultBatchSize-tmp.RowCount())
 			if allocationLimit != 0 {
 				rows = appendableRows(tmp, src, offset, rows, allocationLimit)
@@ -243,11 +274,7 @@ func (bs *Batches) copyIntoBatches(
 					return mpool.ErrAllocationAllocatorLimit
 				}
 			}
-			tmp, err = proc.NewBatchFromSrcWithAllocation(
-				src,
-				rows,
-				selection,
-			)
+			tmp, err = proc.NewBatchFromSrcWithAllocation(src, rows, selection)
 			if err != nil {
 				return err
 			}
@@ -256,7 +283,7 @@ func (bs *Batches) copyIntoBatches(
 			}
 			bs.Buf = append(bs.Buf, tmp)
 		}
-		if err = appendBatchRange(tmp, src, offset, rows, proc); err != nil {
+		if err = appendBatchRange(tmp, src, offset, rows, proc, allocationMP(proc, selection)); err != nil {
 			return err
 		}
 		if tmp.RowCount() == DefaultBatchSize {
@@ -292,16 +319,9 @@ func appendableRows(dst, src *batch.Batch, start, rows int, limit int64) int {
 			}
 			continue
 		}
-		if !vec.IsDictionary() {
-			area := int64(len(vec.GetArea()))
-			if area == 0 || (vec.VarlenaAreaIsDisjoint() && area <= available) || area <= available/int64(rows) {
-				continue
-			}
-			if vec.CanCopyWholeVarlenaArea() && start == 0 && rows == vec.Length() {
-				// UnionBatch would copy the whole area, including dead bytes.
-				// Use a partial range so it uses only live descriptors instead.
-				rows--
-			}
+		area := int64(len(vec.GetArea()))
+		if area == 0 || (vec.VarlenaAreaIsDisjoint() && area <= available) || area <= available/int64(rows) {
+			continue
 		}
 		for row := 0; row < rows; row++ {
 			available -= vector.VarlenaPayloadSize(vec, start+row)
@@ -331,14 +351,15 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 	if n == 0 {
 		n = 1
 	}
-	selection := bs.Buf[0].AllocationAccountSelection()
+	selection := bs.allocation
+	mp := allocationMP(proc, selection)
 	newBuf := make([]*batch.Batch, n)
 	cleanup := true
 	defer func() {
 		if cleanup {
 			for _, bat := range newBuf {
 				if bat != nil {
-					bat.Clean(proc.Mp())
+					bat.Clean(mp)
 				}
 			}
 			// Preserve the caller's ignore-row checkpoint on failure.
@@ -346,12 +367,9 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 		}
 	}()
 	for i := range newBuf {
-		newBuf[i] = batch.NewOffHeapWithSize(len(bs.Buf[0].Vecs))
-		if err := newBuf[i].SetAllocationAccount(selection); err != nil {
-			return err
-		}
+		newBuf[i] = batch.NewWithSize(len(bs.Buf[0].Vecs))
 		for j, vec := range bs.Buf[0].Vecs {
-			newBuf[i].SetVector(int32(j), vector.NewOffHeapVecWithType(*vec.GetType()))
+			newBuf[i].SetVector(int32(j), vector.NewVec(*vec.GetType(), mp))
 		}
 	}
 	itr := ignoreRow.Iterator()
@@ -361,7 +379,7 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 		srcBatch, srcRow := sel/DefaultBatchSize, sel%DefaultBatchSize
 		dstBatch := outRow / DefaultBatchSize
 		for j, vec := range bs.Buf[srcBatch].Vecs {
-			if err := newBuf[dstBatch].Vecs[j].UnionOne(vec, int64(srcRow), proc.Mp()); err != nil {
+			if err := newBuf[dstBatch].Vecs[j].UnionOne(vec, int64(srcRow), mp); err != nil {
 				return err
 			}
 		}
@@ -371,6 +389,8 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 
 	bs.Clean(proc.Mp())
 	bs.Buf = newBuf
+	bs.allocation = selection
+	bs.pool = mp
 	for _, bat := range newBuf {
 		bs.MemSize += int64(bat.Size())
 	}
@@ -379,7 +399,15 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 	return nil
 }
 
-func appendBatchRange(dst *batch.Batch, src *batch.Batch, offset, length int, proc *process.Process) error {
+// allocationMP returns selection when it is set, otherwise the process pool.
+func allocationMP(proc *process.Process, selection *mpool.MPool) *mpool.MPool {
+	if selection != nil {
+		return selection
+	}
+	return proc.Mp()
+}
+
+func appendBatchRange(dst *batch.Batch, src *batch.Batch, offset, length int, proc *process.Process, mp *mpool.MPool) error {
 	var err error
 	if len(dst.Vecs) != len(src.Vecs) {
 		return moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
@@ -391,14 +419,14 @@ func appendBatchRange(dst *batch.Batch, src *batch.Batch, offset, length int, pr
 	} else {
 		checkpoints = localCheckpoints[:len(dst.Vecs)]
 	}
+	if err := dst.OwnReadOnlyVectors(mp); err != nil {
+		return err
+	}
 	for i := range dst.Vecs {
-		if err := dst.Vecs[i].MaterializeOwned(proc.Mp()); err != nil {
-			return err
-		}
 		checkpoints[i] = dst.Vecs[i].MakeAppendCheckpoint()
 	}
 	for i := range dst.Vecs {
-		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
+		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, mp); err != nil {
 			for j := 0; j <= i; j++ {
 				err = vector.JoinAppendRollbackError(err, dst.Vecs[j].RollbackAppend(checkpoints[j], length))
 			}

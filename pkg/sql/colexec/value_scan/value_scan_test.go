@@ -157,8 +157,8 @@ func TestValueScanEvaluatesRowLocalDependencyAgainstMaterializedColumn(t *testin
 	}
 	bat := batch.NewWithSize(2)
 	bat.SetRowCount(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{0, 0}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{0, 0}, nil, proc.Mp()))
 	vs := &ValueScan{
@@ -214,7 +214,7 @@ func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
 
 	input := batch.NewWithSize(1)
 	input.SetRowCount(rowCount)
-	input.Vecs[0] = vector.NewVec(intType)
+	input.Vecs[0] = vector.NewVec(intType, proc.Mp())
 	inputValues := make([]int64, rowCount)
 	for i := range inputValues {
 		inputValues[i] = int64(i)
@@ -222,7 +222,7 @@ func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], inputValues, nil, proc.Mp()))
 	defer input.Clean(proc.Mp())
 
-	target := vector.NewVec(intType)
+	target := vector.NewVec(intType, proc.Mp())
 	require.NoError(t, vector.AppendFixedList(target, make([]int64, rowCount), nil, proc.Mp()))
 	defer target.Free(proc.Mp())
 
@@ -236,7 +236,7 @@ func TestEvalRowsetDataUsesBoundedRowWindows(t *testing.T) {
 		defer probes[row].Free()
 	}
 
-	require.NoError(t, evalRowsetData(proc, rowset, target, execs, input))
+	require.NoError(t, evalRowsetData(proc, rowset, target, execs, input, proc.Mp(), nil))
 	for row, probe := range probes {
 		require.Equal(t, []int{1}, probe.seenRows,
 			"row %d must not evaluate its expression against the full VALUES batch", row)
@@ -273,8 +273,8 @@ func TestValueScanEvaluatesVolatileSourceOnceForDependentColumn(t *testing.T) {
 	}
 	bat := batch.NewWithSize(2)
 	bat.SetRowCount(2)
-	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{0, 0}, nil, proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{0, 0}, nil, proc.Mp()))
 	vs := &ValueScan{
@@ -308,7 +308,7 @@ func TestValueScanDependencyCanReadConstantSourceColumn(t *testing.T) {
 	batchData := batch.NewWithSize(3)
 	batchData.SetRowCount(2)
 	for i := range batchData.Vecs {
-		batchData.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		batchData.Vecs[i] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	}
 	// Column 2 represents a constant expression already folded by
 	// constructValueScan and therefore has no RowsetData entries. The
@@ -426,11 +426,11 @@ func TestEvalRowsetDataDoesNotEvaluateLocalDefaultOnOtherRows(t *testing.T) {
 
 	input := batch.NewWithSize(1)
 	input.SetRowCount(2)
-	input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []float64{0, 2}, nil, proc.Mp()))
 	defer input.Clean(proc.Mp())
 
-	result := vector.NewVec(types.T_float64.ToType())
+	result := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(result, []float64{0, 0}, nil, proc.Mp()))
 	defer result.Free(proc.Mp())
 
@@ -440,14 +440,15 @@ func TestEvalRowsetDataDoesNotEvaluateLocalDefaultOnOtherRows(t *testing.T) {
 	}}
 	beforeEval := proc.Mp().CurrNB()
 	require.NoError(t, evalRowsetData(proc, rowsetExpr, result,
-		[]colexec.ExpressionExecutor{expr}, input))
+		[]colexec.ExpressionExecutor{expr}, input, proc.Mp(), nil))
 	require.Equal(t, []float64{0, 5}, vector.MustFixedColNoTypeCheck[float64](result))
 
 	// The expression owns its reusable result vector. It must release that
 	// vector after the window has been cleaned, leaving only input/result alive.
 	expr.Free()
 	expr = nil
-	require.Equal(t, beforeEval, proc.Mp().CurrNB())
+	require.LessOrEqual(t, proc.Mp().CurrNB(), beforeEval)
+	require.Equal(t, int64(input.Allocated()+result.Allocated()), proc.Mp().CurrNB())
 }
 
 func resetBatchs(arg *ValueScan, m *mpool.MPool) {

@@ -138,7 +138,7 @@ func TestMakeTimeBinarySecondsColumns(t *testing.T) {
 			require.NoError(t, err)
 			input := batch.NewWithSize(1)
 			defer input.Clean(proc.Mp())
-			input.Vecs[0] = vector.NewVec(typ)
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			for _, seconds := range []string{"1.5", "59.5", ""} {
 				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(seconds), seconds == "", proc.Mp()))
 			}
@@ -188,7 +188,7 @@ func TestSpecialIntegerArgumentPreparedReuse(t *testing.T) {
 					bound, changed, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(proc.Ctx, original, []any{ParamValue{Value: source.value, IsBinaryProtocol: true, RuntimeType: source.typ.ToType(), HasRuntimeType: true}})
 					require.NoError(t, err)
 					require.True(t, changed)
-					params := vector.NewVec(types.T_text.ToType())
+					params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 					require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(source.value)), source.value == nil, proc.Mp()))
 					proc.SetPrepareParams(params)
@@ -241,7 +241,7 @@ func TestPersistedFormatPrecisionCompatibility(t *testing.T) {
 			require.NoError(t, restored.Unmarshal(data))
 			input := batch.NewWithSize(1)
 			defer input.Clean(proc.Mp())
-			input.Vecs[0] = vector.NewVec(typ)
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(1125), false, proc.Mp()))
 			input.SetRowCount(1)
 			executor, err := colexec.NewExpressionExecutor(proc, restored)

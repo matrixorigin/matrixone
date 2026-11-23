@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
+func TestWindowResetReleasesAccountedBuffers(t *testing.T) {
 	for _, tc := range []struct {
 		name                                             string
 		partitioned, accounted, cancelBuffered, freeOnly bool
@@ -65,6 +65,7 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				child.Free(proc, false, nil)
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -76,23 +77,20 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 				proc.Ctx = ctx
 				t.Cleanup(cancel)
 				var account *mpool.AllocationAccount
-				var selection *vector.AllocationAccountSelection
 				if tc.accounted {
 					account, err = registry.Open(1 << 20)
 					require.NoError(t, err)
-					selection, err = vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2)
-					require.NoError(t, err)
+					require.NoError(t, arg.SetAllocationAccount(account))
 				}
 				columns := [][]int32{{1, 1, 1}, {3, 1, 2}, {30, 10, 20}}
 				want := []int64{10, 30, 60}
 				if generation == 1 {
 					columns, want = [][]int32{{1, 1}, {2, 1}, {200, 100}}, []int64{100, 300}
 				}
-				input := batch.NewOffHeapWithSize(3)
+				input := batch.NewWithSize(3)
 				child.WithBatchs([]*batch.Batch{input})
 				for col, values := range columns {
-					input.Vecs[col] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-					require.NoError(t, input.Vecs[col].SetAllocationAccount(selection))
+					input.Vecs[col] = vector.NewVec(types.T_int32.ToType(), mp)
 					require.NoError(t, vector.AppendFixedList(input.Vecs[col], values, nil, mp))
 				}
 				input.SetRowCount(len(want))
@@ -114,13 +112,14 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 						if tc.partitioned {
 							sum = int64(row + 1)
 						}
-						require.Equal(t, sum, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], row))
+						if tc.partitioned {
+							require.Equal(t, sum, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], row))
+						} else {
+							require.Equal(t, types.Decimal128FromInt64(sum), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[3], row))
+						}
 					}
 				}
 				require.NotNil(t, arg.ctr.bat)
-				for _, vec := range arg.ctr.bat.Vecs {
-					require.Same(t, selection, vec.AllocationAccountSelection())
-				}
 				if tc.accounted && !canceled {
 					require.NotEmpty(t, arg.ctr.orderVecs)
 					require.Len(t, arg.ctr.aggVecs, 1)
@@ -133,13 +132,13 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 						for _, expression := range expressions {
 							for _, vec := range expression.Vec {
 								require.NotNil(t, vec)
-								require.Same(t, selection, vec.AllocationAccountSelection(), "expression copies must belong to the current generation")
 							}
 						}
 					}
 				}
 				// Child-first cleanup leaves only Window's independently owned copies.
 				child.Free(proc, false, nil)
+				colexec.FreeMockChildren(child)
 				if tc.accounted {
 					require.Positive(t, account.Snapshot().Used)
 				}
@@ -147,6 +146,7 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 				allocated := buffered.Vecs[0].Allocated()
 				if tc.freeOnly {
 					arg.Free(proc, false, nil)
+					colexec.FreeMockChildren(arg)
 				} else {
 					arg.Reset(proc, callErr != nil, callErr)
 					if !tc.accounted {
@@ -164,6 +164,7 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 						}
 					}
 					require.Zero(t, account.Snapshot().Used, "Reset must release the ending generation before Free")
+					require.NoError(t, arg.ClearAllocationAccount(account))
 					terminal, first, err := registry.CompleteTerminal(account)
 					require.NoError(t, err)
 					require.True(t, first)
@@ -213,6 +214,7 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				child.Free(proc, false, nil)
 				proc.Free()
 				require.Zero(t, mp.CurrNB())
@@ -228,13 +230,14 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 			for _, limit := range limits {
 				func() {
 					var account, sourceAccount *mpool.AllocationAccount
-					var selection *vector.AllocationAccountSelection
+					var selection *mpool.MPool
 					if limit > 0 {
 						account, err = registry.Open(limit)
 						require.NoError(t, err)
 						require.NoError(t, arg.SetAllocationAccount(account))
 						defer func() {
 							arg.Free(proc, false, nil)
+							colexec.FreeMockChildren(arg)
 							require.Zero(t, account.Snapshot().Used)
 							require.NoError(t, arg.ClearAllocationAccount(account))
 							terminal, _, err := registry.CompleteTerminal(account)
@@ -245,10 +248,11 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 					if tc.sourceAccounted {
 						sourceAccount, err = sourceRegistry.Open(1 << 20)
 						require.NoError(t, err)
-						selection, err = vector.NewAllocationAccountSelection(sourceAccount, mpool.AllocationOwnerOrder, 1, 2)
+						selection, err = mp.WithAccount(sourceAccount, mpool.AllocationOwnerOrder, 1, mpool.AllocationCapacityClassDefault)
 						require.NoError(t, err)
 						defer func() {
 							arg.Free(proc, false, nil)
+							colexec.FreeMockChildren(arg)
 							child.Free(proc, false, nil)
 							require.Zero(t, sourceAccount.Snapshot().Used)
 							terminal, _, err := sourceRegistry.CompleteTerminal(sourceAccount)
@@ -268,19 +272,17 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 						input := batch.NewWithSize(width)
 						child.WithBatchs([]*batch.Batch{input})
 						for col := range width {
-							var v *vector.Vector
+							inputMP := mp
 							if selection != nil {
-								v, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
-								require.NoError(t, err)
-							} else {
-								v = vector.NewVec(typ)
+								inputMP = selection
 							}
+							v := vector.NewVec(typ, inputMP)
 							input.Vecs[col] = v
 							for row := range 4 {
 								if tc.varlen {
-									require.NoError(t, vector.AppendBytes(v, []byte(strings.Repeat("x", 512)), row == 0, mp))
+									require.NoError(t, vector.AppendBytes(v, []byte(strings.Repeat("x", 512)), row == 0, inputMP))
 								} else {
-									require.NoError(t, vector.AppendFixed(v, int64(batchIdx*4+row+col), false, mp))
+									require.NoError(t, vector.AppendFixed(v, int64(batchIdx*4+row+col), false, inputMP))
 								}
 							}
 						}
@@ -314,7 +316,6 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 						if account != nil {
 							retained := 0
 							for _, v := range arg.ctr.bat.Vecs {
-								require.Same(t, arg.ctr.allocation.Vector, v.AllocationAccountSelection())
 								retained += v.Allocated()
 							}
 							require.GreaterOrEqual(t, retained, 3072)

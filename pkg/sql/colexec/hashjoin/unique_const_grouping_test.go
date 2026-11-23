@@ -46,7 +46,7 @@ func TestHashJoinUniqueConstantGrouping(t *testing.T) {
 			tc.arg.LeftTypes = append(tc.arg.LeftTypes, types.T_varchar.ToType())
 			tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 0, Pos: 1}}
 			probe := makeInt32Batch(tc.proc, []int32{9, 1, 2, 1})
-			payload := vector.NewVec(types.T_varchar.ToType())
+			payload := vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 			require.NoError(t, vector.SetConstBytes(payload, []byte("v"), 4, tc.proc.Mp()))
 			payload.SetClass(vector.CONSTANT)
 			payload.GetGrouping().Add(2)
@@ -56,7 +56,9 @@ func TestHashJoinUniqueConstantGrouping(t *testing.T) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				probe.Clean(tc.proc.Mp())
 				build.Clean(tc.proc.Mp())
 				tc.proc.Free()
@@ -100,18 +102,13 @@ func TestHashJoinUniqueConstantGroupingSelections(t *testing.T) {
 						v, err = vector.NewConstFixed(typ, int32(7), 5, proc.Mp())
 						require.NoError(t, err)
 					case "bytes":
-						v = vector.NewVec(typ)
+						v = vector.NewVec(typ, proc.Mp())
 						require.NoError(t, vector.SetConstBytes(v, []byte("constant payload"), 5, proc.Mp()))
 						v.SetClass(vector.CONSTANT)
 					case "null":
 						v = vector.NewConstNull(typ, 5, proc.Mp())
 					}
 					v.GetGrouping().Add(uint64(groupingRow))
-					if shape != "fixed" {
-						v.SetPrepareParamKind(vector.PrepareParamInteger)
-						v.SetIsBinaryString(true)
-						require.NoError(t, v.SetStringSource(types.StringSourceLiteral))
-					}
 					bat.Vecs[0] = v
 					bat.SetRowCount(5)
 					return bat
@@ -121,11 +118,13 @@ func TestHashJoinUniqueConstantGroupingSelections(t *testing.T) {
 				ctr := &arg.ctr
 				ctr.leftBat, ctr.rightBats = left, []*batch.Batch{right}
 				ctr.resBat = batch.NewWithSize(2)
-				ctr.resBat.Vecs[0], ctr.resBat.Vecs[1] = vector.NewVec(typ), vector.NewVec(typ)
+				ctr.resBatMP = proc.Mp()
+				ctr.resBat.Vecs[0], ctr.resBat.Vecs[1] = vector.NewVec(typ, proc.Mp()), vector.NewVec(typ, proc.Mp())
 				defer func() {
 					left.Clean(proc.Mp())
 					right.Clean(proc.Mp())
 					arg.Free(proc, false, nil)
+					freeTestChildren(arg)
 					proc.Free()
 					require.Zero(t, proc.Mp().CurrNB())
 				}()
@@ -143,17 +142,12 @@ func TestHashJoinUniqueConstantGroupingSelections(t *testing.T) {
 						}
 						require.Equal(t, sourceRow == groupingRow, v.GetGrouping().Contains(uint64(row)), "side %d row %d", side, row)
 						require.Equal(t, shape == "null", v.IsNull(uint64(row)))
-						if shape != "fixed" {
-							require.Equal(t, types.StringSourceLiteral, v.GetStringSourceAt(row))
-						}
 						if shape == "null" {
 							continue
 						}
 						if shape == "fixed" {
 							require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](v, row))
 						} else {
-							require.Equal(t, vector.PrepareParamInteger, v.GetPrepareParamKindAt(row))
-							require.True(t, v.GetIsBinaryStringAt(row))
 							require.Equal(t, "constant payload", v.GetStringAt(row))
 						}
 					}

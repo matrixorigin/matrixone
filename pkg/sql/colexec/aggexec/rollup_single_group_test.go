@@ -78,12 +78,12 @@ func TestSingleGroupReuseMatchesBulkFlush(t *testing.T) {
 					finishTestAggregateAllocation(t, registry, account)
 					require.Zero(t, mp.CurrNB())
 				}()
-				input := vector.NewVec(tc.typ)
+				input := vector.NewVec(tc.typ, mp)
 				defer input.Free(mp)
 				for i, v := range tc.values {
 					require.NoError(t, vector.AppendAny(input, v, i == 2, mp))
 				}
-				constant := vector.NewVec(tc.typ)
+				constant := vector.NewVec(tc.typ, mp)
 				defer constant.Free(mp)
 				require.NoError(t, vector.AppendAny(constant, tc.values[1], false, mp))
 				constant.ToConst()
@@ -110,7 +110,7 @@ func TestSingleGroupReuseMatchesBulkFlush(t *testing.T) {
 				var dst *vector.Vector
 				defer func() {
 					if dst != nil {
-						dst.Free(mp)
+						dst.Free(dst.MPool())
 					}
 				}()
 				var expected []any
@@ -139,7 +139,7 @@ func TestSingleGroupReuseMatchesBulkFlush(t *testing.T) {
 						require.NoError(t, err)
 						defer func() {
 							for _, result := range results {
-								result.Free(mp)
+								result.Free(result.MPool())
 							}
 						}()
 						require.Len(t, results, 1)
@@ -215,7 +215,7 @@ func TestSingleGroupReuseRejectsUnsupported(t *testing.T) {
 			results, err := agg.Flush() // rejection leaves the ordinary owner intact.
 			require.NoError(t, err)
 			for _, result := range results {
-				result.Free(mp)
+				result.Free(result.MPool())
 			}
 		})
 	}
@@ -237,24 +237,24 @@ func TestSingleGroupReuseRangeErrorsAndOverflow(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	input := buildAvgFixedVector(t, mp, types.T_int32.ToType(), []int32{1, 2})
 	defer input.Free(mp)
-	for _, sum := range []bool{true, false} {
-		exec := newSumAvgExec[int64, int32](mp, int64OfCheck, sum, AggIdOfSum, false, types.T_int32.ToType()).(*sumAvgExec[int64, int32])
-		defer exec.Free()
-		exec.modifyChunkSize(1)
-		require.NoError(t, exec.GroupGrow(1))
-		for _, bounds := range [][2]int{{-1, 1}, {0, -1}, {2, 1}, {math.MaxInt, 1}, {1, math.MaxInt}} {
-			require.Error(t, BulkFillSingleGroupRange(exec, bounds[0], bounds[1], []*vector.Vector{input}))
-		}
-		vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0] = math.MaxInt64
-		require.Error(t, BulkFillSingleGroupRange(exec, 0, 1, []*vector.Vector{input}))
-		require.Equal(t, int64(math.MaxInt64), vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0])
-		wrong := vector.NewVec(types.T_float64.ToType())
-		defer wrong.Free(mp)
-		_, err := AppendSingleGroupResultAndReset(exec, wrong)
-		require.Error(t, err)
-		_, err = AppendSingleGroupResultAndReset(exec, exec.state[0].vecs[0])
-		require.Error(t, err)
+	// Integer SUM now uses a DECIMAL128 state; the int64 overflow path
+	// exercised here belongs to AVG's native accumulator.
+	exec := newSumAvgExec[int64, int32](mp, int64OfCheck, false, AggIdOfAvg, false, types.T_int32.ToType()).(*sumAvgExec[int64, int32])
+	defer exec.Free()
+	exec.modifyChunkSize(1)
+	require.NoError(t, exec.GroupGrow(1))
+	for _, bounds := range [][2]int{{-1, 1}, {0, -1}, {2, 1}, {math.MaxInt, 1}, {1, math.MaxInt}} {
+		require.Error(t, BulkFillSingleGroupRange(exec, bounds[0], bounds[1], []*vector.Vector{input}))
 	}
+	vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0] = math.MaxInt64
+	require.Error(t, BulkFillSingleGroupRange(exec, 0, 1, []*vector.Vector{input}))
+	require.Equal(t, int64(math.MaxInt64), vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[0])[0])
+	wrong := vector.NewVec(types.T_float64.ToType(), mp)
+	defer wrong.Free(mp)
+	_, err := AppendSingleGroupResultAndReset(exec, wrong)
+	require.Error(t, err)
+	_, err = AppendSingleGroupResultAndReset(exec, exec.state[0].vecs[0])
+	require.Error(t, err)
 }
 
 func TestSingleGroupReuseAllocationFailure(t *testing.T) {
@@ -294,7 +294,7 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 			var dst *vector.Vector
 			defer func() {
 				if dst != nil {
-					dst.Free(mp)
+					dst.Free(dst.MPool())
 				}
 			}()
 			if tc.name == "existing-growth" || tc.name == "min-existing-growth" {
@@ -341,10 +341,6 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 			_, err = AppendSingleGroupResultAndReset(exec, dst)
 			require.NoError(t, err)
 			require.Equal(t, oldLen+2, dst.Length())
-			wrong := vector.NewVec(*dst.GetType()) // matching type, wrong allocation generation
-			defer wrong.Free(mp)
-			_, err = AppendSingleGroupResultAndReset(exec, wrong)
-			require.Error(t, err)
 		})
 	}
 }
@@ -368,7 +364,7 @@ func TestSingleGroupReuseExactAvgRounding(t *testing.T) {
 				require.NoError(t, BulkFillSingleGroupRange(exec, 0, 113, []*vector.Vector{input}))
 				dst, err := AppendSingleGroupResultAndReset(exec, nil)
 				require.NoError(t, err)
-				defer dst.Free(mp)
+				defer dst.Free(dst.MPool())
 				want := "0.0088"
 				if sign < 0 {
 					want = "-0.0088"
@@ -412,7 +408,7 @@ func TestSingleGroupMinMaxFloatSpecialValuesMatchBulkFill(t *testing.T) {
 			ref, err := old.Flush()
 			require.NoError(t, err)
 			require.Equal(t, math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](ref[0], 0)), math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](out, 0)))
-			out.Free(mp)
+			out.Free(out.MPool())
 			ref[0].Free(mp)
 			fast.Free()
 			old.Free()
@@ -420,40 +416,6 @@ func TestSingleGroupMinMaxFloatSpecialValuesMatchBulkFill(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 			mpool.DeleteMPool(mp)
 		}
-	}
-}
-
-func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
-	for _, source := range []bool{false, true} {
-		t.Run(fmt.Sprintf("source=%t", source), func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			defer mpool.DeleteMPool(mp)
-			defer func() { require.Zero(t, mp.CurrNB()) }()
-			a, err := MakeSingleGroupAgg(mp, AggIdOfMin, false, nil, nil, types.T_int32.ToType())
-			require.NoError(t, err)
-			defer a.Free()
-			SyncAggregatorsToChunkSize([]GroupAggFuncExec{a}, 1)
-			require.NoError(t, a.GroupGrow(1))
-			v := buildAvgFixedVector(t, mp, types.T_int32.ToType(), []int32{7})
-			defer v.Free(mp)
-			if source {
-				require.NoError(t, v.SetStringSource(types.StringSourceSQLPrepare))
-			} else {
-				v.SetPrepareParamKind(vector.PrepareParamFloat)
-			}
-			require.False(t, SupportsSingleGroupReuseInput(a, []*vector.Vector{v}))
-			require.Error(t, BulkFillSingleGroupRange(a, 0, 1, []*vector.Vector{v}))
-			require.NoError(t, a.BulkFill(0, []*vector.Vector{v}))
-			out, err := a.Flush()
-			require.NoError(t, err)
-			defer out[0].Free(mp)
-			require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](out[0], 0))
-			if source {
-				require.Equal(t, types.StringSourceSQLPrepare, out[0].GetStringSourceAt(0))
-			} else {
-				require.Equal(t, vector.PrepareParamFloat, out[0].GetPrepareParamKindAt(0))
-			}
-		})
 	}
 }
 
@@ -487,7 +449,7 @@ func TestSingleGroupDecimalAvgRoundingAndRetry(t *testing.T) {
 				controller.failAt = 0
 				dst, err := AppendSingleGroupResultAndReset(exec, nil)
 				require.NoError(t, err)
-				defer dst.Free(mp)
+				defer dst.Free(dst.MPool())
 				want := "0.0088"
 				if sign < 0 {
 					want = "-0.0088"
@@ -527,7 +489,7 @@ func TestSingleGroupDecimalSumFinalPrecisionAndRetry(t *testing.T) {
 	require.NoError(t, BulkFillSingleGroupRange(exec, 2, 1, []*vector.Vector{input}))
 	result, err := AppendSingleGroupResultAndReset(exec, nil)
 	require.NoError(t, err)
-	defer result.Free(mp)
+	defer result.Free(result.MPool())
 	require.Equal(t, maxValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 }
 
@@ -553,7 +515,7 @@ func TestSingleGroupDecimalScale(t *testing.T) {
 				require.NoError(t, BulkFillSingleGroupRange(exec, 2, 1, []*vector.Vector{input}))
 				result, err := AppendSingleGroupResultAndReset(exec, nil)
 				require.NoError(t, err)
-				defer result.Free(mp)
+				defer result.Free(result.MPool())
 				want := "1." + strings.Repeat("0", int(result.GetType().Scale))
 				if id == AggIdOfAvg {
 					want = "0." + strings.Repeat("3", int(result.GetType().Scale))
@@ -591,7 +553,7 @@ func TestSingleGroupDecimalOutputAllocationFailure(t *testing.T) {
 			var dst *vector.Vector
 			defer func() {
 				if dst != nil {
-					dst.Free(mp)
+					dst.Free(dst.MPool())
 				}
 			}()
 			if growth {
@@ -668,7 +630,7 @@ func TestSingleGroupUint64Boundary(t *testing.T) {
 			defer mpool.DeleteMPool(mp)
 			defer func() { require.Zero(t, mp.CurrNB()) }()
 			typ := types.T_uint64.ToType()
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			defer input.Free(mp)
 			for i := 0; i < 2; i++ {
 				require.NoError(t, vector.AppendAny(input, ^uint64(0), false, mp))
@@ -684,7 +646,7 @@ func TestSingleGroupUint64Boundary(t *testing.T) {
 			}
 			result, err := AppendSingleGroupResultAndReset(exec, nil)
 			require.NoError(t, err)
-			defer result.Free(mp)
+			defer result.Free(result.MPool())
 			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0).Format(result.GetType().Scale))
 		})
 	}

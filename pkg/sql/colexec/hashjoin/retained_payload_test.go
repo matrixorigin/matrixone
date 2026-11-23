@@ -56,6 +56,10 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 		wantBatchRows    []int
 	}{
 		{
+			name: "inner-duplicate-continuation", joinType: plan.Node_INNER, probeKeys: []int64{1},
+			wantBatchRows: []int{11, 2},
+		},
+		{
 			name: "left-duplicate-continuation", joinType: plan.Node_LEFT, probeKeys: []int64{1, 2},
 			wantBatchRows: []int{11, 3},
 		},
@@ -143,7 +147,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				input := batch.NewWithSize(len(arg.RightTypes))
 				buildChild.WithBatchs([]*batch.Batch{input})
 				for col, typ := range arg.RightTypes {
-					input.Vecs[col] = vector.NewVec(typ)
+					input.Vecs[col] = vector.NewVec(typ, mp)
 				}
 				for row := first; row < last; row++ {
 					buildKey := int64(1)
@@ -197,7 +201,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 
 			probe := batch.NewWithSize(1)
 			probeChild.WithBatchs([]*batch.Batch{probe})
-			probe.Vecs[0] = vector.NewVec(keyType)
+			probe.Vecs[0] = vector.NewVec(keyType, mp)
 			for _, key := range tc.probeKeys {
 				require.NoError(t, vector.AppendFixed(probe.Vecs[0], key, false, mp))
 			}
@@ -235,7 +239,7 @@ func TestHashJoinRetainedVarlenAcrossBatches(t *testing.T) {
 				want[joinedRow{2, nullID}] = true
 				want[joinedRow{3, -1}] = true
 				want[joinedRow{4, -1}] = true
-			} else if !tc.usePK {
+			} else if tc.joinType == plan.Node_LEFT {
 				want[joinedRow{2, -1}] = true
 			}
 

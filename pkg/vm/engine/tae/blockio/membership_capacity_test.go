@@ -55,7 +55,7 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(mp) })
 	for i := range input.Vecs {
-		input.Vecs[i] = vector.NewVec(types_[i])
+		input.Vecs[i] = vector.NewVec(types_[i], mp)
 	}
 	for row := range 8 {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, mp))
@@ -81,13 +81,11 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+	allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	output := batch.NewOffHeapWithSize(2)
-	require.NoError(t, output.SetAllocationAccount(allocation))
+	output := batch.NewWithSize(2)
 	for i := range output.Vecs {
-		output.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types_[i], allocation)
-		require.NoError(t, err)
+		output.Vecs[i] = vector.NewVec(types_[i], mp)
 	}
 	original := append([]*vector.Vector(nil), output.Vecs...)
 	request := &engine.ReaderFilterRequest{
@@ -129,7 +127,7 @@ func TestMembershipMetadataRefusalRunsBorrowedPredicate(t *testing.T) {
 	require.Zero(t, output.RowCount())
 	for i, v := range output.Vecs {
 		require.Same(t, original[i], v)
-		require.False(t, v.HasBorrowedBacking())
+		require.False(t, v.IsReadOnly())
 	}
 	require.Equal(t, []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned}, request.ColumnUses)
 }
@@ -142,7 +140,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	t.Cleanup(proc.Free)
 	typs := []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}
-	input := batch.NewWithSchema(false, nil, typs)
+	input := batch.NewWithSchema(nil, typs, mp)
 	t.Cleanup(func() { input.Clean(mp) })
 	for row := range 8 {
 		for col, v := range input.Vecs {
@@ -169,13 +167,16 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 		exact          bool
 		retained       bool
 		sourceError    bool
+		// stagedPressure: copying the member rows for the predicates already
+		// exceeds the budget, so the staged predicate call never happens.
+		stagedPressure bool
 	}{
 		{name: "identity", limit: 128},
 		{name: "selective output fits", limit: 128, selective: true},
-		{name: "early output pressure", limit: 64, selective: true, bypass: true},
+		{name: "early output pressure", limit: 64, selective: true, bypass: true, stagedPressure: true},
 		{name: "late output pressure", limit: 96, selective: true, bypass: true},
 		{name: "callback capacity error", limit: 128, predicateError: true},
-		{name: "real predicate result pressure", limit: 64, selective: true, bypass: true, realPredicate: true},
+		{name: "real predicate result pressure", limit: 64, selective: true, bypass: true, realPredicate: true, stagedPressure: true},
 		{name: "generic ordinary fallback", limit: 128, ordinary: true},
 		{name: "tombstoned ordinary fallback", limit: 128, ordinary: true, tombstone: true},
 		{name: "total tombstoned visibility once", limit: 128, tombstone: true},
@@ -195,11 +196,10 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					_, _, err := registry.CompleteTerminal(account)
 					require.NoError(t, err)
 				})
-				allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSelection, 1, 2)
+				allocation, err := mp.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
-				output := batch.NewWithSchema(true, nil, typs)
-				t.Cleanup(func() { output.Clean(mp) })
-				require.NoError(t, output.SetAllocationAccount(allocation))
+				output := batch.NewWithSchema(nil, typs, allocation)
+				t.Cleanup(func() { freeTestBatchWithOwnPools(output) })
 				original := append([]*vector.Vector(nil), output.Vecs...)
 				request := &engine.ReaderFilterRequest{
 					OutputAllocation: allocation,
@@ -234,10 +234,22 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 						}
 					})
 					var scratch []int64
-					var parameter vector.FunctionParameterWrapper[bool]
-					evaluate = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-						rows, all, err := colexec.SelectPredicateRows(proc, bat, loaded, exprs, allocation, &scratch, &parameter, nil, nil, nil)
-						return engine.ReaderFilterResult{Sels: rows, All: all}, err
+					evaluate = func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+						value, err := exprs[0].Eval(proc, []*batch.Batch{bat}, nil)
+						if err != nil {
+							return engine.ReaderFilterResult{}, err
+						}
+						keep := vector.GenerateFunctionFixedTypeParameter[bool](value)
+						scratch = scratch[:0]
+						for row := 0; row < bat.RowCount(); row++ {
+							if v, null := keep.GetValue(uint64(row)); v && !null {
+								scratch = append(scratch, int64(row))
+							}
+						}
+						if len(scratch) == bat.RowCount() {
+							return engine.ReaderFilterResult{All: true}, nil
+						}
+						return engine.ReaderFilterResult{Sels: scratch}, nil
 					}
 				}
 				request.Select = func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
@@ -263,9 +275,9 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 						},
 					}
 					if tc.retained {
-						scratch, err := request.MembershipScratch(len(typs))
+						scratch, err := request.MembershipScratch(len(typs), allocation)
 						require.NoError(t, err)
-						require.NoError(t, scratch.Physical.PreExtend(16, mp))
+						require.NoError(t, scratch.Physical.PreExtend(16, scratch.Physical.MPool()))
 					}
 				}
 				ds := &membershipVisibilityTestSource{}
@@ -310,7 +322,9 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 					require.Zero(t, memberUsed, "identity inputs must not reserve optional row maps")
 					require.Equal(t, tc.bypass, request.Membership.Bypass)
 					if tc.bypass {
-						wantCalls++
+						if !tc.stagedPressure {
+							wantCalls++
+						}
 					} else if tc.selective {
 						wantRows--
 					}
@@ -319,7 +333,7 @@ func TestMembershipScratchDoesNotStarveOutput(t *testing.T) {
 				require.Equal(t, wantRows, output.RowCount())
 				for col, v := range output.Vecs {
 					require.Same(t, original[col], v)
-					require.False(t, v.HasBorrowedBacking())
+					require.False(t, v.IsReadOnly())
 					for row := range wantRows {
 						physical := row
 						if tc.tombstone && row >= 6 {

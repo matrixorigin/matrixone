@@ -101,7 +101,7 @@ func TestGetColDataDecimal256PrecisionAndScale(t *testing.T) {
 			typ := plan.Type{Id: int32(types.T_decimal256), Width: tc.width, Scale: tc.scale}
 			param := decimal256ExternalParam(tree.CSV, "", typ)
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, tc.width, tc.scale))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, tc.width, tc.scale), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			err := getColData(
@@ -131,7 +131,7 @@ func TestGetColDataDecimal256NullEmptyInvalidAndOverflow(t *testing.T) {
 
 	t.Run("null", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale), proc.Mp())
 		defer bat.Clean(proc.Mp())
 
 		err := getColData(bat, []csvparser.Field{{IsNull: true}}, 0, param, proc.Mp(), param.Attrs[0], proc)
@@ -141,7 +141,7 @@ func TestGetColDataDecimal256NullEmptyInvalidAndOverflow(t *testing.T) {
 
 	t.Run("empty remains null", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale), proc.Mp())
 		defer bat.Clean(proc.Mp())
 
 		err := getColData(bat, []csvparser.Field{{Val: ""}}, 0, param, proc.Mp(), param.Attrs[0], proc)
@@ -157,7 +157,7 @@ func TestGetColDataDecimal256NullEmptyInvalidAndOverflow(t *testing.T) {
 	} {
 		t.Run(value, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			err := getColData(bat, []csvparser.Field{{Val: value}}, 0, param, proc.Mp(), param.Attrs[0], proc)
@@ -195,7 +195,7 @@ func TestIsLegalLineDecimal256AndParallelBoundary(t *testing.T) {
 	parallelParam := decimal256ExternalParam(tree.CSV, "", cols[0].Typ)
 	parallelParam.ParallelLoad = true
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	err := getColData(bat, []csvparser.Field{{Val: valid}}, 0, parallelParam, proc.Mp(), parallelParam.Attrs[0], proc)
@@ -207,7 +207,7 @@ func TestAppendLoadEmptyNumericZeroDecimal256(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	vec := vector.NewVec(types.New(types.T_decimal256, 50, 10))
+	vec := vector.NewVec(types.New(types.T_decimal256, 50, 10), proc.Mp())
 	defer vec.Free(proc.Mp())
 
 	require.NoError(t, appendLoadEmptyNumericZero(vec, types.T_decimal256, false, proc.Mp()))
@@ -233,7 +233,7 @@ func TestDecimal256CSVAndJSONLineObjectArray(t *testing.T) {
 			typ := plan.Type{Id: int32(types.T_decimal256), Width: 39, Scale: 2}
 			param := decimal256ExternalParam(tc.format, tc.jsonData, typ)
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, typ.Width, typ.Scale), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			err := readAllText(t, param, proc, bat, tc.content)
@@ -276,7 +276,7 @@ func TestDecimal256CSVAndJSONLineDroppedTail(t *testing.T) {
 					param := decimal256ExternalParam(format.format, format.jsonData, typ)
 					param.Extern.ExternType = int32(plan.ExternType_LOAD)
 					bat := batch.NewWithSize(1)
-					bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, width, 2))
+					bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, width, 2), proc.Mp())
 					defer bat.Clean(proc.Mp())
 
 					content := tc.value + "\n"

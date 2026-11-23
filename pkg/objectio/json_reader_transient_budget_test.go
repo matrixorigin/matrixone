@@ -30,7 +30,7 @@ func TestCacheJSONReaderTransientBackingAdmission(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-			source := vector.NewVec(types.T_json.ToType())
+			source := vector.NewVec(types.T_json.ToType(), mp)
 			defer source.Free(mp)
 			doc, err := types.ParseStringToByteJson(`{"keep":"` + strings.Repeat("x", 32<<10) + `"}`)
 			require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestCacheJSONReaderTransientBackingAdmission(t *testing.T) {
 				live += size
 				return func() { live -= size }, nil
 			}
-			reader, err := OpenJSONReader(data, mp, nil, admission)
+			reader, err := OpenJSONReader(data, mp, admission)
 			require.NoError(t, err)
 			defer reader.Close()
 			require.True(t, IsPrivateJSONCacheReader(reader))

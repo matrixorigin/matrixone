@@ -295,7 +295,7 @@ func (r *ObjectReader) ReadBlockCommitTS(ctx context.Context, blockIdx uint32) (
 		releaseIOVector()
 		return nil, nil, err
 	}
-	if vec.GetNulls().GetCardinality() == vec.Length() {
+	if vec.GetNulls().Count() == vec.Length() {
 		vec.Free(r.mp)
 		releaseIOVector()
 		return nil, func() {}, nil

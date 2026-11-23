@@ -87,6 +87,23 @@ def _event_fields(event: object) -> Optional[Tuple[str, str, str]]:
     return action, package, test
 
 
+def decode_event(raw_line: bytes) -> object:
+    return json.loads(raw_line.decode("utf-8"))
+
+
+def emit_analyzer_input(report_path: Path) -> None:
+    # Preserve complete records exactly. The pinned analyzer aborts on invalid
+    # JSON, so keep malformed fragments only in the authoritative raw report.
+    with report_path.open("rb") as report:
+        for raw_line in report:
+            try:
+                event = decode_event(raw_line)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(event, dict):
+                sys.stdout.buffer.write(raw_line)
+
+
 def validate(report_path: Path, require_complete: bool = False) -> Validation:
     result = Validation()
     active: Dict[Tuple[str, str], ActiveTest] = {}
@@ -96,13 +113,8 @@ def validate(report_path: Path, require_complete: bool = False) -> Validation:
     with report_path.open("rb") as report:
         for line_number, raw_line in enumerate(report, 1):
             try:
-                line = raw_line.decode("utf-8")
-            except UnicodeDecodeError:
-                result.malformed += 1
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
+                event = decode_event(raw_line)
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 result.malformed += 1
                 continue
 
@@ -239,12 +251,18 @@ def _print_result(result: Validation) -> None:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--require-complete", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--require-complete", action="store_true")
+    mode.add_argument("--emit-analyzer-input", action="store_true")
     parser.add_argument("report", type=Path)
     arguments = parser.parse_args(argv)
     if not arguments.report.is_file():
         print(f"UT report missing: {arguments.report}", file=sys.stderr)
         return 1
+
+    if arguments.emit_analyzer_input:
+        emit_analyzer_input(arguments.report)
+        return 0
 
     result = validate(arguments.report, arguments.require_complete)
     _print_result(result)

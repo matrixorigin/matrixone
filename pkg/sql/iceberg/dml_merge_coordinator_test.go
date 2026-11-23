@@ -212,11 +212,11 @@ func newMergeActionScanBatch(t *testing.T) (*batch.Batch, func()) {
 		api.DMLRowOrdinalColumnName,
 		api.DMLMergeActionColumnName,
 	})
-	idVec := vector.NewVec(types.T_int32.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
-	pathVec := vector.NewVec(types.T_varchar.ToType())
-	ordinalVec := vector.NewVec(types.T_int64.ToType())
-	actionVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	ordinalVec := vector.NewVec(types.T_int64.ToType(), mp)
+	actionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, row := range []struct {
 		id      int32
 		name    string
@@ -254,11 +254,11 @@ func newDuplicateMergeMatchBatch(t *testing.T) (*batch.Batch, func()) {
 		api.DMLRowOrdinalColumnName,
 		api.DMLMergeActionColumnName,
 	})
-	idVec := vector.NewVec(types.T_int32.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
-	pathVec := vector.NewVec(types.T_varchar.ToType())
-	ordinalVec := vector.NewVec(types.T_int64.ToType())
-	actionVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	ordinalVec := vector.NewVec(types.T_int64.ToType(), mp)
+	actionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, row := range []struct {
 		id   int32
 		name string
@@ -291,11 +291,11 @@ func newReorderedMergeActionScanBatch(t *testing.T) (*batch.Batch, func()) {
 		api.DMLRowOrdinalColumnName,
 		"id",
 	})
-	actionVec := vector.NewVec(types.T_varchar.ToType())
-	pathVec := vector.NewVec(types.T_varchar.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
-	ordinalVec := vector.NewVec(types.T_int64.ToType())
-	idVec := vector.NewVec(types.T_int32.ToType())
+	actionVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	ordinalVec := vector.NewVec(types.T_int64.ToType(), mp)
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	for _, row := range []struct {
 		id      int32
 		name    string

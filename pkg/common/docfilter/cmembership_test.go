@@ -142,7 +142,7 @@ func TestCExactMembershipOf(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, f.(CFilter).CKind(), m.Kind)
 
-	words := vector.NewVec(types.T_varchar.ToType())
+	words := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer words.Free(mp)
 	require.NoError(t, vector.AppendBytes(words, []byte("k"), false, mp))
 	payload, err := Build(words)

@@ -130,7 +130,7 @@ func fixedTruncProcess(t testing.TB) *process.Process {
 
 func fixedTruncValues(t testing.TB, proc *process.Process, values []types.Datetime, nulls []bool) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	vec := vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
 	require.NoError(t, vector.AppendFixedList(vec, values, nulls, proc.Mp()))
 	return vec
@@ -160,7 +160,7 @@ func TestDateTruncFixedUnitsVectorContract(t *testing.T) {
 	}
 	t.Run("per_row_units_and_null_error_order", func(t *testing.T) {
 		proc := fixedTruncProcess(t)
-		units := vector.NewVec(types.T_varchar.ToType())
+		units := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		t.Cleanup(func() { units.Free(proc.Mp()) })
 		names := []string{"second", "MINUTE", "hour", "DAY", "bogus", "bogus", "bogus"}
 		for index, unit := range names {

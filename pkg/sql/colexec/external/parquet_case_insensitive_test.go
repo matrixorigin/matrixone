@@ -228,7 +228,7 @@ func TestParquetPrepare_IcebergFieldIDMapping(t *testing.T) {
 		require.Equal(t, "old_order_id", h.cols[0].Name())
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 		require.NoError(t, h.getData(bat, param, proc))
 		require.Equal(t, 1, bat.RowCount())
 		values := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
@@ -296,7 +296,7 @@ func TestParquetPrepare_IcebergFieldIDMapping(t *testing.T) {
 		require.True(t, h.rowCountOnly)
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 		require.NoError(t, h.getData(bat, param, proc))
 		require.Equal(t, 1, bat.RowCount())
 		require.Equal(t, 1, bat.Vecs[0].Length())
@@ -406,10 +406,10 @@ func TestParquetPrepare_IcebergSchemaEvolutionRead(t *testing.T) {
 		require.Nil(t, h.cols[3])
 
 		bat := batch.NewWithSize(4)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_float64, 0, 0))
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 0, 0))
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 0, 0))
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_int32, 0, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
+		bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 		require.NoError(t, h.getData(bat, param, proc))
 		require.Equal(t, 1, bat.RowCount())
 		require.InDelta(t, 1.5, vector.MustFixedColWithTypeCheck[float64](bat.Vecs[0])[0], 0.0001)
@@ -449,7 +449,7 @@ func TestParquetPrepare_IcebergSchemaEvolutionRead(t *testing.T) {
 		require.Equal(t, "legacy_price", h.cols[0].Name())
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		require.NoError(t, h.getData(bat, param, proc))
 		require.Equal(t, 1, bat.RowCount())
 		got := vector.MustFixedColWithTypeCheck[types.Decimal64](bat.Vecs[0])
@@ -621,8 +621,8 @@ func TestParquetScan_CaseInsensitive(t *testing.T) {
 
 		// Create batch and read data
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0))
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 0, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 
 		err = h.getData(bat, param, proc)
 		require.NoError(t, err)
@@ -666,8 +666,8 @@ func TestParquetScan_CaseInsensitive(t *testing.T) {
 		require.NoError(t, err)
 
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0))
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 0, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 
 		err = h.getData(bat, param, proc)
 		require.NoError(t, err)

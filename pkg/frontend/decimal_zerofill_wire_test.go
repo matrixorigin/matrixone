@@ -205,8 +205,8 @@ func TestDecimalZerofillTextAndBinaryRowWire(t *testing.T) {
 	// type, and the pad must match the mrs.GetString channel byte for byte.
 	newSlices := func(t *testing.T) (*batch.Batch, *ColumnSlices) {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		decA, err := types.ParseDecimal64("123.45", 10, 2)
 		require.NoError(t, err)
 		decB, err := types.ParseDecimal64("0.50", 10, 2)
@@ -290,8 +290,8 @@ func TestDecimalZerofillExport(t *testing.T) {
 	}
 	newExportBatch := func(t *testing.T) *batch.Batch {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2), mp)
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_decimal64, 10, 2), mp)
 		v1, err := types.ParseDecimal64("123.45", 10, 2)
 		require.NoError(t, err)
 		v2, err := types.ParseDecimal64("0.50", 10, 2)

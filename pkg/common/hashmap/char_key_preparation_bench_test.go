@@ -50,7 +50,7 @@ func BenchmarkCharKeyPreparation(b *testing.B) {
 			}
 			vecs := make([]*vector.Vector, 2)
 			for col := range vecs {
-				vec := vector.NewVec(typ)
+				vec := vector.NewVec(typ, mp)
 				vecs[col] = vec
 				defer vec.Free(mp)
 				if shape == "constant" {

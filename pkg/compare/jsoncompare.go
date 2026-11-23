@@ -41,7 +41,7 @@ func (c *jsonCompare) Set(idx int, v *vector.Vector) {
 }
 
 func (c *jsonCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
-	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
+	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, c.vs[vecDst].MPool())
 }
 
 func (c *jsonCompare) Compare(veci, vecj int, vi, vj int64) int {

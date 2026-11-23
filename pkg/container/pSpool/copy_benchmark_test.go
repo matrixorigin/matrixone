@@ -57,7 +57,7 @@ func BenchmarkCachedBatchWideReuse(b *testing.B) {
 func BenchmarkCachedBatchReuse(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := batch.NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	values := make([]int64, 8192)
 	for i := range values {
 		values[i] = int64(i)

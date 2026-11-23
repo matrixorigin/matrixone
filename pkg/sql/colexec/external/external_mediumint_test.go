@@ -55,7 +55,7 @@ func TestMediumIntCSVLoadBounds(t *testing.T) {
 			proc := testutil.NewProc(t)
 			mp := proc.GetMPool()
 			bat := batch.New([]string{"m"})
-			bat.Vecs[0] = vector.NewVec(types.New(tc.oid, 24, -1))
+			bat.Vecs[0] = vector.NewVec(types.New(tc.oid, 24, -1), mp)
 			t.Cleanup(func() { bat.Clean(mp) })
 			param := &ExternalParam{
 				ExParamConst: ExParamConst{Ctx: context.Background(), Extern: extern, Cols: cols},

@@ -47,9 +47,9 @@ func writeObjectWithCommitTS(
 		0, []uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS}, -1, false, false, fs,
 	)
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	var blk types.Blockid
 	for i, ts := range tsValues {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(i), false, mp))
@@ -81,9 +81,9 @@ func writeTombstoneObjectWithCommitTS(
 		writer.SetAppendable()
 	}
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i, ts := range tsValues {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], targetRowID, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int32(i), false, mp))
