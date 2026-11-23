@@ -343,20 +343,15 @@ func classifyZombiesFromHAKeeperState(
 // used by HAKeeper's LogService checker, so it is authoritative rather than a
 // randomly selected peer's eventually-consistent gossip view.
 //
-// Every peer's gossip-backed membership view is eventually consistent, so a
-// single authoritative reply is not enough: a stale peer could either hide a
-// real zombie (it still lists the removed replica) or falsely flag a
-// freshly-added replica (it has not yet learned of the ADD). To be robust
-// against both, the classification rule is unanimous-absence: probe every
-// reachable peer, and mark the replica as a zombie only when at least one
-// peer answered authoritatively AND every authoritative reply reports the
-// replicaID as absent. If any reachable peer still lists the replica, we
-// defer to that peer and treat the replica as legitimate — HAKeeper's
-// existing L/Kill path is still free to clean it up later via the normal
-// recovery flow.
+// Every peer's gossip-backed membership view is eventually consistent. A
+// partial set of replies cannot establish absence: the only answering peer
+// might not have learned that this replica joined. Probe every configured
+// peer and classify only if each one reports the shard and omits the replica.
+// Even unanimous gossip can lag a recent membership change, so this remains
+// a conservative best-effort startup check, not a Raft membership proof.
 //
-// The check is best-effort: if no peer or HAKeeper leader answers
-// authoritatively, the shard is treated as "not a zombie" so legitimate
+// The check is best-effort: if any peer or HAKeeper leader does not answer,
+// the shard is treated as "not a zombie" so legitimate
 // whole-cluster cold starts are not blocked. An absent HAKeeper shard or an
 // epoch-zero shard is likewise considered uninitialized, not evidence of
 // removal. The whole sweep is bounded by zombieSelfCheckTimeout; if the budget
@@ -402,7 +397,7 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 		if rec.NonVoting {
 			continue
 		}
-		var authoritative, presentReplies int
+		var completeReplies, presentReplies int
 		for _, address := range addresses {
 			if ctx.Err() != nil {
 				return zombies
@@ -419,12 +414,12 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 			if !ok {
 				continue
 			}
-			authoritative++
+			completeReplies++
 			if _, present := members[rec.ReplicaID]; present {
 				presentReplies++
 			}
 		}
-		if authoritative > 0 && presentReplies == 0 {
+		if completeReplies == len(addresses) && presentReplies == 0 {
 			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
 		}
 	}
@@ -478,6 +473,17 @@ func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
 	}
 	_, ok := l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}]
 	return ok
+}
+
+func (l *store) localReplicaPresentWithRole(shardID, replicaID uint64, nonVoting bool) bool {
+	nhi := l.nh.GetNodeHostInfo(dragonboat.NodeHostInfoOption{SkipLogInfo: true})
+	for _, replica := range nhi.ShardInfoList {
+		if replica.ShardID == shardID && replica.ReplicaID == replicaID &&
+			replica.IsNonVoting == nonVoting {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *store) startReplicas(ctx context.Context) error {

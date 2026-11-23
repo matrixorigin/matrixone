@@ -554,6 +554,10 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		if s.catalogScheduleObsolete(c) {
 			continue
 		}
+		// A later terminal operation supersedes an undelivered start for the
+		// same replica. Otherwise a retained start could revive it after a
+		// RemoveReplica or KillZombie command has been admitted.
+		s.discardSupersededLogStarts(c)
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
@@ -609,6 +613,47 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	}
 
 	return sm.Result{}
+}
+
+func (s *stateMachine) discardSupersededLogStarts(command pb.ScheduleCommand) {
+	if command.ServiceType != pb.LogService || command.ConfigChange == nil {
+		return
+	}
+	change := command.ConfigChange
+	switch change.ChangeType {
+	case pb.RemoveReplica, pb.RemoveNonVotingReplica,
+		pb.StopReplica, pb.StopNonVotingReplica, pb.KillZombie:
+	default:
+		return
+	}
+	for uuid, batch := range s.state.ScheduleCommands {
+		kept := make([]pb.ScheduleCommand, 0, len(batch.Commands))
+		var ids []pb.ScheduleCommandID
+		if len(batch.CommandIDs) == len(batch.Commands) {
+			ids = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
+		}
+		for i, pending := range batch.Commands {
+			if pending.ServiceType == pb.LogService && pending.ConfigChange != nil &&
+				(pending.ConfigChange.ChangeType == pb.StartReplica ||
+					pending.ConfigChange.ChangeType == pb.StartNonVotingReplica) &&
+				pending.ConfigChange.Replica.ShardID == change.Replica.ShardID &&
+				pending.ConfigChange.Replica.UUID == change.Replica.UUID &&
+				(change.Replica.ReplicaID == 0 ||
+					pending.ConfigChange.Replica.ReplicaID == change.Replica.ReplicaID) {
+				continue
+			}
+			kept = append(kept, pending)
+			if ids != nil {
+				ids = append(ids, batch.CommandIDs[i])
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.state.ScheduleCommands, uuid)
+		} else if len(kept) != len(batch.Commands) {
+			batch.Commands, batch.CommandIDs = kept, ids
+			s.state.ScheduleCommands[uuid] = batch
+		}
+	}
 }
 
 type scheduleCommandIDKey struct {
@@ -796,6 +841,12 @@ func (s *stateMachine) getCommandBatchFiltered(
 	filterHAKeeperAdmissions bool,
 ) sm.Result {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
+		if (s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing) &&
+			ensureScheduleCommandIDs(&batch, s.state.Index) {
+			// Old snapshots may still carry a pending LogStore command without
+			// delivery IDs. Assign one replicated identity before redelivery.
+			s.state.ScheduleCommands[uuid] = batch
+		}
 		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		var deliverIDs, pendingIDs []pb.ScheduleCommandID
@@ -807,7 +858,7 @@ func (s *stateMachine) getCommandBatchFiltered(
 			if s.catalogScheduleObsolete(cmd) {
 				continue
 			}
-			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
+			retryable, applied := s.replicaStartCommandStatus(cmd)
 			if applied {
 				continue
 			}
@@ -934,7 +985,7 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		pendingIDs := make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		for i, command := range batch.Commands {
-			retryable, applied := s.bootstrapReplicaCommandStatus(command)
+			retryable, applied := s.replicaStartCommandStatus(command)
 			if retryable && !applied {
 				pending = append(pending, command)
 				pendingIDs = append(pendingIDs, batch.CommandIDs[i])
@@ -955,18 +1006,24 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 	return sm.Result{Data: data}
 }
 
-// bootstrapReplicaCommandStatus returns whether a bootstrap command must be
-// retried until its target reports the replica, and whether that report has
-// already arrived. Heartbeat proposals can be committed after their caller's
-// context times out. Retaining these commands until a later heartbeat
-// acknowledges the replica prevents a committed-but-unobserved response from
-// permanently losing the command and stalling bootstrap.
-func (s *stateMachine) bootstrapReplicaCommandStatus(
+// replicaStartCommandStatus retains bootstrap starts and, after command
+// delivery preparation, ordinary LogStore starts until the target reports the
+// exact replica and voting role. A committed heartbeat response can be lost
+// before the target sees the command; response delivery is not completion.
+func (s *stateMachine) replicaStartCommandStatus(
 	cmd pb.ScheduleCommand,
 ) (retryable bool, applied bool) {
-	if !cmd.Bootstrapping ||
-		cmd.ConfigChange == nil ||
-		cmd.ConfigChange.ChangeType != pb.StartReplica {
+	if cmd.ConfigChange == nil {
+		return false, false
+	}
+	change := cmd.ConfigChange.ChangeType
+	if cmd.Bootstrapping {
+		if change != pb.StartReplica {
+			return false, false
+		}
+	} else if cmd.ServiceType != pb.LogService ||
+		(!s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled) ||
+		(change != pb.StartReplica && change != pb.StartNonVotingReplica) {
 		return false, false
 	}
 
@@ -979,7 +1036,8 @@ func (s *stateMachine) bootstrapReplicaCommandStatus(
 		}
 		for _, current := range store.Replicas {
 			if current.ShardID == replica.ShardID &&
-				current.ReplicaID == replica.ReplicaID {
+				current.ReplicaID == replica.ReplicaID &&
+				current.IsNonVoting == (change == pb.StartNonVotingReplica) {
 				return true, true
 			}
 		}

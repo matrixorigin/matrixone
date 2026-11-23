@@ -64,7 +64,15 @@ func GetShardInfo(
 	if len(excludeHardDownReplicaAddresses) > 0 {
 		excludeHardDown = excludeHardDownReplicaAddresses[0]
 	}
-	si, ok, err := queryShardInfoRawFn(context.Background(), sid, address, shardID, false, excludeHardDown)
+	return getShardInfoWithContext(context.Background(), sid, address, shardID, excludeHardDown)
+}
+
+// getShardInfoWithContext lets client discovery observe its caller's deadline.
+// The exported helper retains its historical independent one-second budget.
+func getShardInfoWithContext(
+	ctx context.Context, sid, address string, shardID uint64, excludeHardDown bool,
+) (ShardInfo, bool, error) {
+	si, ok, err := queryShardInfoRawFn(ctx, sid, address, shardID, false, excludeHardDown)
 	if err != nil || !ok {
 		return ShardInfo{}, false, err
 	}

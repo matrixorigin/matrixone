@@ -1521,8 +1521,16 @@ func TestHAKeeperAdmissionWaitsForCapableTarget(t *testing.T) {
 				delivered := decode(upgraded)
 				require.Equal(t, []pb.ScheduleCommand{admission}, delivered.Commands)
 				require.Equal(t, []pb.ScheduleCommandID{{OriginBatchID: 10}}, delivered.CommandIDs)
-				_, ok = rsm.state.ScheduleCommands[commandUUID]
-				require.False(t, ok)
+				pending, ok = rsm.state.ScheduleCommands[commandUUID]
+				if changeType == pb.StartReplica || changeType == pb.StartNonVotingReplica {
+					require.True(t, ok, "replica start remains pending until the target reports it")
+					require.Equal(t, []pb.ScheduleCommand{admission}, pending.Commands)
+					retry := decode(heartbeat(14, commandUUID, true))
+					require.Equal(t, delivered.Commands, retry.Commands)
+					require.Equal(t, delivered.CommandIDs, retry.CommandIDs)
+				} else {
+					require.False(t, ok)
+				}
 			})
 		}
 	}

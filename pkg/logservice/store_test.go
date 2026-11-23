@@ -2144,12 +2144,8 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 		"self address must be filtered out before dialing")
 }
 
-// TestCheckZombieReplicas_FallsThroughAddresses guards against the second
-// pitfall: if some peers return transient "shard unknown" or RPC errors
-// (which is exactly what GetShardInfo used to return when the leader was
-// unknown -- the scenario that *produces* zombies in #24203), we still need
-// to reach every reachable peer before classifying. The legacy implementation
-// probed only one address.
+// An unanswered peer may be the one with a newer membership view. Continue
+// probing every address, but defer exclusion if any answer is unavailable.
 func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	var probed []string
@@ -2183,8 +2179,8 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
-	assert.True(t, isZombie,
-		"the single authoritative peer confirms absence, so the replica is a zombie")
+	assert.False(t, isZombie,
+		"a single stale gossip answer cannot prove that the replica was removed")
 	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001", "10.0.0.3:32001"}, probed,
 		"every address must be probed; the check does not short-circuit on a single answer")
 }
