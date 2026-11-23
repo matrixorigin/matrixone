@@ -21,7 +21,7 @@ OCF_ERR_ARGS=2
 OCF_ERR_UNIMPLEMENTED=3
 OCF_NOT_RUNNING=7
 ocf_log() { printf '%s\\n' "$*" >&2; }
-check_binary() { [ -x "$1" ]; }
+check_binary() { [ -x "$1" ] || exit 5; }
 """
 
 COMPOSE = """\
@@ -38,11 +38,11 @@ case "$3" in
         else
             ids=$COMPOSE_IDS
         fi
-        if [ "$4" = "-q" ]; then
-            printf '%s\\n' "$ids" | sed '/^oneoff$/d; /^init-exited$/d'
-        else
-            printf '%s\\n' "$ids"
-        fi
+        case "$4" in
+            -q) printf '%s\\n' "$ids" | sed '/^stopped$/d; /^oneoff$/d; /^init-exited$/d; /^init-failed$/d' ;;
+            -aq) printf '%s\\n' "$ids" ;;
+            *) exit 99 ;;
+        esac
         ;;
     up)
         [ "${UP_ERROR:-0}" = 0 ] || exit "$UP_ERROR"
@@ -76,20 +76,31 @@ case "$1" in
         ;;
     inspect)
         [ "${INSPECT_ERROR:-0}" = 0 ] || exit "$INSPECT_ERROR"
-        case "$3" in
-            stopped|init-exited) echo false ;;
-            invalid) echo unknown ;;
-            oneoff) echo oneoff ;;
-            *) echo true ;;
-        esac
+        if [ "$2" = '--format={{.State.Running}}' ]; then
+            case "$3" in
+                stopped|init-exited|init-failed|oneoff) echo false ;;
+                invalid) echo unknown ;;
+                *) echo true ;;
+            esac
+            exit
+        fi
+        shift 2
+        for id do
+            case "$id" in
+                stopped) echo 'false|exited|0||worker|' ;;
+                init-exited) echo 'false|exited|0||init|' ;;
+                init-failed) echo 'false|exited|1||init|' ;;
+                invalid) echo unknown ;;
+                oneoff) echo 'false|exited|0|True|task|' ;;
+                app) echo 'true|running|0||app|init:service_completed_successfully:false' ;;
+                *) echo 'true|running|0||app|' ;;
+            esac
+        done
         ;;
     kill) exit 0 ;;
     rm)
         [ "${RM_ERROR:-0}" = 0 ] || exit "$RM_ERROR"
-        rm -f "$CONTAINERS/$2"
-        if [ -n "$FALLBACK_ID" ] && [ "$2" = "$FALLBACK_ID" ]; then
-            touch "$COMPOSE_STOPPED"
-        fi
+        [ "${RM_NO_EFFECT:-0}" = 1 ] || rm -f "$CONTAINERS/$2"
         ;;
     *) exit 99 ;;
 esac
@@ -169,7 +180,10 @@ class ResourceAgentTests(unittest.TestCase):
         self.action("monitor", 7, COMPOSE_IDS="oneoff")
 
     def test_monitor_preserves_custom_initialization_service_behavior(self):
-        self.action("monitor", 0, COMPOSE_IDS="running\ninit-exited")
+        self.action("monitor", 0, COMPOSE_IDS="init-exited\napp")
+
+    def test_monitor_failed_initialization_service(self):
+        self.action("monitor", 1, COMPOSE_IDS="app\ninit-failed")
 
     def test_monitor_compose_failed(self):
         self.action("monitor", 1, COMPOSE_PS_ERROR="9")
@@ -188,6 +202,10 @@ class ResourceAgentTests(unittest.TestCase):
     def test_monitor_missing_yaml_without_containers(self):
         self.yaml.unlink()
         self.action("monitor", 7)
+
+    def test_monitor_detects_previous_project_when_current_project_is_stopped(self):
+        self.add_container("matrixone", "previous-project", self.yaml)
+        self.assert_no_mutation(self.action("monitor", 0, COMPOSE_IDS="stopped"))
 
     def test_start_stopped_resource_and_check_state(self):
         calls = self.action("start", 0)
@@ -209,28 +227,67 @@ class ResourceAgentTests(unittest.TestCase):
     def test_start_container_never_started(self):
         self.action("start", 1, AFTER_UP_IDS="")
 
+    def test_start_rejects_partial_startup(self):
+        calls = self.action("start", 1, AFTER_UP_IDS="running\nstopped")
+        self.assertIn("compose -f docker-compose.yaml up -d", calls)
+
     def test_stop_compose_success(self):
         calls = self.action("stop", 0, COMPOSE_IDS="running")
         self.assertIn("compose -f docker-compose.yaml down", calls)
         self.assert_no_mutation(calls)
 
+    def test_stop_compose_success_with_absolute_yaml(self):
+        calls = self.action("stop", 0, COMPOSE_IDS="running", OCF_RESKEY_ymlfile=str(self.yaml))
+        self.assertIn(f"compose -f {self.yaml} down", calls)
+        self.assert_no_mutation(calls)
+
     def test_stop_compose_success_but_container_still_running(self):
         self.action("stop", 1, COMPOSE_IDS="running", DOWN_NO_EFFECT="1")
+
+    def test_stop_compose_success_but_verification_needs_labels(self):
+        self.add_container("matrixone", "my-project", self.yaml)
+        calls = self.action("stop", 0, COMPOSE_PS_ERROR="9", DOWN_NO_EFFECT="1")
+        self.assertIn("docker rm owned", calls)
 
     def test_stop_detects_previous_project_after_project_name_changes(self):
         self.add_container("matrixone", "previous-project", self.yaml)
         self.assert_no_mutation(self.action("stop", 1))
 
     def test_stop_compose_failed_fallback(self):
-        calls = self.action("stop", 0, DOWN_ERROR="9", COMPOSE_IDS="owned", FALLBACK_ID="owned")
+        self.add_container("matrixone", "my-project", self.yaml)
+        calls = self.action("stop", 0, DOWN_ERROR="9")
         self.assertIn("docker kill owned", calls)
         self.assertIn("docker rm owned", calls)
 
     def test_stop_compose_failed_and_fallback_query_failed(self):
-        self.assert_no_mutation(self.action("stop", 1, DOWN_ERROR="9", COMPOSE_PS_ERROR="9"))
+        self.assert_no_mutation(self.action("stop", 1, DOWN_ERROR="9", DOCKER_PS_ERROR="9"))
 
     def test_stop_compose_failed_and_fallback_remove_failed(self):
-        self.action("stop", 1, DOWN_ERROR="9", COMPOSE_IDS="owned", RM_ERROR="9")
+        self.add_container("matrixone", "my-project", self.yaml)
+        self.action("stop", 1, DOWN_ERROR="9", RM_ERROR="9")
+
+    def test_stop_malformed_yaml_uses_labels(self):
+        self.add_container("matrixone", "my-project", self.yaml)
+        calls = self.action("stop", 0, DOWN_ERROR="9", COMPOSE_PS_ERROR="9")
+        self.assertIn("docker rm owned", calls)
+        self.assertFalse(any(call.endswith(" ps -aq") for call in calls), calls)
+        self.assertFalse((self.containers / "owned").exists())
+
+    def test_stop_missing_compose_binary_uses_labels(self):
+        self.add_container("matrixone", "my-project", self.yaml)
+        calls = self.action("stop", 0, OCF_RESKEY_binpath=str(self.root / "missing"))
+        self.assertIn("docker rm owned", calls)
+        self.assertFalse(any(call.startswith("compose ") for call in calls), calls)
+
+    def test_stop_fallback_checks_remaining_containers(self):
+        self.add_container("matrixone", "my-project", self.yaml)
+        self.action("stop", 1, DOWN_ERROR="9", RM_NO_EFFECT="1")
+
+    def test_stop_fallback_requires_verified_ownership(self):
+        self.add_container("matrixone")
+        calls = self.action("stop", 1, DOWN_ERROR="9", COMPOSE_IDS="owned")
+        self.assert_no_mutation(calls)
+        self.assertTrue((self.containers / "owned").exists())
 
     def test_stop_missing_yaml_with_owned_fixed_name(self):
         self.yaml.unlink()
