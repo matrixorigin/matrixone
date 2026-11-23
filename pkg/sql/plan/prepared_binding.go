@@ -396,7 +396,7 @@ func bindPreparedIntegerValue(ctx context.Context, column, source *Expr) (*Expr,
 	if binding.Type.Oid == types.T(source.Typ.Id) {
 		if value, ok := AsParamValue(state.values[source.GetP().Pos]); ok &&
 			value.IsBinaryProtocol && !value.IsBin && !value.IsBinaryString &&
-			value.PrepareParamKind == types.StringConversionInteger {
+			ParamValueKind(value) == types.StringConversionInteger {
 			narrowed := DeepCopyExpr(source)
 			narrowed.Typ = converted.Typ
 			return narrowed, true, nil
@@ -961,8 +961,8 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if !ok || !param.EnableNumericPrefix {
 			return false, 0
 		}
-		positions[pos] = param.PrepareParamKind
-		return true, param.PrepareParamKind
+		positions[pos] = ParamValueKind(param)
+		return true, ParamValueKind(param)
 	}
 	for i, source := range args {
 		if list := source.GetList(); list != nil {

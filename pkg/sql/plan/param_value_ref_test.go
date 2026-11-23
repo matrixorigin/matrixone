@@ -17,6 +17,8 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,4 +86,24 @@ func TestCopyParamValuesDetachesFromStorage(t *testing.T) {
 	require.Equal(t, "a", got.Value, "a snapshot does not follow the storage")
 	require.Equal(t, "raw", snapshot[1])
 	require.Nil(t, CopyParamValues(nil))
+}
+
+func TestParamValueKind(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		param ParamValue
+		want  types.StringConversionKind
+	}{
+		{"protocol integer", comStmtIntParam(2), types.StringConversionInteger},
+		{"protocol float", comStmtFloatParam(1.5), types.StringConversionFloat},
+		{"protocol Boolean", ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true, PrepareParamKind: types.StringConversionInteger}, types.StringConversionBoolean},
+		{"protocol DECIMAL", ParamValue{Value: "15e-1", RuntimeType: types.New(types.T_decimal64, 2, 1), HasRuntimeType: true}, types.StringConversionDecimal},
+		{"runtime type wins over source type", ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, SourceType: types.T_float64.ToType(), HasSourceType: true}, types.StringConversionInteger},
+		{"SQL user variable", sqlFloatParam(2.5), types.StringConversionFloat},
+		{"text keeps the recorded kind", ParamValue{Value: "1", SourceType: types.T_text.ToType(), HasSourceType: true, PrepareParamKind: types.StringConversionInteger}, types.StringConversionInteger},
+		{"temporal is text", ParamValue{Value: "2026-01-01", RuntimeType: types.T_date.ToType(), HasRuntimeType: true}, types.StringConversionString},
+		{"untyped NULL keeps the recorded kind", ParamValue{PrepareParamKind: types.StringConversionDecimal}, types.StringConversionDecimal},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, ParamValueKind(tc.param)) })
+	}
 }

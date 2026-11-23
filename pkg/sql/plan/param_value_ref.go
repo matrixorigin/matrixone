@@ -14,6 +14,8 @@
 
 package plan
 
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
 // A prepared execution's parameter values are an []any whose elements are
 // *ParamValue pointing into storage the prepared statement owns and rewrites
 // in place every execution (boxing a pointer does not allocate; boxing the
@@ -91,4 +93,32 @@ func CopyParamValues(values []any) []any {
 		}
 	}
 	return out
+}
+
+// ParamValueType returns the SQL type a prepared parameter value carries: its
+// protocol RuntimeType (COM_STMT_EXECUTE) or else its SourceType (SQL EXECUTE
+// ... USING). ok is false for a value that carries neither.
+func ParamValueType(p ParamValue) (types.Type, bool) {
+	if p.HasRuntimeType {
+		return p.RuntimeType, true
+	}
+	if p.HasSourceType {
+		return p.SourceType, true
+	}
+	return types.Type{}, false
+}
+
+// ParamValueKind is the conversion kind of a parameter: Integer, Float,
+// Decimal or Boolean when its type is one of those. A parameter whose type is
+// text, temporal or another non-numeric type, or that has no type (a NULL),
+// keeps the kind its producer recorded: a user variable copied from a system
+// variable (SET @v = @@var) holds the variable's text with the variable's
+// numeric kind.
+func ParamValueKind(p ParamValue) types.StringConversionKind {
+	if typ, ok := ParamValueType(p); ok {
+		if kind, _ := types.StringConversionKindForType(typ.Oid); kind != types.StringConversionString {
+			return kind
+		}
+	}
+	return p.PrepareParamKind
 }

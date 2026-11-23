@@ -5482,7 +5482,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	isBinaryProtocol := false
 	if param, ok := AsParamValue(value); ok {
 		value = param.Value
-		kind = param.PrepareParamKind
+		kind = ParamValueKind(param)
 		isBinaryProtocol = param.IsBinaryProtocol
 	}
 	if value == nil {
@@ -5557,7 +5557,7 @@ func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
 		if param.HasSourceType && preparedRuntimeTypeIsNumeric(param.SourceType) {
 			return preparedNumericReprepareType(param.SourceType)
 		}
-		if param.PrepareParamKind == types.StringConversionDecimal {
+		if ParamValueKind(param) == types.StringConversionDecimal {
 			return mysqlPreparedDecimalReprepareType(), true
 		}
 		return PreparedParamValueNumericReprepareType(param.Value)
@@ -6364,7 +6364,7 @@ func isPositivePreparedInteger(value any) bool {
 	kind := types.StringConversionString
 	if paramValue, ok := AsParamValue(value); ok {
 		value = paramValue.Value
-		kind = paramValue.PrepareParamKind
+		kind = ParamValueKind(paramValue)
 	}
 	if value == nil || kind != types.StringConversionString && kind != types.StringConversionInteger {
 		return false
@@ -6641,7 +6641,7 @@ func isNonNegativePreparedInteger(value any) bool {
 	kind := types.StringConversionString
 	if paramValue, ok := AsParamValue(value); ok {
 		value = paramValue.Value
-		kind = paramValue.PrepareParamKind
+		kind = ParamValueKind(paramValue)
 	}
 	if value == nil || kind == types.StringConversionFloat || kind == types.StringConversionDecimal {
 		return false
@@ -6839,7 +6839,7 @@ func replaceParamValsWithSelection(
 			}
 			continue
 		}
-		if param.PrepareParamKind == types.StringConversionBoolean {
+		if ParamValueKind(param) == types.StringConversionBoolean {
 			// database/sql encodes bool as MYSQL_TYPE_TINY. Keep the Boolean
 			// literal for functions such as JSON_SET, but retain its numeric
 			// protocol domain while selecting comparison coercion.
@@ -6869,7 +6869,7 @@ func replaceParamValsWithSelection(
 			}
 			if param.EnableNumericPrefix && numericPrefixPositions[i] {
 				paramRule.numericPrefixParamPositions[i] = true
-				paramRule.numericPrefixParamKinds[i] = param.PrepareParamKind
+				paramRule.numericPrefixParamKinds[i] = ParamValueKind(param)
 				// The numeric-prefix capability is the stronger execute-time
 				// contract only when this position is selected by the
 				// decimal-aware common-type path. Do not also route that marker

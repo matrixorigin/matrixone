@@ -548,7 +548,7 @@ func PreparedPlanNeedsNumericPrefixSpecialization(preparePlan *Plan, paramVals [
 		if !ok || !param.EnableNumericPrefix {
 			continue
 		}
-		positions[i] = param.PrepareParamKind
+		positions[i] = ParamValueKind(param)
 	}
 	if len(positions) == 0 {
 		return false
@@ -680,8 +680,8 @@ func hasRuntimeDecimalPrefixFilter(preparePlan *Plan, paramVals []any) bool {
 	positions := make(map[int]types.StringConversionKind)
 	for i, value := range paramVals {
 		param, ok := AsParamValue(value)
-		if ok && param.EnableNumericPrefix && param.PrepareParamKind == types.StringConversionDecimal {
-			positions[i] = param.PrepareParamKind
+		if ok && param.EnableNumericPrefix && ParamValueKind(param) == types.StringConversionDecimal {
+			positions[i] = ParamValueKind(param)
 		}
 	}
 	if len(positions) == 0 {
@@ -1144,7 +1144,7 @@ func (rule *ResetParamRefRule) SetParamValues(values []any) {
 			break
 		}
 		if param, ok := AsParamValue(value); ok {
-			rule.paramKinds[i] = param.PrepareParamKind
+			rule.paramKinds[i] = ParamValueKind(param)
 		}
 	}
 }
@@ -1156,7 +1156,7 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, types.StringConv
 	if pos < len(rule.paramValues) {
 		value := rule.paramValues[pos]
 		if param, ok := AsParamValue(value); ok {
-			return param.Value, param.PrepareParamKind, true
+			return param.Value, ParamValueKind(param), true
 		}
 		if value != nil {
 			kind := types.StringConversionString
@@ -2553,7 +2553,7 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 				position := int(param.Pos)
 				if position >= 0 && position < len(rule.paramValues) {
 					if value, ok := AsParamValue(rule.paramValues[position]); ok &&
-						(value.PrepareParamKind != types.StringConversionString ||
+						(ParamValueKind(value) != types.StringConversionString ||
 							(value.HasSourceType && value.SourceType.IsNumeric()) ||
 							(value.HasRuntimeType && value.RuntimeType.IsNumeric())) {
 						return e, nil
@@ -3463,7 +3463,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					stringType := types.T_varchar.ToType()
 					rewrittenArg.Typ = makePlan2Type(&stringType)
 				} else if param, ok := AsParamValue(rule.paramValues[paramPos]); ok &&
-					param.Value != nil && param.PrepareParamKind != types.StringConversionString {
+					param.Value != nil && ParamValueKind(param) != types.StringConversionString {
 					// SQL EXECUTE still materializes the value through a text
 					// transport literal. Recreate the assignment-time numeric
 					// literal before rebinding, otherwise the already-selected unit
@@ -4120,7 +4120,7 @@ func preparedParamValueUsesStringDomain(value any) bool {
 	// assignment-time PrepareParamKind is the stronger signal: a numeric user
 	// variable must keep the legacy SRID overload even when the marker itself
 	// was provisionally typed VARCHAR during PREPARE.
-	if !param.IsBinaryProtocol && param.PrepareParamKind != types.StringConversionString {
+	if !param.IsBinaryProtocol && ParamValueKind(param) != types.StringConversionString {
 		return false
 	}
 	// SQL EXECUTE transports user variables through a TEXT vector. When the
@@ -4131,7 +4131,7 @@ func preparedParamValueUsesStringDomain(value any) bool {
 		return isStringBackedType(param.RuntimeType)
 	}
 	if param.HasSourceType {
-		if param.SourceType.Oid == types.T_text && param.PrepareParamKind != types.StringConversionString {
+		if param.SourceType.Oid == types.T_text && ParamValueKind(param) != types.StringConversionString {
 			return false
 		}
 		return isStringBackedType(param.SourceType)
@@ -4143,9 +4143,9 @@ func preparedParamValueUsesStringDomain(value any) bool {
 		return false
 	}
 	if param.IsBinaryProtocol {
-		return param.PrepareParamKind == types.StringConversionString
+		return ParamValueKind(param) == types.StringConversionString
 	}
-	return param.PrepareParamKind == types.StringConversionString
+	return ParamValueKind(param) == types.StringConversionString
 }
 
 // preparedComparisonExactIntegerExpr keeps an exact integral text prefix in
@@ -5135,7 +5135,7 @@ func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool
 	if !ok || param.Value == nil {
 		return nil, false, nil
 	}
-	comStmtText := param.IsBinaryProtocol && param.PrepareParamKind == types.StringConversionString &&
+	comStmtText := param.IsBinaryProtocol && ParamValueKind(param) == types.StringConversionString &&
 		(param.Value != nil || param.HasRuntimeType)
 	if !(param.HasSourceType && isStringBackedType(param.SourceType)) &&
 		!(param.HasRuntimeType && isStringBackedType(param.RuntimeType)) && !comStmtText {

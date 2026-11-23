@@ -2143,7 +2143,7 @@ func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPosition
 			continue
 		}
 		param, ok := plan2.AsParamValue(paramVals[position])
-		if !ok || param.PrepareParamKind != types.StringConversionBoolean {
+		if !ok || plan2.ParamValueKind(param) != types.StringConversionBoolean {
 			continue
 		}
 		value, ok := param.Value.(bool)

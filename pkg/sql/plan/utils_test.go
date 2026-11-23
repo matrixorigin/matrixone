@@ -1395,11 +1395,8 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	}
 
 	limitPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ?")
-	t.Run("SQL source type does not replace limit domain", func(t *testing.T) {
-		value := ParamValue{
-			Value: int64(2), PrepareParamKind: types.StringConversionInteger,
-			SourceType: types.New(types.T_decimal128, 1, 0), HasSourceType: true,
-		}
+	t.Run("SQL integer source keeps the limit domain", func(t *testing.T) {
+		value := sqlIntParam(2)
 		require.NoError(t, ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{value}))
 		filled := DeepCopyPlan(limitPlan)
 		_, err := replaceParamVals(context.Background(), filled, []any{value})

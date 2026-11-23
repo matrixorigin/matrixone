@@ -301,7 +301,7 @@ func bindPreparedCommonValueContextMarkers(ctx context.Context, markers, peers [
 		if value == nil {
 			witnesses[i] = makePlan2NullConstExprWithType()
 		}
-		prefixArgs[i], prefixKinds[i] = true, param.PrepareParamKind
+		prefixArgs[i], prefixKinds[i] = true, ParamValueKind(param)
 	}
 	converted, _, err := preparedNumericPrefixArgs(ctx, "coalesce", args, witnesses,
 		prefixArgs, prefixKinds, nil, nil, true)
