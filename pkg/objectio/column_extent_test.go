@@ -46,9 +46,9 @@ func TestObjectColumnExtentIsItsBlocksInOrder(t *testing.T) {
 	cats := make([][]string, 0, len(rowsPerBlock))
 	for blk, rows := range rowsPerBlock {
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_array_float32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_array_float32.ToType(), mp)
 		blkCats := make([]string, 0, rows)
 		for row := range rows {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(blk*10000+row), false, mp))
@@ -111,7 +111,7 @@ func TestObjectColumnExtentIsItsBlocksInOrder(t *testing.T) {
 	bareWriter, err := NewObjectWriter(bare, fs, 0, []uint16{0}, nil)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
 	bat.SetRowCount(1)
 	_, err = bareWriter.Write(bat)
@@ -127,7 +127,7 @@ func TestObjectColumnExtentIsItsBlocksInOrder(t *testing.T) {
 	for blk, want := range cats {
 		read, err := ReadOneBlock(ctx, &meta, name.String(), uint16(blk), []uint16{1}, []types.Type{types.T_varchar.ToType()}, mp, fs, fileservice.SkipFullFilePreloads)
 		require.NoError(t, err)
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, MustVectorToCached(vec, read.Entries[0].CachedData))
 		require.Equal(t, len(want), vec.Length())
 		for row, cat := range want {

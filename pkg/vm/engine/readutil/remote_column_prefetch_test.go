@@ -57,8 +57,8 @@ func writeColumnObjects(t *testing.T, fs fileservice.FileService, objects int) (
 		require.NoError(t, err)
 		for blk := 0; blk < 3; blk++ {
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_array_float32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_array_float32.ToType(), mp)
 			for row := 0; row < rows; row++ {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(row), false, mp))
 				require.NoError(t, vector.AppendArray(bat.Vecs[1], make([]float32, 32), false, mp))
