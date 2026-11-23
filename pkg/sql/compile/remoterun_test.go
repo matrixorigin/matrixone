@@ -3401,7 +3401,8 @@ func TestCoordinatorDispatchRegisteredBeforePrepare(t *testing.T) {
 
 	runDone := make(chan error, 1)
 	go func() {
-		runDone <- runCompile.runOnce()
+		_, err := runCompile.runOnce()
+		runDone <- err
 	}()
 	select {
 	case <-child.entered:
