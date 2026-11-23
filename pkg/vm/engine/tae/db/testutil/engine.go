@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -488,15 +487,8 @@ func mockAndReplayCatalog(
 
 	readTxn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := c.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, e.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
+	err = c.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	assert.NoError(t, err)
 	assert.NoError(t, readTxn.Commit(ctx))
 
 	reader = logtail.NewCKPReader(
