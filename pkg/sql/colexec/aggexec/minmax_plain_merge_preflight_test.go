@@ -90,7 +90,7 @@ func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 				result, err := f.exec.Flush()
 				require.NoError(t, err)
 				for _, v := range result {
-					t.Cleanup(func() { v.Free(f.mp) })
+					t.Cleanup(func() { v.Free(v.MPool()) })
 				}
 				require.Len(t, result, 1)
 				want := []int64{-5, -2}

@@ -119,7 +119,7 @@ func TestColumnCacheSessionSeriesAmortizesAllocation(t *testing.T) {
 		ctx = WithAutoIncrementOptions(ctx, 3, 2)
 		mp := mpool.MustNew("series-test")
 		for i := 0; i < 100; i++ {
-			v := vector.NewVec(types.T_uint64.ToType())
+			v := vector.NewVec(types.T_uint64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(v, uint64(0), true, mp))
 			id, err := c.insertAutoValues(ctx, 0, v, 1, nil)
 			v.Free(mp)
@@ -151,7 +151,7 @@ func TestColumnCacheManualValuesAdvanceOnlyPositiveSequence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runColumnCacheTests(t, 200, 1, func(ctx context.Context, c *columnCache) {
 				mp := mpool.MustNewZero()
-				input := vector.NewVec(types.T_int64.ToType())
+				input := vector.NewVec(types.T_int64.ToType(), mp)
 				defer input.Free(mp)
 				for i, v := range []int64{tc.manual, 0, 100, 0} {
 					require.NoError(t, vector.AppendFixed(input, v, i == 1 || i == 3, mp))
@@ -223,7 +223,7 @@ func TestColumnCacheConcurrentSessionSeries(t *testing.T) {
 				<-start
 				var previous uint64
 				for i := 0; i < 20; i++ {
-					v := vector.NewVec(types.T_uint64.ToType())
+					v := vector.NewVec(types.T_uint64.ToType(), mp)
 					if err := vector.AppendFixed(v, uint64(0), true, mp); err != nil {
 						v.Free(mp)
 						errors <- err
@@ -358,7 +358,7 @@ func TestInsertMediumIntAutoIncrementRange(t *testing.T) {
 			runColumnCacheTestsWithInitOffset(t, 1, 1, tc.max-1, func(ctx context.Context, cache *columnCache) {
 				mp := mpool.MustNewZero()
 				defer func() { require.Zero(t, mp.CurrNB()) }()
-				first := vector.NewVec(tc.typ)
+				first := vector.NewVec(tc.typ, mp)
 				defer first.Free(mp)
 				if tc.typ.Oid == types.T_int32 {
 					require.NoError(t, vector.AppendFixed[int32](first, 0, true, mp))
@@ -374,7 +374,7 @@ func TestInsertMediumIntAutoIncrementRange(t *testing.T) {
 					require.Equal(t, []uint32{uint32(tc.max)}, vector.MustFixedColWithTypeCheck[uint32](first))
 				}
 
-				next := vector.NewVec(tc.typ)
+				next := vector.NewVec(tc.typ, mp)
 				defer next.Free(mp)
 				if tc.typ.Oid == types.T_int32 {
 					require.NoError(t, vector.AppendFixed[int32](next, 0, true, mp))
@@ -700,12 +700,13 @@ func newTestVector[T constraints.Integer](
 		fillMap[v] = fillValues[i]
 	}
 
-	vec := vector.NewVec(vecType)
+	mp := mpool.MustNew("test")
+	vec := vector.NewVec(vecType, mp)
 	for i := 0; i < rows; i++ {
 		if v, ok := fillMap[i]; ok {
-			vector.AppendFixed(vec, v, false, mpool.MustNew("test"))
+			vector.AppendFixed(vec, v, false, mp)
 		} else {
-			vector.AppendFixed[T](vec, 0, true, mpool.MustNew("test"))
+			vector.AppendFixed[T](vec, 0, true, mp)
 		}
 	}
 	return vec

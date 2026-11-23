@@ -17,6 +17,8 @@ package batch
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,17 +28,17 @@ import (
 // lentBatch returns a one-column batch whose vector aliases backing; the batch
 // is the lender. The lease's release poisons backing, modelling a cache entry
 // that is reused after its last pin goes.
-func lentBatch(t *testing.T, values []int64) (*Batch, *vector.RefCountedBufferLease, []byte) {
+func lentBatch(t *testing.T, values []int64) (*Batch, *bufferlease.RefCounted, []byte) {
 	backing := types.EncodeSlice(append([]int64(nil), values...))
-	lease, err := vector.NewRefCountedBufferLease(backing, int64(cap(backing)), func() {
+	lease, err := bufferlease.NewRefCounted(backing, int64(cap(backing)), func() {
 		for i := range backing {
 			backing[i] = 0xFF
 		}
 	})
 	require.NoError(t, err)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), backing)
+	vec, err := vector.NewVecWithData(types.T_int64.ToType(), len(values), backing, nil, nil), error(nil)
 	require.NoError(t, err)
-	bat := NewOffHeapWithSize(1)
+	bat := NewWithSize(1)
 	require.NoError(t, bat.HoldLease(lease))
 	lease.Release()
 	bat.Vecs[0] = vec
@@ -52,7 +54,7 @@ func TestBatchReleasesLeasesWhenItDropsColumns(t *testing.T) {
 		"FreeColumns":   func(b *Batch) { b.FreeColumns(mp) },
 		"Unmarshal": func(b *Batch) {
 			source := NewWithSize(1)
-			source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(5), false, mp))
 			source.SetRowCount(1)
 			data, err := source.MarshalBinary()
@@ -71,26 +73,6 @@ func TestBatchReleasesLeasesWhenItDropsColumns(t *testing.T) {
 			bat.Clean(mp)
 		})
 	}
-	require.Zero(t, mp.CurrNB())
-}
-
-// A vector moved out of a lending batch must be materialized before the
-// batch releases what it lent; the moved copy then survives the release.
-func TestBatchMovedBorrowedVectorIsMaterializedBeforeRelease(t *testing.T) {
-	mp := mpool.MustNewZero()
-	bat, lease, backing := lentBatch(t, []int64{7, 8, 9})
-	moved := bat.Vecs[0]
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
-	require.True(t, moved.HasBorrowedBacking())
-	require.NoError(t, moved.MaterializeOwned(mp))
-	require.False(t, moved.HasBorrowedBacking())
-
-	bat.CleanOnlyData()
-	require.Nil(t, lease.Bytes())
-	require.Equal(t, []byte{0xFF, 0xFF}, backing[:2], "the lent backing was reused")
-	require.Equal(t, []int64{7, 8, 9}, vector.MustFixedColNoTypeCheck[int64](moved))
-	moved.Free(mp)
-	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
 

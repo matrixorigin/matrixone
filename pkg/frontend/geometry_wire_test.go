@@ -82,7 +82,7 @@ func TestGeometryWireWriters(t *testing.T) {
 						if fast {
 							bat := batch.NewWithSize(1)
 							defer bat.Clean(proc.Mp())
-							bat.Vecs[0] = vector.NewVec(typ)
+							bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 							payload := point
 							if oid == types.T_geometry32 {
 								var err error
@@ -184,7 +184,7 @@ func TestHistoricalGeometryCursorCaptureAndFetch(t *testing.T) {
 				require.NoError(t, setMysqlColumnTypeInfo(ctx, typ, col))
 				stmt.cursor = &preparedStmtCursor{result: &MysqlResultSet{Columns: []Column{col}}, maxRows: 3, maxBytes: 4096}
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(typ)
+				bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 				defer bat.Clean(proc.Mp())
 				for _, standard := range [][]byte{historical, closed} {
 					payload := standard

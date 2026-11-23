@@ -353,9 +353,9 @@ func TestParquetHybridReaderPageBoundaries(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			h := &ParquetHandler{}
 			p := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background()}}
-			bat := vectorBatch([]types.Type{types.T_int64.ToType()})
+			bat := vectorBatch([]types.Type{types.T_int64.ToType()}, proc.Mp())
 			t.Cleanup(func() {
-				bat.Clean(proc.Mp())
+				bat.CleanOwned()
 				h.cleanup()
 				_ = h.closePages(p.Ctx)
 			})
@@ -382,8 +382,8 @@ func TestParquetHybridReaderNestedRowDispatch(t *testing.T) {
 		Ctx:  context.Background(),
 		Cols: []*plan.ColDef{{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2}}},
 	}}
-	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0)})
-	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	bat := vectorBatch([]types.Type{types.New(types.T_array_float32, 2, 0)}, proc.Mp())
+	t.Cleanup(func() { bat.CleanOwned() })
 
 	t.Run("skip hidden or missing nested mapper", func(t *testing.T) {
 		h := &ParquetHandler{

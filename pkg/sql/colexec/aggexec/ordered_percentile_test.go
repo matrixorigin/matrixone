@@ -60,7 +60,7 @@ func TestOrderedPercentileExecNumericAndDirection(t *testing.T) {
 	result, err := cont.Flush()
 	require.NoError(t, err)
 	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	cont.Free()
 
 	disc, err := makeOrderedPercentileExec(mp, AggIdOfPercentileDisc, false,
@@ -73,7 +73,7 @@ func TestOrderedPercentileExecNumericAndDirection(t *testing.T) {
 	require.NoError(t, err)
 	// DESC makes p=0.5 select the third value from the high end.
 	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	disc.Free()
 }
 
@@ -106,7 +106,7 @@ func TestOrderedPercentileUsesNativeUint64Order(t *testing.T) {
 			result, err := disc.Flush()
 			require.NoError(t, err)
 			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result[0], 0))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			disc.Free()
 		})
 	}
@@ -143,7 +143,7 @@ func TestOrderedPercentileExecGroupsNullsAndMerge(t *testing.T) {
 	// Group 1 has [1,3], group 2 has [5,10,30] after NULLs are ignored.
 	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 	require.Equal(t, 10.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 1))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	left.Free()
 	right.Free()
 }
@@ -184,7 +184,7 @@ func TestOrderedPercentileExecSpillsRuns(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -228,7 +228,7 @@ func TestOrderedPercentileUnmarshalReplacesSpilledState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 150.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	targetValues.Free(mp)
 	sourceValues.Free(mp)
 	target.Free()
@@ -327,7 +327,7 @@ func runOrderedPercentileFloatNaNCase[T float32 | float64](
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	got := orderedPercentileFloatResult(t, result[0], typ, mode)
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 	return got
 }
@@ -373,7 +373,7 @@ func TestOrderedPercentileCompactsSpillRuns(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, float64(orderedPercentileRunFanIn)/2, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -564,7 +564,7 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		result, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, "2.000", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(3))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		exec.Free()
 	})
 
@@ -584,7 +584,7 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		result, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, "1.00", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(2))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		exec.Free()
 	})
 
@@ -604,7 +604,7 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		result, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, "2.000", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		exec.Free()
 	})
 
@@ -630,7 +630,7 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		result, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, "0", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		exec.Free()
 	})
 
@@ -650,7 +650,7 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		result, err := exec.Flush()
 		require.NoError(t, err)
 		require.Equal(t, "0.5", vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		exec.Free()
 	})
 
@@ -671,7 +671,7 @@ func TestOrderedPercentileDecimalExecution(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "0.15000000000000000000000000000000000000",
 			vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0).Format(result[0].GetType().Scale))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		exec.Free()
 	})
 }
@@ -701,13 +701,13 @@ func TestOrderedPercentileDiscreteSortableTypes(t *testing.T) {
 
 	t.Run("varchar", func(t *testing.T) {
 		typ := types.New(types.T_varchar, 20, 0)
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		defer vec.Free(mp)
 		for _, value := range []string{"gamma", "alpha", "beta"} {
 			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 		}
 		result := run(t, typ, vec)
-		defer result.Free(mp)
+		defer result.Free(result.MPool())
 		require.Equal(t, "beta", result.GetStringAt(0))
 	})
 
@@ -716,7 +716,7 @@ func TestOrderedPercentileDiscreteSortableTypes(t *testing.T) {
 		vec := buildFixedVec(t, mp, typ, []types.Date{30, 10, 20})
 		defer vec.Free(mp)
 		result := run(t, typ, vec)
-		defer result.Free(mp)
+		defer result.Free(result.MPool())
 		require.Equal(t, types.Date(20),
 			vector.GetFixedAtNoTypeCheck[types.Date](result, 0))
 	})
@@ -732,7 +732,7 @@ func TestOrderedPercentileDiscreteSortableTypes(t *testing.T) {
 		vec := buildFixedVec(t, mp, typ, values)
 		defer vec.Free(mp)
 		result := run(t, typ, vec)
-		defer result.Free(mp)
+		defer result.Free(result.MPool())
 		require.Equal(t, "2.00",
 			vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0).Format(typ.Scale))
 	})
@@ -752,7 +752,7 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 		return exec
 	}
 	newValues := func(values ...string) *vector.Vector {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 		}
@@ -775,7 +775,7 @@ func TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "beta", results[0].GetStringAt(0))
 
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	leftValues.Free(mp)
 	rightValues.Free(mp)
 	left.Free()
@@ -797,7 +797,7 @@ func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
 		return exec
 	}
 	newValue := func(value []byte) *vector.Vector {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(vec, value, false, mp))
 		return vec
 	}
@@ -842,7 +842,7 @@ func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			assertResult(results[0], tc.value)
 
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			value.Free(mp)
 			exec.Free()
 		})
@@ -864,7 +864,7 @@ func TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			assertResult(results[0], tc.value)
 
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			value.Free(mp)
 			source.Free()
 			restored.Free()
@@ -920,7 +920,7 @@ func TestAggStringMetadataLegacySourceByte(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 	require.NoError(t, exec.SetExtraInformation(
 		EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
-	values := vector.NewVec(typ)
+	values := vector.NewVec(typ, mp)
 	defer values.Free(mp)
 	require.NoError(t, vector.AppendBytes(values, []byte("v"), false, mp))
 	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))

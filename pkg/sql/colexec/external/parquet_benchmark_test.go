@@ -105,7 +105,7 @@ func BenchmarkParquetDictionaryBoolMapping(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			page, mp, proc := benchmarkParquetBoolPage(b, tc.dictionary, tc.nullable)
 			defer proc.Free()
-			vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+			vec := vector.NewVec(types.New(types.T_bool, 0, 0), proc.Mp())
 			defer vec.Free(proc.Mp())
 			b.SetBytes(page.Size())
 			b.ReportMetric(float64(page.NumRows()), "rows/op")

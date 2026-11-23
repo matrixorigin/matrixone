@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	goruntime "runtime"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -204,7 +203,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 		}
 
 		if insert.ctr.buf == nil {
-			insert.initBufForS3()
+			insert.initBufForS3(proc.Mp())
 		}
 	} else {
 		ref := insert.InsertCtx.Ref
@@ -250,9 +249,14 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 
 // checkExternalNotNull rejects NULLs in NOT NULL columns. ctr.extCols is
 // aligned with InsertCtx.Attrs (and therefore with the leading batch vectors).
-func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) error {
+// checkExternalNotNull enforces NOT NULL for the external path and returns
+// the batch to write. Under statement IGNORE the NULL cells are adjusted
+// instead: the operator writes its own view of the child's batch, whose
+// adjusted slots hold the fill's vectors; the child's batch and vectors are
+// never modified.
+func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) (*batch.Batch, error) {
 	if len(insert.ctr.extCols) == 0 {
-		return nil
+		return bat, nil
 	}
 	if proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore() {
@@ -260,33 +264,12 @@ func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Bat
 		// single NOT NULL gate. Under statement IGNORE apply the same rule
 		// PreInsert uses for normal tables: keep the row, set the implicit
 		// default of the column type, and warn per adjusted cell.
-		//
-		// The fill also replaces a constant NULL broadcast - the projected
-		// fold of an omitted column's NULL default - with a freshly
-		// allocated constant. That batch belongs to the child, which
-		// overwrites every slot on its next Call and frees only its own
-		// vectors, so this operator books the exchanged slots as its own
-		// allocations here and insert_external releases them once the write
-		// consumed the batch; otherwise each affected batch would leave one
-		// more replacement recorded in the pool with an owner nobody calls.
-		//
-		// The staged default of a dependent NOT NULL column
-		// (b DEFAULT (a)) lowers to a raw column reference while a stays
-		// nullable, and the child projection hands that reference the very
-		// vector holding a: one flat vector feeds two slots. The flat leg
-		// of the fill rewrites its destination in place, so it would also
-		// overwrite a's NULL cells with b's implicit default and drop
-		// a's null bitmap. PreInsert normally gives repeated vectors an
-		// independent copy, but this minimal external plan runs no
-		// PreInsert, so the detachment is booked here the same way.
-		if err := insert.detachAliasedFillDestinations(bat, proc); err != nil {
-			return err
+		view := insert.ctr.extFill.View(bat)
+		if _, err := insert.ctr.extFill.Fill(
+			view.Vecs, insert.InsertCtx.Attrs, insert.ctr.extCols, nil, proc); err != nil {
+			return nil, err
 		}
-		before := insert.snapshotConstantNullSlots(bat)
-		_, err := colexec.BatchDataNotNullFillForIgnore(
-			bat.Vecs, insert.InsertCtx.Attrs, insert.ctr.extCols, proc)
-		insert.adoptExtFillReplacements(bat, before)
-		return err
+		return view, nil
 	}
 	for j, col := range insert.ctr.extCols {
 		if col == nil || j >= len(bat.Vecs) {
@@ -300,117 +283,10 @@ func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Bat
 		}
 		vec := bat.Vecs[j]
 		if vec.IsConstNull() || vec.GetNulls().Any() {
-			return moerr.NewConstraintViolationf(proc.Ctx, "Column '%s' cannot be null", insert.InsertCtx.Attrs[j])
+			return nil, moerr.NewConstraintViolationf(proc.Ctx, "Column '%s' cannot be null", insert.InsertCtx.Attrs[j])
 		}
 	}
-	return nil
-}
-
-// snapshotConstantNullSlots keeps the batch's vector pointers while any slot
-// holds the one shape the fill exchanges for a fresh allocation - a constant
-// NULL broadcast of a NOT NULL column - and returns nil otherwise, so
-// ordinary batches take no snapshot at all. A constant NULL owns no backing
-// storage (NewConstNull allocates none), so the absorbed slot below is
-// guaranteed to be a child-owned broadcast the fill cannot free in place.
-func (insert *Insert) snapshotConstantNullSlots(bat *batch.Batch) []*vector.Vector {
-	for j, col := range insert.ctr.extCols {
-		if col == nil || j >= len(bat.Vecs) {
-			continue
-		}
-		vec := bat.Vecs[j]
-		if vec == nil || !vec.IsConst() || vec.Length() <= 0 || !vec.IsNull(0) {
-			continue
-		}
-		if !colexec.ColForbidsNull(col) {
-			continue
-		}
-		return slices.Clone(bat.Vecs)
-	}
-	return nil
-}
-
-// detachAliasedFillDestinations gives every fill destination whose flat
-// vector also occupies another slot independent storage before the IGNORE
-// fill runs. The in-place leg of the fill overwrites NULL cells and clears
-// the null bitmap of the vector holding them, so a shared vector would let
-// b's adjustment also set a's cell to the implicit default and clear a's
-// live NULL - the writer would emit a value where the row supplied NULL.
-// Only a vector that actually holds a NULL can be rewritten, so vectors
-// without one keep the single in-place fill. Every detachment is booked with
-// the same ownership the constant replacement uses: releaseExtFillOwned
-// hands the borrowed slot back to the child and frees the copy on each path
-// out of insert_external.
-func (insert *Insert) detachAliasedFillDestinations(bat *batch.Batch, proc *process.Process) error {
-	hasDestination := false
-	for _, col := range insert.ctr.extCols {
-		if colexec.ColForbidsNull(col) {
-			hasDestination = true
-			break
-		}
-	}
-	if !hasDestination {
-		return nil
-	}
-	shared := make(map[*vector.Vector]int, len(bat.Vecs))
-	for _, v := range bat.Vecs {
-		if v != nil && !v.IsConst() && v.GetNulls().Any() {
-			shared[v]++
-		}
-	}
-	for j, v := range bat.Vecs {
-		if shared[v] < 2 || j >= len(insert.ctr.extCols) {
-			continue
-		}
-		if !colexec.ColForbidsNull(insert.ctr.extCols[j]) {
-			continue
-		}
-		detached := vector.NewVec(*v.GetType())
-		if err := detached.UnionBatch(v, 0, v.Length(), nil, proc.Mp()); err != nil {
-			detached.Free(proc.Mp())
-			return err
-		}
-		bat.Vecs[j] = detached
-		insert.ctr.extFillOwned = append(insert.ctr.extFillOwned,
-			extFillReplacement{slot: j, orig: v, fill: detached})
-	}
-	return nil
-}
-
-// adoptExtFillReplacements takes ownership of the replacements the fill just
-// installed into the child's batch: a slot whose vector pointer changed holds
-// one, paired with the snapshot's displaced original. Comparing pointers
-// after the fact keeps a partial fill - some slots replaced, a later
-// unfillable column failing the statement - booked exactly the same way,
-// because the shared fill has already installed its earlier replacements when
-// it reports that error; the operator then releases those with the failed
-// batch instead of leaving them behind in the child's slots.
-func (insert *Insert) adoptExtFillReplacements(bat *batch.Batch, before []*vector.Vector) {
-	if len(before) == 0 {
-		return
-	}
-	for j := range before {
-		if j >= len(bat.Vecs) || before[j] == bat.Vecs[j] {
-			continue
-		}
-		insert.ctr.extFillOwned = append(insert.ctr.extFillOwned,
-			extFillReplacement{slot: j, orig: before[j], fill: bat.Vecs[j]})
-	}
-}
-
-// releaseExtFillOwned drains the booked replacements of one Call: every
-// affected slot gets the child's vector back - the child, not this operator,
-// owns the original's lifetime - and the replacement's storage is released.
-// insert_external schedules this on every path out of the write, so the
-// writer has already consumed the batch synchronously and nothing downstream
-// still holds a reference to the borrowed fill.
-func (insert *Insert) releaseExtFillOwned(bat *batch.Batch, proc *process.Process) {
-	for _, r := range insert.ctr.extFillOwned {
-		if r.slot >= 0 && r.slot < len(bat.Vecs) && bat.Vecs[r.slot] == r.fill {
-			bat.Vecs[r.slot] = r.orig
-		}
-		r.fill.Free(proc.Mp())
-	}
-	insert.ctr.extFillOwned = nil
+	return bat, nil
 }
 
 // insert_external writes a batch into a writable external table's backing file.
@@ -445,19 +321,12 @@ func (insert *Insert) insert_external(proc *process.Process, analyzer process.An
 
 	// NOT NULL enforcement normally happens in the PreInsert operator, which the
 	// minimal external-insert plan does not run.
-	//
-	// Every path from here on - a fill rejection, a write failure, success, or
-	// an unwinding panic - returns the child's borrowed slots it may have had
-	// adapted and releases the operator's own replacement allocations, so one
-	// batch's fill never survives its batch. The writer consumes a batch
-	// synchronously in WriteBatch, which makes the release in this defer the
-	// first unclaimed point after the last consumer.
-	defer insert.releaseExtFillOwned(input.Batch, proc)
-	if err = insert.checkExternalNotNull(proc, input.Batch); err != nil {
+	out, err := insert.checkExternalNotNull(proc, input.Batch)
+	if err != nil {
 		return input, err
 	}
 	ctx := insert.externalWriterContext(proc.Ctx)
-	if err = insert.ctr.extWriter.WriteBatch(ctx, input.Batch, analyzer); err != nil {
+	if err = insert.ctr.extWriter.WriteBatch(ctx, out, analyzer); err != nil {
 		return input, err
 	}
 
@@ -657,7 +526,7 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 	blockInfoBat, err := process.MeasureFilesystemWait(analyzer, func() (*batch.Batch, error) {
-		return insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx)
+		return insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx, proc.Mp())
 	})
 	if err != nil {
 		return err
@@ -668,7 +537,7 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		if err != nil {
 			return err
 		}
-		insert.ctr.s3Writer.ResetBlockInfoBat()
+		insert.ctr.s3Writer.ResetBlockInfoBat(proc.Mp())
 	}
 
 	insert.refreshAndReleaseS3MemGrant()
@@ -729,7 +598,7 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	insert.ctr.buf.CleanOnlyData()
 	for i := range insert.ctr.buf.Attrs {
 		if insert.ctr.buf.Vecs[i] == nil {
-			insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+			insert.ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType(), proc.Mp())
 		}
 		if err := insert.ctr.buf.Vecs[i].UnionBatch(input.Batch.Vecs[i], 0, input.Batch.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 			return input, err
@@ -779,7 +648,7 @@ func flushTailBatch(
 		return err
 	}
 
-	if bat, err = writer.FillBlockInfoBat(); err != nil {
+	if bat, err = writer.FillBlockInfoBat(proc.Mp()); err != nil {
 		return err
 	}
 
@@ -788,7 +657,7 @@ func flushTailBatch(
 		return err
 	}
 
-	writer.ResetBlockInfoBat()
+	writer.ResetBlockInfoBat(proc.Mp())
 
 	return nil
 }

@@ -102,7 +102,7 @@ func TestBuildBloomfilter(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, bf.Valid())
 			require.Equal(t, 2, calls)
-			probe := vector.NewVec(typ)
+			probe := vector.NewVec(typ, mp)
 			t.Cleanup(func() { probe.Free(mp) })
 			require.NoError(t, vector.AppendFixedList(probe, values, nil, mp))
 			checked := 0

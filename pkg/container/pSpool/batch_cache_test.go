@@ -40,7 +40,7 @@ func newSpoolSizeBatch(tb testing.TB, mp *mpool.MPool, sizes []int, alias bool) 
 		if size < 0 {
 			continue
 		}
-		source.Vecs[i] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+		source.Vecs[i] = vector.NewVec(types.T_text.ToType(), mp)
 		require.NoError(tb, vector.AppendBytes(source.Vecs[i], bytes.Repeat([]byte{byte(i + 1)}, size), false, mp))
 	}
 	if alias {

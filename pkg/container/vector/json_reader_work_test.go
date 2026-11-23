@@ -44,7 +44,7 @@ func TestJSONReaderResidentWork(t *testing.T) {
 						reader, err = builder.Finish()
 						require.NoError(t, err)
 					} else {
-						source := NewVec(types.T_json.ToType())
+						source := NewVec(types.T_json.ToType(), mp)
 						defer func() {
 							if source != nil {
 								source.Free(mp)

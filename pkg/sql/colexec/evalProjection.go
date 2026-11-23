@@ -53,7 +53,7 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 		}
 	}
 	if projection.projectBat == nil {
-		projection.projectBat = batch.NewOffHeapWithSize(len(projection.ProjectList))
+		projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
 	}
 
 	return
@@ -87,6 +87,30 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 	}
 	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(projection.projectBat.Size()))
 	projection.projectBat.SetRowCount(bat.RowCount())
+	return projection.projectBat, nil
+}
+
+// EvalProjectionSelected evaluates the projection of a selected bat on its
+// physical rows (physical, a PhysicalView of bat), masked to the selection,
+// so filtered-out rows are not evaluated. The result carries bat's selection
+// and borrows it: it is valid until bat changes.
+func (projection *Projection) EvalProjectionSelected(bat, physical *batch.Batch, mask []bool, proc *process.Process) (*batch.Batch, error) {
+	if !bat.HasSelection() {
+		return projection.EvalProjection(bat, proc)
+	}
+	if len(projection.ProjectExecutors) == 0 || bat.IsEmpty() || bat.Last() {
+		return bat, nil
+	}
+	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
+	for i := range projection.ProjectExecutors {
+		vec, err := projection.ProjectExecutors[i].Eval(proc, []*batch.Batch{physical}, mask)
+		if err != nil {
+			return nil, err
+		}
+		projection.projectBat.Vecs[i] = vec
+	}
+	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(projection.projectBat.Size()))
+	projection.projectBat.SetSelection(bat.PhysicalRowCount(), bat.Selection())
 	return projection.projectBat, nil
 }
 

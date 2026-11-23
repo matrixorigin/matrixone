@@ -29,13 +29,13 @@ func runVecBlockCast(t *testing.T, proc *process.Process, src *vector.Vector, to
 	t.Helper()
 	result := vector.NewFunctionResultWrapper(to, proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(src.Length()))
-	err := NewCast([]*vector.Vector{src, vector.NewVec(to)}, result, proc, src.Length(), nil)
+	err := NewCast([]*vector.Vector{src, vector.NewVec(to, proc.Mp())}, result, proc, src.Length(), nil)
 	return result.GetResultVector(), err
 }
 
 func vecBlockStrVector(t *testing.T, proc *process.Process, values []string, nulls []bool) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	for i, s := range values {
 		require.NoError(t, vector.AppendBytes(v, []byte(s), nulls != nil && nulls[i], proc.Mp()))
 	}
@@ -44,7 +44,7 @@ func vecBlockStrVector(t *testing.T, proc *process.Process, values []string, nul
 
 func vecBlockF32Vector(t *testing.T, proc *process.Process, dim int32, values [][]float32) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(types.New(types.T_array_float32, dim, 0))
+	v := vector.NewVec(types.New(types.T_array_float32, dim, 0), proc.Mp())
 	for _, a := range values {
 		require.NoError(t, vector.AppendArray(v, a, false, proc.Mp()))
 	}
@@ -129,7 +129,7 @@ func TestCastToVecBlock(t *testing.T) {
 func TestCastBlobToVecBlock(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	blob := func(values ...[]byte) *vector.Vector {
-		v := vector.NewVec(types.T_blob.ToType())
+		v := vector.NewVec(types.T_blob.ToType(), proc.Mp())
 		for _, b := range values {
 			require.NoError(t, vector.AppendBytes(v, b, false, proc.Mp()))
 		}
@@ -192,7 +192,7 @@ func TestCastVecBlockExactText(t *testing.T) {
 		f, _ := oid.BlockScaledFormat()
 		cell, err := types.AppendBlockScaled(nil, f, review)
 		require.NoError(t, err)
-		src := vector.NewVec(types.New(oid, 17, 0))
+		src := vector.NewVec(types.New(oid, 17, 0), proc.Mp())
 		require.NoError(t, vector.AppendBytes(src, cell, false, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(src, nil, true, proc.Mp()))
 
@@ -221,7 +221,7 @@ func TestCastVecBlockExactText(t *testing.T) {
 func TestVecBlockBinary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	blob := func(values ...[]byte) *vector.Vector {
-		v := vector.NewVec(types.T_blob.ToType())
+		v := vector.NewVec(types.T_blob.ToType(), proc.Mp())
 		for _, b := range values {
 			require.NoError(t, vector.AppendBytes(v, b, false, proc.Mp()))
 		}

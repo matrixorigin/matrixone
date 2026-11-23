@@ -50,7 +50,7 @@ func TestCachedBatchGrowthReleasesEarlierBacking(t *testing.T) {
 		source := batch.NewWithSize(len(sizes))
 		t.Cleanup(func() { source.Clean(sourceMP) })
 		for i, size := range sizes {
-			source.Vecs[i] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+			source.Vecs[i] = vector.NewVec(types.T_text.ToType(), sourceMP)
 			require.NoError(t, vector.AppendBytes(source.Vecs[i], bytes.Repeat([]byte{byte(i + 1)}, size), false, sourceMP))
 		}
 		source.SetRowCount(1)

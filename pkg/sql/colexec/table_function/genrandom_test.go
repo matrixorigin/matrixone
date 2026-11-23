@@ -53,7 +53,7 @@ func TestGenerateRandomProjectedColumns(t *testing.T) {
 				st := &genRandomState{
 					total: total, genInt64: intValues, method: method,
 					iMax: 10, r: rand.New(rand.NewSource(42)),
-					batch: tf.createResultBatch(),
+					batch: tf.createResultBatch(proc.Mp()),
 				}
 				want := rand.New(rand.NewSource(42))
 				var seen int64

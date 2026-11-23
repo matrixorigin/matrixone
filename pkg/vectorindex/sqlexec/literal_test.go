@@ -33,7 +33,7 @@ import (
 // the literal and alter the interpolated SQL.
 func TestExactPkFilterBitHostileBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_bit, 64, 0))
+	vec := vector.NewVec(types.New(types.T_bit, 64, 0), mp)
 	defer vec.Free(mp)
 
 	// Big-endian bytes (after encode + reverse) embed ', \, and --.

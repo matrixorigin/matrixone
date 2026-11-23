@@ -57,8 +57,8 @@ func decimalByteJSON(text string) bytejson.ByteJson {
 
 func TestValidVectorsAcceptsBroadcastConstants(t *testing.T) {
 	mp := mpool.MustNewZero()
-	flat := vector.NewVec(types.T_int32.ToType())
-	short := vector.NewVec(types.T_int32.ToType())
+	flat := vector.NewVec(types.T_int32.ToType(), mp)
+	short := vector.NewVec(types.T_int32.ToType(), mp)
 	constant, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), 1, mp)
 	require.NoError(t, err)
 	constantNull := vector.NewConstNull(types.T_int32.ToType(), 1, mp)
@@ -459,14 +459,14 @@ func TestComputeXXHashCanonicalVarlenaShapes(t *testing.T) {
 	vecPositiveZero := types.ArrayToBytes([]float32{1, 2, 3, 0, 5, 6, 7, 8})
 	vecNegativeZero := types.ArrayToBytes([]float32{1, 2, 3, negativeZero, 5, 6, 7, 8})
 
-	jsonFlat := vector.NewVec(jsonType)
-	vecFlat := vector.NewVec(vecType)
-	charFlat := vector.NewVec(charType)
+	jsonFlat := vector.NewVec(jsonType, mp)
+	vecFlat := vector.NewVec(vecType, mp)
+	charFlat := vector.NewVec(charType, mp)
 	// Build the payload with the physical varchar type first.  Re-tagging it
 	// after append models a legacy/spilled vector whose semantic Unicode
 	// metadata is restored by the consumer; AppendBytes must still reject
 	// malformed values for a genuinely Unicode-typed vector.
-	unicodeFlat := vector.NewVec(types.T_varchar.ToType())
+	unicodeFlat := vector.NewVec(types.T_varchar.ToType(), mp)
 	jsonConst, err := vector.NewConstBytes(jsonType, jsonOnePointZero, 3, mp)
 	require.NoError(t, err)
 	vecConst, err := vector.NewConstBytes(vecType, vecNegativeZero, 3, mp)
@@ -540,11 +540,11 @@ func TestCanonicalBytesAtUsesGroupingEquality(t *testing.T) {
 	mp := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
 	floatType.Scale = 2
-	floats := vector.NewVec(floatType)
-	doubles := vector.NewVec(types.T_float64.ToType())
-	chars := vector.NewVec(types.New(types.T_char, 4, 0))
-	jsonValues := vector.NewVec(types.T_json.ToType())
-	unicodeValues := vector.NewVec(types.T_varchar.ToType())
+	floats := vector.NewVec(floatType, mp)
+	doubles := vector.NewVec(types.T_float64.ToType(), mp)
+	chars := vector.NewVec(types.New(types.T_char, 4, 0), mp)
+	jsonValues := vector.NewVec(types.T_json.ToType(), mp)
+	unicodeValues := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer func() {
 		floats.Free(mp)
 		doubles.Free(mp)
@@ -764,8 +764,8 @@ func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			left := vector.NewVec(test.typ)
-			right := vector.NewVec(test.typ)
+			left := vector.NewVec(test.typ, mp)
+			right := vector.NewVec(test.typ, mp)
 			defer left.Free(mp)
 			defer right.Free(mp)
 			for row := range test.left {
@@ -882,12 +882,12 @@ func TestComputeXXHashScaledFloat32Contract(t *testing.T) {
 	m := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
 	floatType.Scale = 2
-	vec := vector.NewVec(floatType)
-	nullable := vector.NewVec(floatType)
+	vec := vector.NewVec(floatType, m)
+	nullable := vector.NewVec(floatType, m)
 	constVec, err := vector.NewConstFixed(floatType, float32(1.23), 3, m)
 	require.NoError(t, err)
 	constNull := vector.NewConstNull(floatType, 3, m)
-	short := vector.NewVec(floatType)
+	short := vector.NewVec(floatType, m)
 	defer func() {
 		vec.Free(m)
 		nullable.Free(m)
@@ -933,8 +933,8 @@ func TestComputeXXHashCompositeScaledFloat32Contract(t *testing.T) {
 	m := mpool.MustNewZero()
 	floatType := types.T_float32.ToType()
 	floatType.Scale = 2
-	discriminators := vector.NewVec(types.T_int64.ToType())
-	floats := vector.NewVec(floatType)
+	discriminators := vector.NewVec(types.T_int64.ToType(), m)
+	floats := vector.NewVec(floatType, m)
 	defer func() {
 		discriminators.Free(m)
 		floats.Free(m)
@@ -970,7 +970,7 @@ func TestComputeXXHashCanonicalizesGroupingRows(t *testing.T) {
 			left:  []int64{11, 22, 33},
 			right: []int64{101, 22, 303},
 			newVec: func(values any) *vector.Vector {
-				vec := vector.NewVec(types.T_int64.ToType())
+				vec := vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList(
 					vec, values.([]int64), nil, mp,
 				))
@@ -982,7 +982,7 @@ func TestComputeXXHashCanonicalizesGroupingRows(t *testing.T) {
 			left:  []float64{11, 22, 33},
 			right: []float64{101, 22, 303},
 			newVec: func(values any) *vector.Vector {
-				vec := vector.NewVec(types.T_float64.ToType())
+				vec := vector.NewVec(types.T_float64.ToType(), mp)
 				require.NoError(t, vector.AppendFixedList(
 					vec, values.([]float64), nil, mp,
 				))
@@ -1019,8 +1019,8 @@ func TestComputeXXHashCanonicalizesGroupingRows(t *testing.T) {
 
 func TestComputeXXHashDoesNotTreatStaleGroupingAsFull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	left := vector.NewVec(types.T_int64.ToType())
-	right := vector.NewVec(types.T_int64.ToType())
+	left := vector.NewVec(types.T_int64.ToType(), mp)
+	right := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(left, int64(11), false, mp))
 	require.NoError(t, vector.AppendFixed(right, int64(22), false, mp))
 	left.GetGrouping().Add(5)

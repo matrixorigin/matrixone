@@ -567,7 +567,9 @@ func runHashJoinKeyContract(
 	var build, probe *batch.Batch
 	defer func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		buildArg.Free(proc, false, nil)
+		freeTestChildren(buildArg)
 		if build != nil {
 			build.Clean(proc.Mp())
 		}
@@ -697,7 +699,7 @@ func makeJoinKeyVector(
 	typ types.Type,
 	values []joinKeyContractValue,
 ) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	for _, value := range values {
 		switch typ.Oid {
 		case types.T_float32:

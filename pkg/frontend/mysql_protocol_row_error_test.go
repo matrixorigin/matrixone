@@ -58,7 +58,7 @@ func TestResultRowEncodingErrorEmitsOneTerminalPacket(t *testing.T) {
 			mrs.AddColumn(column)
 
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), CDCExeutorAllocator)
 			bat.SetRowCount(1)
 			colSlices := &ColumnSlices{
 				ctx: context.Background(), dataSet: bat, colIdx2SliceIdx: []int{0},

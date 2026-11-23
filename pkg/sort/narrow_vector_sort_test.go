@@ -98,7 +98,7 @@ func TestSortNarrowVectorColumns(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name+"/asc", func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			defer vec.Free(mp)
 			tc.fill(vec)
 
@@ -108,7 +108,7 @@ func TestSortNarrowVectorColumns(t *testing.T) {
 		})
 
 		t.Run(tc.name+"/desc", func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			defer vec.Free(mp)
 			tc.fill(vec)
 

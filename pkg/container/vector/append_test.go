@@ -29,7 +29,7 @@ import (
 func newAppendTestVec(t *testing.T, typ types.Type) (*Vector, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	vec := NewVec(typ)
+	vec := NewVec(typ, mp)
 	t.Cleanup(func() {
 		defer mpool.DeleteMPool(mp)
 		vec.Free(mp)
@@ -156,8 +156,8 @@ func TestAppendVarlenListPregrow(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vec, mp := newAppendTestVec(t, tc.oid.ToType())
-			reference := NewVec(tc.oid.ToType())
-			decoded := NewVec(tc.oid.ToType())
+			reference := NewVec(tc.oid.ToType(), mp)
+			decoded := NewVec(tc.oid.ToType(), mp)
 			t.Cleanup(func() {
 				reference.Free(mp)
 				decoded.Free(mp)
@@ -258,7 +258,7 @@ func TestAppendVarlenListPregrowFailureRollsBack(t *testing.T) {
 			const poolCap = 1 << 20
 			mp, err := mpool.NewMPool("append-pregrow-rollback", poolCap, 0)
 			require.NoError(t, err)
-			vec := NewOffHeapVecWithType(tc.oid.ToType())
+			vec := NewVec(tc.oid.ToType(), mp)
 			// Leave room for the row headers, not for the rows*payload area.
 			filler, err := mp.Alloc(poolCap-rows*payload/2, true)
 			require.NoError(t, err)

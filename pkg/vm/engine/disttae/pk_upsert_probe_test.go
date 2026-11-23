@@ -204,9 +204,9 @@ func TestUpsertProbeManyCandidateBlocks(t *testing.T) {
 	tbl, _, fs, keys := newPersistedPKCheckTable(t, types.T_int64, false)
 	proc, mp := tbl.proc.Load(), tbl.proc.Load().Mp()
 	data := batch.NewWithSize(3)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	data.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	data.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	data.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	data.Vecs[2] = vector.NewVec(types.T_bool.ToType(), mp)
 	defer data.Clean(mp)
 	writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}, 0, true, false, fs)
 	for i := 0; i < 32; i++ {
@@ -249,7 +249,7 @@ func TestUpsertProbeSortsOwnedKeys(t *testing.T) {
 	tbl, _, _, _ := newPersistedPKCheckTable(t, types.T_int64, false)
 	proc, mp := tbl.proc.Load(), tbl.proc.Load().Mp()
 	keys := batch.NewWithSize(1)
-	keys.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	keys.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer keys.Clean(mp)
 	want := []int64{100, 7, 1, 50}
 	for _, key := range want {
@@ -272,10 +272,10 @@ func TestUpsertProbeMissingZoneMapsAndDeletedObject(t *testing.T) {
 	// the current table-definition ordinal.
 	tbl.tableDef.Cols[0].Seqnum = 5
 	data := batch.NewWithSize(4)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	data.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	data.Vecs[2] = vector.NewVec(types.T_TS.ToType())
-	data.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	data.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	data.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+	data.Vecs[3] = vector.NewVec(types.T_bool.ToType(), mp)
 	defer data.Clean(mp)
 	require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(7), false, mp))
 	require.NoError(t, vector.AppendFixed(data.Vecs[1], int64(1), false, mp))
@@ -305,7 +305,7 @@ func TestUpsertProbeMissingZoneMapsAndDeletedObject(t *testing.T) {
 	require.NoError(t, state.HandleObjectEntry(proc.Ctx, fs, objectio.ObjectEntry{
 		ObjectStats: stats, CreateTime: types.BuildTS(5, 0), DeleteTime: types.BuildTS(40, 0),
 	}, false))
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), mp)
 	defer keys.Free(mp)
 	for _, key := range []int64{100, 7, 2, 50} {
 		require.NoError(t, vector.AppendFixed(keys, key, false, mp))
@@ -324,7 +324,7 @@ func TestUpsertProbeMissingCommitTimestampRequiresAKeyMatch(t *testing.T) {
 	tbl, _, fs, _ := newPersistedPKCheckTable(t, types.T_int64, false)
 	proc, mp := tbl.proc.Load(), tbl.proc.Load().Mp()
 	data := batch.NewWithSize(1)
-	data.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	data.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer data.Clean(mp)
 	for _, key := range []int64{1, 9} {
 		require.NoError(t, vector.AppendFixed(data.Vecs[0], key, false, mp))
@@ -341,7 +341,7 @@ func TestUpsertProbeMissingCommitTimestampRequiresAKeyMatch(t *testing.T) {
 	require.NoError(t, state.HandleObjectEntry(proc.Ctx, fs, objectio.ObjectEntry{
 		ObjectStats: writer.GetObjectStats(), CreateTime: types.BuildTS(40, 0),
 	}, false))
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), mp)
 	defer keys.Free(mp)
 	for _, tc := range []struct {
 		key     int64

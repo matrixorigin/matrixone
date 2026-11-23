@@ -115,9 +115,9 @@ func TestMoTableStatsSQLDispatch(t *testing.T) {
 				defer pointer.Store(previous)
 				// Table, NULL, tenant-filtered system table, table. Both implementations
 				// must retain this order and append each input exactly once.
-				dbv := vector.NewVec(types.T_varchar.ToType())
+				dbv := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				defer dbv.Free(proc.Mp())
-				tblv := vector.NewVec(types.T_varchar.ToType())
+				tblv := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				defer tblv.Free(proc.Mp())
 				require.NoError(t, vector.AppendBytesList(dbv, [][]byte{[]byte("app"), nil, []byte(catalog.MO_CATALOG), []byte("app")}, []bool{false, true, false, false}, proc.Mp()))
 				require.NoError(t, vector.AppendBytesList(tblv, [][]byte{[]byte("table"), nil, []byte(catalog.MO_TABLES), []byte("table")}, []bool{false, true, false, false}, proc.Mp()))

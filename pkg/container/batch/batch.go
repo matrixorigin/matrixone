@@ -84,18 +84,6 @@ func New(attrs []string) *Batch {
 	}
 }
 
-func NewOffHeap(attrs []string) *Batch {
-	ret := New(attrs)
-	ret.offHeap = true
-	return ret
-}
-
-func NewOffHeapEmpty() *Batch {
-	return &Batch{
-		offHeap: true,
-	}
-}
-
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Vecs:     make([]*vector.Vector, n),
@@ -103,26 +91,12 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
-func NewOffHeapWithSize(n int) *Batch {
-	ret := NewWithSize(n)
-	ret.offHeap = true
-	return ret
-}
-
-func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
-	var bat *Batch
-	if offHeap {
-		bat = NewOffHeapWithSize(len(attTypes))
-	} else {
-		bat = NewWithSize(len(attTypes))
-	}
+// NewWithSchema returns a batch of empty vectors of attTypes, all from mp.
+func NewWithSchema(attrs []string, attTypes []types.Type, mp *mpool.MPool) *Batch {
+	bat := NewWithSize(len(attTypes))
 	bat.Attrs = attrs
 	for i, t := range attTypes {
-		if offHeap {
-			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
-		} else {
-			bat.Vecs[i] = vector.NewVec(t)
-		}
+		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
 	return bat
 }
@@ -854,14 +828,9 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	// This ensures Vecs are properly reset and prevents stale data from previous unmarshal operations
 	if firstTime || vecsLenChanged {
 		if vecsLenChanged && len(bat.Vecs) > 0 {
-			if mp == nil {
-				for _, vec := range bat.Vecs {
-					if vec != nil && !vec.NeedDup() {
-						return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
-					}
-				}
+			if err := bat.freeReceivers(mp); err != nil {
+				return err
 			}
-			bat.Clean(mp)
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
 	}
@@ -906,16 +875,18 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 				usedReceivers[vecs[i]] = struct{}{}
 			}
 		}
+		// A receiver is reused only when it belongs to mp; with a nil mp the
+		// decoded vectors are read-only references to data. A read-only
+		// receiver is dropped; one owned by another pool is not ours to free.
+		if vecs[i] != nil && vecs[i].MPool() != mp {
+			if err := dropReadOnlyReceiver(vecs[i]); err != nil {
+				return err
+			}
+			vecs[i] = nil
+		}
 		if vecs[i] == nil {
-			if bat.offHeap {
-				vecs[i] = vector.NewOffHeapVec()
-			} else {
-				vecs[i] = new(vector.Vector)
-			}
-		} else if vecs[i].Allocated() > 0 || vecs[i].NeedDup() {
-			if mp == nil && !vecs[i].NeedDup() {
-				return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
-			}
+			vecs[i] = vector.NewVec(types.T_any.ToType(), mp)
+		} else {
 			vecs[i].Free(mp)
 		}
 		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
@@ -1176,16 +1147,17 @@ func validateReaderElementCount(
 	return nil
 }
 
-// prepareOwnedDecodeVectors makes every destination an independent owner.
-// Alias decoding deliberately installs borrowed vector buffers; those buffers
-// must never be grown or relabeled by the owned streaming decoder.
+// prepareOwnedDecodeVectors makes every destination an independent vector of
+// mp for the streaming decoder.
 func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	if count < 0 {
 		return moerr.NewInvalidInputNoCtx("invalid batch vector count")
 	}
 	if count != len(bat.Vecs) {
 		if len(bat.Vecs) > 0 {
-			bat.Clean(mp)
+			if err := bat.freeReceivers(mp); err != nil {
+				return err
+			}
 		}
 		bat.Vecs = make([]*vector.Vector, count)
 	}
@@ -1220,16 +1192,15 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 				vec = nil
 			}
 		}
-		if vec == nil {
-			if bat.offHeap {
-				vec = vector.NewOffHeapVec()
-			} else {
-				vec = new(vector.Vector)
+		if vec != nil && vec.MPool() != mp {
+			if err := dropReadOnlyReceiver(vec); err != nil {
+				return err
 			}
-		} else if vec.NeedDup() {
-			vec.Free(mp)
+			vec = nil
 		}
-		vec.SetOffHeap(bat.offHeap)
+		if vec == nil {
+			vec = vector.NewVec(types.T_any.ToType(), mp)
+		}
 		bat.Vecs[i] = vec
 	}
 	return nil
@@ -1361,11 +1332,101 @@ func (bat *Batch) releaseExtraBuf() {
 	bat.extraBufMP = nil
 }
 
-func (bat *Batch) configureOwnedVector(vec *vector.Vector) {
-	if vec == nil {
+// OwnReadOnlyVectors replaces every read-only (reference) vector of bat with
+// a copy in mp, so the batch can be mutated in place. A vector shared by
+// several columns is copied once.
+func (bat *Batch) OwnReadOnlyVectors(mp *mpool.MPool) error {
+	var copied map[*vector.Vector]*vector.Vector
+	for i, vec := range bat.Vecs {
+		if vec == nil || !vec.IsReadOnly() {
+			continue
+		}
+		if owned, ok := copied[vec]; ok {
+			bat.Vecs[i] = owned
+			continue
+		}
+		owned, err := vec.Dup(mp)
+		if err != nil {
+			return err
+		}
+		if copied == nil {
+			copied = make(map[*vector.Vector]*vector.Vector)
+		}
+		copied[vec] = owned
+		bat.Vecs[i] = owned
+	}
+	for vec := range copied {
+		vec.Free(nil)
+	}
+	return nil
+}
+
+// errForeignReceiver reports a decode receiver vector owned by a pool other
+// than the decode pool: the batch's owner does not own it, so it must not be
+// freed or reused here.
+func errForeignReceiver() error {
+	return moerr.NewInternalErrorNoCtx("batch decode receiver vector belongs to another pool")
+}
+
+// dropReadOnlyReceiver drops a read-only receiver's references; a receiver
+// owned by any pool is an error.
+func dropReadOnlyReceiver(vec *vector.Vector) error {
+	if !vec.IsReadOnly() {
+		return errForeignReceiver()
+	}
+	vec.Free(nil)
+	return nil
+}
+
+// freeReceivers releases the decode receivers before the vector count
+// changes: receivers of mp are freed, read-only ones dropped, and a receiver
+// of another pool is an error.
+func (bat *Batch) freeReceivers(mp *mpool.MPool) error {
+	for _, vec := range bat.Vecs {
+		if vec != nil && !vec.IsReadOnly() && vec.MPool() != mp {
+			return errForeignReceiver()
+		}
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	bat.Vecs = nil
+	return nil
+}
+
+// FreeWindow releases a batch returned by Window. Its vectors are read-only
+// references, so this only drops them; it panics on an owned vector.
+func (bat *Batch) FreeWindow() {
+	if bat == nil {
 		return
 	}
-	vec.SetOffHeap(bat.offHeap)
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(nil)
+		}
+	}
+	bat.Vecs = nil
+	bat.Attrs = nil
+	bat.rowCount = 0
+}
+
+// CleanOwned frees each vector with the pool it belongs to. It is for test
+// fixtures that assemble batches from several pools. Production code must not
+// use it: an owner frees only the vectors it created, with its own pool.
+func (bat *Batch) CleanOwned() {
+	if bat == nil {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+		}
+	}
+	bat.Vecs = nil
+	bat.Attrs = nil
+	bat.rowCount = 0
 }
 
 func (bat *Batch) InsertVector(
@@ -1373,7 +1434,6 @@ func (bat *Batch) InsertVector(
 	attr string,
 	vec *vector.Vector,
 ) {
-	bat.configureOwnedVector(vec)
 	bat.Vecs = append(bat.Vecs, nil)
 	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
 	bat.Vecs[pos] = vec
@@ -1383,7 +1443,6 @@ func (bat *Batch) InsertVector(
 }
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
-	bat.configureOwnedVector(vec)
 	bat.Vecs[pos] = vec
 }
 
@@ -1398,14 +1457,9 @@ func (bat *Batch) CloneSelectedColumns(
 ) (cloned *Batch, err error) {
 	cloned = NewWithSize(len(selectCols))
 	cloned.Attrs = selectAttrs
-	cloned.offHeap = bat.offHeap || mp.IsView()
 	var typ types.Type
 	for idx := range selectCols {
-		if cloned.offHeap {
-			cloned.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
-		} else {
-			cloned.Vecs[idx] = vector.NewVec(typ)
-		}
+		cloned.Vecs[idx] = vector.NewVec(typ, mp)
 	}
 	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
 		cloned.Clean(mp)
@@ -1442,10 +1496,23 @@ func (bat *Batch) CloneSelectedColumnsTo(
 	return nil
 }
 
+// ViewInto makes dst a view of bat: the same vectors, attributes, row count
+// and selection. dst owns nothing it references (no vectors, leases or
+// ExtraBuf); it is valid while bat is, and is released by dropping it.
+func (bat *Batch) ViewInto(dst *Batch) {
+	dst.Recursive = bat.Recursive
+	dst.ShuffleIDX = bat.ShuffleIDX
+	dst.Attrs = bat.Attrs
+	dst.Vecs = append(dst.Vecs[:0], bat.Vecs...)
+	dst.ExtraBuf = bat.ExtraBuf
+	dst.rowCount = bat.rowCount
+	dst.selection = bat.selection
+	dst.physicalRows = bat.physicalRows
+}
+
 func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
 	rbat := NewWithSize(len(cols))
 	rbat.Attrs = attrs
-	rbat.offHeap = bat.offHeap
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[col]
 	}
@@ -1568,13 +1635,13 @@ func (bat *Batch) GetSchema() (attrs []string, attrTypes []types.Type) {
 	return
 }
 
-func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
+// Clone copies bat into a new batch whose vectors all come from mp.
+func (bat *Batch) Clone(mp *mpool.MPool) (*Batch, error) {
 	var (
 		cloned           *Batch
 		attrs, attrTypes = bat.GetSchema()
 	)
-	// An accounted MPool view charges only off-heap allocations.
-	cloned = NewWithSchema(offHeap || mp.IsView(), attrs, attrTypes)
+	cloned = NewWithSchema(attrs, attrTypes, mp)
 	cloned.Recursive = bat.Recursive
 	err := bat.CloneTo(cloned, mp)
 	if err != nil {
@@ -1602,7 +1669,7 @@ func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
 // Dup used to copy a Batch object, this method will create a new batch
 // and copy all vectors (Vecs) of the current batch to the new batch.
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
-	return bat.Clone(mp, bat.offHeap)
+	return bat.Clone(mp)
 }
 
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
@@ -1739,21 +1806,17 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 	b := NewWithSize(len(bat.Vecs))
 	var err error
 	b.Attrs = bat.Attrs
-	b.offHeap = bat.offHeap
 	for i, vec := range bat.Vecs {
 		if vec == nil {
-			b.Clean(nil)
+			b.FreeWindow()
 			return nil, moerr.NewInvalidInputNoCtx("invalid batch vector")
 		}
+		// Each window is a read-only reference to its source vector.
 		b.Vecs[i], err = vec.WindowByLogicalRows(start, end)
 		if err != nil {
-			// Plain vector windows borrow data/area and keep any provenance
-			// sidecar's physical MPool owner internally, so nil is the correct
-			// cleanup pool for the successfully-created prefix.
-			b.Clean(nil)
+			b.FreeWindow()
 			return nil, err
 		}
-		b.Vecs[i].SetOffHeap(bat.offHeap)
 	}
 	b.rowCount = end - start
 	return b, nil

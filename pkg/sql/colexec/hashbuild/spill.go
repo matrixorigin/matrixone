@@ -368,7 +368,7 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 	var selected *batch.Batch
 	defer func() {
 		if selected != nil {
-			selected.Clean(proc.Mp())
+			selected.Clean(selectedMP)
 		}
 		for i := range ctr.spillKeyVecs {
 			ctr.spillKeyVecs[i] = nil
@@ -438,12 +438,12 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			continue
 		}
 		if selected == nil {
-			selected = batch.NewOffHeapWithSize(len(bat.Vecs))
+			selected = batch.NewWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				if vec == nil {
 					return process.ErrExecutionResourceInvalid
 				}
-				selected.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+				selected.Vecs[i] = vector.NewVec(*vec.GetType(), selectedMP)
 			}
 		}
 		cursor := start
@@ -661,7 +661,7 @@ func (ctr *container) spillBatchWithPressure(
 			sourceAlreadyCharged,
 		)
 		if current != bat {
-			current.Clean(proc.Mp())
+			current.FreeWindow()
 		}
 		if err == nil {
 			start = end

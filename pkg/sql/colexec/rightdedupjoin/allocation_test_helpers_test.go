@@ -49,14 +49,14 @@ func TestRightDedupJoinResultBatchUsesAllocationAccount(t *testing.T) {
 		LeftTypes: []types.Type{types.T_int64.ToType()},
 	}
 	account := installTestAllocation(t, arg)
-	require.NoError(t, arg.resetResultBatch())
+	require.NoError(t, arg.resetResultBatch(proc))
 	resMP, err := arg.resultMP(proc)
 	require.NoError(t, err)
 	require.Same(t, account, resMP.ViewAccount())
 	require.NoError(t, vector.AppendFixed(arg.ctr.resultBatch.Vecs[0], int64(1), false, resMP))
 	used := account.Snapshot().Used
 	require.Positive(t, used)
-	require.NoError(t, arg.resetResultBatch())
+	require.NoError(t, arg.resetResultBatch(proc))
 	require.Equal(t, used, account.Snapshot().Used)
 
 	arg.Reset(proc, false, nil)
@@ -77,7 +77,7 @@ func TestRightDedupJoinResultBatchHonorsAllocationCapacity(t *testing.T) {
 		LeftTypes: []types.Type{types.T_int64.ToType()},
 	}
 	require.NoError(t, arg.SetAllocationAccount(account))
-	require.NoError(t, arg.resetResultBatch())
+	require.NoError(t, arg.resetResultBatch(proc))
 	resMP, err := arg.resultMP(proc)
 	require.NoError(t, err)
 	err = vector.AppendFixed(arg.ctr.resultBatch.Vecs[0], int64(1), false, resMP)

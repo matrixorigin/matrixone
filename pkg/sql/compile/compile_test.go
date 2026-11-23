@@ -86,7 +86,7 @@ import (
 func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
 	ctx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -381,7 +381,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			proc.ReplaceTopCtx(ctx)
 
 			want := []byte{'A', 'B', 0, 0}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, want, false, proc.Mp()))
 			proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
 
@@ -2674,7 +2674,7 @@ func TestCompileClearReleasesLockMetaBeforeProcess(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	c := allocateNewCompile(proc)
 	c.lockMeta = NewLockMeta()
-	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType())}
+	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType(), proc.Mp())}
 
 	require.NotPanics(t, c.clear)
 	require.Nil(t, c.proc)
@@ -2727,12 +2727,16 @@ func TestCompilePreparedApproxPercentilePreflightsBeforeChildScope(t *testing.T)
 			nodes := []*plan.Node{child, aggregate}
 
 			compileWithParam := func(param []byte, isNull bool) ([]*Scope, error) {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, param, isNull, c.proc.Mp()))
 				c.proc.SetPrepareParams(params)
 				baseline := c.proc.Mp().CurrNB()
 				scopes, compileErr := c.compilePlanScope(0, 1, nodes)
-				require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				if compileErr != nil {
+					// A rejected compile owns nothing; a compiled scope retains
+					// its value-scan batch until ReleaseScopes.
+					require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				}
 				c.proc.SetPrepareParams(nil)
 				params.Free(c.proc.Mp())
 				return scopes, compileErr

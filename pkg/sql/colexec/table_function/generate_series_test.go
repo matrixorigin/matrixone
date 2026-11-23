@@ -147,7 +147,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 		}
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 
 		var result []T
 		for {
@@ -289,7 +289,7 @@ func TestGenerateTimestamp(t *testing.T) {
 		}
 
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 		var res []types.Datetime
 
 		for {
@@ -391,12 +391,12 @@ func TestGenerateDatetimeSeriesRejectsInvalidNextStep(t *testing.T) {
 	}{
 		{
 			name:   "datetime",
-			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6)) },
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp()) },
 			build:  buildNextDatetimeBatch,
 		},
 		{
 			name:   "string",
-			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType()) },
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType(), proc.Mp()) },
 			build:  buildNextDatetimeStringBatch,
 		},
 	} {
@@ -443,12 +443,12 @@ func TestGenerateDatetimeSeriesRejectsFixedUnitStepOverflow(t *testing.T) {
 	}{
 		{
 			name:   "datetime",
-			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6)) },
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6), proc.Mp()) },
 			build:  buildNextDatetimeBatch,
 		},
 		{
 			name:   "varchar",
-			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType()) },
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType(), proc.Mp()) },
 			build:  buildNextDatetimeStringBatch,
 		},
 	}

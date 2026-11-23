@@ -246,15 +246,15 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	// from index 0. Account-owned buffers are released below because their
 	// lifetime cannot cross a statement-attempt generation.
 	if timeWin.EndExpr == nil {
-		ctr.freeFlushedAggVecs(proc.Mp())
+		ctr.freeFlushedAggVecs(proc)
 	} else {
-		ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
+		ctr.freeIntervalTimestampBoundaryVecs(proc)
 	}
 	ctr.bat = nil
 	if releaseInheritedAccount {
 		// Account-charged caches must not cross a prepared-statement
 		// generation; unaccounted caches retain legacy reuse.
-		ctr.freeVector(proc.Mp())
+		ctr.freeVector(proc)
 	}
 	ctr.freeAgg()
 	ctr.aggs = nil
@@ -320,12 +320,13 @@ func calcDatetime(diff int64, iTyp types.IntervalType) (types.Datetime, error) {
 
 func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &timeWin.ctr
-	ctr.freeBatch(proc.Mp())
-	ctr.freeVector(proc.Mp())
+	ctr.freeBatch(proc)
+	ctr.freeVector(proc)
 	ctr.freeExes()
 	ctr.freeAgg()
 	ctr.clearWindowBounds()
 	ctr.allocation.FreeMetadata()
+	ctr.allocation.FreePool()
 }
 
 func (ctr *container) resetExes() {
@@ -432,9 +433,9 @@ func (ctr *container) freeExes() {
 	ctr.gapFillStartExe, ctr.gapFillEndExe = nil, nil
 }
 
-func (ctr *container) freeBatch(mp *mpool.MPool) {
+func (ctr *container) freeBatch(proc *process.Process) {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.allocation.CleanBatch(proc, ctr.bat)
 		ctr.bat = nil
 	}
 	if ctr.startVecInBatch {
@@ -456,10 +457,10 @@ func (ctr *container) freeAgg() {
 	ctr.aggs = nil
 }
 
-func (ctr *container) freeVector(mp *mpool.MPool) {
+func (ctr *container) freeVector(proc *process.Process) {
 	for _, vec := range ctr.tsVec {
 		if vec != nil {
-			vec.Free(mp)
+			ctr.allocation.FreeVector(proc, vec)
 		}
 	}
 	ctr.tsVec = nil
@@ -468,7 +469,7 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 		for _, vecs := range aggregateVecs {
 			for _, vec := range vecs {
 				if vec != nil {
-					vec.Free(mp)
+					ctr.allocation.FreeVector(proc, vec)
 				}
 			}
 		}
@@ -478,24 +479,24 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 	for _, vecs := range ctr.partVec {
 		for _, vec := range vecs {
 			if vec != nil {
-				vec.Free(mp)
+				ctr.allocation.FreeVector(proc, vec)
 			}
 		}
 	}
 	ctr.partVec = nil
 
-	ctr.freePartOut(mp)
+	ctr.freePartOut(proc)
 
 	// DATETIME windows use these as staging vectors and hand only cast results to
 	// the output batch. TIMESTAMP windows can attach them directly to the output
 	// batch; freeBatch/freeFlushedAggVecs clear the ownership flag in that case.
 	if ctr.startVec != nil {
-		ctr.startVec.Free(mp)
+		ctr.allocation.FreeVector(proc, ctr.startVec)
 		ctr.startVec = nil
 		ctr.startVecInBatch = false
 	}
 	if ctr.endVec != nil {
-		ctr.endVec.Free(mp)
+		ctr.allocation.FreeVector(proc, ctr.endVec)
 		ctr.endVec = nil
 		ctr.endVecInBatch = false
 	}
@@ -510,10 +511,10 @@ func (ctr *container) expressionMP(proc *process.Process) (*mpool.MPool, error) 
 	return ctr.allocation.MP(proc)
 }
 
-func (ctr *container) freePartOut(mp *mpool.MPool) {
+func (ctr *container) freePartOut(proc *process.Process) {
 	for _, vec := range ctr.partOut {
 		if vec != nil {
-			vec.Free(mp)
+			ctr.allocation.FreeVector(proc, vec)
 		}
 	}
 	ctr.partOut = nil

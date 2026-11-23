@@ -74,6 +74,9 @@ type container struct {
 
 	emitOffset int
 	rBat       *batch.Batch
+	// rBatWindowCols is the number of leading rBat vectors that are read-only
+	// windows of the input; the vectors after them are owned results.
+	rBatWindowCols int
 
 	// Unordered, unpartitioned ROW_NUMBER borrows one child batch until all chunks
 	// have been consumed. It never owns or materializes that input.
@@ -203,7 +206,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr := &window.ctr
 
 	ctr.freeLocalRankIndex()
-	ctr.cleanOutput(proc.Mp())
+	ctr.cleanOutput(proc)
 	ctr.resetParam()
 	ctr.resetVectors()
 	// Release aggregators here too: on an error exit from Call the normal
@@ -212,16 +215,16 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
-	ctr.freeFullPartitionResults(proc.Mp())
-	ctr.freeAggregateStates(proc.Mp())
-	ctr.freeIndicatorState(proc.Mp())
+	ctr.freeFullPartitionResults(proc)
+	ctr.freeAggregateStates(proc)
+	ctr.freeIndicatorState(proc)
 	ctr.freeEwmState()
 	if ctr.allocation.Account != nil {
 		// Buffered input and evaluated vectors are charged to Window's account
 		// through its view. Release that backing at the prepared-statement
 		// generation boundary; only unaccounted buffers may be reused.
-		ctr.freeBatch(proc.Mp())
-		ctr.freeVector(proc.Mp())
+		ctr.freeBatch(proc)
+		ctr.freeVector(proc)
 	} else if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
@@ -231,7 +234,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr := &window.ctr
 
 	ctr.freeLocalRankIndex()
-	ctr.cleanOutput(proc.Mp())
+	ctr.cleanOutput(proc)
 	ctr.resetRowNumber()
 	ctr.runtimeFrames = nil
 	ctr.clearCivilOrder()
@@ -239,16 +242,17 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
-	ctr.freeFullPartitionResults(proc.Mp())
-	ctr.freeAggregateStates(proc.Mp())
-	ctr.freeIndicatorState(proc.Mp())
+	ctr.freeFullPartitionResults(proc)
+	ctr.freeAggregateStates(proc)
+	ctr.freeIndicatorState(proc)
 	ctr.freeEwmState()
-	ctr.freeBatch(proc.Mp())
+	ctr.freeBatch(proc)
 	ctr.freeExes()
-	ctr.freeVector(proc.Mp())
+	ctr.freeVector(proc)
 	ctr.orderVecs, ctr.aggVecs = nil, nil
 	ctr.clearSortState()
 	ctr.allocation.FreeMetadata()
+	ctr.allocation.FreePool()
 }
 
 func (ctr *container) resetParam() {
@@ -269,15 +273,28 @@ func (ctr *container) clearCivilOrder() {
 	ctr.civilMetadata = 0
 }
 
-// cleanOutput releases the batch returned by the previous Call. Input-column
-// vectors in rBat are borrowed windows into ctr.bat; the appended window-result
-// vector is owned by rBat. The pipeline contract keeps a returned batch valid
-// until the next Call or Reset, so this is the earliest safe release point.
-func (ctr *container) cleanOutput(mp *mpool.MPool) {
-	if ctr.rBat != nil {
-		ctr.rBat.Clean(mp)
-		ctr.rBat = nil
+// cleanOutput releases the batch returned by the previous Call. Its leading
+// input-column vectors are read-only windows of the input, so they are only
+// dropped; the appended window-result vectors are owned by the operator and
+// freed through its allocation. The pipeline contract keeps a returned batch
+// valid until the next Call or Reset, so this is the earliest safe release
+// point.
+func (ctr *container) cleanOutput(proc *process.Process) {
+	if ctr.rBat == nil {
+		return
 	}
+	for i, vec := range ctr.rBat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if i < ctr.rBatWindowCols {
+			vec.Free(nil)
+		} else {
+			ctr.allocation.FreeVector(proc, vec)
+		}
+	}
+	ctr.rBat = nil
+	ctr.rBatWindowCols = 0
 }
 
 func (ctr *container) resetVectors() {
@@ -290,9 +307,9 @@ func (ctr *container) resetVectors() {
 	}
 }
 
-func (ctr *container) freeBatch(mp *mpool.MPool) {
+func (ctr *container) freeBatch(proc *process.Process) {
 	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
+		ctr.allocation.CleanBatch(proc, ctr.bat)
 		ctr.bat = nil
 	}
 }
@@ -319,9 +336,9 @@ func (ctr *container) freeRunningAgg() {
 	ctr.runningPeerEnd = 0
 }
 
-func (ctr *container) freeFullPartitionResults(mp *mpool.MPool) {
+func (ctr *container) freeFullPartitionResults(proc *process.Process) {
 	if ctr.fullPartitionResults != nil {
-		ctr.fullPartitionResults.Free(mp)
+		ctr.allocation.FreeVector(proc, ctr.fullPartitionResults)
 		ctr.fullPartitionResults = nil
 	}
 	ctr.fullPartitionNextRow = 0
@@ -329,14 +346,14 @@ func (ctr *container) freeFullPartitionResults(mp *mpool.MPool) {
 	ctr.fullPartitionResultIndex = 0
 }
 
-func (ctr *container) freeAggregateStates(mp *mpool.MPool) {
+func (ctr *container) freeAggregateStates(proc *process.Process) {
 	for i := range ctr.aggregateStates {
 		state := &ctr.aggregateStates[i]
 		if state.runningAgg != nil {
 			state.runningAgg.Free()
 		}
 		if state.fullPartitionResults != nil {
-			state.fullPartitionResults.Free(mp)
+			ctr.allocation.FreeVector(proc, state.fullPartitionResults)
 		}
 		*state = windowAggregateState{}
 	}
@@ -371,11 +388,11 @@ func (ctr *container) freeExes() {
 	}
 }
 
-func (ctr *container) freeVector(mp *mpool.MPool) {
+func (ctr *container) freeVector(proc *process.Process) {
 	for i := range ctr.orderVecs {
 		for j, vec := range ctr.orderVecs[i].Vec {
 			if vec != nil {
-				vec.Free(mp)
+				ctr.allocation.FreeVector(proc, vec)
 				ctr.orderVecs[i].Vec[j] = nil
 			}
 		}
@@ -384,7 +401,7 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 	for i := range ctr.aggVecs {
 		for j, vec := range ctr.aggVecs[i].Vec {
 			if vec != nil {
-				vec.Free(mp)
+				ctr.allocation.FreeVector(proc, vec)
 				ctr.aggVecs[i].Vec[j] = nil
 			}
 		}

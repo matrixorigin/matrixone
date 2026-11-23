@@ -399,8 +399,8 @@ func TestAppendResultBatchEndsStatementAllocationOwnership(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	source := batch.NewOffHeapWithSize(1)
-	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), selection)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
 	source.SetRowCount(1)
 	usedBefore := account.Snapshot().Used
@@ -412,7 +412,7 @@ func TestAppendResultBatchEndsStatementAllocationOwnership(t *testing.T) {
 	// The retained result copy crosses the ownership boundary unaccounted.
 	require.Equal(t, usedBefore, account.Snapshot().Used)
 
-	source.Clean(mp)
+	source.Clean(selection)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	require.Zero(t, registry.LiveAllocationMetadata())

@@ -44,7 +44,7 @@ func initSpoolBuffer(size uint32) *spoolBuffer {
 
 	for i := uint32(0); i < size; i++ {
 		b.readyToUse[i].whichCacheToUse = i
-		b.readyToUse[i].whichPointerToUse = batch.NewOffHeapEmpty()
+		b.readyToUse[i].whichPointerToUse = batch.NewWithSize(0)
 	}
 	return b
 }
@@ -57,10 +57,10 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 		}
 
 		// 1. const vector size was too small,
-		// 2. vector doesn't own its data and area,
+		// 2. a read-only vector, or one of another pool, has no memory the
+		// cache can reuse,
 		// we don't need to cache it.
-		if !vec.IsConst() && !vec.NeedDup() &&
-			vec.CanDetach(vector.BackingData) && vec.CanDetach(vector.BackingArea) {
+		if !vec.IsConst() && vec.MPool() == mp && mp != nil {
 			data := vector.DetachVectorData(vec)
 			area := vector.DetachVectorArea(vec)
 			if data.Capacity() != 0 {

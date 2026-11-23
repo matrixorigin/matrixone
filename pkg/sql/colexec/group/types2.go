@@ -514,6 +514,53 @@ func (ctr *container) unbindAllocationViews() {
 	ctr.spillGroupByAllocation = nil
 }
 
+// ownPool returns the operator pool vec belongs to: the private pool or one
+// of its accounted views. A vector of any other pool is returned ctr.mp, so
+// freeing it reports the mismatch.
+func (ctr *container) ownPool(vec *vector.Vector) *mpool.MPool {
+	mp := vec.MPool()
+	if mp == nil {
+		return ctr.mp
+	}
+	switch mp {
+	case ctr.mp, ctr.groupByAllocation, ctr.rollupAllocation, ctr.spillGroupByAllocation:
+		return mp
+	}
+	if ctr.aggregateAllocation.OwnsVectorMP(mp) || ctr.spillAggregateAllocation.OwnsVectorMP(mp) {
+		return mp
+	}
+	return ctr.mp
+}
+
+// freeGroupVector frees a vector of the operator's buffered data.
+func (ctr *container) freeGroupVector(vec *vector.Vector) {
+	if vec != nil {
+		vec.Free(ctr.ownPool(vec))
+	}
+}
+
+// cleanGroupBatch frees a batch of the operator's buffered data. After the
+// final flush a group-by batch holds key vectors of the group-by view and
+// aggregate results of the aggregates' pool; each is freed with its own.
+func (ctr *container) cleanGroupBatch(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	seen := make(map[*vector.Vector]struct{}, len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if _, ok := seen[vec]; !ok {
+			seen[vec] = struct{}{}
+			ctr.freeGroupVector(vec)
+		}
+		bat.Vecs[i] = nil
+	}
+	// Every vector is released; Clean drops the batch's remaining state.
+	bat.Clean(ctr.mp)
+}
+
 // groupByMP returns the pool through which resident group-by key storage
 // allocates and grows.
 func (ctr *container) groupByMP() *mpool.MPool {
@@ -729,7 +776,7 @@ func (ctr *container) freeSpillAggList() {
 func (ctr *container) freeSpillReloadStaging() {
 	ctr.freeSpillAggList()
 	if ctr.spillGbBatch != nil {
-		ctr.spillGbBatch.Clean(ctr.mp)
+		ctr.cleanGroupBatch(ctr.spillGbBatch)
 		ctr.spillGbBatch = nil
 	}
 }
@@ -750,13 +797,13 @@ func (ctr *container) freeSpillBkts() {
 func (ctr *container) freeGroupByBatches() {
 	for i := range ctr.groupByBatches {
 		if ctr.groupByBatches[i] != nil {
-			ctr.groupByBatches[i].Clean(ctr.mp)
+			ctr.cleanGroupBatch(ctr.groupByBatches[i])
 			ctr.groupByBatches[i] = nil
 		}
 	}
 	ctr.groupByBatches = nil
 	if ctr.groupByStandby != nil {
-		ctr.groupByStandby.Clean(ctr.mp)
+		ctr.cleanGroupBatch(ctr.groupByStandby)
 		ctr.groupByStandby = nil
 	}
 	ctr.clearGroupByPreflights()
@@ -805,7 +852,7 @@ func (ctr *container) freeGroupingRollups() {
 	}
 	for i := range ctr.groupingRollup {
 		if ctr.groupingRollup[i] != nil {
-			ctr.groupingRollup[i].Free(ctr.mp)
+			ctr.freeGroupVector(ctr.groupingRollup[i])
 			ctr.groupingRollup[i] = nil
 		}
 	}
@@ -829,7 +876,7 @@ func (ctr *container) free(expressionMP *mpool.MPool) {
 	ctr.freeGroupByBatches()
 	ctr.freeGroupingRollups()
 	if ctr.sortRollup != nil {
-		ctr.sortRollup.free(ctr.mp)
+		ctr.sortRollup.free(ctr)
 		ctr.sortRollup = nil
 	}
 	ctr.freeAggList()

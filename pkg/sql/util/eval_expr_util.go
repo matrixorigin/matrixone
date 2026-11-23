@@ -153,7 +153,7 @@ func GenVectorByVarValueWithAllocation(
 	// like fixed-width values; otherwise DecodeJson sees the raw text as an
 	// invalid encoded value when a typed user variable is read back.
 	if !typ.IsVarlen() || typ.Oid == types.T_json {
-		vec := newUserVariableVector(typ, accounted)
+		vec := newUserVariableVector(typ, mp)
 		if err := vec.PreExtend(1, mp); err != nil {
 			vec.Free(mp)
 			return nil, err
@@ -169,11 +169,8 @@ func GenVectorByVarValueWithAllocation(
 	return vector.NewConstBytes(typ, []byte(strVal), 1, mp)
 }
 
-func newUserVariableVector(typ types.Type, accounted bool) *vector.Vector {
-	if accounted {
-		return vector.NewOffHeapVecWithType(typ)
-	}
-	return vector.NewVec(typ)
+func newUserVariableVector(typ types.Type, mp *mpool.MPool) *vector.Vector {
+	return vector.NewVec(typ, mp)
 }
 
 func genInternalFixedUserVariableVector(
@@ -229,7 +226,7 @@ func newConstInternalFixedVector[T types.FixedSizeT](
 	mp *mpool.MPool,
 	accounted bool,
 ) (*vector.Vector, error) {
-	vec := newUserVariableVector(typ, accounted)
+	vec := newUserVariableVector(typ, mp)
 	if err := vec.PreExtend(1, mp); err != nil {
 		vec.Free(mp)
 		return nil, err

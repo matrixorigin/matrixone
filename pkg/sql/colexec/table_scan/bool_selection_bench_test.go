@@ -49,7 +49,7 @@ func BenchmarkBooleanFilterSelection(b *testing.B) {
 				case "const_null":
 					input.Vecs[0] = vector.NewConstNull(boolType, rows, proc.Mp())
 				default:
-					input.Vecs[0] = vector.NewVec(boolType)
+					input.Vecs[0] = vector.NewVec(boolType, proc.Mp())
 					require.NoError(b, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
 				}
 				b.ReportAllocs()

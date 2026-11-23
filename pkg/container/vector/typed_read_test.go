@@ -16,7 +16,6 @@ package vector
 
 import (
 	"bytes"
-	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,7 +26,7 @@ import (
 func TestTypedReadLogicalBoundsAndConstantRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	flat := NewVec(types.T_int64.ToType())
+	flat := NewVec(types.T_int64.ToType(), mp)
 	defer flat.Free(mp)
 	require.NoError(t, flat.PreExtend(32, mp))
 	require.NoError(t, AppendFixedList(flat, []int64{11, 22}, nil, mp))
@@ -52,7 +51,7 @@ func TestTypedReadLogicalBoundsAndConstantRows(t *testing.T) {
 func TestTypedReadBytesRetainsAliasesAndBounds(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	vec := NewVec(types.T_varbinary.ToType())
+	vec := NewVec(types.T_varbinary.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vec.PreExtend(32, mp))
 	values := [][]byte{[]byte("inline"), bytes.Repeat([]byte("x"), 64), {}}
@@ -78,23 +77,6 @@ func TestTypedReadBytesRetainsAliasesAndBounds(t *testing.T) {
 	require.Panics(t, func() { _ = vec.GetBytesAt(0) })
 }
 
-func TestTypedReadBorrowedFixedKeepsBacking(t *testing.T) {
-	data := make([]byte, 16)
-	binary.LittleEndian.PutUint64(data, 11)
-	binary.LittleEndian.PutUint64(data[8:], 22)
-	releases := 0
-	lease, err := NewRefCountedBufferLease(data, 16, func() { releases++ })
-	require.NoError(t, err)
-	defer lease.Release()
-	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 2, data)
-	require.NoError(t, err)
-	defer vec.Free(nil)
-	require.Equal(t, int64(11), GetFixedAtNoTypeCheck[int64](vec, 0))
-	require.Equal(t, int64(22), GetFixedAtNoTypeCheck[int64](vec, 1))
-	require.True(t, vec.HasBorrowedBacking())
-	require.Zero(t, releases)
-}
-
 var typedReadBenchSink int64
 
 func BenchmarkVectorTypedRead(b *testing.B) {
@@ -107,7 +89,7 @@ func BenchmarkVectorTypedRead(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
-			vec := NewVec(types.T_int64.ToType())
+			vec := NewVec(types.T_int64.ToType(), mp)
 			defer func() { vec.Free(mp) }()
 			if constant {
 				vec.Free(mp)
@@ -137,7 +119,7 @@ func BenchmarkVectorTypedRead(b *testing.B) {
 	b.Run("bool_flat_2048", func(b *testing.B) {
 		mp := mpool.MustNewZero()
 		defer mpool.DeleteMPool(mp)
-		vec := NewVec(types.T_bool.ToType())
+		vec := NewVec(types.T_bool.ToType(), mp)
 		defer vec.Free(mp)
 		values := make([]bool, rows)
 		for row := range values {
@@ -166,7 +148,7 @@ func BenchmarkVectorTypedRead(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
-			vec := NewVec(types.T_varbinary.ToType())
+			vec := NewVec(types.T_varbinary.ToType(), mp)
 			defer vec.Free(mp)
 			values := make([][]byte, rows)
 			for row := range values {

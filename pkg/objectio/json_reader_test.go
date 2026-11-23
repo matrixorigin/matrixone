@@ -24,6 +24,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -81,7 +83,7 @@ func cacheJSONTextFields(value vector.JSONTextSelection) []any {
 func TestJSONCacheAdmissionDoesNotSealCallerBacking(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
 	require.NoError(t, err)
@@ -127,7 +129,7 @@ func TestJSONCacheAdmissionDoesNotSealCallerBacking(t *testing.T) {
 func TestJSONCacheReaderRejectsMalformedColumnHeader(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":1}`)
 	require.NoError(t, err)
@@ -158,7 +160,7 @@ func TestJSONCacheReaderRejectsMalformedColumnHeader(t *testing.T) {
 func TestJSONCacheRehomeDoesNotExposeAdmittedBacking(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
 	require.NoError(t, err)
@@ -215,7 +217,7 @@ func (a *aliasingCacheAllocator) CopyToCacheData(_ context.Context, raw []byte) 
 func TestJSONCachePrivateConstructorRejectsAliasingAllocator(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
 	require.NoError(t, err)
@@ -249,7 +251,7 @@ func TestJSONCachePrivateConstructorRejectsAliasingAllocator(t *testing.T) {
 func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL","number":123}`)
 	require.NoError(t, err)
@@ -317,7 +319,7 @@ func TestCacheJSONReaderIndependentConcurrentReaders(t *testing.T) {
 func TestCacheJSONReaderSynchronousTextSelection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":"owned text","items":[1,2],"null":null}`)
 	require.NoError(t, err)
@@ -381,7 +383,7 @@ func TestCacheJSONReaderSynchronousTextSelection(t *testing.T) {
 func TestCacheJSONReaderStringTextMatchesUnquote(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	literals := []string{`""`, `"plain"`, `"\"quoted\""`, `"slash\\line\n"`, `"猫🌍"`, `"\u0000"`}
 	want := make([]string, len(literals))
@@ -441,7 +443,7 @@ func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 		t.Run(fmt.Sprintf("insufficient=%v", insufficient), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-			source := vector.NewVec(types.T_json.ToType())
+			source := vector.NewVec(types.T_json.ToType(), mp)
 			defer source.Free(mp)
 			doc, err := types.ParseStringToByteJson(`{"keep":"ORIGINAL"}`)
 			require.NoError(t, err)
@@ -454,7 +456,7 @@ func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 			}()
 			capacity := uint64(data.Capacity())
 			require.Positive(t, capacity)
-			ownerMeta := vector.JSONReaderMetadataCapacity(reflect.TypeFor[vector.Vector]().Size() + reflect.TypeFor[vector.RefCountedBufferLease]().Size())
+			ownerMeta := vector.JSONReaderMetadataCapacity(reflect.TypeFor[vector.Vector]().Size() + reflect.TypeFor[bufferlease.RefCounted]().Size())
 			handleMeta := vector.JSONReaderMetadataCapacity(reflect.TypeFor[cacheJSONReader]().Size())
 			cursorMeta := vector.JSONReaderMetadataCapacity(reflect.TypeFor[cacheJSONCursor]().Size())
 			registry, err := mpool.NewAllocationAccountRegistry(1, 256)
@@ -519,7 +521,7 @@ func TestCacheJSONReaderAccountsPinnedBacking(t *testing.T) {
 func TestCacheJSONReaderPinAdmissionFailureAndSnapshotFallback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":1}`)
 	require.NoError(t, err)
@@ -546,7 +548,7 @@ func TestCacheJSONReaderMetadataAdmissionFailureIsAtomic(t *testing.T) {
 		t.Run(fmt.Sprintf("admission=%d", failAt), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-			source := vector.NewVec(types.T_json.ToType())
+			source := vector.NewVec(types.T_json.ToType(), mp)
 			defer source.Free(mp)
 			doc, err := types.ParseStringToByteJson(`{"keep":1}`)
 			require.NoError(t, err)
@@ -579,7 +581,7 @@ func TestOpenJSONReaderCacheLifetime(t *testing.T) {
 		mp := mpool.MustNewZero()
 		func() {
 			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-			source := vector.NewVec(types.T_json.ToType())
+			source := vector.NewVec(types.T_json.ToType(), mp)
 			defer source.Free(mp)
 			doc, err := types.ParseStringToByteJson(`{"keep":1,"large":[0,0]}`)
 			require.NoError(t, err)
@@ -613,7 +615,7 @@ func TestOpenJSONReaderCacheLifetime(t *testing.T) {
 func TestCacheJSONReaderMatchesPrivateReader(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	doc, err := types.ParseStringToByteJson(`{"keep":1,"arr":[1,2],"nil":null,"one":[3],"flt":0.000031}`)
 	require.NoError(t, err)
@@ -736,7 +738,7 @@ type wrappedCacheJSONReader struct{ vector.JSONReader }
 func TestCacheJSONReaderRepeatView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := vector.NewVec(types.T_json.ToType())
+	source := vector.NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	for _, text := range []string{`{"keep":1}`, `{"keep":2}`} {
 		doc, err := types.ParseStringToByteJson(text)
@@ -780,7 +782,8 @@ func TestCacheJSONReaderRepeatView(t *testing.T) {
 	nullView.Close()
 	materialized, err := again.Materialize(mp)
 	require.NoError(t, err)
-	defer materialized.Free(mp)
+	// Materialize binds the result to the reader's admission pool.
+	defer materialized.Free(materialized.MPool())
 	cursor, err := again.OpenCursor()
 	require.NoError(t, err)
 	reader.Close()

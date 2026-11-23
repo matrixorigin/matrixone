@@ -68,7 +68,7 @@ func TestMarshalRemoteBatchGroupingProtocolGate(t *testing.T) {
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(87))
 	data, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
 	require.NoError(t, err)
-	decoded := batch.NewOffHeapEmpty()
+	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(proc.Mp())
 	require.NoError(t, decoded.UnmarshalBinaryForPipeline(data, proc.Mp()))
 	require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
@@ -218,7 +218,7 @@ func TestMarshalRemoteBatchUnknownServiceFailsClosed(t *testing.T) {
 	}
 
 	legacy := batch.NewWithSize(1)
-	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	legacy.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(legacy.Vecs[0], []byte("plain"), false, proc.Mp()))
 	legacy.SetRowCount(1)
 	defer legacy.Clean(proc.Mp())
@@ -1108,8 +1108,8 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 	producerMP, err := mp.WithAccount(account, 1, 102, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	src := batch.NewOffHeapWithSize(1)
-	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	src := batch.NewWithSize(1)
+	src.SetVector(0, vector.NewVec(types.T_int64.ToType(), producerMP))
 	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, producerMP))
 	src.SetRowCount(1)
 	sourceUsed := account.Snapshot().Used
@@ -1147,7 +1147,7 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, d.ClearAllocationAccount(account))
 	require.Nil(t, d.cleanupSpool)
 
-	src.Clean(mp)
+	src.Clean(producerMP)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	_, err = registry.Finalize(account)
@@ -1286,7 +1286,7 @@ func TestSendBatchRetiresCertifiedStop(t *testing.T) {
 func newDispatchSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	t.Helper()
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 	values := make([]int64, rows)
 	for i := range values {
 		values[i] = int64(i + 1)

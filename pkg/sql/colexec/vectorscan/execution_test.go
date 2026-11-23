@@ -70,7 +70,7 @@ func parameterizedScanTemplate(t *testing.T) *plan.IndexSearchScan {
 
 func installStringParam(t *testing.T, proc *process.Process, value string) func() {
 	t.Helper()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	return func() {

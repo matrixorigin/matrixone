@@ -31,9 +31,11 @@ func (txn *Transaction) workspaceAllocation() (*mpool.MPool, error) {
 	return txn.workspaceAllocationWithLimit(0)
 }
 
-// workspaceMP is the pool that grows existing workspace batches: the workspace
-// view once it exists, otherwise the transaction's pool. Growth of an existing
-// allocation keeps that allocation's own account either way.
+// workspaceMP is the workspace's pool: every txn.writes batch, staged copy
+// and workspace rowid vector is created with it and operated through it. It
+// is the workspace view once it exists; batches only enter the workspace as
+// copies made through workspaceAllocation, so no workspace batch exists
+// before the view.
 func (txn *Transaction) workspaceMP() *mpool.MPool {
 	txn.workspaceAllocationMu.Lock()
 	defer txn.workspaceAllocationMu.Unlock()
@@ -110,7 +112,7 @@ func (txn *Transaction) newWorkspaceVector(typ types.Type) (*vector.Vector, *mpo
 	if err != nil {
 		return nil, nil, err
 	}
-	return vector.NewOffHeapVecWithType(typ), view, nil
+	return vector.NewVec(typ, view), view, nil
 }
 
 // Called after all workspace batches have been cleaned, under txn's terminal
@@ -161,6 +163,15 @@ func (txn *Transaction) rememberWorkspaceCopy(bat *batch.Batch) {
 		txn.workspaceCopies = make(map[*batch.Batch]struct{})
 	}
 	txn.workspaceCopies[bat] = struct{}{}
+}
+
+// isWorkspaceCopy reports whether bat is a workspace copy, keeping it
+// remembered.
+func (txn *Transaction) isWorkspaceCopy(bat *batch.Batch) bool {
+	txn.workspaceAllocationMu.Lock()
+	defer txn.workspaceAllocationMu.Unlock()
+	_, ok := txn.workspaceCopies[bat]
+	return ok
 }
 
 // takeWorkspaceCopy reports whether bat is a workspace copy and forgets it.

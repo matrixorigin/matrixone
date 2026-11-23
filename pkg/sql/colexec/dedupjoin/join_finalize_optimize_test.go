@@ -44,8 +44,10 @@ func runFinalizeFixture(
 	t.Helper()
 	installTestAllocation(t, dedupArg, buildArg)
 
+	freeTestChildren(buildArg)
 	buildArg.Children = nil
 	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+	freeTestChildren(dedupArg)
 	dedupArg.Children = nil
 	dedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
 
@@ -280,7 +282,9 @@ func TestDedupJoinEmitsOrderedODKUActions(t *testing.T) {
 				dedupArg.Reset(proc, false, nil)
 				buildArg.Reset(proc, false, nil)
 				dedupArg.Free(proc, false, nil)
+				freeTestChildren(dedupArg)
 				buildArg.Free(proc, false, nil)
+				freeTestChildren(buildArg)
 				proc.Free()
 			})
 
@@ -475,7 +479,9 @@ func TestDedupJoinUpdateRestoresProbeVectors(t *testing.T) {
 				dedupArg.Reset(proc, false, nil)
 				buildArg.Reset(proc, false, nil)
 				dedupArg.Free(proc, false, nil)
+				freeTestChildren(dedupArg)
 				buildArg.Free(proc, false, nil)
+				freeTestChildren(buildArg)
 				proc.Free()
 				require.Equal(t, int64(0), proc.Mp().CurrNB())
 			})
@@ -539,7 +545,9 @@ func TestDedupJoinUpdateUsesBuildOnlyResultColumn(t *testing.T) {
 		dedupArg.Reset(proc, false, nil)
 		buildArg.Reset(proc, false, nil)
 		dedupArg.Free(proc, false, nil)
+		freeTestChildren(dedupArg)
 		buildArg.Free(proc, false, nil)
+		freeTestChildren(buildArg)
 		proc.Free()
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	})
@@ -611,7 +619,9 @@ func TestDedupJoinFinalizeMatchedZero_NonCapture(t *testing.T) {
 	buildArg.Reset(proc, false, nil)
 
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -681,7 +691,9 @@ func TestDedupJoinFinalizeMatchedZero_WithCapture(t *testing.T) {
 	dedupArg.Reset(proc, false, nil)
 	buildArg.Reset(proc, false, nil)
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -744,7 +756,9 @@ func TestDedupJoinFinalize_UnionSelsByBatch_PartialMatch(t *testing.T) {
 	dedupArg.Reset(proc, false, nil)
 	buildArg.Reset(proc, false, nil)
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -801,7 +815,9 @@ func TestDedupJoinIgnoreSkipsUpdateTargetOldKey(t *testing.T) {
 	dedupArg.Reset(proc, false, nil)
 	buildArg.Reset(proc, false, nil)
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -857,7 +873,9 @@ func TestDedupJoinIgnoreMapsNullableKeyGroupToBuildRow(t *testing.T) {
 	dedupArg.Reset(proc, false, nil)
 	buildArg.Reset(proc, false, nil)
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -865,7 +883,7 @@ func TestDedupJoinIgnoreMapsNullableKeyGroupToBuildRow(t *testing.T) {
 // makeInt32Vec builds a single-vector helper for unionSelsByBatch tests.
 func makeInt32Vec(t *testing.T, proc *process.Process, vals []int32) *vector.Vector {
 	t.Helper()
-	v := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	v := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	for _, x := range vals {
 		require.NoError(t, vector.AppendFixed(v, x, false, proc.Mp()))
 	}
@@ -885,7 +903,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 		bat.SetRowCount(len(vals))
 		defer bat.Clean(proc.Mp())
 
-		dst := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		dst := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		defer dst.Free(proc.Mp())
 
 		sels := []int32{0, 2, 4} // length 3 ≤ 16
@@ -913,7 +931,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 			want[i] = vals[i]
 		}
 
-		dst := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		dst := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		defer dst.Free(proc.Mp())
 		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat}, 0, sels, proc.Mp()))
 
@@ -952,7 +970,7 @@ func TestUnionSelsByBatch(t *testing.T) {
 			vals1[0], vals1[1], vals1[2],
 		}
 
-		dst := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		dst := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		defer dst.Free(proc.Mp())
 		require.NoError(t, unionSelsByBatch(dst, []*batch.Batch{bat0, bat1}, 0, sels, proc.Mp()))
 
@@ -975,12 +993,12 @@ func TestUnionSelsByBatch(t *testing.T) {
 
 		// Pick the same 17 indices in both runs.
 		sels := []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-		dstLarge := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		dstLarge := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		defer dstLarge.Free(proc.Mp())
 		require.NoError(t, unionSelsByBatch(dstLarge, []*batch.Batch{bat}, 0, sels, proc.Mp()))
 
 		// Drop one to force the ≤16 fallback path.
-		dstSmall := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		dstSmall := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		defer dstSmall.Free(proc.Mp())
 		require.NoError(t, unionSelsByBatch(dstSmall, []*batch.Batch{bat}, 0, sels[:16], proc.Mp()))
 
@@ -1061,7 +1079,9 @@ func TestDedupJoinFinalizeMatchedZero_DuplicateBuildPos(t *testing.T) {
 	dedupArg.Reset(proc, false, nil)
 	buildArg.Reset(proc, false, nil)
 	dedupArg.Free(proc, false, nil)
+	freeTestChildren(dedupArg)
 	buildArg.Free(proc, false, nil)
+	freeTestChildren(buildArg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

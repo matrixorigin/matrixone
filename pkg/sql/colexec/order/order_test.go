@@ -117,9 +117,9 @@ func TestOrderCopyDoesNotRetainUpstreamAccount(t *testing.T) {
 	view, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	input := batch.NewOffHeapWithSize(2)
+	input := batch.NewWithSize(2)
 	for i := range input.Vecs {
-		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		input.Vecs[i] = vector.NewVec(types.T_int64.ToType(), view)
 	}
 	for i := range 64 {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, view))
@@ -133,7 +133,7 @@ func TestOrderCopyDoesNotRetainUpstreamAccount(t *testing.T) {
 	require.NoError(t, err)
 	// An unaccounted Order copies into its own pool: the producer's account
 	// is fully released once the producer frees its batch.
-	input.Clean(proc.Mp())
+	input.Clean(view)
 	require.NotNil(t, arg.ctr.batWaitForSort)
 	require.Zero(t, account.Snapshot().Used)
 

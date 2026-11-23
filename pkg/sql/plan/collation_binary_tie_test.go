@@ -103,7 +103,7 @@ func TestPatternBinaryCastCoercibilitySurvivesFolding(t *testing.T) {
 	}
 	newBatch := func(value string) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(generalCI)
+		bat.Vecs[0] = vector.NewVec(generalCI, proc.Mp())
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, proc.Mp()))
 		bat.SetRowCount(1)
 		return bat

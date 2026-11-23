@@ -347,8 +347,8 @@ func TestMergeOrderFloatNaNLastAndPeerTieBreak(t *testing.T) {
 	}
 	makeBatch := func(values []float64, ids []int64) *batch.Batch {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[1], ids, nil, proc.Mp()))
 		bat.SetRowCount(len(values))
@@ -1324,7 +1324,8 @@ func TestCanAppendToActiveRun(t *testing.T) {
 	defer incomingEqual.Free(proc.Mp())
 	defer incomingLess.Free(proc.Mp())
 
-	ctr.spillTailCols = []*vector.Vector{vector.NewOffHeapVecWithType(types.T_int8.ToType())}
+	ctr.spillTailCols = []*vector.Vector{vector.NewVec(types.T_int8.ToType(), proc.Mp())}
+	ctr.spillTailMP = proc.Mp()
 	ctr.spillTailReady = false
 	require.NoError(t, ctr.updateActiveRunTail(proc, []*vector.Vector{tail}, 0))
 
@@ -1624,6 +1625,7 @@ func TestPickAndSendAfterFirstBatchReleased(t *testing.T) {
 		indexList:       []int64{-1, 0},
 		compares:        []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
 		buf:             output,
+		bufMP:           proc.Mp(),
 		inMemoryHeapPos: []int{-1, 0},
 	}
 	ctr.inMemoryHeap = &inMemoryMergeHeap{ctr: ctr, items: []int{1}}
@@ -1652,9 +1654,9 @@ func TestAppendContiguousOrderRows(t *testing.T) {
 	defer src0.Free(proc.Mp())
 	defer src1.Free(proc.Mp())
 
-	dst := batch.NewOffHeapWithSize(2)
-	dst.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
-	dst.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	dst := batch.NewWithSize(2)
+	dst.Vecs[0] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
+	dst.Vecs[1] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
 	defer dst.Clean(proc.Mp())
 
 	err := appendContiguousOrderRows(dst, []*vector.Vector{src0, src1}, []int{1, 0}, 1, 2, proc.Mp())
@@ -1853,9 +1855,11 @@ func TestMergeOrderResetAndOpType(t *testing.T) {
 	arg.ctr.executors = []colexec.ExpressionExecutor{exec}
 	arg.ctr.batchList = []*batch.Batch{newValuesBatch(proc, []int8{1, 2})}
 	arg.ctr.orderCols = [][]*vector.Vector{{arg.ctr.batchList[0].Vecs[0]}}
-	arg.ctr.buf = batch.NewOffHeapWithSize(1)
-	arg.ctr.buf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	arg.ctr.buf = batch.NewWithSize(1)
+	arg.ctr.buf.Vecs[0] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
+	arg.ctr.bufMP = proc.Mp()
 	arg.ctr.spillTailCols = []*vector.Vector{testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{9})}
+	arg.ctr.spillTailMP = proc.Mp()
 	require.NoError(t, arg.ctr.ensureActiveSpillRun(proc, nil))
 	require.Equal(t, vm.MergeOrder, arg.OpType())
 
@@ -1880,13 +1884,14 @@ func TestMergeOrderResetReleasesAccountedResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, view)
 
-	result := batch.NewOffHeapWithSize(1)
-	result.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	result := batch.NewWithSize(1)
+	result.Vecs[0] = vector.NewVec(types.T_int64.ToType(), view)
 	require.NoError(t, vector.AppendFixed(result.Vecs[0], int64(1), false, view))
 	result.SetRowCount(1)
 	require.Positive(t, account.Snapshot().Used)
 
 	arg.ctr.buf = result
+	arg.ctr.bufMP = result.Vecs[0].MPool()
 	arg.Reset(proc, false, nil)
 	require.Nil(t, arg.ctr.buf)
 	require.Zero(t, account.Snapshot().Used)
@@ -1908,9 +1913,9 @@ func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
 	view, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	input := batch.NewOffHeapWithSize(2)
+	input := batch.NewWithSize(2)
 	for i := range input.Vecs {
-		input.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		input.Vecs[i] = vector.NewVec(types.T_int64.ToType(), view)
 	}
 	for i := range 17 {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, view))
@@ -1920,10 +1925,11 @@ func TestRemoveInMemoryBatchReleasesAccountedBatch(t *testing.T) {
 	require.Positive(t, account.Snapshot().Used)
 
 	ctr := container{
-		batchList:     []*batch.Batch{input},
-		orderCols:     [][]*vector.Vector{{input.Vecs[0]}},
-		indexList:     []int64{17},
-		spillMemUsage: int64(input.Allocated()),
+		batchList:          []*batch.Batch{input},
+		orderCols:          [][]*vector.Vector{{input.Vecs[0]}},
+		indexList:          []int64{17},
+		spillMemUsage:      int64(input.Allocated()),
+		retainedAllocation: view,
 	}
 	require.NoError(t, ctr.removeInMemoryBatch(proc, 0))
 	require.Nil(t, ctr.batchList[0])
@@ -1969,11 +1975,11 @@ func TestSpillHelperBranches(t *testing.T) {
 	_, _, err = writeSpillBatch(proc, bat, nil, failWriter{}, analyzer)
 	require.Error(t, err)
 
-	reuse := batch.NewOffHeapWithSize(1)
-	reuse.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	reuse := batch.NewWithSize(1)
+	reuse.Vecs[0] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
 	defer reuse.Clean(proc.Mp())
-	reuseKey := batch.NewOffHeapWithSize(1)
-	reuseKey.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	reuseKey := batch.NewWithSize(1)
+	reuseKey.Vecs[0] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
 	defer reuseKey.Clean(proc.Mp())
 
 	_, err = readSpillPayload(proc, bufio.NewReader(bytes.NewReader(nil)), reuse, proc.Mp())
@@ -2000,9 +2006,9 @@ func TestSpillHelperBranches(t *testing.T) {
 	ctrRestore.spillColPos = []int32{-1}
 	_, err = ctrRestore.restoreSpillOrderColumns(proc, bat, nil, nil)
 	require.Error(t, err)
-	keyMismatch := batch.NewOffHeapWithSize(2)
-	keyMismatch.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
-	keyMismatch.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	keyMismatch := batch.NewWithSize(2)
+	keyMismatch.Vecs[0] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
+	keyMismatch.Vecs[1] = vector.NewVec(types.T_int8.ToType(), proc.Mp())
 	defer keyMismatch.Clean(proc.Mp())
 	_, err = ctrRestore.restoreSpillOrderColumns(proc, bat, keyMismatch, nil)
 	require.Error(t, err)

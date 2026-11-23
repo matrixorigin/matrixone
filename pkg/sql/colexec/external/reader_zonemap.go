@@ -205,14 +205,13 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 		}
 	}
 
-	// Output-batch vectors are charged to the operator's output view; the
-	// loaded block above is transient staging on proc's pool.
-	outputMP := r.param.outputPool(proc)
+	// The output vectors are the operator's, created with its output pool.
+	out := r.param.outputPool(proc)
 	fileColumn := 0
 	for i, attr := range attrs {
 		dst := bat.Vecs[i]
 		if attr.ColFieldIndex < 0 || attr.ColFieldIndex >= colCount {
-			if err := vector.AppendMultiFixed(dst, 0, true, rows, outputMP); err != nil {
+			if err := vector.AppendMultiFixed(dst, 0, true, rows, out); err != nil {
 				return err
 			}
 			continue
@@ -225,7 +224,7 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 		if src.Length() != rows {
 			return moerr.NewInvalidInput(ctx, "saved result column length does not match the block row count")
 		}
-		if err := dst.UnionBatch(src, 0, rows, nil, outputMP); err != nil {
+		if err := dst.UnionBatch(src, 0, rows, nil, out); err != nil {
 			return err
 		}
 	}

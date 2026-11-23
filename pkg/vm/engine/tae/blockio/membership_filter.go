@@ -98,7 +98,7 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo,
 		output.SetRowCount(0)
 		return true, nil
 	}
-	s, err := request.MembershipScratch(len(columns))
+	s, err := request.MembershipScratch(len(columns), mp)
 	if err != nil {
 		return false, err
 	}

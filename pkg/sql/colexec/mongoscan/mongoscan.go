@@ -232,7 +232,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, moerr.NewInternalError(proc.Ctx, "MongoScan is not prepared")
 	}
 	if scan.ctr.buf != nil {
-		scan.ctr.buf.Clean(proc.Mp())
+		scan.ctr.buf.Clean(scan.mp(proc))
 		scan.ctr.buf = nil
 	}
 
@@ -251,18 +251,12 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 	maxRows := firstPositive(scan.Scan.MaxScanRows, deps.Config.MaxScanRows)
 	maxBytes := firstPositive(scan.Scan.MaxScanBytes, deps.Config.MaxScanBytes)
 
-	bat := scan.ctr.converter.NewBatch()
-	if scan.OutputAllocation != nil {
-		for i, old := range bat.Vecs {
-			owned := vector.NewOffHeapVecWithType(*old.GetType())
-			old.Free(proc.Mp())
-			bat.Vecs[i] = owned
-		}
-	}
+	// The output vectors belong to the scan's output pool.
+	bat := scan.ctr.converter.NewBatch(scan.mp(proc))
 	var currentBatchBytes int64
 	for bat.RowCount() < batchRows {
 		if err := scan.explicitQueryContextError(); err != nil {
-			bat.Clean(proc.Mp())
+			bat.Clean(scan.mp(proc))
 			scan.ctr.done = true
 			scan.closeResources(proc.Ctx)
 			return result, moerr.NewInternalErrorf(proc.Ctx, "MongoDB explicit query deadline exceeded: %v", err)
@@ -281,7 +275,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 				metric.MongoDBPhaseDurationHistogram.WithLabelValues("get_more_wait").Observe(time.Since(waitStarted).Seconds())
 				if cursorErr := scan.ctr.cursor.Err(); cursorErr != nil {
 					metric.MongoDBCursorEventCounter.WithLabelValues("error").Inc()
-					bat.Clean(proc.Mp())
+					bat.Clean(scan.mp(proc))
 					scan.ctr.done = true
 					scan.closeResources(proc.Ctx)
 					return result, moerr.NewInternalError(proc.Ctx, "MongoDB cursor failed")
@@ -293,7 +287,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 			process.StopAnalyzerWait(scan.OpAnalyzer, waitStarted, resource.WaitRemote)
 			metric.MongoDBPhaseDurationHistogram.WithLabelValues("get_more_wait").Observe(time.Since(waitStarted).Seconds())
 			if err := scan.explicitQueryContextError(); err != nil {
-				bat.Clean(proc.Mp())
+				bat.Clean(scan.mp(proc))
 				scan.ctr.done = true
 				scan.closeResources(proc.Ctx)
 				return result, moerr.NewInternalErrorf(proc.Ctx, "MongoDB explicit query deadline exceeded: %v", err)
@@ -301,7 +295,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 			raw = scan.ctr.cursor.CurrentRaw()
 		}
 		if int64(len(raw)) > maxBatchBytes || currentBatchBytes+int64(len(raw)) > maxBatchBytes && bat.RowCount() == 0 {
-			bat.Clean(proc.Mp())
+			bat.Clean(scan.mp(proc))
 			scan.ctr.done = true
 			scan.closeResources(proc.Ctx)
 			return result, moerr.NewInvalidInput(proc.Ctx, "MongoDB batch byte limit exceeded")
@@ -310,7 +304,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 			// A cursor cannot unread, so retain exactly one bounded document for
 			// the next Call. Copy because driver-owned Current is reused by Next.
 			if err = scan.retainPendingRaw(proc, raw); err != nil {
-				bat.Clean(proc.Mp())
+				bat.Clean(scan.mp(proc))
 				scan.ctr.done = true
 				scan.closeResources(proc.Ctx)
 				return result, err
@@ -325,14 +319,14 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 				// it for the next Call just like a raw-byte boundary; the converter
 				// rolled every vector back to the last committed row.
 				if err = scan.retainPendingRaw(proc, raw); err != nil {
-					bat.Clean(proc.Mp())
+					bat.Clean(scan.mp(proc))
 					scan.ctr.done = true
 					scan.closeResources(proc.Ctx)
 					return result, err
 				}
 				break
 			}
-			bat.Clean(proc.Mp())
+			bat.Clean(scan.mp(proc))
 			scan.ctr.done = true
 			scan.closeResources(proc.Ctx)
 			return result, err
@@ -345,19 +339,19 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		scan.ctr.rawBytes += int64(len(raw))
 		scan.clearPendingRaw()
 		if maxRows > 0 && scan.ctr.rows > maxRows || maxBytes > 0 && scan.ctr.rawBytes > maxBytes {
-			bat.Clean(proc.Mp())
+			bat.Clean(scan.mp(proc))
 			scan.ctr.done = true
 			scan.closeResources(proc.Ctx)
 			return result, moerr.NewInvalidInput(proc.Ctx, "MongoDB statement scan limit exceeded")
 		}
 	}
 	if bat.RowCount() == 0 {
-		bat.Clean(proc.Mp())
+		bat.Clean(scan.mp(proc))
 		result.Status = vm.ExecStop
 		return result, nil
 	}
 	if err = scan.appendQueryColumn(proc, bat, maxBatchBytes); err != nil {
-		bat.Clean(proc.Mp())
+		bat.Clean(scan.mp(proc))
 		scan.ctr.done = true
 		scan.closeResources(proc.Ctx)
 		return result, err
@@ -407,7 +401,7 @@ func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch
 			queryType, []byte(scan.ctr.userQuery.Source), bat.RowCount(), scan.mp(proc))
 		if err != nil {
 			if queryVector != nil {
-				queryVector.Free(proc.Mp())
+				queryVector.Free(scan.mp(proc))
 			}
 			return err
 		}
@@ -417,7 +411,7 @@ func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch
 	if maxBatchBytes > 0 && int64(bat.Size()) > maxBatchBytes {
 		bat.Attrs = bat.Attrs[:len(bat.Attrs)-1]
 		bat.Vecs = bat.Vecs[:len(bat.Vecs)-1]
-		queryVector.Free(proc.Mp())
+		queryVector.Free(scan.mp(proc))
 		return moerr.NewInvalidInput(proc.Ctx, "MongoDB batch byte limit exceeded")
 	}
 	return nil

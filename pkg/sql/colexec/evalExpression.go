@@ -440,26 +440,26 @@ func newExpressionExecutorWithAllocation(
 		return ve, nil
 
 	case *plan.Expr_Vec:
-		vec := vector.NewVec(types.T_any.ToType())
+		vec := vector.NewVec(types.T_any.ToType(), ownerMP)
 		err := vec.UnmarshalBinary(t.Vec.Data)
 		if err != nil {
-			vec.Free(proc.Mp())
+			vec.Free(ownerMP)
 			return nil, err
 		}
 		// The opaque payload may carry a different type than the enclosing Expr.
 		// Decoding permits known metadata; executing it still requires admission.
 		if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
-			vec.Free(proc.Mp())
+			vec.Free(ownerMP)
 			return nil, err
 		}
 		// The stable Vector payload does not carry runtime provenance. LiteralVec
 		// explicitly records its uniform owner because the same container is used
 		// for SQL constants and runtime-filter payloads.
 		if rawSource := t.Vec.GetStringSource(); rawSource > uint32(types.StringSourceCOMStmt) {
-			vec.Free(proc.Mp())
+			vec.Free(ownerMP)
 			return nil, moerr.NewInvalidInputf(proc.Ctx, "invalid literal vector string source %d", rawSource)
 		}
-		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
+		return NewFixedVectorExpressionExecutor(ownerMP, true, vec), nil
 
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
@@ -609,9 +609,9 @@ func expressionAllocationMP(mp *mpool.MPool, allocation *mpool.MPool) *mpool.MPo
 
 func newExpressionOffHeapVector(
 	typ types.Type,
-	_ *mpool.MPool,
+	mp *mpool.MPool,
 ) (*vector.Vector, error) {
-	return vector.NewOffHeapVecWithType(typ), nil
+	return vector.NewVec(typ, mp), nil
 }
 
 func newExpressionConstNull(
@@ -815,7 +815,7 @@ func (expr *ParamExpressionExecutor) evalTyped(src *vector.Vector, rowCount int)
 			expr.typedVec.Free(expr.mp)
 			expr.typedVec = nil
 		}
-		vec, err := src.DupOffHeap(expr.mp)
+		vec, err := src.Dup(expr.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -1093,7 +1093,7 @@ func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch
 
 	if expr.resultVector == nil {
 		var err error
-		expr.resultVector, err = newExpressionOffHeapVector(expr.typ, expr.allocation)
+		expr.resultVector, err = newExpressionOffHeapVector(expr.typ, expr.mp)
 		if err != nil {
 			return nil, err
 		}
@@ -1165,7 +1165,7 @@ func (expr *ListExpressionExecutor) init(
 	expr.allocation = selection
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 	var err error
-	expr.resultVector, err = newExpressionOffHeapVector(typ, selection)
+	expr.resultVector, err = newExpressionOffHeapVector(typ, m)
 	return err
 }
 
@@ -1613,7 +1613,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			if selected == nil {
 				var err error
 				selected, err = newExpressionOffHeapVector(
-					*parameter.GetType(), expr.allocation,
+					*parameter.GetType(), expr.m,
 				)
 				if err != nil {
 					return nil, err
@@ -1674,9 +1674,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	// the existing append loop.
 	scatterFixed := selectedCount <= rowCount/4 && runtimeType.IsFixedLen() &&
 		!selectedResult.IsConst() &&
-		selectedResult.DataBackingKind() == vector.OwnedMPoolUnique &&
-		result.DataBackingKind() == vector.OwnedMPoolUnique &&
-		!selectedResult.HasBorrowedBacking() && !result.HasBorrowedBacking() &&
+		!selectedResult.IsReadOnly() && !result.IsReadOnly() &&
 		!selectedResult.HasGrouping() &&
 		cap(sourceData) > 0 && cap(destinationData) > 0 &&
 		&sourceData[:1][0] != &destinationData[:1][0]
@@ -2021,6 +2019,8 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 	if expr.resultVector == nil {
 		return
 	}
+	// The executor owns its vector, created with expr.m (or a read-only
+	// constant NULL, whose Free only drops references).
 	expr.resultVector.Free(expr.m)
 	expr.resultVector = nil
 }
@@ -2039,10 +2039,11 @@ func generateConstExpressionExecutor(
 	if _, err = DecodeLiteralStringSource(con); err != nil {
 		return nil, err
 	}
-	// Allocation belongs to this constructor until a successful return transfers it.
+	// Allocation belongs to this constructor until a successful return
+	// transfers it; it was made with the expression's allocation pool.
 	defer func() {
 		if err != nil && vec != nil {
-			vec.Free(proc.Mp())
+			vec.Free(expressionAllocationMP(proc.Mp(), selection))
 			vec = nil
 		}
 	}()
@@ -2315,12 +2316,11 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 
 func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,
 	[]func(*vector.Vector, *vector.Vector, int64, int) error) {
-	rbat := batch.NewOffHeapWithSize(bat.VectorCount())
+	rbat := batch.NewWithSize(bat.VectorCount())
 	cfs := make([]func(*vector.Vector, *vector.Vector, int64, int) error, bat.VectorCount())
 	for i, vec := range bat.Vecs {
 		typ := *vec.GetType()
-		rbat.Vecs[i] = vector.NewConstNull(typ, 0, nil)
-		rbat.Vecs[i].SetOffHeap(true)
+		rbat.Vecs[i] = vector.NewConstNull(typ, 0, mp)
 		cfs[i] = vector.GetConstSetFunction(typ, mp)
 	}
 	return rbat, cfs
@@ -2536,7 +2536,8 @@ func EvaluateFilterByZoneMap(
 // block, so sorting a private copy would clone and sort the payload per block.
 // Decoding is therefore zero-copy and the payload is only ever inspected.
 func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
-	vec := vector.NewVec(types.T_any.ToType())
+	// A nil pool makes a read-only reference to data.
+	vec := vector.NewVec(types.T_any.ToType(), nil)
 	if err := vec.UnmarshalBinary(data); err != nil {
 		return nil, false
 	}

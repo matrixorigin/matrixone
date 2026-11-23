@@ -51,7 +51,7 @@ func TestOwnedCompleteKeyShuffle(t *testing.T) {
 			arg.OwnedColumnCount = 1
 			require.NoError(t, arg.SetAllocationAccount(account))
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
 			input.SetRowCount(len(values))
 			input.ShuffleIDX = 99
@@ -632,7 +632,8 @@ func TestOwnedShuffleSelectionAndOutputFailure(t *testing.T) {
 			arg.OwnedColumnCount = 1
 			require.NoError(t, arg.SetAllocationAccount(account))
 			require.NoError(t, arg.Prepare(proc))
-			arg.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+			arg.ctr.keyHashes = vector.NewVec(types.T_uint64.ToType(), testOutputMP(t, arg, proc))
+			arg.ctr.keyHashesMP = testOutputMP(t, arg, proc)
 			require.NoError(t, arg.ctr.keyHashes.PreExtend(128, testOutputMP(t, arg, proc)))
 			if failure == "output" {
 				arg.ctr.selectionBacking, err = mpool.MakeSliceAccounted[int32](128, proc.Mp(), account, mpool.AllocationOwnerSet, 13)

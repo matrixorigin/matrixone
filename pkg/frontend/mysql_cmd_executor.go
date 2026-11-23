@@ -4234,7 +4234,7 @@ func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explai
 		count++
 	}
 	vs = vs[:count]
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), session.GetMemPool())
 	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec
@@ -4280,7 +4280,7 @@ func buildMoExplainPhyPlan(
 	}
 
 	vs = vs[:count]
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), session.GetMemPool())
 	defer vec.Free(session.GetMemPool())
 	vector.AppendBytesList(vec, vs, nil, session.GetMemPool())
 	bat.Vecs[0] = vec

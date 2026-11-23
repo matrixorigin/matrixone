@@ -525,16 +525,20 @@ func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Proce
 		}
 		shuffle.ctr.keyVectors[i] = bat.Vecs[col]
 	}
-	if shuffle.ctr.keyHashes == nil {
-		// NewVec defaults to Go-heap storage, which bypasses mpool capacity.
-		shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
-	}
 	hashMP := proc.Mp()
 	if shuffle.OwnedOutput {
 		var err error
 		if hashMP, err = shuffle.outputAllocation.MP(proc.Mp()); err != nil {
 			return nil, err
 		}
+	}
+	if shuffle.ctr.keyHashes != nil && shuffle.ctr.keyHashesMP != hashMP {
+		shuffle.ctr.keyHashes.Free(shuffle.ctr.keyHashesMP)
+		shuffle.ctr.keyHashes, shuffle.ctr.keyHashesMP = nil, nil
+	}
+	if shuffle.ctr.keyHashes == nil {
+		shuffle.ctr.keyHashes = vector.NewVec(types.T_uint64.ToType(), hashMP)
+		shuffle.ctr.keyHashesMP = hashMP
 	}
 	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), hashMP); err != nil {
 		return nil, err

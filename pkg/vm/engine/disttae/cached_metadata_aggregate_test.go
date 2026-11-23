@@ -53,7 +53,7 @@ func TestCachedMetadataRemainsImmutableDuringAggregation(t *testing.T) {
 	originals := make([][objectio.ZoneMapSize]byte, 0, 2)
 	for _, value := range []uint64{1, 100} {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 64, -1))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_uint64, 64, -1), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		bat.SetRowCount(1)
 		writer := ioutil.ConstructWriter(0, []uint16{0}, 0, true, false, fs)

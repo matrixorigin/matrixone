@@ -84,8 +84,8 @@ func issue25590InsertRow(t *testing.T, mp *mpool.MPool, pk, v int32) *batch.Batc
 	t.Helper()
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{"mock_0", "mock_1"}
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], pk, false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], v, false, mp))
 	bat.SetRowCount(1)
@@ -100,8 +100,8 @@ func issue25590DeleteRow(t *testing.T, mp *mpool.MPool, rowid types.Rowid, pk in
 	t.Helper()
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowid, false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], pk, false, mp))
 	bat.SetRowCount(1)
@@ -316,7 +316,7 @@ func issue25590ReadTableRows(
 		require.NoError(t, reader.Close())
 	}()
 	for {
-		ret := testutil.EmptyBatchFromSchema(schema, 0, 1)
+		ret := testutil.EmptyBatchFromSchema(schema, mp, 0, 1)
 		isEnd, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
 		if err != nil {
 			ret.Clean(mp)
@@ -1124,8 +1124,8 @@ func TestIssue25590CompactPublishFailurePreservesDeletesAndCommits(t *testing.T)
 	issue25590AdmitStatement(t, ctx, txn)
 	bulk := batch.NewWithSize(2)
 	bulk.Attrs = []string{"mock_0", "mock_1"}
-	pkCol := vector.NewVec(types.T_int32.ToType())
-	vCol := vector.NewVec(types.T_int32.ToType())
+	pkCol := vector.NewVec(types.T_int32.ToType(), mp)
+	vCol := vector.NewVec(types.T_int32.ToType(), mp)
 	bulkPks := make([]int32, totalRows)
 	bulkVs := make([]int32, totalRows)
 	for i := range bulkPks {
@@ -1307,8 +1307,8 @@ func TestIssue25590CompactSecondPublishFailureRetriesAndCommits(t *testing.T) {
 	insertBulkEntry := func(entry int32) {
 		bulk := batch.NewWithSize(2)
 		bulk.Attrs = []string{"mock_0", "mock_1"}
-		pkCol := vector.NewVec(types.T_int32.ToType())
-		vCol := vector.NewVec(types.T_int32.ToType())
+		pkCol := vector.NewVec(types.T_int32.ToType(), mp)
+		vCol := vector.NewVec(types.T_int32.ToType(), mp)
 		bulkPks := make([]int32, rowsPerEntry)
 		bulkVs := make([]int32, rowsPerEntry)
 		for i := range bulkPks {
@@ -1531,8 +1531,8 @@ func TestIssue25590CompactionAdmissionRefusalPreservesRowsAndCommits(t *testing.
 	issue25590AdmitStatement(t, ctx, txn)
 	bulk := batch.NewWithSize(2)
 	bulk.Attrs = []string{"mock_0", "mock_1"}
-	pkCol := vector.NewVec(types.T_int32.ToType())
-	vCol := vector.NewVec(types.T_int32.ToType())
+	pkCol := vector.NewVec(types.T_int32.ToType(), mp)
+	vCol := vector.NewVec(types.T_int32.ToType(), mp)
 	bulkPks := make([]int32, totalRows)
 	bulkVs := make([]int32, totalRows)
 	for i := range bulkPks {
@@ -1677,8 +1677,8 @@ func TestIssue25590TwoDirtyObjectRefusalRollsBackRetriesAndCommits(t *testing.T)
 	issue25590AdmitStatement(t, ctx, txn)
 	bulk := batch.NewWithSize(2)
 	bulk.Attrs = []string{"mock_0", "mock_1"}
-	pkCol := vector.NewVec(types.T_int32.ToType())
-	vCol := vector.NewVec(types.T_int32.ToType())
+	pkCol := vector.NewVec(types.T_int32.ToType(), mp)
+	vCol := vector.NewVec(types.T_int32.ToType(), mp)
 	bulkPks := make([]int32, totalRows)
 	bulkVs := make([]int32, totalRows)
 	for i := range bulkPks {

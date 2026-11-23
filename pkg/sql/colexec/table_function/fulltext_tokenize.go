@@ -117,7 +117,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			}
 		}
 
-		u.batch = tf.createResultBatch()
+		u.batch = tf.createResultBatch(proc.Mp())
 		u.doc = Document{Words: make([]FullTextEntry, 0, 512)}
 		u.inited = true
 	}

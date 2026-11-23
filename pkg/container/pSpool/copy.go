@@ -119,7 +119,7 @@ copyVectors:
 		// ends at the producer's next call, before consumers read this copy.
 		typ := *vec.GetType()
 		if dst.Vecs[i] == nil {
-			dst.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+			dst.Vecs[i] = vector.NewVec(typ, cb.mp)
 		}
 
 		destination := dst.Vecs[i]
@@ -233,7 +233,7 @@ func (mc *oneBatchMemoryCache) prepareCopyBacking(src, dst *batch.Batch, column 
 	if (dataSize == 0 || cap(dst.Vecs[column].GetData()) > 0) && (areaSize == 0 || cap(dst.Vecs[column].GetArea()) > 0) {
 		return false, aliases, nil
 	}
-	aliases, err = prepareSpoolSuffix(src, dst, column)
+	aliases, err = prepareSpoolSuffix(src, dst, column, dst.Vecs[column].MPool())
 	if err != nil {
 		return false, aliases, err
 	}
@@ -245,7 +245,7 @@ func (mc *oneBatchMemoryCache) prepareCopyBacking(src, dst *batch.Batch, column 
 
 // prepareSpoolSuffix creates owned shells only. Payload allocation stays in
 // the source-order copy loop.
-func prepareSpoolSuffix(src, dst *batch.Batch, first int) (bool, error) {
+func prepareSpoolSuffix(src, dst *batch.Batch, first int, mp *mpool.MPool) (bool, error) {
 	aliases := false
 	for i := first; i < len(src.Vecs); i++ {
 		source := src.Vecs[i]
@@ -253,7 +253,7 @@ func prepareSpoolSuffix(src, dst *batch.Batch, first int) (bool, error) {
 			continue
 		}
 		if dst.Vecs[i] == nil {
-			dst.Vecs[i] = vector.NewOffHeapVecWithType(*source.GetType())
+			dst.Vecs[i] = vector.NewVec(*source.GetType(), mp)
 		} else if i > first {
 			aliases = true
 		}

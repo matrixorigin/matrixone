@@ -178,7 +178,7 @@ func TestTemporalFoldRefreshesPreparedTimestampScale(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			defer proc.Free()
 			proc.GetSessionInfo().TimeZone = time.UTC
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
 			proc.SetPrepareParams(params)
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()

@@ -108,7 +108,7 @@ func TryExtractRelayS3InfoObjectNames(
 	nameData, nameArea := vector.MustVarlenaRawData(bat.Vecs[3])
 	batData, batArea := vector.MustVarlenaRawData(bat.Vecs[4])
 	seen := make(map[string]struct{})
-	inner := batch.NewOffHeapEmpty()
+	inner := batch.NewWithSize(0)
 	defer inner.Clean(mp)
 	for i, action := range actions {
 		switch actionType(action) {

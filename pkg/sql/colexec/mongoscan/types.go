@@ -99,7 +99,7 @@ func (scan *MongoScan) Reset(proc *process.Process, _ bool, _ error) {
 	scan.closeResources(proc.Ctx)
 	scan.ctr.closeErr = nil
 	if scan.ctr.buf != nil {
-		scan.ctr.buf.Clean(proc.Mp())
+		scan.ctr.buf.Clean(scan.mp(proc))
 		scan.ctr.buf = nil
 	}
 	scan.ctr.converter = nil
@@ -119,7 +119,7 @@ func (scan *MongoScan) Reset(proc *process.Process, _ bool, _ error) {
 func (scan *MongoScan) Free(proc *process.Process, _ bool, _ error) {
 	scan.closeResources(proc.Ctx)
 	if scan.ctr.buf != nil {
-		scan.ctr.buf.Clean(proc.Mp())
+		scan.ctr.buf.Clean(scan.mp(proc))
 		scan.ctr.buf = nil
 	}
 	scan.ctr.converter = nil

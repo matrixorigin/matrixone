@@ -37,7 +37,7 @@ func TestResultCloneBytesAccountsForSharedPayload(t *testing.T) {
 	constantBatch := batch.NewWithSize(1)
 	constantBatch.Vecs[0] = constant
 	constantBatch.SetRowCount(rows)
-	compact, err := cloneInternalExecutorResultBatch(constantBatch, mp, false)
+	compact, err := cloneInternalExecutorResultBatch(constantBatch, mp)
 	require.NoError(t, err)
 	defer compact.Clean(mp)
 	compactBytes, err := resultCloneBytes(constantBatch, 0, limit)
@@ -45,7 +45,7 @@ func TestResultCloneBytesAccountsForSharedPayload(t *testing.T) {
 	require.GreaterOrEqual(t, compactBytes, uint64(compact.Size()))
 	_, err = resultCloneBytes(constantBatch, limit-compactBytes+1, limit)
 	require.Error(t, err, "the limit also accounts for earlier result batches")
-	flat := vector.NewVec(types.T_varchar.ToType())
+	flat := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, flat.UnionBatch(constant, 0, rows, nil, mp))
 	source := batch.NewWithSize(1)
 	source.Vecs[0] = flat
@@ -55,7 +55,7 @@ func TestResultCloneBytesAccountsForSharedPayload(t *testing.T) {
 
 	// The same clone used by the executor materializes the shared payload for
 	// each row; the original batch's physical area is not a sufficient bound.
-	cloned, err := cloneInternalExecutorResultBatch(source, mp, false)
+	cloned, err := cloneInternalExecutorResultBatch(source, mp)
 	require.NoError(t, err)
 	defer cloned.Clean(mp)
 	require.Greater(t, cloned.Size(), limit)
@@ -69,7 +69,7 @@ func TestResultCloneBytesAccountsForSharedPayload(t *testing.T) {
 
 	// Null rows retain stale descriptors in the source but clone no payload.
 	flat.SetNull(0)
-	nullClone, err := cloneInternalExecutorResultBatch(source, mp, false)
+	nullClone, err := cloneInternalExecutorResultBatch(source, mp)
 	require.NoError(t, err)
 	defer nullClone.Clean(mp)
 	measured, err = resultCloneBytes(source, 0, uint64(nullClone.Size()))
@@ -86,7 +86,7 @@ func TestResultCloneBytesAccountsForSharedPayload(t *testing.T) {
 func TestResultCloneBytesBorrowedWindowAndOverflow(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	parent := vector.NewVec(types.T_varchar.ToType())
+	parent := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer parent.Free(mp)
 	payload := bytes.Repeat([]byte{'x'}, 128<<10)
 	for i := 0; i < 40; i++ {
@@ -98,7 +98,7 @@ func TestResultCloneBytesBorrowedWindowAndOverflow(t *testing.T) {
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = window
 	input.SetRowCount(1)
-	cloned, err := cloneInternalExecutorResultBatch(input, mp, false)
+	cloned, err := cloneInternalExecutorResultBatch(input, mp)
 	require.NoError(t, err)
 	defer cloned.Clean(mp)
 	measured, err := resultCloneBytes(input, 0, 4<<20)

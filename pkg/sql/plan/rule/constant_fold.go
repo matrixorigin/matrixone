@@ -656,7 +656,7 @@ func scalarConstantVector(expr *plan.Expr) *vector.Vector {
 	}
 	// Checked decoding borrows immutable payload bytes (including ReadNoCopy
 	// nulls); this fresh temporary owns no MPool allocations to release.
-	decoded := vector.NewVec(types.T_any.ToType())
+	decoded := vector.NewVec(types.T_any.ToType(), nil)
 	if err := decoded.UnmarshalBinary(literal.Data); err != nil {
 		return nil
 	}

@@ -169,12 +169,12 @@ func TestFilterTargetRowsCrossesAllocationAccountBoundary(t *testing.T) {
 	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	bat := batch.NewOffHeapWithSize(4)
+	bat := batch.NewWithSize(4)
 	for idx, typ := range []types.Type{
 		types.T_Rowid.ToType(), types.T_int64.ToType(),
 		types.T_int32.ToType(), types.T_bool.ToType(),
 	} {
-		bat.Vecs[idx] = vector.NewOffHeapVecWithType(typ)
+		bat.Vecs[idx] = vector.NewVec(typ, view)
 	}
 	require.NoError(t, vector.AppendFixedList(
 		bat.Vecs[0], []types.Rowid{types.BuildTestRowid(1, 1)}, nil, view))
@@ -192,7 +192,7 @@ func TestFilterTargetRowsCrossesAllocationAccountBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, clean)
 	// The filtered copy outlives the source account's charge.
-	bat.Clean(mp)
+	bat.Clean(view)
 	require.Zero(t, account.Snapshot().Used)
 	filtered.Clean(mp)
 	_, _, err = registry.CompleteTerminal(account)

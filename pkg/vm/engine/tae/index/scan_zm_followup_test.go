@@ -34,7 +34,7 @@ func TestScanFollowupZoneMap(t *testing.T) {
 	}
 	bools[0], bools[32] = false, false
 	ints[0], ints[31], ints[32] = math.MinInt64, math.MaxInt64, math.MinInt64
-	bv, iv := vector.NewVec(types.T_bool.ToType()), vector.NewVec(types.T_int64.ToType())
+	bv, iv := vector.NewVec(types.T_bool.ToType(), mp), vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { bv.Free(mp); iv.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(bv, bools, nil, mp))
 	require.NoError(t, vector.AppendFixedList(iv, ints, nil, mp))

@@ -60,8 +60,8 @@ func TestObjectWriterS3CacheAfterArenaRelease(t *testing.T) {
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	intType, textType := types.T_int64.ToType(), types.T_text.ToType()
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(intType)
-	bat.Vecs[1] = vector.NewVec(textType)
+	bat.Vecs[0] = vector.NewVec(intType, mp)
+	bat.Vecs[1] = vector.NewVec(textType, mp)
 	t.Cleanup(func() { bat.Clean(mp) })
 	values := [][]byte{bytes.Repeat([]byte("alpha"), 800), nil, bytes.Repeat([]byte("beta"), 700)}
 	for i, value := range values {

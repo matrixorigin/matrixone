@@ -154,7 +154,7 @@ func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.memory.Release()
 	for _, bat := range ctr.freeBats {
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			ctr.allocation.CleanBatch(proc, bat)
 		}
 	}
 	ctr.buf = nil

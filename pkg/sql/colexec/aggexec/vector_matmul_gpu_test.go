@@ -65,8 +65,8 @@ func vmGPURun(t *testing.T, mp *mpool.MPool, vt types.Type, toCell func([]float3
 		return exec.(*vectorMatmulExec)
 	}
 	build := func(lo, hi int) []*vector.Vector {
-		idv := vector.NewVec(types.T_int64.ToType())
-		vv := vector.NewVec(vt)
+		idv := vector.NewVec(types.T_int64.ToType(), mp)
+		vv := vector.NewVec(vt, mp)
 		for i := lo; i < hi; i++ {
 			require.NoError(t, vector.AppendFixed(idv, ids[i], false, mp))
 			require.NoError(t, vector.AppendBytes(vv, toCell(rows[i]), false, mp))

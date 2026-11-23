@@ -20,6 +20,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,8 +34,8 @@ import (
 // poisonedLease models a lender's backing that is reused once its last
 // reference goes: the release overwrites the bytes, so any read through a
 // stale alias observes garbage.
-func poisonedLease(t *testing.T, backing []byte) *vector.RefCountedBufferLease {
-	lease, err := vector.NewRefCountedBufferLease(backing, int64(cap(backing)), func() {
+func poisonedLease(t *testing.T, backing []byte) *bufferlease.RefCounted {
+	lease, err := bufferlease.NewRefCounted(backing, int64(cap(backing)), func() {
 		for i := range backing {
 			backing[i] = 0xFF
 		}
@@ -45,9 +47,9 @@ func poisonedLease(t *testing.T, backing []byte) *vector.RefCountedBufferLease {
 func TestSpoolCacheNeverDetachesBorrowedVectorBacking(t *testing.T) {
 	data := types.EncodeSlice([]int64{11})
 	lease := poisonedLease(t, data)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, data)
+	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 1, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	bat := batch.NewOffHeap([]string{"v"})
+	bat := batch.New([]string{"v"})
 	require.NoError(t, bat.HoldLease(lease))
 	lease.Release()
 	bat.Vecs[0] = vec
@@ -66,9 +68,9 @@ func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	data := types.EncodeSlice([]int64{11, 22})
 	lease := poisonedLease(t, data)
-	vec, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 2, data)
+	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 2, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	source := batch.NewOffHeap([]string{"v"})
+	source := batch.New([]string{"v"})
 	require.NoError(t, source.HoldLease(lease))
 	lease.Release()
 	source.Vecs[0] = vec
@@ -82,7 +84,7 @@ func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 		uintptr(unsafe.Pointer(unsafe.SliceData(source.Vecs[0].GetData()))),
 		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
 	)
-	require.False(t, copied.Vecs[0].HasBorrowedBacking())
+	require.False(t, copied.Vecs[0].IsReadOnly())
 	require.Zero(t, copied.HeldLeases())
 	source.Clean(mp)
 	require.Nil(t, lease.Bytes(), "the producer batch released its lease")
@@ -100,15 +102,17 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	area := append(append([]byte(nil), first...), second...)
 	lease := poisonedLease(t, area)
 
-	vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vec.PreExtend(2, mp))
 	vec.SetLength(2)
 	descriptors := vector.MustFixedColNoTypeCheck[types.Varlena](vec)
 	descriptors[0].SetOffsetLen(0, uint32(len(first)))
 	descriptors[1].SetOffsetLen(uint32(len(first)), uint32(len(second)))
-	require.NoError(t, vec.InstallBorrowedArea(area))
+	// A read-only vector over the owner's descriptors and the lent area.
+	owner := vec
+	vec = vector.NewVecWithData(types.T_varchar.ToType(), 2, owner.GetData(), area, nil)
 
-	source := batch.NewOffHeap([]string{"v"})
+	source := batch.New([]string{"v"})
 	require.NoError(t, source.HoldLease(lease))
 	lease.Release()
 	source.Vecs[0] = vec
@@ -125,7 +129,7 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	require.NotEqual(t, sourceAreaPointer,
 		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetArea()))),
 		"the borrowed area is copied at the spool boundary")
-	require.False(t, copied.Vecs[0].HasBorrowedBacking())
+	require.False(t, copied.Vecs[0].IsReadOnly())
 
 	source.Clean(mp)
 	require.Nil(t, lease.Bytes())
@@ -134,6 +138,7 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 
 	cache.CacheBatch(useCache, cacheID, copied)
 	cache.free()
+	owner.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -188,7 +193,7 @@ func TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained(t *testing.T) {
 		mpool.DeleteMPool(srcMP)
 	})
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), srcMP)
 	values := make([]int64, 1024)
 	for i := range values {
 		values[i] = int64(i + 1)
@@ -255,8 +260,8 @@ func TestCachedBatchChargesSpoolAllocationView(t *testing.T) {
 	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	newSource := func(value string) *batch.Batch {
-		source := batch.NewOffHeapWithSize(1)
-		vec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+		source := batch.NewWithSize(1)
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		source.SetVector(0, vec)
 		require.NoError(t, vector.AppendBytes(
 			vec,
@@ -319,8 +324,8 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 	require.NoError(t, err)
 	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	source := batch.NewOffHeapWithSize(1)
-	source.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
+	source := batch.NewWithSize(1)
+	source.SetVector(0, vector.NewVec(types.T_int64.ToType(), view))
 	require.NoError(t, vector.AppendFixedList(
 		source.Vecs[0],
 		[]int64{1, 2, 3, 4, 5, 6, 7, 8},
@@ -336,7 +341,7 @@ func TestCachedBatchAllocationFailureReturnsCacheOwnership(t *testing.T) {
 	require.Len(t, cache.buffer.readyToUse, 1)
 	require.Equal(t, uint64(64), account.Snapshot().Used)
 
-	source.Clean(mp)
+	source.Clean(view)
 	cache.free()
 	require.Zero(t, account.Snapshot().Used)
 	account.Seal()
@@ -348,12 +353,12 @@ func TestUnaccountedCacheNonLastSelectionRetainsOwnership(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cache := oneBatchMemoryCache{}
 	for _, size := range []int{64, 128, 256} {
-		owner := vector.NewOffHeapVecWithType(types.T_int8.ToType())
+		owner := vector.NewVec(types.T_int8.ToType(), mp)
 		require.NoError(t, owner.PreExtend(size, mp))
 		cache.buffers = append(cache.buffers, vector.DetachVectorData(owner))
 		owner.Free(mp)
 	}
-	vec := vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	vec := vector.NewVec(types.T_int8.ToType(), mp)
 	require.NoError(t, cache.setSuitableDataAreaToVector(
 		100,
 		0,
@@ -548,7 +553,7 @@ func TestPipelineSpoolCloseWithTimeoutCleansMemoryExactlyOnce(t *testing.T) {
 		mpool.DeleteMPool(srcMP)
 	})
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), srcMP)
 	values := []int64{1, 2, 3, 4}
 	require.NoError(t, vector.AppendFixedList[int64](src.Vecs[0], values, nil, srcMP))
 	src.SetRowCount(len(values))
@@ -927,7 +932,7 @@ func TestPipelineSpoolSendBatchCopyFailureRestoresCapacity(t *testing.T) {
 		{
 			name: "flat vector",
 			newVector: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
-				vec := vector.NewVec(types.T_varchar.ToType())
+				vec := vector.NewVec(types.T_varchar.ToType(), mp)
 				require.NoError(t, vector.AppendBytes(vec, make([]byte, 2<<20), false, mp))
 				return vec
 			},
@@ -998,7 +1003,7 @@ func TestPipelineSpoolSendBatchCopyFailureRestoresCapacity(t *testing.T) {
 func newSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
 	t.Helper()
 	src := batch.NewWithSize(1)
-	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0))
+	src.Vecs[0] = vector.NewVec(types.New(types.T_int64, 0, 0), mp)
 	values := make([]int64, rows)
 	for i := range values {
 		values[i] = int64(i + 1)

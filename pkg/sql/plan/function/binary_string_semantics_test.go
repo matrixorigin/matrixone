@@ -51,7 +51,7 @@ func makeBinaryStringTestInput(
 
 func makeBinaryStringInt64Input(t *testing.T, proc *process.Process, values []int64) *vector.Vector {
 	t.Helper()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(input, values, nil, proc.Mp()))
 	return input
 }
@@ -404,7 +404,7 @@ func TestBinaryStringAdditionalTransformsAndMask(t *testing.T) {
 		require.Equal(t, [][]byte{{'a'}, {'a'}}, runBinaryStringSubjectDomains(
 			t, proc, SubStrIndex[int64], types.T_varchar.ToType(), source, 0, delimiter, count))
 
-		field := vector.NewVec(types.T_uint32.ToType())
+		field := vector.NewVec(types.T_uint32.ToType(), mp)
 		defer field.Free(mp)
 		require.NoError(t, vector.AppendFixedList(field, []uint32{2, 2}, nil, mp))
 		require.Equal(t, [][]byte{{'b'}, {'b'}}, runBinaryStringSubjectDomains(

@@ -1103,7 +1103,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		return nil
 	}
 
-	keyMP, err := ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
+	keyMP, err := ctr.hashmapBuilder.uniqueKeyMP(proc)
 	if err != nil {
 		return err
 	}
@@ -1343,9 +1343,15 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		return nil, nil, 0, false, err
 	}
 	defer freeRuntimeFilterExecutors(executors)
+	// The chunk payload is created with the unique-key view of proc's pool
+	// (cached by the binding, so the chunk gets this same pool).
+	payloadMP, err := hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
 	payload, rows, usable, err := hashBuild.materializeSerializedRuntimeFilterChunk(proc, spec, componentTypes, rowCount, hashBuild.ctr.hashmapBuilder.uniqueKeys.first.vecs, executors)
 	if payload != nil {
-		defer payload.Free(proc.Mp())
+		defer payload.Free(payloadMP)
 	}
 	if err != nil || !usable || rows == 0 {
 		return nil, nil, rows, usable, err
@@ -1442,10 +1448,10 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 	if err != nil {
 		return nil, 0, false, err
 	}
-	payload := vector.NewOffHeapVecWithType(payloadType)
+	payload := vector.NewVec(payloadType, payloadMP)
 	defer func() {
 		if err != nil || !usable {
-			payload.Free(proc.Mp())
+			payload.Free(payloadMP)
 		}
 	}()
 	if err = payload.PreExtendWithArea(

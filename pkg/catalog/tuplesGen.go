@@ -254,17 +254,17 @@ func GenCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 
 	{
 		idx := MO_DATABASE_DAT_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // dat_id
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // dat_id
 		if err = vector.AppendFixed(bat.Vecs[idx], databaseId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_DATABASE_DAT_NAME_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // datname
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // datname
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_DATABASE_DAT_CATALOG_NAME_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // dat_catalog_name
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // dat_catalog_name
 		val := []byte(SystemCatalogName)
 		if name == MO_CATALOG { // historic debt
 			val = []byte(MO_CATALOG)
@@ -273,38 +273,38 @@ func GenCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 			return nil, err
 		}
 		idx = MO_DATABASE_CREATESQL_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx])                             // dat_createsql
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m)                          // dat_createsql
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(sql), false, m); err != nil { // TODO
 			return nil, err
 		}
 		idx = MO_DATABASE_OWNER_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // owner
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // owner
 		if err = vector.AppendFixed(bat.Vecs[idx], roleId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_DATABASE_CREATOR_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // creator
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // creator
 		if err = vector.AppendFixed(bat.Vecs[idx], userId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_DATABASE_CREATED_TIME_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // created_time
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // created_time
 		if err = vector.AppendFixed(bat.Vecs[idx], types.CurrentTimestamp(), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_DATABASE_ACCOUNT_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // account_id
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // account_id
 		if err = vector.AppendFixed(bat.Vecs[idx], accountId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_DATABASE_DAT_TYPE_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx])                             // dat_type
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m)                          // dat_type
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(typ), false, m); err != nil { // TODO
 			return nil, err
 		}
 
 		idx = MO_DATABASE_CPKEY_IDX
-		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx]) // cpkey
+		bat.Vecs[idx] = vector.NewVec(MoDatabaseTypes[idx], m) // cpkey
 		packer.EncodeUint32(accountId)
 		packer.EncodeStringType([]byte(name))
 		if err = vector.AppendBytes(bat.Vecs[idx], packer.Bytes(), false, m); err != nil {
@@ -331,14 +331,14 @@ func GenDropDatabaseTuple(
 	}()
 
 	//add the rowid vector as the first one in the batch
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), m)
 	if err = vector.AppendFixed(rowidVec, rowid, false, m); err != nil {
 		return nil, err
 	}
 	bat.Vecs[0] = rowidVec
 
 	// add the cpkey vector as the second one in the batch
-	cpkVec := vector.NewVec(types.T_varchar.ToType()) // cpkey of accid+dbname
+	cpkVec := vector.NewVec(types.T_varchar.ToType(), m) // cpkey of accid+dbname
 	packer.EncodeUint32(accid)
 	packer.EncodeStringType([]byte(name))
 	if err = vector.AppendBytes(cpkVec, packer.Bytes(), false, m); err != nil {
@@ -348,11 +348,11 @@ func GenDropDatabaseTuple(
 
 	// add supplementary info to generate ddl cmd for TN handler
 	{
-		bat.Vecs[2] = vector.NewVec(MoDatabaseTypes[MO_DATABASE_DAT_ID_IDX]) // dat_id
+		bat.Vecs[2] = vector.NewVec(MoDatabaseTypes[MO_DATABASE_DAT_ID_IDX], m) // dat_id
 		if err = vector.AppendFixed(bat.Vecs[2], datid, false, m); err != nil {
 			return nil, err
 		}
-		bat.Vecs[3] = vector.NewVec(MoDatabaseTypes[MO_DATABASE_DAT_NAME_IDX]) // datname
+		bat.Vecs[3] = vector.NewVec(MoDatabaseTypes[MO_DATABASE_DAT_NAME_IDX], m) // datname
 		if err = vector.AppendBytes(bat.Vecs[3], []byte(name), false, m); err != nil {
 			return nil, err
 		}
@@ -374,7 +374,7 @@ func GenTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, erro
 	}()
 
 	idx := MO_TABLES_ALTER_TABLE
-	bat.Vecs[idx] = vector.NewVec(MoTablesTypes[MO_TABLES_CONSTRAINT_IDX]) // constraint
+	bat.Vecs[idx] = vector.NewVec(MoTablesTypes[MO_TABLES_CONSTRAINT_IDX], m) // constraint
 	for i := 0; i < len(constraint); i++ {
 		if err = vector.AppendBytes(bat.Vecs[idx], constraint[i], false, m); err != nil {
 			return nil, err
@@ -400,47 +400,47 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 
 	{
 		idx := MO_TABLES_REL_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // rel_id
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // rel_id
 		if err = vector.AppendFixed(bat.Vecs[idx], tbl.TableId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_REL_NAME_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // relname
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // relname
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(tbl.TableName), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_RELDATABASE_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // reldatabase
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // reldatabase
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(tbl.DatabaseName), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_RELDATABASE_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // reldatabase_id
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // reldatabase_id
 		if err = vector.AppendFixed(bat.Vecs[idx], tbl.DatabaseId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_RELPERSISTENCE_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // relpersistence
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // relpersistence
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_RELKIND_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // relkind
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // relkind
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(tbl.Kind), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_REL_COMMENT_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // rel_comment
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // rel_comment
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(tbl.Comment), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_REL_CREATESQL_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // rel_createsql
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // rel_createsql
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(tbl.CreateSql), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_CREATED_TIME_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // created_time
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // created_time
 		createdTime := tbl.CreatedTime
 		if createdTime == 0 {
 			createdTime = types.CurrentTimestamp()
@@ -449,52 +449,52 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 			return nil, err
 		}
 		idx = MO_TABLES_CREATOR_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // creator
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // creator
 		if err = vector.AppendFixed(bat.Vecs[idx], tbl.UserId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_OWNER_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // owner
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // owner
 		if err = vector.AppendFixed(bat.Vecs[idx], tbl.RoleId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_ACCOUNT_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // account_id
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // account_id
 		if err = vector.AppendFixed(bat.Vecs[idx], tbl.AccountId, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_PARTITIONED_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // partitioned
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // partitioned
 		if err = vector.AppendFixed(bat.Vecs[idx], tbl.Partitioned, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_PARTITION_INFO_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // partition_info
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // partition_info
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(tbl.PartitionInfo), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_VIEWDEF_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // viewdef
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // viewdef
 		if err := vector.AppendBytes(bat.Vecs[idx], []byte(tbl.Viewdef), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_CONSTRAINT_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // constraint
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // constraint
 		if err = vector.AppendBytes(bat.Vecs[idx], tbl.Constraint, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_VERSION_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // schema_version
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // schema_version
 		if err = vector.AppendFixed(bat.Vecs[idx], uint32(tbl.Version), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_CATALOG_VERSION_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // catalog version
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // catalog version
 		if err = vector.AppendFixed(bat.Vecs[idx], CatalogVersion_Curr, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_CPKEY_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // cpkey
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // cpkey
 		packer.EncodeUint32(tbl.AccountId)
 		packer.EncodeStringType([]byte(tbl.DatabaseName))
 		packer.EncodeStringType([]byte(tbl.TableName))
@@ -502,12 +502,12 @@ func GenCreateTableTuple(tbl Table, m *mpool.MPool, packer *types.Packer) (*batc
 			return nil, err
 		}
 		idx = MO_TABLES_EXTRA_INFO_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // extra_info
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // extra_info
 		if err = vector.AppendBytes(bat.Vecs[idx], tbl.ExtraInfo, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_LOGICAL_ID_IDX
-		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx]) // rel_logical_id
+		bat.Vecs[idx] = vector.NewVec(MoTablesTypes[idx], m) // rel_logical_id
 		// Use LogicalId if set, otherwise use TableId (physical_id)
 		logicalId := tbl.LogicalId
 		if logicalId == 0 {
@@ -535,7 +535,7 @@ func GenCreateColumnTuples(cols []Column, m *mpool.MPool, packer *types.Packer) 
 		}
 	}()
 	for i := 0; i <= MO_COLUMNS_MAXIDX; i++ {
-		bat.Vecs[i] = vector.NewVec(MoColumnsTypes[i])
+		bat.Vecs[i] = vector.NewVec(MoColumnsTypes[i], m)
 		bat.Vecs[i].PreExtend(len(cols), m)
 	}
 	for _, col := range cols {
@@ -672,7 +672,7 @@ func GenDropColumnTuples(rowids []types.Rowid, pks [][]byte, m *mpool.MPool) (*b
 		}
 	}()
 
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), m)
 	for _, rowid := range rowids {
 		if err = vector.AppendFixed(rowidVec, rowid, false, m); err != nil {
 			return nil, err
@@ -680,7 +680,7 @@ func GenDropColumnTuples(rowids []types.Rowid, pks [][]byte, m *mpool.MPool) (*b
 	}
 	bat.Vecs[0] = rowidVec
 
-	pkVec := vector.NewVec(types.T_varchar.ToType())
+	pkVec := vector.NewVec(types.T_varchar.ToType(), m)
 	for _, s := range pks {
 		if err = vector.AppendBytes(pkVec, s, false, m); err != nil {
 			return nil, err
@@ -708,13 +708,13 @@ func GenDropTableTuple(rowid types.Rowid, accid uint32, id, databaseId uint64, n
 	}()
 
 	//add the rowid vector as the first one in the batch
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), m)
 	if err = vector.AppendFixed(rowidVec, rowid, false, m); err != nil {
 		return nil, err
 	}
 	bat.Vecs[0] = rowidVec
 
-	cpkVec := vector.NewVec(types.T_varchar.ToType()) // cpkey of acc_id + db_name + tbl_name
+	cpkVec := vector.NewVec(types.T_varchar.ToType(), m) // cpkey of acc_id + db_name + tbl_name
 	packer.EncodeUint32(accid)
 	packer.EncodeStringType([]byte(databaseName))
 	packer.EncodeStringType([]byte(name))
@@ -726,22 +726,22 @@ func GenDropTableTuple(rowid types.Rowid, accid uint32, id, databaseId uint64, n
 	{
 		off := 2
 		idx := MO_TABLES_REL_ID_IDX
-		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx]) // rel_id
+		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx], m) // rel_id
 		if err = vector.AppendFixed(bat.Vecs[idx+off], id, false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_REL_NAME_IDX
-		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx]) // relname
+		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx], m) // relname
 		if err = vector.AppendBytes(bat.Vecs[idx+off], []byte(name), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_RELDATABASE_IDX
-		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx]) // reldatabase
+		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx], m) // reldatabase
 		if err = vector.AppendBytes(bat.Vecs[idx+off], []byte(databaseName), false, m); err != nil {
 			return nil, err
 		}
 		idx = MO_TABLES_RELDATABASE_ID_IDX
-		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx]) // reldatabase_id
+		bat.Vecs[idx+off] = vector.NewVec(MoTablesTypes[idx], m) // reldatabase_id
 		if err = vector.AppendFixed(bat.Vecs[idx+off], databaseId, false, m); err != nil {
 			return nil, err
 		}
@@ -768,13 +768,13 @@ func GenLogicalIdIndexInsertBatch(
 	}()
 
 	// logical_id column (__mo_index_idx_col)
-	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType(), mp)
 	if err = vector.AppendFixed(bat.Vecs[0], logicalId, false, mp); err != nil {
 		return nil, err
 	}
 
 	// composite_pk column (__mo_index_pri_col)
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	if err = vector.AppendBytes(bat.Vecs[1], compositePk, false, mp); err != nil {
 		return nil, err
 	}
@@ -802,14 +802,14 @@ func GenLogicalIdIndexDeleteBatch(
 	}()
 
 	// rowid vector
-	rowidVec := vector.NewVec(types.T_Rowid.ToType())
+	rowidVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	if err = vector.AppendFixed(rowidVec, rowid, false, mp); err != nil {
 		return nil, err
 	}
 	bat.Vecs[0] = rowidVec
 
 	// logical_id (primary key of index table)
-	logicalIdVec := vector.NewVec(types.T_uint64.ToType())
+	logicalIdVec := vector.NewVec(types.T_uint64.ToType(), mp)
 	if err = vector.AppendFixed(logicalIdVec, logicalId, false, mp); err != nil {
 		return nil, err
 	}

@@ -224,7 +224,7 @@ func (set *JSONReadSet) ApplyDeletes(deleted []int64, mp *mpool.MPool) (err erro
 	if err != nil {
 		return err
 	}
-	kept := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	kept := vector.NewVec(types.T_int64.ToType(), allocMP)
 	defer kept.Free(allocMP)
 	nextDelete := 0
 	for row := 0; row < count; row++ {

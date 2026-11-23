@@ -12,10 +12,11 @@ package vector
 
 import (
 	"bytes"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCollationMetadataVectorReaderRoundTrip(t *testing.T) {
@@ -23,11 +24,11 @@ func TestCollationMetadataVectorReaderRoundTrip(t *testing.T) {
 	for _, domain := range []struct{ id, revision uint8 }{{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 1}, {7, 1}, {12, 1}} {
 		typ := types.NewWithCharset(types.T_varchar, 32, 0, domain.id)
 		typ.CollationVersion = domain.revision
-		src := NewVec(typ)
+		src := NewVec(typ, mp)
 		require.NoError(t, AppendBytes(src, []byte("😀"), false, mp))
 		proto, err := VectorToProtoVector(src)
 		require.NoError(t, err)
-		fromProto, err := ProtoVectorToVector(proto)
+		fromProto, err := ProtoVectorToVector(proto, mp)
 		require.NoError(t, err)
 		require.Equal(t, typ, *fromProto.GetType())
 		require.Equal(t, "😀", fromProto.GetStringAt(0))
@@ -35,7 +36,7 @@ func TestCollationMetadataVectorReaderRoundTrip(t *testing.T) {
 		wire, err := src.MarshalBinary()
 		require.NoError(t, err)
 		for _, copyData := range []bool{false, true} {
-			restored := NewVec(types.T_any.ToType())
+			restored := NewVec(types.T_any.ToType(), mp)
 			if copyData {
 				err = restored.UnmarshalBinaryWithCopy(wire, mp)
 			} else {
@@ -48,12 +49,12 @@ func TestCollationMetadataVectorReaderRoundTrip(t *testing.T) {
 		}
 		var legacy bytes.Buffer
 		require.NoError(t, src.MarshalBinaryWithBufferV1(&legacy))
-		restored := NewVec(types.T_any.ToType())
+		restored := NewVec(types.T_any.ToType(), mp)
 		require.NoError(t, restored.UnmarshalBinaryV1(legacy.Bytes()))
 		require.Equal(t, typ, *restored.GetType())
 		restored.Free(mp)
 		proto.Type.CollationVersion = 257
-		bad, err := ProtoVectorToVector(proto)
+		bad, err := ProtoVectorToVector(proto, mp)
 		require.Error(t, err)
 		require.Nil(t, bad)
 		// Byte 3 within the native Type is its revision, after the vector class.
@@ -64,7 +65,7 @@ func TestCollationMetadataVectorReaderRoundTrip(t *testing.T) {
 			func(v *Vector) error { return v.UnmarshalBinaryWithCopy(wire, mp) },
 			func(v *Vector) error { legacy.Bytes()[1+3] = 2; return v.UnmarshalBinaryV1(legacy.Bytes()) },
 		} {
-			v := NewVec(types.T_any.ToType())
+			v := NewVec(types.T_any.ToType(), mp)
 			require.Error(t, decode(v))
 			v.Free(mp)
 		}

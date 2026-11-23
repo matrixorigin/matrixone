@@ -41,7 +41,7 @@ func TestSelectIntoUserVariablesCapturesAndAssignsOneRow(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(5), false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
@@ -64,7 +64,7 @@ func TestSelectIntoUserVariablesRejectsArityMismatchOnZeroRows(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out1"}, {Name: "out2"}})
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.SetRowCount(0)
 	defer bat.Clean(mp)
 
@@ -97,9 +97,9 @@ func TestSelectIntoUserVariablesPreservesBinaryFlagPerColumn(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "bin_out"}, {Name: "text_out"}})
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("AB\x00\x00"), false, mp))
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("text"), false, mp))
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
@@ -169,7 +169,7 @@ func TestSelectIntoUserVariablesStopsOnSecondRowDuringCapture(t *testing.T) {
 	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(2), false, mp))
 	bat.SetRowCount(2)
@@ -264,7 +264,7 @@ func TestRetryDiscardOutputResetsSelectIntoCapture(t *testing.T) {
 
 	rowBatch := func(t *testing.T, value int64) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		bat.SetRowCount(1)
 		return bat

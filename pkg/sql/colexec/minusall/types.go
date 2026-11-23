@@ -94,7 +94,7 @@ func (minusAll *MinusAll) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.cleanRemaining(proc.Mp())
 	ctr.keyEvaluator.Free()
 	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
+		minusAll.CleanBatch(proc, ctr.bat)
 		ctr.bat = nil
 	}
 	minusAll.FreeMetadata()

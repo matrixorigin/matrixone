@@ -122,7 +122,7 @@ func TestPersistedFormatRoundingAndProjection(t *testing.T) {
 	var loaded planpb.Expr
 	require.NoError(t, proto.Unmarshal(data, &loaded))
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 1))
+	input.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 1), proc.Mp())
 	defer input.Clean(proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(25), false, proc.Mp()))
 	input.SetRowCount(1)

@@ -835,7 +835,7 @@ func (e *bmpExecCommon) flush(typ types.Type) (_ []*vector.Vector, retErr error)
 	}()
 	for i, st := range e.state {
 		var err error
-		vecs[i], err = e.allocation.newVector(typ)
+		vecs[i], err = e.allocation.newVector(typ, e.mp)
 		if err != nil {
 			return nil, err
 		}

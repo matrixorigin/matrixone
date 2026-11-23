@@ -89,11 +89,11 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		srcRowids[i] = types.RandomRowid()
 		srcPKs[i] = int64(i + 1)
 	}
-	rv := vector.NewVec(types.T_Rowid.ToType())
+	rv := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(rv, srcRowids, nil, mp))
-	av := vector.NewVec(types.T_int64.ToType())
+	av := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(av, srcPKs, nil, mp))
-	vv := vector.NewVec(types.T_int64.ToType())
+	vv := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vv, srcPKs, nil, mp))
 	srcRows.Vecs[0] = rv
 	srcRows.Vecs[1] = av
@@ -122,14 +122,14 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		delRowids[i] = types.RandomRowid()
 		delPKs[i] = int64(i + 1)
 	}
-	drv := vector.NewVec(types.T_Rowid.ToType())
+	drv := vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(drv, delRowids, nil, mp))
-	dpv := vector.NewVec(types.T_int64.ToType())
+	dpv := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(dpv, delPKs, nil, mp))
 	delBat.Vecs[0] = drv
 	delBat.Vecs[1] = dpv
 	delBat.SetRowCount(16)
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:          DELETE,
 		accountId:    1,
 		databaseId:   tbl.db.databaseId,
@@ -183,7 +183,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		reader := variant.build()
 
 		// The data phase drives the data-materializing family.
-		dataOut := colexec.AllocCNS3ResultBat(false)
+		dataOut := colexec.AllocCNS3ResultBat(false, mp)
 		driveErr := r33RecoverGuarded(func() error {
 			_, derr := reader.collectDataOfAObjsAndInMem(
 				ctx, mp, dataOut, seqnums, attrs, colTypes, objRelData)
@@ -203,7 +203,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 		dataOut.Clean(mp)
 
 		// The tombstone phase drives the tombstone-materializing family.
-		tombOut := colexec.AllocCNS3ResultBat(true)
+		tombOut := colexec.AllocCNS3ResultBat(true, mp)
 		tombErr := r33RecoverGuarded(func() error {
 			_, terr := reader.collectTombstoneOfAObjsAndInMem(
 				ctx, mp, tombOut,
@@ -242,7 +242,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 	// assertions: the drive reserves the fresh name BEFORE durability
 	// and the record choke converts it.
 	boundReader := actualReader(txn.SinkerCapacityOption())
-	boundOut := colexec.AllocCNS3ResultBat(false)
+	boundOut := colexec.AllocCNS3ResultBat(false, mp)
 	_, err = boundReader.collectDataOfAObjsAndInMem(
 		ctx, mp, boundOut, seqnums, attrs, colTypes, objRelData)
 	require.NoError(t, err,
@@ -264,7 +264,7 @@ func TestIssue25590UnboundMaterializingReadersSkipNilOption(t *testing.T) {
 
 	// The record choke converts the bound reservation, settling the
 	// ledger exactly the production destination Write does.
-	recBat := colexec.AllocCNS3ResultBat(false)
+	recBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer recBat.Clean(mp)
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, matStats))

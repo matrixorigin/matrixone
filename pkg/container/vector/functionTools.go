@@ -676,7 +676,7 @@ func (fr *FunctionResult[T]) PreExtendAndResetNonNull(targetSize int) error {
 
 func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) error {
 	if fr.vec == nil {
-		fr.vec = NewOffHeapVecWithType(fr.typ)
+		fr.vec = NewVec(fr.typ, fr.mp)
 	}
 
 	oldLength := fr.vec.Length()

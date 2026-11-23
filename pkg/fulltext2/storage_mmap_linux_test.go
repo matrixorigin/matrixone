@@ -44,7 +44,7 @@ func linuxProcMaps(t *testing.T) []string {
 
 func linuxSingleInt64Batch(mp *mpool.MPool, value int64) *batch.Batch {
 	b := batch.NewWithSize(1)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	_ = vector.AppendFixed[int64](b.Vecs[0], value, false, mp)
 	b.SetRowCount(1)
 	return b
@@ -52,7 +52,7 @@ func linuxSingleInt64Batch(mp *mpool.MPool, value int64) *batch.Batch {
 
 func linuxSingleIDBatch(mp *mpool.MPool, id string) *batch.Batch {
 	b := batch.NewWithSize(1)
-	b.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	_ = vector.AppendBytes(b.Vecs[0], []byte(id), false, mp)
 	b.SetRowCount(1)
 	return b

@@ -29,7 +29,7 @@ const testRate = 0.00001
 const vecCount = 10
 
 func newVector(rowCount int, typ types.Type, mp *mpool.MPool) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for i := 0; i < rowCount; i++ {
 		if typ.Oid == types.T_int64 {
 			vector.AppendFixed(vec, int64(i), false, mp)

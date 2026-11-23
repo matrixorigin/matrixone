@@ -500,7 +500,7 @@ func TestConvertScalarLegacyDecimalDiagnostics(t *testing.T) {
 						require.Nil(t, result.Warning)
 					}
 					mp := mpool.MustNewZero()
-					vec := vector.NewVec(target)
+					vec := vector.NewVec(target, mp)
 					defer vec.Free(mp)
 					require.NoError(t, AppendResult(vec, result, mp))
 					require.Equal(t, 1, vec.Length())
@@ -556,7 +556,7 @@ func TestConvertScalarDecimalResultAppendsWithWarningAndRejectsRange(t *testing.
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			vec := vector.NewVec(test.target)
+			vec := vector.NewVec(test.target, mp)
 			defer vec.Free(mp)
 
 			result := ConvertScalar(parseConversionValue(t, `"1.2349999999999999999"`), test.target)
@@ -739,7 +739,7 @@ func TestConvertPathMatchesDistinguishesMissingNullAndMultipleValues(t *testing.
 	result := ConvertPathMatches(missing, types.T_int64.ToType())
 	require.Equal(t, StatusMissing, result.Status)
 	mp := mpool.MustNewZero()
-	missingVector := vector.NewVec(types.T_int64.ToType())
+	missingVector := vector.NewVec(types.T_int64.ToType(), mp)
 	defer missingVector.Free(mp)
 	require.ErrorIs(t, AppendResult(missingVector, result, mp), ErrMissingJSONTableValue)
 
@@ -903,7 +903,7 @@ func TestConvertPathMatchesUsesSharedOpaqueAdmissionForSingleAndMulti(t *testing
 
 func TestConvertUint32AppendResultRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vectorValue := vector.NewVec(types.T_uint32.ToType())
+	vectorValue := vector.NewVec(types.T_uint32.ToType(), mp)
 	defer vectorValue.Free(mp)
 
 	for _, test := range []struct {
@@ -934,7 +934,7 @@ func TestConvertUint32AppendResultRoundTrip(t *testing.T) {
 
 func TestAppendResultRejectsErrorsWithoutMutatingVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vectorValue := vector.NewVec(types.T_int32.ToType())
+	vectorValue := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vectorValue.Free(mp)
 	require.NoError(t, vector.AppendAny(vectorValue, int32(7), false, mp))
 
@@ -1092,7 +1092,7 @@ func TestJSONValueConversionAndAppendBoundaryStates(t *testing.T) {
 	require.Error(t, result.Err)
 
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer vec.Free(mp)
 	require.Error(t, AppendResult(nil, Result{Status: StatusJSONNull}, mp))
 	require.Error(t, AppendResult(vec, Result{Status: StatusJSONNull}, nil))
@@ -1106,7 +1106,7 @@ func TestJSONValueConversionAndAppendBoundaryStates(t *testing.T) {
 	defer constVec.Free(mp)
 	require.Error(t, AppendResult(constVec, Result{Status: StatusSuccess, Value: int32(2)}, mp))
 
-	bytesVec := vector.NewVec(types.T_varchar.ToType())
+	bytesVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer bytesVec.Free(mp)
 	require.NoError(t, AppendResult(bytesVec, Result{Status: StatusTruncated, Value: []byte("x")}, mp))
 	require.Equal(t, 1, bytesVec.Length())

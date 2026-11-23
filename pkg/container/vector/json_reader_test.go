@@ -38,7 +38,7 @@ func TestJSONReaderSnapshotIsolation(t *testing.T) {
 	for _, document := range []string{`[1]`, `{"keep":1,"large":[0,0]}`} {
 		t.Run(document, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			source := NewVec(types.T_json.ToType())
+			source := NewVec(types.T_json.ToType(), mp)
 			t.Cleanup(func() { source.Free(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
 			require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, document), false, mp))
 			path := jsonReaderPath(t, "$.keep")
@@ -81,7 +81,7 @@ func TestJSONReaderSnapshotIsolation(t *testing.T) {
 
 func TestJSONReaderRejectsUnselectedCorruptionAndDescriptors(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer func() { source.Free(mp); require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1,"large":[0,0]}`), false, mp))
 	root := types.DecodeJson(source.GetBytesAt(0))
@@ -150,7 +150,7 @@ func TestJSONReaderBuilderViewsAndOwnedOutput(t *testing.T) {
 	result, err := view.Query(0, path)
 	require.NoError(t, err)
 	defer result.Close()
-	destination := NewVec(types.T_json.ToType())
+	destination := NewVec(types.T_json.ToType(), mp)
 	defer destination.Free(mp)
 	require.NoError(t, result.AppendJSON(destination, mp))
 	destination.GetBytesAt(0)[1] = 0xff
@@ -228,7 +228,7 @@ func TestJSONReaderIndependentConcurrentReaders(t *testing.T) {
 func TestJSONReaderSelectionAndConst(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	for _, text := range []string{`1`, `2`, `3`} {
 		require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, text), false, mp))
@@ -283,9 +283,10 @@ func TestJSONReaderSnapshotAllocationFailure(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1<<20, 128)
 			defer finalizeTestVectorAllocationAccount(t, state)
 			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-			source := NewOffHeapVecWithType(types.T_json.ToType())
-			defer source.Free(mp)
-			require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1,"large":[0,0]}`), false, state.view(t, mp)))
+			sourceMP := state.view(t, mp)
+			source := NewVec(types.T_json.ToType(), sourceMP)
+			defer source.Free(sourceMP)
+			require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1,"large":[0,0]}`), false, sourceMP))
 			controller := &rejectNextVectorAllocation{failAt: failAt}
 			class, err := state.account.RegisterCapacityController(controller)
 			require.NoError(t, err)
@@ -305,7 +306,7 @@ func TestJSONReaderSnapshotAllocationFailure(t *testing.T) {
 func TestJSONReaderSnapshotReportsInvalidWithoutPublishing(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1}`), false, mp))
 	source.GetBytesAt(0)[0] = 0xfd
@@ -442,7 +443,7 @@ func TestJSONReaderConstantBatchDomain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "1", text.Text)
 	text.Close()
-	flat := NewVec(types.T_json.ToType())
+	flat := NewVec(types.T_json.ToType(), mp)
 	defer flat.Free(mp)
 	require.NoError(t, AppendBytes(flat, raw, false, mp))
 	_, err = NewJSONReaderSnapshotForRows(flat, 64, mp)
@@ -452,7 +453,7 @@ func TestJSONReaderConstantBatchDomain(t *testing.T) {
 func TestJSONReaderSnapshotRejectsTypeBeforeCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1}`), false, mp))
 	original := source.typ

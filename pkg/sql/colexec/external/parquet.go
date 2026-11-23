@@ -2975,7 +2975,7 @@ func processStringToFixed[T any](
 func processStringToTimeAssignment(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 	// This is transport staging, not a VARCHAR target. A declared VARCHAR
 	// capacity must not reject a long TIME spelling before assignment sees it.
-	text := vector.NewVec(types.New(types.T_varchar, -1, 0))
+	text := vector.NewVec(types.New(types.T_varchar, -1, 0), proc.Mp())
 	defer text.Free(proc.Mp())
 	if err := processParquetValuesToBytes(proc.Ctx, mp.stagingMapper(), page, proc, text, func(v parquet.Value) ([]byte, error) {
 		return bytes.TrimSpace(v.ByteArray()), nil

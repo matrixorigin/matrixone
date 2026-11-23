@@ -40,12 +40,12 @@ func TestFixedMinMaxScalarFill(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", tc.name, id), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-				input := vector.NewVec(tc.typ)
+				input := vector.NewVec(tc.typ, mp)
 				t.Cleanup(func() { input.Free(mp) })
 				for _, value := range []any{tc.mid, tc.low, tc.high, nil} {
 					require.NoError(t, vector.AppendAny(input, value, value == nil, mp))
 				}
-				constant := vector.NewVec(tc.typ)
+				constant := vector.NewVec(tc.typ, mp)
 				t.Cleanup(func() { constant.Free(mp) })
 				require.NoError(t, vector.AppendAny(constant, tc.mid, false, mp))
 				constant.ToConst()
@@ -79,7 +79,7 @@ func TestFixedMinMaxScalarFill(t *testing.T) {
 				results, err := scalar.Flush()
 				require.NoError(t, err)
 				for _, result := range results {
-					t.Cleanup(func() { result.Free(mp) })
+					t.Cleanup(func() { result.Free(result.MPool()) })
 				}
 				require.Len(t, results, 2)
 				want := tc.low
@@ -151,7 +151,7 @@ func TestFixedMinMaxScalarMerge(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", tc.name, id), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-				input := vector.NewVec(tc.typ)
+				input := vector.NewVec(tc.typ, mp)
 				t.Cleanup(func() { input.Free(mp) })
 				for _, value := range tc.values {
 					require.NoError(t, vector.AppendAny(input, value, value == nil, mp))
@@ -226,7 +226,7 @@ func BenchmarkFixedMinMaxScalarFill(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/scalar=%t", tc.name, scalar), func(b *testing.B) {
 				mp := mpool.MustNewZero()
 				b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
-				input := vector.NewVec(tc.typ)
+				input := vector.NewVec(tc.typ, mp)
 				b.Cleanup(func() { input.Free(mp) })
 				require.NoError(b, vector.AppendAny(input, tc.value, false, mp))
 				exec := makeMinMaxExec(mp, AggIdOfMin, true, tc.typ)

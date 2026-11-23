@@ -59,13 +59,15 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 			join.arg.resultAllocation, err = mpool.NewAccountBinding(account, mpool.AllocationOwnerHashBuild,
 				hashJoinAllocationSiteResultData)
 			require.NoError(t, err)
-			probe := batch.NewWithSchema(false, nil, join.arg.LeftTypes)
-			build := batch.NewWithSchema(false, nil, join.arg.RightTypes)
+			probe := batch.NewWithSchema(nil, join.arg.LeftTypes, join.proc.Mp())
+			build := batch.NewWithSchema(nil, join.arg.RightTypes, join.proc.Mp())
 			t.Cleanup(func() {
 				join.arg.Reset(join.proc, false, nil)
 				join.barg.Reset(join.proc, false, nil)
 				join.arg.Free(join.proc, false, nil)
+				freeTestChildren(join.arg)
 				join.barg.Free(join.proc, false, nil)
+				freeTestChildren(join.barg)
 				probe.Clean(join.proc.Mp())
 				build.Clean(join.proc.Mp())
 				join.proc.GetMessageBoard().Reset()
@@ -120,7 +122,9 @@ func BenchmarkHashJoinSmallDuplicatePayload(b *testing.B) {
 				tc.arg.Reset(tc.proc, false, nil)
 				tc.barg.Reset(tc.proc, false, nil)
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				probe.Clean(tc.proc.Mp())
 				build.Clean(tc.proc.Mp())
 				tc.proc.GetMessageBoard().Reset()
@@ -129,10 +133,10 @@ func BenchmarkHashJoinSmallDuplicatePayload(b *testing.B) {
 				require.Zero(b, tc.proc.Mp().CurrNB())
 			})
 			for col := range probe.Vecs {
-				probe.Vecs[col] = vector.NewVec(typ)
+				probe.Vecs[col] = vector.NewVec(typ, tc.proc.Mp())
 			}
 			for col := range build.Vecs {
-				build.Vecs[col] = vector.NewVec(typ)
+				build.Vecs[col] = vector.NewVec(typ, tc.proc.Mp())
 			}
 			const groups = 512
 			for row := range groups * duplicates {
@@ -159,7 +163,7 @@ func BenchmarkHashJoinSmallDuplicatePayload(b *testing.B) {
 			require.NoError(b, tc.arg.build(tc.arg.OpAnalyzer, tc.proc))
 			require.False(b, tc.arg.ctr.probeHashOnPK)
 			run := func() {
-				require.NoError(b, tc.arg.resetResultBat())
+				require.NoError(b, tc.arg.resetResultBat(tc.proc))
 				ctr := &tc.arg.ctr
 				ctr.leftBat = probe
 				ctr.lastIdx = 0

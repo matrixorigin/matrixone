@@ -59,7 +59,7 @@ func TestGetMapper_Date32ToDatetime(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_datetime), NotNullable: true})
 		require.NotNil(t, mp, "DATE32 → DATETIME should be supported")
@@ -98,7 +98,7 @@ func TestGetMapper_Date32ToDatetime(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_datetime), NotNullable: true})
 		require.NotNil(t, mp, "DATE32 → DATETIME with dictionary should be supported")
@@ -136,7 +136,7 @@ func TestGetMapper_Date32ToDatetime(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_datetime)})
 		require.NotNil(t, mp, "Optional DATE32 → DATETIME should be supported")
@@ -176,7 +176,7 @@ func TestGetMapper_Date32ToDatetime(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_datetime), NotNullable: true})
 		require.NotNil(t, mp)
@@ -210,7 +210,7 @@ func TestGetMapper_Date32ToDatetime(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_datetime, 0, 0))
+		vec := vector.NewVec(types.New(types.T_datetime, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_datetime), NotNullable: true})
 		require.NotNil(t, mp)

@@ -415,7 +415,7 @@ func (st *specialTableInfo) processObjects(
 				MetaLoc: objectio.ObjectLocation(loc),
 			}
 
-			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
+			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs, mp)
 			if err != nil {
 				return err
 			}
@@ -1204,7 +1204,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 				buildBatch := func() *batch.Batch {
 					result := batch.NewWithSize(len(colTypes))
 					for i, typ := range colTypes {
-						result.Vecs[i] = vector.NewVec(typ)
+						result.Vecs[i] = vector.NewVec(typ, mp)
 					}
 					return result
 				}
@@ -1212,7 +1212,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 				bat := buildBatch()
 				defer bat.Clean(mp)
 				if bat, _, err = blockio.BlockDataReadBackup(
-					ctx, &blk, ds, idxes, types.TS{}, fs,
+					ctx, &blk, ds, idxes, types.TS{}, fs, mp,
 				); err != nil {
 					return nil, err
 				}

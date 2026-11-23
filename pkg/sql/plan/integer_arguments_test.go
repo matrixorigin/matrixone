@@ -284,7 +284,7 @@ func TestIntegerArgumentMixedPreparedSources(t *testing.T) {
 			bound, changed, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(proc.Ctx, original, []any{ParamValue{Value: tc.value, IsBinaryProtocol: true, RuntimeType: tc.typ.ToType(), HasRuntimeType: tc.typ != types.T_any}})
 			require.NoError(t, err)
 			require.True(t, changed)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(tc.value)), tc.value == nil, proc.Mp()))
 			proc.SetPrepareParams(params)
