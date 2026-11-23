@@ -66,26 +66,29 @@ cell was pruned.
 
 Every probe:
 
-1. **Drives a public entry point** (read, prefetch, delete, close), in the mode its
-   oracle needs (§7): `-race` for a data-race or ownership oracle; normal mode for a
-   timing, allocation or other instrumentation-sensitive oracle, such as a deadline.
-2. **Gates storage per offset** so the test, not the scheduler, decides completion
-   order: one channel per unit. Reuse the package's existing storage fakes and helpers.
-3. **Asserts invariants after every transition**, not only the final result:
-   - charged bytes equal the units still reading;
-   - holders per unit;
-   - backend opens: current, peak and total, with each byte read once;
-   - goroutines started against the bound;
-   - updates of the caller's cache tiers;
-   - queue bytes back to 0 after the scans end.
-4. **Adds a bystander:** an unrelated read while the probe holds its stall, with the
-   budget sized so the bystander fits once the ended units are released. Its expected
-   wait follows the admission contract: it must not wait when only ended units hold
-   the budget, and may wait while live units hold it all. The same read without the
+1. **Drives a public entry point** (for example read, prefetch, delete, close,
+   submit, shutdown), in the mode its oracle needs (§7): `-race` for a data-race or
+   ownership oracle; normal mode for a timing, allocation or other
+   instrumentation-sensitive oracle, such as a deadline.
+2. **Synchronizes at the affected transition** so the test, not the scheduler, decides
+   the order: one gate per unit, at the seam the change uses, such as a storage fake
+   gated per offset, a completion callback, a worker hook or an allocator callback.
+   Reuse the package's existing fakes and helpers.
+3. **Asserts the affected invariants after every transition**, not only the final
+   result. For example: charged bytes equal the units still running; holders per unit;
+   backend opens (current, peak and total) with each byte read once; goroutines and
+   workers against their bound; updates of the caller's cache tiers; queues back to 0
+   once the work ends.
+4. **Adds a bystander when the change shares a budget, pool or worker with other
+   requests:** an unrelated request while the probe holds its stall, with the capacity
+   sized so the bystander fits once the ended units are released. Its expected wait
+   follows the admission contract: it must not wait when only ended units hold the
+   capacity, and may wait while live units hold it all. The same request without the
    stall is its control. This is what catches pinning: "a completed unit stays charged
    and starves someone else".
 5. **Pairs every failing probe with a control** in the same run that must succeed,
-   such as a direct read that skips the cache, an exact read, or a live variant. If the control also fails, the fixture is broken, not the code.
+   such as a direct read that skips the cache, an exact read, or a live variant. If
+   the control also fails, the fixture is broken, not the code.
 6. **Runs on the revisions its claim needs (§7).**
    - A **finding** is a probe that fails on the reviewed change, as first reviewed
      before any fix for it, while its control passes. When the claim is that the PR introduced the defect and the base supports
@@ -134,9 +137,20 @@ were class **A**.
 ## 7. Validation and report
 
 - **Reviewed change.** For an external review, the frozen PR head. For self-review,
-  the full in-scope change: commits, staged, unstaged and untracked files. Run it where it
-  lives, or reproduce it in a disposable worktree and check with `git diff` that the
-  copy matches.
+  the full in-scope change: commits, staged, unstaged and untracked files. Run it in
+  the working tree that holds it. To run it elsewhere, snapshot it without touching
+  the branch, the index or the working tree, list every in-scope path (`git status
+  --porcelain` shows the ones not committed), and check out the snapshot as a
+  revision:
+
+  ```sh
+  T=<scratch>/index; cp "$(git rev-parse --git-path index)" "$T"
+  GIT_INDEX_FILE=$T git add -- <in-scope paths>
+  c=$(git commit-tree "$(GIT_INDEX_FILE=$T git write-tree)" -p HEAD -m snapshot)
+  ```
+
+  Then compare each in-scope path's contents with the original (`cmp`); `git diff`
+  does not show untracked files.
 - **Other revisions.** Pick each one the claim needs (§3.6): the PR's merge-base for a
   defect the PR introduces; the revision before a fix to prove the fix. Never assume
   `HEAD~`. Check that the revision lacks or holds the change under test (`git diff
