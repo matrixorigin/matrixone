@@ -3522,7 +3522,7 @@ func buildPreparedSetExecutePacket(proto *MysqlProtocolImpl, nullBitmap byte, fi
 	return data
 }
 
-func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
+func TestPrepareStmtClearBinaryParamStateKeepsParamArea(t *testing.T) {
 	ctx := context.TODO()
 	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
 
@@ -3533,13 +3533,19 @@ func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
 	firstAreaLen := len(prepareStmt.params.GetArea())
 	require.Greater(t, firstAreaLen, 0)
 
+	params := prepareStmt.params
 	prepareStmt.clearBinaryParamState(proc)
-	require.Nil(t, prepareStmt.params)
+	require.Same(t, params, prepareStmt.params, "the storage stays with the statement")
+	require.Zero(t, prepareStmt.params.Length())
+	require.Empty(t, prepareStmt.params.GetArea(), "but not the execution's values")
 	require.Empty(t, prepareStmt.getFromSendLongData)
 
+	allocs := proc.Mp().Stats().NumAlloc.Load()
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, secondPayload), 0))
 	require.Equal(t, secondPayload, prepareStmt.params.GetStringAt(0))
-	require.Equal(t, firstAreaLen, len(prepareStmt.params.GetArea()))
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load(), "the next execution reuses it")
+	prepareStmt.Close()
+	require.Nil(t, prepareStmt.params)
 }
 
 func TestParseExecuteDataRejectsTruncatedNewParamBoundFlag(t *testing.T) {

@@ -1869,7 +1869,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// Statements that are not re-bound per execution (DDL, SET, SHOW, ...)
 		// still read their parameters with source types. A parameter whose
 		// source type cannot be determined keeps the TEXT transport.
-		if bindings, bindErr := preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
+		if bindings, bindErr := preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
 			if err = installTypedPrepareParams(cwft.proc, bindings, &prepareStmt.typedParams); err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
@@ -1880,7 +1880,7 @@ func initExecuteStmtParamWithResolverInSession(
 	var runtimeColDefData [][]byte
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
-		cwft.paramBindings, err = preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
+		cwft.paramBindings, err = preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -2117,9 +2117,10 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 }
 
 // preparedExecutionRetry is an immutable snapshot of the execution-time
-// binding needed when Compile rebuilds a plan after a definition change. The
-// slice must not alias TxnComputationWrapper.paramVals because that field is
-// replaced on the next execution of the cached prepared statement.
+// binding needed when Compile rebuilds a plan after a definition change. Its
+// values and bindings are copies: they do not alias the statement storage
+// the execution reads (TxnComputationWrapper.paramVals and paramBindings),
+// which the next execution of the prepared statement rewrites.
 type preparedExecutionRetry struct {
 	temporalTypes      *plan2.PreparedTemporalTypes
 	fieldTypes         *plan2.PreparedFieldTypes

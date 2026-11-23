@@ -34,10 +34,22 @@ import (
 // category must never change another occurrence's SQL source type.
 func preparedExecutionBindings(ctx context.Context, values []any, protocolTypes []byte,
 	bitCountTypes []types.Type) ([]plan2.PreparedSourceBinding, error) {
-	bindings := make([]plan2.PreparedSourceBinding, len(values))
+	var bindings []plan2.PreparedSourceBinding
+	return preparedExecutionBindingsInto(ctx, &bindings, values, protocolTypes, bitCountTypes)
+}
+
+// preparedExecutionBindingsInto computes the bindings of an execution into
+// *dst, the prepared statement's storage, reusing it once it is large enough.
+// The result is valid until the statement's next execution.
+func preparedExecutionBindingsInto(ctx context.Context, dst *[]plan2.PreparedSourceBinding, values []any,
+	protocolTypes []byte, bitCountTypes []types.Type) ([]plan2.PreparedSourceBinding, error) {
+	if cap(*dst) < len(values) {
+		*dst = make([]plan2.PreparedSourceBinding, len(values))
+	}
+	bindings := (*dst)[:len(values)]
 	for i, value := range values {
 		binding := &bindings[i]
-		binding.Position = int32(i)
+		*binding = plan2.PreparedSourceBinding{Position: int32(i)}
 		param, ok := plan2.AsParamValue(value)
 		if !ok {
 			binding.Type, _ = preparedConversionRuntimeType(value)

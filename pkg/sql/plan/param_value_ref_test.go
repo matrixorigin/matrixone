@@ -85,3 +85,20 @@ func TestCopyParamValuesDetachesFromStorage(t *testing.T) {
 	require.Equal(t, "raw", snapshot[1])
 	require.Nil(t, CopyParamValues(nil))
 }
+
+func TestParamValueStoreCopyFromReusesStorage(t *testing.T) {
+	var source, snapshot ParamValueStore
+	values := source.Reset(3)
+	for i := range values {
+		*source.Ref(i) = ParamValue{Value: int64(i)}
+	}
+	values[2] = "raw"
+	copied := snapshot.CopyFrom(values)
+	*source.Ref(0) = ParamValue{Value: int64(9)}
+	got, ok := AsParamValue(copied[0])
+	require.True(t, ok)
+	require.Equal(t, int64(0), got.Value, "the snapshot does not follow its source")
+	require.Equal(t, "raw", copied[2])
+	require.Zero(t, testing.AllocsPerRun(100, func() { snapshot.CopyFrom(values) }))
+	require.Nil(t, snapshot.CopyFrom(nil))
+}
