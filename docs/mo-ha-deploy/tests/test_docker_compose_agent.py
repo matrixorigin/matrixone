@@ -77,7 +77,16 @@ case "$3" in
             fi
             touch "$STOP_BARRIER.seen"
         fi
-        [ "${DOWN_NO_EFFECT:-0}" = 1 ] || touch "$COMPOSE_STOPPED"
+        if [ "${DOWN_NO_EFFECT:-0}" != 1 ]; then
+            touch "$COMPOSE_STOPPED"
+            # down stops only the current project's containers, in Compose's
+            # dependency order. Record that result so a later Docker stop is
+            # not required for those ids.
+            for id in $COMPOSE_IDS; do
+                [ -n "$id" ] || continue
+                touch "$TRACE.$id.stopped"
+            done
+        fi
         ;;
     *) exit 99 ;;
 esac
@@ -253,10 +262,14 @@ class ResourceAgentTests(unittest.TestCase):
             VANISHED=str(self.root / "vanished"),
             INSPECT_ONCE_MARK=str(self.root / "inspect-once"),
         )
+        project_name = settings.pop("PROJECT_NAME", None)
         env.update(settings)
         if model is None:
             model = {name: {} for name in env["SERVICES"].splitlines()}
-        env["CONFIG_JSON"] = json.dumps({"services": model})
+        document = {"services": model}
+        if project_name:
+            document["name"] = project_name
+        env["CONFIG_JSON"] = json.dumps(document)
 
         result = subprocess.run(
             [os.environ.get("AGENT_TEST_SHELL", "/bin/sh"), str(AGENT), action],
@@ -696,6 +709,53 @@ class ResourceAgentTests(unittest.TestCase):
             self.assertFalse(any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments), call)
         self.assertTrue((self.root / "trace.service.stopped").exists())
         self.assertTrue((self.root / "trace.task.stopped").exists())
+
+    def test_stop_leaves_current_services_to_compose_down(self):
+        self.add_container("matrixone", "my-project", self.yaml, container_id="matrixone")
+        self.add_container("worker", "my-project", self.yaml, container_id="worker")
+        self.add_container("mo-run", "my-project", self.yaml, "True", "task")
+        calls = self.action(
+            "stop",
+            0,
+            COMPOSE_IDS="matrixone\nworker",
+            STOP_BARRIER=str(self.root / "barrier"),
+        )
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertEqual([call.split()[2:] for call in stop_calls], [["task"]], calls)
+        self.assertIn("down overlapped stop", calls)
+        self.assertNotIn("docker kill matrixone", calls)
+        self.assertNotIn("docker kill worker", calls)
+        self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+        self.assertTrue((self.root / "trace.worker.stopped").exists())
+        self.assertTrue((self.root / "trace.task.stopped").exists())
+
+    def test_stop_overlaps_current_and_former_project_services(self):
+        self.add_container("matrixone", "renamed", self.yaml, container_id="current")
+        self.add_container("old-matrixone", "previous-project", self.yaml, container_id="former")
+        self.assert_no_mutation(self.action("monitor", 1, COMPOSE_IDS="current", PROJECT_NAME="renamed"))
+        self.assert_no_mutation(self.action("start", 1, COMPOSE_IDS="current", PROJECT_NAME="renamed"))
+        self.trace.write_text("")
+        calls = self.action(
+            "stop",
+            0,
+            COMPOSE_IDS="current",
+            PROJECT_NAME="renamed",
+            STOP_BARRIER=str(self.root / "barrier"),
+        )
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertTrue(stop_calls, calls)
+        for call in stop_calls:
+            arguments = call.split()[2:]
+            self.assertIn("former", arguments, call)
+            self.assertNotIn("current", arguments, call)
+            self.assertFalse(
+                any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments),
+                call,
+            )
+        self.assertIn("down overlapped stop", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+        self.assertTrue((self.root / "trace.current.stopped").exists())
+        self.assertTrue((self.root / "trace.former.stopped").exists())
 
     def test_stop_owned_oneoff_with_and_without_yaml(self):
         self.add_container("app-task", "my-project", self.yaml, "True", container_id="task")

@@ -152,7 +152,7 @@ labeled_container_ids()
 	# An exited project left behind by a rename is not a second owner.
 	# Only a project that still has an active container can conflict.
 	if ! ids=$(printf '%s\n' "$containers" |
-		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" OCF_CURRENT_IDS="${2:-}" awk -F '\t' -v selection="$1" '
+		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" OCF_COMPOSE_PROJECT="$compose_project" OCF_CURRENT_IDS="${2:-}" awk -F '\t' -v selection="$1" '
 		BEGIN {
 			prefix = tolower(ENVIRON["OCF_COMPOSE_DIR"])
 			gsub(/[^a-z0-9_-]/, "", prefix)
@@ -190,17 +190,22 @@ labeled_container_ids()
 				active_count++
 				current_project = project
 			}
-			if (active_count > 1) ambiguous = 1
+			# Two active projects are an ownership conflict for monitor and
+			# start. Stop can still name the containers compose down will
+			# skip, because those targets belong to different projects.
+			if (active_count > 1 && selection != "shutdown") ambiguous = 1
 			if (!ambiguous && selection != "reconcile") {
 				for (i = 1; i <= count; i++) {
-					# Health and shutdown enumeration follow the one active
-					# project. Removal still lists every verified service,
-					# including exited containers from a former project.
-					if (selection != "services" &&
+					# Health follows the one active project. Removal lists
+					# every verified service. Shutdown lists one-offs and
+					# other projects, which compose down does not stop.
+					if (selection != "services" && selection != "shutdown" &&
 						(active_count == 0 || cproj[i] != current_project)) continue
 					if (selection == "monitor") selected = 1
 					else if (selection == "oneoff") selected = (coneoff[i] && cactive[i])
 					else if (selection == "active") selected = cactive[i]
+					else if (selection == "shutdown")
+						selected = cactive[i] && (coneoff[i] || cproj[i] != ENVIRON["OCF_COMPOSE_PROJECT"])
 					else selected = !coneoff[i]
 					if (selected) print cid[i]
 				}
@@ -419,6 +424,28 @@ docker_compose_start()
 	return "$OCF_SUCCESS"
 }
 
+# The project name compose down will use. Prefer the resolved Compose
+# model, then the directory name Compose uses when the file sets none.
+compose_project_name()
+{
+	fallback=$(printf '%s\n' "${DIR##*/}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
+	name=
+	if [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ]; then
+		if model=$(run_compose config --format json); then
+			name=$(printf '%s\n' "$model" | python3 -I -c '
+import json, re, sys
+document = json.load(sys.stdin)
+value = document.get("name") or ""
+if not isinstance(value, str):
+    value = ""
+print(re.sub(r"[^a-z0-9_-]", "", value.lower()))
+') || name=
+		fi
+	fi
+	[ -n "$name" ] || name=$fallback
+	printf '%s\n' "$name"
+}
+
 confirm_containers_stopped()
 {
 	[ "$#" -gt 0 ] || return "$OCF_SUCCESS"
@@ -435,17 +462,19 @@ confirm_containers_stopped()
 
 docker_compose_stop()
 {
-	# down does not stop a former project's service or an owned one-off.
-	# Each keeps the template's 60s stop grace, and Pacemaker allows 120s
-	# for the whole stop. One docker stop signals every still-active owned
-	# container at once, so those grace periods run together and overlap
-	# down. No shorter timeout is passed: Docker uses each container's
-	# configured StopTimeout, which is what leaves MatrixOne time to flush.
+	# compose down stops the current project in dependency order and keeps
+	# each service's configured grace period. It does not stop one-offs or
+	# containers that still belong to an earlier project. One docker stop
+	# signals only those skipped containers, overlapped with down, so two
+	# 60s grace periods fit in the 120s Pacemaker budget. No shorter
+	# timeout is passed: Docker uses each container's StopTimeout.
 	stop_pid=
+	compose_project=
 	if [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ]; then
-		if actives=$(labeled_container_ids active); then
-			if [ -n "$actives" ]; then
-				docker stop $actives >/dev/null 2>&1 &
+		compose_project=$(compose_project_name) || compose_project=
+		if [ -n "$compose_project" ] && skipped=$(labeled_container_ids shutdown); then
+			if [ -n "$skipped" ]; then
+				docker stop $skipped >/dev/null 2>&1 &
 				stop_pid=$!
 			fi
 		fi
