@@ -48,6 +48,12 @@ case "$3" in
         else
             ids=$COMPOSE_IDS
         fi
+        if [ -n "${VANISH_ID:-}" ] && [ -f "$VANISHED" ]; then
+            if [ "${PS_ERROR_AFTER_VANISH:-0}" != 0 ]; then
+                exit "$PS_ERROR_AFTER_VANISH"
+            fi
+            ids=$(printf '%s\n' "$ids" | grep -F -vx "$VANISH_ID" || true)
+        fi
         case "$4" in
             -q) printf '%s\\n' "$ids" | sed '/^stopped$/d; /^oneoff$/d; /^init-exited$/d; /^init-failed$/d' ;;
             -aq) printf '%s\\n' "$ids" ;;
@@ -89,6 +95,9 @@ case "$1" in
             case "$id" in
                 *.after) continue ;;
             esac
+            if [ -n "${VANISH_ID:-}" ] && [ -f "$VANISHED" ] && [ "$id" = "$VANISH_ID" ]; then
+                continue
+            fi
             if [ -f "$container.after" ] && [ ! -f "$COMPOSE_STARTED" ]; then
                 continue
             fi
@@ -125,7 +134,28 @@ case "$1" in
             exit
         fi
         shift 2
+        if [ "${INSPECT_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$INSPECT_ONCE_MARK" ]; then
+            : > "$INSPECT_ONCE_MARK"
+            echo "Error: inspection failed" >&2
+            exit 1
+        fi
+        if [ -n "${VANISH_ID:-}" ] && [ ! -f "$VANISHED" ]; then
+            for id do
+                if [ "$id" = "$VANISH_ID" ]; then
+                    printf '%s\n' "$id" > "$VANISHED"
+                    echo "Error: No such object: $id" >&2
+                    exit 1
+                fi
+            done
+        fi
+        if [ -f "${VANISHED:-/nonexistent}" ] && [ "${INSPECT_ERROR_AFTER_VANISH:-0}" != 0 ]; then
+            exit "$INSPECT_ERROR_AFTER_VANISH"
+        fi
         for id do
+            if [ -n "${VANISH_ID:-}" ] && [ -f "$VANISHED" ] && [ "$id" = "$VANISH_ID" ]; then
+                echo "Error: No such object: $id" >&2
+                exit 1
+            fi
             if [ -f "$TRACE.$id.stopped" ]; then
                 echo 'false|exited|0||app|'
                 continue
@@ -135,9 +165,9 @@ case "$1" in
                 recoverable)
                     if [ -f "$COMPOSE_STARTED" ]; then echo 'true|running|0||worker|'
                     else echo 'false|exited|0||worker|'; fi ;;
-                init-exited) echo 'false|exited|0||init|' ;;
+                init-exited*) echo 'false|exited|0||init|' ;;
                 init-failed) echo 'false|exited|1||init|' ;;
-                init-running) echo 'true|running|0||init|' ;;
+                init-running*) echo 'true|running|0||init|' ;;
                 former-init) echo 'false|exited|0||init|' ;;
                 retired) echo 'false|exited|0||app|' ;;
                 retired-failed) echo 'false|exited|1||app|' ;;
@@ -155,13 +185,17 @@ case "$1" in
     stop)
         [ "${STOP_ERROR:-0}" = 0 ] || exit "$STOP_ERROR"
         if [ -n "$STOP_BARRIER" ]; then
-            touch "$STOP_BARRIER.started"
-            i=0
-            while [ ! -f "$STOP_BARRIER.seen" ] && [ "$i" -lt 40 ]; do
-                i=$((i + 1))
-                sleep 0.02
-            done
-            touch "$STOP_BARRIER.finished"
+            if [ -f "$STOP_BARRIER.started" ] && [ ! -f "$STOP_BARRIER.finished" ]; then
+                printf 'stop overlapped stop\n' >> "$TRACE"
+            else
+                touch "$STOP_BARRIER.started"
+                i=0
+                while [ ! -f "$STOP_BARRIER.seen" ] && [ "$i" -lt 40 ]; do
+                    i=$((i + 1))
+                    sleep 0.02
+                done
+                touch "$STOP_BARRIER.finished"
+            fi
         fi
         shift
         for id do
@@ -216,6 +250,8 @@ class ResourceAgentTests(unittest.TestCase):
             CONTAINERS=str(self.containers),
             SERVICES="app",
             AFTER_UP_IDS="running",
+            VANISHED=str(self.root / "vanished"),
+            INSPECT_ONCE_MARK=str(self.root / "inspect-once"),
         )
         env.update(settings)
         if model is None:
@@ -353,11 +389,77 @@ class ResourceAgentTests(unittest.TestCase):
         self.action("monitor", 1, model=model, COMPOSE_IDS="app\nrunning")
         self.action("monitor", 0, model=model, COMPOSE_IDS="app\nretired-failed")
 
+    def test_extra_successful_initializer_replica_is_not_surplus(self):
+        def model(replicas):
+            return {
+                "app": {"depends_on": {"init": {"condition": "service_completed_successfully"}}},
+                "init": {"deploy": {"replicas": replicas}},
+            }
+
+        one = model(1)
+        exited = "init-exited\ninit-exited-retired\napp"
+        self.assert_no_mutation(self.action("monitor", 0, model=one, SERVICES="app\ninit", COMPOSE_IDS=exited))
+        self.assert_no_mutation(self.action("start", 0, model=one, SERVICES="app\ninit", COMPOSE_IDS=exited))
+        self.action(
+            "monitor",
+            1,
+            model=one,
+            SERVICES="app\ninit",
+            COMPOSE_IDS="init-running\ninit-running-2\napp",
+        )
+        self.action("monitor", 1, model=one, SERVICES="app\ninit", COMPOSE_IDS="app")
+        two = model(2)
+        self.action(
+            "monitor",
+            0,
+            model=two,
+            SERVICES="app\ninit",
+            COMPOSE_IDS="init-exited\ninit-exited-retired\ninit-exited-old\napp",
+        )
+        self.action("monitor", 1, model=two, SERVICES="app\ninit", COMPOSE_IDS="init-exited\napp")
+
     def test_monitor_compose_failed(self):
         self.action("monitor", 1, COMPOSE_PS_ERROR="9")
 
     def test_monitor_inspect_failed(self):
         self.action("monitor", 1, COMPOSE_IDS="running", INSPECT_ERROR="9")
+
+    def test_monitor_rechecks_after_listed_container_disappears(self):
+        self.add_container("app-run", "my-project", self.yaml, "True", "task")
+        settings = dict(COMPOSE_IDS="app\ntask", VANISH_ID="task")
+        calls = self.action("monitor", 0, **settings)
+        self.assert_no_mutation(calls)
+        inspects = [call for call in calls if call.startswith("docker inspect ")]
+        self.assertGreaterEqual(len(inspects), 2, calls)
+        self.assertIn("task", inspects[0].split())
+        self.assertNotIn("task", inspects[-1].split())
+        self.assertIn("app", inspects[-1].split())
+        self.trace.write_text("")
+        (self.root / "vanished").unlink()
+        calls = self.action("start", 0, **settings)
+        self.assert_no_mutation(calls)
+
+    def test_monitor_refresh_keeps_real_inspect_and_enumeration_failures(self):
+        self.add_container("app-run", "my-project", self.yaml, "True", "task")
+        self.assert_no_mutation(self.action(
+            "monitor", 1, COMPOSE_IDS="app\ntask", VANISH_ID="task", INSPECT_ERROR_AFTER_VANISH="9",
+        ))
+        self.trace.write_text("")
+        (self.root / "vanished").unlink()
+        self.assert_no_mutation(self.action(
+            "monitor", 1, COMPOSE_IDS="app\ntask", VANISH_ID="task", PS_ERROR_AFTER_VANISH="9",
+        ))
+        self.trace.write_text("")
+        self.action("monitor", 1, COMPOSE_IDS="app", INSPECT_FAIL_ONCE="1")
+
+    def test_monitor_refresh_reevaluates_a_missing_service(self):
+        calls = self.action(
+            "monitor", 1, SERVICES="app\nworker", COMPOSE_IDS="app\nworker", VANISH_ID="worker",
+        )
+        self.assert_no_mutation(calls)
+        inspects = [call for call in calls if call.startswith("docker inspect ")]
+        self.assertGreaterEqual(len(inspects), 2, calls)
+        self.assertNotIn("worker", inspects[-1].split())
 
     def test_monitor_inspect_unexpected_output(self):
         self.action("monitor", 1, COMPOSE_IDS="invalid")
@@ -579,6 +681,21 @@ class ResourceAgentTests(unittest.TestCase):
         self.assertIn("docker stop task", calls)
         self.assertIn("down overlapped stop", calls)
         self.assertIn("compose -f docker-compose.yaml down", calls)
+
+    def test_stop_overlaps_former_project_service_and_oneoff(self):
+        self.add_container("matrixone", "previous-project", self.yaml, container_id="service")
+        self.add_container("matrixone-run", "previous-project", self.yaml, "True", "task")
+        calls = self.action("stop", 0, STOP_BARRIER=str(self.root / "barrier"))
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        together = any({"service", "task"} <= set(call.split()[2:]) for call in stop_calls)
+        self.assertTrue(together or "stop overlapped stop" in calls, calls)
+        self.assertIn("down overlapped stop", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+        for call in stop_calls:
+            arguments = call.split()[2:]
+            self.assertFalse(any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments), call)
+        self.assertTrue((self.root / "trace.service.stopped").exists())
+        self.assertTrue((self.root / "trace.task.stopped").exists())
 
     def test_stop_owned_oneoff_with_and_without_yaml(self):
         self.add_container("app-task", "my-project", self.yaml, "True", container_id="task")
