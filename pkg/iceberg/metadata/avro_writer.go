@@ -128,8 +128,8 @@ func EncodeManifestList(manifests []api.ManifestFile, opts ManifestListWriteOpti
 func EncodeManifestListBounded(manifests []api.ManifestFile, opts ManifestListWriteOptions, maxBytes int64) ([]byte, error) {
 	buf := boundedAvroOutput{maxBytes: maxBytes}
 	err := WriteManifestList(&buf, manifests, opts)
-	if buf.exceeded {
-		return nil, avroOutputLimitExceeded(maxBytes)
+	if buf.failure != nil {
+		return nil, buf.failure
 	}
 	if err != nil {
 		return nil, err
@@ -178,8 +178,8 @@ func EncodeManifest(entries []api.ManifestEntry, opts ManifestWriteOptions) ([]b
 func EncodeManifestBounded(entries []api.ManifestEntry, opts ManifestWriteOptions, maxBytes int64) ([]byte, error) {
 	buf := boundedAvroOutput{maxBytes: maxBytes}
 	err := WriteManifest(&buf, entries, opts)
-	if buf.exceeded {
-		return nil, avroOutputLimitExceeded(maxBytes)
+	if buf.failure != nil {
+		return nil, buf.failure
 	}
 	if err != nil {
 		return nil, err
@@ -190,13 +190,15 @@ func EncodeManifestBounded(entries []api.ManifestEntry, opts ManifestWriteOption
 type boundedAvroOutput struct {
 	data     []byte
 	maxBytes int64
-	exceeded bool
+	failure  *api.MemoryLimitError
 }
 
 func (b *boundedAvroOutput) Write(payload []byte) (int, error) {
 	if b.maxBytes <= 0 || int64(len(payload)) > b.maxBytes-int64(len(b.data)) {
-		b.exceeded = true
-		return 0, avroOutputLimitExceeded(b.maxBytes)
+		if b.failure == nil {
+			b.failure = api.NewEncoderMemoryLimitError(int64(len(b.data)), int64(len(payload)), b.maxBytes, api.MemoryEncoderOutput)
+		}
+		return 0, b.failure
 	}
 	required := len(b.data) + len(payload)
 	if required > cap(b.data) {
@@ -215,8 +217,10 @@ func (b *boundedAvroOutput) Write(payload []byte) (int, error) {
 			nextCapacity = maxCapacity
 		}
 		if cap(b.data) > maxCapacity-nextCapacity {
-			b.exceeded = true
-			return 0, avroOutputLimitExceeded(b.maxBytes)
+			if b.failure == nil {
+				b.failure = api.NewEncoderMemoryLimitError(int64(cap(b.data)), int64(nextCapacity), b.maxBytes, api.MemoryEncoderGrowth)
+			}
+			return 0, b.failure
 		}
 		next := make([]byte, len(b.data), nextCapacity)
 		copy(next, b.data)
@@ -230,12 +234,6 @@ func (b *boundedAvroOutput) Write(payload []byte) (int, error) {
 
 func (b *boundedAvroOutput) Bytes() []byte {
 	return b.data
-}
-
-func avroOutputLimitExceeded(limit int64) error {
-	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg Avro output exceeds its memory limit", map[string]string{
-		"limit_bytes": strconv.FormatInt(limit, 10),
-	})
 }
 
 func validateManifestWriteOptions(opts ManifestWriteOptions, entries []api.ManifestEntry) error {
