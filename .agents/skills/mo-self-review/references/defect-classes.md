@@ -75,11 +75,12 @@ the fix that closed it.
 - **Fix:** keep submission order; advance past skipped entries without parking.
 
 ## K. A faulty cache tier fails the request instead of falling through
-- **Shape:** a tier's file is short, missing or unreadable; the request returns EOF or
-  an I/O error although the source holds the data, and the bad entry stays.
+- **Shape:** a tier's file is short, missing or unreadable; a request whose contract
+  promises the data returns EOF or an I/O error although the source holds it, and the
+  bad entry stays.
 - **Probe:** a truncated, a missing and an unopenable entry. Expect the source's bytes,
-  one backend read, and the entry recached. Control: decoder and caller errors are
-  still returned.
+  one backend read, and the entry recached. A cache-only read reports a miss instead.
+  Control: decoder and caller errors are still returned.
 - **Fix:** record the tier reader's error; on a tier failure drop the entry and fall
   through.
 

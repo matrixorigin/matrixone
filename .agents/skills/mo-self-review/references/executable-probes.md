@@ -46,8 +46,9 @@ Cross the axes that apply to each item in §1:
 - **Lifecycle event × state:** fire each event while the unit is in each state,
   including every wait entered before registration (§1).
 - **Tier fault:** for each cache tier, a truncated file, a missing file and a read
-  error. The read must return storage's bytes. Control: an error from the decoder or
-  the caller is still returned.
+  error. Derive the expected result from the entry point's contract: a read that
+  promises the data returns the source's bytes; a cache-only read reports a miss.
+  Control: an error from the decoder or the caller is still returned.
 - **Reentrancy:** each callback submits, flushes or closes while its own resources
   are held, with the capacity scaled to 1.
 - **Scale:** the supported max input. Count goroutines, opens and charged bytes
@@ -77,9 +78,11 @@ Every probe:
 5. **Pairs every failing probe with a control** in the same run: a direct or bypass
    read that skips the cache, an exact read, or a live variant that must
    succeed. If the control also fails, the fixture is broken, not the code.
-6. **Applies the fix as an overlay:** the probe fails on `HEAD~` or with the hunk
-   reverted (§7), and passes with it. Run it both ways and
-   record both results.
+6. **Runs on the baseline and on the candidate (§7).** A probe for a finding fails on
+   the baseline and passes on the fix; record both results. A probe that clears a
+   matrix cell may pass on both: it shows the behavior is preserved. A cell may also be
+   cleared by source evidence or retained results that close its contract, under the
+   shared evidence rules.
 
 
 ## 4. Race-window widening (check-then-act)
@@ -113,24 +116,30 @@ were class **A**.
 
 ## 7. Validation and report
 
-- To run a probe on the old code, copy the production files aside, write `git show
-  HEAD:<file>` over them, run, and copy them back. Don't use `git stash`: the stash list
-  is shared by every worktree, so parallel reviewers pop each other's entries. In zsh,
-  loop over an explicit word list; an unquoted `$VAR` holding several names is not split.
+- **Baseline.** Pick the revision the comparison needs: the PR's merge-base for
+  behavior the PR introduces, or the known-bad revision for a fix made within the PR.
+  Never assume `HEAD~`. Verify that it lacks the change under test (`git diff
+  <baseline> HEAD -- <files>`). Check it out in a disposable `git worktree add --detach
+  <baseline>`, copy in only the probe test files, and run there; never overwrite files
+  in the active checkout, and don't use `git stash`, whose list every worktree shares.
+  In zsh, loop over an explicit word list; an unquoted `$VAR` holding several names is
+  not split.
 - When the review is split into parallel agents (one per axis), give each its own
   `git worktree add --detach`, and never build or test in a checkout another session is
   using.
 
-- Run each probe red and green (§3.6), both completion orders, under `-race`, then
-  `-count=50 -cpu 1,2,8` with the **full output saved to a file**. Never filter
-  failure output down to `ok`, `FAIL` or `---` lines: the error message, the line
-  number and `WARNING: DATA RACE` are the evidence.
-- Then run the owning-package suites under `-race`, and those of their direct consumers.
+- Run each probe on the baseline and the candidate (§3.6), in both completion orders.
+  Choose the mode, the repetition budget and the package scope by the
+  [race protocol](../../mo-dev/references/race-validation.md) and the
+  [validation scope](../../mo-dev/references/validation-evidence.md#2-assign-risk-per-closure-not-per-pr).
+- Save the **full output** to a file. Never filter failure output down to `ok`, `FAIL`
+  or `---` lines: the error message, the line number and `WARNING: DATA RACE` are the
+  evidence.
 - Keep a probe as a regression test only when it proves a distinct behavior, and fold
   it into the existing table-driven test where it fits.
 - Report the inventory, the matrix with pruned cells and their reasons, and for each
-  finding: inputs and state → observed vs expected, its control, and red and green
-  results.
+  finding: inputs and state → observed vs expected, its control, and its baseline and
+  candidate results.
 
 This method adds executable evidence to the change map, closure tracing and
 `unhappy-path-audit` (Q1–Q3); it does not replace them.

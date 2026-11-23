@@ -189,9 +189,10 @@ Use the testing contract for fixture reuse, independent oracles, UT/BVT depth
 and teardown. Apply the shared evidence checks to suspected overfit, lost test
 coverage and performance claims. For a proposed optimization, check work and
 results at the real entry point as well as the claimed faster phase.
-For a change in the executable-probes trigger, prove each transition finding, and
-each cleared probe-matrix cell, with a probe through a public entry point: a passing
-control, red on the old code and green on the fix.
+For a change in the executable-probes trigger, prove each transition finding with a
+probe through a public entry point: a passing control, failing on the baseline and
+passing on the fix. Close each other matrix cell with a preservation probe or with
+evidence that meets the shared rules.
 
 ## Convergence and decision
 
