@@ -17,6 +17,7 @@ package colexec
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -273,6 +274,25 @@ func (w *CNS3Writer) Close() (err error) {
 		w.blockInfoBat = nil
 	}
 
+	return err
+}
+
+// CloseForService transfers failed terminal cleanup to the CN that owns
+// the writer. Close remains available to callers that retain and retry it.
+func (w *CNS3Writer) CloseForService(serviceID string) error {
+	err := w.Close()
+	if w.sinker == nil {
+		return err
+	}
+	srv := GetServer(serviceID)
+	if srv == nil || srv.spillCleanup == nil {
+		return err
+	}
+	if handoffErr := w.sinker.TransferFailedCloseCleanup(srv.spillCleanup.remember); handoffErr != nil {
+		logutil.Errorf("failed to retain CN spill cleanup: %v", handoffErr)
+		return errors.Join(err, handoffErr)
+	}
+	w.sinker = nil
 	return err
 }
 

@@ -89,6 +89,34 @@ func TestWriteArenaSerialBufferLifecycle(t *testing.T) {
 	require.Zero(t, arena.serialBuf.Cap())
 }
 
+func TestArenaDropsExceptionalCompressionScratchOnReturn(t *testing.T) {
+	drainArenaPools()
+	t.Cleanup(drainArenaPools)
+
+	arena := GetArena(ArenaSmall)
+	t.Cleanup(arena.FreeBuffers)
+	oldLimit := mpool.CapLimit
+	mpool.CapLimit = 48 << 10
+	t.Cleanup(func() { mpool.CapLimit = oldLimit })
+
+	const exceptionalSize = 40 << 10 // the rounded 64 KiB exceeds the scaled allocation limit
+	arena.CompressBuf(exceptionalSize)
+	require.Len(t, arena.compressBuf, exceptionalSize)
+	arena.Reset()
+	require.Len(t, arena.compressBuf, exceptionalSize, "active writers keep their scratch")
+
+	PutArena(arena)
+	reused := GetArena(ArenaSmall)
+	require.Same(t, arena, reused)
+	require.Nil(t, reused.compressBuf)
+
+	reused.CompressBuf(8 << 10)
+	PutArena(reused)
+	reused = GetArena(ArenaSmall)
+	require.Same(t, arena, reused)
+	require.Len(t, reused.compressBuf, 8<<10, "ordinary scratch remains reusable")
+}
+
 func TestArenaPooledSerialGaugeConcurrent(t *testing.T) {
 	drainArenaPools()
 	t.Cleanup(drainArenaPools)

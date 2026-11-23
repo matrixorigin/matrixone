@@ -678,8 +678,8 @@ func (sinker *Sinker) runSizeLimit() int {
 
 // cleanupUnpublishedRun removes only objects still owned by the staging run.
 // Results already transferred to result.persisted or the caller are excluded.
-// A failed deletion is logged without changing the original SQL error; durable
-// retries require the separate unpublished-object ownership work.
+// A failed deletion is logged and kept for reuse or terminal cleanup without
+// changing the original SQL error.
 func (sinker *Sinker) cleanupUnpublishedRun(ctx context.Context) error {
 	if sinker.pipe.result != nil {
 		sinker.pipe.result.cancel()
@@ -1487,6 +1487,20 @@ func (sinker *Sinker) Close() error {
 	sinker.staged.persisted = nil
 	sinker.fs = nil
 	return drainErr
+}
+
+// TransferFailedCloseCleanup hands off only unpublished objects left by a
+// terminal Close. The caller retains ownership if the handoff fails.
+func (sinker *Sinker) TransferFailedCloseCleanup(accept func(fileservice.FileService, []objectio.ObjectStats) error) error {
+	if !sinker.closed || len(sinker.staged.persisted) == 0 {
+		return nil
+	}
+	if err := accept(sinker.fs, sinker.staged.persisted); err != nil {
+		return err
+	}
+	sinker.staged.persisted = nil
+	sinker.fs = nil
+	return nil
 }
 
 // A failed run remains aborted until Reset starts retirement. If storage was

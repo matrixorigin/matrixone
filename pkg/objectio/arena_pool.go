@@ -110,6 +110,11 @@ func PutArena(a *WriteArena) {
 	// The caller still owns the arena here; drop oversized Go-heap scratch
 	// before publishing it to the lock-free free list.
 	a.resetSerialBuf(a.serialBuf.Cap() > arenaSerialRetainLimit)
+	// Every ordinary compression allocation is rounded to a power of two.
+	// An exact-size fallback can exceed the largest cacheable allocation.
+	if n := len(a.compressBuf); n > 0 && n&(n-1) != 0 {
+		a.freeCompressBuf()
+	}
 	serialCap := a.serialBuf.Cap()
 	tier := ArenaSmall
 	if a.sizeLimit > arenaSmallMax {

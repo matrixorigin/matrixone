@@ -1968,7 +1968,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		proc.Mp(), fs, tbl.tableDef, -1, false,
 	)
 
-	defer func() { s3Writer.Close() }()
+	defer s3Writer.CloseForService(proc.GetService())
 
 	var (
 		bat      *batch.Batch

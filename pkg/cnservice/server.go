@@ -150,6 +150,11 @@ func NewService(
 		return nil, err
 	}
 
+	sharedFS, err := fileservice.Get[fileservice.FileService](fileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	srv := &service{
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
@@ -309,6 +314,10 @@ func NewService(
 		return nil, err
 	}
 	if err := srv.registerDefaultIcebergMaintenanceExecutor(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := srv.colexecServer.StartCNS3Cleanup(srv.stopper, cfg.UUID, metadataFS, sharedFS); err != nil {
 		return nil, err
 	}
 

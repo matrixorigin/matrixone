@@ -585,7 +585,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
 	}
 
-	defer s3Writer.Close()
+	defer s3Writer.CloseForService(proc.GetService())
 
 	counterSet := analyzer.GetOpCounterSet()
 	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
@@ -840,7 +840,7 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 	// Close persistent insert sinkers.
 	for i, s3w := range writer.insertSinkers {
 		if s3w != nil {
-			s3w.Close()
+			s3w.CloseForService(proc.GetService())
 			writer.insertSinkers[i] = nil
 		}
 	}

@@ -1140,7 +1140,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			s3Writer.CloseForService(txn.proc.GetService())
 		}
 	}()
 
@@ -1191,7 +1191,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return err
 		}
 
-		s3Writer.Close()
+		s3Writer.CloseForService(txn.proc.GetService())
 
 		s3Writer = nil
 	}
@@ -1283,7 +1283,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			s3Writer.CloseForService(txn.proc.GetService())
 		}
 	}()
 
@@ -1335,7 +1335,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return err
 		}
 
-		if err = s3Writer.Close(); err != nil {
+		if err = s3Writer.CloseForService(txn.proc.GetService()); err != nil {
 			return err
 		}
 	}

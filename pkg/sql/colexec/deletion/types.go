@@ -250,7 +250,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 		defer func() {
 			if s3writer != nil {
-				s3writer.Close()
+				s3writer.CloseForService(proc.GetService())
 			}
 		}()
 

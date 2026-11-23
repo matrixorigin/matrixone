@@ -140,10 +140,7 @@ func arenaNextPow2(n int) int {
 // power of 2 unless that capacity exceeds mpool's single-allocation limit.
 func (a *WriteArena) CompressBuf(minSize int) []byte {
 	if len(a.compressBuf) < minSize {
-		if a.compressBuf != nil {
-			arenaMPool.Free(a.compressBuf)
-			a.compressBuf = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
-		}
+		a.freeCompressBuf()
 		var err error
 		a.compressBuf, err = arenaMPool.Alloc(arenaCompressBufSize(minSize), true)
 		if err != nil {
@@ -170,6 +167,10 @@ func (a *WriteArena) FreeBuffers() {
 		arenaMPool.Free(a.data)
 		a.data = nil
 	}
+	a.freeCompressBuf()
+}
+
+func (a *WriteArena) freeCompressBuf() {
 	if a.compressBuf != nil {
 		arenaMPool.Free(a.compressBuf)
 		a.compressBuf = nil
