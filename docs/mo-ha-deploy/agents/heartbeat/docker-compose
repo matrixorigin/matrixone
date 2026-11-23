@@ -100,7 +100,7 @@ For example, "docker-compose.yml"
 
 <actions>
 <action name="start" timeout="240s"/>
-<action name="stop" timeout="20s"/>
+<action name="stop" timeout="120s"/>
 <action name="monitor" depth="0" timeout="10s" interval="60s" />
 <action name="validate-all" timeout="5s" />
 <action name="meta-data"  timeout="5s"/>
@@ -117,6 +117,9 @@ else
 fi
 
 DIR="$OCF_RESKEY_dirpath"
+# Internal status for a successful inspection that found a partial project.
+# Only start may reconcile it. A monitor always reports it as an OCF error.
+COMPOSE_PARTIAL=42
 YML="$OCF_RESKEY_ymlfile"
 case "$YML" in
 	/*) CONFIG_FILE=$YML ;;
@@ -144,26 +147,38 @@ labeled_container_ids()
 	# Names only flag possible ownership conflicts. They cannot authorize
 	# stopping a container, even when it has the template name "matrixone".
 	if ! ids=$(printf '%s\n' "$containers" |
-		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" awk -F '\t' -v selection="$1" '
+		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" OCF_CURRENT_IDS="${2:-}" awk -F '\t' -v selection="$1" '
 		BEGIN {
 			prefix = tolower(ENVIRON["OCF_COMPOSE_DIR"])
 			gsub(/[^a-z0-9_-]/, "", prefix)
 			legacy = prefix
 			gsub(/[_-]/, "", legacy)
+			n = split(ENVIRON["OCF_CURRENT_IDS"], current, "\n")
+			for (i = 1; i <= n; i++)
+				if (current[i] != "") unverified[current[i]] = 1
 		}
-		{ oneoff = (tolower($5) == "true") }
-		oneoff && (selection == "monitor" || $6 == "exited" || $6 == "created") { next }
+		{
+			oneoff = (tolower($5) == "true")
+			active = ($6 != "exited" && $6 != "created")
+		}
+		oneoff && (selection == "monitor" || (!active && selection != "reconcile")) { next }
 		$3 != "" && $4 == ENVIRON["OCF_COMPOSE_CONFIG"] {
 			if (project != "" && project != $3) ambiguous = 1
 			project = $3
-			if (selection == "active-oneoffs" ? oneoff : !oneoff) print $1
+			if (selection == "reconcile") {
+				if (active && !oneoff && !($1 in unverified)) ambiguous = 1
+				delete unverified[$1]
+			} else if (selection == "active" ? active : !oneoff) print $1
 			next
 		}
 		$2 == "matrixone" ||
 		($2 ~ /[_-][0-9]+$/ && (index($2, prefix "-") == 1 ||
 			index($2, prefix "_") == 1 || index($2, legacy "-") == 1 ||
 			index($2, legacy "_") == 1)) { ambiguous = 1 }
-		END { exit ambiguous }
+		END {
+			for (id in unverified) ambiguous = 1
+			exit ambiguous
+		}
 	'); then
 		ocf_log err "cannot verify container ownership for $config_path"
 		return "$OCF_ERR_GENERIC"
@@ -200,7 +215,7 @@ docker_container_status()
 
 	# Compose records service_completed_successfully dependencies on the
 	# dependent container. Only a successful exit satisfies that condition.
-	printf '%s\n' "$states" | OCF_EXPECTED_SERVICES="$expected_services" awk -F '[|]' -v not_running="$OCF_NOT_RUNNING" '
+	printf '%s\n' "$states" | OCF_EXPECTED_SERVICES="$expected_services" awk -F '[|]' -v not_running="$OCF_NOT_RUNNING" -v partial="$COMPOSE_PARTIAL" '
 		NF != 6 || ($1 != "true" && $1 != "false") { invalid = 1; next }
 		tolower($4) == "true" { next }
 		{
@@ -224,13 +239,13 @@ docker_container_status()
 				if (services[i] != "" && !(services[i] in seen)) stopped = 1
 			for (service in exited)
 				if (!(service in init)) stopped = 1
-			exit stopped ? 1 : 0
+			exit stopped ? partial : 0
 		}
 	'
 	result=$?
 	case "$result" in
 		"$OCF_SUCCESS"|"$OCF_NOT_RUNNING") return "$result" ;;
-		1) ocf_log err "only some Compose services are running" ;;
+		"$COMPOSE_PARTIAL") ocf_log warn "only some Compose services are running"; return "$result" ;;
 		*) ocf_log err "invalid state for Docker containers of $CONFIG_FILE" ;;
 	esac
 	return "$OCF_ERR_GENERIC"
@@ -238,23 +253,23 @@ docker_container_status()
 
 docker_compose_status()
 {
-	services=
-	if [ -r "$CONFIG_FILE" ]; then
-		services=$(run_compose config --services) && [ -n "$services" ] || {
-			ocf_log err "cannot determine the configured services for $CONFIG_FILE"
-			return "$OCF_ERR_GENERIC"
-		}
-		compose_ids=$(run_compose ps -aq) || {
-			ocf_log err "failed to enumerate Compose containers for $CONFIG_FILE"
-			return "$OCF_ERR_GENERIC"
-		}
-		docker_container_status "$services" $compose_ids
-		case "$?" in
-			"$OCF_SUCCESS") return "$OCF_SUCCESS" ;;
-			"$OCF_NOT_RUNNING") ;;
-			*) return "$OCF_ERR_GENERIC" ;;
-		esac
+	if [ ! -r "$CONFIG_FILE" ]; then
+		ids=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
+		[ -n "$ids" ] || return "$OCF_NOT_RUNNING"
+		ocf_log err "containers are active but cannot verify expected services without $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
 	fi
+	services=$(run_compose config --services) && [ -n "$services" ] || {
+		ocf_log err "cannot determine the configured services for $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
+	}
+	compose_ids=$(run_compose ps -aq) || {
+		ocf_log err "failed to enumerate Compose containers for $CONFIG_FILE"
+		return "$OCF_ERR_GENERIC"
+	}
+	docker_container_status "$services" $compose_ids
+	result=$?
+	[ "$result" = "$OCF_NOT_RUNNING" ] || return "$result"
 
 	ids=$(labeled_container_ids monitor) || return "$OCF_ERR_GENERIC"
 	docker_container_status "$services" $ids
@@ -266,6 +281,11 @@ docker_compose_start()
 	docker_compose_status
 	case "$?" in
 		"$OCF_SUCCESS") return "$OCF_SUCCESS" ;;
+		"$COMPOSE_PARTIAL")
+			# up targets the current project. Prove that its IDs belong to
+			# this config and no other project still runs its services.
+			labeled_container_ids reconcile "$compose_ids" >/dev/null || return "$OCF_ERR_GENERIC"
+			;;
 		"$OCF_NOT_RUNNING") ;;
 		*) return "$OCF_ERR_GENERIC" ;;
 	esac
@@ -291,29 +311,30 @@ confirm_containers_stopped()
 
 docker_compose_stop()
 {
-	if [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ] &&
-		run_compose down && compose_ids=$(run_compose ps -aq); then
-		confirm_containers_stopped $compose_ids || return "$OCF_ERR_GENERIC"
-	else
+	compose_ids=
+	if ! { [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ] &&
+		run_compose down && compose_ids=$(run_compose ps -aq); }; then
+		compose_ids=
 		ocf_log warn "Compose shutdown unavailable or failed, trying Docker label-based removal"
 		remove_containers || return "$OCF_ERR_GENERIC"
 	fi
 
-	# Compose down may leave compose run jobs accessing shared data. Only
-	# stop jobs with verified ownership and leave their containers intact.
-	jobs=$(labeled_container_ids active-oneoffs) || return "$OCF_ERR_GENERIC"
-	if [ -n "$jobs" ]; then
-		# A job started with --rm may disappear before docker stop. Verify
-		# the resulting state even if the command reports a missing ID.
-		docker stop $jobs >/dev/null
-		jobs=$(labeled_container_ids active-oneoffs) || return "$OCF_ERR_GENERIC"
-		if [ -n "$jobs" ]; then
-			ocf_log err "Compose one-off containers still active for $CONFIG_FILE: $jobs"
+	# down can miss one-offs and services under an earlier project name.
+	remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
+	if [ -n "$remaining" ]; then
+		docker stop $remaining >/dev/null
+		# A --rm container may disappear during stop. Verify the final state.
+		remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
+		if [ -n "$remaining" ]; then
+			ocf_log err "containers still active for $CONFIG_FILE: $remaining"
 			return "$OCF_ERR_GENERIC"
 		fi
 	fi
-	ids=$(labeled_container_ids services) || return "$OCF_ERR_GENERIC"
-	confirm_containers_stopped $ids
+	if [ -n "$compose_ids" ]; then
+		compose_ids=$(run_compose ps -aq) || return "$OCF_ERR_GENERIC"
+		confirm_containers_stopped $compose_ids || return "$OCF_ERR_GENERIC"
+	fi
+	return "$OCF_SUCCESS"
 }
 
 docker_compose_validate_all()
@@ -358,6 +379,9 @@ case $1 in
 
 	status|monitor)
 		docker_compose_status
+		result=$?
+		[ "$result" != "$COMPOSE_PARTIAL" ] || result=$OCF_ERR_GENERIC
+		exit "$result"
 		;;
 
 	validate-all)

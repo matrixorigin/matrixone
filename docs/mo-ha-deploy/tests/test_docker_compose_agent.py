@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 
 AGENT = Path(
@@ -94,6 +95,10 @@ case "$1" in
         fi
         shift 2
         for id do
+            if [ -f "$TRACE.$id.stopped" ]; then
+                echo 'false|exited|0||app|'
+                continue
+            fi
             case "$id" in
                 stopped) echo 'false|exited|0||worker|' ;;
                 init-exited) echo 'false|exited|0||init|' ;;
@@ -102,6 +107,7 @@ case "$1" in
                 oneoff) echo 'false|exited|0|True|task|' ;;
                 task) echo 'true|running|0|True|app|' ;;
                 helper) echo 'true|running|0||helper|' ;;
+                worker) echo 'true|running|0||worker|' ;;
                 app) echo 'true|running|0||app|init:service_completed_successfully:false' ;;
                 *) echo 'true|running|0||app|' ;;
             esac
@@ -170,6 +176,7 @@ class ResourceAgentTests(unittest.TestCase):
             timeout=5,
         )
         calls = self.trace.read_text().splitlines()
+        self.output = result.stdout
         self.assertEqual(result.returncode, expected, f"{result.stderr}\n{calls}")
         return calls
 
@@ -227,8 +234,10 @@ class ResourceAgentTests(unittest.TestCase):
 
     def test_monitor_missing_yaml_with_owned_container_is_read_only(self):
         self.yaml.unlink()
-        self.add_container("matrixone", "override-project", self.yaml)
-        self.assert_no_mutation(self.action("monitor", 0))
+        self.add_container("my-project-helper-1", "override-project", self.yaml, container_id="helper")
+        self.assert_no_mutation(self.action("monitor", 1))
+        (self.root / "trace.helper.stopped").touch()
+        self.action("monitor", 7)
 
     def test_monitor_missing_yaml_without_containers(self):
         self.yaml.unlink()
@@ -250,7 +259,27 @@ class ResourceAgentTests(unittest.TestCase):
         self.assert_no_mutation(self.action("start", 1, COMPOSE_PS_ERROR="9"))
 
     def test_start_when_partially_running(self):
-        self.assert_no_mutation(self.action("start", 1, COMPOSE_IDS="running\nstopped"))
+        self.add_container("app-1", "my-project", self.yaml, container_id="running")
+        self.add_container("worker-1", "my-project", self.yaml, container_id="stopped")
+        calls = self.action("start", 0, SERVICES="app\nworker", COMPOSE_IDS="running\nstopped",
+                            AFTER_UP_IDS="running\nworker")
+        self.assertEqual(calls.count("compose -f docker-compose.yaml up -d"), 1)
+
+    def test_start_repairs_missing_service_and_verifies_result(self):
+        self.add_container("helper-1", "my-project", self.yaml, container_id="helper")
+        settings = dict(SERVICES="app\nhelper", COMPOSE_IDS="helper")
+        self.action("start", 1, AFTER_UP_IDS="helper", **settings)
+        self.assertEqual(self.trace.read_text().count(" up -d"), 1)
+        (self.root / "started").unlink()
+        self.action("start", 0, AFTER_UP_IDS="app\nhelper", **settings)
+
+    def test_start_rejects_partial_project_when_ownership_is_uncertain(self):
+        self.add_container("helper", "my-project", self.yaml, container_id="helper")
+        self.add_container("old-app", "old-project", self.yaml, container_id="old")
+        self.assert_no_mutation(self.action("start", 1, SERVICES="app\nhelper", COMPOSE_IDS="helper"))
+
+    def test_start_inspect_failure_does_not_attempt_repair(self):
+        self.assert_no_mutation(self.action("start", 1, COMPOSE_IDS="running", INSPECT_ERROR="9"))
 
     def test_start_compose_failed(self):
         self.action("start", 1, UP_ERROR="9")
@@ -282,7 +311,19 @@ class ResourceAgentTests(unittest.TestCase):
 
     def test_stop_detects_previous_project_after_project_name_changes(self):
         self.add_container("matrixone", "previous-project", self.yaml)
-        self.assert_no_mutation(self.action("stop", 1))
+        calls = self.action("stop", 0)
+        self.assertIn("docker stop owned", calls)
+        self.assertNotIn("docker kill owned", calls)
+
+    def test_stop_recovers_after_ineffective_down(self):
+        self.add_container("matrixone", "my-project", self.yaml)
+        self.action("stop", 1, COMPOSE_IDS="owned", DOWN_NO_EFFECT="1", STOP_NO_EFFECT="1")
+        self.action("stop", 0, COMPOSE_IDS="owned", DOWN_NO_EFFECT="1")
+
+    def test_metadata_stop_timeout_matches_deployment(self):
+        self.action("meta-data", 0)
+        stop = ET.fromstring(self.output).find("./actions/action[@name='stop']")
+        self.assertEqual(stop.get("timeout"), "120s")
 
     def test_stop_compose_failed_fallback(self):
         self.add_container("matrixone", "my-project", self.yaml)
@@ -312,7 +353,7 @@ class ResourceAgentTests(unittest.TestCase):
 
     def test_stop_fallback_checks_remaining_containers(self):
         self.add_container("matrixone", "my-project", self.yaml)
-        self.action("stop", 1, DOWN_ERROR="9", RM_NO_EFFECT="1")
+        self.action("stop", 1, DOWN_ERROR="9", RM_NO_EFFECT="1", STOP_NO_EFFECT="1")
 
     def test_stop_fallback_requires_verified_ownership(self):
         self.add_container("matrixone")

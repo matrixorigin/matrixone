@@ -56,6 +56,8 @@ sudo install -D -m 0755 agents/heartbeat/docker-compose /usr/lib/ocf/resource.d/
 
 停机或迁移时，资源代理也会停止能确认属于该配置的活动 `docker compose run` 任务，以便释放共享数据。请在维护前完成需要保留运行的任务。已经退出的临时容器会保留；使用 `--rm` 启动的任务由 Docker 自动清理。
 
+如果 Compose 配置丢失，且仍有属于该配置的活动容器，监控会报错。恢复原配置后，代理才能核对 MatrixOne 等预期服务是否运行。如果配置可读、部分服务缺失，且容器归属清楚，`start` 会尝试一次 `compose up -d` 并重新检查。
+
 ## 三、验证
 
 ```bash
