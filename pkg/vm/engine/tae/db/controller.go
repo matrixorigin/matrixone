@@ -886,6 +886,7 @@ func (c *Controller) replayFromCheckpoints(ctx context.Context) (
 
 	// 2. replay all table Entries
 	if err = ckpReplayer.ReplayCatalog(
+		ctx,
 		db.TxnMgr.OpenOfflineTxn(checkpointed),
 		Phase_Open,
 	); err != nil {

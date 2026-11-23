@@ -17,6 +17,11 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -443,4 +448,513 @@ func TestCorrelatedPaginationZeroRetainsTableScan(t *testing.T) {
 		visit(root)
 	}
 	require.True(t, found, "the empty subquery must retain its table scan for authorization and prepare metadata")
+}
+
+func TestCorrelatedScalarZeroLimitKeepsInnerScan(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"filtered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"arithmetic in comparison", `select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey + 1 limit 0) as v from tpch.nation n`},
+		{"boolean IS TRUE projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is true from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"boolean IS FALSE projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is false from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"negated truth projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is not true from tpch.region r where (r.r_regionkey > n.n_nationkey + 1) is not false limit 0) as v from tpch.nation n`},
+		{"unknown projection", `select n.n_nationkey, (select (n.n_nationkey > 1) is unknown from tpch.region r where (r.r_regionkey > n.n_nationkey + 1) is not unknown limit 0) as v from tpch.nation n`},
+		{"compound arithmetic projection", `select n.n_nationkey, (select (n.n_nationkey * 2 - 1) > 4 and n.n_regionkey is not null from tpch.region r where r.r_regionkey > n.n_nationkey + 1 limit 0) as v from tpch.nation n`},
+		{"unfiltered", `select n.n_nationkey, (select n.n_nationkey from tpch.region r limit 0) as v from tpch.nation n`},
+		{"projection alias with hidden order key", `select n.n_nationkey, (select n.n_nationkey as alias_value from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"typed value projection", `select n.n_nationkey, (select cast(concat(n.n_nationkey, char(120)) as signed) from tpch.region r limit 0) as v from tpch.nation n`},
+		{"comparison projection", `select n.n_nationkey, (select n.n_nationkey > 1 from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"unary minus projection", `select n.n_nationkey, (select -n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"unary plus projection", `select n.n_nationkey, (select +n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"ifnull projection", `select n.n_nationkey, (select ifnull(n.n_nationkey, 1) from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"ifnull with hidden order key", `select n.n_nationkey, (select ifnull(n.n_nationkey, 1) from tpch.region r where r.r_regionkey > n.n_nationkey order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"alias", `select n.n_nationkey, (select n.n_nationkey as x from tpch.region r limit 0) as v from tpch.nation n`},
+		{"hidden sort", `select n.n_nationkey, (select n.n_nationkey from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"cast and sort", `select n.n_nationkey, (select cast(n.n_nationkey as signed) from tpch.region r order by r.r_regionkey limit 0) as v from tpch.nation n`},
+		{"unrelated CTE", `with unused as (select 1) select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"unqualified table with unrelated CTE", `with unused as (select 1) select n.n_nationkey, (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+		{"qualified table shadowed by CTE", `with region as (select 1 as r_regionkey) select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			q, err := NewBaseOptimizer(NewMockCompilerContext(true)).Optimize(stmt, false)
+			require.NoError(t, err)
+			require.NotNil(t, q)
+			require.NotEmpty(t, q.Steps)
+			visited := make(map[int32]bool)
+			found := false
+			var visit func(int32)
+			visit = func(id int32) {
+				if visited[id] {
+					return
+				}
+				visited[id] = true
+				node := q.Nodes[id]
+				if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.GetName() == "region" {
+					found = true
+				}
+				for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList, node.BlockFilterList} {
+					for _, expr := range exprs {
+						require.False(t, hasCorrCol(expr), "reachable plans must not leave a correlated column for the executor")
+					}
+				}
+				for _, child := range node.Children {
+					visit(child)
+				}
+			}
+			for _, root := range q.Steps {
+				visit(root)
+			}
+			require.True(t, found, "the inner scan must remain reachable for authorization and metadata")
+		})
+	}
+}
+
+func TestZeroScalarPrivilegeCarriersDoNotChangeScheduling(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		`select null + (select (select o.n_nationkey from tpch.region r where r.r_regionkey > o.n_nationkey limit 0) from tpch.nation o limit 1)`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	require.NoError(t, err)
+	withoutCarriers := *query
+	withoutCarriers.Nodes = nil
+	for _, node := range query.Nodes {
+		if node.ExtraOptions != zeroScalarPrivilegeCarrier {
+			withoutCarriers.Nodes = append(withoutCarriers.Nodes, node)
+		}
+	}
+	require.Less(t, len(withoutCarriers.Nodes), len(query.Nodes), "query must exercise retained privilege carriers")
+	t.Run("placement", func(t *testing.T) {
+		require.Equal(t, GetExecType(&withoutCarriers, false, false), GetExecType(query, false, false))
+	})
+	t.Run("single CPU", func(t *testing.T) {
+		p := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+		require.NotPanics(t, func() { CalcQueryDOP(p, 1, 1, ExecTypeAP_MULTICN) })
+	})
+	t.Run("carrier between execution nodes", func(t *testing.T) {
+		q := &plan.Query{Nodes: []*plan.Node{
+			{NodeType: plan.Node_VALUE_SCAN, Stats: &plan.Stats{}},
+			{NodeType: plan.Node_VALUE_SCAN, ExtraOptions: zeroScalarPrivilegeCarrier},
+			{NodeType: plan.Node_VALUE_SCAN, Stats: &plan.Stats{}},
+		}}
+		require.Equal(t, ExecTypeTP, GetExecType(q, false, false))
+		require.False(t, HasShuffleInPlan(q))
+		p := &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
+		require.NotPanics(t, func() { CalcQueryDOP(p, 1, 1, ExecTypeTP) })
+	})
+}
+
+func TestZeroLimitScalarSourceRejectsVisibleCTE(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		safe bool
+	}{
+		{"select a from region limit 0", false},
+		{"select a from tpch.region limit 0", true},
+		{"select a from nation limit 0", true},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			outer := &BindContext{cteByName: map[string]*CTERef{"region": {}}}
+			require.Equal(t, tc.safe, zeroLimitScalarSourceSafe(stmt.(*tree.Select), &BindContext{parent: outer}))
+		})
+	}
+}
+
+func TestCorrelatedZeroScalarOutputType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		typ  types.T
+	}{
+		{"signed", `select (select cast(n.n_nationkey as signed) from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) from tpch.nation n`, types.T_int64},
+		{"boolean", `select (select (n.n_nationkey > 1) is true from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) from tpch.nation n`, types.T_bool},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+			require.NoError(t, err)
+			require.Len(t, query.Steps, 1)
+			root := query.Nodes[query.Steps[0]]
+			require.Len(t, root.ProjectList, 1)
+			require.Equal(t, int32(tc.typ), root.ProjectList[0].Typ.Id)
+			require.False(t, root.ProjectList[0].Typ.NotNullable)
+		})
+	}
+}
+
+func TestBuiltinFoldedZeroScalarRetainsSources(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		sources []string
+	}{
+		{"direct", `select null + (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) from tpch.nation n`, []string{"region"}},
+		{"nested", `select null + (select null + (select c.c_custkey from tpch.region r where r.r_regionkey > c.c_custkey limit 0) from tpch.customer c limit 1) from tpch.nation n`, []string{"region", "customer"}},
+		{"deduplicated nested source", `select null + (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0), null + (select null + (select c.c_custkey from tpch.region r where r.r_regionkey > c.c_custkey limit 0) from tpch.customer c limit 1) from tpch.nation n`, []string{"region", "customer"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+			require.NoError(t, err)
+			retained := make(map[string]bool)
+			for _, node := range query.Nodes {
+				if node.ExtraOptions == zeroScalarPrivilegeCarrier && node.ObjRef != nil {
+					retained[node.ObjRef.ObjName] = true
+				}
+			}
+			for _, source := range tc.sources {
+				require.True(t, retained[source], "folded source must remain visible for authorization")
+			}
+		})
+	}
+}
+
+func TestNestedCorrelatedScalarZeroLimitRetainsAuthorizationSources(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		`select null + (select (select o.n_nationkey from tpch.region r where r.r_regionkey > o.n_nationkey limit 0) from tpch.nation o limit 1)`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	require.NoError(t, err)
+	retained := make(map[string]bool)
+	for _, node := range query.Nodes {
+		if node.ExtraOptions == zeroScalarPrivilegeCarrier && node.ObjRef != nil {
+			retained[node.ObjRef.ObjName] = true
+		}
+	}
+	require.True(t, retained["region"], "folded expression must retain the nested source for privilege checks")
+	require.True(t, retained["nation"], "folded expression must retain the wrapper source for privilege checks")
+}
+
+func TestLiveZeroScalarSourcesDoNotDuplicateCarriers(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		`select (select (select c.c_custkey from tpch.region r where r.r_regionkey > c.c_custkey limit 0) from tpch.customer c limit 1) from tpch.nation n`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	require.NoError(t, err)
+	counts := make(map[string]int)
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil {
+			counts[node.ObjRef.ObjName]++
+		}
+	}
+	require.Equal(t, 1, counts["region"])
+	require.Equal(t, 1, counts["customer"])
+}
+
+func TestZeroScalarCarrierRequiresMatchingSourceMetadata(t *testing.T) {
+	newPair := func() (*plan.Node, *plan.Node) {
+		source := &plan.Node{
+			NodeType:     plan.Node_TABLE_SCAN,
+			ObjRef:       &plan.ObjectRef{ObjName: "t"},
+			ParentObjRef: &plan.ObjectRef{ObjName: "parent"},
+			TableDef:     &plan.TableDef{TableType: catalog.SystemOrdinaryRel, Name: "t", TblId: 7, Version: 3, DbName: "db", DbId: 4},
+			OriginViews:  []string{"db.v1", "db.v2"}, DirectView: "db.v2", NotCacheable: true,
+		}
+		carrier := &plan.Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			ObjRef:   DeepCopyObjectRef(source.ObjRef), ParentObjRef: DeepCopyObjectRef(source.ParentObjRef),
+			TableDef: &plan.TableDef{TableType: source.TableDef.TableType, Name: source.TableDef.Name, TblId: source.TableDef.TblId,
+				Version: source.TableDef.Version, DbName: source.TableDef.DbName, DbId: source.TableDef.DbId},
+			OriginViews: append([]string(nil), source.OriginViews...), DirectView: source.DirectView, NotCacheable: true,
+		}
+		return source, carrier
+	}
+	require.True(t, zeroScalarSourceCoversCarrier(newPair()))
+
+	for _, tc := range []struct {
+		name   string
+		change func(*plan.Node)
+	}{
+		{"object reference", func(n *plan.Node) { n.ObjRef.ObjName = "other" }},
+		{"parent object reference", func(n *plan.Node) { n.ParentObjRef.ObjName = "other" }},
+		{"snapshot", func(n *plan.Node) { n.ScanSnapshot = &plan.Snapshot{} }},
+		{"view chain", func(n *plan.Node) { n.OriginViews[0] = "db.other" }},
+		{"direct view", func(n *plan.Node) { n.DirectView = "db.other" }},
+		{"cacheability", func(n *plan.Node) { n.NotCacheable = false }},
+		{"table version", func(n *plan.Node) { n.TableDef.Version++ }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, carrier := newPair()
+			tc.change(source)
+			require.False(t, zeroScalarSourceCoversCarrier(source, carrier))
+		})
+	}
+}
+
+func TestViewDefinitionDoesNotEnableRootZeroScalarRewrite(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		`create view zero_scalar_v as select n.n_nationkey, (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) as v from tpch.nation n`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err, "view definitions must not accept a rewrite that is unavailable when the view is read")
+}
+
+func TestPrepareDoesNotEnableFoldedRootZeroScalarRewrite(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL,
+		`select null + (select n.n_nationkey from tpch.region r where r.r_regionkey > n.n_nationkey limit 0) from tpch.nation n`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, true)
+	require.ErrorContains(t, err, "prepared correlated subquery with LIMIT 0")
+}
+
+func TestZeroLimitScalarSourceSafety(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		safe  bool
+		remap bool
+	}{
+		{name: "direct table", sql: "select a from t2 limit 0", safe: true},
+		{name: "projection alias", sql: "select a as x from t2 limit 0", safe: true},
+		{name: "filtered correlated shape", sql: "select a from t2 where d > a limit 0", safe: true},
+		{name: "audited value expression", sql: "select cast(concat(a, char(120)) as signed) from t2 limit 0", safe: true},
+		{name: "parenthesized projection", sql: "select (a) from t2 limit 0", safe: true},
+		{name: "binary value operation", sql: "select a + 1 from t2 limit 0", safe: true},
+		{name: "unary value operation", sql: "select -a from t2 limit 0", safe: true},
+		{name: "coalesce value function", sql: "select coalesce(a, 1) from t2 limit 0", safe: true},
+		{name: "ifnull value function", sql: "select ifnull(a, 1) from t2 limit 0", safe: true},
+		{name: "compound null predicate", sql: "select a from t2 where (d > a) and (a is not null) limit 0", safe: true},
+		{name: "disjunction predicate", sql: "select a from t2 where d > 1 or a is null limit 0", safe: true},
+		{name: "safe order key", sql: "select a from t2 order by d limit 0", safe: true},
+		{name: "literal offset", sql: "select a from t2 limit 0 offset 4", safe: true},
+		{name: "negated string predicate", sql: "select a from t2 where not (d = 'x') limit 0", safe: true},
+		{name: "unsafe predicate function", sql: "select a from t2 where random_bytes(4) = 'x' limit 0"},
+		{name: "derived source", sql: "select a from (select a from t2) q limit 0"},
+		{name: "multiple projections", sql: "select a, d from t2 limit 0"},
+		{name: "grouping", sql: "select a from t2 group by a limit 0"},
+		{name: "unsafe nested function argument", sql: "select coalesce(random_bytes(4), a) from t2 limit 0"},
+		{name: "arithmetic order key remains unsupported", sql: "select a from t2 order by (d + 1 > 2) is true limit 0"},
+		{name: "untrusted function inside arithmetic predicate", sql: "select a from t2 where d > 1 + custom_fn(a) limit 0"},
+		{name: "unsafe order key", sql: "select a from t2 order by random_bytes(4) limit 0"},
+		{name: "aggregate projection", sql: "select sum(a) from t2 limit 0"},
+		{name: "predicate parameter retained", sql: "select a from t2 where d > ? limit 0", safe: true},
+		{name: "random function", sql: "select random_bytes(4) from t2 limit 0"},
+		{name: "UDF with hidden nested argument", sql: "select r32869_keep_second((select s from secret limit 1), a) from t2 limit 0"},
+		{name: "CTE", sql: "with q as (select a from t2) select a from q limit 0"},
+		{name: "index hint", sql: "select a from t2 use index (idx) limit 0"},
+		{name: "dynamic offset", sql: "select a from t2 limit 0 offset ?"},
+		{name: "join", sql: "select t2.a from t2 join t3 on t2.a = t3.a limit 0"},
+		{name: "inherited rewrite", sql: "select a from t2 limit 0", remap: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok, "unexpected parser result %T", stmt)
+			ctx := &BindContext{}
+			if tc.remap {
+				ctx.remapOption = &tree.RewriteOption{}
+			}
+			require.Equal(t, tc.safe, zeroLimitScalarSourceSafe(selectStmt, ctx))
+		})
+	}
+}
+
+func TestEmptyCorrelatedScalarScanChecksIntermediateProjectionSafety(t *testing.T) {
+	inputType := plan.Type{Id: int32(types.T_int64)}
+	resultType := plan.Type{Id: int32(types.T_date)}
+	correlated := &plan.Expr{
+		Typ:  inputType,
+		Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{Depth: 1}},
+	}
+	projection := &plan.Expr{
+		Typ: resultType,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(int32(function.CAST), 0), ObjName: "cast"},
+			Args: []*plan.Expr{
+				correlated,
+				{Typ: resultType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+			},
+		}},
+	}
+	require.True(t, emptyCorrelatedScalarResultSafe(projection))
+	require.False(t, emptyCorrelatedScalarExpressionSafe(projection))
+
+	ctx := &BindContext{
+		zeroScalarRootSourceSafe: true,
+		results:                  []*plan.Expr{{Typ: resultType}},
+		projects:                 []*plan.Expr{projection},
+	}
+	scan := &plan.Node{
+		NodeId:      0,
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{1},
+		TableDef:    &plan.TableDef{TableType: catalog.SystemOrdinaryRel},
+		ObjRef:      &plan.ObjectRef{},
+	}
+	intermediate := &plan.Node{
+		NodeId:      1,
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{0},
+		BindingTags: []int32{2},
+		ProjectList: []*plan.Expr{projection},
+	}
+	root := &plan.Node{
+		NodeId:      2,
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{1},
+		BindingTags: []int32{3},
+		ProjectList: []*plan.Expr{projection},
+		Limit:       makePlan2Uint64ConstExprWithType(0),
+	}
+	builder := &QueryBuilder{
+		qry:       &Query{Nodes: []*plan.Node{scan, intermediate, root}},
+		ctxByNode: []*BindContext{ctx, ctx, ctx},
+	}
+	_, ok := builder.emptyCorrelatedScalarScan(2, &plan.SubqueryRef{
+		Typ:    plan.SubqueryRef_SCALAR,
+		NodeId: 2,
+	}, ctx)
+	require.False(t, ok, "an intermediate projection must use the stricter expression proof")
+}
+
+func TestUDFResolutionInvalidatesSubqueryArgumentSource(t *testing.T) {
+	ctx := &BindContext{zeroScalarRootSourceSafe: true}
+	builder := &QueryBuilder{ctxByNode: []*BindContext{ctx}}
+	arg := &plan.Expr{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{NodeId: 0}}}
+	require.False(t, markSubquerySourcesUnsafe(builder, []*plan.Expr{arg}))
+	require.False(t, ctx.zeroScalarRootSourceSafe)
+
+	ctx.zeroScalarRootSourceSafe = true
+	ctx.zeroScalarRewriteInPlan = true
+	require.True(t, markSubquerySourcesUnsafe(builder, []*plan.Expr{arg}))
+	require.False(t, ctx.zeroScalarRootSourceSafe)
+}
+
+func TestZeroScalarDiscardedWrapperRetainsAuthorizationSource(t *testing.T) {
+	result, err := runOneStmt(NewMockOptimizer(true), t, `select n.n_nationkey, null + (select (select c.c_custkey from tpch.region r where r.r_regionkey > c.c_custkey limit 0) from tpch.customer c limit 1) from tpch.nation n`)
+	require.NoError(t, err)
+	q := result.GetQuery()
+	found := false
+	for _, node := range q.Nodes {
+		if node.ExtraOptions == zeroScalarPrivilegeCarrier && node.GetObjRef().GetObjName() == "customer" {
+			found = true
+			require.Empty(t, node.Children)
+			require.Empty(t, node.SourceStep)
+		}
+	}
+	require.True(t, found, "discarded wrapper must retain its authorization source")
+}
+
+func TestZeroScalarAuthorizationSourcesFollowStepsAndViews(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
+		{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan.ObjectRef{ObjName: "source"}, TableDef: &plan.TableDef{Name: "source", TblId: 4, Version: 5, DbId: 6, DbName: "db"}, OriginViews: []string{"v"}},
+		{NodeType: plan.Node_VALUE_SCAN, DirectView: "constant_view"},
+	}
+	builder.qry.Steps = []int32{1}
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0, false))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(2, false))
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0, false))
+	require.Len(t, builder.zeroScalarPrivilegeScans, 2)
+	require.Equal(t, "source", builder.zeroScalarPrivilegeScans[0].GetObjRef().GetObjName())
+	require.Equal(t, []string{"v"}, builder.zeroScalarPrivilegeScans[0].OriginViews)
+	require.Equal(t, builder.qry.Nodes[1].TableDef, builder.zeroScalarPrivilegeScans[0].TableDef)
+	require.Equal(t, "constant_view", builder.zeroScalarPrivilegeScans[1].DirectView)
+	require.Error(t, builder.retainZeroScalarAuthorizationSources(3, false))
+	builder.qry.Nodes[0].SourceStep = []int32{1}
+	require.Error(t, builder.retainZeroScalarAuthorizationSources(0, false))
+}
+
+func TestZeroScalarAuthorizationRetentionKeepsNonCacheableAndRequiresLiveControl(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder.qry.Nodes = []*plan.Node{{NodeType: plan.Node_PROJECT, NotCacheable: true}}
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(0, false))
+	require.Len(t, builder.zeroScalarPrivilegeScans, 1)
+	require.True(t, builder.zeroScalarPrivilegeScans[0].NotCacheable)
+
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "mo_ctl"},
+		}}}},
+	})
+	require.NoError(t, builder.retainZeroScalarAuthorizationSources(1, true))
+	require.Equal(t, zeroScalarLiveControl, builder.zeroScalarRequiredLiveSources[1])
+	builder.qry.Steps = []int32{1}
+	builder.qry.Nodes[1].ProjectList = nil
+	require.ErrorContains(t, builder.finalizeZeroScalarAuthorizationSources(),
+		"special source in correlated scalar LIMIT 0 wrapper")
+}
+
+type zeroScalarResultScanContext struct{ *MockCompilerContext }
+
+func (c *zeroScalarResultScanContext) ResolveVariable(name string, system, global bool) (interface{}, error) {
+	if name == "save_query_result" {
+		return int8(1), nil
+	}
+	return c.MockCompilerContext.ResolveVariable(name, system, global)
+}
+
+func (c *zeroScalarResultScanContext) GetQueryResultMeta(string) ([]*plan.ColDef, string, error) {
+	return []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}}, "saved-result", nil
+}
+
+func TestZeroScalarWrapperRejectsSpecialSources(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"result scan", `select null + (select (select q.a from tpch.region r where r.r_regionkey > q.a limit 0) from result_scan('00000000-0000-0000-0000-000000000001') q limit 1)`},
+		{"meta scan", `select null + (select (select q.account_id from tpch.region r where r.r_regionkey > q.account_id limit 0) from meta_scan('00000000-0000-0000-0000-000000000001') q limit 1)`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &zeroScalarResultScanContext{NewMockCompilerContext(true)}
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = NewBaseOptimizer(ctx).Optimize(stmt, false)
+			require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+		})
+	}
+}
+
+func TestZeroScalarWrapperKeepsLiveSpecialSource(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		nodeType plan.Node_NodeType
+	}{
+		{"result scan", `select (select (select q.a from tpch.region r where r.r_regionkey > q.a limit 0) from result_scan('00000000-0000-0000-0000-000000000001') q limit 1)`, plan.Node_EXTERNAL_SCAN},
+		{"meta scan", `select (select (select q.account_id from tpch.region r where r.r_regionkey > q.account_id limit 0) from meta_scan('00000000-0000-0000-0000-000000000001') q limit 1)`, plan.Node_FUNCTION_SCAN},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &zeroScalarResultScanContext{NewMockCompilerContext(true)}
+			stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+			require.NoError(t, err)
+			found := false
+			for _, node := range query.Nodes {
+				found = found || node.NodeType == tc.nodeType
+			}
+			require.True(t, found, "live source must reach its existing authorization consumer")
+		})
+	}
 }

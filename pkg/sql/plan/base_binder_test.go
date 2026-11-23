@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -184,11 +185,17 @@ type sqlUdfMockCompilerContext struct {
 
 func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
 	switch name {
+	case "f_identity":
+		return &function.Udf{Body: "$1", Language: string(tree.SQL)}, nil
+	case "f_discard":
+		return &function.Udf{Body: "1", Language: string(tree.SQL)}, nil
 	case "f_lookup":
 		return &function.Udf{
 			Body:     "select n_regionkey from nation where n_nationkey = $1",
 			Language: string(tree.SQL),
 		}, nil
+	case "f_keep_second":
+		return &function.Udf{Body: "$2", Language: string(tree.SQL)}, nil
 	case "f_ansi_quotes":
 		mode := "ANSI_QUOTES"
 		return &function.Udf{
@@ -218,6 +225,123 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 	}
 }
 
+func TestZeroScalarControlAuthorization(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	control := "mo_ctl('cn', 'GetProtocolVersion', '')"
+	from := " from nation n where (select n.n_nationkey from region r " +
+		"where r.r_regionkey > n.n_nationkey limit 0) is null"
+	for _, tc := range []struct {
+		name         string
+		sql          string
+		reject       bool
+		keepsControl bool
+	}{
+		{name: "ordinary scalar", sql: "select (select " + control + " limit 0)"},
+		{name: "ordinary exists", sql: "select exists(select " + control + " limit 0)"},
+		{name: "live project", sql: "select (select " + control + from + " limit 0)", keepsControl: true},
+		{name: "discarded project", sql: "select null + (select " + control + from + " limit 1) from nation", reject: true},
+		{name: "folded call", sql: "select (select null + " + control + from + " limit 0)", reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+			if tc.reject {
+				require.ErrorContains(t, err, "special source in correlated scalar LIMIT 0 wrapper")
+				return
+			}
+			require.NoError(t, err)
+			if tc.keepsControl {
+				require.True(t, slices.ContainsFunc(query.Nodes, ProjectHasMoCtrl),
+					"the frontend must still see the retained control function")
+			}
+		})
+	}
+}
+
+func TestSQLUDFRejectsNestedZeroScalarRewrite(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select f_discard((select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n union all select 1))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = NewBaseOptimizer(ctx).Optimize(stmt, false)
+	require.ErrorContains(t, err, "SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument",
+		"the nested UNION argument must be rejected before the UDF discards its source")
+}
+
+func TestSQLUDFFoldedZeroScalarSource(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		wantErr bool
+	}{
+		{"identity", "select f_identity(null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)) from nation n", false},
+		{"discard", "select f_discard(null + (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)) from nation n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument")
+				return
+			}
+			require.NoError(t, err)
+			found := false
+			for _, node := range query.Nodes {
+				found = found || IsZeroScalarPrivilegeCarrier(node) && node.ObjRef.GetObjName() == "region"
+			}
+			require.True(t, found, "identity UDF must keep the folded source for authorization")
+		})
+	}
+}
+
+func TestSQLIdentityUDFKeepsNestedZeroScalarRewriteSources(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select f_identity((select (select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0) from nation n limit 1))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	require.NoError(t, err)
+	foundNation, foundRegion, foundSingleJoin := false, false, false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
+			foundNation = foundNation || node.TableDef.GetName() == "nation"
+			foundRegion = foundRegion || node.TableDef.GetName() == "region"
+		}
+		foundSingleJoin = foundSingleJoin || node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE
+	}
+	require.True(t, foundNation, "the identity UDF must retain its wrapper table source")
+	require.True(t, foundRegion, "the identity UDF must retain the inner LIMIT 0 table source")
+	require.True(t, foundSingleJoin, "the nested empty scalar must keep its invocation-local single join")
+}
+
+func TestSQLIdentityUDFKeepsZeroLimitSource(t *testing.T) {
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select f_identity((select n.n_nationkey from region r where r.r_regionkey > n.n_nationkey limit 0)) from nation n", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	query, err := NewBaseOptimizer(ctx).Optimize(stmt, false)
+	require.NoError(t, err)
+	foundScan, foundSingleJoin := false, false
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.GetName() == "region" {
+			foundScan = true
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE {
+			foundSingleJoin = true
+		}
+	}
+	require.True(t, foundSingleJoin, "the identity UDF must use the correlated scalar LIMIT 0 rewrite")
+	require.True(t, foundScan, "the identity UDF must retain the inner source for authorization")
+}
+
 func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.Background(),
@@ -239,6 +363,21 @@ func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	query := built.GetQuery()
 	require.NotNil(t, query)
 	require.True(t, queryContainsCrossRelationEquality(query), "SQL UDF parameter must bind to the outer scan column")
+}
+
+func TestBindSQLUDFRejectsDiscardedSetOperationZeroLimitSource(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+		"select f_keep_second((select (select o.r_regionkey from region i where i.r_regionkey > o.r_regionkey limit 0) from region o union all select 5 limit 1), n.n_nationkey) from nation n", 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+	_, err = BuildPlan(ctx, stmts[0], false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "pre-flattened correlated scalar LIMIT 0 argument")
 }
 
 func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
@@ -357,6 +496,37 @@ func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, "", marker))
 		})
 	}
+}
+
+func TestVisitPlanExprTreeTraversesNestedExpressionSources(t *testing.T) {
+	leaf := func() *plan.Expr { return &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{}}} }
+	windowFunc, partition, order, start, end := leaf(), leaf(), leaf(), leaf(), leaf()
+	child, listItem, literalSource := leaf(), leaf(), leaf()
+	root := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+		{Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			WindowFunc:  windowFunc,
+			PartitionBy: []*plan.Expr{partition},
+			OrderBy:     []*plan.OrderBySpec{{Expr: order}},
+			Frame: &plan.FrameClause{
+				Start: &plan.FrameBound{Val: start},
+				End:   &plan.FrameBound{Val: end},
+			},
+		}}},
+		{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{Child: child}}},
+		{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{listItem}}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Src: literalSource}}},
+	}}}}
+	visited := make(map[*plan.Expr]int)
+	err := visitPlanExprTree(root, func(expr *plan.Expr) error {
+		visited[expr]++
+		return nil
+	})
+	require.NoError(t, err)
+	for _, expr := range []*plan.Expr{root, windowFunc, partition, order, start, end, child, listItem, literalSource} {
+		require.Equal(t, 1, visited[expr])
+	}
+	stop := fmt.Errorf("stop expression walk")
+	require.ErrorIs(t, visitPlanExprTree(root, func(*plan.Expr) error { return stop }), stop)
 }
 
 func TestCorrelateSQLUdfArgumentTraversesNestedExpressions(t *testing.T) {
