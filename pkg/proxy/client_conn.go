@@ -594,7 +594,7 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	return nil
 }
 
-func (c *clientConn) sendErr(err error, resp chan<- []byte) {
+func (c *clientConn) sendErr(ctx context.Context, err error, resp chan<- []byte) {
 	errCode, sqlState, errMsg := frontend.RewriteError(err, "")
 	payload := c.mysqlProto.MakeErrPayload(
 		errCode, sqlState, errMsg)
@@ -603,7 +603,7 @@ func (c *clientConn) sendErr(err error, resp chan<- []byte) {
 		SequenceID: 1,
 		Payload:    payload,
 	}
-	sendResp(packetToBytes(r), resp)
+	sendRespContext(ctx, packetToBytes(r), resp)
 }
 
 func (c *clientConn) connAndExec(
@@ -628,7 +628,7 @@ func (c *clientConn) connAndExec(
 	}
 	if err != nil {
 		if resp != nil {
-			c.sendErr(err, resp)
+			c.sendErr(ctx, err, resp)
 		}
 		return err
 	}
@@ -640,7 +640,7 @@ func (c *clientConn) connAndExec(
 	if err != nil {
 		c.log.Error("failed to connect to backend server", zap.Error(err))
 		if resp != nil {
-			c.sendErr(err, resp)
+			c.sendErr(ctx, err, resp)
 		}
 		return err
 	}
@@ -650,7 +650,7 @@ func (c *clientConn) connAndExec(
 		c.log.Error("failed to connect to cn to handle event",
 			zap.String("query", stmt), zap.String("error", string(r)))
 		if resp != nil {
-			sendResp(r, resp)
+			sendRespContext(ctx, r, resp)
 		}
 		return moerr.NewInternalErrorNoCtx("access error")
 	}
@@ -783,19 +783,11 @@ func recordSetVarStmt(stmts *[]string, stmtMap map[string]struct{}, stmt string)
 	*stmts = append(*stmts, stmt)
 }
 
-func (c *clientConn) handleQuitEvent(ctx context.Context) error {
-	return c.handleQuitEventInternal(ctx, true)
-}
-
 // handleQuitCommand handles an intercepted COM_QUIT while c2s is synchronously
 // blocked waiting for the event notification. Sealing is sufficient here: the
 // pipe cannot touch the backend again before it is notified, and it terminates
 // immediately afterwards.
 func (c *clientConn) handleQuitCommand(ctx context.Context) error {
-	return c.handleQuitEventInternal(ctx, false)
-}
-
-func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe bool) error {
 	c.quit.once.Do(func() {
 		csp, scp := c.tun.getPipes()
 		discardBackend := func() {
@@ -825,12 +817,6 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 			if err := csp.seal(); err != nil {
 				abort(err)
 				return
-			}
-			if waitClientPipe {
-				if err := csp.waitStopped(pauseCtx); err != nil {
-					abort(err)
-					return
-				}
 			}
 		}
 		if scp != nil {
@@ -907,14 +893,14 @@ func (c *clientConn) handleUpgradeEvent(
 	if !c.clientInfo.isSuperTenant() {
 		err := moerr.NewInternalErrorNoCtx("do not have privilege to execute the statement")
 		c.log.Error("failed to exec upgrade event", zap.Error(err))
-		c.sendErr(err, resp)
+		c.sendErr(ctx, err, resp)
 		return err
 	}
 
 	servers, err := c.router.AllServers(c.sid)
 	if err != nil {
 		c.log.Error("failed to select CN server", zap.Error(err))
-		c.sendErr(err, resp)
+		c.sendErr(ctx, err, resp)
 		return err
 	}
 
@@ -926,7 +912,7 @@ func (c *clientConn) handleUpgradeEvent(
 		cid, err := c.genConnID()
 		if err != nil {
 			c.log.Error("failed to generate conn ID for upgrade query", zap.Error(err))
-			c.sendErr(err, resp)
+			c.sendErr(ctx, err, resp)
 			return err
 		}
 		cn.connID = cid
@@ -935,12 +921,12 @@ func (c *clientConn) handleUpgradeEvent(
 		// It everything is ok, send ok response at last out of the loop.
 		if err := c.connAndExec(ctx, cn, e.stmt, nil, protocolMemoryBackground); err != nil {
 			c.log.Error("failed to execute upgrade query", zap.Error(err))
-			c.sendErr(err, resp)
+			c.sendErr(ctx, err, resp)
 			return err
 		}
 	}
 	if resp != nil {
-		sendResp(makeOKPacket(8), resp)
+		sendRespContext(ctx, makeOKPacket(8), resp)
 	}
 	return nil
 }

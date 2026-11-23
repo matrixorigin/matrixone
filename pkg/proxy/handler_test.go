@@ -1203,9 +1203,10 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	tun.mu.sc = current
 	killed := make(chan ServerConn, 1)
 	cc := &mockClientConn{killFn: func(sc ServerConn) error { killed <- sc; return nil }}
-	done := make(chan bool, 1)
+	done := make(chan struct{}, 1)
 	go func() {
-		done <- h.cleanupBackendOnClientDisconnect(withCode(syscall.ECONNRESET, codeClientDisconnect), cc, tun)
+		h.cleanupBackendOnClientDisconnect(withCode(syscall.ECONNRESET, codeClientDisconnect), cc, tun)
+		close(done)
 	}()
 	<-entered
 	// The handler must complete terminal Close before selecting its backend.
@@ -1219,7 +1220,7 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	require.ErrorIs(t, tun.replaceServerConn(nil, replacement, false), errPipeClosed)
 	require.True(t, replacementClosed)
 	releaseWaiter()
-	require.True(t, <-done)
+	<-done
 	require.Same(t, current, <-killed)
 	require.Same(t, current, tun.getServerConn())
 }
@@ -1249,9 +1250,10 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 		return nil
 	}}
 
-	done := make(chan bool, 1)
+	done := make(chan struct{}, 1)
 	go func() {
-		done <- h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
+		h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
+		close(done)
 	}()
 
 	require.Same(t, current, <-notificationStarted)
@@ -1261,7 +1263,7 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 		t.Fatal("backend close waited for control-plane notification")
 	}
 	release()
-	require.True(t, <-done)
+	<-done
 }
 
 func TestHandler_handleTunnelErrCleansPlainInFlightEOF(t *testing.T) {

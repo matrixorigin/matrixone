@@ -395,7 +395,7 @@ func TestPipeCancelError(t *testing.T) {
 	cc := newMySQLConn("client", clientProxy, 0, nil, nil, false, 0)
 	sc := newMySQLConn("server", serverProxy, 0, nil, nil, false, 0)
 	p := tun.newPipe(pipeClientToServer, cc, sc)
-	err := p.kickoff(ctx, nil)
+	err := p.kickoff(ctx, nil, nil)
 	require.EqualError(t, err, context.Canceled.Error())
 	p.mu.Lock()
 	require.True(t, p.mu.closed)
@@ -437,7 +437,7 @@ func TestPipeStart(t *testing.T) {
 	default:
 	}
 
-	go func() { _ = p.kickoff(ctx, nil) }()
+	go func() { _ = p.kickoff(ctx, nil, nil) }()
 
 	var lastErr error
 	require.Eventually(t, func() bool {
@@ -500,9 +500,9 @@ func TestPipeStartAndPause(t *testing.T) {
 	p := tun.newPipe(pipeClientToServer, cc, sc)
 
 	errCh := make(chan error, 2)
-	go func() { errCh <- p.kickoff(ctx, nil) }()
-	go func() { errCh <- p.kickoff(ctx, nil) }()
-	go func() { errCh <- p.kickoff(ctx, nil) }()
+	go func() { errCh <- p.kickoff(ctx, nil, nil) }()
+	go func() { errCh <- p.kickoff(ctx, nil, nil) }()
+	go func() { errCh <- p.kickoff(ctx, nil, nil) }()
 	err := <-errCh
 	require.NoError(t, err)
 	err = <-errCh
@@ -606,7 +606,7 @@ func TestCacheQuitDoesNotLeakPostQuitCommandIntoReusedBackend(t *testing.T) {
 		}
 	}
 	pipeDone := make(chan error, 1)
-	go func() { pipeDone <- csp.kickoff(ctx, scp) }()
+	go func() { pipeDone <- csp.kickoff(ctx, scp, nil) }()
 	require.NoError(t, csp.waitReady(ctx))
 
 	postQuitCommand := makeSimplePacket("post quit command")
@@ -747,7 +747,7 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 	for i := 1; i <= concurrency; i++ {
 		go func(p *pipe, i int) {
 			time.Sleep(jitteredInterval(time.Duration((i*2)+500) * time.Millisecond))
-			errKickoffCh <- p.kickoff(ctx, nil)
+			errKickoffCh <- p.kickoff(ctx, nil, nil)
 		}(p, i)
 		go func(p *pipe, i int) {
 			time.Sleep(jitteredInterval(time.Duration((i*2)+500) * time.Millisecond))
@@ -779,7 +779,7 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	go func(p *pipe) { _ = p.kickoff(ctx, nil) }(p)
+	go func(p *pipe) { _ = p.kickoff(ctx, nil, nil) }(p)
 
 	err := p.waitReady(ctx)
 	require.NoError(t, err)
@@ -2167,7 +2167,7 @@ func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
 	tun.mu.started = true
 
 	pipeDone := make(chan error, 1)
-	go func() { pipeDone <- csp.kickoff(ctx, tun.mu.scp) }()
+	go func() { pipeDone <- csp.kickoff(ctx, tun.mu.scp, nil) }()
 	require.NoError(t, csp.waitReady(ctx))
 
 	forward := func(packet []byte) {
@@ -2251,7 +2251,7 @@ func TestSyncTransferSerializesClientRequestPublication(t *testing.T) {
 	}
 
 	pipeDone := make(chan error, 1)
-	go func() { pipeDone <- csp.kickoff(ctx, peer) }()
+	go func() { pipeDone <- csp.kickoff(ctx, peer, nil) }()
 	require.NoError(t, csp.waitReady(ctx))
 
 	const statementID uint32 = 42
@@ -2372,7 +2372,7 @@ func TestSyncTransferWaiterStopsWhenResponseForwardingFails(t *testing.T) {
 	defer tun.setTransferIntent(false)
 
 	pipeDone := make(chan error, 1)
-	go func() { pipeDone <- scp.kickoff(ctx, csp) }()
+	go func() { pipeDone <- scp.kickoff(ctx, csp, nil) }()
 	require.NoError(t, scp.waitReady(ctx))
 	writeDone := make(chan error, 1)
 	response := makeOKPacket(5)
@@ -2442,7 +2442,7 @@ func TestAsyncTransferSerializesClientRequestPublication(t *testing.T) {
 		<-releaseRead
 	}
 	pipeDone := make(chan error, 1)
-	go func() { pipeDone <- csp.kickoff(ctx, scp) }()
+	go func() { pipeDone <- csp.kickoff(ctx, scp, nil) }()
 	require.NoError(t, csp.waitReady(ctx))
 
 	request := makeSimplePacket("select 1")
@@ -2480,7 +2480,7 @@ func TestAsyncTransferSerializesClientRequestPublication(t *testing.T) {
 	newBackendConn := newMySQLConn(connServerName, newBackendProxy, 0, nil, nil, false, 3)
 	replacement := tun.newPipe(pipeClientToServer, clientConn, newBackendConn)
 	replacementDone := make(chan error, 1)
-	go func() { replacementDone <- replacement.kickoff(ctx, &pipe{}) }()
+	go func() { replacementDone <- replacement.kickoff(ctx, &pipe{}, nil) }()
 	require.NoError(t, replacement.waitReady(ctx))
 
 	got := make([]byte, len(request))
@@ -2541,7 +2541,7 @@ func TestLocallyConsumedRequestClosesProxyBoundary(t *testing.T) {
 			}()
 
 			pipeDone := make(chan error, 1)
-			go func() { pipeDone <- csp.kickoff(ctx, &pipe{}) }()
+			go func() { pipeDone <- csp.kickoff(ctx, &pipe{}, nil) }()
 			require.NoError(t, csp.waitReady(ctx))
 
 			localRequest := makeSimplePacket(test.statement)
@@ -2631,7 +2631,7 @@ func TestPipeTracksFragmentedTerminalResponse(t *testing.T) {
 	tun.trackClientRequest(makeSimplePacket("insert"))
 
 	pipeDone := make(chan error, 1)
-	go func() { pipeDone <- scp.kickoff(ctx, csp) }()
+	go func() { pipeDone <- scp.kickoff(ctx, csp, nil) }()
 	require.NoError(t, scp.waitReady(ctx))
 
 	ok := makeOKPacket(8)
