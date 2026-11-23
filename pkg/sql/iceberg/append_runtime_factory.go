@@ -205,10 +205,10 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
-	appendWriteBudget := newDMLMemoryBudget(
-		effectiveCfg.Write.DMLMaxMemory,
-		metadata.ManifestListMemoryWeight(0, preserved),
-	)
+	appendWriteBudget := newDMLMemoryBudget(effectiveCfg.Write.DMLMaxMemory, 0)
+	if err := appendWriteBudget.reserve(ctx, metadata.ManifestListMemoryWeight(0, preserved)); err != nil {
+		return nil, err
+	}
 	parquetOptions, err := icebergwritecore.ParseParquetOptions(tableMeta.Properties)
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
