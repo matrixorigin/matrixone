@@ -191,18 +191,7 @@ func mergeableLockTargets(left, right lockTarget) bool {
 		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
 }
 
-// getHasNewVersionInRangeFunc returns the configured checker when one is
-// supplied, and otherwise uses the normal lock checker. The callback is
-// optional for lock operators created by the planner; merged targets must not
-// dereference a nil callback while checking each target's relation.
-func (lockOp *LockOp) getHasNewVersionInRangeFunc() hasNewVersionInRangeFunc {
-	if lockOp.ctr.hasNewVersionInRange != nil {
-		return lockOp.ctr.hasNewVersionInRange
-	}
-	return hasNewVersionInRange
-}
-
-func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionInRangeFunc {
+func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int, observation *resource.LockReadObservation) hasNewVersionInRangeFunc {
 	return func(
 		proc *process.Process,
 		_ engine.Relation,
@@ -215,10 +204,10 @@ func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionI
 		from timestamp.Timestamp,
 		to timestamp.Timestamp,
 	) (bool, error) {
-		hasNewVersionInRange := lockOp.getHasNewVersionInRangeFunc()
+		opts := LockOptions{hasNewVersionInRangeFunc: lockOp.ctr.hasNewVersionInRange, lockRead: observation}
 		for _, groupIdx := range group {
 			groupTarget := lockOp.targets[groupIdx]
-			changed, err := hasNewVersionInRange(
+			changed, err := opts.checkPKVersions(
 				proc,
 				lockOp.ctr.relations[groupIdx],
 				analyzer,
@@ -340,9 +329,14 @@ func performLock(
 		// order. Use one full-domain range lock for the group. This keeps the
 		// operator streaming and bounds memory independently of input size.
 		lockTable := target.lockTable || len(group) > 1
-		hasNewVersionInRangeFunc := lockOp.getHasNewVersionInRangeFunc()
+		lockReadRoot := resource.LockReadRootFromContext(proc.Ctx)
+		var observation *resource.LockReadObservation
+		if lockReadRoot != nil {
+			observation = &resource.LockReadObservation{}
+		}
+		hasNewVersionInRangeFunc := lockOp.ctr.hasNewVersionInRange
 		if len(group) > 1 {
-			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
+			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group, observation)
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
@@ -356,6 +350,7 @@ func performLock(
 			target.primaryColumnType,
 			target.partitionColumnIndexInBatch,
 			DefaultLockOptions(lockOp.ctr.parker).
+				withLockRead(lockReadRoot, observation).
 				WithLockMode(target.mode).
 				WithFetchLockRowsFunc(fetchRows).
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
@@ -481,6 +476,7 @@ func lockTableWithModeAndContext(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		withLockRead(resource.LockReadRootFromContext(ctx), nil).
 		WithLockMode(mode).
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
@@ -522,7 +518,8 @@ func LockTableForSnapshotRefreshWithContext(
 	return lockTableWithModeAndContext(ctx, eng, proc, tableID, pkType, mode, changeDef, false)
 }
 
-// LockRow lock rows in table, rows will be locked, and wait current txn closed.
+// LockRows locks rows for the lifetime of the current transaction. When the
+// query context opts in, pre-pipeline acquisitions contribute to its diagnostic.
 func LockRows(
 	eng engine.Engine,
 	proc *process.Process,
@@ -565,6 +562,7 @@ func LockRows(
 	}()
 
 	opts := DefaultLockOptions(parker).
+		withLockRead(resource.LockReadRootFromContext(proc.Ctx), nil).
 		WithLockTable(false, false).
 		WithLockSharding(sharding).
 		WithLockMode(lockMode).
@@ -724,8 +722,16 @@ func doLock(
 		table = lockservice.ShardingByRow(rows[0])
 	}
 
+	if opts.lockReadRoot != nil {
+		if opts.lockRead == nil {
+			opts.lockRead = &resource.LockReadObservation{}
+		}
+		defer opts.lockReadRoot.MergeLockRead(opts.lockRead)
+	}
+	lockCtx := resource.ContextWithLockReadAcquisition(ctx, opts.lockRead)
+	acquisitionStart := opts.lockRead.Start()
 	result, err := lockWithRetry(
-		ctx,
+		lockCtx,
 		lockService,
 		table,
 		rows,
@@ -737,6 +743,8 @@ func doLock(
 		opts,
 		pkType,
 	)
+	opts.lockRead.Finish(lockCtx, resource.LockReadAcquisition, acquisitionStart, err)
+	opts.lockRead.ObserveAcquisitionConflict(result.HasConflict, err)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -793,18 +801,13 @@ func doLock(
 		txnOp.Txn().IsRCIsolation() {
 
 		start = time.Now()
-		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		newSnapshotTS, err := waitLockReadLogtail(ctx, txnClient, lockedTS, opts.lockRead)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
 		analyzeLockWaitTime(analyzer, start)
 
-		fn := opts.hasNewVersionInRangeFunc
-		if fn == nil {
-			fn = hasNewVersionInRange
-		}
-
-		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+		changed, err := opts.checkPKVersions(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -856,18 +859,13 @@ func doLock(
 
 	if needsExtraCheck && snapshotTS.LessEq(lockedTS) && txnOp.Txn().IsRCIsolation() {
 		start = time.Now()
-		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		newSnapshotTS, err := waitLockReadLogtail(ctx, txnClient, lockedTS, opts.lockRead)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
 		analyzeLockWaitTime(analyzer, start)
 
-		fn := opts.hasNewVersionInRangeFunc
-		if fn == nil {
-			fn = hasNewVersionInRange
-		}
-
-		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+		changed, err := opts.checkPKVersions(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -901,18 +899,13 @@ func doLock(
 
 	// HasConflict=true, HasPrevCommit=true, RC isolation - check hasNewVersionInRange
 	start = time.Now()
-	newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+	newSnapshotTS, err := waitLockReadLogtail(ctx, txnClient, lockedTS, opts.lockRead)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 	analyzeLockWaitTime(analyzer, start)
 
-	fn := opts.hasNewVersionInRangeFunc
-	if fn == nil {
-		fn = hasNewVersionInRange
-	}
-
-	changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
+	changed, err := opts.checkPKVersions(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -1653,6 +1646,37 @@ func getRowsFilter(
 	}
 }
 
+func (opts LockOptions) withLockRead(root *resource.Root, observation *resource.LockReadObservation) LockOptions {
+	opts.lockReadRoot = root
+	opts.lockRead = observation
+	return opts
+}
+
+func waitLockReadLogtail(ctx context.Context, txnClient client.TxnClient, target timestamp.Timestamp, observation *resource.LockReadObservation) (timestamp.Timestamp, error) {
+	start := observation.Start()
+	ts, err := txnClient.WaitLogTailAppliedAt(ctx, target)
+	observation.Finish(ctx, resource.LockReadLogtail, start, err)
+	return ts, err
+}
+
+func (opts LockOptions) checkPKVersions(
+	proc *process.Process,
+	rel engine.Relation,
+	analyzer process.Analyzer,
+	tableID uint64,
+	eng engine.Engine,
+	bat *batch.Batch,
+	idx int32,
+	partitionIdx int32,
+	from, to timestamp.Timestamp,
+) (bool, error) {
+	if opts.hasNewVersionInRangeFunc != nil {
+		return opts.hasNewVersionInRangeFunc(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, from, to)
+	}
+
+	return hasNewVersionInRange(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, from, to, opts.lockRead)
+}
+
 // [from, to].
 // 1. if has a mvcc record <= from, return false, means no changed
 // 2. otherwise return true, changed
@@ -1666,6 +1690,7 @@ func hasNewVersionInRange(
 	idx int32,
 	partitionIdx int32,
 	from, to timestamp.Timestamp,
+	observation *resource.LockReadObservation,
 ) (bool, error) {
 	if bat == nil {
 		return false, nil
@@ -1685,12 +1710,16 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	newCtx = resource.ContextWithLockReadPK(newCtx, observation)
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 
 	changed, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
-		return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+		start := observation.Start()
+		changed, err := rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+		observation.Finish(newCtx, resource.LockReadPKCheck, start, err)
+		return changed, err
 	})
 
 	return changed, err
