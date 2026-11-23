@@ -25,3 +25,10 @@ type IndexPointKey struct {
 	Seqnum uint16
 	Value  int32
 }
+
+// IndexPointSample counts joint matches over the same Observed rows for every
+// candidate. The other PointSampleRows-Observed preselected rows are unknown.
+type IndexPointSample struct {
+	Matches  [MaxPointSampleCandidates]int
+	Observed int
+}

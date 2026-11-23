@@ -43,8 +43,8 @@ const (
 func (e *Engine) SamplePointIndexMatches(
 	ctx context.Context, op client.TxnOperator, db, table uint64, rows int,
 	candidates [][]engine.IndexPointKey, mp *mpool.MPool,
-) ([engine.MaxPointSampleCandidates]int, bool) {
-	var empty [engine.MaxPointSampleCandidates]int
+) (engine.IndexPointSample, bool) {
+	var empty engine.IndexPointSample
 	if ctx == nil || context.Cause(ctx) != nil || op == nil || db == 0 || table == 0 || mp == nil ||
 		rows <= objectio.BlockMaxRows || rows > maxPointSampleBlocks*objectio.BlockMaxRows ||
 		len(candidates) < 2 || len(candidates) > engine.MaxPointSampleCandidates {
@@ -158,7 +158,7 @@ func (e *Engine) SamplePointIndexMatches(
 	if err != nil {
 		return empty, false
 	}
-	var matches [engine.MaxPointSampleCandidates]int
+	var sample engine.IndexPointSample
 	var selected [engine.PointSampleRows]objectio.CachedInt32Row
 	for i, block := range layout[:numBlocks] {
 		if len(picks[i]) == 0 {
@@ -166,18 +166,20 @@ func (e *Engine) SamplePointIndexMatches(
 		}
 		batch := selected[:len(picks[i])]
 		if !objectio.ReadCachedInt32Rows(ctx, fs, names[i], block, len(columns), picks[i], batch, mp) {
-			return empty, false
+			// Every row in this block remains unknown for every candidate.
+			continue
 		}
-		countPointSampleMatches(&matches, batch, candidates, positions)
+		countPointSampleMatches(&sample.Matches, batch, candidates, positions)
+		sample.Observed += len(batch)
 	}
 
 	latest, latestSub, valid := push.pointSamplePartition(db, table, snapshot)
-	if !valid || latest != state || latestSub != sub || generation != push.replayVersion.Load() ||
+	if sample.Observed == 0 || !valid || latest != state || latestSub != sub || generation != push.replayVersion.Load() ||
 		!op.SnapshotTS().Equal(snapshot) || op.GetWorkspace() != txn || !txn.ReadOnly() ||
 		txn.haveDDL.Load() || context.Cause(ctx) != nil {
 		return empty, false
 	}
-	return matches, true
+	return sample, true
 }
 
 func countPointSampleMatches(

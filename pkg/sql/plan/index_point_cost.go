@@ -34,10 +34,13 @@ type indexPointInterval struct {
 	lower, upper float64
 }
 
-func pointSampleInterval(matches, candidates int) indexPointInterval {
-	p := float64(matches) / engine.PointSampleRows
+func pointSampleInterval(matches, missing, candidates int) indexPointInterval {
+	// Bound every completion of the original sample. Eviction or admission
+	// can correlate with the data, so a cache hit is not a sampling decision.
+	lower := float64(matches) / engine.PointSampleRows
+	upper := float64(matches+missing) / engine.PointSampleRows
 	width := math.Sqrt(math.Log(2*float64(candidates)/0.01) / (2 * engine.PointSampleRows))
-	return indexPointInterval{max(0, p-width), min(1, p+width)}
+	return indexPointInterval{max(0, lower-width), min(1, upper+width)}
 }
 
 // Observe compatible ordinary point candidates after native admission. Every
@@ -59,7 +62,7 @@ func (builder *QueryBuilder) observePointIndexMatches(node *plan.Node, indexes [
 		return result, false
 	}
 	provider, ok := builder.compCtx.(interface {
-		SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) ([engine.MaxPointSampleCandidates]int, bool)
+		SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) (engine.IndexPointSample, bool)
 	})
 	if !ok {
 		return result, false
@@ -125,15 +128,16 @@ func (builder *QueryBuilder) observePointIndexMatches(node *plan.Node, indexes [
 		}
 		candidates[i] = keyGroups[i][:len(candidate.filters)]
 	}
-	matches, ok := provider.SamplePointIndexMatches(node.TableDef.DbId, node.TableDef.TblId, int(node.Stats.TableCnt), candidates[:len(group)])
-	if !ok {
+	sample, ok := provider.SamplePointIndexMatches(node.TableDef.DbId, node.TableDef.TblId, int(node.Stats.TableCnt), candidates[:len(group)])
+	if !ok || sample.Observed <= 0 || sample.Observed > engine.PointSampleRows {
 		return result, false
 	}
 	for i := range group {
-		if matches[i] < 0 || matches[i] > engine.PointSampleRows {
+		matches := sample.Matches[i]
+		if matches < 0 || matches > sample.Observed {
 			return result, false
 		}
-		result[i] = pointSampleInterval(matches[i], len(group))
+		result[i] = pointSampleInterval(matches, engine.PointSampleRows-sample.Observed, len(group))
 	}
 	return result, true
 }

@@ -1200,11 +1200,10 @@ func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 
 // SamplePointIndexMatches is optional for compiler contexts that own a local
 // transaction and its file service. The plan may discard the observation.
-func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) ([engine.MaxPointSampleCandidates]int, bool) {
-	var empty [engine.MaxPointSampleCandidates]int
+func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) (engine.IndexPointSample, bool) {
 	proc := tcc.GetProcess()
 	if proc == nil || proc.Base == nil || proc.Mp() == nil {
-		return empty, false
+		return engine.IndexPointSample{}, false
 	}
 	th := tcc.GetTxnHandler()
 	storage := th.GetStorage()
@@ -1212,10 +1211,10 @@ func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows in
 		storage = wrapped.Engine
 	}
 	observer, ok := storage.(interface {
-		SamplePointIndexMatches(context.Context, TxnOperator, uint64, uint64, int, [][]engine.IndexPointKey, *mpool.MPool) ([engine.MaxPointSampleCandidates]int, bool)
+		SamplePointIndexMatches(context.Context, TxnOperator, uint64, uint64, int, [][]engine.IndexPointKey, *mpool.MPool) (engine.IndexPointSample, bool)
 	})
 	if !ok {
-		return empty, false
+		return engine.IndexPointSample{}, false
 	}
 	return observer.SamplePointIndexMatches(tcc.GetContext(), th.GetTxn(), db, table, rows, candidates, proc.Mp())
 }

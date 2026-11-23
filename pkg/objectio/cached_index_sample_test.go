@@ -15,11 +15,13 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -27,6 +29,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCachedInt32BlocksRequiresCompleteMetadata(t *testing.T) {
+	ctx := t.Context()
+	fs, err := fileservice.NewMemoryFS("cached-index-metadata", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { bat.Clean(mp) })
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(12), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(12), false, mp))
+	bat.SetRowCount(1)
+	id := NewObjectid()
+	name := BuildObjectNameWithObjectID(&id)
+	writer, err := NewObjectWriter(name, fs, 0, []uint16{0, 1}, nil)
+	require.NoError(t, err)
+	for range 2 {
+		_, err = writer.Write(bat)
+		require.NoError(t, err)
+	}
+	blocks, err := writer.WriteEnd(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+	loc := BuildLocation(name, blocks[0].GetExtent(), 1, 0)
+
+	var dst [2]CachedInt32Block
+	require.False(t, CachedInt32Blocks(ctx, loc, []uint16{0}, dst[:]), "cold metadata must stay a miss")
+	_, err = FastLoadObjectMeta(ctx, &loc, false, fs)
+	require.NoError(t, err)
+	require.True(t, CachedInt32Blocks(ctx, loc, []uint16{0}, dst[:]))
+	for i, block := range dst {
+		require.Equal(t, uint32(1), block.Rows)
+		require.Equal(t, blocks[i].MustGetColumn(0).Location(), Extent(block.Extents[0][:]))
+	}
+	require.False(t, CachedInt32Blocks(ctx, loc, nil, dst[:]))
+	require.False(t, CachedInt32Blocks(ctx, loc, []uint16{0}, dst[:1]))
+	require.False(t, CachedInt32Blocks(ctx, loc, []uint16{0}, make([]CachedInt32Block, 3)))
+	require.False(t, CachedInt32Blocks(ctx, loc, []uint16{2}, dst[:]), "missing column")
+	require.False(t, CachedInt32Blocks(ctx, loc, []uint16{1}, dst[:]), "unsupported column type")
+
+	key := encodeCacheKey(*loc.ShortName(), cacheKeyTypeMeta)
+	raw, ok := metaCache.Get(ctx, key)
+	require.True(t, ok)
+	// Publish a truncated copy under its own key so neither the fixture nor
+	// immutable metadata borrowed by other readers is modified.
+	invalidID := NewObjectid()
+	invalid := BuildLocation(BuildObjectNameWithObjectID(&invalidID), loc.Extent(), loc.Rows(), 0)
+	metaCache.Set(ctx, encodeCacheKey(*invalid.ShortName(), cacheKeyTypeMeta), bytes.Clone(raw[:IOEntryHeaderSize]), IOEntryHeaderSize)
+	require.False(t, CachedInt32Blocks(ctx, invalid, []uint16{0}, dst[:]), "truncated metadata")
+}
 
 func TestReadCachedInt32RowsRequiresAllColumnsAndReleases(t *testing.T) {
 	ctx := t.Context()
