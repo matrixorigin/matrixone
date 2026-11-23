@@ -45,18 +45,19 @@ func (f *assignmentFactory) Open(p *process.Process, _ *plan.DependentExpr, inpu
 	if f.opened == f.failAt {
 		return nil, errors.New("assignment subquery failed")
 	}
-	v, err := inputs[0].DupOffHeap(f.allocation)
+	v, err := inputs[0].Dup(f.allocation)
 	if err != nil {
 		return nil, err
 	}
 	b := &batch.Batch{Vecs: []*vector.Vector{v}}
 	b.SetRowCount(1)
-	return &assignmentInvocation{p: p, b: b}, nil
+	return &assignmentInvocation{p: p, b: b, mp: f.allocation}, nil
 }
 
 type assignmentInvocation struct {
-	p *process.Process
-	b *batch.Batch
+	p  *process.Process
+	b  *batch.Batch
+	mp *mpool.MPool
 }
 
 func (i *assignmentInvocation) Step(context.Context) (vm.ContinuationStep, error) {
@@ -64,7 +65,7 @@ func (i *assignmentInvocation) Step(context.Context) (vm.ContinuationStep, error
 }
 func (i *assignmentInvocation) Accept(vm.Continuation) error { return nil }
 func (i *assignmentInvocation) Result() *batch.Batch         { return i.b }
-func (i *assignmentInvocation) Close(error) error            { i.b.Clean(i.p.Mp()); return nil }
+func (i *assignmentInvocation) Close(error) error            { i.b.Clean(i.mp); return nil }
 
 func TestDependentOrderedAssignmentImages(t *testing.T) {
 	for _, fail := range []bool{false, true} {

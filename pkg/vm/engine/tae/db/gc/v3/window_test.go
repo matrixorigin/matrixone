@@ -801,7 +801,7 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 	defer buffer.Close(mp)
 
 	// Create batch
-	newBat := buffer.Fetch()
+	newBat := buffer.Fetch(mp)
 	defer buffer.Putback(newBat, mp)
 
 	// Add test data to batch

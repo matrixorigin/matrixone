@@ -213,7 +213,7 @@ func TestJSONReaderMetadataSelectionTakesPrecedence(t *testing.T) {
 func TestJSONReaderSnapshotAdmissionFailureIsTerminal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
-	source := NewVec(types.T_json.ToType())
+	source := NewVec(types.T_json.ToType(), mp)
 	defer source.Free(mp)
 	require.NoError(t, AppendBytes(source, jsonAdmissionValue(t, `{"keep":1}`), false, mp))
 	want := errors.New("statement budget rejected")

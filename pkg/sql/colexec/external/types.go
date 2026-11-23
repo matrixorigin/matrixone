@@ -224,6 +224,26 @@ type ExternalFileReader interface {
 	Close() error
 }
 
+// BatchPublisher is an ExternalFileReader that owns the batches it reads (the
+// zero-copy Arrow conversions). PublishBatch replaces ReadBatch: it returns a
+// batch owned by the reader, valid until the next PublishBatch or
+// ReleaseBatch. The External operator outputs it as is and never frees or
+// modifies its vectors; the reader never touches the operator's buffer.
+type BatchPublisher interface {
+	PublishBatch(ctx context.Context, proc *process.Process, analyzer process.Analyzer) (*batch.Batch, bool, error)
+	// ReleaseBatch frees the last published batch once nothing reads it.
+	ReleaseBatch()
+}
+
+// releaseReader releases a publishing reader's last batch and closes the
+// reader. It runs only once the operator's last output was consumed.
+func (external *External) releaseReader() error {
+	if publisher, ok := external.reader.(BatchPublisher); ok {
+		publisher.ReleaseBatch()
+	}
+	return external.reader.Close()
+}
+
 type container struct {
 	maxAllocSize int
 	buf          *batch.Batch
@@ -406,7 +426,7 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 		}
 	}
 	if external.reader != nil {
-		if closeErr := external.reader.Close(); closeErr != nil {
+		if closeErr := external.releaseReader(); closeErr != nil {
 			logutil.Debugf("external reader close on reset: %v", closeErr)
 		}
 		external.reader = nil
@@ -447,7 +467,7 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.Es.KafkaPending = nil
 	}
 	if external.reader != nil {
-		external.reader.Close()
+		external.releaseReader()
 		external.reader = nil
 		external.fileOpened = false
 	}
@@ -455,7 +475,9 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.Es.releaseIcebergObjectIORef()
 	}
 	if external.ctr.buf != nil {
-		external.ctr.buf.Clean(proc.Mp())
+		// buf holds only the operator's own vectors (a publishing reader's
+		// batches are never installed in it).
+		external.ctr.buf.Clean(external.Es.outputPool(proc))
 		external.ctr.buf = nil
 	}
 	external.FreeProjection(proc)

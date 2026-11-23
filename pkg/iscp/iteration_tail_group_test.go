@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -199,21 +200,20 @@ func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
 			var releaseOnce sync.Once
 			t.Cleanup(func() { releaseOnce.Do(func() { close(allowRelease) }) })
 
-			pkData := types.EncodeSlice([]int64{1})
-			lease, err := vector.NewRefCountedBufferLease(pkData, int64(cap(pkData)), func() {
+			// The batch's held lease is the observable cleanup step: its
+			// release blocks until the test allows it.
+			lease, err := bufferlease.NewRefCounted(nil, 0, func() {
 				close(releaseStarted)
 				<-allowRelease
 				close(released)
 			})
 			require.NoError(t, err)
-			pk, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, pkData)
-			require.NoError(t, err)
 			firstBatch := testutil.NewBatchWithVectors([]*vector.Vector{
-				pk,
+				testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{1}),
 				testutil.NewVector(1, types.T_TS.ToType(), mp, false, []types.TS{types.BuildTS(1, 0)}),
 			}, nil)
 			require.NoError(t, firstBatch.HoldLease(lease))
-			lease.Release() // the batch owns the lease for its borrowed vector
+			lease.Release() // the batch now holds the only reference
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

@@ -97,7 +97,7 @@ func PrunePartitionByExpr(
 	// Create a new batch with the same structure as the input batch
 	res := batch.NewWithSize(bat.VectorCount())
 	for i := range bat.Vecs {
-		res.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+		res.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType(), proc.Mp())
 	}
 
 	// Handle partition expression

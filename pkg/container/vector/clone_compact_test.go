@@ -24,7 +24,7 @@ import (
 
 func TestCloneToFlatCompactFreesPartialAllocation(t *testing.T) {
 	srcMP := mpool.MustNew("clone-compact-source")
-	src := NewVec(types.T_varchar.ToType())
+	src := NewVec(types.T_varchar.ToType(), srcMP)
 	require.NoError(t, AppendBytes(src, make([]byte, 2<<20), false, srcMP))
 
 	dstMP := mpool.MustNew("clone-compact-destination")

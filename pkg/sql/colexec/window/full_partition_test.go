@@ -49,11 +49,11 @@ func TestFullPartitionSumAcrossChunksAndNullPartitions(t *testing.T) {
 		bat: bat, ps: []int64{0, firstRows, firstRows + 3},
 		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
 	}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, colexec.DefaultBatchSize)
 	require.NoError(t, err)
-	defer first.Free(proc.Mp())
+	defer first.Free(first.MPool())
 	require.NotNil(t, ctr.fullPartitionResults)
 	for i, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](first) {
 		require.Equal(t, types.Decimal128FromInt64(firstRows), value, "row %d", i)
@@ -61,7 +61,7 @@ func TestFullPartitionSumAcrossChunksAndNullPartitions(t *testing.T) {
 
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, colexec.DefaultBatchSize, len(values))
 	require.NoError(t, err)
-	defer second.Free(proc.Mp())
+	defer second.Free(second.MPool())
 	got := vector.MustFixedColWithTypeCheck[types.Decimal128](second)
 	for i := 0; i < 8; i++ {
 		require.Equal(t, types.Decimal128FromInt64(firstRows), got[i])
@@ -91,14 +91,14 @@ func TestFullPartitionResultsAdvanceAcrossOutputChunks(t *testing.T) {
 		bat: bat, ps: []int64{0, 2, 4, 10, 12},
 		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
 	}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	want := []int64{2, 2, 2, 2, 6, 6, 6, 6, 6, 6, 2, 2, 1}
 	start := 0
 	for _, end := range []int{5, 11, 13} {
 		func() {
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
 			require.NoError(t, err)
-			defer result.Free(proc.Mp())
+			defer result.Free(result.MPool())
 			values := vector.MustFixedColWithTypeCheck[types.Decimal128](result)
 			for i, value := range values {
 				require.Equal(t, types.Decimal128FromInt64(want[start+i]), value)
@@ -140,10 +140,10 @@ func TestFullPartitionCommonAggregates(t *testing.T) {
 					e.GetEncodedOverloadID(), tc.distinct, []*plan.Expr{newColExprWithType(0, typ)}, nil)},
 			}
 			ctr := &container{bat: bat, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-			defer ctr.freeFullPartitionResults(proc.Mp())
+			defer ctr.freeFullPartitionResults(proc)
 			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 4)
 			require.NoError(t, err)
-			defer result.Free(proc.Mp())
+			defer result.Free(result.MPool())
 			for i := 0; i < 4; i++ {
 				require.False(t, result.IsNull(uint64(i)))
 				switch {
@@ -169,7 +169,7 @@ func TestFullPartitionDoesNotEvaluateLaterPartitionEarly(t *testing.T) {
 	maxValue, err := types.ParseDecimal256(strings.Repeat("9", 65), 65, 0)
 	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(typ)
+	bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 	for _, v := range []types.Decimal256{types.Decimal256FromInt64(1), types.Decimal256FromInt64(1), maxValue, types.Decimal256FromInt64(1)} {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], v, false, proc.Mp()))
 	}
@@ -177,14 +177,14 @@ func TestFullPartitionDoesNotEvaluateLaterPartitionEarly(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	arg := &Window{WinSpecList: []*plan.Expr{makeAggWindowSpec("sum")}, Aggs: []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, typ)}}
 	ctr := &container{bat: bat, ps: []int64{0, 2}, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.NoError(t, err, "the unrequested overflowing partition must not be evaluated")
-	defer first.Free(proc.Mp())
+	defer first.Free(first.MPool())
 	require.Equal(t, types.Decimal256FromInt64(2), vector.GetFixedAtNoTypeCheck[types.Decimal256](first, 0))
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, 1, 2)
 	require.NoError(t, err)
-	defer second.Free(proc.Mp())
+	defer second.Free(second.MPool())
 	_, err = ctr.processAggregateFuncRange(0, arg, proc, 2, 4)
 	require.ErrorContains(t, err, "beyond the range")
 	require.Nil(t, ctr.fullPartitionResults)
@@ -192,7 +192,7 @@ func TestFullPartitionDoesNotEvaluateLaterPartitionEarly(t *testing.T) {
 	// A failed generation must not contaminate reuse.
 	reused, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.NoError(t, err)
-	defer reused.Free(proc.Mp())
+	defer reused.Free(reused.MPool())
 }
 
 func TestFullPartitionCancellationReleasesAggregate(t *testing.T) {
@@ -202,7 +202,7 @@ func TestFullPartitionCancellationReleasesAggregate(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	arg := &Window{WinSpecList: []*plan.Expr{makeAggWindowSpec("sum")}, Aggs: []aggexec.AggFuncExecExpression{newAggExpr()}}
 	ctr := &container{bat: bat, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
 	_, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
 	require.ErrorIs(t, err, context.Canceled)
@@ -223,15 +223,15 @@ func TestUnorderedRangeFullPartitionAcrossMultiplePartitions(t *testing.T) {
 	}
 	arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{newAggExpr()}}
 	ctr := &container{bat: bat, ps: []int64{0, 2}, aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 3)
 	require.NoError(t, err)
-	defer first.Free(proc.Mp())
+	defer first.Free(first.MPool())
 	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(3), types.Decimal128FromInt64(3), types.Decimal128FromInt64(28)}, vector.MustFixedColWithTypeCheck[types.Decimal128](first))
 	require.NotNil(t, ctr.fullPartitionResults)
 	second, err := ctr.processAggregateFuncRange(0, arg, proc, 3, 5)
 	require.NoError(t, err)
-	defer second.Free(proc.Mp())
+	defer second.Free(second.MPool())
 	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(28), types.Decimal128FromInt64(28)}, vector.MustFixedColWithTypeCheck[types.Decimal128](second))
 	require.Nil(t, ctr.fullPartitionResults)
 }

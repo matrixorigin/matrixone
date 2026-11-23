@@ -324,11 +324,11 @@ func (p *EnginePack) DeleteTableInDB(txnop client.TxnOperator, dbname, tblname s
 	require.NoError(p.t, db.Delete(p.Ctx, tblname))
 }
 
-func EmptyBatchFromSchema(schema *catalog.Schema, sels ...int) *batch.Batch {
+func EmptyBatchFromSchema(schema *catalog.Schema, mp *mpool.MPool, sels ...int) *batch.Batch {
 	if len(sels) == 0 {
 		ret := batch.NewWithSize(len(schema.ColDefs))
 		for i, col := range schema.ColDefs {
-			vec := vector.NewVec(col.Type.Oid.ToType())
+			vec := vector.NewVec(col.Type.Oid.ToType(), mp)
 			ret.Vecs[i] = vec
 			ret.Attrs = append(ret.Attrs, col.Name)
 		}
@@ -337,7 +337,7 @@ func EmptyBatchFromSchema(schema *catalog.Schema, sels ...int) *batch.Batch {
 	ret := batch.NewWithSize(len(sels))
 	for i, sel := range sels {
 		col := schema.ColDefs[sel]
-		vec := vector.NewVec(col.Type.Oid.ToType())
+		vec := vector.NewVec(col.Type.Oid.ToType(), mp)
 		ret.Vecs[i] = vec
 		ret.Attrs = append(ret.Attrs, col.Name)
 	}

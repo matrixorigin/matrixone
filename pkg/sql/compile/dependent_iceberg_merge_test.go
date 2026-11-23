@@ -151,7 +151,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 					ok := false
 					defer func() {
 						if !ok {
-							b.Clean(child.Mp())
+							b.Clean(dependentFixtureMP(child, allocation))
 						}
 					}()
 					for i, col := range node.TableDef.Cols {
@@ -159,7 +159,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 						if err != nil {
 							return nil, err
 						}
-						b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+						b.Vecs[i] = vector.NewVec(typ, dependentFixtureMP(child, allocation))
 						for row := 0; row < 2; row++ {
 							switch strings.ToLower(col.Name) {
 							case "id":
@@ -182,7 +182,7 @@ func TestDependentIcebergMergeProjection(t *testing.T) {
 					}
 					b.SetRowCount(2)
 					ok = true
-					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(child.Mp()) }}, nil
+					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(dependentFixtureMP(child, allocation)) }}, nil
 				}, nil
 			}, c.compileDependentKernel)
 			require.NoError(t, err)

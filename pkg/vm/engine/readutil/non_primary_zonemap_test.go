@@ -86,8 +86,8 @@ func TestFilterObjectsNonPrimaryZoneMaps(t *testing.T) {
 				func() {
 					input := batch.NewWithSize(2)
 					defer input.Clean(mp)
-					input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-					input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+					input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+					input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 					// 块 location 的行数计算要求非末块填满；每块仅重复两个值。
 					for row := 0; row < objectio.BlockMaxRows; row++ {
 						require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(block*objectio.BlockMaxRows+row+1), false, mp))

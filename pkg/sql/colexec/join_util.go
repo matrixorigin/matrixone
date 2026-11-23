@@ -31,6 +31,23 @@ type Batches struct {
 	// allocation is the accounted MPool view the retained batches allocate
 	// through (nil = unaccounted). Every batch in Buf shares it.
 	allocation *mpool.MPool
+	// pool is the pool every vector in Buf was created with: allocation, or
+	// the process pool when unaccounted. Buf is freed with it.
+	pool *mpool.MPool
+}
+
+// Pool returns the pool the retained batches were created with, or nil when
+// there are none.
+func (bs *Batches) Pool() *mpool.MPool {
+	return bs.pool
+}
+
+// cleanPool is the pool Buf is freed with: the recorded pool, else mp.
+func (bs *Batches) cleanPool(mp *mpool.MPool) *mpool.MPool {
+	if bs.pool != nil {
+		return bs.pool
+	}
+	return mp
 }
 
 func (bs *Batches) RowCount() int {
@@ -41,13 +58,17 @@ func (bs *Batches) RowCount() int {
 	return count
 }
 
+// Clean frees the retained batches with the pool they were created with; mp
+// is used only when no batch was ever retained.
 func (bs *Batches) Clean(mp *mpool.MPool) {
+	pool := bs.cleanPool(mp)
 	for i := range bs.Buf {
-		bs.Buf[i].Clean(mp)
+		bs.Buf[i].Clean(pool)
 	}
 	bs.Buf = nil
 	bs.MemSize = 0
 	bs.allocation = nil
+	bs.pool = nil
 }
 
 // Allocation returns the MPool view the retained batches allocate through,
@@ -62,12 +83,16 @@ func (bs *Batches) CleanOnlyData() {
 	}
 	bs.Buf = nil
 	bs.MemSize = 0
+	bs.pool = nil
 }
+
+// Reset forgets Buf without freeing it; its owner frees it with Pool().
 func (bs *Batches) Reset() {
 	if bs.Buf != nil {
 		bs.Buf = nil
 	}
 	bs.MemSize = 0
+	bs.pool = nil
 }
 
 // copy from input batch into batches
@@ -136,21 +161,23 @@ func (bs *Batches) copyWithAllocation(
 		} else {
 			tailCheckpoints = localTailCheckpoints[:len(originalTail.Vecs)]
 		}
+		if err := originalTail.OwnReadOnlyVectors(allocationMP(proc, selection)); err != nil {
+			return err
+		}
 		for i := range originalTail.Vecs {
-			if err := originalTail.Vecs[i].MaterializeOwned(allocationMP(proc, selection)); err != nil {
-				return err
-			}
 			tailCheckpoints[i] = originalTail.Vecs[i].MakeAppendCheckpoint()
 		}
 	}
+	originalPool := bs.pool
 	if originalLen == 0 {
 		bs.allocation = selection
+		bs.pool = allocationMP(proc, selection)
 	}
 	if err = bs.copyIntoBatches(src, proc, selection, allocationLimit); err == nil {
 		return nil
 	}
 	for i := originalLen; i < len(bs.Buf); i++ {
-		bs.Buf[i].Clean(proc.Mp())
+		bs.Buf[i].Clean(allocationMP(proc, selection))
 	}
 	clear(bs.Buf[originalLen:])
 	bs.Buf = bs.Buf[:originalLen]
@@ -170,6 +197,7 @@ func (bs *Batches) copyWithAllocation(
 	bs.MemSize = originalMemSize
 	if originalLen == 0 {
 		bs.allocation = originalAllocation
+		bs.pool = originalPool
 	}
 	return err
 }
@@ -200,7 +228,7 @@ func (bs *Batches) copyIntoBatches(
 		}
 		if err != nil {
 			if tmp != nil {
-				tmp.Clean(proc.Mp())
+				tmp.Clean(allocationMP(proc, selection))
 			}
 			return err
 		}
@@ -331,7 +359,7 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 		if cleanup {
 			for _, bat := range newBuf {
 				if bat != nil {
-					bat.Clean(proc.Mp())
+					bat.Clean(mp)
 				}
 			}
 			// Preserve the caller's ignore-row checkpoint on failure.
@@ -339,9 +367,9 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 		}
 	}()
 	for i := range newBuf {
-		newBuf[i] = batch.NewOffHeapWithSize(len(bs.Buf[0].Vecs))
+		newBuf[i] = batch.NewWithSize(len(bs.Buf[0].Vecs))
 		for j, vec := range bs.Buf[0].Vecs {
-			newBuf[i].SetVector(int32(j), vector.NewOffHeapVecWithType(*vec.GetType()))
+			newBuf[i].SetVector(int32(j), vector.NewVec(*vec.GetType(), mp))
 		}
 	}
 	itr := ignoreRow.Iterator()
@@ -362,6 +390,7 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 	bs.Clean(proc.Mp())
 	bs.Buf = newBuf
 	bs.allocation = selection
+	bs.pool = mp
 	for _, bat := range newBuf {
 		bs.MemSize += int64(bat.Size())
 	}
@@ -390,10 +419,10 @@ func appendBatchRange(dst *batch.Batch, src *batch.Batch, offset, length int, pr
 	} else {
 		checkpoints = localCheckpoints[:len(dst.Vecs)]
 	}
+	if err := dst.OwnReadOnlyVectors(mp); err != nil {
+		return err
+	}
 	for i := range dst.Vecs {
-		if err := dst.Vecs[i].MaterializeOwned(mp); err != nil {
-			return err
-		}
 		checkpoints[i] = dst.Vecs[i].MakeAppendCheckpoint()
 	}
 	for i := range dst.Vecs {

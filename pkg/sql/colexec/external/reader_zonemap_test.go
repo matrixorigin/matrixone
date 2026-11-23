@@ -101,8 +101,8 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 		func() {
 			data := batch.NewWithSize(2)
 			defer data.Clean(pool)
-			data.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-			data.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			data.Vecs[0] = vector.NewVec(types.T_int32.ToType(), pool)
+			data.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), pool)
 			for row := range rows {
 				require.NoError(t, vector.AppendFixed(data.Vecs[0], int32(row), false, pool))
 				require.NoError(t, vector.AppendBytes(data.Vecs[1], []byte(stored), row == 1, pool))
@@ -142,8 +142,27 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 				}},
 				ExParam: ExParam{Fileparam: &ExFileparam{Filepath: path}, Filter: &FilterParam{}},
 			}
+			// The output vectors are created with the operator's output pool:
+			// an accounted view of mp for the allocation-failure cases.
+			outPool := mp
+			if tc.failAppend {
+				registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+				require.NoError(t, err)
+				// The account fits the first column's rows but not the second
+				// column, so the read fails after one column was copied.
+				account, err := registry.Open(32)
+				require.NoError(t, err)
+				defer func() {
+					require.Zero(t, account.Seal().Used)
+					_, err := registry.Finalize(account)
+					require.NoError(t, err)
+				}()
+				outPool, err = mp.WithAccount(account, mpool.AllocationOwnerExternal, 1, mpool.AllocationCapacityClassDefault)
+				require.NoError(t, err)
+				param.outputMP = outPool
+			}
 			buf := batch.NewWithSize(len(tc.fields))
-			defer buf.Clean(mp)
+			defer buf.Clean(outPool)
 			for col, field := range tc.fields {
 				name, typ := "missing", types.T_int32
 				switch field {
@@ -157,7 +176,7 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 				}
 				param.Attrs = append(param.Attrs, plan.ExternAttr{ColName: name, ColIndex: int32(col), ColFieldIndex: field})
 				param.Cols = append(param.Cols, &plan.ColDef{Name: name, Typ: plan.Type{Id: int32(typ)}})
-				buf.Vecs[col] = vector.NewOffHeapVecWithType(typ.ToType())
+				buf.Vecs[col] = vector.NewVec(typ.ToType(), outPool)
 			}
 			reader := NewZonemapReader(param, proc)
 			_, err := reader.Open(param, proc)
@@ -166,26 +185,6 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 			bytes, objects := mp.OnHeapOutstanding()
 			offHeap := mp.CurrNB()
 			analyzer := process.NewAnalyzer(0, false, false, "saved-result")
-			if tc.failAppend {
-				registry, err := mpool.NewAllocationAccountRegistry(1, 8)
-				require.NoError(t, err)
-				account, err := registry.Open(1)
-				require.NoError(t, err)
-				defer func() {
-					require.Zero(t, account.Seal().Used)
-					_, err := registry.Finalize(account)
-					require.NoError(t, err)
-				}()
-				// Output vectors are charged through the operator's output view,
-				// and the account admits no fresh allocation. Column 0 is pre-sized
-				// from the base pool, so the failure is the second column's first
-				// allocation, after the first column was already filled.
-				outputMP, err := mp.WithAccount(account, mpool.AllocationOwnerExternal, 1, mpool.AllocationCapacityClassDefault)
-				require.NoError(t, err)
-				require.NoError(t, buf.Vecs[0].PreExtend(5, mp))
-				param.outputMP = outputMP
-				defer buf.Clean(mp)
-			}
 			for block, rows := range []int{5, 2} {
 				buf.CleanOnlyData()
 				if block == 1 && len(tc.fields) == 0 {
@@ -243,7 +242,7 @@ func TestZonemapSavedResultProjection(t *testing.T) {
 			for _, column := range scanFS.columns {
 				require.Equal(t, 1, column.releases)
 			}
-			buf.Clean(mp)
+			buf.Clean(outPool)
 			gotBytes, gotObjects := mp.OnHeapOutstanding()
 			require.Equal(t, bytes, gotBytes)
 			require.Equal(t, objects, gotObjects)

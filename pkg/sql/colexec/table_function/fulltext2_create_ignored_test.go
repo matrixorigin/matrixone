@@ -96,7 +96,7 @@ func TestFulltext2CreateLeaveOutCompositeKey(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{PKey: catalog.CPrimaryKeyColName}, ignored: newIgnoredBuild(st0Cfg(), "")}
 	t.Cleanup(st.ignored.close)
-	pk := vector.NewVec(types.T_varchar.ToType())
+	pk := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(pk, []byte{0x01, 0xff}, false, mp))
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
 	tf.ctr.argVecs = []*vector.Vector{nil, pk}

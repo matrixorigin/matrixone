@@ -26,7 +26,7 @@ import (
 func vecBlockOrderVector(t *testing.T, oid types.T, mp *mpool.MPool, rows [][]float32) *vector.Vector {
 	t.Helper()
 	f, _ := oid.BlockScaledFormat()
-	vec := vector.NewVec(types.New(oid, 3, 0))
+	vec := vector.NewVec(types.New(oid, 3, 0), mp)
 	for _, r := range rows {
 		if r == nil {
 			require.NoError(t, vector.AppendBytes(vec, nil, true, mp))

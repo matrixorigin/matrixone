@@ -140,11 +140,11 @@ func (r *TableRange) IsEmpty() bool {
 	return r.Start == types.Rowid{}
 }
 
-func MakeTableRangeBatch() *batch.Batch {
+func MakeTableRangeBatch(mp *mpool.MPool) *batch.Batch {
 	return batch.NewWithSchema(
-		true,
 		MetaSchema_TableRange_Attrs,
 		MetaSchema_TableRange_Types,
+		mp,
 	)
 }
 
@@ -282,7 +282,7 @@ func ForEachFile(
 		end bool
 	)
 	tmpBat := batch.NewWithSchema(
-		true, DataScan_TableIDAtrrs, DataScan_TableIDTypes,
+		DataScan_TableIDAtrrs, DataScan_TableIDTypes, mp,
 	)
 	defer tmpBat.Clean(mp)
 	for {

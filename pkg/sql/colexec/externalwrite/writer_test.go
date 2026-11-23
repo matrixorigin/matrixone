@@ -103,7 +103,7 @@ func TestExternalWriterChecksResolvedStageAuthority(t *testing.T) {
 	proc.GetStageCache().Set("owned", stage.StageDef{Name: "owned", Url: &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}})
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{"id"}
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, proc.Mp()))
 	bat.SetRowCount(1)

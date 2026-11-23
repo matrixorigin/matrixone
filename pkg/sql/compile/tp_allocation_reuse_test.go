@@ -197,7 +197,7 @@ func newTPReusePipeline(t testing.TB, execType plan2.ExecType, aggregate bool) *
 	project := projection.NewArgument()
 	project.ProjectList = []*plan.Expr{col(0, keyType), bind("+", col(1, valueType), lit(1))}
 	project.AppendChild(restrict)
-	f := &tpReusePipeline{scan: scan, root: project, ops: []vm.Operator{project, restrict, scan}, params: vector.NewVec(keyType), proc: proc}
+	f := &tpReusePipeline{scan: scan, root: project, ops: []vm.Operator{project, restrict, scan}, params: vector.NewVec(keyType, proc.Mp()), proc: proc}
 	var group *groupop.Group
 	if aggregate {
 		group = groupop.NewArgument()

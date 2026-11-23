@@ -204,11 +204,11 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 	require.Equal(t, []int{0}, scan.ctr.earlyColumns)
 	require.Equal(t, []int{1}, scan.ctr.lateColumns)
 
-	bat := batch.NewOffHeapWithSize(2)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(intType)
-	bat.Vecs[1] = vector.NewOffHeapVecWithType(textType)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(intType, scan.mp(proc))
+	bat.Vecs[1] = vector.NewVec(textType, scan.mp(proc))
 	for i := int32(0); i < 5; i++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, scan.mp(proc)))
 	}
 	bat.SetRowCount(5)
 
@@ -220,7 +220,7 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 	require.Equal(t, []int32{2, 3}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
 	require.Zero(t, bat.Vecs[1].Length())
 
-	bat.Clean(proc.Mp())
+	bat.Clean(scan.mp(proc))
 	scan.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.GetMPool().CurrNB())
@@ -245,11 +245,11 @@ func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 	require.Equal(t, []int{0}, scan.ctr.earlyColumns)
 	require.Equal(t, []int{1}, scan.ctr.lateColumns)
 
-	bat := batch.NewOffHeapWithSize(2)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(intType)
-	bat.Vecs[1] = vector.NewOffHeapVecWithType(charType)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(intType, scan.mp(proc))
+	bat.Vecs[1] = vector.NewVec(charType, scan.mp(proc))
 	for i := int32(0); i < 4; i++ {
-		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, scan.mp(proc)))
 	}
 	bat.SetRowCount(4)
 
@@ -259,7 +259,7 @@ func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 	require.Equal(t, 2, bat.RowCount())
 	require.Zero(t, bat.Vecs[1].Length(), "late CHAR vector must remain unloaded during filtering")
 
-	bat.Clean(proc.Mp())
+	bat.Clean(scan.mp(proc))
 	scan.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.GetMPool().CurrNB())

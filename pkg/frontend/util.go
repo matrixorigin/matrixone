@@ -1374,7 +1374,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 	cnt := len(rows)
 	bat.SetRowCount(cnt)
 	for colIndex, typ := range colTyps {
-		bat.Vecs[colIndex] = vector.NewVec(typ)
+		bat.Vecs[colIndex] = vector.NewVec(typ, pool)
 		nsp := nulls.NewWithSize(cnt)
 
 		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64

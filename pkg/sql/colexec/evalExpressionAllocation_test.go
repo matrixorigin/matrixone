@@ -80,7 +80,7 @@ func TestAccountedFixedMaskedResultNullsAndReuse(t *testing.T) {
 			typ := types.New(oid, 18, 0)
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(typ)
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			for row := range 12 {
 				if oid == types.T_int64 {
 					require.NoError(t, vector.AppendFixed(input.Vecs[0], -int64(row+1), row == 1, proc.Mp()))
@@ -199,7 +199,7 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	// executor with a small partial batch. Admission failure must not poison it.
 	large := batch.NewWithSize(1)
 	defer large.Clean(proc.Mp())
-	large.Vecs[0] = vector.NewVec(typ)
+	large.Vecs[0] = vector.NewVec(typ, pool)
 	for range 4 {
 		require.NoError(t, vector.AppendBytes(large.Vecs[0], []byte(strings.Repeat("A", 2048)), false, proc.Mp()))
 	}

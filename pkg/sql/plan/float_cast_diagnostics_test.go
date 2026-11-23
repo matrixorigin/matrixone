@@ -207,7 +207,7 @@ func TestIffStringTruthExecutionModes(t *testing.T) {
 			defer input.Clean(proc.Mp())
 			values := []string{"NaN", "Inf", "1.25", "0", ""}
 			nulls := []bool{false, false, false, false, true}
-			input.Vecs[0] = vector.NewVec(oid.ToType())
+			input.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendStringList(input.Vecs[0], values, nulls, proc.Mp()))
 			input.SetRowCount(5)
 			want := []int64{2, 2, 1, 2, 2}

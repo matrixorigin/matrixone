@@ -334,20 +334,20 @@ func TestDependentNativeStages(t *testing.T) {
 					opened++
 					b := batch.NewWithSize(len(node.TableDef.Cols))
 					for i, col := range node.TableDef.Cols {
-						b.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+						b.Vecs[i] = vector.NewVec(types.T_int32.ToType(), dependentFixtureMP(p, sourceAllocation))
 						for key := int32(1); key <= 3; key++ {
 							v := key
 							if col.Name == "n_regionkey" {
 								v = key * 10
 							}
 							if err := vector.AppendFixed(b.Vecs[i], v, false, dependentFixtureMP(p, sourceAllocation)); err != nil {
-								b.Clean(p.Mp())
+								b.Clean(dependentFixtureMP(p, sourceAllocation))
 								return nil, err
 							}
 						}
 					}
 					b.SetRowCount(3)
-					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(p.Mp()) }}, nil
+					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(dependentFixtureMP(p, sourceAllocation)) }}, nil
 				}, nil
 			}
 			c := &Compile{proc: proc, stmt: stmts[0]}
@@ -563,7 +563,7 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 					}
 					return func(p *process.Process, a *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 						b := batch.NewWithSize(1)
-						b.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+						b.Vecs[0] = vector.NewVec(types.T_int32.ToType(), dependentFixtureMP(p, a))
 						keys := []int32{1, 2, 3}
 						if node.NodeId == left.NodeId {
 							keys = []int32{9}
@@ -573,12 +573,12 @@ func TestDependentFuzzyFilterDemand(t *testing.T) {
 						}
 						for _, v := range keys {
 							if err := vector.AppendFixed(b.Vecs[0], v, false, dependentFixtureMP(p, a)); err != nil {
-								b.Clean(p.Mp())
+								b.Clean(dependentFixtureMP(p, a))
 								return nil, err
 							}
 						}
 						b.SetRowCount(len(keys))
-						return &dependentFixtureSource{batch: b, rows: 1, close: func() { b.Clean(p.Mp()) }}, nil
+						return &dependentFixtureSource{batch: b, rows: 1, close: func() { b.Clean(dependentFixtureMP(p, a)) }}, nil
 					}, nil
 				}
 				template, err := dependent.Compile(proc.Ctx, q, sourceCompiler, c.compileDependentKernel)

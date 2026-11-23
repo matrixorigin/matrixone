@@ -70,7 +70,7 @@ func TestJSONNumericPredicatesDoNotDefinePhysicalLockKeys(t *testing.T) {
 						if tc.wantKey {
 							require.NotNil(t, target.LockRows)
 							if payload := target.LockRows.GetVec(); payload != nil {
-								decoded := vector.NewVec(types.T_any.ToType())
+								decoded := vector.NewVec(types.T_any.ToType(), proc.Mp())
 								defer decoded.Free(proc.Mp())
 								require.NoError(t, decoded.UnmarshalBinary(payload.Data))
 								require.Equal(t, target.PrimaryColTyp.Id, int32(decoded.GetType().Oid))

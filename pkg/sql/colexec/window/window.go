@@ -83,7 +83,7 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
-	window.ctr.cleanOutput(proc.Mp())
+	window.ctr.cleanOutput(proc)
 	window.ctr.resetRowNumber()
 	// Retire reusable materialized input before entering a streaming generation
 	// or admitting copies under an account, including unaccounted reuse.
@@ -343,7 +343,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 	// A returned batch is valid through the caller's processing of it. Once the
 	// next Call begins, release its borrowed input windows and owned result
 	// vector before reusing any operator state.
-	ctr.cleanOutput(proc.Mp())
+	ctr.cleanOutput(proc)
 	if ctr.streamRowNumber {
 		result, err := window.callRowNumber(proc)
 		if err != nil {
@@ -411,8 +411,8 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// this also closes reuse after an interrupted or failed generation.
 			ctr.freeLocalRankIndex()
 			ctr.freeRunningAgg()
-			ctr.freeFullPartitionResults(proc.Mp())
-			ctr.freeAggregateStates(proc.Mp())
+			ctr.freeFullPartitionResults(proc)
+			ctr.freeAggregateStates(proc)
 			if len(window.WinSpecList) > 1 {
 				ctr.aggregateStates = make([]windowAggregateState, len(window.WinSpecList))
 			}
@@ -422,7 +422,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// with the previous partition's stale spans. Clear it here, with
 			// the other generation-scoped state.
 			ctr.clearCivilOrder()
-			ctr.freeIndicatorState(proc.Mp())
+			ctr.freeIndicatorState(proc)
 			ctr.freeEwmState()
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
@@ -488,7 +488,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			if err != nil {
 				for _, vec := range vecs {
 					if vec != nil {
-						vec.Free(proc.Mp())
+						ctr.allocation.FreeVector(proc, vec)
 					}
 				}
 				return result, err
@@ -523,6 +523,7 @@ func (ctr *container) makeResultBatch(start, end int, vecs ...*vector.Vector) (*
 	if err != nil {
 		return nil, err
 	}
+	ctr.rBatWindowCols = len(rBat.Vecs)
 	rBat.Vecs = append(rBat.Vecs, vecs...)
 	rBat.SetRowCount(end - start)
 	ctr.rBat = rBat
@@ -547,7 +548,7 @@ func (ctr *container) processFusedFuncRange(idx int, ap *Window, proc *process.P
 func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, analyzer process.Analyzer) error {
 	vec, err := ctr.processFuncRange(idx, ap, proc, analyzer, 0, ctr.bat.RowCount())
 	if vec != nil {
-		vec.Free(proc.Mp())
+		ctr.allocation.FreeVector(proc, vec)
 	}
 	return err
 }
@@ -695,7 +696,7 @@ func (ctr *container) processAggregateFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (*vector.Vector, error) {
-	vecMP, mpErr := ctr.allocation.MP(proc)
+	_, mpErr := ctr.allocation.MP(proc)
 	if mpErr != nil {
 		return nil, mpErr
 	}
@@ -790,7 +791,7 @@ func (ctr *container) processAggregateFuncRange(
 	// groupCount is bounded by DefaultBatchSize (the aggregate chunk size),
 	// so this is normally the zero-copy one-vector path. Keep the merge for
 	// defensive compatibility with aggregate implementations that split early.
-	vec, err := aggexec.MergeSplitResult(vecs, vecMP)
+	vec, err := aggexec.MergeSplitResult(vecs)
 	if err != nil {
 		return nil, err
 	}
@@ -860,19 +861,19 @@ func (ctr *container) processFullPartitionRange(
 	n := ctr.bat.RowCount()
 	eager := orderedSetWindowAggregate(ap.WinSpecList[idx].GetW().Name)
 	if outputStart != ctr.fullPartitionNextRow {
-		ctr.freeFullPartitionResults(proc.Mp())
+		ctr.freeFullPartitionResults(proc)
 		return nil, moerr.NewInternalErrorNoCtx("full-partition window output is not sequential")
 	}
 	defer func() {
 		if retErr != nil {
-			ctr.freeFullPartitionResults(proc.Mp())
+			ctr.freeFullPartitionResults(proc)
 		}
 	}()
 
 	var result *vector.Vector
 	defer func() {
 		if retErr != nil && result != nil {
-			result.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, result)
 		}
 	}()
 	for row := outputStart; row < outputEnd; {
@@ -897,7 +898,7 @@ func (ctr *container) processFullPartitionRange(
 		}
 		if result == nil {
 			var err error
-			result, err = ctr.allocation.NewVector(*ctr.fullPartitionResults.GetType())
+			result, err = ctr.allocation.NewVector(proc, *ctr.fullPartitionResults.GetType())
 			if err != nil {
 				return nil, err
 			}
@@ -911,7 +912,7 @@ func (ctr *container) processFullPartitionRange(
 		if row == end {
 			ctr.fullPartitionResultIndex++
 			if ctr.fullPartitionResultIndex == ctr.fullPartitionResults.Length() {
-				ctr.fullPartitionResults.Free(proc.Mp())
+				ctr.allocation.FreeVector(proc, ctr.fullPartitionResults)
 				ctr.fullPartitionResults = nil
 				ctr.fullPartitionResultIndex = 0
 			}
@@ -920,7 +921,7 @@ func (ctr *container) processFullPartitionRange(
 	}
 	ctr.fullPartitionNextRow = outputEnd
 	if outputEnd == n {
-		ctr.freeFullPartitionResults(proc.Mp())
+		ctr.freeFullPartitionResults(proc)
 	}
 	return result, nil
 }
@@ -928,7 +929,7 @@ func (ctr *container) processFullPartitionRange(
 func (ctr *container) evaluateFullPartitions(
 	idx int, ap *Window, proc *process.Process, firstPartition, outputEnd int, eager bool,
 ) (*vector.Vector, error) {
-	vecMP, mpErr := ctr.allocation.MP(proc)
+	_, mpErr := ctr.allocation.MP(proc)
 	if mpErr != nil {
 		return nil, mpErr
 	}
@@ -972,12 +973,12 @@ func (ctr *container) evaluateFullPartitions(
 	if err != nil {
 		return nil, err
 	}
-	result, err := aggexec.MergeSplitResult(vecs, vecMP)
+	result, err := aggexec.MergeSplitResult(vecs)
 	if err != nil {
 		return nil, err
 	}
 	if result.Length() != groups {
-		result.Free(proc.Mp())
+		ctr.allocation.FreeVector(proc, result)
 		return nil, moerr.NewInternalErrorNoCtx("full-partition aggregate result count mismatch")
 	}
 	return result, nil
@@ -1138,7 +1139,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (_ *vector.Vector, retErr error) {
-	vecMP, mpErr := ctr.allocation.MP(proc)
+	_, mpErr := ctr.allocation.MP(proc)
 	if mpErr != nil {
 		return nil, mpErr
 	}
@@ -1221,7 +1222,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
-	vec, err := aggexec.MergeSplitResult(vecs, vecMP)
+	vec, err := aggexec.MergeSplitResult(vecs)
 	if err != nil {
 		return nil, err
 	}
@@ -1247,7 +1248,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	frame *plan.FrameClause,
 	prefix bool,
 ) (_ *vector.Vector, retErr error) {
-	vecMP, mpErr := ctr.allocation.MP(proc)
+	_, mpErr := ctr.allocation.MP(proc)
 	if mpErr != nil {
 		return nil, mpErr
 	}
@@ -1358,7 +1359,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
-	vec, err := aggexec.MergeSplitResult(vecs, vecMP)
+	vec, err := aggexec.MergeSplitResult(vecs)
 	if err != nil {
 		return nil, err
 	}
@@ -1388,19 +1389,19 @@ func (ctr *container) processOrderFuncRange(
 			return nil, err
 		}
 		count := outputEnd - outputStart
-		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+		vec, err := ctr.allocation.NewVector(proc, types.T_uint64.ToType())
 		if err != nil {
 			return nil, err
 		}
 		if err = vec.PreExtend(count, vecMP); err != nil {
-			vec.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, vec)
 			return nil, err
 		}
 		vec.SetLength(count)
 		values := vector.MustFixedColNoTypeCheck[uint64](vec)
 		for j := outputStart; j < outputEnd; j++ {
 			if err := checkCanceled(proc, j-outputStart); err != nil {
-				vec.Free(proc.Mp())
+				ctr.allocation.FreeVector(proc, vec)
 				return nil, err
 			}
 			partitionStart := 0
@@ -1443,12 +1444,12 @@ func (ctr *container) processOrderFuncRange(
 				values[j-outputStart] = float64(peerEnd) / float64(n)
 			}
 		}
-		vec, err := ctr.allocation.NewVector(types.T_float64.ToType())
+		vec, err := ctr.allocation.NewVector(proc, types.T_float64.ToType())
 		if err != nil {
 			return nil, err
 		}
 		if err := vector.AppendFixedList(vec, values, nil, vecMP); err != nil {
-			vec.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, vec)
 			return nil, err
 		}
 		return vec, nil
@@ -1466,12 +1467,12 @@ func (ctr *container) processOrderFuncRange(
 			}
 			values[j-outputStart] = ntileBucket(int64(j), int64(n), bucketCount)
 		}
-		vec, err := ctr.allocation.NewVector(types.T_int64.ToType())
+		vec, err := ctr.allocation.NewVector(proc, types.T_int64.ToType())
 		if err != nil {
 			return nil, err
 		}
 		if err := vector.AppendFixedList(vec, values, nil, vecMP); err != nil {
-			vec.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, vec)
 			return nil, err
 		}
 		return vec, nil
@@ -1501,12 +1502,12 @@ func (ctr *container) processOrderFuncRange(
 				values[j-outputStart] = uint64(peerIndex - partitionPeerIndex + 1)
 			}
 		}
-		vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+		vec, err := ctr.allocation.NewVector(proc, types.T_uint64.ToType())
 		if err != nil {
 			return nil, err
 		}
 		if err := vector.AppendFixedList(vec, values, nil, vecMP); err != nil {
-			vec.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, vec)
 			return nil, err
 		}
 		return vec, nil
@@ -1621,13 +1622,13 @@ func (ctr *container) processValueFuncRange(
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
 	retType := types.MustTypeFromPlan(w.WindowFunc.Typ)
-	localResult, err := ctr.allocation.NewVector(retType)
+	localResult, err := ctr.allocation.NewVector(proc, retType)
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if err != nil && localResult != nil {
-			localResult.Free(proc.Mp())
+			ctr.allocation.FreeVector(proc, localResult)
 			result = nil
 		}
 	}()
@@ -2847,7 +2848,7 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 					return err
 				}
 				if owned != nil {
-					owned.Free(proc.Mp())
+					ctr.allocation.FreeVector(proc, owned)
 				}
 				ctr.orderVecs[i].Vec[j] = next
 			}
@@ -2944,20 +2945,20 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			// vectors before final merge collection so the sorted partition does
 			// not overlap a second full copy of the same window payload.
 			if ctr.bat == bat {
-				bat.Clean(proc.Mp())
+				ctr.allocation.CleanBatch(proc, bat)
 				ctr.bat = nil
 			}
 			for _, ref := range orderRefs {
 				vec := ctr.orderVecs[ref[0]].Vec[ref[1]]
 				if vec != nil {
-					vec.Free(proc.Mp())
+					ctr.allocation.FreeVector(proc, vec)
 					ctr.orderVecs[ref[0]].Vec[ref[1]] = nil
 				}
 			}
 			for _, ref := range extraRefs {
 				vec := ctr.aggVecs[ref[0]].Vec[ref[1]]
 				if vec != nil {
-					vec.Free(proc.Mp())
+					ctr.allocation.FreeVector(proc, vec)
 					ctr.aggVecs[ref[0]].Vec[ref[1]] = nil
 				}
 			}
@@ -2984,15 +2985,15 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		if len(sortedOrderVecs) != len(orderRefs) || len(sortedAggVecs) != len(extraRefs) {
 			for _, vec := range sortedOrderVecs {
 				if vec != nil {
-					vec.Free(proc.Mp())
+					ctr.allocation.FreeVector(proc, vec)
 				}
 			}
 			for _, vec := range sortedAggVecs {
 				if vec != nil {
-					vec.Free(proc.Mp())
+					ctr.allocation.FreeVector(proc, vec)
 				}
 			}
-			sorted.Clean(proc.Mp())
+			ctr.allocation.CleanBatch(proc, sorted)
 			return false, moerr.NewInternalErrorNoCtx("window sorted vector count mismatch")
 		}
 		ctr.bat = sorted

@@ -51,6 +51,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 			installLoopJoinTestAllocation(t, join)
 			defer func() {
 				join.Free(proc, false, nil)
+				freeTestChildren(join)
 				left.Clean(proc.Mp())
 				right.Clean(proc.Mp())
 				proc.Free()
@@ -100,7 +101,7 @@ func TestLoopJoinConstantGroupingProjection(t *testing.T) {
 				require.Nil(t, join.ctr.buildCopyBatch)
 				return
 			}
-			require.NoError(t, join.resetResultBat())
+			require.NoError(t, join.resetResultBat(proc))
 			if method == "range" {
 				join.ctr.setProbeBatch(left)
 				require.NoError(t, join.ctr.appendJoinedRange(join, proc, left, 2, right, 1, 4))
@@ -142,7 +143,7 @@ func TestLoopJoinCopyBindingNewGeneration(t *testing.T) {
 		input.Vecs[0] = source
 		join.ctr.setProbeBatch(input)
 		for _, build := range []*batch.Batch{flat, selectedBuild, flat} {
-			require.NoError(t, join.resetResultBat())
+			require.NoError(t, join.resetResultBat(proc))
 			require.NoError(t, join.ctr.appendJoinedRange(join, proc, input, 0, build, 0, 3))
 			for row := range 3 {
 				require.Equal(t, vector.GetFixedAtNoTypeCheck[int32](source, 0), vector.GetFixedAtNoTypeCheck[int32](join.ctr.resBat.Vecs[0], row))
@@ -157,6 +158,7 @@ func TestLoopJoinCopyBindingNewGeneration(t *testing.T) {
 	require.Zero(t, account.Snapshot().Used)
 	join.ctr.setProbeBatch(input)
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	require.Nil(t, join.ctr.probeCopy)
 	require.Nil(t, join.ctr.buildCopyBatch)
 }

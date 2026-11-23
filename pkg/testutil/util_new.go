@@ -436,7 +436,7 @@ func NewVectorWithNulls(n int, typ types.Type, m *mpool.MPool, random bool, null
 }
 
 func NewTsVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, vs []types.TS) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -466,7 +466,7 @@ func NewTsVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, vs
 }
 
 func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, vs []types.Rowid) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -498,7 +498,7 @@ func NewRowidVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool,
 }
 
 func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, vs []types.Blockid) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -530,7 +530,7 @@ func NewBlockidVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []boo
 }
 
 func NewJsonVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i, v := range vs {
 			if nulls != nil && nulls[i] {
@@ -570,7 +570,7 @@ func NewJsonVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, 
 }
 
 func NewBoolVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, vs []bool) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -597,7 +597,7 @@ func NewBoolVector(n int, typ types.Type, m *mpool.MPool, _ bool, nulls []bool, 
 }
 
 func NewInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []int8) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -628,7 +628,7 @@ func NewInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []b
 }
 
 func NewInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []int16) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -659,7 +659,7 @@ func NewInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []
 }
 
 func NewInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []int32) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -690,7 +690,7 @@ func NewInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []
 }
 
 func NewInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []int64) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -721,7 +721,7 @@ func NewInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []
 }
 
 func NewUInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []uint8) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -752,7 +752,7 @@ func NewUInt8Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []
 }
 
 func NewUInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []uint16) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -783,7 +783,7 @@ func NewUInt16Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls [
 }
 
 func NewUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []uint32) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -814,7 +814,7 @@ func NewUInt32Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls [
 }
 
 func NewUInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []uint64) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -845,7 +845,7 @@ func NewUInt64Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls [
 }
 
 func NewFloat32Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []float32) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -876,7 +876,7 @@ func NewFloat32Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls 
 }
 
 func NewFloat64Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []float64) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -907,7 +907,7 @@ func NewFloat64Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls 
 }
 
 func NewDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []types.Decimal64) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -940,7 +940,7 @@ func NewDecimal64Vector(n int, typ types.Type, m *mpool.MPool, random bool, null
 }
 
 func NewDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []types.Decimal128) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil {
@@ -972,7 +972,7 @@ func NewDecimal128Vector(n int, typ types.Type, m *mpool.MPool, random bool, nul
 }
 
 func NewDateVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i := range vs {
 			if nulls != nil && nulls[i] {
@@ -1008,7 +1008,7 @@ func NewDateVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []b
 }
 
 func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i, v := range vs {
 			if nulls != nil && nulls[i] {
@@ -1044,7 +1044,7 @@ func NewTimeVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []b
 }
 
 func NewDatetimeVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i, v := range vs {
 			if nulls != nil && nulls[i] {
@@ -1080,7 +1080,7 @@ func NewDatetimeVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls
 }
 
 func NewTimestampVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i, v := range vs {
 			if nulls != nil && nulls[i] {
@@ -1116,7 +1116,7 @@ func NewTimestampVector(n int, typ types.Type, m *mpool.MPool, random bool, null
 }
 
 func NewStringVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []string) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i, v := range vs {
 			if nulls != nil && nulls[i] {
@@ -1147,7 +1147,7 @@ func NewStringVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls [
 }
 
 func NewUUIDVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs []types.Uuid) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i, v := range vs {
 			if nulls != nil && nulls[i] {
@@ -1181,7 +1181,7 @@ func NewUUIDVector(n int, typ types.Type, m *mpool.MPool, random bool, nulls []b
 }
 
 func NewArrayVector[T types.RealNumbers](n int, typ types.Type, m *mpool.MPool, random bool, nulls []bool, vs [][]T) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, m)
 	if vs != nil {
 		for i, v := range vs {
 			if nulls != nil && nulls[i] {

@@ -42,7 +42,7 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			for i, values := range [][]bool{{true, true, false, false}, {true, false, true, false}} {
-				input.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+				input.Vecs[i] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
 			}
 			input.SetRowCount(4)
@@ -105,7 +105,7 @@ func TestNumericComparisonValidityWithoutDictionaryCapability(t *testing.T) {
 				if oid.IsDecimal() && side == 0 {
 					typ.Scale = 2
 				}
-				v := vector.NewVec(typ)
+				v := vector.NewVec(typ, proc.Mp())
 				input.Vecs[side] = v
 				values := []uint64{100, 150, 90, 200}
 				if side == 1 {
@@ -202,7 +202,7 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 	require.NoError(t, err)
 	input := batch.NewWithSize(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []bool{true, false, true, false, true, false, true, false}, nil, proc.Mp()))
 	input.SetRowCount(8)
 	column := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}

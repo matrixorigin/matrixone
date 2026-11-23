@@ -737,7 +737,7 @@ func (tbl *txnTable) scanAnalyzeColumnGroup(
 	attrs = append(attrs, catalog.Row_ID)
 	attrTypes = append(attrTypes, objectio.RowidType)
 
-	data := batch.NewWithSchema(true, attrs, attrTypes)
+	data := batch.NewWithSchema(attrs, attrTypes, proc.Mp())
 	defer data.Clean(proc.Mp())
 	for rangeIndex := range selected {
 		descriptor := &selected[rangeIndex]

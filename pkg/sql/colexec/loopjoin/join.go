@@ -160,7 +160,7 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if !ctr.conditionPending {
-				if err = loopJoin.resetResultBat(); err != nil {
+				if err = loopJoin.resetResultBat(proc); err != nil {
 					return result, err
 				}
 			}
@@ -321,7 +321,11 @@ func (ctr *container) joinedRowBytes(
 	return size
 }
 
-func (loopJoin *LoopJoin) resetResultBat() error {
+func (loopJoin *LoopJoin) resetResultBat(proc *process.Process) error {
+	resultMP, err := loopJoin.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	ctr := &loopJoin.ctr
 	if ctr.resBat != nil {
 		ctr.resBat.CleanOnlyData()
@@ -330,7 +334,8 @@ func (loopJoin *LoopJoin) resetResultBat() error {
 			ctr.resBat.Vecs[i].SetLength(0)
 		}
 	} else {
-		ctr.resBat = batch.NewOffHeapWithSize(len(loopJoin.ResultCols))
+		ctr.resBat = batch.NewWithSize(len(loopJoin.ResultCols))
+		ctr.resBatMP = resultMP
 
 		for i, rp := range loopJoin.ResultCols {
 			switch rp.Rel {
@@ -341,17 +346,18 @@ func (loopJoin *LoopJoin) resetResultBat() error {
 				} else if int(rp.Pos) < len(loopJoin.LeftTypes) {
 					leftType = loopJoin.LeftTypes[rp.Pos]
 				} else {
-					ctr.resBat.Clean(nil)
+					ctr.resBat.Clean(resultMP)
 					ctr.resBat = nil
+					ctr.resBatMP = nil
 					return process.ErrExecutionResourceInvalid
 				}
-				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(leftType)
+				ctr.resBat.Vecs[i] = vector.NewVec(leftType, resultMP)
 
 			case 1:
-				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(loopJoin.RightTypes[rp.Pos])
+				ctr.resBat.Vecs[i] = vector.NewVec(loopJoin.RightTypes[rp.Pos], resultMP)
 
 			case -1:
-				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+				ctr.resBat.Vecs[i] = vector.NewVec(types.T_bool.ToType(), resultMP)
 			}
 		}
 	}
@@ -400,7 +406,7 @@ func (ctr *container) finalize(ap *LoopJoin, proc *process.Process, result *vm.C
 		return err
 	}
 	bats := ctr.mp.GetBatches()
-	if err := ap.resetResultBat(); err != nil {
+	if err := ap.resetResultBat(proc); err != nil {
 		return err
 	}
 

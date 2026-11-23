@@ -26,7 +26,7 @@ import (
 )
 
 func buildSortedBytesVec(t *testing.T, mp *mpool.MPool, vals [][]byte) *Vector {
-	v := NewVec(types.T_varchar.ToType())
+	v := NewVec(types.T_varchar.ToType(), mp)
 	for _, b := range vals {
 		require.NoError(t, AppendBytes(v, b, false, mp))
 	}

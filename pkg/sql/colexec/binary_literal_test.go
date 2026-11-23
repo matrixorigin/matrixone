@@ -111,7 +111,7 @@ func TestBinaryPreparedParamArgument(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 	state := proc.DetachPrepareParams()
 	defer proc.RestorePrepareParams(state)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer params.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
 	param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}

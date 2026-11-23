@@ -646,9 +646,9 @@ func (exec *quantileExactWeightedExec) newFinalVector(
 	typ types.Type,
 ) (*vector.Vector, error) {
 	if exec.allocation != nil {
-		return exec.allocation.newVector(typ)
+		return exec.allocation.newVector(typ, exec.mp)
 	}
-	return vector.NewOffHeapVecWithType(typ), nil
+	return vector.NewVec(typ, exec.mp), nil
 }
 
 // parseQuantileExactWeightedPair splits one retained multi-argument member,

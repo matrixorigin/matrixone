@@ -176,7 +176,7 @@ func TestSpillAllocationAccountDecodedBatchLifecycle(t *testing.T) {
 		fd:         writeSpillAllocationTestFile(t, source, 0),
 		allocation: state.allocation,
 	}
-	reuse := batch.NewOffHeapWithSize(0)
+	reuse := batch.NewWithSize(0)
 	decoded, err := reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	require.Same(t, reuse, decoded)
@@ -184,7 +184,7 @@ func TestSpillAllocationAccountDecodedBatchLifecycle(t *testing.T) {
 	require.Positive(t, state.account.Snapshot().Used)
 
 	reader.Close()
-	reuse.Clean(proc.Mp())
+	cleanSpillBatch(reuse)
 	require.Zero(t, state.account.Snapshot().Used)
 
 	reader = BucketReader{
@@ -192,20 +192,20 @@ func TestSpillAllocationAccountDecodedBatchLifecycle(t *testing.T) {
 		mergeRecords: true,
 		allocation:   state.allocation,
 	}
-	reuse = batch.NewOffHeapWithSize(0)
+	reuse = batch.NewWithSize(0)
 	decoded, err = reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	require.Equal(t, 2*source.RowCount(), decoded.RowCount())
 	require.Positive(t, state.account.Snapshot().Used)
 	reader.Close()
-	reuse.Clean(proc.Mp())
+	cleanSpillBatch(reuse)
 	require.Zero(t, state.account.Snapshot().Used)
 
 	reader = BucketReader{
 		fd:         writeSpillAllocationTestFile(t, source, 1),
 		allocation: state.allocation,
 	}
-	reuse = batch.NewOffHeapWithSize(0)
+	reuse = batch.NewWithSize(0)
 	_, err = reader.ReadBatch(proc, reuse)
 	require.Error(t, err)
 	require.Zero(t, state.account.Snapshot().Used)
@@ -241,7 +241,7 @@ func TestSpillReadBufferFallsBackUnderAllocationPressure(t *testing.T) {
 		fd:         writeSpillAllocationTestFile(t, source, 0),
 		allocation: state.allocation,
 	}
-	reuse := batch.NewOffHeapWithSize(0)
+	reuse := batch.NewWithSize(0)
 	decoded, err := reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	require.Equal(t, source.RowCount(), decoded.RowCount())
@@ -250,7 +250,7 @@ func TestSpillReadBufferFallsBackUnderAllocationPressure(t *testing.T) {
 	require.Less(t, state.account.Snapshot().Used, uint64(spillReadBufferSize))
 
 	reader.Close()
-	reuse.Clean(proc.Mp())
+	cleanSpillBatch(reuse)
 	finalizeTestSpillAllocationAccount(t, state)
 }
 
@@ -316,17 +316,17 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 		fd:         writeSpillAllocationTestRecords(t, first, second),
 		allocation: measure.allocation,
 	}
-	reuse := batch.NewOffHeapWithSize(0)
+	reuse := batch.NewWithSize(0)
 	_, err := reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	firstUsed := measure.account.Snapshot().Used
 	require.Positive(t, firstUsed)
-	reuse.Clean(proc.Mp())
+	cleanSpillBatch(reuse)
 	_, err = reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	secondUsed := measure.account.Snapshot().Used
 	require.Positive(t, secondUsed)
-	reuse.Clean(proc.Mp())
+	cleanSpillBatch(reuse)
 	reader.Close()
 	finalizeTestSpillAllocationAccount(t, measure)
 
@@ -345,7 +345,7 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 		fd:         writeSpillAllocationTestRecords(t, first, second),
 		allocation: allocation,
 	}
-	reuse = batch.NewOffHeapWithSize(0)
+	reuse = batch.NewWithSize(0)
 	_, err = reader.ReadBatch(proc, reuse)
 	require.NoError(t, err)
 	rejects := generation.Snapshot().RejectCount
@@ -360,7 +360,7 @@ func TestSpillAllocationAccountDecodedReuseRetriesFromCleanRecord(t *testing.T) 
 		generation.Used(),
 		"decoded payloads are charged only by their physical allocations",
 	)
-	reuse.Clean(proc.Mp())
+	cleanSpillBatch(reuse)
 	reader.Close()
 	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, generation.Used())

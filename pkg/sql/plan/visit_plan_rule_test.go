@@ -3810,7 +3810,7 @@ func TestRestorePreparedExactIntegerTextExecutesNormalization(t *testing.T) {
 			} else {
 				require.NotNil(t, restored.GetF().Args[0].GetP())
 			}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			proc.SetPrepareParams(params)
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			value := "9007199254740993"

@@ -37,7 +37,7 @@ func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Proc
 		!c.vs[vecSrc].GetGrouping().Contains(uint64(src)) {
 		return moerr.NewNotSupportedNoCtx("non-NULL ANY comparison")
 	}
-	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
+	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, c.vs[vecDst].MPool())
 }
 
 func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {

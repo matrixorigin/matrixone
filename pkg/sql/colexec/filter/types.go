@@ -103,7 +103,7 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil
 	if filter.ctr.buf != nil {
-		filter.ctr.buf.Clean(proc.Mp())
+		filter.ctr.buf.Clean(filter.ctr.mp(proc))
 		filter.ctr.buf = nil
 	}
 	filter.RuntimeFilterExprs = nil

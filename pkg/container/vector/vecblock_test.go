@@ -31,7 +31,7 @@ func blockScaledTestVector(t *testing.T, oid types.T, n int, mp *mpool.MPool) (*
 	t.Helper()
 	f, ok := oid.BlockScaledFormat()
 	require.True(t, ok)
-	vec := NewVec(types.New(oid, blockScaledTestDim, 0))
+	vec := NewVec(types.New(oid, blockScaledTestDim, 0), mp)
 	cells := make([][]byte, n)
 	texts := make([]string, n)
 	for i := 0; i < n; i++ {
@@ -85,7 +85,7 @@ func TestBlockScaledVectorOps(t *testing.T) {
 			// Marshal round trip validates every live cell.
 			data, err := vec.MarshalBinary()
 			require.NoError(t, err)
-			decoded := new(Vector)
+			decoded := NewVec(types.T_any.ToType(), mp)
 			require.NoError(t, decoded.UnmarshalBinaryWithCopy(data, mp))
 			requireBlockScaledRows(t, decoded, texts)
 			decoded.Free(mp)
@@ -104,13 +104,13 @@ func TestBlockScaledVectorOps(t *testing.T) {
 			requireBlockScaledRows(t, shuffled, []string{texts[3], texts[1], texts[2]})
 			shuffled.Free(mp)
 
-			union := NewVec(*vec.GetType())
+			union := NewVec(*vec.GetType(), mp)
 			require.NoError(t, union.UnionOne(vec, 2, mp))
 			require.NoError(t, union.UnionBatch(vec, 0, 2, nil, mp))
 			requireBlockScaledRows(t, union, []string{texts[2], texts[0], texts[1]})
 			union.Free(mp)
 
-			anyVec := NewVec(*vec.GetType())
+			anyVec := NewVec(*vec.GetType(), mp)
 			require.NoError(t, AppendAny(anyVec, cells[3], false, mp))
 			requireBlockScaledRows(t, anyVec, []string{texts[3]})
 			anyVec.Free(mp)
@@ -143,7 +143,7 @@ func TestBlockScaledVectorUnmarshalRejectsMalformedCell(t *testing.T) {
 			corrupted := append([]byte(nil), data...)
 			corrupted[pos] = 0x7f // version byte
 
-			target := new(Vector)
+			target := NewVec(types.T_any.ToType(), mp)
 			require.Error(t, target.UnmarshalBinaryWithCopy(corrupted, mp))
 			target.Free(mp)
 

@@ -52,13 +52,13 @@ func TestStrHashMapFlatFixedCompositeKeyGrammar(t *testing.T) {
 			first := []int32{99, 1, 2, 1, 3}
 			second := []int32{99, 10, 20, 10, 30}
 			third := []int64{999, 100, 200, 100, 300}
-			vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int32.ToType())}
+			vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mp), vector.NewVec(types.T_int32.ToType(), mp)}
 			if tc.wide {
-				vecs = append(vecs, vector.NewVec(types.T_int64.ToType()))
+				vecs = append(vecs, vector.NewVec(types.T_int64.ToType(), mp))
 			}
 			if tc.many {
 				for len(vecs) < 16 {
-					vecs = append(vecs, vector.NewVec(types.T_int32.ToType()))
+					vecs = append(vecs, vector.NewVec(types.T_int32.ToType(), mp))
 				}
 			}
 			for _, vec := range vecs {
@@ -129,7 +129,7 @@ func TestStrHashMapFlatFixedCompositeKeyGrammar(t *testing.T) {
 		m, err := NewStrHashMap(true, mp)
 		require.NoError(t, err)
 		t.Cleanup(m.Free)
-		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int32.ToType())}
+		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mp), vector.NewVec(types.T_int32.ToType(), mp)}
 		for _, vec := range vecs {
 			t.Cleanup(func() { vec.Free(mp) })
 		}
@@ -171,11 +171,11 @@ func TestStrHashMapFlatFixedCompositeFallbacks(t *testing.T) {
 			if shape == "grouping" {
 				require.NoError(t, m.SetGroupingAware())
 			}
-			first := vector.NewVec(types.T_int32.ToType())
+			first := vector.NewVec(types.T_int32.ToType(), mp)
 			if shape == "float" {
-				first = vector.NewVec(types.T_float64.ToType())
+				first = vector.NewVec(types.T_float64.ToType(), mp)
 			} else if shape == "varlen" {
-				first = vector.NewVec(types.T_varchar.ToType())
+				first = vector.NewVec(types.T_varchar.ToType(), mp)
 			} else if shape == "constant" {
 				first, err = vector.NewConstFixed(types.T_int32.ToType(), int32(1), 3, mp)
 				require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestStrHashMapFlatFixedCompositeFallbacks(t *testing.T) {
 				columnCount = 17
 			}
 			for len(vecs) < columnCount {
-				vec := vector.NewVec(types.T_int32.ToType())
+				vec := vector.NewVec(types.T_int32.ToType(), mp)
 				t.Cleanup(func() { vec.Free(mp) })
 				require.NoError(t, vector.AppendFixedList(vec, []int32{7, 7, 7}, nil, mp))
 				vecs = append(vecs, vec)
@@ -267,7 +267,7 @@ func TestStrHashMapFlatRawStringBatchGrammar(t *testing.T) {
 				oid = types.T_char
 				values = []string{"prefix", "   ", " a\x00b  ", strings.Repeat("i", 23) + " ", strings.Repeat("a", 24) + "  ", wide + "   ", wide, "last\t ", "suffix"}
 			}
-			vecs := []*vector.Vector{vector.NewVec(oid.ToType()), vector.NewVec(types.T_binary.ToType())}
+			vecs := []*vector.Vector{vector.NewVec(oid.ToType(), mp), vector.NewVec(types.T_binary.ToType(), mp)}
 			for column, vec := range vecs {
 				t.Cleanup(func() { vec.Free(mp) })
 				for _, value := range values {
@@ -365,7 +365,7 @@ func TestStrHashMapFlatCharFallbacks(t *testing.T) {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-			vec := vector.NewVec(types.T_char.ToType())
+			vec := vector.NewVec(types.T_char.ToType(), mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			values := []string{"A ", "A", "B "}
 			want := []uint64{1, 1, 2}
@@ -427,7 +427,7 @@ func BenchmarkNullableStrHashEncodeFlatString(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer m.Free()
-			vec := vector.NewVec(tc.oid.ToType())
+			vec := vector.NewVec(tc.oid.ToType(), mp)
 			defer vec.Free(mp)
 			value := []byte(tc.value)
 			if tc.value == "" {

@@ -92,7 +92,10 @@ func (order *Order) Release() {
 type container struct {
 	state          vm.CtrState
 	batWaitForSort *batch.Batch
-	rbat           *batch.Batch
+	// bufMP is the operator's own pool: batWaitForSort and rbat, the buffered
+	// run, are created with and operated through it.
+	bufMP *mpool.MPool
+	rbat  *batch.Batch
 
 	desc      []bool // ds[i] == true: the attrs[i] are in descending order
 	nullsLast []bool
@@ -188,14 +191,14 @@ func (order *Order) Reset(proc *process.Process, pipelineFailed bool, err error)
 			// A partially accumulated sort batch can survive when an upstream
 			// pipeline is stopped before sortAndSend transfers it to rbat. Its
 			// allocation account belongs to the completed execution generation.
-			ctr.batWaitForSort.Clean(proc.Mp())
+			ctr.batWaitForSort.Clean(ctr.runMP())
 			ctr.batWaitForSort = nil
 		} else {
 			ctr.batWaitForSort.CleanOnlyData()
 		}
 	}
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.Mp())
+		ctr.rbat.Clean(ctr.runMP())
 		ctr.rbat = nil
 	}
 	ctr.state = vm.Build
@@ -223,6 +226,7 @@ func (order *Order) Free(proc *process.Process, _ bool, err error) {
 	order.ctr.desc = nil
 	order.ctr.nullsLast = nil
 	order.ctr.state = vm.Build
+	colexec.FreeOperatorMPool(&order.ctr.bufMP)
 }
 
 func (order *Order) SetAllocationAccount(account *mpool.AllocationAccount) error {
@@ -542,11 +546,11 @@ func (order *Order) cleanBatch(proc *process.Process) {
 	//big memory, just clean
 	ctr := &order.ctr
 	if ctr.batWaitForSort != nil {
-		ctr.batWaitForSort.Clean(proc.Mp())
+		ctr.batWaitForSort.Clean(ctr.runMP())
 		ctr.batWaitForSort = nil
 	}
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.Mp())
+		ctr.rbat.Clean(ctr.runMP())
 		ctr.rbat = nil
 	}
 }

@@ -240,7 +240,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	sourceProc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), sourceProc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, sourceProc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, sourceProc.Mp()))
 	t.Cleanup(func() { params.Free(sourceProc.Mp()) })
@@ -378,7 +378,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 
 	// Create a valid ProcessInfo
 	proc := testutil.NewProcess(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("AB\x00\x00"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
 	t.Cleanup(func() { params.Free(proc.Mp()) })
@@ -968,7 +968,7 @@ func TestMessageReceiverSendBatchCarriesStaticBinaryType(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
 	bat.SetRowCount(2)
@@ -993,7 +993,7 @@ func TestMessageReceiverSendBatchCarriesStaticBinaryType(t *testing.T) {
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
-	decoded := batch.NewOffHeapEmpty()
+	decoded := batch.NewWithSize(0)
 	defer decoded.Clean(mp)
 	require.NoError(t, decoded.UnmarshalBinaryWithMetadata(sent.Data, mp))
 	require.Equal(t, types.T_varbinary, decoded.Vecs[0].GetType().Oid)

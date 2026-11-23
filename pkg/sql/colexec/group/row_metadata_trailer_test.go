@@ -66,7 +66,7 @@ func TestRowMetadataTrailerWireUnknownServiceFailsClosed(t *testing.T) {
 func TestGroupSpillGroupKeyCodec(t *testing.T) {
 	mp := mpool.MustNewZero()
 	gb := batch.NewWithSize(1)
-	gb.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	gb.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(gb.Vecs[0], []byte("5"), false, mp))
 	require.NoError(t, vector.AppendBytes(gb.Vecs[0], []byte("5"), false, mp))
 	gb.SetRowCount(2)
@@ -77,8 +77,8 @@ func TestGroupSpillGroupKeyCodec(t *testing.T) {
 
 	rows := []int32{0, 1}
 	newDestination := func() *batch.Batch {
-		decoded := batch.NewOffHeapWithSize(1)
-		decoded.Vecs[0] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+		decoded := batch.NewWithSize(1)
+		decoded.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 		return decoded
 	}
 	var record bytes.Buffer
@@ -232,7 +232,7 @@ func TestRowMetadataTrailerDomainRequiresCapabilities(t *testing.T) {
 // state's values.
 func TestOldRowMetadataTrailerWithRetiredKindsDecodes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, mp))
 	require.NoError(t, vector.AppendBytes(input, []byte("b"), false, mp))
 	source, err := aggexec.MakeGroupAgg(

@@ -46,14 +46,14 @@ func TestWorkspaceAllocationIndependentClose(t *testing.T) {
 	w, wmp, err := clone.newWorkspaceVector(types.T_int64.ToType())
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendFixed(w, int64(7), false, wmp))
-	v.Free(proc.Mp())
+	v.Free(vmp)
 	txn.closeWorkspaceAllocation()
 	txn.closeWorkspaceAllocation()
 	require.False(t, parent.Closed())
 	require.NoError(t, vector.AppendFixed(w, int64(8), false, wmp))
 	_, err = txn.workspaceAllocation()
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountSealed)
-	w.Free(proc.Mp())
+	w.Free(wmp)
 	clone.closeWorkspaceAllocation()
 	require.Zero(t, budget.AggregateUsed())
 }
@@ -119,13 +119,13 @@ func TestWorkspaceAllocationStatementRollbackRetainsEarlierWrites(t *testing.T) 
 			makeInput := func(rows int, wide bool, value int8) *batch.Batch {
 				b := batch.NewWithSize(1)
 				b.Attrs = []string{"v"}
-				b.Vecs[0] = vector.NewVec(types.T_int8.ToType())
+				b.Vecs[0] = vector.NewVec(types.T_int8.ToType(), txn.proc.Mp())
 				t.Cleanup(func() { b.Clean(txn.proc.Mp()) })
 				for range rows {
 					require.NoError(t, vector.AppendFixed(b.Vecs[0], value, false, txn.proc.Mp()))
 				}
 				if wide {
-					v := vector.NewVec(types.T_varchar.ToType())
+					v := vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp())
 					b.Vecs = append(b.Vecs, v)
 					b.Attrs = append(b.Attrs, "payload")
 					for range rows {
@@ -145,7 +145,7 @@ func TestWorkspaceAllocationStatementRollbackRetainsEarlierWrites(t *testing.T) 
 				copied = true
 				_, err = txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
 				if err != nil {
-					b.Clean(txn.proc.Mp())
+					b.Clean(txn.workspaceMP())
 				}
 				return err
 			}
@@ -205,7 +205,7 @@ func TestWorkspaceInsertAdoptsRowidsWithinCapacity(t *testing.T) {
 			txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 			src := batch.NewWithSize(1)
 			src.Attrs = []string{"v"}
-			src.Vecs[0] = vector.NewVec(types.T_int8.ToType())
+			src.Vecs[0] = vector.NewVec(types.T_int8.ToType(), txn.proc.Mp())
 			defer src.Clean(txn.proc.Mp())
 			for range 64 {
 				require.NoError(t, vector.AppendFixed(src.Vecs[0], int8(1), false, txn.proc.Mp()))
@@ -213,7 +213,7 @@ func TestWorkspaceInsertAdoptsRowidsWithinCapacity(t *testing.T) {
 			src.SetRowCount(64)
 			b, err := txn.copyWorkspaceBatch(src)
 			require.NoError(t, err)
-			defer b.Clean(txn.proc.Mp())
+			defer b.Clean(txn.workspaceMP())
 			before := txn.workspaceAccount.Snapshot().Used
 			rowids, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
 			if limit == 1500 {
@@ -221,7 +221,7 @@ func TestWorkspaceInsertAdoptsRowidsWithinCapacity(t *testing.T) {
 				require.Nil(t, rowids)
 				require.Empty(t, txn.writes)
 				require.Equal(t, before, txn.workspaceAccount.Snapshot().Used)
-				b.Clean(txn.proc.Mp()) // the caller still owns an unpublished batch
+				b.Clean(txn.workspaceMP()) // the caller still owns an unpublished batch
 			} else {
 				require.NoError(t, err)
 				require.Same(t, rowids, b.Vecs[0])
@@ -265,29 +265,28 @@ func TestWorkspaceInsertPreservesRawBatchProvenance(t *testing.T) {
 				defer func() { _, _, err := registry.CompleteTerminal(account); require.NoError(t, err) }()
 				appendMP, err = txn.proc.Mp().WithAccount(account, mpool.AllocationOwnerDML, 1, mpool.AllocationCapacityClassDefault)
 				require.NoError(t, err)
-				b = batch.NewOffHeapWithSize(1)
-				b.SetVector(0, vector.NewOffHeapVecWithType(types.T_int8.ToType()))
+				b = batch.NewWithSize(1)
+				b.SetVector(0, vector.NewVec(types.T_int8.ToType(), appendMP))
 			} else {
-				b.SetVector(0, vector.NewVec(types.T_int8.ToType()))
+				b.SetVector(0, vector.NewVec(types.T_int8.ToType(), appendMP))
 			}
-			defer b.Clean(txn.proc.Mp())
 			b.Attrs = []string{"v"}
 			require.NoError(t, vector.AppendFixed(b.Vecs[0], int8(1), false, appendMP))
 			b.SetRowCount(1)
-			var payloadUsed uint64
-			if account != nil {
-				payloadUsed = account.Snapshot().Used
-			}
 			rowids, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
 			require.NoError(t, err)
-			require.Same(t, rowids, b.Vecs[0])
-			if account != nil {
-				// A raw batch carries no account: its rowid copy is not charged
-				// to the caller's account either.
-				require.Equal(t, payloadUsed, account.Snapshot().Used)
-			}
-			require.Zero(t, txn.workspaceAccount.Snapshot().Used, "temporary workspace rowids were released")
+			// The workspace copies a raw caller batch into its own pool and
+			// never holds the caller's batch: the caller still owns and frees it.
+			require.Len(t, txn.writes, 1)
+			require.Same(t, rowids, txn.writes[0].bat.Vecs[0])
+			require.Same(t, txn.workspaceMP(), rowids.MPool())
+			require.Positive(t, txn.workspaceAccount.Snapshot().Used, "the copy is charged to the workspace")
+			require.Same(t, appendMP, b.Vecs[0].MPool())
+			b.Clean(appendMP)
 			txn.delTransaction()
+			if account != nil {
+				require.Zero(t, account.Snapshot().Used, "the caller released its batch")
+			}
 			require.Zero(t, budget.AggregateUsed())
 			if account != nil {
 				require.Zero(t, account.Snapshot().Used)
@@ -311,7 +310,7 @@ func TestWorkspaceMergeAdoptsRegeneratedRowids(t *testing.T) {
 		src := batch.NewWithSize(1)
 		t.Cleanup(func() { src.Clean(txn.proc.Mp()) })
 		src.Attrs = []string{"v"}
-		src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		src.Vecs[0] = vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		for range 64 {
 			require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(1), false, txn.proc.Mp()))
 		}
@@ -324,7 +323,7 @@ func TestWorkspaceMergeAdoptsRegeneratedRowids(t *testing.T) {
 			require.NoError(t, e)
 			_, e = txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", b, DNStore{})
 			if e != nil {
-				b.Clean(txn.proc.Mp())
+				b.Clean(txn.workspaceMP())
 			}
 			require.NoError(t, e)
 		}

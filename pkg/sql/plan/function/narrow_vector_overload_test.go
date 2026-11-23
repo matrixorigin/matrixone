@@ -225,7 +225,7 @@ func TestNarrowVectorFunctionOverloads(t *testing.T) {
 	// Asserted against the vecf32 output because json_array returns ByteJson
 	// BINARY, so a hand-written "null" would be checking the wrong encoding.
 	{
-		nf := vector.NewVec(f32t)
+		nf := vector.NewVec(f32t, mp)
 		require.NoError(t, vector.AppendArrayList[float32](nf, [][]float32{{0, 0, 0}}, []bool{true}, mp))
 		refOut := run(t, "json_array", []types.Type{f32t}, []*vector.Vector{nf})
 		wantNull := append([]byte(nil), refOut.GetBytesAt(0)...)
@@ -234,7 +234,7 @@ func TestNarrowVectorFunctionOverloads(t *testing.T) {
 
 		for _, typ := range narrow {
 			t.Run("json_array/null/"+typ.String(), func(t *testing.T) {
-				v := vector.NewVec(typ.ToType())
+				v := vector.NewVec(typ.ToType(), mp)
 				defer v.Free(mp)
 				require.NoError(t, appendNullArrayRow(v, typ, mp))
 				out := run(t, "json_array", []types.Type{typ.ToType()}, []*vector.Vector{v})

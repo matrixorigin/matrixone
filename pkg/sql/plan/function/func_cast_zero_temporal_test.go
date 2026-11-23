@@ -426,7 +426,7 @@ func TestTypedDatetimeAssignmentDiagnosesDateNarrowing(t *testing.T) {
 			})
 			warnings := &numericWarningSession{}
 			proc.WarningSink = warnings
-			input := vector.NewVec(types.T_datetime.ToType())
+			input := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendFixed(input, value, false, proc.Mp()))
 			target := vector.NewConstNull(types.T_date.ToType(), 1, proc.Mp())

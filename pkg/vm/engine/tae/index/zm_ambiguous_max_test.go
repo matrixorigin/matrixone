@@ -101,7 +101,7 @@ func TestByteZoneMapPrefixAndMembershipAmbiguousMax(t *testing.T) {
 			require.False(t, AnyPrefixGTByValue(tc.zm, prefix, types.T_varbinary).MayMatch(), "no 30-byte prefix exceeds all-FF")
 
 			mp := mpool.MustNewZero()
-			v := vector.NewVec(types.T_varbinary.ToType())
+			v := vector.NewVec(types.T_varbinary.ToType(), mp)
 			defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()) }()
 			for _, x := range [][]byte{[]byte("a"), []byte("z"), lower, actual, upper} {
 				require.NoError(t, vector.AppendBytes(v, x, false, mp))
@@ -196,7 +196,7 @@ func TestByteZoneMapAmbiguousEncodingAndLowerPruning(t *testing.T) {
 
 	zm := legacyObjectSummaryForTest(value)
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_varbinary.ToType())
+	v := vector.NewVec(types.T_varbinary.ToType(), mp)
 	defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()) }()
 	for _, x := range []string{"a", "b", "c", "d"} {
 		require.NoError(t, vector.AppendBytes(v, []byte(x), false, mp))
@@ -272,7 +272,7 @@ func TestByteZoneMapAmbiguousMaxNullableMembership(t *testing.T) {
 	value := append(bytes.Clone(prefix), 2)
 	zm := legacyObjectSummaryForTest(value)
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_varbinary.ToType())
+	v := vector.NewVec(types.T_varbinary.ToType(), mp)
 	defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()) }()
 	require.NoError(t, vector.AppendBytes(v, nil, true, mp))
 	require.NoError(t, vector.AppendBytes(v, value, false, mp))

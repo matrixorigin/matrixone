@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -29,8 +30,11 @@ import (
 // in the same statement account across Window and TimeWin native generations.
 type AnalyticAllocation struct {
 	Account *mpool.AllocationAccount
-	// vectors is the accounted view of the operator's pool that charges its
-	// output vectors; built on first use by MP.
+	// pool is the operator's own pool (#33019): the analytic operator buffers
+	// whole partitions, so its retained and output vectors live there.
+	pool *mpool.MPool
+	// vectors is the accounted view of pool that charges its output vectors;
+	// built on first use by MP.
 	vectors   *mpool.MPool
 	Aggregate *aggexec.AllocationAccount
 	budget    *process.ExecutionResourceGeneration
@@ -65,7 +69,8 @@ func (a *AnalyticAllocation) Clear(account *mpool.AllocationAccount) error {
 	if a.metadata != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	*a = AnalyticAllocation{}
+	// The operator pool outlives the account; FreePool deletes it.
+	*a = AnalyticAllocation{pool: a.pool}
 	return nil
 }
 
@@ -140,23 +145,81 @@ func GrowAnalyticSlice[T any](old []T, length int, proc *process.Process, a *Ana
 	return next, nil
 }
 
-// NewVector creates an empty output vector. With an account bound it is an
-// off-heap vector the caller must grow through MP(proc).
-func (a *AnalyticAllocation) NewVector(typ types.Type) (*vector.Vector, error) {
-	if a.Account == nil {
-		return vector.NewVec(typ), nil
+// NewVector creates an empty output vector of MP(proc); the caller grows and
+// frees it through MP(proc).
+func (a *AnalyticAllocation) NewVector(proc *process.Process, typ types.Type) (*vector.Vector, error) {
+	mp, err := a.MP(proc)
+	if err != nil {
+		return nil, err
 	}
-	return vector.NewOffHeapVecWithType(typ), nil
+	return vector.NewVec(typ, mp), nil
+}
+
+// basePool returns the operator's own pool, creating it on first use.
+func (a *AnalyticAllocation) basePool(proc *process.Process) (*mpool.MPool, error) {
+	if a.pool == nil {
+		pool, err := NewOperatorMPool(proc, "analytic")
+		if err != nil {
+			return nil, err
+		}
+		a.pool = pool
+	}
+	return a.pool, nil
+}
+
+// FreePool deletes the operator pool. Every vector of it must be freed.
+func (a *AnalyticAllocation) FreePool() {
+	a.vectors = nil
+	FreeOperatorMPool(&a.pool)
+}
+
+// FreeVector frees a vector owned by the analytic operator: one of its pool,
+// the pool's accounted view, its aggregates' view, or proc's pool. A vector
+// of any other pool is passed proc's pool so the mismatch is reported.
+func (a *AnalyticAllocation) FreeVector(proc *process.Process, vec *vector.Vector) {
+	if vec == nil {
+		return
+	}
+	mp := vec.MPool()
+	if mp == nil || mp == a.pool || mp == a.vectors || mp == proc.Mp() ||
+		a.Aggregate.OwnsVectorMP(mp) {
+		vec.Free(mp)
+		return
+	}
+	vec.Free(proc.Mp())
+}
+
+// CleanBatch frees a batch whose vectors the analytic operator owns.
+func (a *AnalyticAllocation) CleanBatch(proc *process.Process, bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	seen := make(map[*vector.Vector]struct{}, len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if _, ok := seen[vec]; !ok {
+			seen[vec] = struct{}{}
+			a.FreeVector(proc, vec)
+		}
+		bat.Vecs[i] = nil
+	}
+	bat.Clean(proc.Mp())
 }
 
 // MP returns the pool analytic output vectors allocate from: an accounted view
-// of proc's pool when an account is bound, otherwise proc's pool.
+// of the operator pool when an account is bound, otherwise the operator pool.
 func (a *AnalyticAllocation) MP(proc *process.Process) (*mpool.MPool, error) {
+	base, err := a.basePool(proc)
+	if err != nil {
+		return nil, err
+	}
 	if a.Account == nil {
-		return proc.Mp(), nil
+		return base, nil
 	}
 	if a.vectors == nil {
-		view, err := proc.Mp().WithAccount(
+		view, err := base.WithAccount(
 			a.Account, mpool.AllocationOwnerWindow, 1, mpool.AllocationCapacityClassDefault)
 		if err != nil {
 			return nil, err

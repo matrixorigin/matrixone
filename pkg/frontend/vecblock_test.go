@@ -35,7 +35,7 @@ func vecBlockTestVector(t *testing.T, oid types.T, mp *mpool.MPool) *vector.Vect
 	f, _ := oid.BlockScaledFormat()
 	cell, err := types.AppendBlockScaled(nil, f, []float32{1, -3, 0, 6})
 	require.NoError(t, err)
-	vec := vector.NewVec(types.New(oid, 4, 0))
+	vec := vector.NewVec(types.New(oid, 4, 0), mp)
 	require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
 	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
 	return vec
@@ -93,7 +93,7 @@ func TestQueryResultDumpVecBlockExactText(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
-		ids := vector.NewVec(types.T_int64.ToType())
+		ids := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(ids, []int64{1, 2}, nil, mp))
 		vec := vecBlockTestVector(t, oid, mp)
 		bat := batch.NewWithSize(2)
@@ -129,7 +129,7 @@ func TestUserVarVecBlockKeepsCell(t *testing.T) {
 		f, _ := oid.BlockScaledFormat()
 		cell, err := types.StringToBlockScaled(f, "[0.44547153, 1.7, -3.1, 0.02, 5.5]")
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(oid, 5, 0))
+		vec := vector.NewVec(types.New(oid, 5, 0), mp)
 		require.NoError(t, vector.AppendBytes(vec, cell, false, mp))
 
 		value, err := getValueFromVector(ctx, vec, nil, &plan.Expr{Typ: plan.Type{Id: int32(oid), Width: 5}})

@@ -189,21 +189,21 @@ func TestDependentIndependentJoinWork(t *testing.T) {
 					}
 					b := batch.NewWithSize(len(node.TableDef.Cols))
 					for i := range b.Vecs {
-						b.Vecs[i], err = vector.NewOffHeapVecWithType(types.T_int32.ToType()), nil
+						b.Vecs[i], err = vector.NewVec(types.T_int32.ToType(), dependentFixtureMP(p, selection)), nil
 						if err != nil {
-							b.Clean(p.Mp())
+							b.Clean(dependentFixtureMP(p, selection))
 							return nil, err
 						}
 						for key := int32(1); key <= size; key++ {
 							if err := vector.AppendFixed(b.Vecs[i], key, false, dependentFixtureMP(p, selection)); err != nil {
-								b.Clean(p.Mp())
+								b.Clean(dependentFixtureMP(p, selection))
 								return nil, err
 							}
 						}
 					}
 					b.SetRowCount(int(size))
 					opened++
-					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(p.Mp()) }}, nil
+					return &dependentFixtureSource{batch: b, rows: 1, close: func() { closed++; b.Clean(dependentFixtureMP(p, selection)) }}, nil
 				}, nil
 			}
 			c := &Compile{proc: proc, stmt: stmts[0]}

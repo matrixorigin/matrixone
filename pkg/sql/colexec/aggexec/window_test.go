@@ -39,7 +39,7 @@ func flushValueWindowForTest(t *testing.T, exec AggFuncExec, mp *mpool.MPool) *v
 	t.Helper()
 	results, err := exec.Flush()
 	for _, result := range results {
-		t.Cleanup(func() { result.Free(mp) })
+		t.Cleanup(func() { result.Free(result.MPool()) })
 	}
 	require.NoError(t, err)
 	require.Len(t, results, 1)
@@ -59,7 +59,7 @@ func checkValueWindowNulls(t *testing.T, result *vector.Vector, typ types.Type, 
 func runValueWindowFixedCase[T types.FixedSizeTExceptStrType](t *testing.T, id int64, typ types.Type, input []T, nulls []bool, want []T, wantNulls []bool) {
 	t.Helper()
 	mp := newAggExecTestPool(t)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(vec, input, nulls, mp))
 	exec, err := makeValueWindowExec(mp, id, false, []types.Type{typ})
@@ -171,7 +171,7 @@ func TestValueWindowExec_VarlenTypes(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := newAggExecTestPool(t)
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			require.NoError(t, vector.AppendStringList(vec, []string{"aaa", "bbb", "ccc"}, nil, mp))
 			exec, err := makeValueWindowExec(mp, test.id, false, []types.Type{types.T_varchar.ToType()})
@@ -202,7 +202,7 @@ func TestValueWindowExec_EmptyVectors(t *testing.T) {
 
 func TestValueWindowExec_FillWithoutGroupGrow(t *testing.T) {
 	mp := newAggExecTestPool(t)
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200}, nil, mp))
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
@@ -215,7 +215,7 @@ func TestValueWindowExec_FillWithoutGroupGrow(t *testing.T) {
 
 func TestValueWindowExec_SizeWithData(t *testing.T) {
 	mp := newAggExecTestPool(t)
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200, 300}, nil, mp))
 	exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
@@ -239,7 +239,7 @@ func TestValueWindowExec_ResultOwnership(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			mp := newAggExecTestPool(t)
-			vec := vector.NewVec(types.T_int64.ToType())
+			vec := vector.NewVec(types.T_int64.ToType(), mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			require.NoError(t, vector.AppendFixedList(vec, []int64{100, 200}, nil, mp))
 			exec, err := makeValueWindowExec(mp, WinIdOfLag, false, []types.Type{types.T_int64.ToType()})
@@ -252,7 +252,7 @@ func TestValueWindowExec_ResultOwnership(t *testing.T) {
 			t.Cleanup(func() {
 				if callerOwns {
 					for _, result := range results {
-						result.Free(mp)
+						result.Free(result.MPool())
 					}
 				}
 			})
@@ -268,7 +268,8 @@ func TestValueWindowExec_ResultOwnership(t *testing.T) {
 			exec.Free()
 			require.Zero(t, exec.Size())
 			if transfer {
-				require.Zero(t, mp.CurrNB())
+				// Only the caller's input vector remains.
+				require.Equal(t, int64(vec.Allocated()), mp.CurrNB())
 			} else {
 				require.Positive(t, mp.CurrNB())
 				require.Equal(t, int64(100), vector.GetFixedAtWithTypeCheck[int64](results[0], 1))
@@ -371,7 +372,7 @@ func TestValueWindowExec_InvalidAggID(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 	results, err := exec.Flush()
 	for _, result := range results {
-		t.Cleanup(func() { result.Free(mp) })
+		t.Cleanup(func() { result.Free(result.MPool()) })
 	}
 	require.Nil(t, results)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -387,12 +388,12 @@ func TestNtileWindowExec(t *testing.T) {
 		require.NoError(t, err)
 
 		// Simulate window operator: one partition with 10 rows
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3, 3, 3, 3, 3, 3}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
@@ -428,12 +429,12 @@ func TestNtileWindowExec(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3, 3, 3, 3, 3}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
@@ -468,12 +469,12 @@ func TestNtileWindowExec(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{3, 3, 3, 3, 3}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
@@ -539,7 +540,7 @@ func TestPercentRank(t *testing.T) {
 		require.NoError(t, err)
 
 		// 单行分区: [0, 1] 表示从0到1共1行
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -570,7 +571,7 @@ func TestPercentRank(t *testing.T) {
 		require.NoError(t, err)
 
 		// 4行分区，每行rank不同: [0, 1, 2, 3, 4]
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -606,12 +607,12 @@ func TestPercentRank(t *testing.T) {
 		err = exec2.GroupGrow(1)
 		require.NoError(t, err)
 
-		vec1 := vector.NewVec(types.T_int64.ToType())
+		vec1 := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec1, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer vec1.Free(mp)
 
-		vec2 := vector.NewVec(types.T_int64.ToType())
+		vec2 := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec2, []int64{1, 2}, nil, mp)
 		require.NoError(t, err)
 		defer vec2.Free(mp)
@@ -643,7 +644,7 @@ func TestPercentRank(t *testing.T) {
 		err = exec2.GroupGrow(2)
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -685,7 +686,7 @@ func TestPercentRank(t *testing.T) {
 		err = exec.GroupGrow(2)
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -710,7 +711,7 @@ func TestPercentRank(t *testing.T) {
 		err = exec1.GroupGrow(2)
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -743,7 +744,7 @@ func TestPercentRank(t *testing.T) {
 		err = exec.GroupGrow(2)
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -765,7 +766,7 @@ func TestPercentRank(t *testing.T) {
 		err = exec.GroupGrow(2)
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -798,7 +799,7 @@ func TestPercentRank(t *testing.T) {
 		err = exec.GroupGrow(2)
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -825,7 +826,7 @@ func TestPercentRank(t *testing.T) {
 		err = exec.GroupGrow(2)
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
 		require.NoError(t, err)
 		defer vec.Free(mp)
@@ -845,7 +846,7 @@ func TestRankingWindowUnsignedResults(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)
 
-	osVec := vector.NewVec(types.T_int64.ToType())
+	osVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(osVec, []int64{0, 2, 3, 5}, nil, mp))
 	defer osVec.Free(mp)
 
@@ -874,7 +875,7 @@ func TestRankingWindowUnsignedResults(t *testing.T) {
 			require.Equal(t, types.T_uint64, results[0].GetType().Oid)
 			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[uint64](results[0]))
 
-			results[0].Free(mp)
+			results[0].Free(results[0].MPool())
 			exec.Free()
 		})
 	}
@@ -931,12 +932,12 @@ func TestNtileExec_IntegerTypes(t *testing.T) {
 			exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{tc.typ})
 			require.NoError(t, err)
 
-			osVec := vector.NewVec(types.T_int64.ToType())
+			osVec := vector.NewVec(types.T_int64.ToType(), mp)
 			err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6}, nil, mp)
 			require.NoError(t, err)
 			defer osVec.Free(mp)
 
-			bucketVec := vector.NewVec(tc.typ)
+			bucketVec := vector.NewVec(tc.typ, mp)
 			switch v := tc.values.(type) {
 			case []int8:
 				err = vector.AppendFixedList(bucketVec, v, nil, mp)
@@ -984,12 +985,12 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		require.NoError(t, err)
 		defer exec.Free()
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{-1}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1010,12 +1011,12 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		require.NoError(t, err)
 		defer exec.Free()
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{0}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1035,12 +1036,12 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		require.NoError(t, err)
 		defer exec.Free()
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{0}, []bool{true}, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1075,7 +1076,7 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
@@ -1104,12 +1105,12 @@ func TestNtileExec_AlgorithmEdgeCases(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{1}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1139,12 +1140,12 @@ func TestNtileExec_AlgorithmEdgeCases(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{5}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1174,12 +1175,12 @@ func TestNtileExec_AlgorithmEdgeCases(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{1}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1211,12 +1212,12 @@ func TestNtileExec_AlgorithmEdgeCases(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{3}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1273,17 +1274,17 @@ func TestNtileExec_MultiplePartitions(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucket2Vec := vector.NewVec(types.T_int64.ToType())
+		bucket2Vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucket2Vec, []int64{2}, nil, mp)
 		require.NoError(t, err)
 		defer bucket2Vec.Free(mp)
 
-		bucket3Vec := vector.NewVec(types.T_int64.ToType())
+		bucket3Vec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucket3Vec, []int64{3}, nil, mp)
 		require.NoError(t, err)
 		defer bucket3Vec.Free(mp)
@@ -1338,12 +1339,12 @@ func TestNtileExec_MemoryManagement(t *testing.T) {
 		initialSize := exec.Size()
 		require.GreaterOrEqual(t, initialSize, int64(0))
 
-		osVec := vector.NewVec(types.T_int64.ToType())
+		osVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3}, nil, mp)
 		require.NoError(t, err)
 		defer osVec.Free(mp)
 
-		bucketVec := vector.NewVec(types.T_int64.ToType())
+		bucketVec := vector.NewVec(types.T_int64.ToType(), mp)
 		err = vector.AppendFixedList(bucketVec, []int64{2}, nil, mp)
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
@@ -1451,12 +1452,12 @@ func TestNtileExec_InvalidBucketType(t *testing.T) {
 	exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_varchar.ToType()})
 	require.NoError(t, err)
 
-	osVec := vector.NewVec(types.T_int64.ToType())
+	osVec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
 	require.NoError(t, err)
 	defer osVec.Free(mp)
 
-	bucketVec := vector.NewVec(types.T_varchar.ToType())
+	bucketVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	err = vector.AppendStringList(bucketVec, []string{"invalid"}, nil, mp)
 	require.NoError(t, err)
 	defer bucketVec.Free(mp)
@@ -1503,7 +1504,7 @@ func TestCumeDistWindowExec_FillAndFlush(t *testing.T) {
 	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -1538,7 +1539,7 @@ func TestCumeDistWindowExec_Merge(t *testing.T) {
 	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -1571,7 +1572,7 @@ func TestCumeDistWindowExec_BatchMerge(t *testing.T) {
 	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -1607,7 +1608,7 @@ func TestCumeDistWindowExec_BatchMergeWithNotMatched(t *testing.T) {
 	exec2, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1, 2}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -1668,7 +1669,7 @@ func TestCumeDistWindowExec_SaveIntermediateResult(t *testing.T) {
 	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -1700,7 +1701,7 @@ func TestCumeDistWindowExec_SaveIntermediateResultOfChunk(t *testing.T) {
 	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -1731,7 +1732,7 @@ func TestCumeDistWindowExec_UnmarshalFromReader(t *testing.T) {
 	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)
@@ -1772,7 +1773,7 @@ func TestSingleWindowFailedUnmarshalPreservesOwnedState(t *testing.T) {
 		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
 	}
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		input, []int64{7, 8, 9}, nil, mp))
 	defer input.Free(mp)
@@ -1806,7 +1807,7 @@ func TestCumeDistWindowExec_SizeWithData(t *testing.T) {
 	exec, err := makeWindowExec(mp, WinIdOfCumeDist, false)
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	err = vector.AppendFixedList(vec, []int64{0, 1, 2, 3, 4}, nil, mp)
 	require.NoError(t, err)
 	defer vec.Free(mp)

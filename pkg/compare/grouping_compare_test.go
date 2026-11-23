@@ -55,9 +55,9 @@ func TestGroupingSentinelComparesAsNull(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			grouping := vector.NewVec(test.typ)
-			ordinary := vector.NewVec(test.typ)
-			nullValue := vector.NewVec(test.typ)
+			grouping := vector.NewVec(test.typ, mp)
+			ordinary := vector.NewVec(test.typ, mp)
+			nullValue := vector.NewVec(test.typ, mp)
 			t.Cleanup(func() {
 				grouping.Free(mp)
 				ordinary.Free(mp)

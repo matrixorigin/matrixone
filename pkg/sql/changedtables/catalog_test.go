@@ -348,31 +348,31 @@ func changedTableTestResult(t *testing.T, row []any) executor.Result {
 	for i, val := range row {
 		switch v := val.(type) {
 		case string:
-			b.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(b.Vecs[i], []byte(v), false, mp))
 		case []byte:
-			b.Vecs[i] = vector.NewVec(types.T_text.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_text.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(b.Vecs[i], v, false, mp))
 		case int8:
-			b.Vecs[i] = vector.NewVec(types.T_int8.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_int8.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
 		case int32:
-			b.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
 		case uint32:
-			b.Vecs[i] = vector.NewVec(types.T_uint32.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_uint32.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
 		case uint64:
-			b.Vecs[i] = vector.NewVec(types.T_uint64.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_uint64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
 		case bool:
-			b.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_bool.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
 		case types.Uuid:
-			b.Vecs[i] = vector.NewVec(types.T_uuid.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_uuid.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
 		case types.Timestamp:
-			b.Vecs[i] = vector.NewVec(types.T_timestamp.ToType())
+			b.Vecs[i] = vector.NewVec(types.T_timestamp.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(b.Vecs[i], v, false, mp))
 		case nil:
 			oid := types.T_uint64
@@ -382,7 +382,7 @@ func changedTableTestResult(t *testing.T, row []any) executor.Result {
 			if i == 8 {
 				oid = types.T_varchar
 			}
-			b.Vecs[i] = vector.NewVec(oid.ToType())
+			b.Vecs[i] = vector.NewVec(oid.ToType(), mp)
 			require.NoError(t, vector.AppendNull(b.Vecs[i], mp))
 		default:
 			t.Fatalf("unsupported catalog fixture value %T", v)

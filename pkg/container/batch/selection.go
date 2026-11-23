@@ -73,12 +73,7 @@ func (bat *Batch) SelectionRows(dst []int64) []int64 {
 	if bat.selection == nil {
 		return nil
 	}
-	dst = dst[:0]
-	itr := bat.selection.IteratorValue()
-	for itr.HasNext() {
-		dst = append(dst, int64(itr.Next()))
-	}
-	return dst
+	return bitmap.AppendRows(bat.selection, dst[:0])
 }
 
 // PhysicalRowCount returns the number of rows in the batch's vectors.
@@ -105,8 +100,10 @@ func (bat *Batch) PhysicalView(dst *Batch) {
 
 // CompactInto copies the selected rows of bat into dst, which must be an
 // owned batch with the same column layout (its vectors are reset and
-// refilled). An unselected bat is copied whole.
-func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool) error {
+// refilled). An unselected bat is copied whole. rows, when not nil, is the
+// caller's scratch for the selected row list, reused across calls so a
+// steady stream of batches does not allocate one per call.
+func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool, rows *[]int64) error {
 	if len(dst.Vecs) != len(bat.Vecs) {
 		return moerr.NewInternalErrorNoCtx("compact batch column count mismatch")
 	}
@@ -121,7 +118,14 @@ func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool) error {
 			}
 		}
 	} else {
-		sels := bat.SelectionRows(nil)
+		var scratch []int64
+		if rows != nil {
+			scratch = *rows
+		}
+		sels := bat.SelectionRows(scratch)
+		if rows != nil {
+			*rows = sels
+		}
 		for i, vec := range bat.Vecs {
 			if vec == nil {
 				continue
@@ -148,17 +152,7 @@ func (bat *Batch) SelectionMask(mask []bool) []bool {
 
 // SelectionMaskOf expands sel into a per-row mask of length physicalRows.
 func SelectionMaskOf(sel *bitmap.Bitmap, physicalRows int, mask []bool) []bool {
-	if cap(mask) < physicalRows {
-		mask = make([]bool, physicalRows)
-	} else {
-		mask = mask[:physicalRows]
-		clear(mask)
-	}
-	itr := sel.IteratorValue()
-	for itr.HasNext() {
-		mask[itr.Next()] = true
-	}
-	return mask
+	return sel.ExpandBools(mask, physicalRows)
 }
 
 func errSelectedBatch() error {

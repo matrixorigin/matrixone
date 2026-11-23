@@ -51,7 +51,7 @@ func TestGroupSpillRowCodecAndWriterEdges(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("alpha"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("beta"), false, mp))
 	bat.SetRowCount(2)
@@ -60,13 +60,13 @@ func TestGroupSpillRowCodecAndWriterEdges(t *testing.T) {
 
 	for cut := 0; cut < encoded.Len(); cut++ {
 		target := batch.NewWithSize(1)
-		target.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		target.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.Error(t, unmarshalSpillGroupByRows(
 			bytes.NewReader(encoded.Bytes()[:cut]), target, 2, mp), "cut=%d", cut)
 		target.Clean(mp)
 	}
 	target := batch.NewWithSize(1)
-	target.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	target.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, unmarshalSpillGroupByRows(
 		bytes.NewReader(encoded.Bytes()), target, 2, mp))
 	require.Equal(t, "beta", string(target.Vecs[0].GetBytesAt(0)))

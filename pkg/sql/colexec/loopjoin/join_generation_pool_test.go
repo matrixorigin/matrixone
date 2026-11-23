@@ -27,7 +27,7 @@ func TestLoopJoinResetReleasesGenerationJoinBatch(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	source := batch.NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], bytes.Repeat([]byte("x"), 1024), false, proc.Mp()))
 	source.SetRowCount(1)
 	defer source.Clean(proc.Mp())

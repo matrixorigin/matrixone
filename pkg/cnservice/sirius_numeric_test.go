@@ -42,7 +42,7 @@ func TestEmbeddedDecimal256ResultPreservesLimbsNullsAndBorrowing(t *testing.T) {
 	bat, err := decodeEmbeddedSiriusResult(result, request, proc.Mp())
 	require.NoError(t, err)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
-	require.Equal(t, vector.BorrowedAlias, bat.Vecs[0].DataBackingKind())
+	require.True(t, bat.Vecs[0].IsReadOnly())
 	require.Same(t, &backing[0], &bat.Vecs[0].GetData()[0])
 	require.Equal(t, types.New(types.T_decimal256, 65, 4), *bat.Vecs[0].GetType())
 	for row := 0; row < 2; row++ {

@@ -556,12 +556,13 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 		return err
 	}
 	n := len(ap.OldColCapturePlaceholderIdxList)
+	ctr.capturedMP = stateMP
 	ctr.capturedVecs = make([]*vector.Vector, n)
 	for i, probePos := range ap.OldColCaptureProbeIdxList {
 		typ := ap.LeftTypes[probePos]
-		vec := vector.NewOffHeapVecWithType(typ)
+		vec := vector.NewVec(typ, stateMP)
 		if err := vector.AppendMultiFixed(vec, 0, true, int(ctr.batchRowCount), stateMP); err != nil {
-			vec.Free(proc.Mp())
+			vec.Free(stateMP)
 			ctr.capturedVecs[i] = nil
 			return err
 		}
@@ -627,7 +628,7 @@ func (ctr *container) finalizeODKUActionRows(
 		return nil
 	}
 	if !ctr.updateSuspended {
-		if err := ap.resetRBat(); err != nil {
+		if err := ap.resetRBat(proc); err != nil {
 			return err
 		}
 	}
@@ -923,26 +924,9 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 	}
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {
 		if ctr.matched.Count() == 0 {
-			// constructDedupJoin copies node.ProjectList into ap.Result without
-			// dedup, and the REPLACE planner can alias multiple projections onto
-			// the same build column, so a non-capture build position may be
-			// referenced more than once. Ownership transfer (steal the build
-			// vector and nil it out) is only safe when a position is referenced
-			// exactly once; duplicates must copy, otherwise the second reference
-			// reads a nil vector. Count references first.
-			buildPosRefCount := make(map[int32]int, len(ap.Result))
-			for j, rp := range ap.Result {
-				if rp.Rel != 1 {
-					continue
-				}
-				if len(ctr.captureResultIdx) > 0 && ctr.captureResultIdx[j] >= 0 {
-					continue
-				}
-				buildPosRefCount[rp.Pos]++
-			}
 			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
 			for i := range ap.ctr.buf {
-				ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
+				ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
 				bat := ctr.batches[i]
 				ap.ctr.buf[i].Attrs = bat.Attrs
 				batSize := bat.RowCount()
@@ -963,7 +947,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 							cIdx := ctr.captureResultIdx[j]
 							if ctr.captured != nil && ctr.captured.Count() > 0 {
 								typ := ap.RightTypes[rp.Pos]
-								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ)
+								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ, proc)
 								if err != nil {
 									return err
 								}
@@ -971,7 +955,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 									return err
 								}
 							} else {
-								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+								ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 								if err != nil {
 									return err
 								}
@@ -979,19 +963,13 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 									return err
 								}
 							}
-						} else if buildPosRefCount[rp.Pos] == 1 {
-							// Non-capture build column referenced exactly once:
-							// transfer ownership from the build batch to avoid a
-							// full copy.
-							ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
-							bat.Vecs[rp.Pos] = nil
 						} else {
-							// Non-capture build column referenced more than once
-							// (aliased projections). Copy so every reference gets
-							// its own valid vector; ownership transfer here would
-							// leave later references reading a nil vector.
+							// Copy the build column into the result. Build
+							// vectors belong to the hash build's own pool, which
+							// is deleted with the JoinMap, so they cannot move
+							// into the result.
 							typ := ap.RightTypes[rp.Pos]
-							ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ)
+							ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(typ, proc)
 							if err != nil {
 								return err
 							}
@@ -1000,7 +978,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 							}
 						}
 					} else {
-						ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+						ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 						if err != nil {
 							return err
 						}
@@ -1044,10 +1022,10 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			} else {
 				newSels = sels[i*colexec.DefaultBatchSize:]
 			}
-			ap.ctr.buf[i] = batch.NewOffHeapWithSize(len(ap.Result))
+			ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
 			for j, rp := range ap.Result {
 				if rp.Rel == 1 {
-					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
@@ -1055,7 +1033,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						return err
 					}
 				} else {
-					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+					ap.ctr.buf[i].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
@@ -1095,10 +1073,10 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if fillCnt+batSize > len(sels) {
 				batSize = len(sels) - fillCnt
 			}
-			ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+			ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 			for i, rp := range ap.Result {
 				if rp.Rel == 1 {
-					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
@@ -1109,7 +1087,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						}
 					}
 				} else {
-					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+					ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 					if err != nil {
 						return err
 					}
@@ -1139,15 +1117,15 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				continue
 			}
 			if rowIdx == 0 {
-				ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+				ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 				for i, rp := range ap.Result {
 					if rp.Rel == 1 {
-						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 						if err != nil {
 							return err
 						}
 					} else {
-						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+						ap.ctr.buf[batIdx].Vecs[i], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 						if err != nil {
 							return err
 						}
@@ -1178,12 +1156,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					logicalAffectedRows := uint64(1)
 					for actionIdx, sel := range sels[1:] {
 						if rowIdx == 0 {
-							ap.ctr.buf[batIdx] = batch.NewOffHeapWithSize(len(ap.Result))
+							ap.ctr.buf[batIdx] = batch.NewWithSize(len(ap.Result))
 							for j, rp := range ap.Result {
 								if rp.Rel == 1 {
-									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos])
+									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.RightTypes[rp.Pos], proc)
 								} else {
-									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos])
+									ap.ctr.buf[batIdx].Vecs[j], err = ap.newResultVector(ap.LeftTypes[rp.Pos], proc)
 								}
 								if err != nil {
 									return err
@@ -1415,7 +1393,7 @@ func (ctr *container) stabilizeUpdateVectors(proc *process.Process) error {
 			}
 		}
 		if dst == nil {
-			dst = vector.NewVec(*ctr.joinBat1.Vecs[pos].GetType())
+			dst = vector.NewVec(*ctr.joinBat1.Vecs[pos].GetType(), proc.Mp())
 			ctr.stableUpdateVecs[pos] = append(ctr.stableUpdateVecs[pos], dst)
 		}
 		dst.CleanOnlyData()
@@ -1980,7 +1958,7 @@ func (ctr *container) probeODKUActionRows(
 	result *vm.CallResult,
 ) error {
 	if !ctr.updateSuspended {
-		if err := ap.resetRBat(); err != nil {
+		if err := ap.resetRBat(proc); err != nil {
 			return err
 		}
 	}
@@ -2111,7 +2089,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	if ap.EmitActionRows {
 		return ctr.probeODKUActionRows(bat, ap, proc, result)
 	}
-	if err := ap.resetRBat(); err != nil {
+	if err := ap.resetRBat(proc); err != nil {
 		return err
 	}
 	err = ctr.evalJoinCondition(bat, proc)
@@ -2349,14 +2327,24 @@ func unionSelsByBatch(dst *vector.Vector, batches []*batch.Batch, colPos int32, 
 	}
 	return nil
 }
-func (dedupJoin *DedupJoin) newResultVector(typ types.Type) (*vector.Vector, error) {
-	return vector.NewOffHeapVecWithType(typ), nil
+func (dedupJoin *DedupJoin) newResultVector(typ types.Type, proc *process.Process) (*vector.Vector, error) {
+	mp, err := dedupJoin.resultMP(proc)
+	if err != nil {
+		return nil, err
+	}
+	return vector.NewVec(typ, mp), nil
 }
 
 // resultMP returns the pool result vectors grow through: the result account
 // view when an account is bound, otherwise proc's pool.
 func (dedupJoin *DedupJoin) resultMP(proc *process.Process) (*mpool.MPool, error) {
-	return dedupJoin.resultAllocation.MP(proc.Mp())
+	mp, err := dedupJoin.resultAllocation.MP(proc.Mp())
+	if err == nil {
+		// Every result vector is created with this pool; cleanup frees the
+		// result batches with it.
+		dedupJoin.ctr.resultVecMP = mp
+	}
+	return mp, err
 }
 
 // stateMP returns the pool captured old-column vectors grow through.
@@ -2364,17 +2352,21 @@ func (dedupJoin *DedupJoin) stateMP(proc *process.Process) (*mpool.MPool, error)
 	return dedupJoin.stateAllocation.MP(proc.Mp())
 }
 
-func (dedupJoin *DedupJoin) resetRBat() error {
+func (dedupJoin *DedupJoin) resetRBat(proc *process.Process) error {
+	resultMP, err := dedupJoin.resultMP(proc)
+	if err != nil {
+		return err
+	}
 	ctr := &dedupJoin.ctr
 	if ctr.rbat != nil {
 		ctr.rbat.CleanOnlyData()
 	} else {
-		ctr.rbat = batch.NewOffHeapWithSize(len(dedupJoin.Result))
+		ctr.rbat = batch.NewWithSize(len(dedupJoin.Result))
 		for i, rp := range dedupJoin.Result {
 			if rp.Rel == 0 {
-				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(dedupJoin.LeftTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewVec(dedupJoin.LeftTypes[rp.Pos], resultMP)
 			} else {
-				ctr.rbat.Vecs[i] = vector.NewOffHeapVecWithType(dedupJoin.RightTypes[rp.Pos])
+				ctr.rbat.Vecs[i] = vector.NewVec(dedupJoin.RightTypes[rp.Pos], resultMP)
 			}
 		}
 	}

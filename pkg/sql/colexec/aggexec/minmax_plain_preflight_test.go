@@ -65,7 +65,7 @@ func newFixedMetadataPreflightFixture(t testing.TB, id int64, typ types.Type) *f
 
 func (f *fixedMetadataPreflightFixture) intInput(t testing.TB, values []int64, nulls []bool) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), f.mp)
 	t.Cleanup(func() { v.Free(f.mp) })
 	require.NoError(t, vector.AppendFixedList(v, values, nulls, f.mp))
 	return v
@@ -124,7 +124,7 @@ func TestFixedMinMaxPlainMetadataPreflight(t *testing.T) {
 			result, err := f.exec.Flush()
 			require.NoError(t, err)
 			require.Len(t, result, 1)
-			t.Cleanup(func() { result[0].Free(f.mp) })
+			t.Cleanup(func() { result[0].Free(result[0].MPool()) })
 			want := []int64{-5, -2}
 			if id == AggIdOfMax {
 				want = []int64{8, 7}
@@ -164,7 +164,7 @@ func TestFixedMinMaxPlainMetadataPreflightStandby(t *testing.T) {
 	result, err := f.exec.Flush()
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	t.Cleanup(func() { result[0].Free(f.mp) })
+	t.Cleanup(func() { result[0].Free(result[0].MPool()) })
 	require.Equal(t, []int64{3, 9}, vector.MustFixedColNoTypeCheck[int64](result[0]))
 	for row := range 2 {
 		require.False(t, result[0].IsNull(uint64(row)))
@@ -229,7 +229,7 @@ func TestFixedMinMaxPlainConstPreflight(t *testing.T) {
 	result, err := f.exec.Flush()
 	require.NoError(t, err)
 	require.Len(t, result, 1)
-	t.Cleanup(func() { result[0].Free(f.mp) })
+	t.Cleanup(func() { result[0].Free(result[0].MPool()) })
 	require.Equal(t, []int64{7, 7}, vector.MustFixedColNoTypeCheck[int64](result[0]))
 }
 
@@ -257,7 +257,7 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 			b.Run(tc.name+"/"+path, func(b *testing.B) {
 				b.StopTimer()
 				f := newFixedMetadataPreflightFixture(b, AggIdOfMax, types.T_float64.ToType())
-				input := vector.NewVec(types.T_float64.ToType())
+				input := vector.NewVec(types.T_float64.ToType(), f.mp)
 				if tc.constant {
 					input.Free(f.mp)
 					var err error
@@ -316,7 +316,7 @@ func BenchmarkFixedMinMaxPlainMetadataPreflight(b *testing.B) {
 				result, err := f.exec.Flush()
 				require.NoError(b, err)
 				require.Len(b, result, 1)
-				b.Cleanup(func() { result[0].Free(f.mp) })
+				b.Cleanup(func() { result[0].Free(result[0].MPool()) })
 				for row := range want {
 					require.Equal(b, !present[row], result[0].IsNull(uint64(row)))
 					if present[row] {

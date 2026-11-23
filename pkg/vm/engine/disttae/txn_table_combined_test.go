@@ -2087,8 +2087,8 @@ func newChangesTestBatch(t testing.TB, mp *mpool.MPool, values []int64, timestam
 	require.Len(t, values, len(timestamps))
 	bat := batch.NewWithSize(2)
 	bat.Attrs = []string{"value", "commit_ts"}
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], timestamps[i], false, mp))

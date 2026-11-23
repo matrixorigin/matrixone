@@ -30,7 +30,7 @@ import (
 func BenchmarkColumnCacheConstruction(b *testing.B) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	source := vector.NewVec(types.T_int32.ToType())
+	source := vector.NewVec(types.T_int32.ToType(), mp)
 	defer source.Free(mp)
 	for i := 0; i < 4096; i++ {
 		if err := vector.AppendFixed(source, int32(i%8), false, mp); err != nil {

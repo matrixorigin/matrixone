@@ -76,6 +76,7 @@ func BenchmarkPartitionTopOneRuns(b *testing.B) {
 				func() {
 					defer func() {
 						child.Free(proc, false, nil)
+						colexec.FreeMockChildren(child)
 						require.Zero(b, proc.Mp().CurrNB())
 					}()
 					arg := topOneRunArgument(true, true)
@@ -88,7 +89,7 @@ func BenchmarkPartitionTopOneRuns(b *testing.B) {
 					for start := 0; start < rowCount; start += 8191 {
 						bat := topOneRunBatch(b, proc, rows[start:min(start+8191, rowCount)])
 						child.WithBatchs([]*batch.Batch{bat})
-						vec := vector.NewVec(types.T_varchar.ToType())
+						vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 						bat.Vecs = append(bat.Vecs, vec)
 						for row := 0; row < bat.RowCount(); row++ {
 							require.NoError(b, vector.AppendBytes(vec, payload, false, proc.Mp()))

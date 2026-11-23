@@ -187,7 +187,7 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		}
 		u.uid = fmt.Sprintf("%s:%d", indexIdentity, u.ts)
 		u.cur = fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
-		u.batch = tf.createResultBatch()
+		u.batch = tf.createResultBatch(proc.Mp())
 		u.threads = int(vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild))
 		u.ignored = newIgnoredBuild(u.ignoredConfig(), vimemory.HostSpillDir(proc.GetTopContext(), proc.Base.FileService, proc.GetService()))
 		u.inited = true

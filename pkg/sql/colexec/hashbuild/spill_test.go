@@ -328,7 +328,7 @@ func TestDirectSpillKeepsAdmittedRecoveryUntilBuildEnds(t *testing.T) {
 			for _, value := range []int64{1, 2} {
 				input := batch.NewWithSize(1)
 				child.WithBatchs([]*batch.Batch{input})
-				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), h.proc.Mp())
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, h.proc.Mp()))
 				input.SetRowCount(1)
 			}
@@ -681,7 +681,7 @@ func TestAccountedSpillAdaptsAndPreservesRows(t *testing.T) {
 func TestAccountedSpillBroadcastsPreparedParamKey(t *testing.T) {
 	h := newSpillTestHarness(t, 80<<10)
 	defer h.close(t)
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), h.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, h.proc.Mp()))
 	defer func() {
 		h.op.ctr.freeSpillExprExecs()

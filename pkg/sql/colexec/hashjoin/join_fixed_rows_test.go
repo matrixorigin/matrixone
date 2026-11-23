@@ -37,7 +37,9 @@ func TestHashJoinFixedBuildRows(t *testing.T) {
 			}, [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 			t.Cleanup(func() {
 				tc.arg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.arg)
 				tc.barg.Free(tc.proc, false, nil)
+				freeTestChildren(tc.barg)
 				tc.proc.Free()
 				tc.cancel()
 				require.Zero(t, tc.proc.Mp().CurrNB())
@@ -48,7 +50,7 @@ func TestHashJoinFixedBuildRows(t *testing.T) {
 			build := batch.NewWithSize(2)
 			t.Cleanup(func() { build.Clean(tc.proc.Mp()) })
 			for i := range build.Vecs {
-				build.Vecs[i] = vector.NewVec(typ)
+				build.Vecs[i] = vector.NewVec(typ, tc.proc.Mp())
 			}
 			for i := range count {
 				require.NoError(t, vector.AppendFixed(build.Vecs[0], int32(1), false, tc.proc.Mp()))

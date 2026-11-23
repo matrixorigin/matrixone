@@ -43,17 +43,17 @@ func TestBooleanFilterSelection(t *testing.T) {
 					t.Cleanup(func() { scan.Free(proc, false, nil) })
 					require.NoError(t, scan.Prepare(proc))
 					input := batch.NewWithSize(3)
-					t.Cleanup(func() { input.Clean(proc.Mp()) })
-					input.Vecs[0] = vector.NewVec(boolType)
-					input.Vecs[1] = vector.NewVec(intType)
-					input.Vecs[2] = vector.NewVec(textType)
+					t.Cleanup(func() { input.Clean(scan.mp(proc)) })
+					input.Vecs[0] = vector.NewVec(boolType, scan.mp(proc))
+					input.Vecs[1] = vector.NewVec(intType, scan.mp(proc))
+					input.Vecs[2] = vector.NewVec(textType, scan.mp(proc))
 					var want []int32
 					var sels []int64
 					for i := 0; i < rows; i++ {
 						value := shape == "true" || shape == "const_true" || (shape == "mixed" || shape == "nullable") && i%3 != 1
 						isNull := shape == "allnull" || shape == "nullable" && i%4 == 0
-						require.NoError(t, vector.AppendFixed(input.Vecs[0], value, isNull, proc.Mp()))
-						require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(i), false, proc.Mp()))
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], value, isNull, scan.mp(proc)))
+						require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(i), false, scan.mp(proc)))
 						if value && !isNull {
 							want = append(want, int32(i))
 							sels = append(sels, int64(i))
@@ -112,15 +112,17 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 				Attrs:       []string{"mask", "payload"},
 				Types:       []pb.Type{boolType.PlanType(), intType.PlanType()},
 				FilterExprs: []*pb.Expr{lateTestCol(0, boolType)},
+				// The scan output, which the filter shrinks, lives in this view.
+				OutputAllocation: allocation,
 			}
 			t.Cleanup(func() { scan.Free(proc, false, nil) })
 			require.NoError(t, scan.Prepare(proc))
 			input := batch.NewWithSize(2)
-			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(boolType)
-			input.Vecs[1] = vector.NewOffHeapVecWithType(intType)
+			t.Cleanup(func() { input.Clean(allocation) })
+			input.Vecs[0] = vector.NewVec(boolType, allocation)
+			input.Vecs[1] = vector.NewVec(intType, allocation)
 			for row := range 66 {
-				require.NoError(t, vector.AppendFixed(input.Vecs[0], row != 0, false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], row != 0, false, allocation))
 				require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(row), row == 2, allocation))
 			}
 			input.SetRowCount(66)
@@ -157,23 +159,23 @@ func TestBooleanFilterRepresentationReuse(t *testing.T) {
 	for _, shape := range []string{"const_true", "flat", "const_null", "nullable", "const_false", "const_true"} {
 		func() {
 			input := batch.NewWithSize(1)
-			defer input.Clean(proc.Mp())
+			defer input.Clean(scan.mp(proc))
 			want := 0
 			switch shape {
 			case "const_true", "const_false":
-				v, err := vector.NewConstFixed(boolType, shape == "const_true", 5, proc.Mp())
+				v, err := vector.NewConstFixed(boolType, shape == "const_true", 5, scan.mp(proc))
 				require.NoError(t, err)
 				input.Vecs[0] = v
 				if shape == "const_true" {
 					want = 5
 				}
 			case "const_null":
-				input.Vecs[0] = vector.NewConstNull(boolType, 5, proc.Mp())
+				input.Vecs[0] = vector.NewConstNull(boolType, 5, scan.mp(proc))
 			default:
-				input.Vecs[0] = vector.NewVec(boolType)
+				input.Vecs[0] = vector.NewVec(boolType, scan.mp(proc))
 				for i := range 5 {
 					null := shape == "nullable" && i == 0
-					require.NoError(t, vector.AppendFixed(input.Vecs[0], i%2 == 0, null, proc.Mp()))
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], i%2 == 0, null, scan.mp(proc)))
 					if i%2 == 0 && !null {
 						want++
 					}
@@ -196,8 +198,8 @@ func TestBooleanFilterErrorOrder(t *testing.T) {
 			require.NoError(t, scan.Prepare(proc))
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(types.T_bool.ToType())
-			input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixed(input.Vecs[0], first, false, proc.Mp()))
 			require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(7), false, proc.Mp()))
 			input.SetRowCount(1)

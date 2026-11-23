@@ -3146,7 +3146,7 @@ func Test_decodeBatch(t *testing.T) {
 		Recursive:  0,
 		ShuffleIDX: 0,
 		Attrs:      []string{"1"},
-		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
+		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType(), mp)},
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)

@@ -66,8 +66,8 @@ var ObjectListTypes = []types.Type{
 }
 
 // CreateObjectListBatch creates a new batch for object list with proper schema
-func CreateObjectListBatch() *batch.Batch {
-	return batch.NewWithSchema(false, ObjectListAttrs, ObjectListTypes)
+func CreateObjectListBatch(mp *mpool.MPool) *batch.Batch {
+	return batch.NewWithSchema(ObjectListAttrs, ObjectListTypes, mp)
 }
 
 func tailCheckFn(objEntry objectio.ObjectEntry, start, end types.TS) bool {
@@ -212,7 +212,7 @@ func GetObjectListFromCKP(
 ) (err error) {
 	// Initialize batch if needed
 	if *bat == nil {
-		*bat = CreateObjectListBatch()
+		*bat = CreateObjectListBatch(mp)
 	}
 
 	// Fill function to append object entry to batch

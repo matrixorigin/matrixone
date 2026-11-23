@@ -52,7 +52,7 @@ func TestFillSpillWriteRejectsShortIO(t *testing.T) {
 	defer writer.Free()
 	spill := &fillSpill{}
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp()))
 	bat.SetRowCount(1)
 	defer bat.Clean(proc.Mp())
@@ -64,8 +64,8 @@ func TestFillSpillBorrowedMarkerFailurePreservesSource(t *testing.T) {
 	const rows = 600_000
 	sourceMP := mpool.MustNewZero()
 	source := batch.NewWithSize(2)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	source.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sourceMP)
+	source.Vecs[1] = vector.NewVec(types.T_int64.ToType(), sourceMP)
 	for _, vec := range source.Vecs {
 		require.NoError(t, vec.PreExtend(rows, sourceMP))
 		vec.SetLength(rows)
@@ -93,7 +93,7 @@ func TestFillSpillLinearMarkerFailurePreservesSource(t *testing.T) {
 	const rows = 600_000
 	sourceMP := mpool.MustNewZero()
 	source := batch.NewWithSize(1)
-	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), sourceMP)
 	require.NoError(t, source.Vecs[0].PreExtend(rows, sourceMP))
 	source.Vecs[0].SetLength(rows)
 	vector.MustFixedColWithTypeCheck[int64](source.Vecs[0])[0] = 7
@@ -157,7 +157,7 @@ func TestFillSpillReverseReadRejectsCorruptAndTruncatedRecords(t *testing.T) {
 			spill, err := newFillSpill(&container{}, proc)
 			require.NoError(t, err)
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t,
 				vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp()))
 			bat.SetRowCount(1)

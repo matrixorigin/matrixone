@@ -102,9 +102,14 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 			rowCount = 1000
 		}
 
-		if err := fuzzyFilter.generate(); err != nil {
+		rfMP, err := fuzzyFilter.runtimeFilterAllocation.MP(proc.Mp())
+		if err != nil {
 			return err
 		}
+		if err := fuzzyFilter.generate(rfMP); err != nil {
+			return err
+		}
+		ctr.rbatMP = rfMP
 
 		useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 
@@ -143,7 +148,7 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		if buildExpr == nil || buildExpr.GetCol() == nil ||
 			buildExpr.GetCol().ColPos != 0 {
 			if ctr.pass2RuntimeFilter != nil {
-				ctr.pass2RuntimeFilter.Free(proc.Mp())
+				ctr.pass2RuntimeFilter.Free(ctr.pass2MP)
 				ctr.pass2RuntimeFilter = nil
 			}
 			return nil
@@ -160,15 +165,20 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 			return mpool.ErrAllocationAccountInvalid
 		}
 		if ctr.pass2RuntimeFilter == nil {
-			ctr.pass2RuntimeFilter = vector.NewOffHeapVecWithType(
-				plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp),
+			rfMP, err := fuzzyFilter.runtimeFilterAllocation.MP(proc.Mp())
+			if err != nil {
+				return err
+			}
+			ctr.pass2RuntimeFilter = vector.NewVec(
+				plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp), rfMP,
 			)
+			ctr.pass2MP = rfMP
 		}
 	} else if ctr.pass2RuntimeFilter != nil {
 		// FuzzyFilter must still execute its uniqueness check, but an
 		// unprovable optional runtime filter must not retain a second copy of
 		// every build key.
-		ctr.pass2RuntimeFilter.Free(proc.Mp())
+		ctr.pass2RuntimeFilter.Free(ctr.pass2MP)
 		ctr.pass2RuntimeFilter = nil
 	}
 
@@ -520,7 +530,7 @@ func (fuzzyFilter *FuzzyFilter) abandonRuntimeFilter(
 	ctr := &fuzzyFilter.ctr
 	ctr.runtimeFilterUsable = false
 	if ctr.pass2RuntimeFilter != nil {
-		ctr.pass2RuntimeFilter.Free(proc.Mp())
+		ctr.pass2RuntimeFilter.Free(ctr.pass2MP)
 		ctr.pass2RuntimeFilter = nil
 	}
 }
@@ -579,20 +589,11 @@ func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx in
 }
 
 // rbat will contain the keys that have hash collisions
-func (fuzzyFilter *FuzzyFilter) generate() error {
+func (fuzzyFilter *FuzzyFilter) generate(mp *mpool.MPool) error {
 	ctr := &fuzzyFilter.ctr
-	var rbat *batch.Batch
-	if fuzzyFilter.runtimeFilterAllocation != nil {
-		rbat = batch.NewOffHeapWithSize(1)
-	} else {
-		rbat = batch.NewWithSize(1)
-	}
+	rbat := batch.NewWithSize(1)
 	typ := plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)
-	if fuzzyFilter.runtimeFilterAllocation != nil {
-		rbat.SetVector(0, vector.NewOffHeapVecWithType(typ))
-	} else {
-		rbat.SetVector(0, vector.NewVec(typ))
-	}
+	rbat.SetVector(0, vector.NewVec(typ, mp))
 	ctr.rbat = rbat
 	return nil
 }

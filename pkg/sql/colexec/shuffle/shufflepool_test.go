@@ -292,9 +292,8 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 	inputs := make([]*batch.Batch, 2)
 	for producer := range inputs {
 		inputs[producer] = batch.NewWithSchema(
-			true,
 			nil,
-			[]types.Type{types.T_int64.ToType()},
+			[]types.Type{types.T_int64.ToType()}, mp,
 		)
 		for row := range 2 {
 			require.NoError(t, vector.AppendFixed(
@@ -381,7 +380,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 			if tc.drainAll {
 				getFull = sp.getAnyFullBatch
 			}
-			input := batch.NewWithSchema(true, nil, []types.Type{types.T_int64.ToType()})
+			input := batch.NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, proc.Mp())
 			defer input.Clean(proc.Mp())
 			sels := make([]int32, objectio.BlockMaxRows)
 			for row := range sels {
@@ -458,7 +457,6 @@ func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
 
 	input := testutil.NewBatch(
 		[]types.Type{types.T_int64.ToType()}, false, objectio.BlockMaxRows, proc.Mp())
-	defer input.Clean(proc.Mp())
 
 	// Fill bucket 0 until its writer is backpressured. With the old global
 	// credit pool, this also exhausted the credits needed by every other bucket.
@@ -501,6 +499,7 @@ func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
 	}
 	require.Zero(t, sp.readyCount)
 	sp.abort(proc.Mp())
+	input.Clean(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -572,8 +571,8 @@ func TestShufflePoolRecycleCacheUsesWorkerBound(t *testing.T) {
 	defer proc.Free()
 	sp := NewShufflePool(128, 2, false)
 	for i := range sp.readyLimit + 3 {
-		bat := batch.NewOffHeapWithSize(1)
-		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, bat.Vecs[0].PreExtend(1, proc.Mp()))
 		bat.ShuffleIDX = int32(i) % sp.maxHolders
 		sp.putBatchToPool(bat, proc.Mp())
@@ -592,8 +591,8 @@ func fillShufflePoolRecycleCache(
 	tb.Helper()
 	pooled := make(map[*batch.Batch]struct{}, sp.readyLimit)
 	for i := range sp.readyLimit {
-		bat := batch.NewOffHeapWithSize(1)
-		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		if err := bat.Vecs[0].PreExtend(rows, proc.Mp()); err != nil {
 			tb.Fatal(err)
 		}
@@ -654,8 +653,8 @@ func TestShufflePoolRecycleCacheFollowsProducerAcrossDestinations(t *testing.T) 
 	sp := NewShufflePool(128, 16, false)
 
 	for range shuffleBatchPoolShardSize {
-		bat := batch.NewOffHeapWithSize(1)
-		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, bat.Vecs[0].PreExtend(1, proc.Mp()))
 		bat.ShuffleIDX = 0
 		sp.putBatchToPool(bat, proc.Mp())
@@ -838,9 +837,8 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 			inputs := make([]*batch.Batch, producerCount)
 			for producer := range inputs {
 				inputs[producer] = batch.NewWithSchema(
-					true,
 					nil,
-					[]types.Type{types.T_int64.ToType()},
+					[]types.Type{types.T_int64.ToType()}, mp,
 				)
 				for row := range rowsPerBatch {
 					if err = vector.AppendFixed(
@@ -1019,8 +1017,8 @@ func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 	}
 
-	buf := batch.NewOffHeapWithSize(1)
-	buf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	buf := batch.NewWithSize(1)
+	buf.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, buf.Vecs[0].PreExtend(128, proc.Mp()))
 	sp.putBatchToPool(buf, proc.Mp())
 
@@ -1039,8 +1037,8 @@ func TestShufflePoolMemoryAccountingAcrossShards(t *testing.T) {
 	batches := make([]*batch.Batch, 64)
 	var expected int64
 	for i := range batches {
-		batches[i] = batch.NewOffHeapWithSize(1)
-		batches[i].Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		batches[i] = batch.NewWithSize(1)
+		batches[i].Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, batches[i].Vecs[0].PreExtend(128+i, proc.Mp()))
 		batches[i].ShuffleIDX = int32(i)
 		expected += int64(batches[i].Allocated())
@@ -1121,8 +1119,8 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 				mpool.DeleteMPool(mp)
 			}()
 
-			reuseBuf := batch.NewOffHeapWithSize(1)
-			reuseBuf.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			reuseBuf := batch.NewWithSize(1)
+			reuseBuf.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			sp.putBatchToPool(reuseBuf, mp)
 			input = batch.NewWithSize(1)
 			input.Vecs[0] = testutil.NewInt64Vector(1024, types.T_int64.ToType(), mp, false, nil, nil)

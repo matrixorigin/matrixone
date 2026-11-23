@@ -48,7 +48,7 @@ func (r *emptyMembershipReader) ReadWithFilter(_ context.Context, _ []string, _ 
 	require.NoError(r.t, vector.AppendFixed(output.Vecs[0], int32(1), false, mp))
 	require.NoError(r.t, vector.AppendFixed(output.Vecs[1], int32(0), false, mp))
 	output.SetRowCount(1)
-	scratch, err := filter.MembershipScratch(2)
+	scratch, err := filter.MembershipScratch(2, mp)
 	require.NoError(r.t, err)
 	require.NoError(r.t, scratch.Physical.PreExtend(1, mp))
 	_, err = filter.Membership.Select(output, []int{0})

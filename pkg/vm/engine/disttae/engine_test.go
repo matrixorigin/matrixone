@@ -424,7 +424,7 @@ func TestPreparedBinarySchedulingExcludesMixedVersionCN(t *testing.T) {
 			proc.ReplaceTopCtx(ctx)
 			proc.Base.TxnOperator = txnOp
 			binaryValue := []byte{'A', 'B', 0, 0}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, binaryValue, false, proc.Mp()))
 			proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
 			t.Cleanup(proc.Free)

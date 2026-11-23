@@ -96,14 +96,14 @@ func TestUnionAreaProjectionBoundaryMatrix(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, physical)
 	require.Zero(t, selected)
-	fixed := vector.NewVec(types.T_int64.ToType())
+	fixed := vector.NewVec(types.T_int64.ToType(), mp)
 	physical, selected, err = unionBatchAreaProjection(fixed, 0, 0)
 	require.NoError(t, err)
 	require.Zero(t, physical)
 	require.Zero(t, selected)
 	fixed.Free(mp)
 
-	flat := vector.NewVec(types.T_varchar.ToType())
+	flat := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range [][]byte{
 		[]byte("inline"),
 		make([]byte, types.VarlenaInlineSize+9),
@@ -144,7 +144,7 @@ func TestUnionAreaProjectionBoundaryMatrix(t *testing.T) {
 
 func TestSerializedRuntimeFilterBoundsNullAndAreaModes(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	keys := vector.NewVec(types.T_varchar.ToType())
+	keys := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(keys,
 		make([]byte, types.VarlenaInlineSize+9), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(keys, nil, true, proc.Mp()))

@@ -102,15 +102,15 @@ func TestIssue25590ReusedWriterReservationsSettleUnderReboundWorkspace(t *testin
 				t.Helper()
 				rowidVec, err := txn.batchAllocNewRowIds(2)
 				require.NoError(t, err)
-				defer rowidVec.Free(txn.proc.Mp())
+				defer rowidVec.Free(txn.workspaceMP())
 				rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowidVec)
 				bat := batch.NewWithSize(2)
 				defer bat.Clean(txn.proc.Mp())
 				bat.SetAttributes([]string{objectio.PhysicalAddr_Attr, "pk"})
-				rowidCol := vector.NewVec(types.T_Rowid.ToType())
+				rowidCol := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 				bat.Vecs[0] = rowidCol
 				require.NoError(t, vector.AppendFixedList(rowidCol, rowids, nil, txn.proc.Mp()))
-				pkCol := vector.NewVec(types.T_int64.ToType())
+				pkCol := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 				bat.Vecs[1] = pkCol
 				require.NoError(t, vector.AppendFixedList(pkCol, []int64{1, 2}, nil, txn.proc.Mp()))
 				bat.SetRowCount(2)

@@ -28,7 +28,7 @@ func TestDependentSlotPreservesNativeValueAndLifetime(t *testing.T) {
 	proc, allocation, _ := dependentTestAllocation(t)
 	typ := types.T_varbinary.ToType()
 	typ.Width = 4
-	source := vector.NewVec(typ)
+	source := vector.NewVec(typ, proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(source, []byte{0, 255, 1}, false, proc.Mp()))
 	child, err := proc.NewDependentProcess(3, []*vector.Vector{source}, 0)

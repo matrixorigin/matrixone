@@ -804,9 +804,9 @@ func TestParseColumnsBatchPreservesUnsignedFlag(t *testing.T) {
 	require.NoError(t, err)
 
 	logtailBatch := batch.NewWithSize(len(columnBatch.Vecs) + MO_OFF)
-	logtailBatch.Vecs[MO_ROWID_IDX] = vector.NewVec(types.T_Rowid.ToType())
+	logtailBatch.Vecs[MO_ROWID_IDX] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(logtailBatch.Vecs[MO_ROWID_IDX], types.Rowid{}, false, mp))
-	logtailBatch.Vecs[MO_TIMESTAMP_IDX] = vector.NewVec(types.T_TS.ToType())
+	logtailBatch.Vecs[MO_TIMESTAMP_IDX] = vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(logtailBatch.Vecs[MO_TIMESTAMP_IDX], types.BuildTS(1, 0), false, mp))
 	copy(logtailBatch.Vecs[MO_OFF:], columnBatch.Vecs)
 	logtailBatch.SetRowCount(1)
@@ -848,37 +848,37 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	bat := batch.NewWithSize(len(typs))
 	bat.SetRowCount(Rows)
 	for i := range bat.Vecs {
-		bat.Vecs[i] = vector.NewVec(typs[i])
+		bat.Vecs[i] = vector.NewVec(typs[i], mp)
 	}
 	for i, account := range accounts {
 		for j, typ := range typs {
 			switch j {
 			case MO_TIMESTAMP_IDX:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, timestamps[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, account, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, databaseIds[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, ids[i], false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendBytes(vec, names[i], false, mp)
 					require.NoError(t, err)
@@ -886,31 +886,31 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 			case catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF:
 				data, err := types.Encode(&typ) // reuse the type for test
 				require.NoError(t, err)
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendBytes(vec, data, false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_HAS_GENERATED_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendFixed(vec, int8(0), false, mp)
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATT_GENERATED_IDX + MO_OFF:
-				vec = vector.NewVec(typ)
+				vec = vector.NewVec(typ, mp)
 				for k := 0; k < Rows; k++ {
 					err := vector.AppendBytes(vec, []byte(""), false, mp)
 					require.NoError(t, err)

@@ -381,7 +381,7 @@ func BenchmarkLocalDomainMaskConsumer(b *testing.B) {
 			b.Cleanup(domain.Close)
 			source, err := domain.Begin(proc, 0, 1)
 			require.NoError(b, err)
-			keys := vector.NewVec(types.T_int32.ToType())
+			keys := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			b.Cleanup(func() { keys.Free(proc.Mp()) })
 			require.NoError(b, vector.AppendFixedList(keys, []int32{1, 2}, nil, proc.Mp()))
 			require.NoError(b, source.AddVector(proc.Ctx, keys, 2))
@@ -389,7 +389,7 @@ func BenchmarkLocalDomainMaskConsumer(b *testing.B) {
 			bloom, _, err := domain.Wait(proc.Ctx)
 			require.NoError(b, err)
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			b.Cleanup(func() { input.Clean(proc.Mp()) })
 			const rows = runtimefilter.LocalDomainBatchRows
 			for row := range rows {

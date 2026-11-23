@@ -66,7 +66,7 @@ func ivfpqCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 
 func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
 	if !u.inited {
-		u.batch = tf.createResultBatch()
+		u.batch = tf.createResultBatch(proc.Mp())
 		u.inited = true
 	}
 	u.batch.CleanOnlyData()

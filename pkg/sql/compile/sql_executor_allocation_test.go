@@ -43,9 +43,8 @@ func TestInternalExecutorResultEndsStatementAllocationOwnership(t *testing.T) {
 			require.NoError(t, err)
 
 			source := batch.NewWithSchema(
-				true,
 				[]string{"id", "value"},
-				[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
+				[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, selection,
 			)
 			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
 			require.NoError(t, vector.AppendBytes(source.Vecs[1], []byte("result"), false, selection))
@@ -53,7 +52,7 @@ func TestInternalExecutorResultEndsStatementAllocationOwnership(t *testing.T) {
 			usedBefore := account.Snapshot().Used
 			require.Positive(t, usedBefore)
 
-			cloned, err := cloneInternalExecutorResultBatch(source, mp, streaming)
+			cloned, err := cloneInternalExecutorResultBatch(source, mp)
 			require.NoError(t, err)
 			// The clone crosses the ownership boundary unaccounted.
 			require.Equal(t, usedBefore, account.Snapshot().Used)
@@ -70,7 +69,7 @@ func TestInternalExecutorResultEndsStatementAllocationOwnership(t *testing.T) {
 				result.Batches = []*batch.Batch{cloned}
 			}
 
-			source.Clean(mp)
+			source.Clean(selection)
 			snapshot := account.Seal()
 			require.Zero(t, snapshot.Used)
 			require.Zero(t, registry.LiveAllocationMetadata())
@@ -99,14 +98,13 @@ func TestInternalExecutorStreamCancellationCleansUnpublishedResult(t *testing.T)
 	require.NoError(t, err)
 
 	source := batch.NewWithSchema(
-		true,
 		[]string{"value"},
-		[]types.Type{types.T_int64.ToType()},
+		[]types.Type{types.T_int64.ToType()}, selection,
 	)
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, selection))
 	source.SetRowCount(1)
 
-	cloned, err := cloneInternalExecutorResultBatch(source, mp, true)
+	cloned, err := cloneInternalExecutorResultBatch(source, mp)
 	require.NoError(t, err)
 	result := executor.NewResult(mp)
 	result.Batches = []*batch.Batch{cloned}
@@ -124,7 +122,7 @@ func TestInternalExecutorStreamCancellationCleansUnpublishedResult(t *testing.T)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, results, 1)
 
-	source.Clean(mp)
+	source.Clean(selection)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	require.Zero(t, registry.LiveAllocationMetadata())

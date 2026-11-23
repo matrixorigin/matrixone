@@ -190,6 +190,10 @@ func getSetDescriptorWithContext(ctx context.Context, setStr string) (*setDescri
 		return descriptor.(*setDescriptor), nil
 	}
 
+	// setStr may alias vector memory (callers convert bytes without copying).
+	// The cached descriptor and its key outlive that memory, so both are built
+	// from a private copy.
+	setStr = strings.Clone(setStr)
 	descriptor, err := buildSetDescriptorWithContext(ctx, setStr)
 	if err != nil {
 		return nil, err

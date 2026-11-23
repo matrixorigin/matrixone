@@ -337,8 +337,8 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 			t.Cleanup(func() { defer mpool.DeleteMPool(writeMP); require.Zero(t, writeMP.CurrNB()) })
 			input := batch.NewWithSize(2)
 			t.Cleanup(func() { input.Clean(writeMP) })
-			input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-			input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), writeMP)
+			input.Vecs[1] = vector.NewVec(types.T_text.ToType(), writeMP)
 			for i := 0; i < 8; i++ {
 				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, writeMP))
 				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("persisted-payload"), false, writeMP))
@@ -393,8 +393,8 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 
 			output := batch.NewWithSize(2)
 			t.Cleanup(func() { output.Clean(queryMP) })
-			output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
-			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+			output.Vecs[0] = vector.NewVec(types.T_int32.ToType(), queryMP)
+			output.Vecs[1] = vector.NewVec(types.T_text.ToType(), queryMP)
 			for read := 0; read < 2; read++ {
 				source.emitted = false
 				observed.policies = nil
@@ -461,7 +461,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 	for pos, typ := range []types.Type{
 		types.T_int32.ToType(), types.New(types.T_array_float32, 2, 0), types.T_int32.ToType(),
 	} {
-		output.Vecs[pos] = vector.NewOffHeapVecWithType(typ)
+		output.Vecs[pos] = vector.NewVec(typ, queryMP)
 	}
 	isEnd, topKApplied, err := r.ReadWithFilterAndTopK(
 		ctx,
@@ -686,7 +686,7 @@ func TestReaderSetIndexParamConservativelyConvertsL2UpperBounds(t *testing.T) {
 
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
-			entries := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+			entries := vector.NewVec(types.New(types.T_array_float32, 3, 0), mp)
 			defer entries.Free(mp)
 			require.NoError(t, vector.AppendArray(entries, test.entry, false, mp))
 			rows, distances, err := objectio.TopNVector(context.Background(), nil, entries, r.orderByLimit)
@@ -1075,8 +1075,8 @@ func testReaderTemporalResidualAfterOptionalPKFilter(t *testing.T, reverse bool)
 	values := []int64{keyCenter - 1, keyCenter, keyCenter + 456, keyCenter + 1000, keyCenter + 2000}
 	input := batch.NewWithSize(2)
 	defer input.Clean(proc.Mp())
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	var expected []int64
 	for i, value := range values {
 		require.NoError(t, vector.AppendBytes(input.Vecs[0], encode(value), false, proc.Mp()))
@@ -1166,8 +1166,8 @@ func testReaderTemporalResidualAfterOptionalPKFilter(t *testing.T, reverse bool)
 			defer executor.Free()
 			output := batch.NewWithSize(2)
 			defer output.Clean(proc.Mp())
-			output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
-			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			output.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+			output.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			observed := 0
 			isEnd, err := r.ReadWithFilter(ctx, []string{"key", "id"}, []int{0},
 				&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {

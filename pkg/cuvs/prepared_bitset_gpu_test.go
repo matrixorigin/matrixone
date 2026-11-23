@@ -29,7 +29,7 @@ import (
 // bitsetTestMembership returns an exact C membership of keys and its free.
 func bitsetTestMembership(t *testing.T, keys []int64) (docfilter.CMembership, func()) {
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(v, keys, nil, mp))
 	f, err := docfilter.NewForC(v, nil)
 	v.Free(mp)

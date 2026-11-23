@@ -67,7 +67,7 @@ func TestMaterializedDispatchAttributesSourceSpill(t *testing.T) {
 	}))
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
 	input.SetRowCount(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
@@ -103,7 +103,7 @@ func TestMaterializedDispatchDoesNotPersistLastBatch(t *testing.T) {
 	require.NoError(t, source.Begin(proc.Mp()))
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
 	input.SetRowCount(1)
 	last := batch.NewWithSize(1)

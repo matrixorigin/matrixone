@@ -1227,7 +1227,7 @@ func Test_makeExecuteSql(t *testing.T) {
 
 	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
-	params1 := vector.NewVec(types.T_text.ToType())
+	params1 := vector.NewVec(types.T_text.ToType(), mp)
 	defer params1.Free(testProc.GetMPool())
 	for i := 0; i < 3; i++ {
 		err = vector.AppendBytes(params1, []byte{}, false, testProc.GetMPool())
@@ -1239,9 +1239,10 @@ func Test_makeExecuteSql(t *testing.T) {
 	util.SetAnyToStringVector(testProc, "bVal", params1, 2)
 
 	ses1.SetPrepareStmt(ctx, "st4", &PrepareStmt{
-		Name:   "st4",
-		Sql:    "prepare st4 select * from t where a = ? and b = ?",
-		params: params1,
+		Name:     "st4",
+		Sql:      "prepare st4 select * from t where a = ? and b = ?",
+		params:   params1,
+		paramsMP: mp,
 	})
 
 	ses1.SetPrepareStmt(ctx, "st5", nil)
@@ -1405,8 +1406,8 @@ func Test_makeExecuteSql(t *testing.T) {
 		{"text NULL", "NULL", "NULL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			params := vector.NewVec(types.T_text.ToType())
-			prepared := &PrepareStmt{Name: "binary_diagnostic", Sql: "select ?, ?, ?", params: params}
+			params := vector.NewVec(types.T_text.ToType(), mp)
+			prepared := &PrepareStmt{Name: "binary_diagnostic", Sql: "select ?, ?, ?", params: params, paramsMP: mp}
 			t.Cleanup(func() { prepared.params = nil; params.Free(mp) })
 			for _, value := range []string{tc.value, "", "42"} {
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, mp))
@@ -1807,7 +1808,7 @@ func TestGetValueFromVectorPreservesTemporalScale(t *testing.T) {
 		{name: "datetime", typ: types.New(types.T_datetime, 0, 6), value: datetime, want: datetime.String2(6)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			switch value := tc.value.(type) {
 			case types.Time:
@@ -3839,7 +3840,7 @@ func TestLowPrecFloatFrontendPaths(t *testing.T) {
 			require.Equal(t, defines.MYSQL_TYPE_FLOAT, col.ColumnType())
 
 			// getValueFromVector widens a const scalar to float32.
-			cv := vector.NewVec(c.oid.ToType())
+			cv := vector.NewVec(c.oid.ToType(), mp)
 			defer cv.Free(mp)
 			c.app(cv, 1.5)
 			got, err := getValueFromVector(ctx, cv, nil, nil)
@@ -3847,7 +3848,7 @@ func TestLowPrecFloatFrontendPaths(t *testing.T) {
 			require.Equal(t, float32(1.5), got)
 
 			// extractRowFromVector (legacy any-row path) yields float32.
-			rv := vector.NewVec(c.oid.ToType())
+			rv := vector.NewVec(c.oid.ToType(), mp)
 			defer rv.Free(mp)
 			c.app(rv, -2.0)
 			row := make([]any, 1)

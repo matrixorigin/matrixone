@@ -403,7 +403,7 @@ func TestJSONZoneMapValueComparisonsFailOpen(t *testing.T) {
 	}
 
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, low, false, mp))
 	match := index.AnyInVector(zm, vec, columnType)
 	require.False(t, match.Known)
@@ -521,13 +521,13 @@ func TestZoneMapMatchHelpersDoNotAllocate(t *testing.T) {
 	decimalValue, decimalBoundZM := decimalBoundZoneMap(t, decimalType, decimalBound{"15", 0})
 	unknownDecimalZM := index.NewZM(types.T_decimal128, decimalType.Scale)
 	intInExpr := sortedUnknownVectorFilter(t, intType, []string{"15", "20"}, false)
-	intInVec := vector.NewVec(types.T_any.ToType())
+	intInVec := vector.NewVec(types.T_any.ToType(), mpool.MustNewZero())
 	require.NoError(t, intInVec.UnmarshalBinary(intInExpr.GetF().Args[1].GetVec().Data))
 	prefixType := plan.Type{Id: int32(types.T_varchar), Width: 8}
 	prefixZM := sortedUnknownZoneMap(t, prefixType, "10", "20")
 	unknownPrefixZM := index.NewZM(types.T_varchar, 0)
 	prefixInExpr := sortedUnknownVectorFilter(t, prefixType, []string{"15", "20"}, true)
-	prefixInVec := vector.NewVec(types.T_any.ToType())
+	prefixInVec := vector.NewVec(types.T_any.ToType(), mpool.MustNewZero())
 	require.NoError(t, prefixInVec.UnmarshalBinary(prefixInExpr.GetF().Args[1].GetVec().Data))
 	prefixValue := encodeSortedUnknownValue(t, prefixType, "15")
 
@@ -783,7 +783,7 @@ func TestFoldedFalseCandidateDoesNotForceEmptyPKFilter(t *testing.T) {
 		block, err := ConstructBlockPKFilter(false, base, nil)
 		require.NoError(t, err)
 		require.True(t, block.Valid)
-		pk := vector.NewVec(types.T_int64.ToType())
+		pk := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(pk, []int64{1, 2, 3}, nil, proc.Mp()))
 		require.Equal(t, []int64{1}, block.SortedSearchFunc(containers.Vectors{*pk}))
 		pk.Free(proc.Mp())
@@ -1107,7 +1107,7 @@ func TestCompileFilterExprMalformedVectorDoesNotCompile(t *testing.T) {
 func TestCompileFilterExprPrefixInNullableVectorFailsOpen(t *testing.T) {
 	typ := plan.Type{Id: int32(types.T_varchar), Width: 8}
 	proc := testutil.NewProcess(t)
-	vec := vector.NewVec(plan2.MakeTypeByPlan2Type(typ))
+	vec := vector.NewVec(plan2.MakeTypeByPlan2Type(typ), proc.Mp())
 	defer vec.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(vec, []byte("00000020"), false, proc.Mp()))
@@ -1380,7 +1380,7 @@ func sortedUnknownVectorFilterWithType(
 ) *plan.Expr {
 	t.Helper()
 	proc := testutil.NewProcess(t)
-	vec := vector.NewVec(plan2.MakeTypeByPlan2Type(vectorType))
+	vec := vector.NewVec(plan2.MakeTypeByPlan2Type(vectorType), proc.Mp())
 	defer vec.Free(proc.Mp())
 	for _, value := range values {
 		encoded := encodeSortedUnknownValue(t, vectorType, value)

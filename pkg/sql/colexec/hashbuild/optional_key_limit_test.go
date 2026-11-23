@@ -87,7 +87,7 @@ func TestOptionalRuntimeFilterKeyByteLimitPublication(t *testing.T) {
 			require.Equal(t, tc.want, filter.Typ)
 			if tc.want == message.RuntimeFilter_IN {
 				require.Less(t, len(filter.Data), 128<<10)
-				payload := vector.NewVec(types.T_any.ToType())
+				payload := vector.NewVec(types.T_any.ToType(), fixture.proc.Mp())
 				require.NoError(t, payload.UnmarshalBinary(filter.Data))
 				require.Equal(t, int32(len(tc.values)), filter.Card)
 				got := make([]string, payload.Length())
@@ -119,7 +119,7 @@ func TestOptionalRuntimeFilterKeyByteLimitPublication(t *testing.T) {
 func TestOptionalRuntimeFilterKeyLimitBeforeCopy(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
-	src := vector.NewVec(types.T_varchar.ToType())
+	src := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	t.Cleanup(func() {
 		hb.curVecs = nil // The test owns the source.
 		hb.Free(proc)
@@ -166,7 +166,7 @@ func TestOptionalRuntimeFilterKeyLimitBeforeCopy(t *testing.T) {
 func TestOptionalRuntimeFilterKeyByteFallbackReleasesPriorKeys(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	hb := newTestHashmapBuilder(t)
-	src := vector.NewVec(types.T_varchar.ToType())
+	src := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	t.Cleanup(func() {
 		hb.curVecs = nil
 		hb.Free(proc)

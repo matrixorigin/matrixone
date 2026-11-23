@@ -45,21 +45,21 @@ func TestFillInclude(t *testing.T) {
 	require.Len(t, out.Include, 2)
 
 	// Col 0 = status (varchar): ["active", NULL].
-	statusVec := vector.NewVec(types.T_varchar.ToType())
+	statusVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[0], statusVec, mp))
 	require.Equal(t, "active", statusVec.GetStringAt(0))
 	require.False(t, statusVec.IsNull(0))
 	require.True(t, statusVec.IsNull(1)) // pk2 status is NULL
 
 	// Col 1 = prio (int64): [10, 20], no NULLs.
-	prioVec := vector.NewVec(types.T_int64.ToType())
+	prioVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vectorindex.AppendColumnBuffer(out.Include[1], prioVec, mp))
 	require.Equal(t, []int64{10, 20}, vector.MustFixedColWithTypeCheck[int64](prioVec))
 	require.False(t, prioVec.IsNull(0))
 	require.False(t, prioVec.IsNull(1))
 
 	// AppendColumnBufferRange pages a subset: row [1,2) of prio = just 20.
-	pageVec := vector.NewVec(types.T_int64.ToType())
+	pageVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vectorindex.AppendColumnBufferRange(out.Include[1], pageVec, 1, 1, mp))
 	require.Equal(t, []int64{20}, vector.MustFixedColWithTypeCheck[int64](pageVec))
 

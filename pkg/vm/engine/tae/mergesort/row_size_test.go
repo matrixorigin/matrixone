@@ -67,8 +67,8 @@ func TestMergeFlushesOversizedRows(t *testing.T) {
 			for run := range 2 {
 				bat := batch.NewWithSize(2)
 				bat.Attrs = []string{"key", "payload"}
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 				host.runs = append(host.runs, bat)
 				for row := range 4 {
 					key := row*2 + run

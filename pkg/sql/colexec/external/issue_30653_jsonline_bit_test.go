@@ -92,7 +92,7 @@ func (r *bitRows) Value(i int) uint64 {
 func readBitColumn(t *testing.T, param *ExternalParam, proc *process.Process, width int32, content string) (*bitRows, error) {
 	t.Helper()
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(bitJSONLineType(width))
+	bat.Vecs[0] = vector.NewVec(bitJSONLineType(width), proc.Mp())
 	defer bat.Clean(proc.Mp())
 	err := readJSONLineText(t, param, proc, bat, content)
 	vec := bat.Vecs[0]
@@ -235,13 +235,13 @@ func TestJSONLineBitNumberStagedParallelLoadCast(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			param := bitJSONLineParam(int32(plan.ExternType_LOAD), tree.OBJECT, true, tc.width, nil)
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 			require.NoError(t, readJSONLineText(t, param, proc, bat, `{"b":`+tc.lex+`}`+"\n"))
 			src := bat.Vecs[0]
 			require.Equal(t, 1, src.Length())
 
-			typVec := vector.NewVec(bitJSONLineType(tc.width))
+			typVec := vector.NewVec(bitJSONLineType(tc.width), proc.Mp())
 			defer typVec.Free(proc.Mp())
 			result := vector.NewFunctionResultWrapper(bitJSONLineType(tc.width), proc.Mp())
 			defer result.Free()

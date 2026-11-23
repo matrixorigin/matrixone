@@ -576,7 +576,7 @@ func compareFixedResult[T types.FixedSizeTExceptStrType](fc *FunctionTestCase, v
 }
 
 func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	owned := vec
 	defer func() {
 		if owned != nil {

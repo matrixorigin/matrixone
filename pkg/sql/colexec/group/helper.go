@@ -1518,18 +1518,18 @@ func (ctr *container) newRuntimeEmptyGroupingSetBatch(
 		rows = len(setIDs)
 		rollupColumns--
 	}
-	output := batch.NewOffHeapWithSize(len(groupTypes))
+	output := batch.NewWithSize(len(groupTypes))
 	groupByMP := ctr.groupByMP()
 	for i := 0; i < rollupColumns; i++ {
 		output.Vecs[i] = vector.NewRollupConst(
 			groupTypes[i], rows, groupByMP)
 	}
 	if setIDs != nil {
-		setIDVector := vector.NewOffHeapVecWithType(
-			groupTypes[len(groupTypes)-1])
+		setIDVector := vector.NewVec(
+			groupTypes[len(groupTypes)-1], groupByMP)
 		output.Vecs[len(output.Vecs)-1] = setIDVector
 		if err := vector.AppendFixedList(setIDVector, setIDs, nil, groupByMP); err != nil {
-			output.Clean(ctr.mp)
+			ctr.cleanGroupBatch(output)
 			return nil, err
 		}
 	}

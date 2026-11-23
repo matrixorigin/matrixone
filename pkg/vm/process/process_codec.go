@@ -454,7 +454,7 @@ func decodeTypedPrepareParams(encoded [][]byte, paramCount int, mp *mpool.MPool)
 		if len(data) == 0 {
 			continue
 		}
-		vec := new(vector.Vector)
+		vec := vector.NewVec(types.T_any.ToType(), mp)
 		if err := vec.UnmarshalBinaryWithCopy(data, mp); err != nil {
 			typed.Clean(mp)
 			return nil, err

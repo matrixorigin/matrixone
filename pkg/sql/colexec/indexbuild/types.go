@@ -41,8 +41,10 @@ const (
 )
 
 type container struct {
-	state               int
-	buf                 *batch.Batch
+	state int
+	buf   *batch.Batch
+	// bufMP is the pool buf was created with (the runtime-filter view).
+	bufMP               *mpool.MPool
 	runtimeFilterUsable bool
 	runtimeFilterDone   bool
 }
@@ -145,14 +147,16 @@ func (indexBuild *IndexBuild) Reset(proc *process.Process, pipelineFailed bool, 
 	indexBuild.ctr.state = ReceiveBatch
 	indexBuild.ctr.runtimeFilterUsable = false
 	if indexBuild.ctr.buf != nil {
-		indexBuild.ctr.buf.Clean(proc.Mp())
+		indexBuild.ctr.buf.Clean(indexBuild.ctr.bufMP)
 		indexBuild.ctr.buf = nil
+		indexBuild.ctr.bufMP = nil
 	}
 }
 
 func (indexBuild *IndexBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if indexBuild.ctr.buf != nil {
-		indexBuild.ctr.buf.Clean(proc.Mp())
+		indexBuild.ctr.buf.Clean(indexBuild.ctr.bufMP)
 		indexBuild.ctr.buf = nil
+		indexBuild.ctr.bufMP = nil
 	}
 }

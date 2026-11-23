@@ -108,7 +108,7 @@ func writeGCMetadata(
 	start, end types.TS,
 	stats ...objectio.ObjectStats,
 ) string {
-	bat := batch.NewWithSchema(false, gc.ObjectTableMetaAttrs, gc.ObjectTableMetaTypes)
+	bat := batch.NewWithSchema(gc.ObjectTableMetaAttrs, gc.ObjectTableMetaTypes, common.DebugAllocator)
 	defer bat.Clean(common.DebugAllocator)
 	for _, stat := range stats {
 		require.NoError(t, vector.AppendBytes(bat.GetVector(0), stat[:], false, common.DebugAllocator))

@@ -51,10 +51,12 @@ type container struct {
 	limitExecutor colexec.ExpressionExecutor
 	limit         uint64
 	source        *materialized.Source
-	output        *batch.Batch
-	position      int
-	selected      bool
-	done          bool
+	// outputMP is the pool of output, the batch last returned by source.
+	outputMP *mpool.MPool
+	output   *batch.Batch
+	position int
+	selected bool
+	done     bool
 }
 
 func NewArgument() *AdaptiveTop { return reuse.Alloc[AdaptiveTop](nil) }
@@ -102,7 +104,7 @@ func (a *AdaptiveTop) ClearAllocationAccount(account *mpool.AllocationAccount) e
 
 func (a *AdaptiveTop) discard(proc *process.Process) {
 	if a.ctr.output != nil {
-		a.ctr.output.Clean(proc.Mp())
+		a.ctr.output.Clean(a.ctr.outputMP)
 		a.ctr.output = nil
 	}
 	if a.ctr.source != nil {

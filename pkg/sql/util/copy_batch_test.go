@@ -32,7 +32,7 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	src := batch.NewWithSize(4)
 	src.Attrs = []string{"fixed", "varlen", "const", "const_null"}
 
-	fixed := vector.NewVec(types.T_int64.ToType())
+	fixed := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(fixed, []int64{11}, []bool{false}, mp))
 	fixed.GetNulls().Add(9)
 	fixed.GetGrouping().Add(0, 9)
@@ -42,7 +42,7 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	dead = append(dead, make([]byte, 4096)...)
 	live := []byte("live-")
 	live = append(live, make([]byte, 64)...)
-	varlen := vector.NewVec(types.T_varchar.ToType())
+	varlen := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(varlen, dead, false, mp))
 	require.NoError(t, vector.AppendBytes(varlen, live, false, mp))
 	require.NoError(t, varlen.Shrink([]int64{1}, false, mp))
@@ -101,8 +101,8 @@ func TestCopyBatchCrossesAllocationOwnershipBoundary(t *testing.T) {
 	selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	src := batch.NewOffHeapWithSize(1)
-	vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	src := batch.NewWithSize(1)
+	vec := vector.NewVec(types.T_int64.ToType(), selection)
 	require.NoError(t, vector.AppendFixed(vec, int64(42), false, selection))
 	src.SetVector(0, vec)
 	src.SetRowCount(1)
@@ -114,7 +114,7 @@ func TestCopyBatchCrossesAllocationOwnershipBoundary(t *testing.T) {
 	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
 	require.Equal(t, sourceUsed, account.Snapshot().Used)
 
-	src.Clean(mp)
+	src.Clean(selection)
 	require.Zero(t, account.Snapshot().Used)
 	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
 	got.Clean(mp)
@@ -130,7 +130,7 @@ func BenchmarkCopyBatchCompact(b *testing.B) {
 	mp := proc.Mp()
 	src := batch.NewWithSize(10)
 	for col := range src.Vecs {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		for row := 0; row < 1024; row++ {
 			value := []byte(fmt.Sprintf("column-%d-row-%d-", col, row))
 			value = append(value, make([]byte, 64)...)
@@ -176,7 +176,7 @@ func BenchmarkCopyBatchAlreadyCompact(b *testing.B) {
 	mp := proc.Mp()
 	src := batch.NewWithSize(10)
 	for col := range src.Vecs {
-		vec := vector.NewVec(types.T_varchar.ToType())
+		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		for row := 0; row < 128; row++ {
 			value := []byte(fmt.Sprintf("column-%d-row-%d-", col, row))
 			value = append(value, make([]byte, 64)...)
@@ -216,7 +216,7 @@ func copyBatchWithUnionAll(src *batch.Batch, mp *mpool.MPool) (*batch.Batch, err
 	dst := batch.NewWithSize(len(src.Vecs))
 	dst.Attrs = append(dst.Attrs, src.Attrs...)
 	for i, srcVec := range src.Vecs {
-		vec := vector.NewVec(*srcVec.GetType())
+		vec := vector.NewVec(*srcVec.GetType(), mp)
 		if err := vector.GetUnionAllFunction(*srcVec.GetType(), mp)(vec, srcVec); err != nil {
 			vec.Free(mp)
 			dst.Clean(mp)
@@ -232,8 +232,8 @@ func TestCopyBatchDestinationAdmission(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	src := batch.NewWithSize(2)
 	src.Attrs = []string{"id", "payload"}
-	src.SetVector(0, vector.NewVec(types.T_int64.ToType()))
-	src.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+	src.SetVector(0, vector.NewVec(types.T_int64.ToType(), proc.Mp()))
+	src.SetVector(1, vector.NewVec(types.T_varchar.ToType(), proc.Mp()))
 	require.NoError(t, vector.AppendFixedList(src.Vecs[0], []int64{1, 2}, []bool{false, true}, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(src.Vecs[1], []byte("a sufficiently long variable payload"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(src.Vecs[1], nil, true, proc.Mp()))
@@ -253,7 +253,7 @@ func TestCopyBatchDestinationAdmission(t *testing.T) {
 				require.Positive(t, account.Snapshot().Used)
 				require.Equal(t, src.RowCount(), dst.RowCount())
 				require.Equal(t, src.Vecs[1].GetBytesAt(0), dst.Vecs[1].GetBytesAt(0))
-				dst.Clean(proc.Mp())
+				dst.Clean(selection)
 			} else {
 				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 				require.Nil(t, dst)
@@ -270,7 +270,7 @@ func BenchmarkCopyBatchDestinationAdmission(b *testing.B) {
 	proc := testutil.NewProcess(b)
 	src := batch.NewWithSize(1)
 	src.Attrs = []string{"payload"}
-	src.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	src.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	for range 32 {
 		require.NoError(b, vector.AppendBytes(src.Vecs[0], []byte("a moderately wide variable payload for a workspace batch"), false, proc.Mp()))
 	}
@@ -328,22 +328,22 @@ func TestCopyBatchKeepsSourceAndDestinationChargesIndependent(t *testing.T) {
 	require.NoError(t, err)
 	dstSelection, err := proc.Mp().WithAccount(target, mpool.AllocationOwnerTxnWorkspace, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	src := batch.NewOffHeapWithSize(1)
-	src.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
-	defer src.Clean(proc.Mp())
+	src := batch.NewWithSize(1)
+	src.SetVector(0, vector.NewVec(types.T_int64.ToType(), srcSelection))
+	defer src.Clean(srcSelection)
 	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(42), false, srcSelection))
 	src.SetRowCount(1)
 	used := source.Snapshot().Used
 	dst, err := CopyBatchWithAllocation(src, proc, dstSelection)
 	require.NoError(t, err)
-	defer dst.Clean(proc.Mp())
+	defer dst.Clean(dstSelection)
 	require.Equal(t, used, source.Snapshot().Used)
 	require.Positive(t, target.Snapshot().Used)
-	src.Clean(proc.Mp())
+	src.Clean(srcSelection)
 	require.Zero(t, source.Snapshot().Used)
 	require.Positive(t, target.Snapshot().Used)
 	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](dst.Vecs[0])[0])
-	dst.Clean(proc.Mp())
+	dst.Clean(dstSelection)
 	require.Zero(t, target.Snapshot().Used)
 	_, _, err = registry.CompleteTerminal(source)
 	require.NoError(t, err)

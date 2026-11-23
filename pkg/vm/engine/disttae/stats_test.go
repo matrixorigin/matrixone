@@ -351,7 +351,7 @@ func TestUpdateStats(t *testing.T) {
 			require.NoError(t, err)
 			e.fs = fs
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(columnType)
+			bat.Vecs[0] = vector.NewVec(columnType, e.mp)
 			defer bat.Clean(e.mp)
 			values := []int64{10, 20, 30}
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, e.mp))

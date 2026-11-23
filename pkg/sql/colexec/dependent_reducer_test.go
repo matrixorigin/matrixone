@@ -51,7 +51,7 @@ func dependentTestAllocation(t *testing.T) (*process.Process, *mpool.MPool, *mpo
 func dependentTestInts(t *testing.T, proc *process.Process, values ...*int64) *batch.Batch {
 	t.Helper()
 	b := batch.NewWithSize(1)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	t.Cleanup(func() { b.Clean(proc.Mp()) })
 	for _, v := range values {
 		var n int64

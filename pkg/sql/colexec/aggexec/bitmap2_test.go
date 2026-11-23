@@ -120,7 +120,7 @@ func TestAccountedBitmapPortableWireAndLifecycle(t *testing.T) {
 				require.NoError(t, err)
 				secondBytes, err := second.ToBytes()
 				require.NoError(t, err)
-				input := vector.NewVec(types.T_varbinary.ToType())
+				input := vector.NewVec(types.T_varbinary.ToType(), mp)
 				require.NoError(t, vector.AppendBytesList(
 					input, [][]byte{firstBytes, secondBytes}, nil, mp))
 				require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
@@ -153,7 +153,7 @@ func TestAccountedBitmapPortableWireAndLifecycle(t *testing.T) {
 				require.True(t, portable.Contains(65537))
 			}
 
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			exec.Free()
 			restored.Free()
 			require.NoError(t, owner.ClearAllocationAccount(allocation))
@@ -220,7 +220,7 @@ func TestAccountedBitmapPreflightAndCrossAccountMerge(t *testing.T) {
 		require.NoError(t, err)
 		secondBytes, err := second.ToBytes()
 		require.NoError(t, err)
-		input := vector.NewVec(types.T_varbinary.ToType())
+		input := vector.NewVec(types.T_varbinary.ToType(), mp)
 		require.NoError(t, vector.AppendBytesList(
 			input, [][]byte{firstBytes, secondBytes}, nil, mp))
 		groups := []uint64{1, 1}
@@ -263,7 +263,7 @@ func TestAccountedBitmapPreflightAndCrossAccountMerge(t *testing.T) {
 			append(append([]byte(nil), valid...), 0xff),
 		}
 		for _, invalid := range invalidWires {
-			input := vector.NewVec(types.T_varbinary.ToType())
+			input := vector.NewVec(types.T_varbinary.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(input, invalid, false, mp))
 			used := account.Snapshot().Used
 			err = exec.PreflightBatchFill(
@@ -360,7 +360,7 @@ func TestBitmapConstructExec(t *testing.T) {
 
 		exec.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -378,7 +378,7 @@ func TestBitmapConstructExec(t *testing.T) {
 
 		exec.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -424,7 +424,7 @@ func TestBitmapConstructExec(t *testing.T) {
 				exec.Free()
 				restored.Free()
 				for _, result := range results {
-					result.Free(mp)
+					result.Free(result.MPool())
 				}
 				require.Equal(t, curNB, mp.CurrNB())
 			})
@@ -477,7 +477,7 @@ func TestBitmapConstructExec(t *testing.T) {
 		execb1.Free()
 		execb2.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -508,7 +508,7 @@ func TestBitmapConstructExec(t *testing.T) {
 		exec.Free()
 		execb.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -552,7 +552,7 @@ func TestBitmapConstructExec(t *testing.T) {
 		execb1.Free()
 		execb2.Free()
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
@@ -568,7 +568,7 @@ func TestBitmapConstructRejectsOutOfRangePosition(t *testing.T) {
 		results, err := exec.Flush()
 		require.NoError(t, err)
 		checkBitmap(t, results[0], 0, []uint32{uint32(value)})
-		results[0].Free(mp)
+		results[0].Free(results[0].MPool())
 		vec.Free(mp)
 		exec.Free()
 	}
@@ -588,7 +588,6 @@ func TestBitmapConstructRejectsOutOfRangePosition(t *testing.T) {
 func TestBitmapConstructPropagatesMpoolFailure(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := testutil.NewUInt64Vector(1, types.T_uint64.ToType(), mp, false, nil, []uint64{1})
-	defer vec.Free(mp)
 
 	exec := makeBmpConstructExec(mp, AggIdOfBitmapConstruct, types.T_uint64.ToType())
 	require.NoError(t, exec.GroupGrow(1))
@@ -596,6 +595,7 @@ func TestBitmapConstructPropagatesMpoolFailure(t *testing.T) {
 	require.ErrorIs(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}), mpool.ErrAllocationAccountInvalid)
 	require.Nil(t, exec.state[0].mobs[0])
 	exec.Free()
+	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
 

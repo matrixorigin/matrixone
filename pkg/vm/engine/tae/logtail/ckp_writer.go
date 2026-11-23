@@ -246,7 +246,7 @@ func NewCheckpointData_V2(
 	fs fileservice.FileService,
 ) *CheckpointData_V2 {
 	return &CheckpointData_V2{
-		batch: ckputil.NewObjectListBatch(),
+		batch: ckputil.NewObjectListBatch(allocator),
 		sinker: ckputil.NewDataSinker(
 			allocator, fs, ioutil.WithMemorySizeThreshold(objSize),
 		),
@@ -292,7 +292,7 @@ func (data *CheckpointData_V2) Sync(
 	if len(inMems) != 0 {
 		panic("logic error")
 	}
-	ranges := ckputil.MakeTableRangeBatch()
+	ranges := ckputil.MakeTableRangeBatch(data.allocator)
 	defer ranges.Clean(data.allocator)
 	if err = ckputil.CollectTableRanges(
 		ctx, files, ranges, data.allocator, fs,
@@ -824,7 +824,7 @@ func syncTableIDBatch(
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
+	bat := batch.NewWithSchema(TableIDAttrs, TableIDTypes, mp)
 	defer bat.Clean(mp)
 
 	tableBatchStart := types.MaxTs()
@@ -1106,7 +1106,7 @@ func MockTableIDBatch(
 		ioutil.WithMemorySizeThreshold(sinkerThreshold),
 	)
 	defer sinker.Close()
-	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
+	bat := batch.NewWithSchema(TableIDAttrs, TableIDTypes, mp)
 	defer bat.Clean(mp)
 
 	for i := 0; i < rowCount; i++ {

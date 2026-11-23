@@ -167,12 +167,12 @@ func writeLogicalSchemaObject(
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(len(seqNums))
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], id, false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(name), false, mp))
 	if len(seqNums) == 3 {
-		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte(added), false, mp))
 	}
 	bat.SetRowCount(1)
@@ -437,8 +437,8 @@ func writeLogicalTableTestObject(t *testing.T, _ string) (fileservice.FileServic
 	require.NoError(t, err)
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("alice"), false, mp))
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(2), false, mp))

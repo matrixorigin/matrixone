@@ -30,7 +30,7 @@ func TestBetweenAfterShuffleInvalidatesSorted(t *testing.T) {
 		t.Run(fmt.Sprintf("buffered=%v", buffered), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_int64.ToType()
-			v := vector.NewVec(typ)
+			v := vector.NewVec(typ, mp)
 			t.Cleanup(func() { v.Free(mp) })
 			require.NoError(t, vector.AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
 			v.SetSorted(true)
@@ -81,8 +81,8 @@ func TestSortedConsumersAfterShuffle(t *testing.T) {
 		} {
 			t.Run(fmt.Sprintf("buffered=%v/%s", buffered, tc.name), func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				ints := vector.NewVec(types.T_int64.ToType())
-				strs := vector.NewVec(types.T_varchar.ToType())
+				ints := vector.NewVec(types.T_int64.ToType(), mp)
+				strs := vector.NewVec(types.T_varchar.ToType(), mp)
 				t.Cleanup(func() { ints.Free(mp); strs.Free(mp); require.Zero(t, mp.CurrNB()) })
 				values := []int64{1, 2, 3, 4}
 				words := []string{"aa long external value 0", "ab long external value 1", "ab long external value 2", "cc long external value 3"}

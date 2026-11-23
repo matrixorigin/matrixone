@@ -16,8 +16,6 @@ package sample
 
 import (
 	"bytes"
-	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -53,7 +51,7 @@ func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpoo
 	bat := batch.NewWithSize(columnCount)
 	column := 0
 	if includeWide {
-		bat.Vecs[column] = vector.NewVec(types.T_text.ToType())
+		bat.Vecs[column] = vector.NewVec(types.T_text.ToType(), mp)
 		payload := bytes.Repeat([]byte{'x'}, wideSampleBytes)
 		for range wideSampleRows {
 			require.NoError(tb, vector.AppendBytes(bat.Vecs[column], payload, false, mp))
@@ -61,7 +59,7 @@ func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpoo
 		column++
 	}
 
-	bat.Vecs[column] = vector.NewVec(types.T_int8.ToType())
+	bat.Vecs[column] = vector.NewVec(types.T_int8.ToType(), mp)
 	for i := range wideSampleRows {
 		require.NoError(tb, vector.AppendFixed(bat.Vecs[column], int8(i), false, mp))
 	}
@@ -108,15 +106,9 @@ func measureSampleMemoryCase(tb testing.TB, includeWide bool) sampleMemoryStats 
 	proc := testutil.NewProcessWithMPool(tb, "", outputMP)
 	defer proc.Free()
 
-	runtime.GC()
-	previousGCPercent := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(previousGCPercent)
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
+	// Vector memory is off-heap: measure the peak through the output pool.
 	stats := executeSampleMemoryCase(tb, proc, input)
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-	stats.peakBytes = int64(after.HeapAlloc - before.HeapAlloc)
+	stats.peakBytes = outputMP.Stats().HighWaterMark.Load()
 	return stats
 }
 
@@ -345,14 +337,14 @@ func TestSampleSeparatesSQLNullFromGrouping(t *testing.T) {
 	defer freeSampleHashContainer(ctr)
 
 	nullBatch := batch.NewWithSize(2)
-	nullBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	nullBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		nullBatch.Vecs[0],
 		int64(0),
 		true,
 		proc.Mp(),
 	))
-	nullBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	nullBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		nullBatch.Vecs[1],
 		int64(10),
@@ -398,7 +390,7 @@ func TestSampleSeparatesPartialRollupKeys(t *testing.T) {
 
 	input := batch.NewWithSize(3)
 	for column := 0; column < 2; column++ {
-		input.Vecs[column] = vector.NewVec(types.T_int64.ToType())
+		input.Vecs[column] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(
 			input.Vecs[column],
 			[]int64{0, 0},
@@ -408,7 +400,7 @@ func TestSampleSeparatesPartialRollupKeys(t *testing.T) {
 	}
 	input.Vecs[0].GetGrouping().Add(0)
 	input.Vecs[1].GetGrouping().Add(1)
-	input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(
 		input.Vecs[2],
 		[]int64{10, 20},
@@ -556,7 +548,7 @@ func makeSampleGroupingBatch(
 			proc.Mp(),
 		)
 	} else {
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(tb, vector.AppendFixedList(
 			bat.Vecs[0],
 			groups,
@@ -564,7 +556,7 @@ func makeSampleGroupingBatch(
 			proc.Mp(),
 		))
 	}
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(tb, vector.AppendFixedList(
 		bat.Vecs[1],
 		samples,
@@ -603,7 +595,7 @@ func genSampleBatch(proc *process.Process, rows [][]int64) (*batch.Batch, error)
 
 	var err error
 	for i := range b.Vecs {
-		b.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[i] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 
 		for _, rowValue := range rows {
 			err = vector.AppendFixed[int64](b.Vecs[i], rowValue[i], rowValue[i] == nullFlag, proc.Mp())
@@ -646,7 +638,7 @@ func TestSamplePoolLowPrecisionFloats(t *testing.T) {
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 		t.Run(oid.String(), func(t *testing.T) {
 			b := batch.NewWithSize(1)
-			b.Vecs[0] = vector.NewVec(oid.ToType())
+			b.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 			for i := 0; i < 20; i++ {
 				v := float32(i%6) - 2
 				var err error

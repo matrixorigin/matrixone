@@ -116,22 +116,22 @@ func TestGetUpstreamDDLUsingGetDdl_SkipIndexTable(t *testing.T) {
 			// Build a batch with 4 columns: dbname, tablename, tableid, tablesql
 			bat := batch.NewWithSize(4)
 			// col0: dbname (varchar)
-			v0 := vector.NewVec(types.T_varchar.ToType())
+			v0 := vector.NewVec(types.T_varchar.ToType(), mp)
 			vector.AppendBytes(v0, []byte("db1"), false, mp)
 			vector.AppendBytes(v0, []byte("db1"), false, mp)
 			bat.Vecs[0] = v0
 			// col1: tablename (varchar)
-			v1 := vector.NewVec(types.T_varchar.ToType())
+			v1 := vector.NewVec(types.T_varchar.ToType(), mp)
 			vector.AppendBytes(v1, []byte("__mo_index_secondary_abc"), false, mp)
 			vector.AppendBytes(v1, []byte("real_table"), false, mp)
 			bat.Vecs[1] = v1
 			// col2: tableid (int64)
-			v2 := vector.NewVec(types.T_int64.ToType())
+			v2 := vector.NewVec(types.T_int64.ToType(), mp)
 			vector.AppendFixed(v2, int64(100), false, mp)
 			vector.AppendFixed(v2, int64(200), false, mp)
 			bat.Vecs[2] = v2
 			// col3: tablesql (varchar)
-			v3 := vector.NewVec(types.T_varchar.ToType())
+			v3 := vector.NewVec(types.T_varchar.ToType(), mp)
 			vector.AppendBytes(v3, []byte("CREATE TABLE ..."), false, mp)
 			vector.AppendBytes(v3, []byte("CREATE TABLE real_table (id INT)"), false, mp)
 			bat.Vecs[3] = v3

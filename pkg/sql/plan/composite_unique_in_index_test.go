@@ -123,7 +123,7 @@ func TestCompositeUniqueTrailingInPointAccess(t *testing.T) {
 			values := lookup.Args[1].GetVec()
 			require.NotNil(t, values)
 			require.Equal(t, int32(tc.wantItems), values.Len)
-			keys := vector.NewVec(types.T_any.ToType())
+			keys := vector.NewVec(types.T_any.ToType(), mpool.MustNewZero())
 			require.NoError(t, keys.UnmarshalBinary(values.Data))
 			require.Equal(t, tc.wantItems, keys.Length())
 		})
@@ -336,7 +336,7 @@ func makeCompositeUniqueInt32EqualFilterExpr(relPos, colPos, value int32) *pb.Ex
 func makeCompositeUniqueInt32VecInFilterExpr(t *testing.T, relPos, colPos int32, values ...int32) *pb.Expr {
 	t.Helper()
 	mp := mpool.MustNew(t.Name())
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 	}
@@ -446,14 +446,14 @@ func TestFastExactKeySetMatchesSerialFolding(t *testing.T) {
 		buildValues func(*testing.T, *mpool.MPool) *vector.Vector
 	}{
 		{name: "fixed width", buildValues: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
-			v := vector.NewVec(types.T_int32.ToType())
+			v := vector.NewVec(types.T_int32.ToType(), mp)
 			for _, value := range []int32{1, 1, 2, 3, 4, 5, 6, 7, 8} {
 				require.NoError(t, vector.AppendFixed(v, value, false, mp))
 			}
 			return v
 		}},
 		{name: "string", buildValues: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
-			v := vector.NewVec(types.T_varchar.ToType())
+			v := vector.NewVec(types.T_varchar.ToType(), mp)
 			for _, value := range []string{"v0", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"} {
 				require.NoError(t, vector.AppendBytes(v, []byte(value), false, mp))
 			}
@@ -467,7 +467,7 @@ func TestFastExactKeySetMatchesSerialFolding(t *testing.T) {
 			equality := makeCompositeUniqueInt32EqualFilterExpr(1, 0, 1)
 			equality.Selectivity = 1
 			filters := []*pb.Expr{equality, newInFilter(values)}
-			rowVec := vector.NewVec(*values.GetType())
+			rowVec := vector.NewVec(*values.GetType(), mp)
 			defer rowVec.Free(mp)
 
 			actual, handled := builder.fastExactKeySet(
@@ -477,13 +477,13 @@ func TestFastExactKeySetMatchesSerialFolding(t *testing.T) {
 			require.NotNil(t, actual)
 			defer actual.Free(mp)
 
-			expected := vector.NewVec(types.T_varchar.ToType())
+			expected := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer expected.Free(mp)
 			for row := 0; row < values.Length(); row++ {
 				tuple := builder.foldKeySetTuple(idxDef, filters, positions, values, rowVec, row, mp)
 				require.NotNil(t, tuple)
 				require.NotNil(t, tuple.GetVec())
-				decoded := vector.NewVec(types.T_any.ToType())
+				decoded := vector.NewVec(types.T_any.ToType(), mp)
 				require.NoError(t, decoded.UnmarshalBinary(tuple.GetVec().Data))
 				require.Equal(t, types.T_varchar, decoded.GetType().Oid)
 				require.Equal(t, 1, decoded.Length())

@@ -333,7 +333,7 @@ func testOwnedArrayValue[T types.ArrayElement](t *testing.T, oid types.T, want [
 	t.Helper()
 	t.Run(oid.String(), func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		vec := vector.NewVec(oid.ToType())
+		vec := vector.NewVec(oid.ToType(), proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		require.NoError(t, vector.AppendArray(vec, want, false, proc.Mp()))
 		got, err := getValueFromVector(context.Background(), vec, nil, nil)

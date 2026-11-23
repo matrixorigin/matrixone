@@ -291,7 +291,7 @@ func TestInternalResult_Scan_NilVector(t *testing.T) {
 func TestInternalResult_Scan_InvalidRowIndex(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte("hello"), false, mp))
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)

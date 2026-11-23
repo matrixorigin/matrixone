@@ -30,7 +30,7 @@ func TestPipelineGroupingRoundTrip(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	input := NewWithSize(1)
 	t.Cleanup(func() { input.Clean(mp) })
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{7, 0, 0}, []bool{false, true, true}, mp))
 	input.Vecs[0].GetGrouping().Add(2)
 	input.Attrs = []string{"key"}
@@ -38,7 +38,7 @@ func TestPipelineGroupingRoundTrip(t *testing.T) {
 	input.SetRowCount(3)
 	data, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
-	output := NewOffHeapEmpty()
+	output := NewWithSize(0)
 	t.Cleanup(func() { output.Clean(mp) })
 	require.NoError(t, output.UnmarshalBinaryForPipeline(data, mp))
 	require.Equal(t, input.Attrs, output.Attrs)
@@ -69,7 +69,7 @@ func TestPipelineGroupingConstAndMalformed(t *testing.T) {
 	data, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	t.Run("constant logical rows", func(t *testing.T) {
-		output := NewOffHeapEmpty()
+		output := NewWithSize(0)
 		t.Cleanup(func() { output.Clean(mp) })
 		require.NoError(t, output.UnmarshalBinaryForPipeline(data, mp))
 		for row := uint64(0); row < 3; row++ {
@@ -90,7 +90,7 @@ func TestPipelineGroupingConstAndMalformed(t *testing.T) {
 		{"unknown version", func(b []byte) []byte { b[end+7]++; return b }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			output := NewOffHeapEmpty()
+			output := NewWithSize(0)
 			t.Cleanup(func() { output.Clean(mp) })
 			require.Error(t, output.UnmarshalBinaryForPipeline(tc.mutate(bytes.Clone(data)), mp))
 		})
@@ -98,7 +98,7 @@ func TestPipelineGroupingConstAndMalformed(t *testing.T) {
 	input.Vecs[0].GetGrouping().Add(3)
 	bad, err := input.MarshalBinaryForPipeline(&bytes.Buffer{}, true)
 	require.NoError(t, err)
-	output := NewOffHeapEmpty()
+	output := NewWithSize(0)
 	t.Cleanup(func() { output.Clean(mp) })
 	require.ErrorContains(t, output.UnmarshalBinaryForPipeline(bad, mp), "exceeds vector length")
 }
@@ -108,7 +108,7 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	input := NewWithSize(1)
 	t.Cleanup(func() { input.Clean(mp) })
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	for _, value := range []string{"one", "two", "three"} {
 		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), false, mp))
 	}
@@ -122,7 +122,7 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	// Magic at the footer candidate position is part of ExtraBuf, not a footer.
 	end := len(plain) - pipelineGroupingFooterSize
 	require.Equal(t, pipelineGroupingMagic, string(plain[end:end+8]))
-	output := NewOffHeapEmpty()
+	output := NewWithSize(0)
 	t.Cleanup(func() { output.Clean(mp) })
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
 	require.Equal(t, input.ExtraBuf, output.ExtraBuf)

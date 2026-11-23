@@ -251,7 +251,7 @@ func (s *viewColumnsState) call(tf *TableFunction, proc *process.Process) (resul
 		return result, nil
 	}
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		s.batch.CleanOnlyData()
 	}

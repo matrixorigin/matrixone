@@ -109,12 +109,12 @@ func NewDependentReducer(proc *process.Process, call *plan.DependentExpr, output
 			if typeErr != nil {
 				return r, typeErr
 			}
-			r.tuple.Vecs[i] = vector.NewOffHeapVecWithType(native)
+			r.tuple.Vecs[i] = vector.NewVec(native, allocation)
 		}
 	}
 	if call.Reducer != plan.SubqueryRef_SCALAR || r.comparison != nil {
 		r.result = batch.NewWithSize(1)
-		r.result.Vecs[0] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+		r.result.Vecs[0] = vector.NewVec(types.T_bool.ToType(), allocation)
 	}
 	return r, nil
 }
@@ -267,11 +267,11 @@ func (r *DependentReducer) Close() {
 		r.comparison = nil
 	}
 	if r.tuple != nil {
-		r.tuple.Clean(r.proc.Mp())
+		r.tuple.Clean(r.mp)
 		r.tuple = nil
 	}
 	if r.result != nil {
-		r.result.Clean(r.proc.Mp())
+		r.result.Clean(r.mp)
 		r.result = nil
 	}
 	r.lhs = nil

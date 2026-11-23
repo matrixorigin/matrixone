@@ -60,7 +60,7 @@ func TestParallelLoadBlobTextAssignmentUsesOriginalPayload(t *testing.T) {
 			require.NoError(t, err)
 			defer executor.Free()
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer input.Clean(proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(strings.Repeat("x", 256)), false, proc.Mp()))
 			input.SetRowCount(1)

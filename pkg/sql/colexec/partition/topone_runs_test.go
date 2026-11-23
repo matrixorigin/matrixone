@@ -113,7 +113,7 @@ func topOneRunBatch(t testing.TB, proc *process.Process, rows []topOneRunRow) (r
 		}
 	}()
 	for i, typ := range []types.T{types.T_int32, types.T_int64, types.T_int64, types.T_int64} {
-		bat.Vecs[i] = vector.NewVec(typ.ToType())
+		bat.Vecs[i] = vector.NewVec(typ.ToType(), proc.Mp())
 	}
 	for _, row := range rows {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row.group, row.groupNull, proc.Mp()))
@@ -245,6 +245,7 @@ func TestPartitionTopOneRunsNullableCompositeReset(t *testing.T) {
 					require.Equal(t, topOneRunOracle(rows, desc, nullsLast), topOneRunCollect(t, arg, proc))
 					arg.Reset(proc, false, nil)
 					child.Free(proc, false, nil)
+					colexec.FreeMockChildren(child)
 				}
 			})
 		}
@@ -320,7 +321,7 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 				}
 				bat := topOneRunBatch(t, proc, rows)
 				child.WithBatchs([]*batch.Batch{bat})
-				payload := vector.NewVec(types.T_varchar.ToType())
+				payload := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				bat.Vecs = append(bat.Vecs, payload)
 				for i := range rows {
 					id := start + i
@@ -369,9 +370,9 @@ func TestPartitionTopOneRunsFloatAndConstantPeers(t *testing.T) {
 					for group := 0; group < 4; group++ {
 						bat := batch.NewWithSize(3)
 						child.WithBatchs([]*batch.Batch{bat})
-						bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-						bat.Vecs[1] = vector.NewVec(typ.ToType())
-						bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+						bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+						bat.Vecs[1] = vector.NewVec(typ.ToType(), proc.Mp())
+						bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 						for i := 0; i < 257; i++ {
 							value := math.Float64frombits(0x7ff8000000000001 + uint64(i%2))
 							switch group {
@@ -533,7 +534,7 @@ func topOneStringRunBatch(t testing.TB, proc *process.Process, keys []string, fi
 		}
 	}()
 	for i, typ := range []types.T{types.T_int32, types.T_varchar, types.T_int64} {
-		bat.Vecs[i] = vector.NewVec(typ.ToType())
+		bat.Vecs[i] = vector.NewVec(typ.ToType(), proc.Mp())
 	}
 	for row, key := range keys {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))

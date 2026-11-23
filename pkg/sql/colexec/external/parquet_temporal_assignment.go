@@ -171,7 +171,7 @@ func processParquetTemporalAssignment[T types.Timestamp | types.Datetime](
 	stagingType types.Type,
 	convert func(parquet.Value) (T, error),
 ) error {
-	staging := vector.NewVec(stagingType)
+	staging := vector.NewVec(stagingType, proc.Mp())
 	defer staging.Free(proc.Mp())
 	if err := processParquetValuesToFixed(proc.Ctx, mp.stagingMapper(), page, proc, staging, T(0), convert); err != nil {
 		return err

@@ -305,10 +305,10 @@ func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
 func (c *compare[T]) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
 	if c.gs[vecSrc].Contains(uint64(src)) ||
 		c.gs[vecDst].Contains(uint64(dst)) {
-		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
+		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, c.vs[vecDst].MPool())
 	}
 	if c.isConstNull[vecSrc] || c.ns[vecSrc].Contains(uint64(src)) {
-		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc.Mp())
+		return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, c.vs[vecDst].MPool())
 	} else {
 		c.ns[vecDst].Del(uint64(dst))
 		c.cpy(c.xs[vecDst], c.xs[vecSrc], dst, src)

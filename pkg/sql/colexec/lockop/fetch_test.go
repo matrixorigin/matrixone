@@ -1428,7 +1428,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 	filterCols []int32,
 	filterAll bool) {
 	mp := mpool.MustNew("test")
-	vec := vector.NewVec(tp)
+	vec := vector.NewVec(tp, mp)
 	appendFunc(vec, mp)
 
 	packer := types.NewPacker()
@@ -1639,7 +1639,7 @@ func TestFetchFloatLockTableRangesCoverEveryEncodedPayload(t *testing.T) {
 func TestFetchRowsSkipsPartialNull(t *testing.T) {
 	mp := mpool.MustNew("test")
 
-	fixed := vector.NewVec(types.T_uint64.ToType())
+	fixed := vector.NewVec(types.T_uint64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(fixed, uint64(0), true, mp))
 	require.NoError(t, vector.AppendFixed(fixed, uint64(0), false, mp))
 	require.NoError(t, vector.AppendFixed(fixed, uint64(1), false, mp))
@@ -1657,7 +1657,7 @@ func TestFetchRowsSkipsPartialNull(t *testing.T) {
 	packer.EncodeUint64(1)
 	require.Equal(t, packer.Bytes(), rows[1])
 
-	text := vector.NewVec(types.T_varchar.ToType())
+	text := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(text, nil, true, mp))
 	require.NoError(t, vector.AppendBytes(text, []byte{}, false, mp))
 	require.NoError(t, vector.AppendBytes(text, []byte("x"), false, mp))

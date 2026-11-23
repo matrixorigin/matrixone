@@ -49,7 +49,7 @@ func TestJSONOutfileRoundTripsThroughLoadParser(t *testing.T) {
 			}
 			mp := mpool.MustNewZero()
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
 			defer func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()) }()
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], encoded, false, mp))
 			bat.SetRowCount(1)
