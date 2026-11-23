@@ -168,7 +168,14 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		}
 		return err
 	}
-	defer done()
+	ended := false
+	end := func() {
+		if !ended {
+			ended = true
+			done()
+		}
+	}
+	defer end()
 	s.touchIndexObject(diskPath)
 	var read int64
 	for i := range vector.Entries {
@@ -179,8 +186,16 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		if e.Size < 0 {
 			return nil
 		}
-		if err := e.readFrom(ctx, io.NewSectionReader(file, e.Offset, e.Size), s); err != nil {
-			return err
+		from := &sourceErrReader{Reader: io.NewSectionReader(file, e.Offset, e.Size)}
+		if err := e.readFrom(ctx, from, s); err != nil {
+			if from.err == nil {
+				return err
+			}
+			// The entry's file is shorter than the object or unreadable: the entry is
+			// dropped and the entries not done are read from the other caches or storage.
+			end()
+			_ = s.indexFileCache.Delete(ctx, IndexObjectEntry(p.File))
+			return nil
 		}
 		e.done = true
 		e.fromCache = s.diskCache
@@ -229,4 +244,18 @@ func (s *S3FS) deleteIndexObjects(ctx context.Context, filePaths []string) error
 		}
 	}
 	return nil
+}
+
+// sourceErrReader records the error, io.EOF included, a read of its Reader returns.
+type sourceErrReader struct {
+	io.Reader
+	err error
+}
+
+func (r *sourceErrReader) Read(buf []byte) (int, error) {
+	n, err := r.Reader.Read(buf)
+	if err != nil {
+		r.err = err
+	}
+	return n, err
 }

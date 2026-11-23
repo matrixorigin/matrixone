@@ -57,6 +57,8 @@ type diskCacheAsyncUpdate struct {
 	// callbackTurn is the update's place in the submission order of callbacks.
 	callbackTurn *asyncCallbackTurn
 	finalize     *diskCacheAsyncFileFinalize
+	// retained is set once the update keeps its slot and bytes for its callbacks.
+	retained     bool
 	releaseOnce  sync.Once
 	resourceOnce sync.Once
 }
@@ -100,8 +102,13 @@ type diskCacheAsyncState struct {
 		maxPendingBytes int64
 		dropped         int64
 		idle            chan struct{}
-		// freed, when set, is closed once a slot or pending bytes are released.
+		// freed, when set, is closed once a slot or pending bytes are released, or an
+		// update keeps them for its callbacks.
 		freed freedSignal
+		// callbackSlots and callbackBytes are the slots and pending bytes updates keep
+		// for their callbacks.
+		callbackSlots int
+		callbackBytes int64
 	}
 }
 
@@ -230,8 +237,9 @@ func cleanupDiskCacheTempFile(file *os.File) error {
 }
 
 // scheduleAsyncUpdate queues the write of entry, waiting for a slot and for room in the
-// pending bytes. It drops the write when the cache closes, when ctx ends first, or when
-// the entry is larger than all the pending bytes allowed.
+// pending bytes. It drops the write when the cache closes, when ctx ends first, when the
+// entry is larger than all the pending bytes allowed, or when only callbacks returning
+// can free what it waits for.
 func (d *DiskCache) scheduleAsyncUpdate(
 	ctx context.Context,
 	filePath string,
@@ -254,9 +262,15 @@ func (d *DiskCache) scheduleAsyncUpdate(
 			a.mu.Unlock()
 			return
 		}
-		if len(a.slots) < cap(a.slots) && dataBytes <= a.mu.maxPendingBytes-a.mu.pendingBytes {
+		slotFree := len(a.slots) < cap(a.slots)
+		if slotFree && dataBytes <= a.mu.maxPendingBytes-a.mu.pendingBytes {
 			a.slots <- struct{}{}
 			break
+		}
+		if (!slotFree && a.mu.callbackSlots == len(a.slots)) || dataBytes > a.mu.maxPendingBytes-a.mu.callbackBytes {
+			a.dropAsyncUpdateLocked()
+			a.mu.Unlock()
+			return
 		}
 		freed := a.mu.freed.waitLocked()
 		a.mu.Unlock()
@@ -317,8 +331,10 @@ func (d *DiskCache) scheduleAsyncUpdate(
 
 // reserveAsyncFileFinalize reserves a slot for the async publication of the file at
 // diskPath, waiting for one to be free. It reports false when the cache is closed, when the
-// file's publication is already pending, or when ctx ends first.
-func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath string) bool {
+// file's publication is already pending, when ctx ends first, when only callbacks
+// returning can free a slot, or once deleted, when set, reports true; a delete of an
+// object wakes the reservations waiting.
+func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath string, deleted func() bool) bool {
 	a := &d.async
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -327,12 +343,19 @@ func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath strin
 			a.dropAsyncUpdateLocked()
 			return false
 		}
+		if deleted != nil && deleted() {
+			return false
+		}
 		if _, ok := a.mu.pending[diskPath]; ok {
 			return false
 		}
 		if len(a.slots) < cap(a.slots) {
 			a.slots <- struct{}{}
 			break
+		}
+		if a.mu.callbackSlots == len(a.slots) {
+			a.dropAsyncUpdateLocked()
+			return false
 		}
 		freed := a.mu.freed.waitLocked()
 		a.mu.Unlock()
@@ -519,7 +542,12 @@ func (d *DiskCache) completeAsyncUpdate(
 		a := &d.async
 		a.mu.Lock()
 		delete(a.mu.pending, job.diskPath)
-		if !retainForCallbacks {
+		if retainForCallbacks {
+			job.retained = true
+			a.mu.callbackSlots++
+			a.mu.callbackBytes += int64(len(job.entry.Data))
+			a.wakeFreedLocked()
+		} else {
 			d.releaseAsyncUpdateResourcesLocked(job)
 		}
 		if len(a.mu.pending) == 0 {
@@ -636,6 +664,10 @@ func (d *DiskCache) releaseAsyncUpdateResources(job *diskCacheAsyncUpdate) {
 
 func (d *DiskCache) releaseAsyncUpdateResourcesLocked(job *diskCacheAsyncUpdate) {
 	job.resourceOnce.Do(func() {
+		if job.retained {
+			d.async.mu.callbackSlots--
+			d.async.mu.callbackBytes -= int64(len(job.entry.Data))
+		}
 		d.async.mu.pendingBytes -= int64(len(job.entry.Data))
 		<-d.async.slots
 		d.async.wakeFreedLocked()

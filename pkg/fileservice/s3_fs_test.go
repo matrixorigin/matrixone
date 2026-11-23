@@ -4208,7 +4208,7 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 					require.NoError(t, err)
 					t.Cleanup(func() { disk.Close(context.Background()) })
 					path := disk.pathForFile("obj")
-					require.True(t, disk.reserveAsyncFileFinalize(ctx, path))
+					require.True(t, disk.reserveAsyncFileFinalize(ctx, path, nil))
 					t.Cleanup(func() { disk.releaseAsyncFileFinalizeReservation(path) })
 				}
 				fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)

@@ -315,6 +315,43 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 	}
 }
 
+// A whole-object prefetch waiting for a slot to publish its file when its object is
+// deleted ends, downloading nothing.
+func TestS3FSPrefetchWaitingForPublicationSlotEndsOnDelete(t *testing.T) {
+	fs, storage, _ := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
+	fs.storage = keepOnDeleteStorage{fs.storage}
+	fs.SetAsyncUpdate(true)
+	d := fs.diskCache
+	a := &d.async
+	for len(a.slots) < cap(a.slots) {
+		a.slots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		a.mu.Lock()
+		for len(a.slots) > 0 {
+			<-a.slots
+		}
+		a.wakeFreedLocked()
+		a.mu.Unlock()
+	})
+	done := make(chan error, 1)
+	go func() { done <- fs.PrefetchFile(context.Background(), "object") }()
+	require.Eventually(t, func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.mu.freed.ch != nil
+	}, 10*time.Second, time.Millisecond, "the prefetch waits for a slot")
+	require.NoError(t, fs.Delete(context.Background(), "object"))
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the prefetch of the deleted object still waits for a slot")
+	}
+	require.Zero(t, storage.reads.Load())
+	require.False(t, d.cache.Contains(d.pathForFile("object")))
+	require.Zero(t, d.conns.held.Load())
+}
+
 // A whole-object download of an object deleted since the mark of its context, before it
 // began, downloads nothing.
 func TestWholeObjectDownloadDeletedBeforeItBegins(t *testing.T) {

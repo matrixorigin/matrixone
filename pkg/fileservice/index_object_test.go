@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	iofs "io/fs"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
@@ -397,4 +399,28 @@ func TestIndexFileCacheHoldCached(t *testing.T) {
 	require.Equal(t, 1, holds())
 	hold.Release()
 	require.Zero(t, holds())
+}
+
+// A read of an entry whose cached file ends before the read's range drops the entry and
+// reads storage, which fills it again; an error of the read's decoding is returned.
+func TestIndexObjectShortCacheFileReadsStorage(t *testing.T) {
+	fs, storage, data := newIndexObjectFS(t, true)
+	cacheIndexObject(t, fs, "object", data[:1000])
+	require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject, 2000, 10))
+	require.Equal(t, int64(1), storage.reads.Load())
+	require.Equal(t, data[len(data)-10:], readIndexObjectRange(t, fs, IndexFileObject, int64(len(data)-10), 10))
+	require.Equal(t, int64(1), storage.reads.Load(), "the short entry is replaced by the object the read filled")
+
+	cacheIndexObject(t, fs, "object", data)
+	storage.reads.Store(0)
+	decodeErr := errors.New("decode")
+	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache, Entries: []IOEntry{{Offset: 1000, Size: 10,
+		ToCacheData: func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+			return nil, decodeErr
+		}}}}
+	require.ErrorIs(t, fs.Read(context.Background(), vec), decodeErr)
+	vec.Release()
+	require.Zero(t, storage.reads.Load())
+	_, cached := fs.indexObjectCached("object")
+	require.True(t, cached, "a decoding error keeps the entry")
 }

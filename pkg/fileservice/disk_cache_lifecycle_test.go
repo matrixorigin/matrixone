@@ -745,6 +745,53 @@ func TestDiskCacheAsyncCallbackCanReenterCompletionMethods(t *testing.T) {
 	}
 }
 
+// An update a callback submits while callbacks hold every slot does not wait for one.
+func TestDiskCacheAsyncCallbackUpdateDoesNotWaitForCallbackSlots(t *testing.T) {
+	for _, nested := range []string{"plain", "with callback", "file finalize"} {
+		t.Run(nested, func(t *testing.T) {
+			cache := newLifecycleTestDiskCache(t)
+			cache.fileSync = func(*os.File) error { return nil }
+			cache.async.slots = make(chan struct{}, 1)
+			callbackDone := make(chan bool, 1)
+			ctx := OnDiskCacheWritten(context.Background(), func(string, IOEntry) {
+				nestedCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+				defer cancel()
+				switch nested {
+				case "file finalize":
+					if cache.reserveAsyncFileFinalize(nestedCtx, cache.pathForFile("nested"), nil) {
+						cache.releaseAsyncFileFinalizeReservation(cache.pathForFile("nested"))
+					}
+				default:
+					updateCtx := nestedCtx
+					if nested == "with callback" {
+						updateCtx = OnDiskCacheWritten(nestedCtx, func(string, IOEntry) {})
+					}
+					_ = cache.Update(updateCtx, &IOVector{
+						FilePath: "nested",
+						Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+					}, true)
+				}
+				callbackDone <- nestedCtx.Err() == nil
+			})
+			require.NoError(t, cache.Update(ctx, &IOVector{
+				FilePath: "foo",
+				Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+			}, true))
+			select {
+			case ok := <-callbackDone:
+				require.True(t, ok, "the nested update waited for the slot its callback holds")
+			case <-time.After(2 * diskCacheLifecycleTestTimeout):
+				t.Fatal("the callback did not return")
+			}
+			require.Eventually(t, func() bool {
+				cache.async.mu.Lock()
+				defer cache.async.mu.Unlock()
+				return len(cache.async.slots) == 0 && cache.async.mu.pendingBytes == 0
+			}, diskCacheLifecycleTestTimeout, time.Millisecond)
+		})
+	}
+}
+
 func TestDiskCacheAsyncCallbackPanicIsContained(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	cache.fileSync = func(*os.File) error { return nil }
@@ -842,38 +889,24 @@ func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
 	// applying a lifecycle-test deadline to this contract.
 	cache.Flush(context.Background())
 
-	// With every slot held by a callback, an update waits for one instead of being dropped.
-	overflowDone := make(chan error, 1)
-	go func() {
-		overflowDone <- cache.Update(ctx, &IOVector{
-			FilePath: "overflow",
-			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
-		}, true)
-	}()
-	require.Eventually(t, func() bool {
-		cache.async.mu.Lock()
-		defer cache.async.mu.Unlock()
-		return cache.async.mu.freed.ch != nil
-	}, diskCacheLifecycleTestTimeout, time.Millisecond)
+	// With every slot held by a callback, only callbacks returning can free one: an
+	// update is dropped instead of waiting.
 	cache.async.mu.Lock()
 	require.Empty(t, cache.async.mu.pending)
 	require.Len(t, cache.async.slots, cap(cache.async.slots))
+	require.Equal(t, cap(cache.async.slots), cache.async.mu.callbackSlots)
 	require.Equal(t, int64(cap(cache.async.slots)), cache.async.mu.pendingBytes)
-	require.Zero(t, cache.async.mu.dropped)
+	dropped := cache.async.mu.dropped
+	cache.async.mu.Unlock()
+	require.NoError(t, cache.Update(ctx, &IOVector{
+		FilePath: "overflow",
+		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+	}, true))
+	cache.async.mu.Lock()
+	require.Equal(t, dropped+1, cache.async.mu.dropped)
 	cache.async.mu.Unlock()
 
 	unblock()
-	select {
-	case err := <-overflowDone:
-		require.NoError(t, err)
-	case <-time.After(diskCacheLifecycleTestTimeout):
-		t.Fatal("the waiting update did not get a slot")
-	}
-	cache.Flush(context.Background())
-	expectedPaths = append(expectedPaths, "overflow")
-	cache.async.mu.Lock()
-	require.Zero(t, cache.async.mu.dropped)
-	cache.async.mu.Unlock()
 	require.Eventually(t, func() bool {
 		cache.async.mu.Lock()
 		defer cache.async.mu.Unlock()
@@ -1394,7 +1427,7 @@ func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 	// file.Sync path is covered by the dedicated error and finalize tests.
 	cache.fileSync = func(*os.File) error { return nil }
 	diskPath := cache.pathForFile("claimed")
-	require.True(t, cache.reserveAsyncFileFinalize(context.Background(), diskPath))
+	require.True(t, cache.reserveAsyncFileFinalize(context.Background(), diskPath, nil))
 	var releaseReservationOnce sync.Once
 	releaseReservation := func() {
 		releaseReservationOnce.Do(func() {

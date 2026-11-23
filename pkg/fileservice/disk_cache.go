@@ -1010,7 +1010,11 @@ func (d *DiskCache) writeFileTo(
 	defer func() { d.endFileWrite(diskPath, &w, &err) }()
 	// The wait for an async slot holds no connection.
 	if asyncFinalize {
-		if !d.reserveAsyncFileFinalize(ctx, diskPath) {
+		var deleted func() bool
+		if whole != nil {
+			deleted = func() bool { return d.deletes.since(diskPath, *whole.needs.deletes) }
+		}
+		if !d.reserveAsyncFileFinalize(ctx, diskPath, deleted) {
 			return false, nil
 		}
 		w.slot = true
@@ -1465,6 +1469,9 @@ func (d *DiskCache) DeletePaths(
 		diskPath := d.pathForFile(path)
 		// Counted first: an entry read before it and cached after it is retracted.
 		d.deletes.deleted(diskPath)
+		d.async.mu.Lock()
+		d.async.wakeFreedLocked()
+		d.async.mu.Unlock()
 		// No prefetch object of the object caches its bytes after the delete; one under
 		// way is canceled rather than waited for.
 		if err = d.dropPrefetches(ctx, diskPath); err != nil {
