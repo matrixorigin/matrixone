@@ -200,7 +200,14 @@ func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 	require.NoError(t, fs.PrefetchObject(ctx, req))
 	require.True(t, fs.prefetcher.isQueued("object"))
 
-	require.Equal(t, data[200<<10+5:200<<10+15], readRangeOf(t, fs, ColumnPrefetch, 200<<10+5, 10))
+	cache := &publicationVectorCache{}
+	vec := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache,
+		Caches: []IOVectorCache{cache}, Entries: []IOEntry{{Offset: 200<<10 + 5, Size: 10}}}
+	require.NoError(t, fs.Read(ctx, vec))
+	fs.diskCache.prefetchObjects.reads.Wait()
+	require.Equal(t, data[200<<10+5:200<<10+15], vec.Entries[0].Data)
+	vec.Release()
+	require.Equal(t, int64(1), cache.updates.Load(), "the read updates the caches it missed")
 	require.False(t, fs.prefetcher.isQueued("object"), "the read moved the queued columns to the live queue")
 	require.Equal(t, int64(2), storage.reads.Load())
 	require.Equal(t, int64(30), storage.bytes.Load(), "the column ranges, not the bytes around them")

@@ -89,9 +89,10 @@ func TestFlightTransitionColumnReadReleasesCopiedFlight(t *testing.T) {
 				err  error
 			}
 			done := make(chan result, 1)
+			cache := &publicationVectorCache{}
 			go func() {
 				vec := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache,
-					Entries: []IOEntry{ranges[0].entry(), ranges[1].entry()}}
+					Caches: []IOVectorCache{cache}, Entries: []IOEntry{ranges[0].entry(), ranges[1].entry()}}
 				var r result
 				if r.err = fs.Read(readCtx, vec); r.err == nil {
 					for i := range r.data {
@@ -123,6 +124,7 @@ func TestFlightTransitionColumnReadReleasesCopiedFlight(t *testing.T) {
 			}
 			_, _, total := g.counts(key)
 			require.Equal(t, 3, total, "each range is read from object storage once")
+			require.Equal(t, int64(1), cache.updates.Load(), "the read updates the caches it missed")
 		})
 	}
 }
@@ -201,6 +203,60 @@ func TestFlightTransitionPrefetchReadReleasesCopiedFlight(t *testing.T) {
 	releaseY()
 	require.NoError(t, <-doneA)
 	require.NoError(t, <-doneB)
+}
+
+// A range read whose runs end out of order holds no budget for a run that ended and
+// cached its bytes while it waits for an earlier one.
+func TestFlightTransitionRangeReadReleasesEndedRun(t *testing.T) {
+	const unit = 64 << 10
+	fs, _, data := newPrefetchRangeFS(t, unit, 5*unit)
+	fs.diskCache.prefetchFlightBytes = 2 * unit
+	// Unit 1 is cached, so the read runs units 0 and 2 apart.
+	readRangeOf(t, fs, 0, unit+5, 5)
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+	g.gated = func(_ string, offset int64) chan struct{} {
+		if offset == 0 {
+			return gate
+		}
+		return nil
+	}
+	fs.storage = g
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	key := fs.pathToKey("object")
+	read := func(ctx context.Context, offset, size int64) ([]byte, error) {
+		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+			Entries: []IOEntry{{Offset: offset, Size: size}}}
+		if err := fs.Read(ctx, vec); err != nil {
+			return nil, err
+		}
+		defer vec.Release()
+		return append([]byte(nil), vec.Entries[0].Data...), nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		got, err := read(ctx, 10, 2*unit)
+		if err == nil && string(got) != string(data[10:10+2*unit]) {
+			err = context.Canceled
+		}
+		done <- err
+	}()
+	require.Eventually(t, func() bool { _, _, total := g.counts(key); return total == 2 }, 5*time.Second, time.Millisecond)
+	// Unit 2 ended; only unit 0, which reads, holds budget.
+	assertEventuallyBytes(t, fs, unit)
+	otherCtx, cancelOther := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelOther()
+	got, err := read(otherCtx, 3*unit+5, 5)
+	if assert.NoError(t, err, "a read of another unit is not held by the ended run") {
+		assert.Equal(t, data[3*unit+5:3*unit+10], got)
+	}
+	release()
+	require.NoError(t, <-done)
+	_, _, total := g.counts(key)
+	require.Equal(t, 3, total, "each unit is read from object storage once")
 }
 
 func (r PrefetchRange) entry() IOEntry { return IOEntry{Offset: r.Offset, Size: r.Size} }

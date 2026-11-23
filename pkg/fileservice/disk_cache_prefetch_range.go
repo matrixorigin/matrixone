@@ -282,6 +282,7 @@ func (d *DiskCache) prefetchRead(
 		if end-start <= d.memoryPrefetchMax {
 			r := newReadRun(d.newFlight(filePath, start, end, policy, open, flightNeeds{caching: true, deletes: &deletes}), nil)
 			r.first, r.last = p[0], p[1]
+			r.copyHolds = true
 			runs = append(runs, r)
 			memoryRuns++
 			continue
@@ -334,7 +335,7 @@ func (d *DiskCache) prefetchRead(
 	startRuns(admitCtx, runs)
 
 	// Assemble the bytes. A prefetch object is released once the last needed block it
-	// holds is copied.
+	// holds is copied; a MemoryPrefetchObject is held only while a block is copied from it.
 	remaining := make(map[*readRun]int)
 	for i := range blocks {
 		if r := blocks[i].run; r != nil {
@@ -364,9 +365,13 @@ func (d *DiskCache) prefetchRead(
 					}
 					return nil, memoryRuns, false, nil
 				}
-				o = r.got
-			} else {
-				// The read chose to join it: it is joined however long its bytes take.
+				if !r.releasedOnAdmit() {
+					o = r.got
+				}
+			}
+			if o == nil && (b.run == nil || b.run.releasedOnAdmit()) {
+				// The read chose to join it, or a run it started that ended left its bytes
+				// cached: it is joined however long its bytes take.
 				f.mu.Lock()
 				if o = f.coveringLocked(diskPath, b.start, b.end, time.Now()); o != nil {
 					o.hold()
@@ -379,7 +384,7 @@ func (d *DiskCache) prefetchRead(
 			} else {
 				err = o.readAt(ctx, b.start, dst)
 			}
-			if r := b.run; r != nil {
+			if r := b.run; r != nil && !r.releasedOnAdmit() {
 				if remaining[r]--; remaining[r] == 0 {
 					r.done()
 				}
@@ -440,6 +445,9 @@ type readRun struct {
 	doneOnce sync.Once
 	// unneeded is set when the read takes no bytes of the run.
 	unneeded bool
+	// copyHolds is set for a run of a read that holds the MemoryPrefetchObject it got only
+	// while it copies from it, releasing the hold it was admitted with.
+	copyHolds bool
 	// prefetch is set for a run of a prefetch, which takes no bytes of it either: it holds
 	// the object it got until the run ends, but a joined FilePrefetchObject until the
 	// prefetch releases it, as one a read started stops once no one holds it.
@@ -494,6 +502,9 @@ func (r *readRun) admit(ctx context.Context) error {
 	r.got, err = admit(ctx, r.object)
 	r.err = err
 	close(r.admitted)
+	if r.releasedOnAdmit() {
+		r.done()
+	}
 	if r.got != prefetchObject(r.object) {
 		r.object.abandon()
 		r.end()
@@ -527,6 +538,12 @@ func (r *readRun) end() {
 	if r.unneeded || r.prefetch && !r.joinedFile() {
 		r.done()
 	}
+}
+
+// releasedOnAdmit reports whether r, admitted, released the MemoryPrefetchObject it got.
+func (r *readRun) releasedOnAdmit() bool {
+	_, ok := r.got.(*memoryPrefetchObject)
+	return ok && r.copyHolds
 }
 
 // joinedFile reports whether r joined a FilePrefetchObject.

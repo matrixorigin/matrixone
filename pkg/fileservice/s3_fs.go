@@ -1015,17 +1015,11 @@ read_disk_cache:
 		}
 	}
 
-	// A read the caches do not hold waits to join a queued download of its object, then
-	// reads what that download put in the disk cache.
-	if s.prefetcher != nil && s.joinQueued(ctx, vector) && s.diskCache != nil {
+	// A read the caches do not hold waits to join a queued download of its object.
+	joined := s.prefetcher != nil && s.diskCache != nil && s.joinQueued(ctx, vector)
+	if joined {
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if err := readCache(ctx, s.diskCache, vector); err != nil {
-			return err
-		}
-		if vector.allDone() {
-			return nil
 		}
 	}
 
@@ -1037,8 +1031,19 @@ read_disk_cache:
 				return err
 			}
 			if vector.allDone() {
-				return nil
+				return finishCacheUpdates()
 			}
+		}
+	}
+
+	// A read that joined a download reads what it put in the disk cache. A flight caches its
+	// bytes before it ends, so the entries no flight held are cached.
+	if joined {
+		if err := readCache(ctx, s.diskCache, vector); err != nil {
+			return err
+		}
+		if vector.allDone() {
+			return finishCacheUpdates()
 		}
 	}
 
