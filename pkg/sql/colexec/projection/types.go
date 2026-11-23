@@ -75,6 +75,7 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
+	jsonFrame     *colexec.ProjectionJSONFrame
 	buf           *batch.Batch
 	expandBuf     *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
@@ -113,6 +114,7 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 	}
 	projection.ctr.projExecutors = nil
 	projection.ctr.selection.free(proc.Mp())
+	projection.ctr.jsonFrame = nil
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }

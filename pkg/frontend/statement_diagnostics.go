@@ -51,7 +51,8 @@ func (h *marshalPlanHandler) captureStatementDiagnostics(ctx context.Context, ph
 	// Capture precedes release, including successful frontend completion without
 	// Run. Initialized counters and reused topology do not prove current analysis;
 	// only a current preview permits publishing execution observations.
-	analysisUnavailable := h.query != nil && preview == nil
+	partial := phy != nil && phy.Partial.Interrupted
+	analysisUnavailable := h.query != nil && preview == nil && !partial
 	if h.query == nil {
 		d.Detail.Capture = "no_query"
 	} else if analysisUnavailable {
@@ -62,12 +63,16 @@ func (h *marshalPlanHandler) captureStatementDiagnostics(ctx context.Context, ph
 	} else if level >= 2 {
 		d.Logical = projectDiagnosticLogical(h.query, level)
 	}
-	if level >= 3 && !analysisUnavailable {
+	if partial {
+		d.Detail.Capture = "partial_execution"
+		d.Detail.Partial = phy.Partial
+	}
+	if (level >= 3 || partial) && !analysisUnavailable {
 		if phy == nil {
 			d.Detail.Capture = "no_physical_plan"
 		} else {
 			d.Physical, d.Detail.PhysicalVisited, d.Detail.PhysicalTruncated = projectDiagnosticPhysical(phy)
-			if d.Detail.PhysicalTruncated {
+			if d.Detail.PhysicalTruncated && !partial {
 				d.Detail.Capture = "bounded"
 			}
 		}
@@ -110,7 +115,7 @@ func (h *jsonPlanHandler) SetStatementDiagnostics(ctx context.Context, summary r
 		}
 		h.marshalHandler.marshalPlan = &models.ExplainData{StatementDiagnostics: d}
 	}
-	if level > d.CapturedLevel {
+	if level > d.CapturedLevel && !d.Detail.Partial.Interrupted {
 		d.Detail.Capture = "not_selected_before_release"
 	}
 	d.Level = max(level, d.Level)
