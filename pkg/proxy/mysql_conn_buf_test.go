@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"context"
 	"math"
 	"net"
 	"testing"
@@ -182,7 +183,7 @@ func TestMySQLConnSend(t *testing.T) {
 			require.Equal(t, "ect 1", string(res[:n]))
 		}()
 		d1 := newMySQLConn("source", dst1, 8, nil, nil, false, 0)
-		handled, err := d1.sendTo(src2)
+		handled, err := d1.sendTo(context.Background(), src2)
 		require.NoError(t, err)
 		require.False(t, handled)
 	})
@@ -208,7 +209,7 @@ func TestMySQLConnSend(t *testing.T) {
 			require.Equal(t, q, string(res[5:n]))
 		}()
 		d1 := newMySQLConn("source", dst1, 30, nil, nil, false, 0)
-		handled, err := d1.sendTo(src2)
+		handled, err := d1.sendTo(context.Background(), src2)
 		require.NoError(t, err)
 		require.False(t, handled)
 	})

@@ -451,6 +451,8 @@ func (db *DB) Close() error {
 		db.Runtime.TransferTable.Close()
 		db.usageMemo.Clear()
 		db.Runtime.TmpFS.Close(context.Background())
+		db.Runtime.VectorPool.Small.Close()
+		db.Runtime.VectorPool.Transient.Close()
 		if db.DBLocker != nil {
 			err = errors.Join(err, db.DBLocker.Close())
 		}

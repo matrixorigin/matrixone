@@ -755,7 +755,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
-	return cwft.recordExecPlan(ctx, phyPlan, nil)
+	return cwft.recordExecPlan(ctx, phyPlan, nil, nil)
 }
 
 // statementWaitActiveCost copies the admission measurement before transaction
@@ -769,13 +769,17 @@ func (cwft *TxnComputationWrapper) statementWaitActiveCost() time.Duration {
 	return -1
 }
 
-func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error) error {
+func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error, partial *plan.Query) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		opts := []marshalPlanOptions{
 			WithWaitActiveCost(cwft.statementWaitActiveCost()),
 			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		handler := newJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, runErr, opts...)
+		executionPlan := cwft.plan
+		if partial != nil {
+			executionPlan = &plan.Plan{Plan: &plan.Plan_Query{Query: partial}}
+		}
+		handler := newJsonPlanHandler(ctx, stm, cwft.ses, executionPlan, phyPlan, runErr, opts...)
 		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}
@@ -2666,8 +2670,14 @@ func (u *executeUserParams) release() {
 	*u = executeUserParams{}
 }
 
-// lend records that proc borrows the storage.
+// lend records that proc borrows the storage. A process that no longer
+// borrows it (freed, or rebound to other parameters) is forgotten, so an
+// owner that runs many executions, each on a fresh process, such as a stored
+// procedure, retains only the processes that still borrow the storage.
 func (u *executeUserParams) lend(proc *process.Process) {
+	u.borrowers = slices.DeleteFunc(u.borrowers, func(borrower *process.Process) bool {
+		return borrower != proc && (borrower == nil || borrower.GetPrepareParams() != u.vec)
+	})
 	if !slices.Contains(u.borrowers, proc) {
 		u.borrowers = append(u.borrowers, proc)
 	}
