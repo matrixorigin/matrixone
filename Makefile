@@ -65,7 +65,10 @@ export GOWORK
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
 GOPATH := $(shell go env GOPATH)
-GO_VERSION=$(shell GOPROXY="$(GOPROXY)" $(GOEXPERIMENT_OPT) $(GO) version)
+# Resolve the installed Go version before choosing SIMD build options. The
+# SIMD default depends on this value, so including GOEXPERIMENT_OPT here would
+# create a recursive make variable dependency.
+GO_VERSION := $(shell GOPROXY="$(GOPROXY)" $(GO) version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
