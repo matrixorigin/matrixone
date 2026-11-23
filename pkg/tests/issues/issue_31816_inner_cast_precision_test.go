@@ -682,6 +682,153 @@ func TestIssue31816Review6018431168Regressions(t *testing.T) {
 				"select cast(X'41' as decimal(6,4))"),
 				"the direct route stays magnitude after saved-condition execution")
 		})
+		t.Run("legacy_insert_fallback_write_policy", func(t *testing.T) {
+			// The legacy INSERT fallback (no unique/primary key with ON
+			// DUPLICATE KEY UPDATE) binds the cast inside the assignment
+			// owner with the statement's write policy: loose sessions clip
+			// to the cast's own bound and keep one out-of-range warning,
+			// strict sessions reject typed.
+			execOK(t, "drop table if exists wnokey")
+			execOK(t, "create table wnokey(id int, d decimal(10,2))")
+			odkuSQL := "insert into wnokey values (1, cast(0x1000 as decimal(4,1))) on duplicate key update d = values(d)"
+			require.NoError(t, execMode(t, "", odkuSQL),
+				"a loose legacy-fallback INSERT with ODKU clips at the cast's own bound")
+			// Warning-code evidence read in the immediately-committed
+			// diagnostics area of THIS exact loose overflow statement, before
+			// any row-reading or mode-changing statement can begin a fresh
+			// diagnostics area. The raw immediate wire result is captured
+			// exactly: when rows surface here the code must be the single
+			// out-of-range 1264; an empty raw result is recorded as the
+			// observed emit boundary of this protocol sequence (the count
+			// below and the tied evaluator sink carry the code semantics).
+			{
+				rows, werr := conn.QueryContext(rootCtx, "show warnings")
+				require.NoError(t, werr, "show warnings must run in the immediate diagnostics area")
+				defer rows.Close()
+				var shown []string
+				for rows.Next() {
+					var level, code, message sql.NullString
+					require.NoError(t, rows.Scan(&level, &code, &message))
+					shown = append(shown, code.String)
+					t.Logf("immediate loose ODKU wire warning: level=%s code=%s message=%s",
+						level.String, code.String, message.String)
+				}
+				require.NoError(t, rows.Err())
+				t.Logf("immediate loose ODKU SHOW WARNINGS raw rows=%q", shown)
+				require.Equal(t, []string{"1264"}, shown,
+					"the immediate diagnostics area of this exact loose overflow statement carries exactly one 1264")
+			}
+			var looseWarn sql.NullString
+			require.NoError(t, conn.QueryRowContext(rootCtx, "select @@warning_count").Scan(&looseWarn))
+			require.Equal(t, "1", looseWarn.String,
+				"the loose legacy-fallback INSERT retains exactly one clip warning")
+			require.Equal(t, "999.90", valueOf(t, "legacy_loose_stored",
+				"select d from wnokey where id = 1"),
+				"the odd-key fallback spends the clipped value in the stored row")
+			strictErr := execMode(t, "STRICT_TRANS_TABLES", odkuSQL)
+			require.Error(t, strictErr, "a strict legacy-fallback INSERT with ODKU keeps the typed rejection")
+			var strictNum *mysql.MySQLError
+			require.ErrorAs(t, strictErr, &strictNum)
+			require.EqualValues(t, 20301, strictNum.Number, "typed out-of-range rejection")
+			require.Equal(t, "1", valueOf(t, "legacy_strict_rows_unchanged",
+				"select count(*) from wnokey"),
+				"the strict legacy-fallback INSERT leaves the table untouched")
+			// The ordinary in-range control keeps the fallback's write
+			// conversion for a fitting value without any warning.
+			execOK(t, "drop table if exists wnokey2")
+			execOK(t, "create table wnokey2(id int, d decimal(10,2))")
+			require.NoError(t, execMode(t, "",
+				"insert into wnokey2 values (2, cast(0x0a as decimal(4,1))) on duplicate key update d = values(d)"),
+				"an in-range legacy-fallback INSERT stores the exact value")
+			require.Equal(t, "10.00", valueOf(t, "legacy_in_range_stored",
+				"select d from wnokey2 where id = 2"),
+				"the in-range legacy-fallback value keeps the cast's own scale then rescales")
+			// The discriminating prepared route: loose PREPARE and EXECUTE
+			// both succeed on the fallback owner and store the clipped value.
+			require.NoError(t, execMode(t, "", "set @prep_mode_guard = 0"),
+				"set the loose session for the prepared route")
+			prepStmt, perr := conn.PrepareContext(rootCtx,
+				"insert into wnokey2 values (3, cast(0x1000 as decimal(4,1))) on duplicate key update d = values(d)")
+			require.NoError(t, perr, "the loose prepared legacy-fallback ODKU must PREPARE")
+			defer prepStmt.Close()
+			plr, pexerr := prepStmt.ExecContext(rootCtx)
+			require.NoError(t, pexerr, "the loose prepared legacy-fallback ODKU must EXECUTE")
+			_ = plr
+			{
+				rows, pwerr := conn.QueryContext(rootCtx, "show warnings")
+				require.NoError(t, pwerr, "show warnings must run in the prepared statement's immediate diagnostics area")
+				defer rows.Close()
+				var shown []string
+				for rows.Next() {
+					var level, code, message sql.NullString
+					require.NoError(t, rows.Scan(&level, &code, &message))
+					shown = append(shown, code.String)
+					t.Logf("immediate prepared ODKU wire warning: level=%s code=%s message=%s",
+						level.String, code.String, message.String)
+				}
+				require.NoError(t, rows.Err())
+				t.Logf("immediate prepared ODKU SHOW WARNINGS raw rows=%q", shown)
+				require.Equal(t, []string{"1264"}, shown,
+					"the prepared statement's immediate diagnostics area carries exactly one 1264")
+			}
+			require.Equal(t, "999.90", valueOf(t, "legacy_prepared_stored",
+				"select d from wnokey2 where id = 3"),
+				"the prepared legacy-fallback INSERT also clips at the cast's own bound")
+			require.Equal(t, "10.00", valueOf(t, "legacy_prepared_preexist_row_value",
+				"select d from wnokey2 where id = 2"),
+				"the prepared route leaves the pre-existing in-range row untouched")
+			// The identical prepared statement under strict execution: the
+			// typed rejection surfaces with no effect, and the pre/post row
+			// VALUES (not just counts) stay unchanged.
+			require.NoError(t, execMode(t, "STRICT_TRANS_TABLES", "set @strict_mode_guard = 0"),
+				"set the strict session for the strict prepared route")
+			preStrict := valueOf(t, "legacy_strict_pre_row_value",
+				"select d from wnokey2 where id = 2")
+			strictStmt, sperr := conn.PrepareContext(rootCtx,
+				"insert into wnokey2 values (3, cast(0x1000 as decimal(4,1))) on duplicate key update d = values(d)")
+			if sperr != nil {
+				var spnum *mysql.MySQLError
+				require.ErrorAs(t, sperr, &spnum)
+				require.EqualValues(t, 20301, spnum.Number,
+					"strict prepared route rejected: exact typed diagnostic recorded")
+			} else {
+				defer strictStmt.Close()
+				_, sexerr := strictStmt.ExecContext(rootCtx)
+				require.Error(t, sexerr, "the strict prepared legacy-fallback ODKU must reject on EXECUTE")
+				var senum *mysql.MySQLError
+				require.ErrorAs(t, sexerr, &senum)
+				require.EqualValues(t, 20301, senum.Number,
+					"typed out-of-range rejection on the strict prepared route")
+			}
+			require.Equal(t, "1", valueOf(t, "legacy_strict_rowset_unchanged",
+				"select count(*) from wnokey2 where id = 3"),
+				"the strict prepared route adds no second id=3 row")
+			require.Equal(t, "999.90", valueOf(t, "legacy_strict_row_value_unchanged",
+				"select d from wnokey2 where id = 3"),
+				"the strict prepared route leaves the id=3 row value unchanged")
+			require.Equal(t, preStrict, valueOf(t, "legacy_strict_post_row_value",
+				"select d from wnokey2 where id = 2"),
+				"the strict prepared route leaves the existing row value unchanged")
+			// The in-range prepared control stores the exact value with zero
+			// retained warnings.
+			require.NoError(t, execMode(t, "", "set @loose_mode_guard = 0"),
+				"set the loose session for the in-range prepared control")
+			inRangeStmt, irerr := conn.PrepareContext(rootCtx,
+				"insert into wnokey2 values (5, cast(0x0a as decimal(4,1))) on duplicate key update d = values(d)")
+			require.NoError(t, irerr, "the in-range prepared legacy-fallback ODKU must PREPARE")
+			defer inRangeStmt.Close()
+			_, irexerr := inRangeStmt.ExecContext(rootCtx)
+			require.NoError(t, irexerr, "the in-range prepared legacy-fallback ODKU must EXECUTE")
+			var inRangeZeroWarn sql.NullString
+			require.NoError(t, conn.QueryRowContext(rootCtx, "select @@warning_count").Scan(&inRangeZeroWarn),
+				"the in-range zero-warning count must be read immediately after EXECUTE")
+			require.Equal(t, "0", inRangeZeroWarn.String,
+				"the in-range prepared control retains no warning immediately after EXECUTE")
+			require.Equal(t, "10.00", valueOf(t, "legacy_prepared_in_range_stored",
+				"select d from wnokey2 where id = 5"),
+				"the in-range prepared control stores the exact value")
+
+		})
 		t.Run("scalar_udf_format_keeps_overload", func(t *testing.T) {
 			execOK(t, "drop function if exists fsfmt ()")
 			execOK(t, "create function fsfmt () returns varchar language sql as 'format(2.5,0)'")

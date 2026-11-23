@@ -612,6 +612,193 @@ func TestIcebergUpdateRewritesDMLScanFilterColumnPositions(t *testing.T) {
 	}
 }
 
+func TestIcebergMergeRadixCastWritePolicy(t *testing.T) {
+	// A fresh fixture per discriminating statement: the MERGE metadata
+	// rewrite annotates the target's table definition during BuildPlan, so
+	// each action type builds on its own compiler context.
+	newCtx := func() CompilerContext {
+		ctx := newIcebergTestCompilerContext(t, nil)
+		ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+			&planpb.ColDef{
+				Name:    "d",
+				Typ:     planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, Table: "gold_orders"},
+				Default: &planpb.Default{NullAbility: true},
+			})
+		return ctx
+	}
+	// The MERGE rewrite routes the action expressions through the query's
+	// projection chain including the write-policy assignment casts: the
+	// matched UPDATE's SET and the not-matched INSERT's value each carry the
+	// radix cast through the statement's write conversion, so a loose session
+	// clips at the cast's own bound with exactly one 1264 while a strict
+	// session keeps the typed rejection.
+	runCase := func(sql, name string, perScale map[int32]types.Decimal64, inRange bool) {
+		ctx := newCtx()
+		proc := ctx.GetProcess()
+		require.NotNil(t, proc, "the Iceberg fixture must bind with a real process")
+		p, err := buildIcebergTestPlan(t, ctx, sql)
+		require.NoError(t, err, "BuildPlan must accept the specialized Iceberg MERGE for the %s action", name)
+		query := p.GetQuery()
+		require.Equal(t, planpb.Query_MERGE, query.GetStmtType())
+		var sink *planpb.Node
+		for _, node := range query.GetNodes() {
+			if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+				sink = node
+			}
+		}
+		require.NotNil(t, sink, "expected the Iceberg MERGE DML sink")
+		require.NotEmpty(t, sink.GetChildren(), "the MERGE sink must have a rewritten child")
+		var found *Expr
+		if inRange {
+			// An in-range radix cast inside a MERGE action folds to the
+			// non-null constant the write conversion produces, so locate the
+			// folded Decimal(10,2) literal carrying 4096.00.
+			isFoldedInRange := func(e *Expr) bool {
+				if e == nil {
+					return false
+				}
+				lit := e.GetLit()
+				return lit != nil &&
+					e.Typ.Id == int32(types.T_decimal64) &&
+					e.Typ.Width == 10 &&
+					e.Typ.Scale == 2 &&
+					lit.GetDecimal64Val().GetA() == int64(409600)
+			}
+		outerFold:
+			for _, node := range query.GetNodes() {
+				for _, expr := range node.GetProjectList() {
+					if isFoldedInRange(expr) {
+						found = expr
+						break outerFold
+					}
+				}
+				for _, expr := range node.GetFilterList() {
+					if isFoldedInRange(expr) {
+						found = expr
+						break outerFold
+					}
+				}
+			}
+		} else {
+			var collect func(e *Expr) *Expr
+			collect = func(e *Expr) *Expr {
+				if e == nil {
+					return nil
+				}
+				if f := e.GetF(); f != nil {
+					for _, arg := range f.Args {
+						if lit := arg.GetLit(); lit != nil && lit.GetSval() == "4096" {
+							return e
+						}
+					}
+					for _, arg := range f.Args {
+						if got := collect(arg); got != nil {
+							return got
+						}
+					}
+				}
+				return nil
+			}
+		outer:
+			for _, node := range query.GetNodes() {
+				for _, expr := range node.GetProjectList() {
+					if got := collect(expr); got != nil {
+						found = got
+						break outer
+					}
+				}
+				for _, expr := range node.GetFilterList() {
+					if got := collect(expr); got != nil {
+						found = got
+						break outer
+					}
+				}
+			}
+		}
+		require.NotNil(t, found, "the discriminating MERGE %s action must carry the radix cast", name)
+		execute := func(mode string, check func(*vector.Vector, []uint16, error)) {
+			executor, err := colexec.NewExpressionExecutor(proc, found)
+			require.NoError(t, err, "must construct the MERGE %s action executor", name)
+			defer executor.Free()
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+			require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[0], types.Decimal64(0), false, proc.Mp()))
+			input.SetRowCount(1)
+			defer input.Clean(proc.Mp())
+			result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+			check(result, sink.codes, evalErr)
+		}
+		checkRow := func(result *vector.Vector, message string) {
+			require.NotNil(t, result, "%s: the evaluation must return a value", message)
+			require.Equal(t, types.T_decimal64, result.GetType().Oid, "%s: one DECIMAL64 row", message)
+			require.Equal(t, 1, result.Length(), "%s: exactly one action row", message)
+			require.False(t, result.IsNull(0), "%s: the action row must be non-null", message)
+			scale := result.GetType().Scale
+			want, ok := perScale[scale]
+			require.True(t, ok, "%s: unexpected action result scale %d", message, scale)
+			require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Decimal64](result, 0),
+				"%s: the evaluated action row value at scale %d", message, scale)
+		}
+		execute("", func(result *vector.Vector, codes []uint16, err error) {
+			require.NoError(t, err, "the loose %s action must evaluate", name)
+			checkRow(result, "the loose "+name+" action value")
+			if inRange {
+				require.Empty(t, codes, "an in-range %s action reports no warning", name)
+			} else {
+				require.Equal(t, []uint16{moerr.ER_WARN_DATA_OUT_OF_RANGE}, codes,
+					"the loose %s action reports exactly one 1264", name)
+			}
+		})
+		execute("STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+			if inRange {
+				require.NoError(t, err, "the strict in-range %s action must evaluate", name)
+				checkRow(result, "the strict in-range "+name+" action value")
+				require.Empty(t, codes, "an in-range strict %s action reports no warning", name)
+				return
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput),
+				"the strict %s action keeps the typed 20301 rejection at the cast's own bound, got %v", name, err)
+			require.Nil(t, result, "a rejected strict %s action produces no value", name)
+			require.Empty(t, codes, "a typed rejection emits no warning")
+		})
+		execute("", func(result *vector.Vector, codes []uint16, err error) {
+			require.NoError(t, err, "the loose %s action must evaluate again", name)
+			checkRow(result, "the loose "+name+" action value after the strict control")
+		})
+	}
+	clipScale := map[int32]types.Decimal64{1: 9999, 2: 99990}
+	inRangeScale := map[int32]types.Decimal64{1: 40960, 2: 409600}
+	looseStmts := []struct {
+		name, sql string
+	}{
+		{"matched update set", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set d = cast(0x1000 as decimal(4,1)) " +
+			"when not matched then insert (id) values (s.id)"},
+		{"not matched insert value", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set id = s.id " +
+			"when not matched then insert (id, d) values (s.id, cast(0x1000 as decimal(4,1)))"},
+	}
+	for _, stmtCase := range looseStmts {
+		runCase(stmtCase.sql, stmtCase.name, clipScale, false)
+	}
+	inRangeStmts := []struct {
+		name, sql string
+	}{
+		{"matched update set in-range", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set d = cast(0x1000 as decimal(10,2)) " +
+			"when not matched then insert (id) values (s.id)"},
+		{"not matched insert value in-range", "merge into gold_orders as t using dim_orders as s on t.id = s.id " +
+			"when matched then update set id = s.id " +
+			"when not matched then insert (id, d) values (s.id, cast(0x1000 as decimal(10,2)))"},
+	}
+	for _, stmtCase := range inRangeStmts {
+		runCase(stmtCase.sql, stmtCase.name, inRangeScale, true)
+	}
+}
+
 func TestIcebergMergeMatchedUpdateBuildsDMLWriteIntent(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then update set id = s.id", 1)
 	if err != nil {

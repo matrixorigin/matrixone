@@ -44,6 +44,13 @@ func buildIcebergMergePlan(stmt *tree.Merge, ctx CompilerContext, isPrepareStmt 
 	}
 	builder := NewQueryBuilder(planpb.Query_MERGE, ctx, isPrepareStmt, false)
 	builder.zeroScalarPolicy = zeroScalarRetainOnly
+	// MERGE actions are writes: the matched UPDATE assignments and the
+	// not-matched INSERT values bind under the statement's write conversion
+	// policy before their expressions hit the scalar cast path. MERGE syntax
+	// carries no statement-level ignore bit, so only the write provenance is
+	// recorded here: strict sessions keep the typed overflow rejection and
+	// loose sessions clip at the cast's own bound with its warning.
+	builder.isBindingDMLWrite = true
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -491,6 +498,18 @@ func rewriteIcebergMergeProjection(ctx CompilerContext, query *planpb.Query, cla
 	if len(writeCols) != shape.tableColumnCount {
 		return moerr.NewInvalidInputf(ctx.GetContext(), "Iceberg MERGE write column shape is invalid: columns=%d shape=%s", len(writeCols), shape.String())
 	}
+	// The merge root's projected clause values alias the child projections'
+	// clause-value slots, and the reachable normalization below assigns each
+	// of those aliased slots its final write-column conversion exactly once.
+	// The alias references must therefore describe the aliased slot's
+	// post-normalization value: a column reference whose stale declared type
+	// still shows the pre-normalization expression (for example a radix write
+	// chain still typed at its inner cast's own DECIMAL bound) would
+	// otherwise make the root-level forced assignment cast re-rescale the
+	// once-converted value by another power of ten. Synchronize only the
+	// alias references' declared type here - the value itself keeps its
+	// single evaluation in the aliased child slot.
+	syncClauseAliasTypes(shape, preProjects, writeCols)
 	if err := normalizeIcebergMergeClauseValueProjects(ctx, preProjects, shape, writeCols, dmlTableDef.DbName); err != nil {
 		return err
 	}
@@ -609,6 +628,78 @@ func normalizeIcebergMergeReachableClauseValueProjects(ctx CompilerContext, quer
 		}
 	}
 	return nil
+}
+
+// syncClauseAliasTypes re-types the clause-value project slots that are
+// plain column references to the aliased child clause-value slots. The
+// reachable normalization supplies each aliased slot exactly one write-column
+// assignment conversion, so the reference's declared type must reflect the
+// converted value, not the pre-normalization expression it was bound from.
+// Non-reference expressions keep their own binding and receive the ordinary
+// forced conversion in the normalize pass.
+func syncClauseAliasTypes(shape icebergMergeProjectionShape, projects []*planpb.Expr, targetCols []*planpb.ColDef) {
+	syncClauseValueRange := func(valueStart int, clauseCount int) {
+		if valueStart < 0 {
+			return
+		}
+		for colIdx := 0; colIdx < clauseCount; colIdx++ {
+			pos := valueStart + colIdx
+			if pos < 0 || pos >= len(projects) || colIdx >= len(targetCols) {
+				continue
+			}
+			ref := projects[pos]
+			if ref == nil || ref.GetCol() == nil || ref.GetCol().GetColPos() != int32(pos) {
+				// Not the merge spine's position-aligned alias to its own
+				// clause-value producer slot: a raw source column reference or
+				// a projected expression keeps its own binding and receives the
+				// ordinary forced conversion below.
+				continue
+			}
+			// Retyping eligibility is restricted to the proven same-decimal
+			// stale-scale case: the alias must already carry the write
+			// column's own decimal identity and only its width/scale went
+			// stale against the downstream normalized bound. Any other
+			// aligned value - including a text expression whose coherent
+			// conversion the ordinary forced assignment path owns - keeps its
+			// own binding; its runtime materialization boundary is evidenced
+			// pre-existing on the no-alias-sync baseline and is deliberately
+			// not touched here.
+			target := targetCols[colIdx].Typ
+			if target.Id != int32(types.T_decimal64) && target.Id != int32(types.T_decimal128) {
+				continue
+			}
+			if ref.Typ.Id != target.Id {
+				continue
+			}
+			// The position-aligned alias references exactly the producer
+			// slot the reachable clause normalization converts once. Its
+			// declared type must be that converted value's own coherent
+			// physical type - identity, width, scale and the numeric
+			// family's metadata come from the converted bound, so a text
+			// source cannot strand its string metadata (collation) on a
+			// non-string identity and the runtime reads the aliased bytes
+			// with the layout the converted producer actually materialized.
+			// The expression-level nullability stays with the referenced
+			// value: the assignment conversion derives it from its real
+			// input, and copying the destination schema flag here would
+			// defeat constraint handling.
+			synced := targetCols[colIdx].Typ
+			synced.NotNullable = ref.Typ.NotNullable
+			ref.Typ = synced
+		}
+	}
+	for _, proj := range shape.matched {
+		if proj.clause == nil || proj.clause.Action != tree.MergeActionUpdate || proj.valueStart < 0 {
+			continue
+		}
+		syncClauseValueRange(proj.valueStart, int(shape.tableColumnCount))
+	}
+	for _, proj := range shape.notMatched {
+		if proj.valueStart < 0 {
+			continue
+		}
+		syncClauseValueRange(proj.valueStart, int(shape.tableColumnCount))
+	}
 }
 
 func normalizeIcebergMergeClauseValueProjects(ctx CompilerContext, projects []*planpb.Expr, shape icebergMergeProjectionShape, targetCols []*planpb.ColDef, ownerDb string) error {
