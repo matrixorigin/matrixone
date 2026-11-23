@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"go.uber.org/zap"
 
@@ -360,6 +359,7 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 }
 
 func (c *CkpReplayer) ReplayCatalog(
+	ctx context.Context,
 	readTxn txnif.AsyncTxn,
 	phase string,
 ) (err error) {
@@ -382,21 +382,21 @@ func (c *CkpReplayer) ReplayCatalog(
 		return
 	}
 
-	// logutil.Info(c.r.catalog.SimplePPString(common.PPL3))
-	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
-		_, err2 = mergesort.SortBlockColumns(cols, pkidx, c.r.rt.VectorPool.Transient)
-		return
-	}
-	closeFn := c.r.catalog.RelayFromSysTableObjects(
-		c.r.ctx,
+	err = c.r.catalog.ReplayFromSysTableObjects(
+		ctx,
 		readTxn,
-		tables.ReadSysTableBatch,
-		sortFunc,
+		tables.ScanSysTable,
 		c,
 	)
+	// A cancellation or error may arrive after some tasks were submitted.
+	// They own their schemas and must finish before replay returns.
 	c.wg.Wait()
-	for _, fn := range closeFn {
-		fn()
+	if err != nil {
+		return err
+	}
+	if ctx.Err() != nil {
+		err = context.Cause(ctx)
+		return err
 	}
 	c.resetObjectCountMap()
 	// logutil.Info(c.r.catalog.SimplePPString(common.PPL0))

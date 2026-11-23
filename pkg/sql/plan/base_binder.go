@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -622,6 +623,13 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
+	udfResolutionCount := uint64(0)
+	udfExpansionDepth := uint32(0)
+	if b.builder != nil {
+		udfResolutionCount = b.builder.udfResolutionCount
+		udfExpansionDepth = b.builder.udfExpansionDepth
+	}
 	if b.numericSubqueryTarget != nil && !astExpr.Exists {
 		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
 	}
@@ -638,6 +646,8 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	var nodeID int32
 	var err error
+	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
+	zeroScalarRetention := b.builder.zeroScalarRetentionGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -652,6 +662,22 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+	}
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration ||
+		b.builder.zeroScalarRetentionGeneration != zeroScalarRetention {
+		if err := b.builder.retainZeroScalarAuthorizationSources(nodeID, zeroLimitScalarHasControlFunction(astExpr.Select)); err != nil {
+			return nil, err
+		}
+	}
+	subCtx.zeroScalarRootNodeID = nodeID
+
+	if b.builder != nil {
+		subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
+			b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
+		if subCtx.zeroScalarRootSourceSafe {
+			// SQL UDFs can reuse bound arguments after the original binding.
+			b.builder.hasZeroScalarSourceCandidate = true
+		}
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -2589,7 +2615,36 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	astArgs []tree.Expr,
 	depth int32,
 	repeatedLeft, repeatedRight bool,
-) (*plan.Expr, error) {
+) (boundExpr *plan.Expr, bindErr error) {
+	zeroScalarRewriteGeneration := uint64(0)
+	zeroScalarRetentionGeneration := uint64(0)
+	if b.builder != nil {
+		zeroScalarRewriteGeneration = b.builder.zeroScalarRewriteGeneration
+		zeroScalarRetentionGeneration = b.builder.zeroScalarRetentionGeneration
+	}
+	var requiredZeroScalarRoots map[int32]struct{}
+	builtinResult := false
+	defer func() {
+		if bindErr != nil || len(requiredZeroScalarRoots) == 0 {
+			return
+		}
+		missing := missingZeroScalarRoots(boundExpr, requiredZeroScalarRoots)
+		if len(missing) == 0 {
+			return
+		}
+		if !builtinResult || b.builder == nil || b.builder.zeroScalarRootCtx == nil || b.builder.isPrepareStatement {
+			boundExpr = nil
+			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+			return
+		}
+		for _, root := range missing {
+			if err := b.builder.retainZeroScalarAuthorizationSources(root, false); err != nil {
+				boundExpr, bindErr = nil, err
+				return
+			}
+		}
+		b.builder.zeroScalarRetentionGeneration++
+	}()
 	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
 		if _, ok := astArgs[0].(*tree.NumVal); !ok {
 			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
@@ -2756,6 +2811,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			}
 		}
 	}
+	requiredZeroScalarRoots = zeroScalarSubqueryRoots(b.builder, args)
 	var err error
 	args, err = b.useStoredNoFromSpecialScalarArgs(name, astArgs, args)
 	if err != nil {
@@ -2776,6 +2832,9 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 		if len(astArgs) == 2 {
 			//interval expr like 'interval 5 day'
 			if _, ok := astArgs[1].(*tree.TimeUnitExpr); ok {
+				if b.builder != nil && b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration {
+					return nil, moerr.NewNYI(b.GetContext(), "function with a nested correlated scalar LIMIT 0 argument may discard its table dependency")
+				}
 				// rewrite interval function to ListExpr, and return directly
 				return &plan.Expr{
 					Typ: plan.Type{
@@ -2810,6 +2869,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			if isIfNull {
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
+			builtinResult = true
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -2823,6 +2883,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
+			builtinResult = true
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -2843,7 +2904,13 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 	if err != nil {
 		return nil, err
 	}
-
+	if (b.builder.zeroScalarRewriteGeneration != zeroScalarRewriteGeneration ||
+		b.builder.zeroScalarRetentionGeneration != zeroScalarRetentionGeneration) && !isIdentitySQLUDF(udf, len(args)) {
+		// This branch cannot reliably prove which sources survive SQL UDF
+		// expansion across independent set-operation bind contexts, so keep
+		// every such call fail-closed rather than risk dropping an auth source.
+		return nil, moerr.NewNYI(b.GetContext(), "SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument")
+	}
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
@@ -2876,6 +2943,210 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 	return args, nil
 }
 
+func isIdentitySQLUDF(udf *function.Udf, argCount int) bool {
+	if udf == nil || udf.Language != string(tree.SQL) || argCount != 1 {
+		return false
+	}
+	body := strings.ToLower(strings.Join(strings.Fields(udf.Body), " "))
+	return body == "$1"
+}
+
+// A UDF may ignore or rewrite one of its already-bound arguments. Do not
+// allow a subquery optimization selected while binding such an argument to
+// rely on the argument's original source surviving SQL UDF expansion.
+func markSubquerySourcesUnsafe(builder *QueryBuilder, args []*plan.Expr) bool {
+	if builder == nil {
+		return false
+	}
+	containsZeroScalarRewrite := false
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		_ = visitPlanExprTree(arg, func(expr *plan.Expr) error {
+			sub := expr.GetSub()
+			if sub != nil && sub.NodeId >= 0 && int(sub.NodeId) < len(builder.ctxByNode) {
+				rootCtx := builder.ctxByNode[sub.NodeId]
+				if rootCtx != nil {
+					seen := make(map[*BindContext]struct{})
+					for _, candidateCtx := range builder.ctxByNode {
+						if candidateCtx == nil || !bindContextWithinZeroScalarArgument(candidateCtx, rootCtx) {
+							continue
+						}
+						if _, ok := seen[candidateCtx]; ok {
+							continue
+						}
+						seen[candidateCtx] = struct{}{}
+						containsZeroScalarRewrite = containsZeroScalarRewrite || candidateCtx.zeroScalarRewriteInPlan
+						if candidateCtx.zeroScalarRootSourceSafe {
+							candidate := &plan.SubqueryRef{
+								NodeId:  candidateCtx.zeroScalarRootNodeID,
+								Typ:     plan.SubqueryRef_SCALAR,
+								RowSize: int32(len(candidateCtx.results)),
+							}
+							_, eligible := builder.emptyCorrelatedScalarScan(candidateCtx.zeroScalarRootNodeID, candidate, candidateCtx)
+							containsZeroScalarRewrite = containsZeroScalarRewrite || eligible
+						}
+						candidateCtx.zeroScalarRootSourceSafe = false
+					}
+				}
+			}
+			return nil
+		})
+	}
+	return containsZeroScalarRewrite
+}
+
+func bindContextWithinZeroScalarArgument(ctx, argumentRoot *BindContext) bool {
+	for ancestor := ctx; ancestor != nil; ancestor = ancestor.parent {
+		if ancestor == argumentRoot {
+			return true
+		}
+	}
+	return false
+}
+
+func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32]struct{} {
+	if builder == nil || !builder.hasZeroScalarSourceCandidate || len(args) == 0 {
+		return nil
+	}
+	var roots map[int32]struct{}
+	for _, arg := range args {
+		_ = visitExecutablePlanExprTree(arg, func(expr *plan.Expr) error {
+			sub := expr.GetSub()
+			if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil ||
+				sub.NodeId < 0 || int(sub.NodeId) >= len(builder.ctxByNode) {
+				return nil
+			}
+			ctx := builder.ctxByNode[sub.NodeId]
+			if ctx != nil && ctx.zeroScalarRootSourceSafe {
+				if _, eligible := builder.emptyCorrelatedScalarScan(sub.NodeId, sub, ctx); eligible {
+					if roots == nil {
+						roots = make(map[int32]struct{})
+					}
+					roots[sub.NodeId] = struct{}{}
+				}
+			}
+			return nil
+		})
+	}
+	return roots
+}
+
+func missingZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) []int32 {
+	if len(required) == 0 {
+		return nil
+	}
+	retained := make(map[int32]struct{}, len(required))
+	_ = visitExecutablePlanExprTree(expr, func(candidate *plan.Expr) error {
+		if sub := candidate.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+			if _, ok := required[sub.NodeId]; ok {
+				retained[sub.NodeId] = struct{}{}
+			}
+		}
+		return nil
+	})
+	var missing []int32
+	for root := range required {
+		if _, ok := retained[root]; !ok {
+			missing = append(missing, root)
+		}
+	}
+	slices.Sort(missing)
+	return missing
+}
+
+func visitExecutablePlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {
+	var local [16]*plan.Expr
+	pending := append(local[:0], root)
+	for len(pending) > 0 {
+		expr := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if expr == nil {
+			continue
+		}
+		if err := visit(expr); err != nil {
+			return err
+		}
+		if window := expr.GetW(); window != nil {
+			for i := len(window.OrderBy) - 1; i >= 0; i-- {
+				if window.OrderBy[i] != nil {
+					pending = append(pending, window.OrderBy[i].Expr)
+				}
+			}
+			for i := len(window.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, window.PartitionBy[i])
+			}
+			pending = append(pending, window.WindowFunc)
+		}
+		if sub := expr.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := expr.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+	}
+	return nil
+}
+
+func visitPlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {
+	var local [16]*plan.Expr
+	pending := append(local[:0], root)
+	for len(pending) > 0 {
+		expr := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if expr == nil {
+			continue
+		}
+		if err := visit(expr); err != nil {
+			return err
+		}
+		if window := expr.GetW(); window != nil {
+			if window.Frame != nil {
+				if window.Frame.End != nil {
+					pending = append(pending, window.Frame.End.Val)
+				}
+				if window.Frame.Start != nil {
+					pending = append(pending, window.Frame.Start.Val)
+				}
+			}
+			for i := len(window.OrderBy) - 1; i >= 0; i-- {
+				if window.OrderBy[i] != nil {
+					pending = append(pending, window.OrderBy[i].Expr)
+				}
+			}
+			for i := len(window.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, window.PartitionBy[i])
+			}
+			pending = append(pending, window.WindowFunc)
+		}
+		if sub := expr.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := expr.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+		if literal := expr.GetLit(); literal != nil {
+			pending = append(pending, literal.Src)
+		}
+	}
+	return nil
+}
+
 func bindFuncExprImplUdf(
 	b *baseBinder,
 	name string,
@@ -2886,6 +3157,14 @@ func bindFuncExprImplUdf(
 ) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
+	}
+	if !isIdentitySQLUDF(udf, len(boundArgs)) && markSubquerySourcesUnsafe(b.builder, boundArgs) {
+		return nil, moerr.NewNYI(b.GetContext(), "SQL UDF with a pre-flattened correlated scalar LIMIT 0 argument")
+	}
+	if b.builder != nil {
+		b.builder.udfResolutionCount++
+		b.builder.udfExpansionDepth++
+		defer func() { b.builder.udfExpansionDepth-- }()
 	}
 
 	switch udf.Language {
