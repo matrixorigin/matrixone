@@ -45,6 +45,13 @@ func indexStatsPrepare(proc *process.Process, tf *TableFunction) (tvfState, erro
 	if err := json.Unmarshal(tf.Params, &state.config); err != nil {
 		return nil, err
 	}
+	if len(state.config.ValidationError) != 0 {
+		var plannedErr moerr.Error
+		if err := plannedErr.UnmarshalBinary(state.config.ValidationError); err != nil {
+			return nil, err
+		}
+		return nil, &plannedErr
+	}
 	if (len(tf.Args) == 4) != (state.config.Analyze != nil) {
 		return nil, moerr.NewInvalidInput(proc.Ctx, "mo_index_stats: invalid planned options")
 	}

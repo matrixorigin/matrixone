@@ -169,6 +169,7 @@ type IndexTableConfig struct {
 
 	// IVF related
 	EntriesTable       string   `json:"entries"`
+	CountFromBuildTxn  bool     `json:"count_from_build_txn,omitempty"`
 	DataSize           int64    `json:"datasize"`
 	Nprobe             uint     `json:"nprobe"`
 	PKeyType           int32    `json:"pktype"`

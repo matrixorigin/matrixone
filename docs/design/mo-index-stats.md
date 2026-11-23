@@ -9,7 +9,7 @@ tables with declared primary keys, unique indexes, regular BTREE secondary
 indexes, IVF_FLAT, classic fulltext, or fulltext2 indexes. Other index types
 return a not-supported error;
 unknown indexes return an index-not-found error. The caller must have SELECT
-permission on the source table.
+permission on the source table. Index-specific errors are returned at execution after source authorization. With `lower_case_table_names=1`, database and table literals follow SQL identifier case folding.
 
 The planner resolves the named index through `indexplugin.Get` and its optional
 `Plan()` diagnostic capability. The IVF and fulltext owners validate their private

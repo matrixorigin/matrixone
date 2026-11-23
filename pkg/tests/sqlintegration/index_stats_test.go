@@ -246,6 +246,11 @@ func TestMoIndexStatsSQL(t *testing.T) {
 		var denied string
 		err = reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf','{}') as s where row_type='index'").Scan(&denied)
 		require.Error(t, err, "deep analysis must require source SELECT too")
+		deniedErr := err.Error()
+		for _, args := range []string{"'missing'", "'PRIMARY','{}'"} {
+			err := reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors',"+args+") as s where row_type='index'").Scan(&denied)
+			require.EqualError(t, err, deniedErr)
+		}
 		exec("grant select on table index_stats_test.plain_vectors to public")
 		var summary string
 		require.NoError(t, reader.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_test','plain_vectors','ivf') AS s where row_type='index'").Scan(&summary))
@@ -330,6 +335,12 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		require.InDelta(t, 2.0/30, built["training_sample_ratio"], 1e-12)
 		require.NoError(t, executor.Pause())
 		paused = true
+		exec("delete from vectors where id=1")
+		lagging, err := read()
+		require.NoError(t, err)
+		drift := lagging["drift"].(map[string]any)
+		require.Equal(t, float64(2), drift["old_sample_count"])
+		require.Equal(t, float64(0), drift["new_sample_count"])
 		exec("insert into vectors values(3,'[30]')")
 		metrics, err := read()
 		require.NoError(t, err)
@@ -355,7 +366,7 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		exec("rollback")
 		require.NoError(t, executor.Resume())
 		paused = false
-		wait(4)
+		wait(3)
 		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_async','vectors','ivf','{}') as s where row_type='index'").Scan(&deepJSON))
 		require.NoError(t, json.Unmarshal([]byte(deepJSON), &deep))
 		require.NotContains(t, deep["analysis"], "status", "same-view durable progress permits coverage analysis")

@@ -18,8 +18,10 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"math"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
@@ -163,6 +165,8 @@ func (s *Fulltext2Search) Stats(ctx context.Context) (indexstats.FullTextSummary
 	return s.idx.Stats(ctx)
 }
 
+var privateStatsRead atomic.Uint64
+
 // ReadStats shares a matching warm generation, or loads an exact snapshot into
 // the normal cache. Both paths use its read lock, admission and byte governor.
 func ReadStats(ctx context.Context, sqlproc *sqlexec.SqlProcess, cfg TableConfig) (result indexstats.FullTextSummary, err error) {
@@ -172,26 +176,39 @@ func ReadStats(ctx context.Context, sqlproc *sqlexec.SqlProcess, cfg TableConfig
 	}
 	veccache.Cache.Once()
 	matched := false
-	_, err = veccache.Cache.ReadIfLoaded(cfg.IndexTable, func(algo veccache.VectorIndexSearchIf) error {
-		reader, ok := algo.(*Fulltext2Search)
-		if !ok {
-			return moerr.NewInternalError(ctx, "fulltext stats: unexpected cached index type")
+	if ts != 0 {
+		_, err = veccache.Cache.ReadIfLoaded(cfg.IndexTable, func(algo veccache.VectorIndexSearchIf) error {
+			reader, ok := algo.(*Fulltext2Search)
+			if !ok {
+				return moerr.NewInternalError(ctx, "fulltext stats: unexpected cached index type")
+			}
+			if !reader.genValid || reader.loadedTs != ts || reader.loadedTail != tail {
+				return nil
+			}
+			matched = true
+			result, err = reader.Stats(ctx)
+			return err
+		})
+		if err != nil || matched {
+			return result, err
 		}
-		if !reader.genValid || reader.loadedTs != ts || reader.loadedTail != tail {
-			return nil
-		}
-		matched = true
-		result, err = reader.Stats(ctx)
-		return err
-	})
-	if err != nil || matched {
-		return result, err
 	}
 	if sqlproc.BuildSnapshotTS() == 0 {
 		return result, moerr.NewInternalError(ctx, "fulltext stats: read snapshot is unavailable")
 	}
 	key := veccache.GenerationKey(cfg.IndexTable, ts, tail)
-	err = veccache.Cache.Read(sqlproc, key, NewFulltext2Search(cfg), func(algo veccache.VectorIndexSearchIf) error {
+	if ts == 0 {
+		// After a merge removes all live documents, tail chunk numbers can repeat.
+		// Keep admission and eviction accounting but never share this reader.
+		key = fmt.Sprintf("%s@stats-%d", cfg.IndexTable, privateStatsRead.Add(1))
+		defer veccache.Cache.Remove(key)
+	}
+	loader := NewFulltext2Search(cfg)
+	// Load reads through this same transaction. Pass its verified generation to
+	// the loader so publishing it does not depend on a second metadata lookup.
+	loader.diagnosticSnapshot = true
+	loader.loadedTs, loader.loadedTail, loader.genValid = ts, tail, true
+	err = veccache.Cache.Read(sqlproc, key, loader, func(algo veccache.VectorIndexSearchIf) error {
 		reader, ok := algo.(*Fulltext2Search)
 		if !ok {
 			return moerr.NewInternalError(ctx, "fulltext stats: unexpected cached index type")

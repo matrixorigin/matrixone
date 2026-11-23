@@ -20,6 +20,8 @@ const FunctionName = "mo_index_stats"
 // Config is produced by the planner after resolving the authorized source.
 // Hidden table names are never taken directly from SQL function arguments.
 type Config struct {
+	// ValidationError carries an index-specific bind error until source authorization.
+	ValidationError                            []byte `json:",omitempty"`
 	Analyze                                    *AnalyzeOptions
 	SupportsAnalysis                           bool
 	Algorithm                                  string

@@ -26,6 +26,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTrainingAdviceRequiresReachableSample(t *testing.T) {
+	base := &BuildInfo{Rows: 100000, TrainingSamples: 10000}
+	m, a := BuildHealth(100000, 500, 10, base)
+	require.InDelta(t, 2.0/3, m["training_sample_ratio"], 1e-12)
+	require.Empty(t, a)
+	_, a = BuildHealth(100000, 500, 20, base)
+	require.Len(t, a, 1)
+}
 func TestBuildHealth(t *testing.T) {
 	b := BuildInfo{Format: 1, IndexVersion: 7, BuildTS: "12345-8", Rows: 100, TrainingSamples: 60, SourceTableID: 42, Historical: true}
 	raw, err := json.Marshal(b)
@@ -44,19 +52,19 @@ func TestBuildHealth(t *testing.T) {
 		_, status := DecodeBuild(tc.raw, tc.version)
 		require.Equal(t, tc.status, status)
 	}
-	m, a := BuildHealth(400, 10, &b)
+	m, a := BuildHealth(400, 10, 10, &b)
 	require.Equal(t, 3., m["growth_ratio"])
 	require.Equal(t, .2, m["training_sample_ratio"])
 	require.Len(t, a, 1)
 	require.Equal(t, "training_sample_insufficient", a[0].Reason)
-	_, a = BuildHealth(100, 1, &b)
+	_, a = BuildHealth(100, 1, 10, &b)
 	require.Len(t, a, 1)
 	require.Equal(t, int64(10), a[0].Params["lists"])
 	for _, tc := range [][2]int64{{0, 1}, {1, 1}, {100, 5}, {100, 20}} {
-		_, a := BuildHealth(tc[0], tc[1], nil)
+		_, a := BuildHealth(tc[0], tc[1], 10, nil)
 		require.Empty(t, a)
 	}
-	_, a = BuildHealth(100, 21, nil)
+	_, a = BuildHealth(100, 21, 10, nil)
 	require.Len(t, a, 1)
 	require.Equal(t, "lists_above_sqrt_n", a[0].Reason)
 }

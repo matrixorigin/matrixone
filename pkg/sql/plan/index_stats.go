@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -27,6 +28,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// IsSourceResolvingTableFunction reports scans that require SELECT on their
+// resolved source relation, including when rewrites discard their output.
+func IsSourceResolvingTableFunction(node *plan.Node) bool {
+	if node.GetNodeType() != plan.Node_FUNCTION_SCAN {
+		return false
+	}
+	switch node.GetTableDef().GetTblFunc().GetName() {
+	case "table_changes", indexstats.FunctionName:
+		return true
+	}
+	return false
+}
+
 func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr) (int32, error) {
 	if len(exprs) != 3 && len(exprs) != 4 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats requires 3 or 4 arguments (database, table, index [, options])")
@@ -38,6 +52,10 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 			return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_index_stats requires non-empty string literals (database, table, index)")
 		}
 		names[i] = name
+	}
+	if lower := builder.compCtx.GetLowerCaseTableNames(); lower == 1 {
+		names[0] = tree.NewCStr(names[0], lower).Compare()
+		names[1] = tree.NewCStr(names[1], lower).Compare()
 	}
 	obj, source, err := builder.compCtx.Resolve(names[0], names[1], ctx.snapshot, nil)
 	if err != nil {
@@ -62,40 +80,15 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 		}
 	}
 
-	if strings.EqualFold(names[2], "PRIMARY") {
-		if source.Pkey == nil || source.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-			return 0, moerr.NewInvalidInputf(builder.GetContext(), "index 'PRIMARY' does not exist on '%s.%s'", names[0], names[1])
+	// Authorization runs on the finished plan. Keep the source scan even when
+	// index-specific validation fails, so errors cannot disclose index metadata
+	// before the caller's SELECT privilege is checked.
+	if configErr := configureIndexStats(builder.GetContext(), &cfg, source); configErr != nil {
+		plannedErr := moerr.ConvertGoError(builder.GetContext(), configErr).(*moerr.Error)
+		cfg.ValidationError, err = plannedErr.MarshalBinary()
+		if err != nil {
+			return 0, err
 		}
-		configurePrimaryIndexStats(&cfg, source)
-	}
-	if cfg.KeyKind != "primary" {
-		var defs []*plan.IndexDef
-		for _, idx := range source.Indexes {
-			if strings.EqualFold(idx.IndexName, names[2]) {
-				defs = append(defs, idx)
-			}
-		}
-		if len(defs) == 0 {
-			return 0, moerr.NewInvalidInputf(builder.GetContext(), "index '%s' does not exist on '%s.%s'", names[2], names[0], names[1])
-		}
-		idx := defs[0]
-		cfg.Index, cfg.Algorithm = idx.IndexName, strings.ToLower(idx.IndexAlgo)
-		if catalog.IsNullIndexAlgo(idx.IndexAlgo) || cfg.Algorithm == catalog.MoIndexBTreeAlgo.ToString() {
-			if err := configureKeyIndexStats(builder.GetContext(), &cfg, source, idx); err != nil {
-				return 0, err
-			}
-		} else {
-			hooks, err := indexplugin.IndexStats(builder.GetContext(), cfg.Algorithm)
-			if err != nil {
-				return 0, err
-			}
-			if err := hooks.ConfigureIndexStats(builder.GetContext(), source, defs, &cfg); err != nil {
-				return 0, err
-			}
-		}
-	}
-	if cfg.Analyze != nil && !cfg.SupportsAnalysis {
-		return 0, moerr.NewNotSupported(builder.GetContext(), "index type does not support deep analysis")
 	}
 	if source.Pkey != nil {
 		cfg.PrimaryKey = source.Pkey.PkeyColName
@@ -116,7 +109,7 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 		return 0, err
 	}
 	if builder.isReusablePlan() {
-		builder.qry.CatalogDependencies = appendPrepareSchemas(builder.qry.CatalogDependencies, prepareSchemaRef(obj, source))
+		builder.qry.CatalogDependencies = appendPrepareSchemas(builder.qry.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, source, ctx.snapshot))
 	}
 	columns := []struct {
 		name string
@@ -137,4 +130,43 @@ func (builder *QueryBuilder) buildIndexStats(_ *tree.TableFunction, ctx *BindCon
 		BindingTags: []int32{builder.genNewBindTag()}, TblFuncExprList: exprs,
 		ScanSnapshot: DeepCopySnapshot(ctx.snapshot),
 	}, ctx), nil
+}
+
+func configureIndexStats(ctx context.Context, cfg *indexstats.Config, source *plan.TableDef) error {
+	if strings.EqualFold(cfg.Index, "PRIMARY") {
+		if source.Pkey == nil || source.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			return moerr.NewInvalidInputf(ctx, "index 'PRIMARY' does not exist on '%s.%s'", cfg.Database, cfg.Table)
+		}
+		configurePrimaryIndexStats(cfg, source)
+	}
+	if cfg.KeyKind != "primary" {
+		var defs []*plan.IndexDef
+		for _, idx := range source.Indexes {
+			if strings.EqualFold(idx.IndexName, cfg.Index) {
+				defs = append(defs, idx)
+			}
+		}
+		if len(defs) == 0 {
+			return moerr.NewInvalidInputf(ctx, "index '%s' does not exist on '%s.%s'", cfg.Index, cfg.Database, cfg.Table)
+		}
+		idx := defs[0]
+		cfg.Index, cfg.Algorithm = idx.IndexName, strings.ToLower(idx.IndexAlgo)
+		if catalog.IsNullIndexAlgo(idx.IndexAlgo) || cfg.Algorithm == catalog.MoIndexBTreeAlgo.ToString() {
+			if err := configureKeyIndexStats(ctx, cfg, source, idx); err != nil {
+				return err
+			}
+		} else {
+			hooks, err := indexplugin.IndexStats(ctx, cfg.Algorithm)
+			if err != nil {
+				return err
+			}
+			if err := hooks.ConfigureIndexStats(ctx, source, defs, cfg); err != nil {
+				return err
+			}
+		}
+	}
+	if cfg.Analyze != nil && !cfg.SupportsAnalysis {
+		return moerr.NewNotSupported(ctx, "index type does not support deep analysis")
+	}
+	return nil
 }

@@ -378,14 +378,15 @@ func ivfIndexCentroidsTable(
 	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
 
 	cfg := vectorindex.IndexTableConfig{
-		SourceTableID: originalTableDef.TblId,
-		MetadataTable: metadataTableName,
-		IndexTable:    indexDef.IndexTableName,
-		DbName:        qryDatabase,
-		SrcTable:      originalTableDef.Name,
-		PKey:          pkColName,
-		KeyPart:       indexDef.Parts[0],
-		DataSize:      totalCnt,
+		SourceTableID:     originalTableDef.TblId,
+		MetadataTable:     metadataTableName,
+		IndexTable:        indexDef.IndexTableName,
+		DbName:            qryDatabase,
+		SrcTable:          originalTableDef.Name,
+		PKey:              pkColName,
+		KeyPart:           indexDef.Parts[0],
+		DataSize:          totalCnt,
+		CountFromBuildTxn: forceSync,
 	}
 
 	listsval, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamLists)

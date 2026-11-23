@@ -1021,9 +1021,8 @@ func readTailFrameFile(sqlproc *sqlexec.SqlProcess, cfg TableConfig, f tailFrame
 // NextTailChunkIdSql returns a SELECT for the next free tag=1 CdcTail chunk_id —
 // the monotonic append position (= recency) the sinker frames at. It is
 // GREATEST(MAX tail chunk_id, MAX tag=0 base recency) + 1, so an appended tail is
-// always newer than every base under Index liveness, and the sequence never
-// resets after a compaction folds the tail into a base. Mirrors bm25's
-// NextTailChunkIdSql.
+// always newer than every remaining base. If compaction leaves neither a base
+// nor a tail, numbering restarts at one.
 func NextTailChunkIdSql(cfg TableConfig) string {
 	tailMax := fmt.Sprintf("COALESCE((SELECT MAX(%s) FROM %s WHERE %s = %s AND %s = %d), 0)",
 		catalog.FullText2Index_TblCol_Storage_Chunk_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),

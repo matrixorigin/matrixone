@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
+	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 )
 
 const BuildMetadataKey = "diagnostic_build"
@@ -62,7 +63,7 @@ func DecodeBuild(raw string, version int64) (*BuildInfo, string) {
 	return &b, ""
 }
 
-func BuildHealth(n, lists int64, base *BuildInfo) (map[string]any, []indexstats.Suggestion) {
+func BuildHealth(n, lists int64, trainPercent float64, base *BuildInfo) (map[string]any, []indexstats.Suggestion) {
 	metrics := map[string]any{}
 	advice := make([]indexstats.Suggestion, 0)
 	if n > 0 && lists > 0 {
@@ -83,7 +84,7 @@ func BuildHealth(n, lists int64, base *BuildInfo) (map[string]any, []indexstats.
 		if lists > 0 {
 			target := 30 * float64(lists)
 			metrics["training_sample_ratio"] = float64(base.TrainingSamples) / target
-			if float64(base.TrainingSamples) < target && float64(n) >= target {
+			if float64(base.TrainingSamples) < target && float64(n) >= target && float64(ivfflatrt.TrainingSampleLimit(n, uint(lists), trainPercent)) >= target {
 				advice = indexstats.AddReindex(advice, "training_sample_insufficient", nil)
 			}
 		}

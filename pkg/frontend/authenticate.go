@@ -7519,7 +7519,7 @@ func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *pl
 			}
 			externalSelectScan := plan2.IsExternalScanRequiringSelectPrivilege(node)
 			diagnosticScan := node.GetNodeType() == plan.Node_FUNCTION_SCAN && node.GetTableDef().GetTblFunc().GetName() == "mo_index_stats"
-			if isPrivilegeBearingTableScan(node) || externalSelectScan || diagnosticScan {
+			if isPrivilegeBearingTableScan(node) || externalSelectScan {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
 				}
@@ -7883,12 +7883,7 @@ func isPrivilegeBearingTableScan(node *plan.Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		return true
 	}
-	return isTableChangesScan(node)
-}
-
-func isTableChangesScan(node *plan.Node) bool {
-	return node.GetNodeType() == plan.Node_FUNCTION_SCAN &&
-		node.GetTableDef().GetTblFunc().GetName() == "table_changes"
+	return plan2.IsSourceResolvingTableFunction(node)
 }
 
 func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {

@@ -347,7 +347,7 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		sqlproc := sqlexec.NewSqlProcess(proc)
 		sqlproc.IndexRelationPolicy = u.policy
-		if u.param.Async == "true" {
+		if u.param.Async == "true" && !u.tblcfg.CountFromBuildTxn {
 			// InitSQL may have been registered in an earlier transaction. Use the
 			// training snapshot for both the sampling ratio and its published baseline.
 			u.tblcfg.DataSize, err = sqlreader.NonNullSourceCount(sqlproc, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart)
@@ -355,19 +355,8 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 				return err
 			}
 		}
-		u.nsample = u.idxcfg.Ivfflat.Lists * 50
-		train_percent := u.idxcfg.Ivfflat.KmeansTrainPercent / float64(100)
-		if u.tblcfg.DataSize > 0 {
-			ns := uint(train_percent * float64(u.tblcfg.DataSize))
-			if u.nsample > ns {
-				u.nsample = ns
-			}
-		}
-		min_nsample := uint(10000)
-		if u.nsample < min_nsample {
-			u.nsample = min_nsample
-		}
-
+		u.nsample = ivfflatrt.TrainingSampleLimit(u.tblcfg.DataSize, u.idxcfg.Ivfflat.Lists, u.idxcfg.Ivfflat.KmeansTrainPercent)
+		train_percent := u.idxcfg.Ivfflat.KmeansTrainPercent / 100
 		u.sample_ratio = train_percent
 		if u.tblcfg.DataSize > 0 {
 			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)

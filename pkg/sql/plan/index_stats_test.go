@@ -28,6 +28,7 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -105,8 +106,21 @@ func TestMoIndexStatsPlannerUsesRegisteredCapability(t *testing.T) {
 
 	wantErr := moerr.NewInvalidInput(mock.GetContext(), "owner rejected diagnostic configuration")
 	hooks.configure = func(context.Context, *pbplan.TableDef, []*pbplan.IndexDef, *indexstats.Config) error { return wantErr }
-	_, _, err = build()
-	require.ErrorIs(t, err, wantErr)
+	builder, node, err = build()
+	require.NoError(t, err)
+	require.EqualError(t, deferredIndexStatsError(t, builder, node), wantErr.Error())
+}
+
+func deferredIndexStatsError(t *testing.T, builder *QueryBuilder, id int32) error {
+	t.Helper()
+	node := builder.qry.Nodes[id]
+	require.True(t, IsSourceResolvingTableFunction(node))
+	require.Equal(t, "stats_source", node.ObjRef.ObjName)
+	var cfg indexstats.Config
+	require.NoError(t, json.Unmarshal(node.TableDef.TblFunc.Param, &cfg))
+	var planned moerr.Error
+	require.NoError(t, planned.UnmarshalBinary(cfg.ValidationError))
+	return &planned
 }
 
 func indexStatsTestContext(t *testing.T) *MockCompilerContext {
@@ -156,11 +170,18 @@ func TestMoIndexStatsPlannerDispatchAndSourceDependency(t *testing.T) {
 	require.Equal(t, "2", cfg.Options["lists"])
 
 	builder := NewQueryBuilder(pbplan.Query_SELECT, mock, true, true)
-	_, err = builder.buildIndexStats(nil, NewBindContext(builder, nil), []*pbplan.Expr{
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 2}}
+	id, err := builder.buildIndexStats(nil, bindCtx, []*pbplan.Expr{
 		makePlan2StringConstExprWithType("db"), makePlan2StringConstExprWithType("stats_source"), makePlan2StringConstExprWithType("idx"),
 	})
 	require.NoError(t, err)
+	require.True(t, isUDFArgumentAuthorizationSource(builder.qry.Nodes[id]))
+	carrier := validationPrivilegeCarrier(builder.qry.Nodes[id])
+	require.Equal(t, "mo_index_stats", carrier.GetTableDef().GetTblFunc().GetName())
+	require.Equal(t, bindCtx.snapshot, carrier.ScanSnapshot)
 	require.Len(t, builder.qry.CatalogDependencies, 1)
+	require.Equal(t, bindCtx.snapshot, builder.qry.CatalogDependencies[0].Snapshot)
 	require.Equal(t, int64(7), builder.qry.CatalogDependencies[0].Server)
 }
 
@@ -176,10 +197,11 @@ func TestMoIndexStatsPlannerRejectsInvalidOrUnsupportedTargets(t *testing.T) {
 				idx.IndexAlgo = tc.algo
 			}
 			builder := NewQueryBuilder(pbplan.Query_SELECT, mock, false, true)
-			_, err := builder.buildIndexStats(nil, NewBindContext(builder, nil), []*pbplan.Expr{
-				makePlan2StringConstExprWithType("db"), makePlan2StringConstExprWithType("stats_source"), makePlan2StringConstExprWithType(tc.index),
+			node, err := builder.buildIndexStats(nil, NewBindContext(builder, nil), []*pbplan.Expr{
+				makePlan2StringConstExprWithType("DB"), makePlan2StringConstExprWithType("STATS_SOURCE"), makePlan2StringConstExprWithType(tc.index),
 			})
-			require.ErrorContains(t, err, tc.want)
+			require.NoError(t, err)
+			require.ErrorContains(t, deferredIndexStatsError(t, builder, node), tc.want)
 		})
 	}
 	mock := indexStatsTestContext(t)

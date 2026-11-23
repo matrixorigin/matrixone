@@ -24,9 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
+	ivfflatrt "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -70,7 +72,11 @@ func (s *ivfStats) readHealth(proc *process.Process, sp *sqlexec.SqlProcess) err
 		}
 		s.health["health_status"] = "source_count_unavailable"
 	} else {
-		metrics, advice := diagnostic.BuildHealth(count, s.config.Lists, s.build)
+		percent, err := indexplugin.AlgoParamFloat(s.config.Options[catalog.IndexAlgoParamKmeansTrainPercent], proc.GetResolveVariableFunc(), catalog.IndexAlgoParamKmeansTrainPercent, ivfflatrt.DefaultKmeansTrainPercent)
+		if err != nil {
+			return err
+		}
+		metrics, advice := diagnostic.BuildHealth(count, s.config.Lists, percent, s.build)
 		for k, v := range metrics {
 			s.health[k] = v
 		}
@@ -168,9 +174,8 @@ func readIndexOldKeys(proc *process.Process, sp *sqlexec.SqlProcess, cfg indexst
 		return nil, moerr.NewInvalidInput(proc.Ctx, "historical source identity changed")
 	}
 	found := map[string]bool{}
-	source := sqlquote.QualifiedIdent(cfg.Database, cfg.Table)
-	err = runIndexKeyLookup(sp, cfg, keys, func(selected string) string {
-		return "SELECT " + indexSourceKey("sampled", cfg.PrimaryKey) + " FROM " + source + " {MO_TS=" + sqlquote.String(base.BuildTS) + "} AS old JOIN " + selected + " ON " + sqlquote.QualifiedIdent("old", cfg.PrimaryKey) + "=" + sqlquote.QualifiedIdent("sampled", cfg.PrimaryKey)
+	err = runIndexKeyLookup(&historic, cfg, keys, func(selected string) string {
+		return "SELECT " + indexSourceKey("sampled", cfg.PrimaryKey) + " FROM " + selected
 	}, func(bat *batch.Batch) error {
 		for row := 0; row < bat.RowCount(); row++ {
 			found[strings.Clone(bat.Vecs[0].GetStringAt(row))] = true

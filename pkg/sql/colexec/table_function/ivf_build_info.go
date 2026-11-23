@@ -19,10 +19,11 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	"github.com/matrixorigin/matrixone/pkg/indexstats/sqlreader"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -39,16 +40,11 @@ func writeIVFBuildInfo(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg v
 	}
 	ts := txn.Txn().SnapshotTS
 	info := diagnostic.BuildInfo{Format: 1, IndexVersion: version, BuildTS: fmt.Sprintf("%d-%d", ts.PhysicalTime, ts.LogicalTime), Rows: cfg.DataSize, TrainingSamples: int64(samples), SourceTableID: cfg.SourceTableID}
-	ctx, db, err := sqlreader.Database(proc, sqlproc, indexstats.Config{Database: cfg.DbName, Table: cfg.SrcTable})
-	if err == nil {
-		if rel, err := db.Relation(ctx, cfg.SrcTable, nil); err == nil {
-			info.SourceTableID = rel.GetTableID(ctx)
-			if provider, ok := rel.(engine.SourceCommitTSProvider); ok {
-				_, err := provider.SourceCommitTS(ctx, types.TS{})
-				info.Historical = err == nil
-			}
-		}
+	historical, err := historicalIVFSource(proc, sqlproc, cfg, &info)
+	if err != nil {
+		logutil.Warnf("IVF build baseline: historical cohort unavailable for %s.%s (table %d, version %d): %v", cfg.DbName, cfg.SrcTable, info.SourceTableID, version, err)
 	}
+	info.Historical = historical
 	encoded, err := json.Marshal(info)
 	if err != nil {
 		return err
@@ -62,4 +58,21 @@ func writeIVFBuildInfo(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg v
 	}
 	result.Close()
 	return nil
+}
+
+func historicalIVFSource(proc *process.Process, sp *sqlexec.SqlProcess, cfg vectorindex.IndexTableConfig, info *diagnostic.BuildInfo) (bool, error) {
+	ctx, db, err := sqlreader.Database(proc, sp, indexstats.Config{Database: cfg.DbName, Table: cfg.SrcTable})
+	if err != nil {
+		return false, err
+	}
+	rel, err := db.Relation(ctx, cfg.SrcTable, nil)
+	if err != nil {
+		return false, err
+	}
+	info.SourceTableID = rel.GetTableID(ctx)
+	provider, ok := rel.(engine.HistoricalSourceProvider)
+	if !ok {
+		return false, moerr.NewNotSupported(ctx, "source snapshot visibility check")
+	}
+	return provider.SourceVisibleAtSnapshot(ctx)
 }

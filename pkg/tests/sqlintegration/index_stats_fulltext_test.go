@@ -196,6 +196,18 @@ func TestMoIndexStatsFulltextSQL(t *testing.T) {
 				metrics = wait(0, 0, 0)
 				require.Equal(t, float64(0), metrics["min_document_frequency"])
 				require.Equal(t, float64(0), metrics["max_document_frequency"])
+				if tc.version == 2 {
+					// Two compact-to-empty cycles reuse the first tail position with
+					// different documents and vocabularies.
+					exec("alter table v2 alter reindex ft fulltext2 merge force_sync")
+					exec("insert into v2 values (10,'apple')")
+					wait(1, 1, 1)
+					exec("delete from v2 where true")
+					wait(0, 0, 0)
+					exec("alter table v2 alter reindex ft fulltext2 merge force_sync")
+					exec("insert into v2 values (11,'apple banana'),(12,'pear')")
+					wait(2, 3, 1)
+				}
 			}) {
 				return
 			}

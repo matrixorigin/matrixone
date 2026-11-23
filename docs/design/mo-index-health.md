@@ -87,7 +87,7 @@ keys, centroid IDs and decoded vectors, in addition to its exact counts and
 geometry. A historical primary-key lookup classifies sampled keys by existence
 at `build_ts`. Both drift and neighbor lookups decode the sampled constants to
 their SQL type for the source primary-key filter. Keys share a statement up to
-the 256 KiB literal budget. The join uses the original key type and collation.
+the 256 KiB literal budget. The drift lookup filters the build snapshot directly, including indexed keys whose source deletion is still pending in CDC.
 "New" means a currently indexed key absent at the build snapshot; updates of an
 existing key belong to the old cohort. Reused keys have the same identity rule.
 
@@ -145,8 +145,8 @@ At most one REINDEX suggestion is emitted, in priority order:
 
 - Lists outside [sqrt(N)/2,2*sqrt(N)], or lists=1 with N>1: suggest ceil(sqrt(N)),
   bounded to [1,N]. Empty tables and no-op parameter changes produce no advice.
-- Training sample below 30*lists: suggest retraining when the current source has
-  enough rows to meet that target; otherwise expose the limitation only.
+- Training sample below 30*lists: suggest retraining when the current source has enough rows and the
+  build sample limit with the effective `kmeans_train_percent` reaches that target.
 - Deep coverage below target around max(1,K/8), or new-query coverage at least
   ten percentage points below old queries with at least ten queries per cohort:
   suggest REINDEX. Also report the smallest evaluated probe count meeting target.

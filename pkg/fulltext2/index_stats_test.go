@@ -114,11 +114,12 @@ func TestMoIndexStatsFulltext2ReusesMatchingWarmGeneration(t *testing.T) {
 	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
 	entry.Status.Store(1)
 	veccache.Cache.IndexMap.Store("stats_warm", entry)
+	baseTS := int64(11)
 	n := 0
 	mp := mpool.MustNewZero()
 	runSql = func(_ *sqlexec.SqlProcess, query string) (executor.Result, error) {
 		n++
-		v := int64(11)
+		v := baseTS
 		if strings.Contains(query, "chunk_id") {
 			v = 22
 		}
@@ -135,6 +136,10 @@ func TestMoIndexStatsFulltext2ReusesMatchingWarmGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Equal(t, 2, n)
+	reader.loadedTs, baseTS = 0, 0
+	_, err = ReadStats(t.Context(), sqlproc, TableConfig{IndexTable: "stats_warm"})
+	require.ErrorContains(t, err, "read snapshot is unavailable", "base-less generations must bypass the bare key even when their tail positions match")
+	reader.loadedTs, baseTS = 11, 11
 	reader.loadedTail = 99
 	_, err = ReadStats(t.Context(), sqlproc, TableConfig{IndexTable: "stats_warm"})
 	require.ErrorContains(t, err, "read snapshot is unavailable", "a different generation must never serve the statement")
@@ -155,4 +160,35 @@ func TestMoIndexStatsFulltext2ReusesMatchingWarmGeneration(t *testing.T) {
 		require.Equal(t, []string{key}, veccache.Cache.Keys())
 	}
 
+}
+
+func TestMoIndexStatsFulltext2GenerationCaptureRetry(t *testing.T) {
+	previous := veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	t.Cleanup(func() { veccache.Cache.Destroy(); veccache.Cache = previous })
+	sp, mp := mockSqlProc(t)
+	op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: timestamp.Timestamp{PhysicalTime: 100}}).AnyTimes()
+	sp.Proc.Base.TxnOperator = op
+	reads := 0
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "MAX(timestamp"):
+			reads++
+			if reads != 2 {
+				return executor.Result{}, context.DeadlineExceeded
+			}
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 11, 0)}}, nil
+		case strings.Contains(sql, "MAX(chunk_id"), strings.Contains(sql, "SUM("), strings.Contains(sql, "COUNT(*)"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+		default:
+			return executor.Result{Mp: mp}, nil
+		}
+	})
+	_, err := ReadStats(t.Context(), sp, testStorageCfg())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Empty(t, veccache.Cache.Keys())
+	_, err = ReadStats(t.Context(), sp, testStorageCfg())
+	require.NoError(t, err)
+	require.Equal(t, 2, reads, "each attempt captures the generation once, before cache publication")
 }

@@ -1184,6 +1184,7 @@ type Relation interface {
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
 	// VisibleObjectCount counts persisted data and tombstone objects at the relation snapshot.
+	// Index diagnostics currently call it only on local, non-partitioned relations.
 	VisibleObjectCount(ctx context.Context) (int, error)
 
 	ApproxObjectsNum(ctx context.Context) int
@@ -1208,6 +1209,12 @@ type RelationHandleFactory interface {
 // relation cache do not implement it.
 type RelationCreatedInCurrentTxn interface {
 	CreatedInCurrentTxn(context.Context) (bool, error)
+}
+
+// HistoricalSourceProvider checks whether the build snapshot can reproduce the
+// source seen by this transaction, including local DDL and DML.
+type HistoricalSourceProvider interface {
+	SourceVisibleAtSnapshot(context.Context) (bool, error)
 }
 
 // SourceCommitTSProvider is an optional relation capability used by async
