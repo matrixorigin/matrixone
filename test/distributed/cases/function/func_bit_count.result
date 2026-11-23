@@ -550,6 +550,119 @@ SELECT d, BIT_COUNT(d) AS bits FROM t_bit_count_float WHERE id IN (1,4) GROUP BY
 SELECT x, BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 GROUP BY CAST(d AS DOUBLE)) s;
 ➤ x[8,53,31]  ¦  bits[-5,64,0]  𝄀
 3.9  ¦  1
+SET @bit_count_group_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY';
+SELECT BIT_COUNT(IF(id=1,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_float
+WHERE id IN (1,2,5) GROUP BY IF(id=1,d,CAST(d AS DOUBLE)) ORDER BY bits;
+➤ bits[-5,64,0]  𝄀
+null  𝄀
+2  𝄀
+63
+SELECT id, BIT_COUNT(IF(id=1,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_float
+GROUP BY IF(id=1,d,CAST(d AS DOUBLE));
+SQL syntax error: column "t_bit_count_float.id" must appear in the GROUP BY clause or be used in an aggregate function
+DROP TABLE IF EXISTS t_bit_count_group_text;
+CREATE TABLE t_bit_count_group_text(id INT PRIMARY KEY, label VARCHAR(16) COLLATE utf8mb4_general_ci, other VARCHAR(16), d DOUBLE);
+INSERT INTO t_bit_count_group_text VALUES (1,'yes','yes',3.9),(2,'no','no',3.9),(3,NULL,NULL,3.9),(4,'YES','no',3.9),(5,'yes','yes',NULL);
+SELECT id, label='yes' AS matches, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits
+FROM t_bit_count_group_text ORDER BY id;
+➤ id[4,32,0]  ¦  matches[-6,8,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  0  ¦  2  𝄀
+3  ¦  null  ¦  2  𝄀
+4  ¦  0  ¦  2  𝄀
+5  ¦  1  ¦  null
+SELECT id, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+GROUP BY id, IF(label='yes',d,CAST(d AS DOUBLE)) ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  2  𝄀
+5  ¦  null
+SELECT id FROM t_bit_count_group_text GROUP BY id, IF(label='yes',d,CAST(d AS DOUBLE))
+HAVING BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE)))=1 ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id, BIT_COUNT(IF(label IS NULL,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+GROUP BY id, IF(label IS NULL,d,CAST(d AS DOUBLE)) ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  1  𝄀
+4  ¦  2  𝄀
+5  ¦  null
+SELECT id, BIT_COUNT(IF(label=other,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  2  𝄀
+5  ¦  null
+SELECT id, BIT_COUNT(IF(label=other,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+GROUP BY id, label, IF(label=other,d,CAST(d AS DOUBLE)) ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  2  𝄀
+5  ¦  null
+SELECT label=CAST(X'FF' AS CHAR(16)) FROM t_bit_count_group_text WHERE id=1;
+➤ label = cast(0xFF as char(16))[-6,8,0]  𝄀
+null
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1300  ¦  Invalid utf8mb4 character string: 'ff'
+SELECT BIT_COUNT(IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d))
+FROM t_bit_count_group_text WHERE id=1;
+➤ BIT_COUNT(IF(id < 0, IF(label = cast(0xFF as char(16)), d, cast(d as double)), d))[-5,64,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SELECT BIT_COUNT(IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d))
+FROM t_bit_count_group_text WHERE id=1
+GROUP BY id, IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d);
+➤ BIT_COUNT(IF(id < 0, IF(label = cast(0xFF as char(16)), d, cast(d as double)), d))[-5,64,0]  𝄀
+2
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET SESSION sql_mode = '';
+SELECT id, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+GROUP BY id, IF(label='yes',d,CAST(d AS DOUBLE)) ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  2  𝄀
+5  ¦  null
+SELECT id, BIT_COUNT(IF(label=other,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+GROUP BY id, label, IF(label=other,d,CAST(d AS DOUBLE)) ORDER BY id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  2  𝄀
+5  ¦  null
+SELECT BIT_COUNT(IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d))
+FROM t_bit_count_group_text WHERE id=1
+GROUP BY IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d);
+➤ BIT_COUNT(IF(id < 0, IF(label = cast(0xFF as char(16)), d, cast(d as double)), d))[-5,64,0]  𝄀
+2
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SELECT COUNT(*) AS groups_seen, COUNT(CASE WHEN
+(label='yes' AND bits=1) OR ((label='no' OR label IS NULL) AND bits=2)
+THEN 1 END) AS coherent_groups FROM (
+SELECT label, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits
+FROM t_bit_count_group_text WHERE id IN (1,2,3)
+GROUP BY IF(label='yes',d,CAST(d AS DOUBLE))
+HAVING (label='yes' AND BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE)))=1)
+OR ((label='no' OR label IS NULL) AND BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE)))=2)
+) s;
+➤ groups_seen[-5,64,0]  ¦  coherent_groups[-5,64,0]  𝄀
+1  ¦  1
+DROP TABLE t_bit_count_group_text;
+SET SESSION sql_mode = @bit_count_group_mode;
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
 ➤ bits[-5,64,0]  𝄀
 2
@@ -641,12 +754,13 @@ FROM t_bit_count_float WHERE id IN (1,2,5) ORDER BY id;
 2  ¦  63  ¦  62  𝄀
 5  ¦  null  ¦  1
 SELECT id, BIT_COUNT(+(SELECT (SELECT IF(id=1,d,CAST(d AS DOUBLE))))) AS plus_bits,
+BIT_COUNT((SELECT +(SELECT IF(id=1,d,CAST(d AS DOUBLE))))) AS inner_plus_bits,
 BIT_COUNT((SELECT (SELECT IF(id=1,d,CAST(d AS DOUBLE))) OFFSET 0)) AS offset_bits
 FROM t_bit_count_float WHERE id IN (1,2,5) ORDER BY id;
-➤ id[4,32,0]  ¦  plus_bits[-5,64,0]  ¦  offset_bits[-5,64,0]  𝄀
-1  ¦  1  ¦  1  𝄀
-2  ¦  63  ¦  63  𝄀
-5  ¦  null  ¦  null
+➤ id[4,32,0]  ¦  plus_bits[-5,64,0]  ¦  inner_plus_bits[-5,64,0]  ¦  offset_bits[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  63  ¦  63  ¦  63  𝄀
+5  ¦  null  ¦  null  ¦  null
 SELECT BIT_COUNT((SELECT CAST(3.9e0 AS DOUBLE) WHERE TRUE)) AS where_bits,
 BIT_COUNT((SELECT CAST(3.9e0 AS DOUBLE) HAVING TRUE)) AS having_bits,
 BIT_COUNT((SELECT (SELECT CAST(3.9e0 AS DOUBLE) HAVING TRUE))) AS nested_having_bits;
@@ -702,22 +816,22 @@ FROM t_bit_count_float WHERE id IN (1,2,5) ORDER BY id;
 2  ¦  63  ¦  63  ¦  62  ¦  2  𝄀
 5  ¦  null  ¦  null  ¦  null  ¦  2
 INSERT INTO t_bit_count_float VALUES (9,3.9,3.9),(10,3.9,3.9);
-PREPARE bit_count_nested FROM 'SELECT id,BIT_COUNT((SELECT (SELECT IF(id=?,d,CAST(d AS DOUBLE))))) AS bits FROM t_bit_count_float WHERE id IN (9,10) ORDER BY id';
+PREPARE bit_count_nested FROM 'SELECT id,BIT_COUNT((SELECT (SELECT IF(id=?,d,CAST(d AS DOUBLE))))) AS bits, BIT_COUNT((SELECT +(SELECT IF(id=?,d,CAST(d AS DOUBLE))))) AS inner_plus_bits FROM t_bit_count_float WHERE id IN (9,10) ORDER BY id';
 SET @bit_count_nested_id = 9;
-EXECUTE bit_count_nested USING @bit_count_nested_id;
-➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
-9  ¦  1  𝄀
-10  ¦  2
+EXECUTE bit_count_nested USING @bit_count_nested_id, @bit_count_nested_id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  ¦  inner_plus_bits[-5,64,0]  𝄀
+9  ¦  1  ¦  1  𝄀
+10  ¦  2  ¦  2
 SET @bit_count_nested_id = 10;
-EXECUTE bit_count_nested USING @bit_count_nested_id;
-➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
-9  ¦  2  𝄀
-10  ¦  1
+EXECUTE bit_count_nested USING @bit_count_nested_id, @bit_count_nested_id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  ¦  inner_plus_bits[-5,64,0]  𝄀
+9  ¦  2  ¦  2  𝄀
+10  ¦  1  ¦  1
 SET @bit_count_nested_id = NULL;
-EXECUTE bit_count_nested USING @bit_count_nested_id;
-➤ id[4,32,0]  ¦  bits[-5,64,0]  𝄀
-9  ¦  2  𝄀
-10  ¦  2
+EXECUTE bit_count_nested USING @bit_count_nested_id, @bit_count_nested_id;
+➤ id[4,32,0]  ¦  bits[-5,64,0]  ¦  inner_plus_bits[-5,64,0]  𝄀
+9  ¦  2  ¦  2  𝄀
+10  ¦  2  ¦  2
 DEALLOCATE PREPARE bit_count_nested;
 PREPARE bit_count_nested_exact FROM 'SELECT id,BIT_COUNT((SELECT (SELECT IF(id=?,d,9007199254740993)))) AS bits FROM t_bit_count_float WHERE id IN (9,10) ORDER BY id';
 SET @bit_count_nested_id = 9;

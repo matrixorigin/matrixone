@@ -282,21 +282,19 @@ func TestBitCountLowersReducedScalarSelector(t *testing.T) {
 		{"IF", "if(e.empno=1, e.sal, cast(e.sal as double))", function.IFF},
 		{"CASE", "case when e.empno=1 then e.sal else cast(e.sal as double) end", function.CASE},
 	} {
-		for _, nested := range []bool{false, true} {
-			name := tc.name + "/single"
-			if nested {
-				name = tc.name + "/nested"
-			}
-			t.Run(name, func(t *testing.T) {
+		for _, shape := range []struct{ name, prefix, suffix string }{
+			{"single", "(select ", ")"},
+			{"nested", "(select (select ", "))"},
+			{"nested plus", "(select +(select ", "))"},
+			{"nested repeated plus", "(select +(+(select ", ")))"},
+		} {
+			t.Run(tc.name+"/"+shape.name, func(t *testing.T) {
 				optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 				table := optimizer.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")]
 				salPos, ok := tableColumnPosition(table, "sal")
 				require.True(t, ok)
 				table.Cols[salPos].Typ.Id = int32(types.T_float64)
-				operand := "(select " + tc.operand + ")"
-				if nested {
-					operand = "(select " + operand + ")"
-				}
+				operand := shape.prefix + tc.operand + shape.suffix
 				p, err := runOneStmt(optimizer, t, "select bit_count("+operand+") from constraint_test.emp e")
 				require.NoError(t, err)
 				q := p.GetQuery()
@@ -362,16 +360,17 @@ func TestTablelessSubqueryInlinesLiteralTrueOnly(t *testing.T) {
 func TestBitCountGroupedSelectorKeepsGroupingContract(t *testing.T) {
 	const selector = "if(e.empno=1,e.sal,cast(e.sal as double))"
 	for _, tc := range []struct {
-		name, mode, operand, keys      string
-		wantError, wantTuple, wantArms bool
+		name, mode, operand, keys string
+		wantTuple, wantArms       bool
 	}{
-		{"determinant", "ONLY_FULL_GROUP_BY", selector, "e.empno,e.sal," + selector, false, false, true},
-		{"unproved determinant", "ONLY_FULL_GROUP_BY", selector, selector, true, false, false},
-		{"permissive representative", "", selector, selector, false, true, true},
-		{"native exact group key", "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE", selector, selector, false, false, false},
-		{"rollup grouping NULL", "", selector, selector + " with rollup", false, false, false},
-		{"warning-bearing cast", "", "if(cast(e.ename as signed)=1,e.sal,cast(e.sal as double))", "k", false, false, false},
-		{"volatile condition", "", "if(rand()>0.5,e.sal,cast(e.sal as double))", "k", false, false, false},
+		{"determinant", "ONLY_FULL_GROUP_BY", selector, "e.empno,e.sal," + selector, false, true},
+		{"unproved determinant uses group key", "ONLY_FULL_GROUP_BY", selector, selector, false, false},
+		{"permissive representative", "", selector, selector, true, true},
+		{"native exact group key", "ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE", selector, selector, false, false},
+		{"rollup grouping NULL", "", selector, selector + " with rollup", false, false},
+		{"warning-bearing cast", "", "if(cast(e.ename as signed)=1,e.sal,cast(e.sal as double))", "k", false, false},
+		{"masked binary-to-text cast", "", "if(e.empno<0,if(e.ename=cast(x'ff' as char(16)),e.sal,cast(e.sal as double)),e.sal)", "k", false, false},
+		{"volatile condition", "", "if(rand()>0.5,e.sal,cast(e.sal as double))", "k", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -389,10 +388,6 @@ func TestBitCountGroupedSelectorKeepsGroupingContract(t *testing.T) {
 				selectList = tc.operand + " as k, " + selectList
 			}
 			p, err := runOneStmt(optimizer, t, "select "+selectList+" from constraint_test.emp e group by "+tc.keys)
-			if tc.wantError {
-				require.ErrorContains(t, err, "must appear in the GROUP BY clause")
-				return
-			}
 			require.NoError(t, err)
 			require.Equal(t, tc.wantTuple, findPlanFunctionExpr(p, "serial_full") != nil)
 			if !tc.wantArms {
@@ -410,6 +405,59 @@ func TestBitCountGroupedSelectorKeepsGroupingContract(t *testing.T) {
 				require.Equal(t, int32(function.BIT_COUNT), id)
 				require.Equal(t, want[i], overload)
 			}
+		})
+	}
+
+	t.Run("ungrouped column remains invalid", func(t *testing.T) {
+		optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+		optimizer.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+		_, err := runOneStmt(optimizer, t, "select e.empno,bit_count("+selector+") from constraint_test.emp e group by "+selector)
+		require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+	})
+}
+
+func TestBitCountGroupedTextConditionStoresBoolean(t *testing.T) {
+	const yes = "if(e.ename='yes',e.sal,cast(e.sal as double))"
+	const no = "if(e.ename='no',e.sal,cast(e.sal as double))"
+	const mixed = "if(e.ename=e.job,e.sal,cast(e.sal as double))"
+	for _, tc := range []struct {
+		name, sql string
+		bools     int
+		wantText  bool
+		wantTuple bool
+	}{
+		{"shared SELECT and HAVING", "select bit_count(" + yes + ") n,bit_count(" + yes + ") from constraint_test.emp e group by " + yes + " having bit_count(" + yes + ")>=0 order by n", 1, false, true},
+		{"distinct predicates", "select bit_count(" + yes + "),bit_count(" + no + ") from constraint_test.emp e group by " + yes + "," + no, 2, false, true},
+		{"text and value grouped", "select bit_count(" + yes + ") from constraint_test.emp e group by e.ename,e.sal," + yes, 0, false, false},
+		{"mixed grouped and input text", "select bit_count(" + mixed + ") from constraint_test.emp e group by e.ename," + mixed, 0, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := optimizer.CurrentContext().(*MockCompilerContext)
+			ctx.SetSqlModeOverride("")
+			table := ctx.tables["emp"]
+			pos, ok := tableColumnPosition(table, "sal")
+			require.True(t, ok)
+			table.Cols[pos].Typ = pb.Type{Id: int32(types.T_float64)}
+			ctx.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")] = table
+			p, err := runOneStmt(optimizer, t, tc.sql)
+			require.NoError(t, err)
+			tuple := findPlanFunctionExpr(p, "serial_full")
+			if !tc.wantTuple {
+				require.Nil(t, tuple)
+				return
+			}
+			require.NotNil(t, tuple)
+			bools := 0
+			foundText := false
+			for _, arg := range tuple.GetF().Args {
+				if types.T(arg.Typ.Id) == types.T_bool {
+					bools++
+				}
+				foundText = foundText || types.T(arg.Typ.Id).IsMySQLString()
+			}
+			require.Equal(t, tc.bools, bools)
+			require.Equal(t, tc.wantText, foundText)
 		})
 	}
 }

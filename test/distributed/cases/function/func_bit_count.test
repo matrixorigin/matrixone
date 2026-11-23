@@ -329,6 +329,63 @@ SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float GROUP BY d, CAST(d AS DOUBL
 SELECT d, BIT_COUNT(d) AS bits FROM t_bit_count_float WHERE id IN (1,4) GROUP BY d ORDER BY d;
 SELECT x, BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 GROUP BY CAST(d AS DOUBLE)) s;
 
+# Exact group keys remain legal without proving their underlying columns.
+SET @bit_count_group_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY';
+SELECT BIT_COUNT(IF(id=1,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_float
+    WHERE id IN (1,2,5) GROUP BY IF(id=1,d,CAST(d AS DOUBLE)) ORDER BY bits;
+SELECT id, BIT_COUNT(IF(id=1,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_float
+    GROUP BY IF(id=1,d,CAST(d AS DOUBLE));
+
+# Grouping preserves the selected arm for string conditions, including NULL
+# and the resolved collation, without retaining full labels.
+DROP TABLE IF EXISTS t_bit_count_group_text;
+CREATE TABLE t_bit_count_group_text(id INT PRIMARY KEY, label VARCHAR(16) COLLATE utf8mb4_general_ci, other VARCHAR(16), d DOUBLE);
+INSERT INTO t_bit_count_group_text VALUES (1,'yes','yes',3.9),(2,'no','no',3.9),(3,NULL,NULL,3.9),(4,'YES','no',3.9),(5,'yes','yes',NULL);
+SELECT id, label='yes' AS matches, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits
+    FROM t_bit_count_group_text ORDER BY id;
+SELECT id, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+    GROUP BY id, IF(label='yes',d,CAST(d AS DOUBLE)) ORDER BY id;
+SELECT id FROM t_bit_count_group_text GROUP BY id, IF(label='yes',d,CAST(d AS DOUBLE))
+    HAVING BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE)))=1 ORDER BY id;
+SELECT id, BIT_COUNT(IF(label IS NULL,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+    GROUP BY id, IF(label IS NULL,d,CAST(d AS DOUBLE)) ORDER BY id;
+# A predicate mixing a group key and a dependent column keeps each value's owner.
+SELECT id, BIT_COUNT(IF(label=other,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text ORDER BY id;
+SELECT id, BIT_COUNT(IF(label=other,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+    GROUP BY id, label, IF(label=other,d,CAST(d AS DOUBLE)) ORDER BY id;
+# An unselected binary-to-text cast must not start emitting warnings when grouped.
+# This unsafe selector uses the grouped value's conversion.
+SELECT label=CAST(X'FF' AS CHAR(16)) FROM t_bit_count_group_text WHERE id=1;
+SHOW WARNINGS;
+SELECT BIT_COUNT(IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d))
+    FROM t_bit_count_group_text WHERE id=1;
+SHOW WARNINGS;
+SELECT BIT_COUNT(IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d))
+    FROM t_bit_count_group_text WHERE id=1
+    GROUP BY id, IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d);
+SHOW WARNINGS;
+SET SESSION sql_mode = '';
+SELECT id, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+    GROUP BY id, IF(label='yes',d,CAST(d AS DOUBLE)) ORDER BY id;
+SELECT id, BIT_COUNT(IF(label=other,d,CAST(d AS DOUBLE))) AS bits FROM t_bit_count_group_text
+    GROUP BY id, label, IF(label=other,d,CAST(d AS DOUBLE)) ORDER BY id;
+SELECT BIT_COUNT(IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d))
+    FROM t_bit_count_group_text WHERE id=1
+    GROUP BY IF(id<0,IF(label=CAST(X'FF' AS CHAR(16)),d,CAST(d AS DOUBLE)),d);
+SHOW WARNINGS;
+SELECT COUNT(*) AS groups_seen, COUNT(CASE WHEN
+    (label='yes' AND bits=1) OR ((label='no' OR label IS NULL) AND bits=2)
+    THEN 1 END) AS coherent_groups FROM (
+    SELECT label, BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE))) AS bits
+    FROM t_bit_count_group_text WHERE id IN (1,2,3)
+    GROUP BY IF(label='yes',d,CAST(d AS DOUBLE))
+    HAVING (label='yes' AND BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE)))=1)
+        OR ((label='no' OR label IS NULL) AND BIT_COUNT(IF(label='yes',d,CAST(d AS DOUBLE)))=2)
+) s;
+DROP TABLE t_bit_count_group_text;
+SET SESSION sql_mode = @bit_count_group_mode;
+
 # Merged projection forwards the CAST; LIMIT makes the projected value a field.
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1) s;
 SELECT BIT_COUNT(x) AS bits FROM (SELECT CAST(d AS DOUBLE) AS x FROM t_bit_count_float WHERE id = 1 LIMIT 1) s;
@@ -383,6 +440,7 @@ SELECT id, BIT_COUNT((SELECT (SELECT (SELECT IF(id=1,d,CAST(d AS DOUBLE)))))) AS
     BIT_COUNT((SELECT (SELECT IFNULL(d,CAST(3.9 AS DOUBLE))))) AS ifnull_bits
 FROM t_bit_count_float WHERE id IN (1,2,5) ORDER BY id;
 SELECT id, BIT_COUNT(+(SELECT (SELECT IF(id=1,d,CAST(d AS DOUBLE))))) AS plus_bits,
+    BIT_COUNT((SELECT +(SELECT IF(id=1,d,CAST(d AS DOUBLE))))) AS inner_plus_bits,
     BIT_COUNT((SELECT (SELECT IF(id=1,d,CAST(d AS DOUBLE))) OFFSET 0)) AS offset_bits
 FROM t_bit_count_float WHERE id IN (1,2,5) ORDER BY id;
 SELECT BIT_COUNT((SELECT CAST(3.9e0 AS DOUBLE) WHERE TRUE)) AS where_bits,
@@ -418,13 +476,13 @@ FROM t_bit_count_float WHERE id IN (1,2,5) ORDER BY id;
 # derived-table boundary it is a field, regardless of projection reuse.
 INSERT INTO t_bit_count_float VALUES (9,3.9,3.9),(10,3.9,3.9);
 # Prepared selector parameters keep their source and selected-arm conversion.
-PREPARE bit_count_nested FROM 'SELECT id,BIT_COUNT((SELECT (SELECT IF(id=?,d,CAST(d AS DOUBLE))))) AS bits FROM t_bit_count_float WHERE id IN (9,10) ORDER BY id';
+PREPARE bit_count_nested FROM 'SELECT id,BIT_COUNT((SELECT (SELECT IF(id=?,d,CAST(d AS DOUBLE))))) AS bits, BIT_COUNT((SELECT +(SELECT IF(id=?,d,CAST(d AS DOUBLE))))) AS inner_plus_bits FROM t_bit_count_float WHERE id IN (9,10) ORDER BY id';
 SET @bit_count_nested_id = 9;
-EXECUTE bit_count_nested USING @bit_count_nested_id;
+EXECUTE bit_count_nested USING @bit_count_nested_id, @bit_count_nested_id;
 SET @bit_count_nested_id = 10;
-EXECUTE bit_count_nested USING @bit_count_nested_id;
+EXECUTE bit_count_nested USING @bit_count_nested_id, @bit_count_nested_id;
 SET @bit_count_nested_id = NULL;
-EXECUTE bit_count_nested USING @bit_count_nested_id;
+EXECUTE bit_count_nested USING @bit_count_nested_id, @bit_count_nested_id;
 DEALLOCATE PREPARE bit_count_nested;
 PREPARE bit_count_nested_exact FROM 'SELECT id,BIT_COUNT((SELECT (SELECT IF(id=?,d,9007199254740993)))) AS bits FROM t_bit_count_float WHERE id IN (9,10) ORDER BY id';
 SET @bit_count_nested_id = 9;

@@ -17,8 +17,8 @@ package plan
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -30,7 +30,7 @@ func (b *baseBinder) bindGroupedBitCount(operand *Expr) (*Expr, error) {
 	if source == operand || b.builder == nil || b.ctx.groupingFuncAllowed || b.ctx.sampleFunc.hasSampleFunc ||
 		!(b.builder.mysqlCompatible || b.builder.mysqlFullGroupByCompat) ||
 		releasedBitCountFloatOverload(types.T(operand.Typ.Id)) < 0 ||
-		bitCountSelector(source) == nil || !canReplaySelectorExpr(b.GetContext(), source) {
+		bitCountSelector(source) == nil || !canReplayGroupedSelectorExpr(b.GetContext(), source) {
 		return nil, nil
 	}
 	groupPos := operand.GetCol().ColPos
@@ -53,6 +53,9 @@ func (b *baseBinder) bindGroupedBitCount(operand *Expr) (*Expr, error) {
 	var collect func(*Expr)
 	collect = func(expr *Expr) {
 		if col := expr.GetCol(); col != nil {
+			if col.RelPos == b.ctx.aggregateTag {
+				return
+			}
 			key := [2]int32{col.RelPos, col.ColPos}
 			if replacements[key] == nil && !seen[key] {
 				seen[key] = true
@@ -72,18 +75,61 @@ func (b *baseBinder) bindGroupedBitCount(operand *Expr) (*Expr, error) {
 	if !b.builder.mysqlCompatible {
 		for _, input := range inputs {
 			if !b.builder.mysqlFullGroupByAllowsColRef(b.ctx, input) {
-				col := input.GetCol()
-				name := col.Name
-				if binding := b.ctx.bindingByTag[col.RelPos]; name == "" && binding != nil &&
-					col.ColPos >= 0 && int(col.ColPos) < len(binding.cols) {
-					name = binding.cols[col.ColPos]
-				}
-				return nil, moerr.NewSyntaxErrorf(ctx, "column %q must appear in the GROUP BY clause or be used in an aggregate function", name)
+				// Replaying is optional: the already-bound group slot is legal
+				// even when its underlying columns are not group-determined.
+				return nil, nil
 			}
 		}
 	}
 
-	lowered, err := b.bindBitCountOperand(DeepCopyExpr(source))
+	working := DeepCopyExpr(source)
+	if !b.builder.mysqlCompatible {
+		var captureTextPredicates func(*Expr) error
+		captureTextPredicates = func(expr *Expr) error {
+			if isReplayableTextPredicate(ctx, expr) {
+				// A grouped input must keep its group-key value. Only capture
+				// predicates whose column inputs all come from the source row.
+				found, allInputs := false, true
+				_ = plan.VisitExprTree(expr, func(node *Expr) error {
+					if col := node.GetCol(); col != nil {
+						found = true
+						allInputs = allInputs && replacements[[2]int32{col.RelPos, col.ColPos}] == nil
+					}
+					return nil
+				})
+				if !found || !allInputs {
+					return nil
+				}
+				value, err := BindFuncExprImplByPlanExpr(ctx, "any_value", []*Expr{DeepCopyExpr(expr)})
+				if err != nil {
+					return err
+				}
+				pos := int32(len(b.ctx.aggregates))
+				b.ctx.aggregates = append(b.ctx.aggregates, value)
+				*expr = *GetColExpr(value.Typ, b.ctx.aggregateTag, pos)
+				return nil
+			}
+			for _, arg := range expr.GetF().GetArgs() {
+				if err := captureTextPredicates(arg); err != nil {
+					return err
+				}
+			}
+			for _, item := range expr.GetList().GetList() {
+				if err := captureTextPredicates(item); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := captureTextPredicates(working); err != nil {
+			return nil, err
+		}
+		// Only ungrouped columns outside captured predicates need an input slot.
+		inputs = nil
+		clear(seen)
+		collect(working)
+	}
+	lowered, err := b.bindBitCountOperand(working)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +160,17 @@ func (b *baseBinder) bindGroupedBitCount(operand *Expr) (*Expr, error) {
 // Only replay scalar operations whose evaluation cannot observe or change
 // session state, or repeat a conversion warning.
 func canReplaySelectorExpr(ctx context.Context, expr *Expr) bool {
+	return canReplaySelectorExprWithText(ctx, expr, false)
+}
+
+func canReplayGroupedSelectorExpr(ctx context.Context, expr *Expr) bool {
+	return canReplaySelectorExprWithText(ctx, expr, true)
+}
+
+func canReplaySelectorExprWithText(ctx context.Context, expr *Expr, captureText bool) bool {
+	if captureText && isReplayableTextPredicate(ctx, expr) {
+		return true
+	}
 	if expr.GetCol() != nil {
 		return bitCountGroupPrimitive(types.T(expr.Typ.Id))
 	}
@@ -152,17 +209,66 @@ func canReplaySelectorExpr(ctx context.Context, expr *Expr) bool {
 			return false
 		}
 	case function.CAST:
-		return len(fn.Args) == 2 && canReplaySelectorExpr(ctx, fn.Args[0]) &&
+		return len(fn.Args) == 2 && canReplaySelectorExprWithText(ctx, fn.Args[0], captureText) &&
 			canReplaySelectorCast(ctx, fn.Args[0], expr.Typ)
 	default:
 		return false
 	}
 	for _, arg := range fn.Args {
-		if !canReplaySelectorExpr(ctx, arg) {
+		if !canReplaySelectorExprWithText(ctx, arg, captureText) {
 			return false
 		}
 	}
 	return true
+}
+
+// Capture a total, diagnostic-free text predicate as a nullable boolean.
+// Carrying the predicate rather than its text inputs bounds per-group storage.
+func isReplayableTextPredicate(ctx context.Context, expr *Expr) bool {
+	if expr == nil || expr.PreparedNumeric != nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id == function.ISNULL || id == function.ISNOTNULL {
+		return len(fn.Args) == 1 && isReplayableTextOperand(ctx, fn.Args[0])
+	}
+	if len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil ||
+		!types.T(fn.Args[0].Typ.Id).IsMySQLString() || !types.T(fn.Args[1].Typ.Id).IsMySQLString() ||
+		!comparisonEvaluationIsTotal(id, fn.Args[0].Typ, fn.Args[1].Typ) {
+		return false
+	}
+	return isReplayableTextOperand(ctx, fn.Args[0]) && isReplayableTextOperand(ctx, fn.Args[1])
+}
+
+func isReplayableTextOperand(ctx context.Context, expr *Expr) bool {
+	if expr == nil || expr.PreparedNumeric != nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return false
+	}
+	if expr.GetCol() != nil {
+		return true
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.Src == nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1].GetT() == nil {
+		return false
+	}
+	id, variant := function.DecodeOverloadID(fn.Func.Obj)
+	if id == function.CAST && variant == 1 && expr.Typ.Charset != uint32(types.CharsetBinary) &&
+		(types.T(expr.Typ.Id) == types.T_char || types.T(expr.Typ.Id) == types.T_varchar || types.T(expr.Typ.Id) == types.T_text) &&
+		(types.StaticStringDomain(makeTypeByPlan2Expr(fn.Args[0])) == types.StringDomainBinary || fn.Args[0].GetLit().GetIsBin()) {
+		// Explicit binary-to-text casts can emit an invalid UTF-8 warning.
+		// They must remain inside their original, possibly masked branch.
+		return false
+	}
+	return id == function.CAST && variant >= 0 && variant <= 2 &&
+		isSameColumnType(fn.Args[1].Typ, expr.Typ) && isReplayableTextOperand(ctx, fn.Args[0]) &&
+		(canReplaySelectorCast(ctx, fn.Args[0], expr.Typ) || existentialStringCastIsTotal(fn.Args[0].Typ, expr.Typ))
 }
 
 func canReplaySelectorCast(ctx context.Context, operand *Expr, target Type) bool {

@@ -192,7 +192,7 @@ func bitCountForwardedScalar(sub *tree.Subquery) *tree.Subquery {
 		clause.Having != nil || len(clause.Windows) != 0 || clause.IntoExport != nil || len(clause.IntoVars) != 0 {
 		return nil
 	}
-	next, _ := unwrapParenExpr(clause.Exprs[0].Expr).(*tree.Subquery)
+	next := bitCountScalarOperand(clause.Exprs[0].Expr)
 	if next != nil && !next.Exists {
 		return next
 	}

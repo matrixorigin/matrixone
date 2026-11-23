@@ -85,6 +85,7 @@ func canShareGroupedBitCountRow(ctx *BindContext) bool {
 type groupedSourceInputKey struct {
 	relation, column int32
 	rowIDNullTest    bool
+	textPredicate    string
 }
 
 // finalizeGroupedBitCountRow gives all eligible implicit group consumers one
@@ -111,6 +112,23 @@ func (builder *QueryBuilder) finalizeGroupedBitCountRow(
 		}
 	}
 	inputForReference := func(expr *Expr) (key groupedSourceInputKey, input, display *Expr) {
+		if isReplayableTextPredicate(builder.GetContext(), expr) {
+			// Capture a total predicate from the same row as the other inputs,
+			// rather than keeping its potentially large text operands per group.
+			found, local := false, true
+			_ = plan.VisitExprTree(expr, func(node *Expr) error {
+				if col := node.GetCol(); col != nil {
+					found = true
+					local = local && ctx.bindingByTag[col.RelPos] != nil
+				}
+				return nil
+			})
+			if found && local {
+				if predicate, err := projectExprKey(expr); err == nil {
+					return groupedSourceInputKey{textPredicate: predicate}, expr, nil
+				}
+			}
+		}
 		col := expr.GetCol()
 		if col == nil {
 			if rowID := groupedRowIDNullTest(expr); rowID != nil && ctx.bindingByTag[rowID.RelPos] != nil {

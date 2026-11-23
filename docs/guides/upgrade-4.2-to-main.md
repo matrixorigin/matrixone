@@ -69,6 +69,14 @@ conversion and reports an out-of-range error. Floating casts retain the
 existing MatrixOne saturation behavior outside their integer range; MySQL can
 report an error for those values. A direct `IF` or `CASE` uses the selected
 arm's conversion.
+When a grouped selector cannot be safely replayed, such as a volatile or
+warning-producing condition, `BIT_COUNT` instead uses the grouped value's
+conversion. The same applies in `ONLY_FULL_GROUP_BY` when the selector's
+source columns are not group-determined.
+
+New generated columns may persist floating `BIT_COUNT` overloads that v4.2.8
+cannot execute. Returning to v4.2.8 requires restoring the complete pre-upgrade
+backup; restoring it discards all changes made after that backup.
 
 A floating `IF` or `CASE` exposed as a derived-table column is read as a
 field, even if the optimizer removes that projection. For example, with two

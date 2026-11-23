@@ -370,11 +370,18 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		// Any branch may skip a scalar subquery. Producer replay must be
 		// total on rows outside the branch's actual evaluation domain.
 		childGuarded := guarded || conditionallyEvaluatesScalarArgument(exprImpl.F.Func)
+		forwardBitCountSource := false
+		if bitCountSource && len(exprImpl.F.Args) == 1 &&
+			releasedBitCountFloatOverload(types.T(expr.Typ.Id)) >= 0 {
+			id, _ := function.DecodeOverloadID(exprImpl.F.Func.GetObj())
+			forwardBitCountSource = id == function.UNARY_PLUS &&
+				exprImpl.F.Args[0].Typ.Id == expr.Typ.Id
+		}
 		for i, arg := range exprImpl.F.Args {
 			var childAffected bool
 			nodeID, exprImpl.F.Args[i], childAffected, err = builder.flattenSubqueriesWithConsumerAndChange(
 				nodeID, arg, ctx, childNullResultRejected, existentialIneligible, childGuarded,
-				i == 0 && scalarBitCountArg != nil)
+				i == 0 && (scalarBitCountArg != nil || forwardBitCountSource))
 			if err != nil {
 				return 0, nil, false, err
 			}

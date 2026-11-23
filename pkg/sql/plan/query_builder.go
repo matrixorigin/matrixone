@@ -12231,7 +12231,7 @@ func (builder *QueryBuilder) appendProjectionNode(
 	notCacheable bool,
 ) (newNodeID int32, err error) {
 	for i, proj := range ctx.projects {
-		if ctx.bitCountScalarForward && len(ctx.projects) == 1 && proj.GetSub() != nil {
+		if ctx.bitCountScalarForward && len(ctx.projects) == 1 {
 			nodeID, proj, _, err = builder.flattenSubqueriesWithConsumerAndChange(
 				nodeID, proj, ctx, false, existentialIneligible, ctx.outerPaginationPending, true)
 		} else {
