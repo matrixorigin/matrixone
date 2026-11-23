@@ -14320,27 +14320,16 @@ func LastDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-func GroupingFunc(parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
+// GroupingFunc is never evaluated: the planner folds every GROUPING call to a
+// constant for its grouping set. The function id stays registered so plans
+// keep resolving it; reaching execution means a plan was built without that
+// fold (for example by an older CN).
+func GroupingFunc(_ []*vector.Vector,
+	_ vector.FunctionResultWrapper,
 	_ *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[int64](result)
-
-	for i := 0; i < length; i++ {
-		var ans int64 = 0
-		power := 0
-		for j := len(parameters) - 1; j >= 0; j-- {
-			rollup := parameters[j].GetGrouping()
-			isRollup := rollup.Contains(uint64(i))
-			if isRollup {
-				ans += 1 << power
-			}
-			power++
-		}
-		rs.AppendMustValue(ans)
-	}
-	return nil
+	_ int,
+	_ *FunctionSelectList) error {
+	return moerr.NewNotSupportedNoCtx("GROUPING must be folded to a constant by the planner")
 }
 
 // CheckAsyncDatalinkSource validates only final rows eligible for a database write.

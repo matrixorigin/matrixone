@@ -2872,19 +2872,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		return false, err
 	}
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
-	if ap.PartitionTopN {
-		// Grouping-set sentinels are SQL NULLs to a downstream PARTITION BY.
-		// Normalize only the private order-key copies before external sorting;
-		// otherwise the sorter can compare their physical zero payload with an
-		// ordinary value (for example an empty string) and merge two partitions.
-		for i := 0; i < len(w.PartitionBy); i++ {
-			vec := ctr.orderVecs[i].Vec[0]
-			if vec.HasGrouping() {
-				vec.GetNulls().Or(vec.GetGrouping())
-				vec.SetGrouping(nil)
-			}
-		}
-	}
 
 	hasOrderValues := false
 	sortSize := int64(bat.Size())

@@ -1397,22 +1397,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	service := ""
-	if receiver.cnInformation.lockService != nil {
-		service = receiver.cnInformation.lockService.GetConfig().ServiceID
-	}
-	version := int64(0)
-	if runtime := moruntime.ServiceRuntime(service); runtime != nil {
-		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
-			version, _ = value.(int64)
-		}
-	}
-	if b.HasGrouping() && version < defines.MORPCVersion87 {
-		return moerr.NewInvalidStateNoCtx(
-			"grouping provenance requires MORPCVersion87 for remote results")
-	}
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryForPipeline(&transport, false)
+	data, err := b.MarshalBinaryWithBuffer(&transport, false)
 	if err != nil {
 		return err
 	}

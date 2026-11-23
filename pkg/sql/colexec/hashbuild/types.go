@@ -124,7 +124,6 @@ type container struct {
 	autoSpillLimitAtTrigger uint64
 	// Monotone while ingress can retain batches; Prepare starts a new generation.
 	// Only the spill projection uses this bit, not the final hashmap selection.
-	autoSpillHasGrouping bool
 
 	// reusable buffers for spill operations
 	spillHashValues []uint64

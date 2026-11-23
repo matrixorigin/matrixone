@@ -223,7 +223,7 @@ func TestTailFrameRowsReferToTheirChunks(t *testing.T) {
 	// First frame starts at 5 and spans two chunks, so the second starts at 7.
 	require.Contains(t, meta, "'cdc_tail:5'")
 	require.Contains(t, meta, "'cdc_tail:7'")
-	require.Contains(t, meta, "4242", "each frame records the version it applied")
+	require.Contains(t, meta, ", 4242)", "each frame records the version it applied")
 
 }
 
@@ -239,7 +239,7 @@ func TestTailFrameRowsAreAlwaysWritten(t *testing.T) {
 	require.Contains(t, sqls[0], "'cdc_tail:1'")
 	require.Contains(t, sqls[0], "'cdc_tail:2'")
 	require.NotContains(t, sqls[0], catalog.FullText2Index_TblCol_Metadata_Build_Ts)
-	require.NotContains(t, sqls[0], "4242")
+	require.NotContains(t, sqls[0], ", 4242)", "the timestamp column may itself contain the digits 4242")
 
 	wide := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_wide"}
 	sqlexec.MarkProvenanceColumns(wide.DbName, wide.MetadataTable)
@@ -248,7 +248,7 @@ func TestTailFrameRowsAreAlwaysWritten(t *testing.T) {
 	require.Len(t, sqls, 1)
 	require.Contains(t, sqls[0], catalog.FullText2Index_TblCol_Metadata_Build_Ts)
 	require.Contains(t, sqls[0], "'cdc_tail:2'")
-	require.Contains(t, sqls[0], "4242")
+	require.Contains(t, sqls[0], ", 4242)")
 }
 
 // The frame's metadata row carries the CRC the frame was SEALED with, read back from its footer

@@ -131,7 +131,7 @@ func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, valu
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	var payload bytes.Buffer
-	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&payload))
+	require.NoError(t, bat.MarshalBinaryForSpillTo(&payload))
 	rows, size, magic := int64(1), int64(payload.Len()), uint64(spillutil.SpillMagic)
 	for _, part := range [][]byte{
 		types.EncodeInt64(&rows),
