@@ -616,7 +616,13 @@ func parseSessionRewrites(ctx context.Context, value string) (rewrites map[strin
 
 	var bare map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(value), &bare); err != nil {
+		if json.Valid([]byte(value)) {
+			return nil, nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: expected a JSON object", value)
+		}
 		return nil, nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: %v", value, err)
+	}
+	if bare == nil {
+		return nil, nil, moerr.NewInvalidInputf(ctx, "invalid remap_rewrites value %q: expected a JSON object", value)
 	}
 	rules, derr := stringRewrites(ctx, value, bare)
 	if derr != nil {
