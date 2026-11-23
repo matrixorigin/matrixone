@@ -406,6 +406,16 @@ type updateTargetScope struct {
 }
 
 type QueryBuilder struct {
+	// syntheticPageSelects marks the exact *tree.Select nodes the ordinary
+	// pagination wrap generated as internal page stages: pointer identity of
+	// the generated page owner, not any alias spelling or shared flag.
+	syntheticPageClauses map[*tree.SelectClause]bool
+	// syntheticStarOrdinals carries, for the wrap's generated star refs
+	// only, the sole derived binding's visible column by relation tag and
+	// ordinal, so duplicate authored headings bind positionally while a
+	// user-written reference to the same name keeps its typed ambiguity.
+	syntheticStarOrdinals map[*tree.UnresolvedName]syntheticStarOrdinal
+
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
@@ -987,6 +997,11 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	// syntheticPageStar is set only while the projections of one registered
+	// generated page select bind: it restricts the star's ordinal expansion
+	// to the generated page owner's own select.
+	syntheticPageStar bool
+
 	builder *QueryBuilder
 	// Internal UPDATE/DELETE target projections need the persisted value for
 	// old secondary-index keys. The user predicate in the same SELECT still
@@ -1492,6 +1507,15 @@ const (
 	NotFound      int32 = math.MaxInt32
 	AmbiguousName int32 = math.MinInt32
 )
+
+// syntheticStarOrdinal binds one generated page star reference to its
+// sole derived binding's visible column by ordinal: the authored display
+// name still travels on the heading, the type and tag stay owned by the
+// binding itself.
+type syntheticStarOrdinal struct {
+	binding *Binding
+	colPos  int32
+}
 
 type Binding struct {
 	tag    int32
