@@ -189,7 +189,10 @@ func (Hooks) IndexHealth(sp *sqlexec.SqlProcess, cfg indexstats.Config) (map[str
 }
 
 func maintenanceHealth(tail fulltext2.TailUsage, live, base int64) (map[string]any, []indexstats.Suggestion) {
-	metrics := map[string]any{"tail_chunk_count": tail.Chunks, "tail_frame_count": tail.Frames, "tail_size_bytes": tail.Bytes}
+	metrics := map[string]any{"tail_chunk_count": tail.Chunks, "tail_size_bytes": tail.Bytes}
+	if tail.Frames != nil {
+		metrics["tail_frame_count"] = *tail.Frames
+	}
 	if base > 0 {
 		metrics["base_dead_ratio"] = max(0, 1-float64(live)/float64(base))
 	}

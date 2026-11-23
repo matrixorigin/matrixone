@@ -123,7 +123,7 @@ func TestMoIndexStatsFulltext2ReusesMatchingWarmGeneration(t *testing.T) {
 			v = 22
 		}
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], v, false, mp))
 		bat.SetRowCount(1)
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil

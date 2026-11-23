@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	"github.com/matrixorigin/matrixone/pkg/indexstats/sqlreader"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -344,6 +345,16 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return err
 		}
 
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.IndexRelationPolicy = u.policy
+		if u.param.Async == "true" {
+			// InitSQL may have been registered in an earlier transaction. Use the
+			// training snapshot for both the sampling ratio and its published baseline.
+			u.tblcfg.DataSize, err = sqlreader.NonNullSourceCount(sqlproc, u.tblcfg.DbName, u.tblcfg.SrcTable, u.tblcfg.KeyPart)
+			if err != nil {
+				return err
+			}
+		}
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
 		train_percent := u.idxcfg.Ivfflat.KmeansTrainPercent / float64(100)
 		if u.tblcfg.DataSize > 0 {
@@ -374,8 +385,6 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		logutil.Infof("IVFFLAT START: pick sample. %s", sql)
 
-		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.IndexRelationPolicy = u.policy
 		res, err := ivf_runSql(sqlproc, sql)
 		if err != nil {
 			return err

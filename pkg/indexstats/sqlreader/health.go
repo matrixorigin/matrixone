@@ -63,7 +63,7 @@ func (s *ivfStats) readHealth(proc *process.Process, sp *sqlexec.SqlProcess) err
 	if status != "" {
 		s.health["baseline_status"] = status
 	}
-	count, err := readIndexHealthSourceCount(sp, s.config)
+	count, err := NonNullSourceCount(sp, s.config.Database, s.config.Table, s.config.Column)
 	if err != nil {
 		if proc.Ctx.Err() != nil {
 			return proc.Ctx.Err()
@@ -119,8 +119,9 @@ func (s *ivfStats) readHealth(proc *process.Process, sp *sqlexec.SqlProcess) err
 	return nil
 }
 
-func readIndexHealthSourceCount(sp *sqlexec.SqlProcess, cfg indexstats.Config) (int64, error) {
-	result, err := indexStatsRunSQL(sp, "SELECT COUNT("+sqlquote.Ident(cfg.Column)+") FROM "+sqlquote.QualifiedIdent(cfg.Database, cfg.Table))
+// NonNullSourceCount counts indexed source values in the caller's transaction.
+func NonNullSourceCount(sp *sqlexec.SqlProcess, database, table, column string) (int64, error) {
+	result, err := indexStatsRunSQL(sp, "SELECT COUNT("+sqlquote.Ident(column)+") FROM "+sqlquote.QualifiedIdent(database, table))
 	if err != nil {
 		return 0, err
 	}

@@ -698,12 +698,8 @@ func tailPeakBytes(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (peak int64, un
 // occupy. A frame of n bytes was written as ceil(n / MaxChunkSize) chunks, contiguously, so the
 // chunk count is what makes the rows comparable with the chunks actually stored.
 func tailFrameCoverage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (stored, chunks int64, err error) {
-	sql := fmt.Sprintf(
-		"SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), CAST(COALESCE(SUM((%s + %d) DIV %d), 0) AS SIGNED) "+
-			"FROM %s WHERE %s",
-		catalog.FullText2Index_TblCol_Metadata_Filesize,
-		catalog.FullText2Index_TblCol_Metadata_Filesize,
-		vectorindex.MaxChunkSize-1, vectorindex.MaxChunkSize,
+	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED), %s FROM %s WHERE %s",
+		catalog.FullText2Index_TblCol_Metadata_Filesize, tailFrameChunksSQL(),
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id))
 	res, err := runSql(sqlproc, sql)
@@ -719,6 +715,11 @@ func tailFrameCoverage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (stored, ch
 			vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0), nil
 	}
 	return 0, 0, nil
+}
+
+func tailFrameChunksSQL() string {
+	return fmt.Sprintf("CAST(COALESCE(SUM((%s + %d) DIV %d), 0) AS SIGNED)",
+		catalog.FullText2Index_TblCol_Metadata_Filesize, vectorindex.MaxChunkSize-1, vectorindex.MaxChunkSize)
 }
 
 // tailChunkCount counts the tag=1 chunks actually stored.
@@ -1168,26 +1169,37 @@ func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 	return scanInt64(sqlproc, "SELECT COUNT(*) FROM "+sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable)+" WHERE "+cdcTailFilter())
 }
 
-type TailUsage struct{ Chunks, Frames, Bytes int64 }
+type TailUsage struct {
+	Chunks, Bytes int64
+	Frames        *int64 // nil when legacy chunks lack frame metadata
+}
 
-// ReadTailUsage counts stored chunk rows, distinct frames and serialized payload
-// bytes. A frame's nrow is not a pending-document count.
+// ReadTailUsage compares physical chunks with the spans of logical frames in
+// the same snapshot. Legacy frames without metadata still contribute bytes.
 func ReadTailUsage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (TailUsage, error) {
-	var usage TailUsage
-	query := fmt.Sprintf("SELECT COUNT(*), COUNT(DISTINCT %s), CAST(COALESCE(SUM(LENGTH(%s)),0) AS SIGNED) FROM %s WHERE %s", catalog.FullText2Index_TblCol_Storage_Chunk_Id, catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter())
+	query := fmt.Sprintf(`SELECT chunks, bytes, IF(chunks = covered, frames, NULL)
+		FROM (SELECT COUNT(*) AS chunks, CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) AS bytes
+		      FROM %s WHERE %s) AS storage
+		CROSS JOIN (SELECT COUNT(*) AS frames, %s AS covered FROM %s WHERE %s) AS meta`,
+		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter(),
+		tailFrameChunksSQL(), sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id))
 	result, err := runSql(sqlproc, query)
 	if err != nil {
-		return usage, err
+		return TailUsage{}, err
 	}
 	defer result.Close()
 	for _, bat := range result.Batches {
 		if bat.RowCount() > 0 {
-			usage.Chunks = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
-			usage.Frames = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], 0)
-			usage.Bytes = vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], 0)
+			usage := TailUsage{Chunks: scalarInt64(bat.Vecs[0]), Bytes: scalarInt64(bat.Vecs[1])}
+			if !bat.Vecs[2].IsNull(0) {
+				frames := scalarInt64(bat.Vecs[2])
+				usage.Frames = &frames
+			}
+			return usage, nil
 		}
 	}
-	return usage, nil
+	return TailUsage{}, moerr.NewInternalErrorNoCtx("missing Fulltext2 tail usage")
 }
 
 // SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the

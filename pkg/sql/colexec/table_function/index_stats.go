@@ -72,7 +72,7 @@ func (s *indexStatsState) end(_ *TableFunction, _ *process.Process) error { retu
 func (s *indexStatsState) start(tf *TableFunction, proc *process.Process, _ int, _ process.Analyzer) (err error) {
 	s.reset(tf, proc)
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	}
 	sp := sqlexec.NewSqlProcess(proc)
 	sp.ApplyScanSnapshot(tf.ScanSnapshot)

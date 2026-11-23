@@ -28,7 +28,8 @@ func TestMaintenanceHealth(t *testing.T) {
 	}{
 		{TailChunkThreshold - 1, 69, 100, ""}, {TailChunkThreshold, 70, 100, "MERGE"}, {TailChunkThreshold + 1, 69, 100, "REBUILD"}, {TailChunkThreshold, 0, 0, "MERGE"},
 	} {
-		m, a := maintenanceHealth(fulltext2.TailUsage{Chunks: tc.chunks, Frames: 2, Bytes: 99}, tc.live, tc.base)
+		frames := int64(2)
+		m, a := maintenanceHealth(fulltext2.TailUsage{Chunks: tc.chunks, Frames: &frames, Bytes: 99}, tc.live, tc.base)
 		require.Equal(t, int64(2), m["tail_frame_count"])
 		require.Equal(t, int64(99), m["tail_size_bytes"])
 		if tc.base == 0 {

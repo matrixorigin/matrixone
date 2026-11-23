@@ -24,8 +24,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -50,6 +53,7 @@ func TestMoIndexStatsFulltextSQL(t *testing.T) {
 		}
 		exec("create database index_stats_fulltext")
 		exec("use index_stats_fulltext")
+		checkFulltextTailFrames(t, ctx, cn.ServiceID(), exec)
 		exec("set experimental_fulltext2_index=1")
 		exec("create user fulltext_stats_reader identified by '111'")
 		for _, tc := range []struct {
@@ -227,4 +231,29 @@ func checkConcurrentStatsGeneration(t *testing.T, ctx context.Context, db *sql.D
 		}
 	}
 	require.Equal(t, 1, entries, "different autocommit snapshots must reuse the same diagnostic load")
+}
+
+func checkFulltextTailFrames(t *testing.T, ctx context.Context, service string, exec func(string)) {
+	t.Helper()
+	cfg := fulltext2.TableConfig{DbName: "index_stats_fulltext", IndexTable: "chunks", MetadataTable: "frames"}
+	sp := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(ctx, service, nil, 0, nil))
+	exec("create table chunks(index_id varchar(64), chunk_id bigint, tag int, data longblob)")
+	exec("create table frames(index_id varchar(64), filesize bigint)")
+	size := int64(vectorindex.MaxChunkSize)
+	exec(fmt.Sprintf("insert into chunks values ('cdc_tail',1,1,repeat('a',%d)),('cdc_tail',2,1,'b')", size))
+	exec(fmt.Sprintf("insert into frames values ('cdc_tail:1',%d)", size+1))
+	usage, err := fulltext2.ReadTailUsage(sp, cfg)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, usage.Chunks)
+	require.Equal(t, size+1, usage.Bytes)
+	require.NotNil(t, usage.Frames)
+	require.EqualValues(t, 1, *usage.Frames)
+
+	// A legacy chunk can coexist with newer frames that have metadata.
+	exec("insert into chunks values ('cdc_tail',3,1,'c')")
+	usage, err = fulltext2.ReadTailUsage(sp, cfg)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, usage.Chunks)
+	require.Equal(t, size+2, usage.Bytes)
+	require.Nil(t, usage.Frames)
 }

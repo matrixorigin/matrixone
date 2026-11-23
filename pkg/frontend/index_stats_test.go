@@ -36,3 +36,30 @@ func TestMoIndexStatsRequiresSourceTableSelectPrivilege(t *testing.T) {
 	require.Equal(t, "private_db", tips[0].databaseName)
 	require.Equal(t, "private_table", tips[0].tableName)
 }
+
+func TestMoIndexStatsRequiresSelectOnDMLTarget(t *testing.T) {
+	ref := &plan.ObjectRef{SchemaName: "db", ObjName: "source"}
+	scan := &plan.Node{NodeType: plan.Node_FUNCTION_SCAN, ObjRef: ref,
+		TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Name: "mo_index_stats"}}}
+	for _, tc := range []struct {
+		stmt   plan.Query_StatementType
+		target *plan.Node
+		write  PrivilegeType
+	}{
+		{plan.Query_UPDATE, &plan.Node{NodeType: plan.Node_MULTI_UPDATE, UpdateCtxList: []*plan.UpdateCtx{{ObjRef: ref, TableDef: &plan.TableDef{}}}}, PrivilegeTypeUpdate},
+		{plan.Query_DELETE, &plan.Node{NodeType: plan.Node_DELETE, DeleteCtx: &plan.DeleteCtx{Ref: ref}}, PrivilegeTypeDelete},
+	} {
+		t.Run(tc.stmt.String(), func(t *testing.T) {
+			q := &plan.Query{StmtType: tc.stmt, Nodes: []*plan.Node{scan, tc.target}}
+			tips, err := extractPrivilegeTipsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: q}})
+			require.NoError(t, err)
+			privileges := make([]PrivilegeType, 0, len(tips))
+			for _, tip := range tips {
+				require.Equal(t, ref.SchemaName, tip.databaseName)
+				require.Equal(t, ref.ObjName, tip.tableName)
+				privileges = append(privileges, tip.typ)
+			}
+			require.ElementsMatch(t, []PrivilegeType{PrivilegeTypeSelect, tc.write}, privileges)
+		})
+	}
+}

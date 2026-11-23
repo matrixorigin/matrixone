@@ -47,7 +47,7 @@ func statsTestBatch(mp *mpool.MPool, vectors ...*vector.Vector) executor.Result 
 
 func statsTestInts(t *testing.T, mp *mpool.MPool, values ...int64) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, x := range values {
 		require.NoError(t, vector.AppendFixed(v, x, false, mp))
 	}
@@ -56,7 +56,7 @@ func statsTestInts(t *testing.T, mp *mpool.MPool, values ...int64) *vector.Vecto
 
 func statsTestVectors(t *testing.T, mp *mpool.MPool, values ...[]float64) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(types.T_array_float64.ToType())
+	v := vector.NewVec(types.T_array_float64.ToType(), mp)
 	for _, x := range values {
 		require.NoError(t, vector.AppendBytes(v, types.ArrayToBytes(x), x == nil, mp))
 	}
@@ -231,7 +231,7 @@ func TestMoIndexStatsBlockScaledVectorDecoding(t *testing.T) {
 				}
 				cell, err := types.AppendBlockScaled(nil, format, source)
 				require.NoError(t, err)
-				v := vector.NewVec(types.New(oid, int32(dim), 0))
+				v := vector.NewVec(types.New(oid, int32(dim), 0), proc.Mp())
 				defer v.Free(proc.Mp())
 				require.NoError(t, vector.AppendBytes(v, cell, false, proc.Mp()))
 				require.NoError(t, vector.AppendBytes(v, nil, true, proc.Mp()))
@@ -249,7 +249,7 @@ func TestMoIndexStatsBlockScaledVectorDecoding(t *testing.T) {
 				got, err = indexStatsVectorInto(v, 1, scratch)
 				require.NoError(t, err)
 				require.Nil(t, got)
-				dynamic := vector.NewVec(oid.ToType())
+				dynamic := vector.NewVec(oid.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(dynamic, cell, false, proc.Mp()))
 				got, err = indexStatsVector(dynamic, 0)
 				dynamic.Free(proc.Mp())
@@ -273,7 +273,7 @@ func TestMoIndexStatsBlockScaledVectorDecoding(t *testing.T) {
 					{wrongFormat, int32(dim)},
 					{cell, int32(dim + 1)},
 				} {
-					bad := vector.NewVec(types.New(oid, invalid.width, 0))
+					bad := vector.NewVec(types.New(oid, invalid.width, 0), proc.Mp())
 					require.NoError(t, vector.AppendBytes(bad, invalid.cell, false, proc.Mp()))
 					_, err = indexStatsVector(bad, 0)
 					bad.Free(proc.Mp())

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -282,32 +283,7 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		exec("create database index_stats_async")
 		exec("use index_stats_async")
 		exec("create table vectors(id bigint primary key, v vecf64(1))")
-		exec("insert into vectors values(1,'[-10]'),(2,'[10]')")
-		exec("create index ivf using ivfflat on vectors(v) lists=1 kmeans_train_percent=100 async")
-		read := func() (map[string]any, error) {
-			var encoded string
-			if err := conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_async','vectors','ivf') AS s where row_type='index'").Scan(&encoded); err != nil {
-				return nil, err
-			}
-			var metrics map[string]any
-			err := json.Unmarshal([]byte(encoded), &metrics)
-			return metrics, err
-		}
-		wait := func(count float64) {
-			t.Helper()
-			var last map[string]any
-			var lastErr error
-			require.Eventually(t, func() bool {
-				last, lastErr = read()
-				if lastErr != nil || last["vector_count"] != count {
-					return false
-				}
-				maintenance, ok := last["async"].(map[string]any)
-				return ok && maintenance["caught_up"] == true
-			}, 45*time.Second, 100*time.Millisecond, "index must consume the source changes")
-			require.NoError(t, lastErr, "%v", last)
-		}
-		wait(2)
+		exec("insert into vectors values(1,'[-10]')")
 		var executor *iscp.ISCPTaskExecutor
 		require.Eventually(t, func() bool {
 			var ok bool
@@ -321,11 +297,44 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 				require.NoError(t, executor.Resume())
 			}
 		}()
+		exec("create index ivf using ivfflat on vectors(v) lists=1 kmeans_train_percent=100 async")
+		// Commit after registration but before the worker takes its training snapshot.
+		exec("insert into vectors values(2,'[10]'),(5,NULL)")
+		require.NoError(t, executor.Resume())
+		paused = false
+		read := func() (map[string]any, error) {
+			var encoded string
+			if err := conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_async','vectors','ivf') AS s where row_type='index'").Scan(&encoded); err != nil {
+				return nil, err
+			}
+			var metrics map[string]any
+			err := json.Unmarshal([]byte(encoded), &metrics)
+			return metrics, err
+		}
+		wait := func(count float64) {
+			t.Helper()
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				last, err := read()
+				require.NoError(c, err)
+				require.Equal(c, count, last["vector_count"])
+				maintenance, ok := last["async"].(map[string]any)
+				require.True(c, ok, "%v", last)
+				require.Equal(c, true, maintenance["caught_up"], "%v", last)
+			}, 45*time.Second, 100*time.Millisecond, "index must consume the source changes")
+		}
+		// The CDC index stores three entries, but only the two non-NULL vectors train the baseline.
+		wait(3)
+		built, err := read()
+		require.NoError(t, err)
+		require.Equal(t, float64(0), built["growth_ratio"])
+		require.InDelta(t, 2.0/30, built["training_sample_ratio"], 1e-12)
+		require.NoError(t, executor.Pause())
+		paused = true
 		exec("insert into vectors values(3,'[30]')")
 		metrics, err := read()
 		require.NoError(t, err)
 		require.Equal(t, "async", metrics["maintenance_mode"])
-		require.Equal(t, float64(2), metrics["vector_count"], "report consumed index vectors")
+		require.Equal(t, float64(3), metrics["vector_count"], "report consumed index entries")
 		var deepJSON string
 		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_async','vectors','ivf','{}') as s where row_type='index'").Scan(&deepJSON))
 		var deep map[string]any
@@ -346,7 +355,7 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		exec("rollback")
 		require.NoError(t, executor.Resume())
 		paused = false
-		wait(3)
+		wait(4)
 		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from mo_index_stats('index_stats_async','vectors','ivf','{}') as s where row_type='index'").Scan(&deepJSON))
 		require.NoError(t, json.Unmarshal([]byte(deepJSON), &deep))
 		require.NotContains(t, deep["analysis"], "status", "same-view durable progress permits coverage analysis")

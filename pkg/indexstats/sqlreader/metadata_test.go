@@ -95,9 +95,9 @@ func TestMoIndexStatsAsyncCoverageUsesSourceCommitsAndLogicalTimestamp(t *testin
 				require.Contains(t, query, "account_id = 7 AND table_id = 42")
 				require.Contains(t, query, "job_name = 'index_i''vf'")
 				require.Contains(t, query, "drop_at IS NULL ORDER BY job_id DESC LIMIT 1")
-				watermark := vector.NewVec(types.T_varchar.ToType())
+				watermark := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(watermark, []byte(tc.watermark), false, proc.Mp()))
-				status := vector.NewVec(types.T_varchar.ToType())
+				status := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendBytes(status, []byte(tc.jobStatus), false, proc.Mp()))
 				return statsTestBatch(proc.Mp(), statsTestInts(t, proc.Mp(), tc.state), watermark, status), nil
 			}
