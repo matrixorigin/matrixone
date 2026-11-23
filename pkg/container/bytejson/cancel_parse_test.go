@@ -99,6 +99,31 @@ func TestCancellableJSONParseStopsWithinTokenAndContainer(t *testing.T) {
 	}
 }
 
+func TestCancellableJSONParseCancelsWideNestedTree(t *testing.T) {
+	const entries = 8 * jsonParseItems
+	data := []byte(`[` + strings.Repeat(`{"k":[0]},`, entries-1) + `{"k":[0]}]`)
+	// The parser checks once per jsonParseItems values here. The outer array
+	// counts once and each element contributes an object, an array, and a number.
+	const parseChecks = (1 + 3*entries) / jsonParseItems
+	for _, test := range []struct {
+		name   string
+		checks int
+	}{
+		{"last parse poll", 1 + parseChecks},
+		{"before encoding", 2 + parseChecks},
+		{"during encoding", 3 + parseChecks},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx := &cancelAfterJSONChecks{parent, cancel, test.checks}
+			got, err := ParseFromByteSliceWithCancellation(ctx, data)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, ByteJson{}, got)
+		})
+	}
+}
+
 func TestCancellableJSONParseErrorOrder(t *testing.T) {
 	wideString := `"` + strings.Repeat("a", 2*jsonParseChunk) + `"`
 	for _, test := range []struct {

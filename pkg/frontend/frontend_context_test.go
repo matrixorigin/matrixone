@@ -221,17 +221,14 @@ func TestFrontendPlanningUsesCurrentRequestContext(t *testing.T) {
 				bound, bindErr = binder.BindExpr(expr, 0, false)
 				return nil, bindErr
 			})
-			_, rebindErr := bindSetVariableResultExpr(expr, compiler, false)
 			value, simpleErr := GetSimpleExprValue(current, expr, ses)
 			if test.canceled {
 				require.ErrorIs(t, err, context.Canceled)
-				require.ErrorIs(t, rebindErr, context.Canceled)
 				require.ErrorIs(t, simpleErr, context.Canceled)
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, bound.GetLit())
 				require.True(t, bound.GetLit().GetBval())
-				require.NoError(t, rebindErr)
 				require.NoError(t, simpleErr)
 				require.Equal(t, true, value)
 			}

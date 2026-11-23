@@ -459,18 +459,6 @@ func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConvers
 	}
 }
 
-func bindSetVariableResultExpr(
-	e tree.Expr,
-	compilerContext plan2.CompilerContext,
-	preparedExpression bool,
-) (*plan.Expr, error) {
-	builder := plan2.NewQueryBuilder(
-		plan.Query_SELECT, compilerContext, preparedExpression, false)
-	bindContext := plan2.NewBindContext(builder, nil)
-	binder := plan2.NewProjectionBinder(builder, bindContext, plan2.NewHavingBinder(builder, bindContext))
-	return binder.BindExpr(e, 0, false)
-}
-
 // bindFrontendExpressionContext borrows only the pipeline context field for
 // synchronous frontend evaluation. The caller must restore it after consuming
 // and freeing the result; query cancellation and compiler state stay untouched.

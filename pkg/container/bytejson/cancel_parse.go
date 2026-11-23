@@ -25,7 +25,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
@@ -61,7 +60,6 @@ func ParseFromByteSliceWithCancellation(ctx context.Context, data []byte) (ByteJ
 	if err != nil {
 		return ByteJson{}, err
 	}
-	defer n.Free()
 	if err := p.space(); err != nil {
 		return ByteJson{}, err
 	}
@@ -165,15 +163,12 @@ func (p *cancelJSONParser) literal(word string, value any) (Node, error) {
 	return Node{value}, nil
 }
 
-func (p *cancelJSONParser) group(depth int, object bool) (result Node, err error) {
+func (p *cancelJSONParser) group(depth int, object bool) (Node, error) {
 	p.pos++
-	g := reuse.Alloc[Group](nil)
-	g.Obj = object
-	defer func() {
-		if err != nil {
-			g.free()
-		}
-	}()
+	// The long-document parser owns these groups until encoding finishes.
+	// Let the GC reclaim them, so cancellation and duplicate-key replacement
+	// can drop a whole subtree without walking it to return groups to a pool.
+	g := &Group{Obj: object}
 
 	end := byte(']')
 	if object {
@@ -196,6 +191,7 @@ func (p *cancelJSONParser) group(depth int, object bool) (result Node, err error
 			if p.peek() != '"' {
 				return Node{}, p.syntaxError()
 			}
+			var err error
 			key, err = p.readString()
 			if err != nil {
 				return Node{}, err
@@ -215,7 +211,6 @@ func (p *cancelJSONParser) group(depth int, object bool) (result Node, err error
 		}
 		if object && len(key) <= 65535 {
 			if prior, ok := index[key]; ok {
-				g.Values[prior].Free()
 				g.Values[prior] = value
 			} else {
 				index[key] = len(g.Values)
