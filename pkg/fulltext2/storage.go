@@ -1178,28 +1178,47 @@ type TailUsage struct {
 // the same snapshot. Legacy frames without metadata still contribute bytes.
 func ReadTailUsage(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (TailUsage, error) {
 	query := fmt.Sprintf(`SELECT chunks, bytes, IF(chunks = covered, frames, NULL)
-		FROM (SELECT COUNT(*) AS chunks, CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) AS bytes
-		      FROM %s WHERE %s) AS storage
-		CROSS JOIN (SELECT COUNT(*) AS frames, %s AS covered FROM %s WHERE %s) AS meta`,
-		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter(),
-		tailFrameChunksSQL(), sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
+		FROM (SELECT COUNT(*) AS chunks FROM %s WHERE %s) AS storage
+		CROSS JOIN (SELECT COUNT(*) AS frames, %s AS covered,
+		    CAST(COALESCE(SUM(%s), 0) AS SIGNED) AS bytes FROM %s WHERE %s) AS meta`,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter(), tailFrameChunksSQL(),
+		catalog.FullText2Index_TblCol_Metadata_Filesize, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		vectorindex.TailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id))
-	result, err := runSql(sqlproc, query)
-	if err != nil {
-		return TailUsage{}, err
-	}
-	defer result.Close()
-	for _, bat := range result.Batches {
-		if bat.RowCount() > 0 {
-			usage := TailUsage{Chunks: scalarInt64(bat.Vecs[0]), Bytes: scalarInt64(bat.Vecs[1])}
+	var usage TailUsage
+	err := sqlexec.RunTxn(sqlproc, func(tx executor.TxnExecutor) error {
+		stmt := sqlproc.StatementOption()
+		result, err := tx.Exec(query, stmt)
+		if err != nil {
+			return err
+		}
+		defer result.Close()
+		for _, bat := range result.Batches {
+			if bat.RowCount() == 0 {
+				continue
+			}
+			usage.Chunks = scalarInt64(bat.Vecs[0])
 			if !bat.Vecs[2].IsNull(0) {
+				usage.Bytes = scalarInt64(bat.Vecs[1])
 				frames := scalarInt64(bat.Vecs[2])
 				usage.Frames = &frames
+				return nil
 			}
-			return usage, nil
+
+			// Legacy tail chunks have no recorded length. Read their exact total
+			// only on this path, in the same snapshot as the coverage check.
+			fallback := fmt.Sprintf("SELECT CAST(COALESCE(SUM(LENGTH(%s)), 0) AS SIGNED) FROM %s WHERE %s",
+				catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), cdcTailFilter())
+			payload, err := tx.Exec(fallback, stmt)
+			if err != nil {
+				return err
+			}
+			defer payload.Close()
+			usage.Bytes = resultScalarInt64(payload)
+			return nil
 		}
-	}
-	return TailUsage{}, moerr.NewInternalErrorNoCtx("missing Fulltext2 tail usage")
+		return moerr.NewInternalErrorNoCtx("missing Fulltext2 tail usage")
+	})
+	return usage, err
 }
 
 // SumBaseNrow sums metadata.nrow over the tag=0 bases — the base doc count for the

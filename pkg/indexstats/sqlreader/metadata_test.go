@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -42,26 +41,19 @@ func (f indexStatsStorageFixture) Size(context.Context, string) (uint64, error) 
 	return 123, nil
 }
 
-func (f indexStatsStorageFixture) GetColumMetadataScanInfo(_ context.Context, column string, tombstones bool) ([]*plan.MetadataScanInfo, error) {
+func (f indexStatsStorageFixture) VisibleObjectCount(context.Context) (int, error) {
 	if f.fail {
-		return nil, errors.New("metadata read failed")
+		return 0, errors.New("metadata read failed")
 	}
-	if column != "*" {
-		return nil, errors.New("expected all columns")
-	}
-	if tombstones {
-		return []*plan.MetadataScanInfo{{ObjectName: "delete1"}, {ObjectName: "delete1"}}, nil
-	}
-	return []*plan.MetadataScanInfo{{ObjectName: "data1"}, {ObjectName: "data1"}, {ObjectName: "data2"}}, nil
+	return 3, nil
 }
 
 func TestMoIndexStatsStorageCountsObjectsOnceAcrossColumns(t *testing.T) {
-	size, data, tombstones, err := indexStatsRelationStorage(context.Background(), indexStatsStorageFixture{})
+	size, count, err := indexStatsRelationStorage(context.Background(), indexStatsStorageFixture{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(123), size)
-	require.Equal(t, 2, data)
-	require.Equal(t, 1, tombstones)
-	_, _, _, err = indexStatsRelationStorage(context.Background(), indexStatsStorageFixture{fail: true})
+	require.Equal(t, 3, count)
+	_, _, err = indexStatsRelationStorage(context.Background(), indexStatsStorageFixture{fail: true})
 	require.ErrorContains(t, err, "metadata read failed")
 }
 
@@ -187,12 +179,11 @@ func (f *primaryStatsStorageFixture) Size(_ context.Context, column string) (uin
 
 func TestMoIndexStatsPrimaryStorageExcludesOtherSourceColumns(t *testing.T) {
 	f := &primaryStatsStorageFixture{}
-	bytes, data, tombstones, err := indexStatsRelationStorage(t.Context(), f, "a", "b")
+	bytes, count, err := indexStatsRelationStorage(t.Context(), f, "a", "b")
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, f.columns)
 	require.Equal(t, uint64(24), bytes)
-	require.Equal(t, 2, data)
-	require.Equal(t, 1, tombstones)
+	require.Equal(t, 3, count)
 }
 
 func TestMoIndexStatsAsyncObservationFailureDoesNotHideCounts(t *testing.T) {

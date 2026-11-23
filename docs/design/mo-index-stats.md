@@ -206,7 +206,7 @@ same engine relation size facility as existing table-size queries: published
 column `OriginSize` statistics plus in-memory/workspace vector sizes. It is
 neither compressed disk usage nor actual process memory usage. This meaning is
 fixed by the metric definition instead of an always-true estimate flag. Object counts are
-visible persisted data and tombstone objects, deduplicated across columns;
+computed by iterating visible persisted data and tombstone objects at the transaction snapshot;
 unflushed vectors occupy memory and can exist with zero persisted objects.
 Storage does not claim the size of only the active IVF generation. Relation.Size
 reuses published engine statistics when available. A cold cache or incompatible

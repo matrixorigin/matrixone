@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -60,10 +59,10 @@ func Database(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats
 
 type indexStatsStorageRelation interface {
 	Size(context.Context, string) (uint64, error)
-	GetColumMetadataScanInfo(context.Context, string, bool) ([]*plan.MetadataScanInfo, error)
+	VisibleObjectCount(context.Context) (int, error)
 }
 
-func indexStatsRelationStorage(ctx context.Context, rel indexStatsStorageRelation, sizeColumns ...string) (uint64, int, int, error) {
+func indexStatsRelationStorage(ctx context.Context, rel indexStatsStorageRelation, sizeColumns ...string) (uint64, int, error) {
 	if len(sizeColumns) == 0 {
 		sizeColumns = []string{"*"}
 	}
@@ -71,26 +70,18 @@ func indexStatsRelationStorage(ctx context.Context, rel indexStatsStorageRelatio
 	for _, column := range sizeColumns {
 		bytes, err := rel.Size(ctx, column)
 		if err != nil {
-			return 0, 0, 0, err
+			return 0, 0, err
 		}
 		if math.MaxUint64-size < bytes {
-			return 0, 0, 0, moerr.NewInvalidInput(ctx, "mo_index_stats: storage size overflow")
+			return 0, 0, moerr.NewInvalidInput(ctx, "mo_index_stats: storage size overflow")
 		}
 		size += bytes
 	}
-	var counts [2]int
-	for i, tombstones := range []bool{false, true} {
-		infos, err := rel.GetColumMetadataScanInfo(ctx, "*", tombstones)
-		if err != nil {
-			return 0, 0, 0, err
-		}
-		objects := make(map[string]struct{})
-		for _, info := range infos {
-			objects[info.ObjectName] = struct{}{}
-		}
-		counts[i] = len(objects)
+	count, err := rel.VisibleObjectCount(ctx)
+	if err != nil {
+		return 0, 0, err
 	}
-	return size, counts[0], counts[1], nil
+	return size, count, nil
 }
 
 func readIndexStatsStorage(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (map[string]any, error) {
@@ -110,7 +101,7 @@ func readIndexStatsStorage(proc *process.Process, sqlproc *sqlexec.SqlProcess, c
 		if err != nil {
 			return nil, err
 		}
-		bytes, data, tombstones, err := indexStatsRelationStorage(ctx, rel, cfg.StorageColumns...)
+		bytes, count, err := indexStatsRelationStorage(ctx, rel, cfg.StorageColumns...)
 		if err != nil {
 			return nil, err
 		}
@@ -118,7 +109,7 @@ func readIndexStatsStorage(proc *process.Process, sqlproc *sqlexec.SqlProcess, c
 			return nil, moerr.NewInvalidInput(ctx, "mo_index_stats: storage size overflow")
 		}
 		size += bytes
-		objects += data + tombstones
+		objects += count
 	}
 	return map[string]any{
 		"size_bytes":  size,

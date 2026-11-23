@@ -44,7 +44,7 @@ Summary fields added by this extension:
 | `drift.approximate` | Present for reconstructed quantized entry vectors. |
 | `analysis.recall` | `kind:centroid_coverage`, actual query count, k=10, target, `(nprobe,recall)` curve, optional new/old curves and smallest evaluated `recommended_probe_limit` meeting target. The curve tests the supported upper bound (80000 or the number of centroids, whichever is smaller). An unattainable target reports `target_unreachable_within_probe_limit` and omits the setting recommendation. |
 | `analysis.retrain` | Sample count, iteration limit, `approximate:true` and current/retrained `sse_ratio`; present only on request. |
-| `tail_chunk_count`, `tail_frame_count`, `tail_size_bytes` | Fulltext2 CDC-tail storage chunks, logical frames and serialized payload bytes. The frame count is omitted when frame metadata does not cover all stored chunks. |
+| `tail_chunk_count`, `tail_frame_count`, `tail_size_bytes` | Fulltext2 CDC-tail storage chunks, logical frames and serialized payload bytes. Complete frame metadata provides the byte count. If coverage is incomplete, the reader sums stored payload lengths in the same snapshot and omits the frame count. |
 | `base_dead_ratio` | Fulltext2 max(0, 1 − source rows/base documents); absent without a base. |
 | `suggestions` | Summary-only array of `{action,reason,params?,variable?,value?}`; observing it never performs the action. |
 

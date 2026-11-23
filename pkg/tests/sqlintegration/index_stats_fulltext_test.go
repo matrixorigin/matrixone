@@ -237,7 +237,8 @@ func checkFulltextTailFrames(t *testing.T, ctx context.Context, service string, 
 	t.Helper()
 	cfg := fulltext2.TableConfig{DbName: "index_stats_fulltext", IndexTable: "chunks", MetadataTable: "frames"}
 	sp := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(ctx, service, nil, 0, nil))
-	exec("create table chunks(index_id varchar(64), chunk_id bigint, tag int, data longblob)")
+	// Hide the payload column to prove the complete-metadata query never projects it.
+	exec("create table chunks(index_id varchar(64), chunk_id bigint, tag int, payload longblob)")
 	exec("create table frames(index_id varchar(64), filesize bigint)")
 	size := int64(vectorindex.MaxChunkSize)
 	exec(fmt.Sprintf("insert into chunks values ('cdc_tail',1,1,repeat('a',%d)),('cdc_tail',2,1,'b')", size))
@@ -250,6 +251,7 @@ func checkFulltextTailFrames(t *testing.T, ctx context.Context, service string, 
 	require.EqualValues(t, 1, *usage.Frames)
 
 	// A legacy chunk can coexist with newer frames that have metadata.
+	exec("alter table chunks rename column payload to data")
 	exec("insert into chunks values ('cdc_tail',3,1,'c')")
 	usage, err = fulltext2.ReadTailUsage(sp, cfg)
 	require.NoError(t, err)

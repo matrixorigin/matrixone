@@ -1183,6 +1183,9 @@ type Relation interface {
 
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
+	// VisibleObjectCount counts persisted data and tombstone objects at the relation snapshot.
+	VisibleObjectCount(ctx context.Context) (int, error)
+
 	ApproxObjectsNum(ctx context.Context) int
 
 	// GetFlushTS returns the flush timestamp of the relation.

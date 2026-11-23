@@ -29,7 +29,10 @@ func TestAnalyzeOptions(t *testing.T) {
 	opts, err = ParseAnalyzeOptions(context.Background(), `{"sample_count":1,"recall_target":1,"retrain":true}`)
 	require.NoError(t, err)
 	require.True(t, opts.Retrain)
-	for _, raw := range []string{"", `null`, `[]`, `{`, `{} {}`, `{"unknown":1}`, `{"sample_count":0}`, `{"sample_count":257}`, `{"recall_target":0}`, `{"recall_target":1.1}`} {
+	opts, err = ParseAnalyzeOptions(t.Context(), `{"retrain":false}`)
+	require.NoError(t, err)
+	require.Equal(t, &AnalyzeOptions{SampleCount: 100, RecallTarget: .95}, opts)
+	for _, raw := range []string{"", `null`, `[]`, `{`, `{} {}`, `{"sample_count":null}`, `{"recall_target":null}`, `{"retrain":null}`, `{"unknown":1}`, `{"sample_count":0}`, `{"sample_count":257}`, `{"recall_target":0}`, `{"recall_target":1.1}`} {
 		_, err := ParseAnalyzeOptions(context.Background(), raw)
 		require.Error(t, err, raw)
 	}

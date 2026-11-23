@@ -661,6 +661,25 @@ func ForeachVisibleObjects(
 	return context.Cause(ctx)
 }
 
+func (tbl *txnTable) VisibleObjectCount(ctx context.Context) (int, error) {
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	snapshot := types.TimestampToTS(tbl.db.op.SnapshotTS())
+	n := 0
+	count := func(context.Context, objectio.ObjectEntry) error {
+		n++
+		return nil
+	}
+	for _, tombstone := range []bool{false, true} {
+		if err := ForeachVisibleObjects(ctx, state, snapshot, count, nil, tombstone); err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
+}
+
 // not accurate!  only used by stats
 func (tbl *txnTable) ApproxObjectsNum(ctx context.Context) int {
 	part, err := tbl.getPartitionState(ctx)
