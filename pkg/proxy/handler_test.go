@@ -40,6 +40,9 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -219,9 +222,10 @@ func TestHandler_Handle(t *testing.T) {
 	}()
 	mc.ForceRefresh(true)
 
-	// start proxy.
-	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
-		WithHAKeeperClient(hc))
+	// Capture the proxy's close diagnostics from construction, before it accepts connections.
+	core, logs := observer.New(zapcore.ErrorLevel)
+	proxyRuntime := runtime.NewRuntime(metadata.ServiceType_PROXY, "", zap.New(core))
+	s, err := NewServer(ctx, cfg, WithRuntime(proxyRuntime), WithHAKeeperClient(hc))
 	defer func() {
 		err := s.Close()
 		require.NoError(t, err)
@@ -261,6 +265,9 @@ func TestHandler_Handle(t *testing.T) {
 
 	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
+	require.NoError(t, db.Close())
+	require.Eventually(t, func() bool { return s.counterSet.connTotal.Load() == 0 }, 5*time.Second, 10*time.Millisecond)
+	require.Empty(t, logs.FilterMessage("failed to close tcp connection").All())
 }
 
 func TestHandlerCurrentConnections(t *testing.T) {
@@ -1203,9 +1210,10 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	tun.mu.sc = current
 	killed := make(chan ServerConn, 1)
 	cc := &mockClientConn{killFn: func(sc ServerConn) error { killed <- sc; return nil }}
-	done := make(chan bool, 1)
+	done := make(chan struct{}, 1)
 	go func() {
-		done <- h.cleanupBackendOnClientDisconnect(withCode(syscall.ECONNRESET, codeClientDisconnect), cc, tun)
+		h.cleanupBackendOnClientDisconnect(withCode(syscall.ECONNRESET, codeClientDisconnect), cc, tun)
+		close(done)
 	}()
 	<-entered
 	// The handler must complete terminal Close before selecting its backend.
@@ -1219,7 +1227,7 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	require.ErrorIs(t, tun.replaceServerConn(nil, replacement, false), errPipeClosed)
 	require.True(t, replacementClosed)
 	releaseWaiter()
-	require.True(t, <-done)
+	<-done
 	require.Same(t, current, <-killed)
 	require.Same(t, current, tun.getServerConn())
 }
@@ -1249,9 +1257,10 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 		return nil
 	}}
 
-	done := make(chan bool, 1)
+	done := make(chan struct{}, 1)
 	go func() {
-		done <- h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
+		h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
+		close(done)
 	}()
 
 	require.Same(t, current, <-notificationStarted)
@@ -1261,7 +1270,7 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 		t.Fatal("backend close waited for control-plane notification")
 	}
 	release()
-	require.True(t, <-done)
+	<-done
 }
 
 func TestHandler_handleTunnelErrCleansPlainInFlightEOF(t *testing.T) {

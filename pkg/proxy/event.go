@@ -80,14 +80,16 @@ func (e *baseEvent) wait() {
 	<-e.waitC
 }
 
-// sendReq sends an event to event channel.
-func sendReq(e IEvent, c chan<- IEvent) {
-	c <- e
-}
-
 // sendResp receives an event response from the channel.
 func sendResp(r []byte, c chan<- []byte) {
 	c <- r
+}
+
+func sendRespContext(ctx context.Context, r []byte, c chan<- []byte) {
+	select {
+	case c <- r:
+	case <-ctx.Done():
+	}
 }
 
 // makeEvent parses an event from message bytes. If we got no
