@@ -745,10 +745,15 @@ type ParamExpressionExecutor struct {
 	folded     bool
 	foldedNull bool
 
-	// typedVec holds this execution's copy of a typed parameter whose source
-	// type equals typ.
+	// typedVec is this execution's typed parameter: normally typedRef, a
+	// read-only reference to the value the process holds; an owned vector
+	// only for a conversion the process could not hold.
 	typedVec    *vector.Vector
+	typedRef    vector.Vector
 	typedFolded bool
+	// typedFrom is the process's typed parameter typedVec was read from. A
+	// different one means new values were installed: typedVec is stale.
+	typedFrom *vector.Vector
 	// textFallback reads a non-string parameter from the TEXT transport when
 	// the process holds no typed value for it.
 	textFallback ExpressionExecutor
@@ -780,6 +785,19 @@ func (expr *ParamExpressionExecutor) route(proc *process.Process) (typed *vector
 	if sameParamType(*src.GetType(), expr.typ) {
 		return src, nil, nil
 	}
+	// An integer that fits the bound integer type converts exactly. The
+	// process converts it once per execution; without a conversion store
+	// evalTyped converts it itself.
+	converted, err := proc.GetTypedPrepareParamAsInteger(expr.pos, expr.typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	if converted != nil {
+		return converted, nil, nil
+	}
+	if _, ok := process.TypedIntegerParamBits(src, expr.typ); ok {
+		return src, nil, nil
+	}
 	source := *src.GetType()
 	if expr.adapter != nil {
 		if sameParamType(expr.adapterSource, source) {
@@ -808,32 +826,58 @@ func (expr *ParamExpressionExecutor) route(proc *process.Process) (typed *vector
 	return nil, expr.adapter, nil
 }
 
-// evalTyped returns this execution's copy of a typed parameter.
-func (expr *ParamExpressionExecutor) evalTyped(src *vector.Vector, rowCount int) (*vector.Vector, error) {
+// evalTyped returns this execution's typed parameter. A value of the bound
+// type is a read-only reference to the process-owned constant, which lives for
+// the whole execution: a parameter is materialized once per execution, never
+// per executor. Only an integer conversion without a process conversion store
+// is materialized here.
+func (expr *ParamExpressionExecutor) evalTyped(proc *process.Process, src *vector.Vector, rowCount int) (*vector.Vector, error) {
 	if !expr.typedFolded {
 		if expr.typedVec != nil {
 			expr.typedVec.Free(expr.mp)
 			expr.typedVec = nil
 		}
-		vec, err := src.Dup(expr.mp)
+		var vec *vector.Vector
+		var err error
+		if sameParamType(*src.GetType(), expr.typ) {
+			if err = src.WindowInto(&expr.typedRef, 0, src.Length()); err == nil {
+				vec = &expr.typedRef
+			}
+		} else if bits, ok := process.TypedIntegerParamBits(src, expr.typ); ok {
+			vec, err = process.NewIntegerParamConst(expr.typ, bits, expr.mp)
+		} else {
+			err = moerr.NewInternalErrorNoCtxf("typed parameter %s cannot be read as %s",
+				src.GetType().String(), expr.typ.String())
+		}
 		if err != nil {
 			return nil, err
 		}
 		expr.typedVec = vec
 		expr.typedFolded = true
+		expr.typedFrom = proc.GetTypedPrepareParam(expr.pos)
 	}
 	expr.typedVec.SetLength(rowCount)
 	return expr.typedVec, nil
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	// A conversion owns the selection handling of its whole subtree.
-	typed, adapter, err := expr.route(proc)
-	if err != nil {
-		return nil, err
+	var typed *vector.Vector
+	var err error
+	// Once this execution's typed value is folded, its route is settled,
+	// unless the process now holds other typed values.
+	if expr.typedFolded && proc.GetTypedPrepareParam(expr.pos) != expr.typedFrom {
+		expr.typedFolded = false
 	}
-	if adapter != nil {
-		return adapter.Eval(proc, batches, selectList)
+	if !expr.typedFolded {
+		var adapter ExpressionExecutor
+		typed, adapter, err = expr.route(proc)
+		if err != nil {
+			return nil, err
+		}
+		// A conversion owns the selection handling of its whole subtree.
+		if adapter != nil {
+			return adapter.Eval(proc, batches, selectList)
+		}
 	}
 	// Scalar values stay physically constant, but their logical cardinality
 	// must follow the input batch for downstream materialization and shuffle.
@@ -848,8 +892,8 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.maskedNull.SetLength(rowCount)
 		return expr.maskedNull, nil
 	}
-	if typed != nil {
-		return expr.evalTyped(typed, rowCount)
+	if typed != nil || expr.typedFolded {
+		return expr.evalTyped(proc, typed, rowCount)
 	}
 	if expr.folded {
 		if expr.foldedNull {
@@ -910,6 +954,10 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 	case expr.null:
 		expr.null = nil
 	case expr.typedVec:
+		if vec.IsReadOnly() {
+			// The caller owns the result; the parameter itself stays shared.
+			return vec.Dup(expr.mp)
+		}
 		expr.typedVec = nil
 		expr.typedFolded = false
 	default:

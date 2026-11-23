@@ -1863,7 +1863,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// still read their parameters with source types. A parameter whose
 		// source type cannot be determined keeps the TEXT transport.
 		if bindings, bindErr := preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
-			if err = installTypedPrepareParams(cwft.proc, bindings); err != nil {
+			if err = installTypedPrepareParams(cwft.proc, bindings, &prepareStmt.typedParams); err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
 		}
@@ -1877,7 +1877,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		if err = installTypedPrepareParams(cwft.proc, cwft.paramBindings); err != nil {
+		if err = installTypedPrepareParams(cwft.proc, cwft.paramBindings, &prepareStmt.typedParams); err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
 		// Update only after the full protocol payload and typed bindings are

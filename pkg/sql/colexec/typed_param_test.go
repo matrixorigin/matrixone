@@ -149,3 +149,170 @@ func TestParamExpressionExecutorTypedTransport(t *testing.T) {
 		require.True(t, got.IsNull(0))
 	})
 }
+
+func TestParamExpressionExecutorTypedIntegerConversion(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	state := proc.DetachPrepareParams()
+	t.Cleanup(func() { proc.RestorePrepareParams(state) })
+	t.Cleanup(func() { proc.SetPrepareParams(nil) })
+
+	install := func(typed *vector.Vector) {
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
+		require.NoError(t, vector.AppendBytes(params, []byte("ignored"), false, proc.Mp()))
+		proc.SetOwnedPrepareParamsWithIsBin(params, nil)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = typed
+		bat.SetRowCount(1)
+		proc.SetTypedPrepareParams(bat)
+	}
+	constOf := func(typ types.T, v any) *vector.Vector {
+		var vec *vector.Vector
+		var err error
+		switch x := v.(type) {
+		case int64:
+			vec, err = vector.NewConstFixed(typ.ToType(), x, 1, proc.Mp())
+		case uint64:
+			vec, err = vector.NewConstFixed(typ.ToType(), x, 1, proc.Mp())
+		case int32:
+			vec, err = vector.NewConstFixed(typ.ToType(), x, 1, proc.Mp())
+		}
+		require.NoError(t, err)
+		return vec
+	}
+	newExecutor := func(typ types.T) *ParamExpressionExecutor {
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Typ:  typ.ToType().PlanType(),
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		})
+		require.NoError(t, err)
+		return executor.(*ParamExpressionExecutor)
+	}
+	rows := func(n int) []*batch.Batch {
+		bat := batch.NewWithSize(0)
+		bat.SetRowCount(n)
+		return []*batch.Batch{bat}
+	}
+
+	t.Run("in-range integers convert without a cast", func(t *testing.T) {
+		cases := []struct {
+			from, to types.T
+			value    any
+			check    func(*vector.Vector)
+		}{
+			{types.T_int64, types.T_int32, int64(7), func(v *vector.Vector) {
+				require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](v, 0))
+			}},
+			{types.T_int64, types.T_int32, int64(math.MinInt32), func(v *vector.Vector) {
+				require.Equal(t, int32(math.MinInt32), vector.GetFixedAtNoTypeCheck[int32](v, 0))
+			}},
+			{types.T_int64, types.T_uint8, int64(255), func(v *vector.Vector) {
+				require.Equal(t, uint8(255), vector.GetFixedAtNoTypeCheck[uint8](v, 0))
+			}},
+			{types.T_uint64, types.T_int64, uint64(math.MaxInt64), func(v *vector.Vector) {
+				require.Equal(t, int64(math.MaxInt64), vector.GetFixedAtNoTypeCheck[int64](v, 0))
+			}},
+			{types.T_int32, types.T_uint64, int32(5), func(v *vector.Vector) {
+				require.Equal(t, uint64(5), vector.GetFixedAtNoTypeCheck[uint64](v, 0))
+			}},
+		}
+		for _, c := range cases {
+			install(constOf(c.from, c.value))
+			executor := newExecutor(c.to)
+			for range 2 {
+				got, err := executor.Eval(proc, rows(3), nil)
+				require.NoError(t, err)
+				require.True(t, got.IsConst())
+				require.Equal(t, 3, got.Length())
+				require.Equal(t, c.to, got.GetType().Oid)
+				c.check(got)
+			}
+			require.Nil(t, executor.adapter)
+			executor.Free()
+		}
+	})
+
+	t.Run("each execution converts its own value", func(t *testing.T) {
+		executor := newExecutor(types.T_int32)
+		defer executor.Free()
+		install(constOf(types.T_int64, int64(8)))
+		got, err := executor.Eval(proc, rows(1), nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(8), vector.GetFixedAtNoTypeCheck[int32](got, 0))
+		executor.ResetForNextQuery()
+		install(constOf(types.T_int64, int64(9)))
+		got, err = executor.Eval(proc, rows(1), nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(9), vector.GetFixedAtNoTypeCheck[int32](got, 0))
+	})
+
+	t.Run("out-of-range values keep the cast and its error", func(t *testing.T) {
+		cases := []struct {
+			from, to types.T
+			value    any
+		}{
+			{types.T_int64, types.T_int32, int64(math.MaxInt32) + 1},
+			{types.T_int64, types.T_int32, int64(math.MinInt32) - 1},
+			{types.T_int64, types.T_uint64, int64(-1)},
+			{types.T_uint64, types.T_int64, uint64(math.MaxInt64) + 1},
+		}
+		for _, c := range cases {
+			install(constOf(c.from, c.value))
+			executor := newExecutor(c.to)
+			_, err := executor.Eval(proc, rows(1), nil)
+			require.Error(t, err)
+			require.NotNil(t, executor.adapter)
+			// Rows that are not selected never see the error.
+			executor.ResetForNextQuery()
+			got, err := executor.Eval(proc, rows(2), []bool{false, false})
+			require.NoError(t, err)
+			require.True(t, got.IsNull(0))
+			executor.Free()
+		}
+	})
+}
+
+// Reading a typed parameter allocates nothing per executor: executors
+// reference the process-held value, and a narrowed integer is converted once.
+func TestParamExpressionExecutorTypedReadDoesNotAllocate(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	state := proc.DetachPrepareParams()
+	t.Cleanup(func() { proc.RestorePrepareParams(state) })
+	t.Cleanup(func() { proc.SetPrepareParams(nil) })
+
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
+	require.NoError(t, vector.AppendBytes(params, []byte("ignored"), false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithIsBin(params, nil)
+	typed, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 1, proc.Mp())
+	require.NoError(t, err)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = typed
+	bat.SetRowCount(1)
+	proc.SetTypedPrepareParams(bat)
+
+	rows := batch.NewWithSize(0)
+	rows.SetRowCount(4)
+	read := func(typ types.T) {
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Typ:  typ.ToType().PlanType(),
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		})
+		require.NoError(t, err)
+		defer executor.Free()
+		got, err := executor.Eval(proc, []*batch.Batch{rows}, nil)
+		require.NoError(t, err)
+		require.Equal(t, 4, got.Length())
+		require.True(t, got.IsReadOnly(), "a parameter is referenced, not copied")
+		require.Equal(t, typ, got.GetType().Oid)
+	}
+	read(types.T_int32) // first narrowed read materializes the conversion
+	allocs := proc.Mp().Stats().NumAlloc.Load()
+	for range 3 {
+		read(types.T_int64)
+		read(types.T_int32)
+	}
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load())
+	// The shared value is untouched by the executors' row counts.
+	require.Equal(t, 1, typed.Length())
+}
