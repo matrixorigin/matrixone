@@ -209,8 +209,8 @@ create publication p_mask database view_pub_db table src,v_mask account vw01;
 drop database if exists s_mask;
 create database s_mask from sys publication p_mask;
 select * from s_mask.v_mask;
-➤ id[4,32,0]  𝄀
-4
+➤ id[-5,64,0]  𝄀
+9
 drop database s_mask;
 create view v_dualcte as with dual as (select id from base) select 1 as one from dual;
 drop publication if exists p_dualcte;
