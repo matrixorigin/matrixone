@@ -1662,9 +1662,77 @@ func TestRequiredLsnResetRejectsOldLeaderBeforeNewClaim(t *testing.T) {
 	// The old owner and revision still match: only the new Raft term may
 	// reject this reset before the new DataSync worker claims an owner.
 	require.Error(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 2, 11))
+	// A proposal admitted before the leader changed can reach apply after the
+	// RPC precheck. Exercise the committed-entry fence directly as well.
+	session := store2.nh.GetNoOPSession(1)
+	result, err := store2.propose(ctx, session, getSetRequiredLsnIfCurrentCmd(0, 100, 2, 11))
+	require.NoError(t, err)
+	require.NotZero(t, result.Value)
+	result, err = store2.propose(ctx, session, getClaimRequiredLsnCmd(100, 2, 12, term, leaderID))
+	require.NoError(t, err)
+	require.NotZero(t, result.Value)
 	state, err := store2.getRequiredLsnState(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), state.lsn)
+	require.Equal(t, uint64(2), state.revision)
+	newLeaderID, newTerm, err := store2.leaderState(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), newLeaderID)
+	require.Greater(t, newTerm, term)
+	require.NoError(t, store2.claimRequiredLsn(ctx, 1, 100, 2, 22, newTerm, newLeaderID))
+	require.NoError(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 3, 22))
+	state, err = store2.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Zero(t, state.lsn)
+	require.Equal(t, uint64(4), state.revision)
+}
+
+func TestRequiredLsnTermAfterSnapshotAndRestart(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getStoreTestConfig()
+	cfg.FS = vfs.Default
+	cfg.DataDir = t.TempDir()
+	genCfg := func() Config { return cfg }
+	store, err := getTestStore(genCfg, true, nil)
+	require.NoError(t, err)
+	defer func() {
+		if store != nil {
+			require.NoError(t, store.close())
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var leader, term uint64
+	waitForLeader := func() {
+		require.Eventually(t, func() bool {
+			var err error
+			leader, term, err = store.leaderState(1)
+			return err == nil && leader == 2 && term != 0
+		}, testIOTimeout, 10*time.Millisecond)
+	}
+	waitForLeader()
+	require.NoError(t, store.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leader))
+	snapshotIndex, err := store.nh.SyncRequestSnapshot(ctx, 1, dragonboat.SnapshotOption{})
+	require.NoError(t, err)
+	require.NoError(t, store.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
+	lastIndex, err := store.getLatestLsn(ctx, 1)
+	require.NoError(t, err)
+	require.Greater(t, lastIndex, snapshotIndex)
+	require.NoError(t, store.close())
+	store = nil
+
+	store, err = getTestStore(genCfg, false, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.startReplica(1, 2, nil, false))
+	waitForLeader()
+	state, err := store.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), state.lsn)
+	require.Equal(t, uint64(2), state.revision)
+	require.Equal(t, uint64(11), state.owner)
+	// The saved owner belongs to the earlier term; a new leader must claim it.
+	require.NoError(t, store.claimRequiredLsn(ctx, 1, 100, 2, 22, term, leader))
+	require.NoError(t, store.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 3, 22))
 }
 
 func TestAddLogShard(t *testing.T) {
