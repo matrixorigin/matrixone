@@ -351,6 +351,8 @@ type BgKey struct{}
 // refused with a distinguishable error.
 type PublicationViewBinding struct{}
 
+type legacyViewCTEScopeKey struct{}
+
 type persistentViewBindingKey struct{}
 
 // WithPersistentViewBinding excludes session temporary aliases while rebinding
@@ -365,6 +367,24 @@ func WithPersistentViewBinding(ctx context.Context) context.Context {
 
 func IsPersistentViewBinding(ctx context.Context) bool {
 	value, _ := ctx.Value(persistentViewBindingKey{}).(bool)
+	return value
+}
+
+// WithLegacyViewCTEScope marks a context that binds a persisted view
+// definition authored before the CTE scope correction: such definitions
+// (persisted without cte_scope_protocol) rebind under the released legacy
+// masking on every consumer of the parsed definition - the value binding,
+// the schema/metadata inference and the regeneration readers - exactly the
+// same marker/absence contract the persisted field itself carries.
+func WithLegacyViewCTEScope(ctx context.Context) context.Context {
+	if IsLegacyViewCTEScope(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, legacyViewCTEScopeKey{}, true)
+}
+
+func IsLegacyViewCTEScope(ctx context.Context) bool {
+	value, _ := ctx.Value(legacyViewCTEScopeKey{}).(bool)
 	return value
 }
 

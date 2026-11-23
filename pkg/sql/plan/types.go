@@ -372,6 +372,8 @@ type BaseOptimizer struct {
 	ctx              CompilerContext
 }
 
+const currentCTEScopeProtocol int64 = 1
+
 type ViewData struct {
 	Stmt                string
 	Definition          string `json:"definition,omitempty"`
@@ -385,6 +387,15 @@ type ViewData struct {
 	// persisted view expression on a local CN. It is a defense-in-depth marker;
 	// cluster admission remains the authoritative old-CN re-entry fence.
 	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
+	// CTEScopeProtocol records the CTE lexical-resolution generation this
+	// definition was authored under. It follows the same persisted-marker
+	// contract as RequiredProtocolVersion: definitions persisted before the
+	// corrected displaced-declaration visibility carry no field (the released
+	// writers omitted it) and rebind under the released legacy masking, while
+	// every fresh CREATE/ALTER/CREATE-OR-REPLACE writer stamps the current
+	// generation below so authored and upgraded deployments keep their
+	// results without any definition rewrite.
+	CTEScopeProtocol *int64 `json:"cte_scope_protocol,omitempty"`
 }
 
 // updateTargetScope borrows the existing target-side binding while UPDATE FROM
@@ -1046,8 +1057,15 @@ type BindContext struct {
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
-	cteState                     CteBindState
-	cteOwnerChain                *cteOwnerNode
+	cteState      CteBindState
+	cteOwnerChain *cteOwnerNode
+	// legacyCTEScope is set only on the isolated binding context of a
+	// persisted view definition authored before the corrected displaced-
+	// declaration visibility (a missing CTEScopeProtocol marker). Children
+	// inherit it, and it restores the released masking behavior for that
+	// binding alone: masked names fall through to the enclosing catalog and
+	// displaced links are never consulted.
+	legacyCTEScope               bool
 	sliding                      bool
 	explicitSliding              bool
 	isDistinct                   bool

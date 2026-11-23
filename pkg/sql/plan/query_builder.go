@@ -6483,12 +6483,33 @@ func (bc *BindContext) bindingRecurQueryBlock() bool {
 // CTE for every later reference in the body, so the union inspection cannot
 // count those references as the outer name's self-reference.
 func bodyWithDeclaresName(s *tree.Select, name string) bool {
-	if s == nil || s.With == nil {
-		return false
-	}
-	for _, c := range s.With.CTEs {
-		if c != nil && c.Name != nil && string(c.Name.Alias) == name {
-			return true
+	// Recursion classification must observe the UNION member's whole lexical
+	// chain: a body can sit behind several parenthesized wrappers, and any of
+	// them may carry its own WITH whose declarations shadow the inspected
+	// name (an inner same-name CTE is then an ordinary shadowing declaration,
+	// not a recursive self-reference). Walk the nested chain instead of
+	// consulting only the first WITH-bearing select.
+	for s != nil {
+		if s.With != nil {
+			for _, c := range s.With.CTEs {
+				if c != nil && c.Name != nil && string(c.Name.Alias) == name {
+					return true
+				}
+			}
+		}
+		switch stmt := s.Select.(type) {
+		case *tree.ParenSelect:
+			if stmt.Select == nil {
+				return false
+			}
+			s = stmt.Select
+		case *tree.Select:
+			if stmt.Select == nil {
+				return false
+			}
+			s = stmt
+		default:
+			return false
 		}
 	}
 	return false
@@ -6519,6 +6540,93 @@ func selectTreePreservingWith(s *tree.Select) *tree.Select {
 		}
 	}
 	return nil
+}
+
+// ordinaryPaginationWrap rewrites an ordinary CTE body whose parenthesized
+// query expression carries enclosing OFFSET/LIMIT/ORDER BY stages into the
+// equivalent derived-table nest. Each stage's clauses move to the wrapped
+// select that consumes the inner result, so the stages compose inside out on
+// single-clause selects that the existing binder and pager already validate;
+// no stage is overwritten, skipped or reordered, and any WITH stays with the
+// select it belongs to (a WITH-bearing level is never wrapped).
+func ordinaryPaginationWrap(s *tree.Select) (*tree.Select, bool) {
+	if s == nil {
+		return nil, false
+	}
+	type pageStage struct {
+		limit   *tree.Limit
+		orderBy tree.OrderBy
+	}
+	var stages []pageStage
+	cur := s
+	for {
+		paren, ok := cur.Select.(*tree.ParenSelect)
+		if !ok || paren.Select == nil {
+			break
+		}
+		if cur.RankOption != nil || cur.TimeWindow != nil {
+			// A wrapper carrying BY RANK or an interval window keeps the
+			// whole expression on the normal binder: its single-clause
+			// semantics and typed error behavior are already correct there.
+			return nil, false
+		}
+		if cur.With != nil && cur != s {
+			// An inner wrapper's WITH owns that level's lexical scope: stop
+			// the peel here so the whole select (its WITH, its own clauses
+			// and everything it wraps) becomes the derived-table content
+			// verbatim, and only the stages above it wrap around it.
+			break
+		}
+		stages = append(stages, pageStage{limit: cur.Limit, orderBy: cur.OrderBy})
+		cur = paren.Select
+	}
+	rewritten := false
+	for _, st := range stages {
+		if st.limit != nil || len(st.orderBy) > 0 {
+			rewritten = true
+		}
+	}
+	if !rewritten {
+		return nil, false
+	}
+	inner := cur
+	for i := len(stages) - 1; i >= 0; i-- {
+		limit, orderBy := stages[i].limit, stages[i].orderBy
+		if limit == nil && len(orderBy) == 0 {
+			// A pure grouping wrapper without its own clauses is already the
+			// inner select's semantic: keep the body as bound.
+			continue
+		}
+		alias := tree.AliasClause{Alias: tree.Identifier(fmt.Sprintf("ordinary_cte_page_%d", i))}
+		wrapped := &tree.Select{
+			Select: &tree.SelectClause{
+				Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
+				From: &tree.From{
+					Tables: tree.TableExprs{
+						// The parser's table_factor rule for a FROM subquery
+						// wraps the select in a ParenTableExpr (mysql_sql.y
+						// table_subquery), which is the shape buildTable
+						// accepts; a bare tree.Subquery is only the scalar-
+						// expression form.
+						&tree.AliasedTableExpr{
+							Expr: &tree.ParenTableExpr{Expr: inner},
+							As:   alias,
+						},
+					},
+				},
+			},
+			Limit:   limit,
+			OrderBy: orderBy,
+		}
+		inner = wrapped
+	}
+	// The body's own WITH declares the fragments the whole expression
+	// reads: it moves to the outermost wrapped select, keeping the lexical
+	// scope identical.
+	if s.With != nil {
+		inner.With = s.With
+	}
+	return inner, true
 }
 
 func (builder *QueryBuilder) bindCte(
@@ -6615,7 +6723,20 @@ func (builder *QueryBuilder) bindCte(
 	if isR && !cteRef.isRecursive {
 		return 0, moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 	} else if !isR {
-		nodeID, err = builder.bindNoRecursiveCte(ctx, fullBody, cteRef, table)
+		bodyForBinding := fullBody
+		// An ordinary CTE body can be a whole parenthesized query
+		// expression whose enclosing wrappers each carry their own
+		// OFFSET/LIMIT/ORDER BY stage (MySQL parenthesized query
+		// expressions). bindSelect deliberately rejects multiple pagination
+		// clauses on one flattened select, so bind the expression as the
+		// equivalent derived-table nest instead: every stage keeps its own
+		// clauses in its own scope, applied inside out, and the innermost
+		// select (including a body-local WITH and its own clauses) stays
+		// untouched.
+		if wrapped, rewritten := ordinaryPaginationWrap(fullBody); rewritten {
+			bodyForBinding = wrapped
+		}
+		nodeID, err = builder.bindNoRecursiveCte(ctx, bodyForBinding, cteRef, table)
 		if err != nil {
 			return 0, err
 		}
@@ -6784,6 +6905,19 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 				// definition reachable for lookups that happen before the
 				// inner name enters scope.
 				ref.shadowedOuter = outer
+			} else if ref.shadowedOuter == nil {
+				// The per-body declaration scope starts empty (body
+				// isolation), so the enclosing definition this inner name
+				// displaces may live only in an ancestor frame: walk outward
+				// and record the first visible same-name definition so the
+				// displaced chain keeps the real declaration ancestry across
+				// multiple pending scopes.
+				for p := ctx.parent; p != nil; p = p.parent {
+					if outer, ok := p.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
+						ref.shadowedOuter = outer
+						break
+					}
+				}
 			}
 			merged[name] = ref
 		}
@@ -13657,6 +13791,16 @@ func (builder *QueryBuilder) bindView(
 			return 0, err
 		}
 	}
+
+	// This definition's own persisted marker selects its binding generation in
+	// BOTH directions: a release-authored (marker-free) definition rebinds
+	// under the released legacy masking so an upgraded deployment keeps the
+	// result the release authored, while a definition recorded with the
+	// current generation keeps the corrected lexicals even when an enclosing
+	// legacy definition surrounds it - the enclosing inference's ambient
+	// marker must never leak through this fresh view binding context, so the
+	// explicit assignment below clears it instead of only setting it.
+	viewCtx.legacyCTEScope = viewData.CTEScopeProtocol == nil
 
 	viewData.Stmt, err = builder.metadataViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
 	if err != nil {

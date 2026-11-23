@@ -387,6 +387,8 @@ func inferViewColumns(
 	}, nil
 }
 
+var currentCTEScopeProtocolInstance = currentCTEScopeProtocol
+
 func genViewTableDef(
 	ctx CompilerContext,
 	stmt *tree.Select,
@@ -456,6 +458,10 @@ func genViewTableDef(
 		LowerCaseTableNames:     &lowerCaseTableNames,
 		Dependencies:            inferred.dependencies,
 		RequiredProtocolVersion: persistedRequiredProtocol,
+		// Fresh authoring (CREATE/ALTER/CREATE-OR-REPLACE and restore) always
+		// stamps the current CTE lexical generation; only definitions written
+		// by releases before this marker lack the field.
+		CTEScopeProtocol: &currentCTEScopeProtocolInstance,
 	})
 	if err != nil {
 		return nil, err

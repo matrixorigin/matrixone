@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -68,6 +70,18 @@ type viewRegenerationContext struct {
 	defaultDatabase     string
 	rootSQL             string
 	lowerCaseTableNames int64
+	legacyCTEScope      bool
+}
+
+// GetContext injects the persisted generation marker so every binding that
+// runs through this parsed definition resolves in the generation the
+// definition was authored under.
+func (c *viewRegenerationContext) GetContext() context.Context {
+	binding := c.CompilerContext.GetContext()
+	if c.legacyCTEScope {
+		binding = defines.WithLegacyViewCTEScope(binding)
+	}
+	return binding
 }
 
 // Use the error-returning catalog lookup rather than DatabaseExists: the
@@ -247,6 +261,7 @@ func parsePersistedViewDefinition(
 		defaultDatabase:     viewData.DefaultDatabase,
 		rootSQL:             viewData.Stmt,
 		lowerCaseTableNames: lowerCaseTableNames,
+		legacyCTEScope:      viewData.CTEScopeProtocol == nil,
 	}
 	parsed.ctx, parsed.data = regenerationCtx, viewData
 	parsed.selectStmt, parsed.columnNames = selectStmt, columnNames

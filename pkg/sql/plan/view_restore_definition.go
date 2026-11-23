@@ -95,8 +95,13 @@ func restoredViewCreationContext(ctx CompilerContext, database, name string) (Co
 	if value, present := fields["DefaultDatabase"]; present && string(value) != "null" {
 		db = data.DefaultDatabase
 	}
+	// The restored definition is re-authored in the generation it was authored
+	// under: a release-era definition (persisted without cte_scope_protocol)
+	// keeps the legacy resolution for its re-inferred columns and dependencies,
+	// while a definition recorded with the current generation stays corrected.
 	return &viewRegenerationContext{CompilerContext: ctx, defaultDatabase: db,
-		rootSQL: ctx.GetRootSql(), lowerCaseTableNames: lower}, nil
+		rootSQL: ctx.GetRootSql(), lowerCaseTableNames: lower,
+		legacyCTEScope: data.CTEScopeProtocol == nil}, nil
 }
 
 func preserveRestoredViewDefinition(ctx context.Context, database, name, generated string) (string, error) {

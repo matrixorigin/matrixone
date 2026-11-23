@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"slices"
 	"strings"
 
@@ -61,6 +62,9 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		if builder.integerPrecision == nil {
 			builder.integerPrecision = newIntegerPrecisionBuilder()
 		}
+		if defines.IsLegacyViewCTEScope(builder.GetContext()) {
+			bc.legacyCTEScope = true
+		}
 		bc.integerPrecision = builder.integerPrecision
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
 		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
@@ -91,6 +95,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.cteName = parent.cteName
 		bc.queryBlockOwner = parent.queryBlockOwner
 		bc.cteOwnerChain = parent.cteOwnerChain
+		bc.legacyCTEScope = parent.legacyCTEScope
 		if parent.bindingCte() {
 			bc.cteByName = parent.cteByName
 			bc.cteState = parent.cteState
@@ -223,9 +228,44 @@ func (bc *BindContext) displacedCandidateVisible(name string, outer *CTERef) boo
 	return bc.cteOwnerChain == nil || !bc.cteOwnerChain.pendingCTE(name, outer)
 }
 
+// displacedVisibleCandidate walks the displaced-declaration chain in
+// declaration order and returns the first definition of this name that is
+// actually visible here: a displaced link records the older same-name
+// declaration it shadowed, and that candidate may itself still be pending in
+// this binding (a later enclosing sibling), so the walk follows each link
+// until it reaches one that is not pending, instead of consulting a single
+// hop or resolving by spelling. The chain is bounded by the recorded
+// displaced links of this name's declaration history.
+func (bc *BindContext) displacedVisibleCandidate(name string, cte *CTERef) *CTERef {
+	if bc.legacyCTEScope {
+		// Legacy persisted bindings resolve like the release: displaced links
+		// are never consulted.
+		return nil
+	}
+	for cte != nil {
+		outer := cte.shadowedOuter
+		if outer == nil || outer == cte {
+			return nil
+		}
+		if bc.displacedCandidateVisible(name, outer) {
+			return outer
+		}
+		cte = outer
+	}
+	return nil
+}
+
 func (bc *BindContext) findCTE(name string) *CTERef {
+
 	// the cte is masked already, we don't go further
 	if bc.cteState.masked(name) {
+		if bc.legacyCTEScope {
+			// A persisted pre-correction definition keeps the released
+			// resolution: a masked name has no CTE candidate here and the
+			// lookup falls through exactly as the release that authored
+			// the definition behaved.
+			return nil
+		}
 		// A later same-WITH declaration is not yet in scope at this binding
 		// frame. MySQL CTE name resolution keeps the enclosing definition
 		// visible instead of failing the lookup: walk the frame chain — a map
@@ -245,7 +285,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 				// for the displaced sibling once.
 				if cte, ok := frame.cteByName[name]; ok && cur != nil && cte != cur &&
 					cte.withClause != nil && cte.withClause == cur.withClause {
-					if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
+					if outer := bc.displacedVisibleCandidate(name, cte); outer != nil {
 						return outer
 					}
 				}
@@ -253,7 +293,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 			}
 			if cte, ok := frame.cteByName[name]; ok {
 				if cur != nil && cte != cur && cte.withClause != nil && cte.withClause == cur.withClause {
-					if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
+					if outer := bc.displacedVisibleCandidate(name, cte); outer != nil {
 						return outer
 					}
 					// The displaced link served nothing: an older lexically
@@ -279,7 +319,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 			// withheld (or resolves to the definition it displaced) while
 			// earlier siblings keep serving normally.
 			if bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
-				if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
+				if outer := bc.displacedVisibleCandidate(name, cte); outer != nil {
 					return outer
 				}
 				return nil
@@ -296,7 +336,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 			// definition of a chain-pending sibling that this frame can
 			// reach.
 			if cte, ok := parent.cteByName[name]; ok && bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
-				if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
+				if outer := bc.displacedVisibleCandidate(name, cte); outer != nil {
 					return outer
 				}
 			}
@@ -305,7 +345,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 		if cte, ok := parent.cteByName[name]; ok {
 			if !parent.cteState.masked(name) {
 				if bc.cteOwnerChain != nil && bc.cteOwnerChain.pendingCTE(name, cte) {
-					if outer := cte.shadowedOuter; outer != nil && outer != cte && bc.displacedCandidateVisible(name, outer) {
+					if outer := bc.displacedVisibleCandidate(name, cte); outer != nil {
 						return outer
 					}
 					return nil
