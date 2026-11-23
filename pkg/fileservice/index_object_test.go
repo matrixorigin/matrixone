@@ -425,6 +425,42 @@ func TestIndexObjectShortCacheFileReadsStorage(t *testing.T) {
 	require.True(t, cached, "a decoding error keeps the entry")
 }
 
+// The repair of a missing entry file is no delete of the object: it waits for no
+// publication holding the entry's delete stripe, and keeps the delete mark.
+func TestIndexObjectMissingFileRepairWaitsForNoPublication(t *testing.T) {
+	fs, storage, data := newIndexObjectFS(t, true)
+	cacheIndexObject(t, fs, "object", data)
+	diskPath, ok := fs.indexObjectCached("object")
+	require.True(t, ok)
+	require.NoError(t, os.Remove(filepath.Join(diskPath, IndexObjectFile)))
+	stripe := fs.indexFileCache.disk.deletes.stripe(diskPath)
+	stripe.RLock()
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			unlocked = true
+			stripe.RUnlock()
+		}
+	}
+	defer unlock()
+	mark := fs.indexFileCache.DeleteMark()
+	storage.reads.Store(0)
+	done := make(chan []byte, 1)
+	go func() {
+		done <- readIndexObjectRange(t, fs, IndexFileObject|SkipDiskCacheWrites, 2000, 10)
+	}()
+	select {
+	case got := <-done:
+		require.Equal(t, data[2000:2010], got)
+	case <-time.After(10 * time.Second):
+		unlock()
+		t.Fatal("the repair waited for the publication")
+	}
+	_, cached := fs.indexObjectCached("object")
+	require.False(t, cached, "the entry is dropped")
+	require.Equal(t, mark, fs.indexFileCache.DeleteMark())
+}
+
 // A missing entry file whose path another holder owns is not dropped, and the delete mark
 // is kept, so the holder's work is not canceled.
 func TestIndexObjectMissingFileOwnedIsKept(t *testing.T) {
@@ -464,6 +500,7 @@ func TestIndexObjectUnopenableEntryReadsStorage(t *testing.T) {
 				require.NoError(t, os.Symlink(IndexObjectFile, file))
 			case "dir":
 				require.NoError(t, os.RemoveAll(diskPath))
+				require.NoError(t, os.MkdirAll(filepath.Dir(diskPath), 0o755))
 				require.NoError(t, os.WriteFile(diskPath, nil, 0o644))
 			case "missing":
 				require.NoError(t, os.Remove(file))

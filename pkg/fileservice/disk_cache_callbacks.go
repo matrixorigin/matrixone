@@ -101,9 +101,9 @@ func (d *DiskCacheCallbacks) Value(key any) any {
 }
 
 // deferWriteCallbacks returns ctx, whose write callbacks record copies of the entries
-// written instead of running; reserve, which reports whether n bytes of copies fit in
-// the copies d keeps, and reserves them; and run, which runs ctx's write callbacks on the
-// copies and releases them.
+// written instead of running; reserve, which reports whether a copy of n bytes, counted
+// as a flight buffer of n bytes, fits in the copies d keeps, and reserves it; and run,
+// which runs ctx's write callbacks on the copies and releases them.
 func (d *DiskCache) deferWriteCallbacks(ctx context.Context) (_ context.Context, reserve func(n int64) bool, run func()) {
 	callbacks, _ := ctx.Value(CtxKeyDiskCacheCallbacks).(*DiskCacheCallbacks)
 	if callbacks == nil || len(callbacks.OnWritten) == 0 {
@@ -117,6 +117,7 @@ func (d *DiskCache) deferWriteCallbacks(ctx context.Context) (_ context.Context,
 	var reserved int64
 	copies := &d.async.flightCopies
 	reserve = func(n int64) bool {
+		n = flightBufSize(n)
 		for {
 			cur := copies.Load()
 			if cur+n > d.async.flightCopiesMax {

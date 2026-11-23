@@ -198,8 +198,8 @@ in memory, and its publication slot, until its callbacks ran; these copies hold 
 one, unless only callbacks returning can free it: then the update is dropped, as one
 larger than the room is (decision 2026-11-23: a callback that submits an update would
 otherwise wait for the slot it holds). The written callbacks of a MemoryPrefetchObject
-run after it ended and released its buffer, on a copy of its range; these copies hold at
-most 64 MiB for each disk cache, and a MemoryPrefetchObject whose copy does not fit does
+run after it ended and released its buffer, on a copy of its range; these copies, each
+counted as a buffer of its range, hold at most 64 MiB for each disk cache, and a MemoryPrefetchObject whose copy does not fit does
 not cache its range, so no callback waits for capacity held by callbacks. The written callbacks of
 asynchronous updates run in the order the updates were submitted, whichever is
 published first; an update that publishes nothing holds no place in that order. A read
