@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -423,6 +424,36 @@ func TestIndexObjectShortCacheFileReadsStorage(t *testing.T) {
 	require.Zero(t, storage.reads.Load())
 	_, cached := fs.indexObjectCached("object")
 	require.True(t, cached, "a decoding error keeps the entry")
+}
+
+// An open failing for lack of resources keeps the entry; other failures drop it.
+func TestIndexObjectOpenResourcesExhausted(t *testing.T) {
+	for _, err := range []error{syscall.EMFILE, syscall.ENFILE, syscall.ENOMEM, syscall.EAGAIN,
+		&os.PathError{Op: "open", Path: "x", Err: syscall.EMFILE}} {
+		require.True(t, openResourcesExhausted(err), err)
+	}
+	for _, err := range []error{syscall.ENOTDIR, syscall.ELOOP, syscall.EACCES, syscall.EIO,
+		&os.PathError{Op: "open", Path: "x", Err: syscall.ENOTDIR}} {
+		require.False(t, openResourcesExhausted(err), err)
+	}
+}
+
+// An entry renamed out of its name is removed, even when deleting its files fails.
+func TestRemoveCacheDirRenamedIsRemoved(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "entry")
+	sub := filepath.Join(dir, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "f"), nil, 0o644))
+	require.NoError(t, os.Chmod(sub, 0o500))
+	t.Cleanup(func() {
+		matches, _ := filepath.Glob(dir + "*")
+		for _, m := range matches {
+			_ = os.Chmod(filepath.Join(m, "sub"), 0o755)
+		}
+	})
+	require.NoError(t, removeCacheDir(dir))
+	_, err := os.Stat(dir)
+	require.True(t, os.IsNotExist(err))
 }
 
 // The repair of a missing entry file is no delete of the object: it waits for no

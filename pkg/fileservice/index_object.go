@@ -16,10 +16,12 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -134,6 +136,13 @@ func (t indexFillTarget) publish(ctx context.Context, tempPath string, _ int64) 
 	return err
 }
 
+// openResourcesExhausted reports whether err is an open failing for lack of file
+// descriptors or memory.
+func openResourcesExhausted(err error) bool {
+	return errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) ||
+		errors.Is(err, syscall.ENOMEM) || errors.Is(err, syscall.EAGAIN)
+}
+
 // indexObjectCached returns the disk path of the entry of the object at filePath, and
 // whether the index-file cache holds it. While the cache loads at startup, an entry on
 // disk is not yet indexed, so its directory decides.
@@ -167,8 +176,12 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		// The entry cannot be opened, or is indexed without its file: it is dropped and
-		// the entries are read from the other caches or storage.
+		// The entries are read from the other caches or storage. The entry is dropped
+		// when it cannot be opened, or is indexed without its file; a lack of resources
+		// to open it keeps it.
+		if openResourcesExhausted(err) {
+			return nil
+		}
 		missing := ""
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			missing = IndexObjectFile

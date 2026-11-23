@@ -1165,13 +1165,16 @@ func (d *DiskCache) removeCachePath(path string) error {
 	return os.Remove(path)
 }
 
-// removeCacheDir renames the entry out of its name in one step, then removes it.
+// removeCacheDir renames the entry out of its name in one step, then removes it. Once
+// renamed the entry is gone; trash left by a failed removal is removed when the cache
+// loads.
 func removeCacheDir(path string) error {
 	trash, err := trashCacheDir(path)
 	if err != nil {
 		return err
 	}
-	return os.RemoveAll(trash)
+	_ = os.RemoveAll(trash)
+	return nil
 }
 
 func trashCacheDir(path string) (string, error) {

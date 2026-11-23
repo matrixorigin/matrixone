@@ -516,8 +516,6 @@ func assertEventuallyBytes(t *testing.T, fs *S3FS, want int64) bool {
 		"the buffer of the copied, ended flight is still charged: %d", prefetchBytes(fs))
 }
 
-// A write callback of a read whose flight caches its bytes can delete the object or
-// close the prefetches: the flight has ended when its callbacks run.
 // A copy kept for write callbacks is charged as a flight buffer of its range, so short
 // ranges bound the callbacks waiting by count too.
 func TestFlightWriteCallbackCopiesChargeBuffers(t *testing.T) {
@@ -589,6 +587,8 @@ func TestFlightWriteCallbackCopiesAreBounded(t *testing.T) {
 	require.Eventually(t, func() bool { return fs.diskCache.async.flightCopies.Load() == 0 }, 5*time.Second, time.Millisecond)
 }
 
+// A write callback of a flight can delete the object, close the prefetches, update the
+// cache or read: the flight has ended when its callbacks run.
 func TestFlightWriteCallbackCallsDeleteOrClose(t *testing.T) {
 	for _, nested := range []string{"delete", "close", "direct update", "read"} {
 		t.Run(nested, func(t *testing.T) {
