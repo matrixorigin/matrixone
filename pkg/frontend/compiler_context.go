@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1195,4 +1196,25 @@ func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName stri
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 	return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
+}
+
+// SamplePointIndexMatches is optional for compiler contexts that own a local
+// transaction and its file service. The plan may discard the observation.
+func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) (engine.IndexPointSample, bool) {
+	proc := tcc.GetProcess()
+	if proc == nil || proc.Base == nil || proc.Mp() == nil {
+		return engine.IndexPointSample{}, false
+	}
+	th := tcc.GetTxnHandler()
+	storage := th.GetStorage()
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	observer, ok := storage.(interface {
+		SamplePointIndexMatches(context.Context, TxnOperator, uint64, uint64, int, [][]engine.IndexPointKey, *mpool.MPool) (engine.IndexPointSample, bool)
+	})
+	if !ok {
+		return engine.IndexPointSample{}, false
+	}
+	return observer.SamplePointIndexMatches(tcc.GetContext(), th.GetTxn(), db, table, rows, candidates, proc.Mp())
 }

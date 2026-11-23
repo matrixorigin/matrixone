@@ -28,6 +28,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -2210,8 +2211,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexCandidates(nodeID
 	idxToChoose := -1
 	var filterIdx []int32
 	keySetSize := 0
+	var sampleBuf [engine.MaxPointSampleCandidates]indexPointAccess
+	group := sampleBuf[:0]
 	if !pointBlocked {
-		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
+		if allowCovering && !ignoreStats && !builder.isPrepareStatement && sortedSelectivity == 1 && len(spatialIndexes) == 0 &&
+			len(indexes) >= 2 && len(indexes) <= len(sampleBuf) {
+			idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets, &group)
+		} else {
+			idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, true, keySetBudget, declinedKeySets)
+		}
 	}
 	selectEqualityFallback := func() {
 		idxToChoose, filterIdx, keySetSize = builder.selectPointIndexWithBudget(indexes, node, ignoreStats, sortedSelectivity, false, keySetBudget, nil)
@@ -2247,6 +2255,22 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexCandidates(nodeID
 		selectEqualityFallback()
 		if !allowedByScanStats() {
 			return nodeID
+		}
+	}
+
+	if idxToChoose >= 0 && keySetSize == 0 && len(group) > 1 {
+		intervals, ok := builder.observePointIndexMatches(node, indexes, group)
+		propagateKeySetControlError(builder.GetContext(), context.Cause(builder.GetContext()))
+		if ok {
+			if winner := separatedPointSampleWinner(intervals[:len(group)]); winner >= 0 && group[winner].index != idxToChoose {
+				access := group[winner]
+				prepared, err := builder.prepareIndexJoin(indexes[access.index], node, EqualIndexCondition, access.filters, scanSnapshot)
+				propagateKeySetControlError(builder.GetContext(), err)
+				if err == nil && prepared != nil {
+					retID, _ := builder.publishIndexJoin(prepared, node, EqualIndexCondition, access.filters)
+					return retID
+				}
+			}
 		}
 	}
 
@@ -3670,8 +3694,12 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelectWithKeySets(inde
 	return builder.selectPointIndexWithBudget(indexes, node, ignoreStats, maxSelectivity, allowKeySet, newIndexKeySetWorkBudget(), nil)
 }
 
-func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64, allowKeySet bool, budget *indexKeySetWorkBudget, declined map[int]struct{}) (int, []int32, int) {
+func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64, allowKeySet bool, budget *indexKeySetWorkBudget, declined map[int]struct{}, sampleCandidates ...*[]indexPointAccess) (int, []int32, int) {
 	currentSel := maxSelectivity
+	var sampleGroup *[]indexPointAccess
+	if len(sampleCandidates) == 1 {
+		sampleGroup = sampleCandidates[0]
+	}
 	currentIdx := -1
 	knownCardinality := hasKnownScanCardinality(node.Stats)
 	forced := builder.scanHintsForceIndexes(node)
@@ -3810,6 +3838,14 @@ func (builder *QueryBuilder) selectPointIndexWithBudget(indexes []*IndexDef, nod
 					maxRows = float64(candidateKeySetSize)
 				}
 				compositeFilterSel = min(compositeFilterSel, maxRows/node.Stats.TableCnt)
+			}
+			if sampleGroup != nil && compositeFilterSel < maxSelectivity {
+				if idxDef.Unique || candidateKeySetSize != 0 || len(*sampleGroup) == cap(*sampleGroup) {
+					*sampleGroup = (*sampleGroup)[:0]
+					sampleGroup = nil
+				} else {
+					*sampleGroup = append(*sampleGroup, indexPointAccess{i, slices.Clone(filterIdx)})
+				}
 			}
 			forceFallback := currentIdx == -1 && compositeFilterSel == 1 && builder.scanHintsForceIndexes(node)
 			if compositeFilterSel >= currentSel && !forceFallback {
