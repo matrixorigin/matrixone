@@ -141,6 +141,30 @@ func TestFrontendExpressionContextAcrossRequests(t *testing.T) {
 			require.Equal(t, 1, w)
 		})
 
+		t.Run("JSON partition bounds", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "create database frontend_context_partitions")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "drop database frontend_context_partitions")
+				require.NoError(t, err)
+			})
+			for _, ddl := range []string{
+				`create table frontend_context_partitions.r (a int) partition by range (a)
+					(partition p0 values less than (1), partition p1 values less than (json_length(json_extract('{"n":[1,2]}', '$.n'))))`,
+				`alter table frontend_context_partitions.r add partition
+					(partition p2 values less than (json_length(json_extract('{"n":[1,2,3]}', '$.n'))))`,
+				`create table frontend_context_partitions.l (a int) partition by list (a)
+					(partition p0 values in (1), partition p1 values in (json_length(json_extract('{"n":[1,2]}', '$.n'))))`,
+			} {
+				var one int
+				require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
+				_, err := conn.ExecContext(ctx, ddl)
+				require.NoError(t, err, ddl)
+			}
+		})
+
 		t.Run("compiler ownership", func(t *testing.T) {
 			_, err := conn.ExecContext(ctx, "create database frontend_context_compile")
 			require.NoError(t, err)
