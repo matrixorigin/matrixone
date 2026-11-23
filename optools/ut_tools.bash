@@ -123,14 +123,14 @@ function install_go_ut_analysis() {
 # Bash dynamic scoping keeps this compatible with Bash 3.2.
 function partition_race_test_inventory() {
     local inventory=$1 groups=$2 layout=$3
-    local name escaped meta index=0 group width duplicates
-    local -a names=()
+    local name escaped meta index=0 group width duplicates priority hint
+    local -a names=() ranked_names=()
 
     shard_patterns=()
     shard_counts=()
     test_count=0
     if ! [[ "${groups}" =~ ^[1-9][0-9]*$ ]] || (( groups > 64 )) ||
-        [[ "${layout}" != roundrobin && "${layout}" != contiguous ]] ||
+        [[ "${layout}" != roundrobin && "${layout}" != contiguous && "${layout}" != cost-roundrobin ]] ||
         [[ ! -r "${inventory}" ]]; then
         return 2
     fi
@@ -147,6 +147,28 @@ function partition_race_test_inventory() {
     if [[ -n "${duplicates}" ]]; then
         echo "duplicate runnable test names: ${duplicates}" >&2
         return 2
+    fi
+
+    if [[ "${layout}" == cost-roundrobin ]]; then
+        # Coarse race-UT timings balance the existing SQL-integration processes.
+        # Hints only place roots discovered from the binary; unknown roots remain.
+        # Go executes the selected roots in their original binary order.
+        for (( priority=9; priority>=1; priority-- )); do
+            for name in "${names[@]}"; do
+                case "${name}" in
+                    TestDatabaseDefaultsFailureAndRecovery|TestLegacyPartitionColumnLimitCopy) hint=9 ;;
+                    TestHiddenIndexUserAccess|TestIssue30949PublicationSnapshotLifecycleAdmission) hint=8 ;;
+                    TestDecimalIntegerDivPublicContracts|TestDatabaseCharsetInheritanceContract) hint=6 ;;
+                    TestCollationsMetadataUpgrade|TestIntegerArithmeticWidth|TestTemporaryTablePhysicalNameIsSessionScoped) hint=5 ;;
+                    TestCDCNoFullPublicTakeoverLifecycle|TestViewCheckOptionCanonicalization|TestTimestampDefaultDumpRoundtrip|TestDecimalHistoricalDumpRoundtrip|TestTemporalExplainIndexParity) hint=4 ;;
+                    TestTenantAdminIndexReadBoundary|TestConcurrentRoleGrantCannotCommitCycleTwoCN) hint=3 ;;
+                    *) hint=1 ;;
+                esac
+                if (( hint == priority )); then ranked_names+=("${name}"); fi
+            done
+        done
+        (( ${#ranked_names[@]} == ${#names[@]} )) || return 2
+        names=("${ranked_names[@]}")
     fi
 
     width=$(( (${#names[@]} + groups - 1) / groups ))
