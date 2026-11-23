@@ -288,9 +288,6 @@ type container struct {
 	// legacyH8CharSemantics keeps pre-v78 CHAR bytes intact when this
 	// container must merge a short variable-length H8 partial.
 	legacyH8CharSemantics bool
-	// groupingAware selects the collision-free HStr key grammar whenever a
-	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
-	groupingAware bool
 
 	// x, y of `group by x, y`.
 	groupByEvaluate colexec.ExprEvalVector
@@ -1030,7 +1027,7 @@ func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.
 	// grouping flag
 	for i, flag := range group.GroupingFlag {
 		if !flag {
-			rollup := vector.NewRollupConst(
+			rollup := vector.NewConstNull(
 				group.ctr.groupByEvaluate.Typ[i],
 				group.ctr.groupByEvaluate.Vec[i].Length(),
 				group.ctr.rollupMP(),
@@ -1185,9 +1182,9 @@ type MergeGroup struct {
 	Aggs []aggexec.AggFuncExecExpression
 
 	GroupByHashKey []int32
-	// GroupingAware is fixed by the producer plan, not inferred from one
-	// partial's data. Dynamic grouping streams can legally alternate partials
-	// with and without an actual rollup sentinel.
+	// GroupingAware declares, from the producer plan, that partials carry
+	// grouping-set rows. Dynamic grouping streams can legally alternate partials
+	// with and without an actual rolled-up key.
 	GroupingAware bool
 	// EmptyGroupingSet declares that a legacy/static all-rolled branch must
 	// produce one row even when no partial reaches this final merge boundary.

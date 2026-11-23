@@ -42,7 +42,7 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("x"), false, mp))
 	}
 	source.SetRowCount(1)
-	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true)
+	data, err := source.MarshalBinaryWithBuffer(new(bytes.Buffer), true)
 	require.NoError(t, err)
 	before := mp.CurrNB()
 	decoded, err := decodeBatch(mp, data)
@@ -115,7 +115,9 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	require.Equal(t, []types.Type{runtime}, convertToTypes(convertToPlanTypes([]types.Type{runtime})))
 }
 
-func TestDecodeBatchReleasesColumnsOnGroupingFailure(t *testing.T) {
+// An older CN appends a ROLLUP grouping trailer after the stable batch. The
+// receiver discards it and decodes the stable payload unchanged.
+func TestDecodeBatchDiscardsLegacyGroupingTrailer(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := batch.NewWithSize(1)
 	t.Cleanup(func() { source.Clean(mp); require.Zero(t, mp.CurrNB()) })
@@ -123,20 +125,23 @@ func TestDecodeBatchReleasesColumnsOnGroupingFailure(t *testing.T) {
 	for _, value := range []string{"one", "two"} {
 		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
 	}
-	source.Vecs[0].GetGrouping().Add(1)
 	source.SetRowCount(2)
-	encoded, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true)
+	encoded, err := source.MarshalBinaryWithBuffer(new(bytes.Buffer), true)
 	require.NoError(t, err)
-	const groupingFooterSize = 16
-	end := len(encoded) - groupingFooterSize
-	start := end - int(binary.LittleEndian.Uint64(encoded[end+8:]))
-	before := mp.CurrNB()
-	binary.LittleEndian.PutUint64(encoded[start:], 3)
+	encoded = append([]byte(nil), encoded...)
+
+	// [int64 rows][int32 vector count][int32 bitmap size per vector] + footer.
+	trailer := binary.LittleEndian.AppendUint64(nil, 2)
+	trailer = binary.LittleEndian.AppendUint32(trailer, 1)
+	trailer = binary.LittleEndian.AppendUint32(trailer, 0)
+	encoded = append(encoded, trailer...)
+	encoded = append(encoded, "MOGROUP\x01"...)
+	encoded = binary.LittleEndian.AppendUint64(encoded, uint64(len(trailer)))
+
 	decoded, err := decodeBatch(mp, encoded)
-	if decoded != nil {
-		defer decoded.Clean(mp)
-	}
-	require.ErrorContains(t, err, "pipeline grouping row count mismatch")
-	require.Nil(t, decoded)
-	require.Equal(t, before, mp.CurrNB(), "decoder must release allocated state on failure")
+	require.NoError(t, err)
+	defer decoded.Clean(mp)
+	require.Equal(t, 2, decoded.RowCount())
+	require.Equal(t, "one", decoded.Vecs[0].GetStringAt(0))
+	require.Equal(t, "two", decoded.Vecs[0].GetStringAt(1))
 }

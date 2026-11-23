@@ -300,7 +300,7 @@ func TestGroupCapacityRecoveryRetainsEvaluatedInput(t *testing.T) {
 					n, err := strconv.Atoi(raw[:5])
 					require.NoError(t, err)
 					if tc.rollup {
-						require.True(t, result.Batch.Vecs[1].GetGrouping().Contains(uint64(row)))
+						require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
 					}
 					require.NotContains(t, got, n, "group was published twice")
 					if tc.distinct {

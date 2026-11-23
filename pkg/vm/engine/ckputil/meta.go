@@ -161,18 +161,19 @@ func ExportToTableRangesByFilter(
 	if start == -1 {
 		return
 	}
-	for i := start; i < len(tableIds); i++ {
-		if objectTypes[i] == objectType {
-			break
+	end, count := start, 0
+	for rows := data.RowCount(); end < rows && end < len(tableIds) && tableIds[end] == tableId; end++ {
+		if objectTypes[end] == objectType {
+			count++
 		}
-		start++
 	}
+	if count == 0 {
+		return nil
+	}
+	ranges = make([]TableRange, 0, count)
 	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
 	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[3])
-	for i, rows := start, data.RowCount(); i < rows; i++ {
-		if tableIds[i] != tableId {
-			break
-		}
+	for i := start; i < end; i++ {
 		if objectTypes[i] != objectType {
 			continue
 		}

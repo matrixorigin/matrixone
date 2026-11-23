@@ -695,7 +695,7 @@ func (l *store) startReplica(shardID uint64, replicaID uint64,
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
 		return err
 	}
-	if err := l.nh.StartReplica(initialReplicas, join, l.newStateMachine, cfg); err != nil {
+	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
 		return err
 	}
 	l.snapshotMgr.MarkPreviousReplicaStopped(shardID, replicaID)
@@ -719,7 +719,7 @@ func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
 		return err
 	}
-	if err := l.nh.StartReplica(initialReplicas, join, l.newStateMachine, cfg); err != nil {
+	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
 		return err
 	}
 	l.snapshotMgr.MarkPreviousReplicaStopped(shardID, replicaID)
@@ -728,18 +728,6 @@ func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
 		l.onReplicaChanged(shardID, replicaID, AddReplica)
 	}
 	return nil
-}
-
-func (l *store) newStateMachine(shardID, replicaID uint64) sm.IStateMachine {
-	s := newStateMachine(shardID, replicaID).(*stateMachine)
-	s.entryTerm = func(index uint64) (uint64, error) {
-		reader, err := l.nh.GetLogReader(shardID)
-		if err != nil {
-			return 0, err
-		}
-		return reader.Term(index)
-	}
-	return s
 }
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {

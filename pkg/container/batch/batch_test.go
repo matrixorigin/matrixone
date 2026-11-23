@@ -216,7 +216,6 @@ func TestBatchWindowRejectsMissingRowMetadata(t *testing.T) {
 	for _, vec := range []*vector.Vector{
 		vector.NewVec(types.T_int64.ToType(), mp),
 		vector.NewConstNull(types.T_int64.ToType(), 0, mp),
-		vector.NewRollupConst(types.T_int64.ToType(), 1, mp),
 	} {
 		if !vec.IsConst() {
 			require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
@@ -820,7 +819,7 @@ func TestTransportDecoderDropsLegacyStringSourcesOnConstant(t *testing.T) {
 	streaming.Clean(mp)
 }
 
-func TestLegacyStringSourcesDroppedByBatchAndGroupingCodecs(t *testing.T) {
+func TestLegacyStringSourcesDroppedByBatchAndSpillCodecs(t *testing.T) {
 	mp := mpool.MustNewZero()
 	sources := []types.StringSource{
 		types.StringSourceExpression,
@@ -835,7 +834,6 @@ func TestLegacyStringSourcesDroppedByBatchAndGroupingCodecs(t *testing.T) {
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, mp))
 	}
-	bat.Vecs[0].GetGrouping().Add(1, 3)
 	bat.SetRowCount(len(sources))
 	defer bat.Clean(mp)
 
@@ -855,25 +853,22 @@ func TestLegacyStringSourcesDroppedByBatchAndGroupingCodecs(t *testing.T) {
 	decoded.Clean(mp)
 
 	var wire bytes.Buffer
-	require.NoError(t, bat.MarshalBinaryWithGroupingTo(&wire))
-	grouped := NewWithSize(0)
-	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(bytes.NewReader(wire.Bytes()), mp))
-	requireStringValues(t, grouped.Vecs[0], values...)
-	require.True(t, grouped.Vecs[0].GetGrouping().IsSame(bat.Vecs[0].GetGrouping()))
+	require.NoError(t, bat.MarshalBinaryForSpillTo(&wire))
+	spilled := NewWithSize(0)
+	require.NoError(t, spilled.UnmarshalFromReaderForSpill(bytes.NewReader(wire.Bytes()), mp))
+	requireStringValues(t, spilled.Vecs[0], values...)
 
-	// The grouping codec frames the same transport payload; an older
+	// The spill codec frames the same transport payload; an older
 	// writer's version-2 trailer inside it is dropped as well.
 	payloadSize := types.DecodeInt64(wire.Bytes()[:8])
 	payload := wire.Bytes()[8 : 8+payloadSize]
-	groupingTail := wire.Bytes()[8+payloadSize:]
+	require.Len(t, wire.Bytes(), int(8+payloadSize))
 	olderPayload := legacyV2TransportWire(t, payload, legacyRowsStringSource(sources...))
 	olderSize := int64(len(olderPayload))
 	olderWire := append(types.EncodeInt64(&olderSize), olderPayload...)
-	olderWire = append(olderWire, groupingTail...)
-	require.NoError(t, grouped.UnmarshalFromReaderWithGrouping(bytes.NewReader(olderWire), mp))
-	requireStringValues(t, grouped.Vecs[0], values...)
-	require.True(t, grouped.Vecs[0].GetGrouping().IsSame(bat.Vecs[0].GetGrouping()))
-	grouped.Clean(mp)
+	require.NoError(t, spilled.UnmarshalFromReaderForSpill(bytes.NewReader(olderWire), mp))
+	requireStringValues(t, spilled.Vecs[0], values...)
+	spilled.Clean(mp)
 }
 
 func TestTransportDropsLegacyVectorFlags(t *testing.T) {

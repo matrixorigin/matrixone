@@ -35,7 +35,6 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	fixed := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(fixed, []int64{11}, []bool{false}, mp))
 	fixed.GetNulls().Add(9)
-	fixed.GetGrouping().Add(0, 9)
 	fixed.SetSorted(true)
 
 	dead := []byte("dead-")
@@ -73,9 +72,7 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	}
 	require.False(t, got.Vecs[0].GetSorted())
 	require.Equal(t, int64(11), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
-	require.True(t, got.Vecs[0].GetGrouping().Contains(0))
 	require.False(t, got.Vecs[0].GetNulls().Contains(9))
-	require.False(t, got.Vecs[0].GetGrouping().Contains(9))
 	require.Equal(t, live, got.Vecs[1].GetBytesAt(0))
 	require.Len(t, got.Vecs[1].GetArea(), len(live))
 	require.Equal(t, "a repeated value long enough to use the area", string(got.Vecs[2].GetBytesAt(0)))

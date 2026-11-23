@@ -705,3 +705,18 @@ func (c *fakeTableCache) InvalidateTable(accountID uint32, catalogID uint64, nam
 	c.table = table
 	return 1
 }
+
+func TestAppendWorkflowRecordsManifestBudgetFailure(t *testing.T) {
+	audit := &fakeAuditRecorder{}
+	committer := &fakeCommitter{}
+	workflow := AppendWorkflow{
+		Builder:   &ManifestAttemptBuilder{SnapshotID: 200, SequenceNumber: 9, ManifestPath: "s3://warehouse/metadata/m.avro", ManifestListPath: "s3://warehouse/metadata/list.avro", MaxMemoryBytes: 1024, InitialMemoryBytes: 1024},
+		Committer: committer, AuditRecorder: audit,
+	}
+	_, err := workflow.CommitAppend(context.Background(), appendRequest())
+	require.Error(t, err)
+	require.True(t, api.IsMemoryLimit(err))
+	require.Empty(t, committer.requests)
+	require.Len(t, audit.audits, 1)
+	require.Equal(t, string(api.ErrPlanningLimitExceeded), audit.audits[0].ErrorCategory)
+}

@@ -141,9 +141,6 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredProtocol); err != nil {
 		return nil, err
 	}
-	if err = validateGroupingTransportDestinations(proc, p); err != nil {
-		return nil, err
-	}
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -658,14 +655,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s = newScope(magicType(p.GetPipelineType()))
-	for parent := ctx; parent != nil; parent = parent.parent {
-		if parent.plan != nil {
-			if queryNeedsGroupingTransport(parent.plan.GetQuery()) {
-				s.Plan = parent.plan
-			}
-			break
-		}
-	}
 	s.IsEnd = p.IsEnd
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote

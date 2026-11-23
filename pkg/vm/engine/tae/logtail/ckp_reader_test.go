@@ -569,22 +569,30 @@ func makeCheckpointMetaFixture(
 	fs.SetAsyncUpdate(false)
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		fs.Close(ctx)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
+	return fs, writeCheckpointMetaFixture(t, fs, mp, ranges), mp
+}
+
+func writeCheckpointMetaFixture(
+	t testing.TB, fs fileservice.FileService, mp *mpool.MPool, ranges []ckputil.TableRange,
+) objectio.Location {
+	t.Helper()
+	ctx := context.Background()
 	bat := ckputil.NewMetaBatch(mp)
 	defer bat.Clean(mp)
 	for i := range ranges {
 		require.NoError(t, ranges[i].AppendTo(bat, mp))
 	}
 	writer := ioutil.ConstructWriter(0, ckputil.MetaSeqnums, -1, false, false, fs)
-	_, err = writer.WriteBatch(bat)
+	_, err := writer.WriteBatch(bat)
 	require.NoError(t, err)
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 	stats := writer.GetObjectStats()
-	return fs, stats.ObjectLocation(), mp
+	return stats.ObjectLocation()
 }
 
 func checkpointMetaRange(tableID uint64, objectType int8, ordinal int) ckputil.TableRange {
@@ -904,7 +912,7 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 			for _, column := range columns {
 				require.NoError(t, dest.Vecs[column].PreExtend(1, failureMP))
 				if column == ckputil.TableObjectsAttr_Accout_Idx {
-					require.NoError(t, dest.Vecs[column].PreExtendBitmap(1, failureMP))
+					require.NoError(t, dest.Vecs[column].PreExtendNulls(1, failureMP))
 				}
 			}
 			available := failureMP.Cap() - failureMP.CurrNB()

@@ -1534,9 +1534,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.validateGroupingTransportPlacement(qry); err != nil {
-		return nil, err
-	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -1584,9 +1581,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
 	c.bindLocalRuntimeFilterDomains(qry, steps)
-	if queryNeedsGroupingTransport(qry) {
-		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
-	}
 
 	c.installMarkScanGuard(qry, steps)
 	return steps, err
@@ -8438,7 +8432,7 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.ProducesGroupingSets())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -8673,7 +8667,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.ProducesGroupingSets())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -8691,7 +8685,7 @@ func (c *Compile) compileMergeGroup(
 
 			if i == 0 {
 				aggs = op.Aggs
-				groupingAware = op.UsesGroupingAwareHash()
+				groupingAware = op.ProducesGroupingSets()
 			}
 		}
 		c.anal.isFirst = false
