@@ -727,10 +727,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				unrelated := database + "_other"
 				for _, query := range []string{
 					"create database " + database,
-					"create database " + unrelated,
 					"create table " + database + ".t (id int primary key, v int)",
 					"create table " + database + ".u (i int)",
-					"create table " + unrelated + ".u (i int)",
 					"insert into " + database + ".t values (1, 1)",
 				} {
 					execSQLRequire(t, ctx, db0, query)
@@ -739,10 +737,14 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
 					defer done()
 					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
-					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+unrelated)
+					if scenario.name == "shared_gate" {
+						_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+unrelated)
+					}
 				}()
 				var progressConn *sql.Conn
 				if scenario.name == "shared_gate" {
+					execSQLRequire(t, ctx, db0, "create database "+unrelated)
+					execSQLRequire(t, ctx, db0, "create table "+unrelated+".u (i int)")
 					conn, err := db0.Conn(ctx)
 					require.NoError(t, err)
 					defer conn.Close()
