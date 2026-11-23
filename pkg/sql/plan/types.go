@@ -977,6 +977,13 @@ type BindContext struct {
 	// View. It lets transparent derived/CTE query boundaries expose their raw
 	// ENUM/SET values without changing ordinary query-boundary behavior.
 	restoreViewMySQLSpecialTypes bool
+	// persistedBodyCompatibility marks a BindContext that is rebinding
+	// persisted SQL text (a stored SQL UDF body). It rides the same
+	// child-context inheritance as restoreViewMySQLSpecialTypes so a
+	// subquery-shaped body binds every nested expression through the
+	// historical persisted semantics; the radix literal gate honors it
+	// exactly like the binder-scoped persistedFormatCompatibility.
+	persistedBodyCompatibility bool
 	// mysqlSpecialRawProjectPositions maps a visible output position to a hidden
 	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
 	// for row-preserving View ORDER BY boundaries.

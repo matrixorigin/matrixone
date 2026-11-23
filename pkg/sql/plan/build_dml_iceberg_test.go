@@ -19,18 +19,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
@@ -93,6 +95,127 @@ func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
 	if got := projectColPosByName(scan.GetProjectList(), icebergapi.DMLRowOrdinalColumnName); got != rowInputPos {
 		t.Fatalf("row-ordinal metadata projection colpos = %d, want scan input colpos %d", got, rowInputPos)
 	}
+}
+
+// TestIcebergUpdateRadixCastWritePolicy evaluates the replacement expression
+// built by the specialized Iceberg UPDATE planner. It verifies that the inner
+// DECIMAL cast uses the statement's IGNORE or strict write policy.
+func TestIcebergUpdateRadixCastWritePolicy(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+		&planpb.ColDef{
+			Name:    "d",
+			Typ:     planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	)
+	proc := ctx.GetProcess()
+	require.NotNil(t, proc, "the Iceberg fixture must bind with a real process")
+
+	build := func(sql string) *Expr {
+		p, err := buildIcebergTestPlan(t, ctx, sql)
+		require.NoError(t, err, "BuildPlan must accept the specialized Iceberg UPDATE")
+		query := p.GetQuery()
+		require.Equal(t, planpb.Query_UPDATE, query.GetStmtType())
+		var sink *planpb.Node
+		for _, node := range query.GetNodes() {
+			if node.GetExtraOptions() == icebergapi.DMLUpdatePlanExtraOptions {
+				sink = node
+			}
+		}
+		require.NotNil(t, sink, "expected the Iceberg UPDATE DML sink")
+		replacement := icebergDMLSinkChildProject(t, query, sink)
+		idx := -1
+		for i, col := range sink.GetTableDef().GetCols() {
+			if col.GetName() == "d" {
+				idx = i
+			}
+		}
+		require.GreaterOrEqual(t, idx, 0, "the d column must exist on the sink table def")
+		require.Greater(t, len(replacement.GetProjectList()), idx,
+			"the replacement project must carry the d assignment")
+		assignment := replacement.GetProjectList()[idx]
+		require.Equal(t, int32(10), assignment.GetTyp().Width,
+			"the planned assignment targets the column's declared width")
+		require.Equal(t, int32(2), assignment.GetTyp().Scale,
+			"the planned assignment targets the column's declared scale")
+		return assignment
+	}
+	// The planned replacement expression evaluates through the real expression
+	// executor under the named-load assignment reference lifecycle: the
+	// statement's IGNORE policy clips at the CAST's own declared bound and
+	// reports exactly one MySQL 1264, while the strict statement keeps the
+	// typed 20301 rejection with no value. In-range radix and numeric
+	// controls evaluate their exact values without any warning.
+	execute := func(expr *Expr, mode string, check func(*vector.Vector, []uint16, error)) {
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		require.NoError(t, err, "must construct the replacement expression executor")
+		defer executor.Free()
+		sink := &loadAssignmentWarningSink{}
+		proc.WarningSink = sink
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return mode, nil })
+		// Evaluate against one deterministic replacement-row input: the
+		// executor and the row stay alive through the caller's assertions.
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(types.T_decimal64.ToType(), proc.Mp())
+		require.NoError(t, vector.AppendFixed[types.Decimal64](input.Vecs[0], types.Decimal64(0), false, proc.Mp()))
+		input.SetRowCount(1)
+		defer input.Clean(proc.Mp())
+		result, evalErr := executor.Eval(proc, []*batch.Batch{input}, nil)
+		check(result, sink.codes, evalErr)
+	}
+	requireOneDecimalRow := func(result *vector.Vector, want types.Decimal64, message string) {
+		require.NotNil(t, result, "%s: the evaluation must return a value", message)
+		require.Equal(t, types.T_decimal64, result.GetType().Oid, "%s: one DECIMAL64 row", message)
+		require.Equal(t, int32(2), result.GetType().Scale, "%s: the column's declared scale", message)
+		require.Equal(t, 1, result.Length(), "%s: exactly one replacement row", message)
+		require.False(t, result.IsNull(0), "%s: the replacement row must be non-null", message)
+		require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Decimal64](result, 0),
+			"%s: the evaluated row value", message)
+	}
+
+	// IGNORE: even under a strict session the statement policy clips the
+	// inner Decimal(4,1) to 999.9 and the column assignment evaluates 999.90,
+	// reporting exactly one 1264.
+	proc.GetSessionInfo().SqlMode = "STRICT_TRANS_TABLES"
+	ignoreExpr := build("update ignore gold_orders set d = cast(0x1000 as decimal(4,1)) where id = 1")
+	execute(ignoreExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err, "the IGNORE replacement expression must evaluate")
+		requireOneDecimalRow(result, types.Decimal64(99990),
+			"the clipped IGNORE assignment evaluates 999.90")
+		require.Equal(t, []uint16{moerr.ER_WARN_DATA_OUT_OF_RANGE}, codes,
+			"the clipped assignment reports exactly one 1264")
+	})
+
+	// Strict statement: the same chain rejects at the cast's own bound with
+	// the typed error and produces no row.
+	strictExpr := build("update gold_orders set d = cast(0x1000 as decimal(4,1)) where id = 1")
+	execute(strictExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput),
+			"the strict statement keeps the typed 20301 rejection at the cast's own bound, got %v", err)
+		require.Nil(t, result, "a rejected strict replacement produces no value")
+		require.Empty(t, codes, "a typed rejection emits no warning")
+	})
+
+	// In-range radix control: the magnitude 4096 reaches the column exactly as
+	// 4096.00 with no warning.
+	inRangeExpr := build("update gold_orders set d = cast(0x1000 as decimal(10,2)) where id = 1")
+	execute(inRangeExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err)
+		requireOneDecimalRow(result, types.Decimal64(409600),
+			"an in-range radix magnitude evaluates its exact value")
+		require.Empty(t, codes, "an in-range radix assignment reports no warning")
+	})
+
+	// In-range numeric control: 4096 fits Decimal(5,1) exactly and reaches the
+	// column as 4096.00 with no warning.
+	numericExpr := build("update gold_orders set d = cast(4096 as decimal(5,1)) where id = 1")
+	execute(numericExpr, "STRICT_TRANS_TABLES", func(result *vector.Vector, codes []uint16, err error) {
+		require.NoError(t, err)
+		requireOneDecimalRow(result, types.Decimal64(409600),
+			"an ordinary in-range numeric control evaluates its exact value")
+		require.Empty(t, codes, "an in-range numeric assignment reports no warning")
+	})
 }
 
 func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {

@@ -39,6 +39,14 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, false)
+	// Mirror bindUpdate: this builder owns an UPDATE, so a radix literal
+	// inside an assignment expression rides the statement's own write and
+	// IGNORE policy through the shared assignment conversion instead of the
+	// standalone scalar range rejection. The outer assignment at the bottom
+	// already forwards stmt.Ignore; this records the provenance before any
+	// RHS bind can see it.
+	builder.isBindingDMLWrite = true
+	builder.isUpdateIgnore = stmt.Ignore
 	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {

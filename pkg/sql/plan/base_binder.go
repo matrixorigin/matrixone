@@ -222,7 +222,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			return
 		}
 		if types.T(typ.Id).IsDecimal() && !b.persistedFormatCompatibility &&
-			!(b.ctx != nil && b.ctx.restoreViewMySQLSpecialTypes) {
+			!(b.ctx != nil && b.ctx.restoreViewMySQLSpecialTypes) &&
+			!(b.ctx != nil && b.ctx.persistedBodyCompatibility) {
 			// #31816: an explicit CAST is the same keyword boundary a direct
 			// assignment is, so a syntax-owned HEX/BIT literal operand has
 			// MySQL's unsigned integer value here too. Bind its bounded
@@ -6340,6 +6341,23 @@ func bindFuncExprImplUdf(
 					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
 			}
 		}
+		// The saved SQL body is persisted catalog text, exactly like a
+		// stored DEFAULT or view: it was authored against the pre-upgrade
+		// binding, so it must rebind through the historical persisted
+		// expression semantics (bindPersistedExpr's compatibility mode)
+		// instead of the new magnitude route. Scope that mode to the body
+		// bind itself - the call-site argument expressions are already bound
+		// normally above - and restore the previous mode on every exit so
+		// nested UDF calls and later callers never see a stale flag.
+		previousPersistedMode := b.persistedFormatCompatibility
+		b.persistedFormatCompatibility = true
+		var previousCtxMode bool
+		if b.ctx != nil {
+			previousCtxMode = b.ctx.persistedBodyCompatibility
+			b.ctx.persistedBodyCompatibility = true
+			defer func() { b.ctx.persistedBodyCompatibility = previousCtxMode }()
+		}
+		defer func() { b.persistedFormatCompatibility = previousPersistedMode }()
 		if expressionBody {
 			expr, err := b.impl.BindExpr(bodyExpr, depth, false)
 			if err != nil {

@@ -99,6 +99,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.numericCteByName = parent.numericCteByName
 		bc.viewPath = append([]*plan.ViewStep(nil), parent.viewPath...)
 		bc.restoreViewMySQLSpecialTypes = parent.restoreViewMySQLSpecialTypes
+		bc.persistedBodyCompatibility = parent.persistedBodyCompatibility
 		bc.captureViewStarExpansion = parent.captureViewStarExpansion
 		bc.expandedSelectLists = parent.expandedSelectLists
 	}

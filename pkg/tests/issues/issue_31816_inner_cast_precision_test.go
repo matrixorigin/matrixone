@@ -453,3 +453,97 @@ func TestIssue31816FoldedMetadataWireOracle(t *testing.T) {
 		})
 	})
 }
+
+// A stored SQL function's saved body is persisted catalog text: it must rebind
+// through the historical coefficient semantics like any pre-upgrade
+// definition, while the call-site argument expressions and direct interactive
+// casts keep the new magnitude route.
+func TestIssue31816StoredUdfBodyCompatibility(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		rootCtx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
+		require.NoError(t, err)
+		defer db.Close()
+		defer func() {
+			dropCtx, dropCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer dropCancel()
+			if _, derr := db.ExecContext(dropCtx, "drop database if exists issue_31816_udf"); derr != nil {
+				t.Errorf("issue31816 udf cleanup drop failed: %v", derr)
+			}
+		}()
+		conn, err := db.Conn(rootCtx)
+		require.NoError(t, err)
+		defer conn.Close()
+		execOK := func(t *testing.T, stmt string) {
+			t.Helper()
+			_, err := conn.ExecContext(rootCtx, stmt)
+			require.NoError(t, err)
+		}
+		valueOf := func(t *testing.T, name, query string) string {
+			t.Helper()
+			var v sql.NullString
+			require.NoError(t, conn.QueryRowContext(rootCtx, query).Scan(&v), name)
+			return v.String
+		}
+		execOK(t, "create database if not exists issue_31816_udf")
+		execOK(t, "use issue_31816_udf")
+		t.Run("stored_body_keeps_released_coefficient_value", func(t *testing.T) {
+			execOK(t, "drop function if exists f41 ()")
+			execOK(t, "create function f41() returns decimal(4,4) language sql as 'select cast(X''41'' as decimal(4,4))'")
+			require.Equal(t, "0.0065", valueOf(t, "udf_narrow_body",
+				"select f41()"),
+				"a stored narrow body keeps the released coefficient result")
+			execOK(t, "drop function if exists f41w ()")
+			execOK(t, "create function f41w() returns decimal(6,4) language sql as 'select cast(X''41'' as decimal(6,4))'")
+			require.Equal(t, "0.0065", valueOf(t, "udf_wider_body",
+				"select f41w()"),
+				"a stored wider body keeps the released coefficient result instead of flipping to the magnitude")
+		})
+		t.Run("scalar_stored_body_keeps_released_coefficient_value", func(t *testing.T) {
+			// A body without a SELECT binds through the UDF binder's separate
+			// scalar expression route, so it must keep the same historical
+			// persisted semantics and restore the caller scope afterwards.
+			execOK(t, "drop function if exists fs41 ()")
+			execOK(t, "create function fs41 () returns decimal(4,4) language sql as 'cast(X''41'' as decimal(4,4))'")
+			require.Equal(t, "0.0065", valueOf(t, "udf_scalar_narrow",
+				"select fs41()"),
+				"a scalar stored body keeps the released coefficient result")
+			execOK(t, "drop function if exists fs41w ()")
+			execOK(t, "create function fs41w () returns decimal(6,4) language sql as 'cast(X''41'' as decimal(6,4))'")
+			require.Equal(t, "0.0065", valueOf(t, "udf_scalar_wide",
+				"select fs41w()"),
+				"a scalar wider body keeps the released coefficient result")
+			// The caller scope is restored after successful body binds and
+			// after a rejected body alike: the same session's direct route
+			// keeps the new magnitude semantics.
+			execOK(t, "drop function if exists fbad ()")
+			execOK(t, "create function fbad () returns decimal(4,4) language sql as 'nosuchfn(X''41'')'")
+			var badCall sql.NullString
+			berr := conn.QueryRowContext(rootCtx, "select fbad()").Scan(&badCall)
+			require.Error(t, berr, "the failing body surfaces its own error")
+			require.Equal(t, "65.0000", valueOf(t, "caller_scope_direct_after_bodies",
+				"select cast(X'41' as decimal(6,4))"),
+				"the direct interactive route stays magnitude after every body bind")
+		})
+		t.Run("call_site_argument_keeps_magnitude_boundaries", func(t *testing.T) {
+			execOK(t, "drop function if exists farg (d decimal(6,4))")
+			execOK(t, "create function farg(d decimal(6,4)) returns decimal(6,4) language sql as 'select cast($1 as decimal(6,4))'")
+			require.Equal(t, "65.0000", valueOf(t, "udf_arg_magnitude",
+				"select farg(cast(X'41' as decimal(6,4)))"),
+				"a call-site argument expression keeps the direct magnitude route")
+			require.Equal(t, "65.0000", valueOf(t, "direct_wide_control",
+				"select cast(X'41' as decimal(6,4))"))
+			// The same QueryRow error-control idiom as the stored-view narrow
+			// control keeps the driver's row-set accounting (rowserrcheck)
+			// clean while asserting the typed call-site rejection.
+			var callNarrow sql.NullString
+			cerr := conn.QueryRowContext(rootCtx, "select farg(cast(X'41' as decimal(4,4)))").Scan(&callNarrow)
+			require.Error(t, cerr, "the direct narrow cast at the call site keeps its typed rejection")
+			require.Contains(t, cerr.Error(), "20301", "typed out-of-range rejection")
+		})
+	})
+}
