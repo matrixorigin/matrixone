@@ -102,7 +102,7 @@ func TestProjectionJSONPlannedJoinedUpdate(t *testing.T) {
 	defer input.Clean(proc.Mp())
 	input.SetRowCount(3)
 	for pos, typ := range columns {
-		vec := vector.NewVec(types.MustTypeFromPlan(typ))
+		vec := vector.NewVec(types.MustTypeFromPlan(typ), proc.Mp())
 		input.Vecs[pos] = vec
 		switch {
 		case pos == docs[0].GetCol().ColPos:

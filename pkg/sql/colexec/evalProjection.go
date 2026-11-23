@@ -106,6 +106,10 @@ func (projection *Projection) EvalProjectionSelected(bat, physical *batch.Batch,
 	if len(projection.ProjectExecutors) == 0 || bat.IsEmpty() || bat.Last() {
 		return bat, nil
 	}
+	if projection.jsonFrame != nil {
+		projection.jsonFrame.Begin(physical)
+		defer projection.jsonFrame.End()
+	}
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 	for i := range projection.ProjectExecutors {
 		vec, err := projection.ProjectExecutors[i].Eval(proc, []*batch.Batch{physical}, mask)

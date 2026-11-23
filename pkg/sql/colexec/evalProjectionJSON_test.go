@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -73,7 +74,7 @@ func TestProjectionJSONSharesSevenConsumers(t *testing.T) {
 	func() {
 		input := batch.NewWithSize(1)
 		defer input.Clean(proc.Mp())
-		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		input.SetRowCount(3)
 		projection := Projection{}
 		for i := range 7 {
@@ -125,6 +126,54 @@ func TestProjectionJSONSharesSevenConsumers(t *testing.T) {
 	require.Equal(t, baseline, proc.Mp().CurrNB())
 }
 
+func TestProjectionJSONSharesSelectedPhysicalRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	baseline := mp.CurrNB()
+	t.Cleanup(func() { require.Equal(t, baseline, mp.CurrNB()) })
+	input := batch.NewWithSize(1)
+	defer input.Clean(mp)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+	var selection bitmap.Bitmap
+	selection.InitWithSize(3)
+	selection.Add(0)
+	selection.Add(2)
+	input.SetSelection(3, &selection)
+	projection := Projection{ProjectList: []*plan.Expr{
+		jsonProjectionTestCall(t, proc, "json_unquote", types.T_varchar, jsonProjectionTestExtract(t, proc, 0, "$.a")),
+		jsonProjectionTestCall(t, proc, "json_unquote", types.T_varchar, jsonProjectionTestExtract(t, proc, 0, "$.b")),
+	}}
+	require.NoError(t, projection.PrepareProjection(proc))
+	defer projection.FreeProjection(proc)
+	count := CountProjectionJSONParses(t, projection.jsonFrame)
+	mask := input.SelectionMask(nil)
+	var physical batch.Batch
+	eval := func(docs []string) (*batch.Batch, error) {
+		input.Vecs[0].ResetWithSameType()
+		require.NoError(t, vector.AppendStringList(input.Vecs[0], docs, nil, mp))
+		input.PhysicalView(&physical)
+		result, err := projection.EvalProjectionSelected(input, &physical, mask, proc)
+		require.Nil(t, projection.jsonFrame.input)
+		require.Empty(t, projection.jsonFrame.pages)
+		require.Zero(t, projection.jsonFrame.cacheBytes)
+		return result, err
+	}
+	first := `{"a":"first a","b":"first b"}`
+	last := `{"a":"last a","b":"last b"}`
+	result, err := eval([]string{first, "invalid masked row", last})
+	require.NoError(t, err)
+	require.Equal(t, 2, *count)
+	require.Equal(t, []int64{0, 2}, result.SelectionRows(nil))
+	for col, expected := range [][2]string{{"first a", "last a"}, {"first b", "last b"}} {
+		require.Equal(t, expected[0], result.Vecs[col].UnsafeGetStringAt(0))
+		require.True(t, result.Vecs[col].IsNull(1))
+		require.Equal(t, expected[1], result.Vecs[col].UnsafeGetStringAt(2))
+	}
+	projection.ResetProjection(proc)
+	_, err = eval([]string{first, "invalid masked row", "invalid selected row"})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+}
+
 func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	baseline := proc.Mp().CurrNB()
@@ -134,13 +183,13 @@ func TestProjectionJSONSparseMasksUseOriginalRows(t *testing.T) {
 	input.SetRowCount(5)
 	docs := []string{`{"a":40,"b":41}`, "invalid document", `{"a":20,"b":21}`, `{"a":null}`, `{"a":10,"b":11}`}
 	for _, col := range []int{0, 3} {
-		input.Vecs[col] = vector.NewVec(types.T_text.ToType())
+		input.Vecs[col] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendStringList(input.Vecs[col], docs, nil, proc.Mp()))
 	}
 	left := []bool{true, false, true, true, false}
 	right := []bool{false, false, true, true, true}
 	for col, mask := range [][]bool{left, right} {
-		input.Vecs[col+1] = vector.NewVec(types.T_bool.ToType())
+		input.Vecs[col+1] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[col+1], mask, nil, proc.Mp()))
 	}
 	build := func(col, mask int32, key string) *plan.Expr {
@@ -185,10 +234,10 @@ func TestProjectionJSONSharedGuardHonorsPhysicalMask(t *testing.T) {
 	input := batch.NewWithSize(3)
 	defer input.Clean(proc.Mp())
 	input.SetRowCount(4)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{`{"a":10,"b":20}`, "invalid", "invalid", `{"a":30}`}, nil, proc.Mp()))
 	for i, values := range [][]bool{{true, false, true, true}, {true, true, false, false}} {
-		input.Vecs[i+1] = vector.NewVec(types.T_bool.ToType())
+		input.Vecs[i+1] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[i+1], values, nil, proc.Mp()))
 	}
 	build := func(path string, guard int32) *plan.Expr {
@@ -230,7 +279,7 @@ func TestProjectionJSONRequiredOutputBudget(t *testing.T) {
 	pool := proc.Mp()
 	input := batch.NewWithSize(1)
 	defer input.Clean(pool)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), pool)
 	input.SetRowCount(1)
 	value := strings.Repeat("x", 2048)
 	doc := fmt.Sprintf(`{"a":%q,"b":%q}`, value, value)
@@ -436,7 +485,7 @@ func BenchmarkProjectionJSON(b *testing.B) {
 				input := batch.NewWithSize(columns)
 				defer input.Clean(proc.Mp())
 				input.SetRowCount(rows)
-				input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 				fields := make([]string, workload.leaves)
 				for i := range workload.leaves {
 					fields[i] = fmt.Sprintf(`"k%d":"value-%d"`, i, i)
@@ -454,7 +503,7 @@ func BenchmarkProjectionJSON(b *testing.B) {
 				for col := range workload.leaves {
 					leaf := jsonProjectionTestExtract(b, proc, 0, fmt.Sprintf("$.k%d", col))
 					if workload.sparse {
-						input.Vecs[col+1] = vector.NewVec(types.T_bool.ToType())
+						input.Vecs[col+1] = vector.NewVec(types.T_bool.ToType(), proc.Mp())
 						mask := make([]bool, rows)
 						for row := col; row < rows; row += workload.leaves {
 							mask[row] = true
