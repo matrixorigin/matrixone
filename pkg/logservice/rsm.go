@@ -214,7 +214,6 @@ type stateMachine struct {
 	replicaID    uint64
 	state        pb.RSMState
 	leaseIndexes []uint64 // sorted cache of the persisted LeaseHistory keys
-	entryTerm    func(uint64) (uint64, error)
 }
 
 var _ sm.IStateMachine = (*stateMachine)(nil)
@@ -500,7 +499,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.RequiredLSNUpdate:
 		return s.handleSetRequiredLsn(cmd), nil
 	case pb.RequiredLSNConditionalUpdate:
-		matches, err := s.hasEntryTerm(e.Index, s.state.RequiredLsnLeaderTerm)
+		matches, err := s.hasEntryTerm(e, s.state.RequiredLsnLeaderTerm)
 		if err != nil {
 			return sm.Result{}, err
 		}
@@ -511,7 +510,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.WALTruncateUpdate:
 		return s.handleWALTruncate(cmd), nil
 	case pb.RequiredLSNClaimUpdate:
-		matches, err := s.hasEntryTerm(e.Index, binaryEnc.Uint64(cmd[headerSize+24:]))
+		matches, err := s.hasEntryTerm(e, binaryEnc.Uint64(cmd[headerSize+24:]))
 		if err != nil {
 			return sm.Result{}, err
 		}
@@ -524,19 +523,11 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	}
 }
 
-func (s *stateMachine) hasEntryTerm(index, requiredTerm uint64) (bool, error) {
-	if s.entryTerm == nil {
-		return false, moerr.NewInternalErrorNoCtxf("missing Raft entry term reader for shard %d", s.shardID)
+func (s *stateMachine) hasEntryTerm(e sm.Entry, requiredTerm uint64) (bool, error) {
+	if e.Term == 0 {
+		return false, moerr.NewInternalErrorNoCtxf("missing Raft entry term for shard %d index %d", s.shardID, e.Index)
 	}
-	actualTerm, err := s.entryTerm(index)
-	if err != nil {
-		return false, moerr.NewInternalErrorNoCtxf("cannot read Raft entry term for shard %d index %d: %v",
-			s.shardID, index, err)
-	}
-	if actualTerm == 0 {
-		return false, moerr.NewInternalErrorNoCtxf("missing Raft entry term for shard %d index %d", s.shardID, index)
-	}
-	return requiredTerm != 0 && actualTerm == requiredTerm, nil
+	return requiredTerm != 0 && e.Term == requiredTerm, nil
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
