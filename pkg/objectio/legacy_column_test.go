@@ -210,6 +210,11 @@ func TestMaterializeLegacyConstantColumnWindow(t *testing.T) {
 	nullText := vector.NewConstNull(types.T_varchar.ToType(), 6, mp)
 	defer nullText.Free(mp)
 	encoded = marshalLegacyTestColumn(t, nullText)
+	costs := make([]uint64, 3)
+	require.NoError(t, addLegacyColumnWindowCosts(bytes.NewReader(encoded), int64(len(encoded)), 2, costs))
+	for _, cost := range costs {
+		require.Equal(t, uint64(types.T_varchar.ToType().TypeSize()), cost)
+	}
 	window, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), int64(len(encoded)), 2, 3, mp)
 	require.NoError(t, err)
 	require.Equal(t, 3, window.Length())

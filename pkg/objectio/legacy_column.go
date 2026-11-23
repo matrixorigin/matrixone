@@ -311,6 +311,9 @@ func addLegacyColumnWindowCosts(source io.ReaderAt, originSize int64, offset int
 	if !layout.typ.IsVarlen() {
 		return nil
 	}
+	if layout.class == vector.CONSTANT && layout.dataLength == 0 {
+		return nil
+	}
 	sourceNulls, err := readLegacyColumnNulls(source, layout)
 	if err != nil {
 		return err
