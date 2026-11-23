@@ -1295,23 +1295,16 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 	if value == nil {
 		return types.Type{}, false
 	}
-	switch kind {
-	case types.StringConversionInteger:
-		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok && typ.Oid.IsInteger() {
-			return typ, true
-		}
-	case types.StringConversionDecimal:
+	// Integer, float and Boolean parameters carry their type (RuntimeType or
+	// SourceType, above). DECIMAL and text are typed from their spelling.
+	if kind == types.StringConversionDecimal {
 		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok && typ.IsDecimal() {
 			return typ, true
 		}
-	case types.StringConversionFloat:
-		return types.T_float64.ToType(), true
-	case types.StringConversionBoolean:
-		return types.T_bool.ToType(), true
-	default:
-		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok {
-			return typ, true
-		}
+		return types.Type{}, false
+	}
+	if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok {
+		return typ, true
 	}
 	return types.Type{}, false
 }

@@ -391,14 +391,12 @@ func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
 		})
 	}
 
-	binaryFilled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
-		ParamValue{
-			Value:            "2",
-			PrepareParamKind: types.StringConversionInteger,
-		},
-	})
+	binaryFilled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{comStmtIntParam(2)})
 	require.NoError(t, err)
-	require.Equal(t, "2", firstWindowSpec(t, binaryFilled).WindowFunc.GetF().Args[1].GetLit().GetSval())
+	// A COM_STMT integer offset is a native integer, materialized as an integer literal.
+	offsetLit := firstWindowSpec(t, binaryFilled).WindowFunc.GetF().Args[1].GetLit()
+	require.NotNil(t, offsetLit)
+	require.Equal(t, int64(2), offsetLit.GetI64Val(), offsetLit.String())
 
 	logicPlan, err := runOneStmt(
 		NewMockOptimizer(false, newPlanTestProcess(t)),

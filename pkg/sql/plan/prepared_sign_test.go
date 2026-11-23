@@ -64,24 +64,18 @@ func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 
 	for _, test := range []struct {
 		name    string
-		value   string
-		kind    types.StringConversionKind
-		isBin   bool
+		param   ParamValue
 		wantArg types.T
 		wantOL  int32
 	}{
-		{name: "integer", value: "-3", kind: types.StringConversionInteger, wantArg: types.T_int64, wantOL: 0},
-		{name: "float", value: "-0.1", kind: types.StringConversionFloat, wantArg: types.T_float64, wantOL: 2},
-		{name: "decimal", value: "-0.1", kind: types.StringConversionDecimal, wantArg: types.T_decimal64, wantOL: 3},
-		{name: "binary string decimal", value: "-0.1", kind: types.StringConversionString, isBin: true, wantArg: types.T_decimal64, wantOL: 3},
+		{name: "integer", param: comStmtIntParam(-3), wantArg: types.T_int64, wantOL: 0},
+		{name: "float", param: comStmtFloatParam(-0.1), wantArg: types.T_float64, wantOL: 2},
+		{name: "decimal", param: ParamValue{Value: "-0.1", PrepareParamKind: types.StringConversionDecimal}, wantArg: types.T_decimal64, wantOL: 3},
+		{name: "binary string decimal", param: ParamValue{Value: "-0.1", IsBinaryProtocol: true, PrepareParamKind: types.StringConversionString}, wantArg: types.T_decimal64, wantOL: 3},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtimePlan, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
-				ctx, preparePlan, []any{ParamValue{
-					Value:            test.value,
-					IsBinaryProtocol: test.isBin,
-					PrepareParamKind: test.kind,
-				}})
+				ctx, preparePlan, []any{test.param})
 			require.NoError(t, err)
 			require.True(t, specialized)
 			fn := findPlanFunctionExpr(runtimePlan, "sign")

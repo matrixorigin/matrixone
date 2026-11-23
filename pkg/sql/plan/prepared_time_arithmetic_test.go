@@ -216,9 +216,9 @@ func TestPreparedTimeArithmeticAsIntegerArgument(t *testing.T) {
 				param ParamValue
 				null  bool
 			}{
-				{"integer", ParamValue{Value: "0", PrepareParamKind: types.StringConversionInteger}, false},
+				{"integer", sqlIntParam(0), false},
 				{"null", ParamValue{Value: nil, PrepareParamKind: types.StringConversionString}, true},
-				{"integer after null", ParamValue{Value: "0", PrepareParamKind: types.StringConversionInteger}, false},
+				{"integer after null", sqlIntParam(0), false},
 			} {
 				t.Run(input.name, func(t *testing.T) {
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), cached, []any{input.param})
@@ -258,7 +258,7 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 				prepared.GetDcl().GetPrepare().Plan, []any{
-					ParamValue{Value: "10", PrepareParamKind: types.StringConversionInteger},
+					sqlIntParam(10),
 				})
 			require.NoError(t, err)
 			preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
@@ -295,7 +295,7 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 
 			preparedMax, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 				prepared.GetDcl().GetPrepare().Plan, []any{
-					ParamValue{Value: "9223372036854775807", PrepareParamKind: types.StringConversionInteger},
+					sqlIntParam(9223372036854775807),
 				})
 			require.NoError(t, err)
 			preparedMaxExpr := preparedMax.GetQuery().Nodes[len(preparedMax.GetQuery().Nodes)-1].ProjectList[0]
@@ -328,7 +328,7 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 				prepared.GetDcl().GetPrepare().Plan, []any{
-					ParamValue{Value: "10", PrepareParamKind: types.StringConversionInteger},
+					sqlIntParam(10),
 				})
 			require.NoError(t, err)
 			preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
@@ -477,7 +477,7 @@ func TestPreparedTimeArithmeticPreservesFractionalTemporalIntegerDomain(t *testi
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 				prepared.GetDcl().GetPrepare().Plan, []any{
-					ParamValue{Value: "10", PrepareParamKind: types.StringConversionInteger},
+					sqlIntParam(10),
 				})
 			require.NoError(t, err)
 
@@ -507,7 +507,7 @@ func TestPreparedTimeArithmeticPreservesFractionalTemporalIntegerDomain(t *testi
 	require.NoError(t, err)
 	filledMax, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 		preparedMax.GetDcl().GetPrepare().Plan, []any{
-			ParamValue{Value: "9223372036854775807", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(9223372036854775807),
 		})
 	require.NoError(t, err)
 	_, ordinaryValue, ordinaryErr := evaluate(t,
@@ -530,8 +530,8 @@ func TestPreparedTimeArithmeticCoercesNestedIntegerAtBoundary(t *testing.T) {
 	require.NoError(t, err)
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 		prepared.GetDcl().GetPrepare().Plan, []any{
-			ParamValue{Value: "10000000000000", PrepareParamKind: types.StringConversionInteger},
-			ParamValue{Value: "9999999999999", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(10000000000000),
+			sqlIntParam(9999999999999),
 		})
 	require.NoError(t, err)
 
@@ -613,10 +613,10 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 	}{
 		{name: "left null", values: []any{
 			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
-			ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(2),
 		}, width: 38, id: types.T_decimal128},
 		{name: "right null", values: []any{
-			ParamValue{Value: "1", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(1),
 			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
 		}, width: 38, id: types.T_decimal128},
 		{name: "both null", values: []any{
@@ -624,8 +624,8 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
 		}, width: 18, id: types.T_decimal64},
 		{name: "both integers", values: []any{
-			ParamValue{Value: "1", PrepareParamKind: types.StringConversionInteger},
-			ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(1),
+			sqlIntParam(2),
 		}, width: 20, id: types.T_decimal128},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -653,7 +653,7 @@ func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 		context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
 			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
-			ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(2),
 		})
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
@@ -670,7 +670,7 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
 		context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
 			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
-			ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(2),
 		})
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
@@ -702,7 +702,7 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 			require.NoError(t, err)
 			foldedPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
 				context.Background(), folded.GetDcl().GetPrepare().Plan, []any{
-					ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+					sqlIntParam(2),
 				})
 			require.NoError(t, err)
 			foldedExpr := foldedPlan.GetQuery().Nodes[len(foldedPlan.GetQuery().Nodes)-1].ProjectList[0]
@@ -738,7 +738,7 @@ func TestPreparedTimeArithmeticPositionScopeKeepsUnselectedMarkers(t *testing.T)
 		context.Background(), preparePlan, []any{
 			ParamValue{Value: "7", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
 			ParamValue{Value: nil, PrepareParamKind: types.StringConversionString},
-			ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			sqlIntParam(2),
 		}, []int32{0})
 	require.NoError(t, err)
 	require.True(t, specialized)
@@ -795,8 +795,8 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 			require.NoError(t, err)
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
 				prepared.GetDcl().GetPrepare().Plan, []any{
-					ParamValue{Value: "1", PrepareParamKind: types.StringConversionInteger},
-					ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+					sqlIntParam(1),
+					sqlIntParam(2),
 				})
 			require.NoError(t, err)
 			preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]

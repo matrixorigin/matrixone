@@ -5506,15 +5506,14 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	case uint, uint8, uint16, uint32, uint64, types.MoYear, bool:
 		return true, false
 	case string:
-		if kind == types.StringConversionBoolean {
-			return value == "0" || value == "1", false
-		}
-		// Connector/ODBC converts SQL_INTEGER and SQL_BIGINT values to their
-		// decimal text form and binds them as MYSQL_TYPE_STRING for server-side
-		// prepared statements. Accept that wire representation only when the
-		// value came from COM_STMT_EXECUTE. SQL PREPARE user variables and
-		// other non-binary-protocol text values keep the stricter validation.
-		if kind != types.StringConversionInteger && !isBinaryProtocol {
+		// Integer and Boolean parameters arrive as native values. Text is valid
+		// only in one form: Connector/ODBC converts SQL_INTEGER and SQL_BIGINT
+		// values to their decimal text form and binds them as MYSQL_TYPE_STRING
+		// for server-side prepared statements. Accept that wire representation
+		// only when the value came from COM_STMT_EXECUTE. SQL PREPARE user
+		// variables and other non-binary-protocol text values keep the stricter
+		// validation.
+		if !isBinaryProtocol || kind != types.StringConversionString {
 			return false, false
 		}
 		if strings.HasPrefix(value, "-") {
@@ -5558,20 +5557,8 @@ func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
 		if param.HasSourceType && preparedRuntimeTypeIsNumeric(param.SourceType) {
 			return preparedNumericReprepareType(param.SourceType)
 		}
-		switch param.PrepareParamKind {
-		case types.StringConversionInteger:
-			if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(param.Value))); ok && typ.Oid.IsInteger() {
-				return preparedNumericReprepareType(typ)
-			}
-			// Preserve the protocol domain even for an internally malformed value;
-			// materialization remains responsible for returning the existing error.
-			return types.T_int64.ToType(), true
-		case types.StringConversionFloat:
-			return types.T_float64.ToType(), true
-		case types.StringConversionDecimal:
+		if param.PrepareParamKind == types.StringConversionDecimal {
 			return mysqlPreparedDecimalReprepareType(), true
-		case types.StringConversionBoolean:
-			return types.T_int64.ToType(), true
 		}
 		return PreparedParamValueNumericReprepareType(param.Value)
 	}
@@ -6406,12 +6393,6 @@ func isPositivePreparedInteger(value any) bool {
 		return value > 0 && value <= uint64(math.MaxInt64)
 	case types.MoYear:
 		return value > 0
-	case string:
-		if kind != types.StringConversionInteger {
-			return false
-		}
-		parsed, err := strconv.ParseUint(value, 10, 63)
-		return err == nil && parsed > 0
 	default:
 		return false
 	}
@@ -6666,14 +6647,8 @@ func isNonNegativePreparedInteger(value any) bool {
 		return false
 	}
 	if kind == types.StringConversionBoolean {
-		switch value := value.(type) {
-		case bool:
-			return true
-		case string:
-			return value == "0" || value == "1"
-		default:
-			return false
-		}
+		_, isBool := value.(bool)
+		return isBool
 	}
 	if _, ok := value.(bool); ok {
 		return true

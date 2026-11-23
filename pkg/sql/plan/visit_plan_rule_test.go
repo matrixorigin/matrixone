@@ -3620,21 +3620,23 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 
 	t.Run("runtime source categories", func(t *testing.T) {
 		for _, test := range []struct {
-			name    string
-			value   any
-			kind    types.StringConversionKind
-			wantOID types.T
+			name       string
+			value      any
+			kind       types.StringConversionKind
+			sourceType types.T
+			wantOID    types.T
 		}{
 			{name: "boolean", value: true, kind: types.StringConversionBoolean, wantOID: types.T_decimal128},
 			{name: "integer", value: int64(42), kind: types.StringConversionInteger, wantOID: types.T_decimal128},
 			{name: "decimal", value: "42.25", kind: types.StringConversionDecimal, wantOID: types.T_decimal128},
-			{name: "float", value: "42.25", kind: types.StringConversionFloat, wantOID: types.T_float64},
+			{name: "float", value: float64(42.25), kind: types.StringConversionFloat, sourceType: types.T_float64, wantOID: types.T_float64},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), decimalColumn()})
 				filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 					ParamValue{
 						Value: test.value, PrepareParamKind: test.kind, EnableNumericPrefix: true,
+						SourceType: test.sourceType.ToType(), HasSourceType: test.sourceType != types.T_any,
 					},
 				})
 				require.NoError(t, err)

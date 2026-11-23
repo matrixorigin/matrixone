@@ -1231,7 +1231,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 		for _, dependent := range []bool{false, true} {
 			ctx := withPreparedSourceBindings(context.Background(),
 				[]PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}},
-				[]any{ParamValue{Value: "7", IsBinaryProtocol: true, PrepareParamKind: types.StringConversionInteger}})
+				[]any{comStmtIntParam(7)})
 			state := preparedBindingState(ctx)
 			state.valueDependent = dependent
 			state.selectStatement = selectStatement
@@ -1293,7 +1293,7 @@ func TestPreparedSignedKeyGuardPreservesOtherDependencies(t *testing.T) {
 
 func TestPreparedIntegerConsumerLoweringProvenance(t *testing.T) {
 	for _, value := range []ParamValue{
-		{Value: "7", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(7),
 		{Value: "7", IsBinaryProtocol: true},
 		{Value: "7", IsBinaryProtocol: true, IsBin: true, PrepareParamKind: types.StringConversionInteger},
 		{Value: "7", IsBinaryProtocol: true, IsBinaryString: true, PrepareParamKind: types.StringConversionInteger},

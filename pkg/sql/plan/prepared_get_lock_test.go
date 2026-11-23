@@ -48,13 +48,13 @@ func TestPreparedGetLockTimeoutPreservesRuntimeType(t *testing.T) {
 		},
 		{
 			name:         "double ties-to-even domain",
-			timeout:      ParamValue{Value: "0.5", PrepareParamKind: types.StringConversionFloat},
+			timeout:      sqlFloatParam(0.5),
 			wantArgType:  types.T_float64,
 			wantOverload: 0,
 		},
 		{
 			name:         "integer keeps the historical double coercion",
-			timeout:      ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger},
+			timeout:      sqlIntParam(2),
 			wantArgType:  types.T_float64,
 			wantOverload: 0,
 		},
