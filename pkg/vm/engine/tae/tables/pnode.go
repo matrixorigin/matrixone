@@ -403,7 +403,7 @@ func (node *persistedNode) FillBlockTombstones(
 		}
 		var commitTSVec containers.Vector
 		if isAppendable {
-			commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
+			commitTSVec, err = node.object.loadPersistedCommitTS(ctx, uint16(tombstoneBlkID))
 			if err != nil {
 				for i := range vecs {
 					vecs[i].Close()

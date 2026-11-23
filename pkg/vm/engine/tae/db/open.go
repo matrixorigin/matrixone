@@ -134,6 +134,10 @@ func Open(
 	)
 	rollbackSteps.Add("rollback open scheduler", func() error {
 		scheduler.Stop()
+		if db.Runtime != nil {
+			db.Runtime.VectorPool.Small.Close()
+			db.Runtime.VectorPool.Transient.Close()
+		}
 		return nil
 	})
 
