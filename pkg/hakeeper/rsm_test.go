@@ -1452,6 +1452,15 @@ func TestHAKeeperAdmissionWaitsForCapableTarget(t *testing.T) {
 				rsm.state.CommandDeliveryPreparing = transition.preparing
 				rsm.state.CommandDeliveryEnabled = transition.enabled
 				rsm.state.LogState.Stores["legacy"] = pb.LogStoreInfo{}
+				if changeType == pb.StartReplica || changeType == pb.StartNonVotingReplica {
+					shard := pb.LogShardInfo{ShardID: DefaultHAKeeperShardID}
+					if changeType == pb.StartReplica {
+						shard.Replicas = map[uint64]string{1: "legacy"}
+					} else {
+						shard.NonVotingReplicas = map[uint64]string{1: "legacy"}
+					}
+					rsm.state.LogState.Shards[DefaultHAKeeperShardID] = shard
+				}
 
 				commandUUID := "log-1"
 				if changeType == pb.StartReplica || changeType == pb.StartNonVotingReplica {
@@ -1463,8 +1472,9 @@ func TestHAKeeperAdmissionWaitsForCapableTarget(t *testing.T) {
 					ConfigChange: &pb.ConfigChange{
 						ChangeType: changeType,
 						Replica: pb.Replica{
-							UUID:    "legacy",
-							ShardID: DefaultHAKeeperShardID,
+							UUID:      "legacy",
+							ShardID:   DefaultHAKeeperShardID,
+							ReplicaID: 1,
 						},
 					},
 				}
@@ -2047,6 +2057,69 @@ func TestPendingScheduleCommandsDeduplicateRetries(t *testing.T) {
 	require.Len(t, batch.Commands, 1)
 	require.Equal(t, uint64(101), batch.Commands[0].ConfigChange.Replica.ReplicaID,
 		"the first valid retry remains the durable command")
+}
+
+func TestRetainedLogStartRejectsReplacementStoreIncarnation(t *testing.T) {
+	for _, change := range []pb.ConfigChangeType{pb.StartReplica, pb.StartNonVotingReplica} {
+		t.Run(change.String(), func(t *testing.T) {
+			const (
+				storeID   = "log-store"
+				shardID   = uint64(7)
+				replicaID = uint64(3)
+			)
+			rsm := NewStateMachine(0, 1).(*stateMachine)
+			rsm.state.CommandDeliveryEnabled = true
+			shard := pb.LogShardInfo{
+				ShardID:                  shardID,
+				ReplicaStoreIncarnations: map[uint64]string{replicaID: "original-disk"},
+			}
+			if change == pb.StartReplica {
+				shard.Replicas = map[uint64]string{replicaID: storeID}
+			} else {
+				shard.NonVotingReplicas = map[uint64]string{replicaID: storeID}
+			}
+			rsm.state.LogState.Shards[shardID] = shard
+			command := pb.ScheduleCommand{
+				UUID: storeID, ServiceType: pb.LogService,
+				ConfigChange: &pb.ConfigChange{
+					ChangeType: change,
+					Replica:    pb.Replica{UUID: storeID, ShardID: shardID, ReplicaID: replicaID},
+				},
+			}
+			_, err := rsm.Update(sm.Entry{Index: 40, Cmd: GetUpdateCommandsCmd(1, []pb.ScheduleCommand{command})})
+			require.NoError(t, err)
+			heartbeat := func(incarnation string) pb.CommandBatch {
+				t.Helper()
+				data, err := (&pb.LogStoreHeartbeat{
+					UUID: storeID, StoreIncarnation: incarnation, CommandDeliverySupported: true,
+				}).Marshal()
+				require.NoError(t, err)
+				result, err := rsm.Update(sm.Entry{Index: rsm.state.Index + 1, Cmd: GetLogStoreHeartbeatCmd(data)})
+				require.NoError(t, err)
+				var batch pb.CommandBatch
+				require.NoError(t, batch.Unmarshal(result.Data))
+				return batch
+			}
+			first := heartbeat("original-disk")
+			require.Equal(t, []pb.ScheduleCommand{command}, first.Commands)
+			require.Len(t, first.CommandIDs, 1)
+			// The committed response can be lost before the original disk sees it.
+			var snapshot bytes.Buffer
+			require.NoError(t, rsm.SaveSnapshot(&snapshot, nil, nil))
+			restored := NewStateMachine(0, 2).(*stateMachine)
+			require.NoError(t, restored.RecoverFromSnapshot(&snapshot, nil, nil))
+			rsm = restored
+			retry := heartbeat("original-disk")
+			require.Equal(t, first.Commands, retry.Commands)
+			require.Equal(t, first.CommandIDs, retry.CommandIDs)
+			require.Len(t, rsm.state.ScheduleCommands[storeID].Commands, 1)
+			// The UUID is unchanged, but its persistent Raft state is gone.
+			replacement := heartbeat("replacement-disk")
+			require.Empty(t, replacement.Commands)
+			_, queued := rsm.state.ScheduleCommands[storeID]
+			require.False(t, queued)
+		})
+	}
 }
 
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {

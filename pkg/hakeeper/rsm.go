@@ -855,7 +855,7 @@ func (s *stateMachine) getCommandBatchFiltered(
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
-			if s.catalogScheduleObsolete(cmd) {
+			if s.catalogScheduleObsolete(cmd) || s.ordinaryLogStartObsolete(cmd) {
 				continue
 			}
 			retryable, applied := s.replicaStartCommandStatus(cmd)
@@ -1004,6 +1004,39 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 		panic(err)
 	}
 	return sm.Result{Data: data}
+}
+
+// A retained Start belongs to the replica identity in the current shard
+// membership. A replacement disk may heartbeat under the same UUID before
+// the checker has retired that identity; never send it the old Start.
+func (s *stateMachine) ordinaryLogStartObsolete(cmd pb.ScheduleCommand) bool {
+	if (!s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled) ||
+		cmd.Bootstrapping || cmd.ServiceType != pb.LogService || cmd.ConfigChange == nil {
+		return false
+	}
+	change := cmd.ConfigChange.ChangeType
+	if change != pb.StartReplica && change != pb.StartNonVotingReplica {
+		return false
+	}
+	replica := cmd.ConfigChange.Replica
+	shard, ok := s.state.LogState.Shards[replica.ShardID]
+	if !ok {
+		return true
+	}
+	members := shard.Replicas
+	if change == pb.StartNonVotingReplica {
+		members = shard.NonVotingReplicas
+	}
+	if members[replica.ReplicaID] != cmd.UUID {
+		return true
+	}
+	store, ok := s.state.LogState.Stores[cmd.UUID]
+	if !ok {
+		return false
+	}
+	memberIncarnation := shard.ReplicaStoreIncarnations[replica.ReplicaID]
+	return memberIncarnation != "" && store.StoreIncarnation != "" &&
+		memberIncarnation != store.StoreIncarnation
 }
 
 // replicaStartCommandStatus retains bootstrap starts and, after command
