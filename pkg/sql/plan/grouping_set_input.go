@@ -21,12 +21,14 @@ import (
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -530,6 +532,13 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	}
 	sinkID := appendSinkNodeWithTag(builder, branches[0].ctx, sharedOutputID, sharedOutputTag)
 	builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
+	// Column pruning compacts a CTESinkOption sink to the outputs its readers
+	// use. Register the sink and its readers as a shared CTE does, so the
+	// readers' producer ordinals are translated to the compacted layout.
+	if builder.cteSinkNodes == nil {
+		builder.cteSinkNodes = make(map[int32]struct{})
+	}
+	builder.cteSinkNodes[sinkID] = struct{}{}
 	sourceStep := builder.appendStep(sinkID)
 
 	for i := range branches {
@@ -550,6 +559,10 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 		if hashBuildBranches[branches[i].rootID] {
 			builder.qry.Nodes[scanID].ExtraOptions = materialized.CTEHashBuildScanOption
 		}
+		if builder.positionalSinkScans == nil {
+			builder.positionalSinkScans = make(map[int32]struct{})
+		}
+		builder.positionalSinkScans[scanID] = struct{}{}
 		setID := groupingSetCol(sharedOutput[len(sharedOutput)-1].Typ, scanTag, int32(len(sharedOutput)-1))
 		matches, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{
 			setID, MakePlan2Int64ConstExprWithType(int64(i)),
@@ -1341,6 +1354,190 @@ func rewriteGroupingSetExpr(expr *planpb.Expr, agg *planpb.Node, scanTag int32, 
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
 			rewriteGroupingSetExpr(item, agg, scanTag, groupCount)
+		}
+	}
+}
+
+// recordGroupingFlags remembers, for an aggregate's group tag, which GROUP BY
+// keys its grouping-set branch keeps active. It is recorded when the aggregate
+// is created, before any rewrite can turn the aggregate into a projection or
+// drop its flags. Sort rollup emits every level from one operator, so
+// its rows have no single grouping set; it records nil.
+func (builder *QueryBuilder) recordGroupingFlags(groupTag int32, keys int, flags []bool, sortRollup bool) {
+	if builder.groupingFlags == nil {
+		builder.groupingFlags = make(map[int32][]bool)
+	}
+	if sortRollup {
+		builder.groupingFlags[groupTag] = nil
+		return
+	}
+	active := make([]bool, keys)
+	for i := range active {
+		active[i] = i >= len(flags) || flags[i]
+	}
+	builder.groupingFlags[groupTag] = active
+}
+
+// addAggregateGroupingFlags records aggregates created outside bindSelectClause
+// (for example by the grouping-set sharing rewrite).
+func (builder *QueryBuilder) addAggregateGroupingFlags() {
+	for _, node := range builder.qry.Nodes {
+		if node == nil || node.NodeType != planpb.Node_AGG || len(node.BindingTags) == 0 {
+			continue
+		}
+		if _, ok := builder.groupingFlags[node.BindingTags[0]]; ok {
+			continue
+		}
+		builder.recordGroupingFlags(node.BindingTags[0], len(node.GroupBy), node.GroupingFlag,
+			IsSortRollupOption(node.ExtraOptions))
+	}
+}
+
+// foldGroupingFunctions replaces every GROUPING call by its constant. Rolled-up
+// keys are plain NULLs at execution time, so GROUPING cannot be computed from
+// the data. It is a constant of the grouping-set branch instead: each argument
+// is a key column of exactly one aggregate, whose flags say whether the key is
+// rolled up. The bit for an argument is 1 when its key is rolled up, with the
+// last argument in bit 0. GROUPING stays a call through binding, so its
+// identity survives DISTINCT/ORDER BY resolution and the grouping-set sharing
+// rewrite, and is folded before any optimization can rewrite its arguments.
+func (builder *QueryBuilder) foldGroupingFunctions(flagsByTag map[int32][]bool) error {
+	var fold func(expr *planpb.Expr) error
+	fold = func(expr *planpb.Expr) error {
+		if expr == nil {
+			return nil
+		}
+		switch e := expr.Expr.(type) {
+		case *planpb.Expr_F:
+			if e.F == nil {
+				return nil
+			}
+			if key := groupingNormalizedKey(e.F); key != nil {
+				// if(grouping(x), NULL, x) turned a rolled-up sentinel into SQL
+				// NULL. A rolled-up key already is NULL, so this is x.
+				typ := expr.Typ
+				*expr = *DeepCopyExpr(key)
+				expr.Typ = typ
+				return fold(expr)
+			}
+			if e.F.Func != nil && e.F.Func.ObjName == "grouping" {
+				value, err := groupingConstant(builder, e.F.Args, flagsByTag)
+				if err != nil {
+					return err
+				}
+				*expr = *MakePlan2Int64ConstExprWithType(value)
+				return nil
+			}
+			for _, arg := range e.F.Args {
+				if err := fold(arg); err != nil {
+					return err
+				}
+			}
+		case *planpb.Expr_W:
+			if e.W == nil {
+				return nil
+			}
+			if err := fold(e.W.WindowFunc); err != nil {
+				return err
+			}
+			for _, part := range e.W.PartitionBy {
+				if err := fold(part); err != nil {
+					return err
+				}
+			}
+			for _, order := range e.W.OrderBy {
+				if order != nil {
+					if err := fold(order.Expr); err != nil {
+						return err
+					}
+				}
+			}
+		case *planpb.Expr_List:
+			if e.List == nil {
+				return nil
+			}
+			for _, item := range e.List.List {
+				if err := fold(item); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, node := range builder.qry.Nodes {
+		if node == nil {
+			continue
+		}
+		if err := planpb.VisitExpressionsInOwner(node, fold); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func groupingConstant(builder *QueryBuilder, args []*planpb.Expr, flagsByTag map[int32][]bool) (int64, error) {
+	if len(args) == 0 || len(args) > 63 {
+		return 0, moerr.NewSyntaxErrorf(builder.GetContext(),
+			"GROUPING takes 1 to 63 arguments, got %d", len(args))
+	}
+	value := int64(0)
+	for _, arg := range args {
+		col := arg.GetCol()
+		if col == nil {
+			return 0, moerr.NewInternalError(builder.GetContext(), "GROUPING argument is not a group key column")
+		}
+		active, ok := flagsByTag[col.RelPos]
+		if !ok || active == nil || col.ColPos < 0 || int(col.ColPos) >= len(active) {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"GROUPING argument does not resolve to a grouping-set key: tag %d position %d", col.RelPos, col.ColPos)
+		}
+		value <<= 1
+		if !active[col.ColPos] {
+			value |= 1
+		}
+	}
+	return value, nil
+}
+
+// groupingNormalizedKey returns x when fn is the if(grouping(x), NULL, x)
+// normalization built by normalizeGroupingSetProjects, and nil otherwise.
+func groupingNormalizedKey(fn *planpb.Function) *planpb.Expr {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 3 {
+		return nil
+	}
+	if id, _ := function.DecodeOverloadID(fn.Func.Obj); id != function.IFF {
+		return nil
+	}
+	probe := fn.Args[0].GetF()
+	if probe == nil || probe.Func == nil || probe.Func.ObjName != "grouping" || len(probe.Args) != 1 {
+		return nil
+	}
+	if lit := fn.Args[1].GetLit(); lit == nil || !lit.Isnull {
+		return nil
+	}
+	// Later passes may refine one operand's type metadata (for example its
+	// nullability); the normalization is identified by the value it probes.
+	if !sameExprIgnoringType(probe.Args[0], fn.Args[2]) {
+		return nil
+	}
+	return fn.Args[2]
+}
+
+func sameExprIgnoringType(left, right *planpb.Expr) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	l, r := DeepCopyExpr(left), DeepCopyExpr(right)
+	clearExprTypes(l)
+	clearExprTypes(r)
+	return proto.Equal(l, r)
+}
+
+func clearExprTypes(expr *planpb.Expr) {
+	expr.Typ = planpb.Type{}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			clearExprTypes(arg)
 		}
 	}
 }

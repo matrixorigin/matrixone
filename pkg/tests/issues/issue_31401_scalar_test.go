@@ -68,7 +68,11 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 	for _, mode := range []string{"ordinary", "pk", "allocator", "prepared", "defaults", "other_account", "broad_index", "initial_snapshot", "late_snapshot", "initial_pitr", "late_pitr", "late_branch", "tenant_snapshot", "upgrade_conflict", "initial_fk", "late_fk"} {
 		t.Run(mode, func(t *testing.T) {
 			runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-				fixture = cluster
+				if fixture != cluster {
+					// A failed subtest can replace the shared cluster generation.
+					fixture = cluster
+					systemSourceOwned, peerOwned = false, false
+				}
 				cn, err := cluster.GetCNService(0)
 				require.NoError(t, err)
 				t.Logf("embedded owner pid=%d config=%s/cn-0.toml data=%s", os.Getpid(), cn.GetServiceConfig().DataDir, cn.GetServiceConfig().DataDir)
@@ -117,15 +121,18 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 					require.NoError(t, err)
 					defer db.Close()
 				}
-				// Each case resets both databases. Keep system resources until
-				// the next reset, then clean the final pair once. DROP ACCOUNT
-				// owns removal of the tenant's source database.
+				// Reset the source per mode. Reuse the system peer after each
+				// successful TRUNCATE, then clean owned system databases once.
+				// DROP ACCOUNT owns removal of the tenant's source database.
 				resetIssue277xxDatabase(t, ctx, db, source)
 				if !tenant {
 					systemSourceOwned = true
 				}
-				resetIssue277xxDatabase(t, ctx, sys, peer)
-				peerOwned = true
+				initializePeer := !peerOwned
+				if initializePeer {
+					resetIssue277xxDatabase(t, ctx, sys, peer)
+					peerOwned = true
+				}
 				definition := "id int,v int"
 				if mode == "pk" || mode == "other_account" || strings.HasSuffix(mode, "fk") || mode == "late_branch" {
 					definition = "id int primary key,v int"
@@ -172,7 +179,12 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				if strings.HasPrefix(mode, "initial_") && mode != "initial_fk" || mode == "tenant_snapshot" {
 					protect()
 				}
-				execSQLRequire(t, ctx, sys, "create table "+peer+".t(id int)")
+				if initializePeer {
+					execSQLRequire(t, ctx, sys, "create table "+peer+".t(id int)")
+				} else {
+					// Each successful mode has joined its peer TRUNCATE.
+					require.Zero(t, queryIssue277xxInt(t, ctx, sys, "select count(*) from "+peer+".t"))
+				}
 				execSQLRequire(t, ctx, sys, "insert into "+peer+".t values(1)")
 				var registryID uint64
 				require.NoError(t, sys.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))

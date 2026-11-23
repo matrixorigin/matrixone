@@ -702,3 +702,95 @@ func reachableGroupingSetShape(query *planpb.Query) groupingSetShape {
 	}
 	return shape
 }
+
+// GROUPING is a constant of its grouping-set branch. Planning folds every call,
+// so no plan carries a GROUPING evaluation, and each ROLLUP level gets its own
+// value: (a,b) -> 0, (a) -> 1, () -> 3.
+func TestFoldGroupingFunctionsPerBranch(t *testing.T) {
+	for _, legacy := range []bool{true, false} {
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
+		if legacy {
+			useLegacyGroupingSetPlan(t, mock)
+		}
+		p, err := runOneStmt(mock, t,
+			"select a, b, grouping(a, b), grouping(b) from select_test.bind_select group by a, b with rollup order by grouping(a, b)")
+		require.NoError(t, err)
+		var values []int64
+		for _, node := range p.GetQuery().GetNodes() {
+			require.NoError(t, planpb.VisitExpressionsInOwner(node, func(expr *planpb.Expr) error {
+				require.NotContains(t, expr.String(), `ObjName:"grouping"`)
+				return nil
+			}))
+			if node.NodeType != planpb.Node_PROJECT || len(node.ProjectList) < 4 {
+				continue
+			}
+			if lit := node.ProjectList[2].GetLit(); lit != nil {
+				values = append(values, lit.GetI64Val())
+			}
+		}
+		if legacy {
+			require.ElementsMatch(t, []int64{0, 1, 3}, values)
+		}
+	}
+}
+
+func TestFoldGroupingFunctionsRejectsUnresolvedArgument(t *testing.T) {
+	builder, _ := genBuilderAndCtx(t)
+	col := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 99, 0)
+	_, err := groupingConstant(builder, []*planpb.Expr{col}, map[int32][]bool{98: {false}})
+	require.ErrorContains(t, err, "does not resolve to a grouping-set key")
+	_, err = groupingConstant(builder, []*planpb.Expr{col}, map[int32][]bool{99: nil})
+	require.ErrorContains(t, err, "does not resolve to a grouping-set key")
+	value, err := groupingConstant(builder, []*planpb.Expr{col, GetColExpr(col.Typ, 99, 1)}, map[int32][]bool{99: {false, true}})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), value)
+}
+
+// A materialized grouping-set sink is compacted to the outputs its readers use.
+// Each reader must then address the compacted layout, including when HAVING
+// keeps the branches from using the direct shared output.
+func TestGroupingSetMaterializedReadersAddressCompactedSink(t *testing.T) {
+	for _, sql := range []string{
+		"select count(*) from select_test.bind_select group by grouping sets ((a), ()) having count(*) >= 0",
+		"select count(*) from select_test.bind_select group by grouping sets ((a), ()) having 1 = 0",
+		"select count(*) from select_test.bind_select group by a with rollup having count(*) >= 0",
+		"select b, count(*) from select_test.bind_select group by grouping sets ((a), (b), ()) having count(*) >= 0",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			query := buildSharedGroupingSetPlan(t, sql)
+			sinkScans := 0
+			for _, node := range query.GetNodes() {
+				if node.NodeType != planpb.Node_SINK_SCAN || len(node.SourceStep) != 1 {
+					continue
+				}
+				sink := query.Nodes[query.Steps[node.SourceStep[0]]]
+				require.Equal(t, planpb.Node_SINK, sink.NodeType)
+				sinkScans++
+				for _, expr := range node.ProjectList {
+					col := expr.GetCol()
+					require.NotNil(t, col)
+					require.Less(t, int(col.ColPos), len(sink.ProjectList),
+						"reader column must exist in the compacted sink output")
+				}
+			}
+			require.NotZero(t, sinkScans, "query must use the materialized grouping-set path")
+		})
+	}
+}
+
+// An unresolvable GROUPING nested in another call must fail planning rather
+// than surviving to execution.
+func TestFoldGroupingFunctionsPropagatesNestedError(t *testing.T) {
+	builder, _ := genBuilderAndCtx(t)
+	col := GetColExpr(planpb.Type{Id: int32(types.T_int64)}, 99, 0)
+	grouping := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "grouping"}, Args: []*planpb.Expr{col}}}}
+	outer := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "abs"}, Args: []*planpb.Expr{grouping}}}}
+	builder.qry.Nodes = []*planpb.Node{{NodeType: planpb.Node_PROJECT, ProjectList: []*planpb.Expr{outer}}}
+	require.ErrorContains(t, builder.foldGroupingFunctions(map[int32][]bool{}), "does not resolve to a grouping-set key")
+
+	builder.qry.Nodes[0].ProjectList[0] = outer
+	require.NoError(t, builder.foldGroupingFunctions(map[int32][]bool{99: {false}}))
+	require.Equal(t, int64(1), outer.GetF().Args[0].GetLit().GetI64Val())
+}
