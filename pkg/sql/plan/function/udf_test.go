@@ -297,12 +297,12 @@ func TestPythonExecutionValidatesDescriptorAndInputTypes(t *testing.T) {
 	require.ErrorContains(t, validatePythonRoutineDescriptor(empty), "descriptor is empty")
 
 	mp := mpool.MustNewZero()
-	nonConst := vector.NewVec(types.T_text.ToType())
+	nonConst := vector.NewVec(types.T_text.ToType(), mp)
 	defer nonConst.Free(mp)
 	require.NoError(t, vector.AppendBytes(nonConst, []byte("routine"), false, mp))
 	require.ErrorContains(t, validatePythonRoutineDescriptor(nonConst), "must be constant")
 
-	input := vector.NewVec(types.T_int32.ToType())
+	input := vector.NewVec(types.T_int32.ToType(), mp)
 	defer input.Free(mp)
 	require.NoError(t, vector.AppendFixed(input, int32(0), false, mp))
 	require.ErrorContains(t,

@@ -161,7 +161,8 @@ export GOWORK=off
 THIRDPARTIES_INSTALL_DIR=${BUILD_WKSP}/thirdparties/install
 CGO_CFLAGS="-I${BUILD_WKSP}/cgo -I${THIRDPARTIES_INSTALL_DIR}/include"
 CGO_LDFLAGS="-Wl,-rpath,${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo -L${THIRDPARTIES_INSTALL_DIR}/lib -L${BUILD_WKSP}/cgo -lmo -lusearch_c -lm"
-LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo"
+# Keep the runner's shared libraries available to tools such as setup-python's interpreter.
+LD_LIBRARY_PATH="${THIRDPARTIES_INSTALL_DIR}/lib:${BUILD_WKSP}/cgo${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 PYTHON_UDF_DEPS_DIR=""
 

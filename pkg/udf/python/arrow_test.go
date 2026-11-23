@@ -373,7 +373,7 @@ func TestBuildInputRecordRejectsEmptyConstantVector(t *testing.T) {
 
 func TestInputBatchEncoderRejectsMismatchedVectorType(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	input := vector.NewVec(types.T_int32.ToType())
+	input := vector.NewVec(types.T_int32.ToType(), mp)
 	defer func() {
 		input.Free(mp)
 		mpool.DeleteMPool(mp)
@@ -387,7 +387,7 @@ func TestInputBatchEncoderRejectsMismatchedVectorType(t *testing.T) {
 
 func TestInputBatchEncoderReusesSchemaAndPreservesRange(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	defer func() {
 		input.Free(mp)
 		mpool.DeleteMPool(mp)
@@ -417,7 +417,7 @@ func TestInputBatchEncoderCachesVariableWidthParameterAcrossRanges(t *testing.T)
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer input.Free(mp)
 	for index, value := range []string{"zero", "one", "two", "three"} {
 		require.NoError(t, vector.AppendBytes(input, []byte(value), index == 2, mp))
@@ -446,7 +446,7 @@ func TestInputBatchEncoderBulkPrimitivePreservesRangeNullsAndConstants(t *testin
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	defer input.Free(mp)
 	for row := 0; row < 128; row++ {
 		require.NoError(t, vector.AppendFixed(input, int64(row+100), row%19 == 0, mp))
@@ -511,7 +511,7 @@ func TestInputBatchEncoderVectorSizeProbeDoesNotUseVarlenaWrapper(t *testing.T) 
 		{name: "vecf64", typ: types.New(types.T_array_float64, 3, 0)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input := vector.NewVec(tc.typ)
+			input := vector.NewVec(tc.typ, mp)
 			defer input.Free(mp)
 			for row := 0; row < 64; row++ {
 				var err error
@@ -746,7 +746,7 @@ func TestNewTypeDescriptorRejectsMediumInt(t *testing.T) {
 
 func TestBuildInputRecordCanonicalizesJSONText(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	input := vector.NewVec(types.T_json.ToType())
+	input := vector.NewVec(types.T_json.ToType(), mp)
 	defer input.Free(mp)
 	bj, err := types.ParseStringToByteJson(`{"a":1,"b":[true,null,"中"]}`)
 	require.NoError(t, err)
@@ -991,7 +991,7 @@ func TestBuildInputRecordCoversEverySupportedType(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			input := vector.NewVec(tc.typ)
+			input := vector.NewVec(tc.typ, mp)
 			require.NoError(t, tc.append(input))
 			record, _, err := BuildInputRecord([]*vector.Vector{input}, []types.Type{tc.typ}, 2)
 			require.NoError(t, err)

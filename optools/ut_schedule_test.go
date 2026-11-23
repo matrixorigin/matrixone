@@ -179,6 +179,29 @@ exit 127
 	return out, err
 }
 
+func TestRunUTPreservesInheritedLibraryPath(t *testing.T) {
+	for _, inherited := range []string{"", "/toolcache/python/lib"} {
+		name := "empty"
+		if inherited != "" {
+			name = "prepared-python"
+		}
+		t.Run(name, func(t *testing.T) {
+			script := `inherited="$LD_LIBRARY_PATH"
+source ./run_ut.sh UT
+expected="$BUILD_WKSP/thirdparties/install/lib:$BUILD_WKSP/cgo${inherited:+:$inherited}"
+actual=$(bash -c 'printf "%s" "$LD_LIBRARY_PATH"')
+if [[ "$actual" != "$expected" ]]; then
+    printf 'child library path: got %s, want %s\n' "$actual" "$expected"
+    exit 1
+fi
+`
+			if out, err := scheduleHarnessWithMock(t, script, "", "LD_LIBRARY_PATH="+inherited); err != nil {
+				t.Fatalf("inherited library path: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
 func TestRunUTPreparesPythonDependenciesForWorkerShards(t *testing.T) {
 	for _, tc := range []struct {
 		shard string

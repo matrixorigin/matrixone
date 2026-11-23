@@ -139,7 +139,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 			mp := mpool.MustNewZeroNoFixed()
 			defer mpool.DeleteMPool(mp)
 			typ := types.T_json.ToType()
-			input := vector.NewVec(typ)
+			input := vector.NewVec(typ, mp)
 			defer input.Free(mp)
 			// ByteJson renders this finite number as 0.000001. Python's
 			// loads/dumps would rewrite it to 1e-06, violating the shared
@@ -764,7 +764,7 @@ func stopRealWorker(cmd *exec.Cmd) {
 func integrationInput(t testing.TB, values []int64) (*vector.Vector, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(input, value, false, mp))
 	}

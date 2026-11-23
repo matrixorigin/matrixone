@@ -784,7 +784,7 @@ func TestValidateDefinitionRejectsMalformedCurrentContractsBeforeRPC(t *testing.
 
 func TestValidateInvocationInputsChecksZeroRowVectorTypes(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	input := vector.NewVec(types.T_int32.ToType())
+	input := vector.NewVec(types.T_int32.ToType(), mp)
 	defer func() {
 		input.Free(mp)
 		mpool.DeleteMPool(mp)
@@ -946,7 +946,7 @@ func TestValidateInvocationRejectsMismatchedInputBacking(t *testing.T) {
 		{
 			name: "wrong type",
 			make: func(mp *mpool.MPool) *vector.Vector {
-				input := vector.NewVec(types.T_float64.ToType())
+				input := vector.NewVec(types.T_float64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(input, float64(1), false, mp))
 				return input
 			},
@@ -955,7 +955,7 @@ func TestValidateInvocationRejectsMismatchedInputBacking(t *testing.T) {
 		{
 			name: "short flat vector",
 			make: func(mp *mpool.MPool) *vector.Vector {
-				input := vector.NewVec(types.T_int64.ToType())
+				input := vector.NewVec(types.T_int64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(input, int64(1), false, mp))
 				return input
 			},

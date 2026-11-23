@@ -416,7 +416,7 @@ func (e *ExternalRoutineEval) compactParameters(rowCount int) ([]*vector.Vector,
 			e.selectedParameters = append(e.selectedParameters, input)
 			continue
 		}
-		selected := vector.NewOffHeapVecWithType(*input.GetType())
+		selected := vector.NewVec(*input.GetType(), e.mp)
 		if err := selected.Union(input, e.selectedRows, e.mp); err != nil {
 			selected.Free(e.mp)
 			return nil, err

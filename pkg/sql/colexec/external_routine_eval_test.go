@@ -114,7 +114,7 @@ func TestExternalRoutineEvalReusesGroupWithNewEpoch(t *testing.T) {
 	proc.Base.StmtProfile = &process.StmtProfile{}
 	proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 10, 1, 2, 3, 4000, time.UTC))
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(input, int64(1), false, proc.Mp()))
 	inputBatch := batch.NewWithSize(0)
@@ -158,7 +158,7 @@ func TestExternalRoutineEvalOwnsSelectionAndStrictNullGuard(t *testing.T) {
 	proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 10, 1, 2, 3, 4000, time.FixedZone("input", 8*60*60)))
 
 	mp := proc.Mp()
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	defer input.Free(mp)
 	require.NoError(t, vector.AppendFixed(input, int64(1), false, mp))
 	require.NoError(t, vector.AppendFixed(input, int64(0), true, mp))
@@ -194,7 +194,7 @@ func TestExternalRoutineEvalRejectsSelectionWithWrongRowDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(input, int64(1), false, proc.Mp()))
 	inputBatch := batch.NewWithSize(0)
@@ -213,7 +213,7 @@ func TestExternalRoutineEvalRejectsSelectionForEmptyRowDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	evaluator, err := newExternalRoutineEval(proc, testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler), []ExpressionExecutor{
 		&externalRoutineTestExecutor{vector: input},
@@ -236,7 +236,7 @@ func TestNewExpressionExecutorDispatchesTypedRoutineCall(t *testing.T) {
 	proc.Base.StmtProfile = &process.StmtProfile{}
 	proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 10, 1, 2, 3, 4000, time.UTC))
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	for _, value := range []int64{1, 2, 3} {
 		require.NoError(t, vector.AppendFixed(input, value, false, proc.Mp()))
 	}
@@ -345,7 +345,7 @@ func TestExternalRoutineEvalRejectsUnsupportedTypeBeforeResultAllocation(t *test
 
 	call := testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler)
 	call.ReturnType = planpb.Type{Id: int32(types.T_decimal256), Width: 76, Scale: 2}
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 
 	require.NotPanics(t, func() {
@@ -372,7 +372,7 @@ func TestExternalRoutineEvalRejectsAccountBeforeEvaluatingParameters(t *testing.
 	proc.Base.StmtProfile = &process.StmtProfile{}
 	proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 10, 1, 2, 3, 4000, time.UTC))
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(input, int64(1), false, proc.Mp()))
 	seen := 0
@@ -402,7 +402,7 @@ func TestMaskedNestedExternalRoutineIsCompactedBeforeOuterEval(t *testing.T) {
 	proc.Base.StmtProfile = &process.StmtProfile{}
 	proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 10, 1, 2, 3, 4000, time.FixedZone("input", 8*60*60)))
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	for _, value := range []int64{1, 2, 3} {
 		require.NoError(t, vector.AppendFixed(input, value, false, proc.Mp()))
 	}
@@ -615,7 +615,7 @@ func TestExternalRoutineEvalRejectsSuccessfulRuntimeWithoutResultRows(t *testing
 	proc.Base.StmtProfile = &process.StmtProfile{}
 	proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(input, int64(10), false, proc.Mp()))
 	bat := batch.NewWithSize(0)
@@ -653,7 +653,7 @@ func TestExternalRoutineEvalPropagatesParameterAndRuntimeFailures(t *testing.T) 
 			proc.GetSessionInfo().User = "root"
 			proc.Base.StmtProfile = &process.StmtProfile{}
 			proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC))
-			input := vector.NewVec(types.T_int64.ToType())
+			input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendFixed(input, int64(10), false, proc.Mp()))
 			parameter := &externalRoutineTestExecutor{vector: input}
@@ -686,7 +686,7 @@ func TestExternalRoutineTransfersResultOwnership(t *testing.T) {
 			proc.GetSessionInfo().User = "root"
 			proc.Base.StmtProfile = &process.StmtProfile{}
 			proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
-			input := vector.NewVec(types.T_int64.ToType())
+			input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendFixed(input, int64(10), false, proc.Mp()))
 			require.NoError(t, vector.AppendFixed(input, int64(20), false, proc.Mp()))
@@ -769,18 +769,18 @@ func TestValidateRoutineCallRejectsIncompleteTypedContracts(t *testing.T) {
 func TestValidateExternalRoutineInputsChecksRowAndTypeContracts(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	int64Rows := vector.NewVec(types.T_int64.ToType())
+	int64Rows := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer int64Rows.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(int64Rows, int64(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(int64Rows, int64(2), false, proc.Mp()))
-	shortRows := vector.NewVec(types.T_int64.ToType())
+	shortRows := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer shortRows.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(shortRows, int64(1), false, proc.Mp()))
-	int32Rows := vector.NewVec(types.T_int32.ToType())
+	int32Rows := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	defer int32Rows.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(int32Rows, int32(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(int32Rows, int32(2), false, proc.Mp()))
-	emptyRows := vector.NewVec(types.T_int64.ToType())
+	emptyRows := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer emptyRows.Free(proc.Mp())
 
 	for _, tc := range []struct {
@@ -818,7 +818,7 @@ func TestExternalRoutineSkipsArgumentsForEmptySelection(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			defer proc.Free()
-			input := vector.NewVec(types.T_int64.ToType())
+			input := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			defer input.Free(proc.Mp())
 			require.NoError(t, vector.AppendFixed(input, int64(1), false, proc.Mp()))
 			seen := 0

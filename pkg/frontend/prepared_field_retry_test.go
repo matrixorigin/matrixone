@@ -276,7 +276,8 @@ func TestPreparedFieldRoutineRetryGeneration(t *testing.T) {
 					historyCase.sql)
 				prepared.proc = cw.proc
 				t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.paramsMP = cw.proc.Mp()
+				prepared.params = vector.NewVec(types.T_text.ToType(), prepared.paramsMP)
 				for _, value := range historyCase.values {
 					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), false, cw.proc.Mp()))
 				}

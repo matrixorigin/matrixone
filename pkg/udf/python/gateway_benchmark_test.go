@@ -25,7 +25,7 @@ import (
 func benchmarkInputVector(b *testing.B, typ types.Type, rows int) (*vector.Vector, *mpool.MPool) {
 	b.Helper()
 	mp := mpool.MustNewZeroNoFixed()
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	for row := 0; row < rows; row++ {
 		var err error
 		switch typ.Oid {
