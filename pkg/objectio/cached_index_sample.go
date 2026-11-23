@@ -149,12 +149,6 @@ func ReadCachedInt32Rows(
 	ctx context.Context, fs fileservice.FileService, name string, block CachedInt32Block,
 	numCols int, picks []int64, dst []CachedInt32Row, mp *mpool.MPool,
 ) bool {
-	// These concrete backends use only memory when no vector caches are set.
-	switch fs.(type) {
-	case *fileservice.LocalFS, *fileservice.S3FS:
-	default:
-		return false
-	}
 	if ctx == nil || context.Cause(ctx) != nil || mp == nil || numCols <= 0 || numCols > maxCachedSampleColumns ||
 		len(picks) == 0 || len(dst) != len(picks) {
 		return false
@@ -162,16 +156,12 @@ func ReadCachedInt32Rows(
 	var entries [maxCachedSampleColumns]fileservice.IOEntry
 	ioVec := fileservice.IOVector{FilePath: name, Entries: entries[:numCols]}
 	for i := range ioVec.Entries {
-		ioVec.Entries[i] = newColumnIOEntry(Extent(block.Extents[i][:]), columnCacheConstructorFactory)
+		extent := Extent(block.Extents[i][:])
+		ioVec.Entries[i] = fileservice.IOEntry{Offset: int64(extent.Offset()), Size: int64(extent.Length())}
 	}
 	defer ioVec.ReleaseReadResultOnError()
-	if err := fs.ReadCache(ctx, &ioVec); err != nil {
+	if !fileservice.TryReadMemoryCache(ctx, fs, &ioVec) {
 		return false
-	}
-	for _, entry := range ioVec.Entries {
-		if entry.CachedData == nil {
-			return false
-		}
 	}
 	clear(dst)
 	for i, entry := range ioVec.Entries {
