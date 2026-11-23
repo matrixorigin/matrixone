@@ -485,9 +485,31 @@ func readMetaWithTableID(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (dataRanges, tombstoneRanges []ckputil.TableRange, err error) {
+	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	if err != nil {
+		return nil, nil, err
+	}
+	// A block's table-ID zone map can prove absence without loading any
+	// columns. IDs inside its bounds still require the exact lookup below.
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	block := dataMeta.GetBlockMeta(uint32(location.ID()))
+	if block.GetMetaColumnCount() > ckputil.MetaSeqnums[0] {
+		column := block.ColumnMeta(ckputil.MetaSeqnums[0])
+		zm := column.ZoneMap()
+		if column.DataType() == uint8(types.T_uint64) && zm.Valid() && zm.GetType() == types.T_uint64 {
+			minBytes, maxBytes := zm.GetMinBuf(), zm.GetMaxBuf()
+			if len(minBytes) == 8 && len(maxBytes) == 8 {
+				minID, maxID := types.DecodeUint64(minBytes), types.DecodeUint64(maxBytes)
+				if minID <= maxID && (tableID < minID || tableID > maxID) {
+					return nil, nil, ctx.Err()
+				}
+			}
+		}
+	}
+
 	tableIDs := containers.NewVectors(1)
-	_, release, _, err := ioutil.LoadColumnsData(
-		ctx, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
+	release, _, err := ioutil.LoadColumnsDataFromMeta(
+		ctx, dataMeta, ckputil.MetaSeqnums[:1], ckputil.MetaTypes[:1],
 		fs, location, tableIDs, mp, 0,
 	)
 	if err != nil {

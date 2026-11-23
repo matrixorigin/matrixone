@@ -88,6 +88,7 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 | Credible shared-state/lifecycle/synchronization/timing failure mode | [../mo-dev/references/race-validation.md](../mo-dev/references/race-validation.md) |
 | Large/complex feature or major refactor; design review (RFC optional) | [../mo-dev/references/feature-design-review.md](../mo-dev/references/feature-design-review.md) |
 | Shared state, cancel/close, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
+| R2/R3 behavior change in concurrency, scheduling, caching, admission/budget or a read path; a bot review that keeps finding transition bugs | [references/executable-probes.md](references/executable-probes.md) |
 | Production behavior or changed/added/removed/merged/optimized UT/BVT | [../mo-dev/references/testing-contract.md](../mo-dev/references/testing-contract.md) |
 | Planner/explain/rewrite correctness or a credible overfit in product behavior | [../mo-dev/references/counterexample-testing.md](../mo-dev/references/counterexample-testing.md) |
 | Changed persisted format or interpretation (including stored IDs or expression semantics), upgrade/restore, or protocol and plan encoding | [../mo-dev/references/upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md) |
@@ -112,7 +113,8 @@ deep tracing, not awareness of in-scope changes that can interact with it.
 5. **Audit evidence.** Check selection, mode, revision, terminal status, and
    relevant inputs. Reuse author/CI evidence that meets the shared rules.
    In self mode, produce missing proof. In external mode, run checks needed
-   to fill a gap or resolve a concrete uncertainty.
+   to fill a gap or resolve a concrete uncertainty. When the executable-probes
+   trigger applies, prove its findings by its proof rule.
 6. **Converge once.** Verify every candidate against source and full closure,
    discard speculation, respect recorded decisions, then return one ranked
    finding/fix-or-decision list and final decision. Do not request another broad
@@ -187,6 +189,8 @@ Use the testing contract for fixture reuse, independent oracles, UT/BVT depth
 and teardown. Apply the shared evidence checks to suspected overfit, lost test
 coverage and performance claims. For a proposed optimization, check work and
 results at the real entry point as well as the claimed faster phase.
+For a change in the executable-probes trigger, prove each transition claim by the
+executable-probes proof rule; a finding needs no fix to be reported. Prove a fix by the same rule.
 
 ## Convergence and decision
 

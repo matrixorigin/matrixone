@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -252,6 +253,53 @@ func TestWindowFrameOrderingDiagnostics(t *testing.T) {
 			require.ErrorAs(t, err, &moErr)
 			require.Equal(t, moerr.ER_PARSE_ERROR, moErr.MySQLCode())
 			require.Equal(t, "42000", moErr.SqlState())
+		})
+	}
+}
+
+func TestWindowJSONConstantFoldUsesRequestContext(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	cancelPrevious()
+	proc.Ctx = previous
+	compiler := NewMockCompilerContext(true, proc)
+
+	const sizeExpr = `json_length(json_extract('{"n":[1]}', '$.n'))`
+	for _, tc := range []struct {
+		name, sql string
+	}{
+		{"nth_value", "select nth_value(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input"},
+		{"ema", "select ema(v, " + sizeExpr + ") over (order by v) from (select 7 as v) as input"},
+		{"range frame", "select count(*) over (order by d range between interval " + sizeExpr +
+			" day preceding and current row) from (select cast('2024-01-01' as date) as d) as input"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			compiler.SetContext(current)
+			build := func() (*Plan, error) {
+				t.Helper()
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				return BuildPlan(compiler, stmt, false, nil)
+			}
+			bound, err := build()
+			require.NoError(t, err)
+			require.NotNil(t, bound.GetQuery())
+			require.Same(t, previous, proc.Ctx)
+
+			cancel()
+			_, err = build()
+			require.ErrorIs(t, err, context.Canceled)
+			require.Same(t, previous, proc.Ctx)
+
+			expired, cancelExpired := context.WithDeadline(t.Context(), time.Time{})
+			defer cancelExpired()
+			compiler.SetContext(expired)
+			_, err = build()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Same(t, previous, proc.Ctx)
 		})
 	}
 }

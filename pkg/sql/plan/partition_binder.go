@@ -174,23 +174,11 @@ func (p *PartitionBinder) constructRangeExpression(
 		if !isMaxValue {
 			// check strictly increasing: condition2 < condition1
 			lt := tree.NewComparisonExpr(tree.LESS_THAN, condition2, condition1)
-			boundExpr, err := p.BindExpr(lt, 0, false)
+			increasing, err := p.evalPartitionComparison(ctx, lt)
 			if err != nil {
 				return nil, err
 			}
-
-			exec, err := colexec.NewExpressionExecutor(p.builder.compCtx.GetProcess(), boundExpr)
-			if err != nil {
-				return nil, err
-			}
-			vec, err := exec.Eval(p.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-			defer exec.Free()
-			if err != nil {
-				return nil, err
-			}
-			bs := vector.MustFixedColWithTypeCheck[bool](vec)
-			// constant expression, expect single row true
-			if len(bs) == 0 || !bs[0] {
+			if !increasing {
 				return nil, moerr.NewInvalidInput(ctx, "VALUES LESS THAN value must be strictly increasing for each partition")
 			}
 		}
@@ -240,24 +228,7 @@ func (p *PartitionBinder) constructListExpression(
 	// helper to evaluate constant equality between two value expressions
 	constEqual := func(a, b tree.Expr) (bool, error) {
 		eq := tree.NewComparisonExpr(tree.EQUAL, a, b)
-		bound, err := p.BindExpr(eq, 0, false)
-		if err != nil {
-			return false, err
-		}
-		exec, err := colexec.NewExpressionExecutor(p.builder.compCtx.GetProcess(), bound)
-		if err != nil {
-			return false, err
-		}
-		vec, err := exec.Eval(p.builder.compCtx.GetProcess(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		defer exec.Free()
-		if err != nil {
-			return false, err
-		}
-		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		if len(bs) == 0 {
-			return false, nil
-		}
-		return bs[0], nil
+		return p.evalPartitionComparison(ctx, eq)
 	}
 
 	// 1) ensure no duplicates within the same partition's value list
@@ -296,6 +267,25 @@ func (p *PartitionBinder) constructListExpression(
 		return nil, err
 	}
 	return planExpr, nil
+}
+
+func (p *PartitionBinder) evalPartitionComparison(ctx context.Context, expr tree.Expr) (bool, error) {
+	bound, err := p.BindExpr(expr, 0, false)
+	if err != nil {
+		return false, err
+	}
+	proc := processForBoundExpr(ctx, bound, p.builder.compCtx.GetProcess())
+	exec, err := colexec.NewExpressionExecutor(proc, bound)
+	if err != nil {
+		return false, err
+	}
+	defer exec.Free()
+	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return false, err
+	}
+	values := vector.MustFixedColWithTypeCheck[bool](vec)
+	return len(values) != 0 && values[0], nil
 }
 
 func (p *PartitionBinder) constructHashExpression(

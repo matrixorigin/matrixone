@@ -6718,7 +6718,7 @@ func bindFuncExprAndConstFoldInternal(
 
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
-			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
+			tmpexpr, _ := foldBoundConstant(ctx, DeepCopyExpr(retExpr), proc)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
@@ -6743,7 +6743,7 @@ func bindFuncExprAndConstFoldInternal(
 
 		fnArgs := retExpr.GetF().Args
 
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
+		arg1, err := foldBoundConstant(ctx, fnArgs[1], proc)
 		if err != nil {
 			goto between_fallback
 		}
@@ -6756,7 +6756,7 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
+		arg2, err := foldBoundConstant(ctx, fnArgs[2], proc)
 		if err != nil {
 			goto between_fallback
 		}
@@ -6774,7 +6774,7 @@ func bindFuncExprAndConstFoldInternal(
 		// value dependency to an otherwise reusable closed range.
 		if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
 			rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-			rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+			rangeCheckRes, _ := foldBoundConstant(ctx, rangeCheckFn, proc)
 			rangeCheckVal := rangeCheckRes.GetLit()
 			if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
 				goto between_fallback
@@ -6784,7 +6784,7 @@ func bindFuncExprAndConstFoldInternal(
 		// The final fold can fail (e.g. '1.5' BETWEEN 1 AND 20 casts the
 		// string operand to INT). Surface the error like the >=/<= form does;
 		// discarding it would bind a nil expression.
-		retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		retExpr, err = foldBoundConstant(ctx, retExpr, proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6796,7 +6796,7 @@ func bindFuncExprAndConstFoldInternal(
 
 		fnArgs := retExpr.GetF().Args
 
-		arg3, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[3], proc, false, true)
+		arg3, err := foldBoundConstant(ctx, fnArgs[3], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6808,7 +6808,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		flag := flagLit.GetU8Val()
 
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
+		arg1, err := foldBoundConstant(ctx, fnArgs[1], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6821,7 +6821,7 @@ func bindFuncExprAndConstFoldInternal(
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
+		arg2, err := foldBoundConstant(ctx, fnArgs[2], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6836,7 +6836,7 @@ func bindFuncExprAndConstFoldInternal(
 			fnName = "<"
 		}
 		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, fnName, []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+		rangeCheckRes, _ := foldBoundConstant(ctx, rangeCheckFn, proc)
 		rangeCheckVal := rangeCheckRes.GetLit()
 		if rangeCheckVal == nil {
 			return nil, moerr.NewInvalidInput(ctx, "2nd and 3rd arguments not comparable")
@@ -6844,7 +6844,7 @@ func bindFuncExprAndConstFoldInternal(
 		if !rangeCheckVal.GetBval() {
 			retExpr = DeepCopyExpr(kAlwaysFalseExpr)
 		} else {
-			retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+			retExpr, _ = foldBoundConstant(ctx, retExpr, proc)
 		}
 	}
 
@@ -6865,7 +6865,7 @@ between_fallback:
 	if err != nil {
 		return nil, err
 	}
-	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+	retExpr, err = foldBoundConstant(ctx, retExpr, proc)
 	if err != nil {
 		return nil, err
 	}
@@ -6891,7 +6891,7 @@ func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*pl
 		return moerr.NewWrongArguments(ctx, "nth_value")
 	}
 
-	offset, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	offset, err := foldBoundConstant(ctx, args[1], proc)
 	if err != nil {
 		return err
 	}

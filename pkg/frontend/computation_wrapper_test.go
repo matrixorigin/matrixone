@@ -28,6 +28,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -7505,4 +7506,50 @@ func paramValuesOf(values []any) []any {
 		}
 	}
 	return out
+}
+
+// A stored procedure can run the same EXECUTE ... USING many times, each on a
+// fresh process over the same session pool. The statement storage must not
+// retain every process it ever lent to: a finished process is forgotten.
+func TestExecuteUserParamsForgetsFinishedProcesses(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	values := map[string]any{"s": "value"}
+	args := []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "s"}}}}
+	var store executeUserParams
+	t.Cleanup(store.release)
+
+	var first *vector.Vector
+	for i := range 32 {
+		proc := testutil.NewProcessWithMPool(t, "", mp)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) { return values[name], nil })
+		params, _, _, _, _, _, err := buildExecuteUserParamsInto(&store, proc, nil, args, nil, nil)
+		require.NoError(t, err)
+		if i == 0 {
+			first = params
+		}
+		require.Same(t, first, params, "the storage is reused on the same pool")
+		proc.SetPrepareParamsWithIsBin(params, store.isBin)
+		store.lend(proc)
+		require.Len(t, store.borrowers, 1, "only the current execution's process is retained")
+		require.Same(t, proc, store.borrowers[0])
+		proc.Free()
+		require.Nil(t, proc.GetPrepareParams())
+	}
+
+	// A process that still borrows the storage is kept, and released with it.
+	live := testutil.NewProcessWithMPool(t, "", mp)
+	live.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) { return values[name], nil })
+	params, _, _, _, _, _, err := buildExecuteUserParamsInto(&store, live, nil, args, nil, nil)
+	require.NoError(t, err)
+	live.SetPrepareParamsWithIsBin(params, store.isBin)
+	store.lend(live)
+	other := testutil.NewProcessWithMPool(t, "", mp)
+	other.SetPrepareParamsWithIsBin(params, store.isBin)
+	store.lend(other)
+	require.ElementsMatch(t, []*process.Process{live, other}, store.borrowers)
+	store.release()
+	require.Nil(t, live.GetPrepareParams())
+	require.Nil(t, other.GetPrepareParams())
+	require.Zero(t, mp.CurrNB())
 }

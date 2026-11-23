@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -315,6 +316,52 @@ func TestParamExpressionExecutorTypedReadDoesNotAllocate(t *testing.T) {
 	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load())
 	// The shared value is untouched by the executors' row counts.
 	require.Equal(t, 1, typed.Length())
+}
+
+// A caller that keeps a string parameter gets its value only, not the TEXT
+// transport area shared by every parameter of the execution.
+func TestParamExpressionExecutorOwnedStringCopiesOnlyItsValue(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	state := proc.DetachPrepareParams()
+	t.Cleanup(func() { proc.RestorePrepareParams(state) })
+	t.Cleanup(func() { proc.SetPrepareParams(nil) })
+
+	large := strings.Repeat("x", 1<<20)
+	medium := "an out-of-line parameter longer than the inline varlena"
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
+	for _, v := range []string{"ok", large, medium} {
+		require.NoError(t, vector.AppendBytes(params, []byte(v), false, proc.Mp()))
+	}
+	proc.SetOwnedPrepareParamsWithIsBin(params, nil)
+	rows := batch.NewWithSize(0)
+	rows.SetRowCount(3)
+
+	for _, test := range []struct {
+		pos  int32
+		typ  types.T
+		want string
+	}{
+		{0, types.T_varchar, "ok"},
+		{2, types.T_text, medium},
+	} {
+		executor, err := NewExpressionExecutor(proc, &plan.Expr{
+			Typ:  test.typ.ToType().PlanType(),
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: test.pos}},
+		})
+		require.NoError(t, err)
+		owned, err := executor.EvalWithoutResultReusing(proc, []*batch.Batch{rows}, nil)
+		require.NoError(t, err)
+		require.False(t, owned.IsReadOnly())
+		require.True(t, owned.IsConst())
+		require.Equal(t, 3, owned.Length())
+		require.Equal(t, test.typ, owned.GetType().Oid)
+		require.Equal(t, test.want, owned.GetStringAt(0))
+		require.Less(t, len(owned.GetArea()), 1024, "the unrelated 1 MiB parameter must not be copied")
+		require.Less(t, owned.Allocated(), 4096)
+		owned.Free(proc.Mp())
+		executor.Free()
+	}
 }
 
 // A string parameter is a read-only reference to its row of the TEXT

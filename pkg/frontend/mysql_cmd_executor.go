@@ -6444,9 +6444,11 @@ func executeStmt(ses *Session,
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
 			var phyPlan *models.PhyPlan
+			var partialQuery *plan.Query
 			analyzeModule := c.GetAnalyzeModule()
 			if analyzeModule != nil {
 				phyPlan = analyzeModule.GetPhyPlan()
+				partialQuery = analyzeModule.GetPartialExecutionQuery()
 				execCtx.cw.SetExplainBuffer(analyzeModule.GetExplainPhyBuffer())
 			}
 
@@ -6456,7 +6458,7 @@ func executeStmt(ses *Session,
 
 			// Capture detached diagnostics before the current generation is released.
 			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-				_ = txnCw.recordExecPlan(execCtx.reqCtx, phyPlan, err)
+				_ = txnCw.recordExecPlan(execCtx.reqCtx, phyPlan, err, partialQuery)
 			} else {
 				_ = execCtx.cw.RecordExecPlan(execCtx.reqCtx, phyPlan)
 			}
@@ -8451,14 +8453,15 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, _ FeSession) (statsByte 
 	if h.query != nil {
 		options := &explain.MarshalPlanOptions
 		for _, node := range h.query.Nodes {
-			if plan2.IsValidationPrivilegeCarrier(node) {
+			if node == nil || plan2.IsValidationPrivilegeCarrier(node) {
 				continue
 			}
 			if h.isInternalSubStmt {
 				s := explain.GetStatistic4Trace(ctx, node, options)
 				statsByte.Add(&s)
 			}
-			if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN {
+			if node.AnalyzeInfo != nil && node.TableDef != nil &&
+				(node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN) {
 				rows, bytes := explain.GetInputRowsAndInputSize(ctx, node, options)
 				stats.RowsRead += rows
 				stats.BytesScan += bytes

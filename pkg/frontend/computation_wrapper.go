@@ -755,7 +755,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
-	return cwft.recordExecPlan(ctx, phyPlan, nil)
+	return cwft.recordExecPlan(ctx, phyPlan, nil, nil)
 }
 
 // statementWaitActiveCost copies the admission measurement before transaction
@@ -769,13 +769,17 @@ func (cwft *TxnComputationWrapper) statementWaitActiveCost() time.Duration {
 	return -1
 }
 
-func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error) error {
+func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error, partial *plan.Query) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		opts := []marshalPlanOptions{
 			WithWaitActiveCost(cwft.statementWaitActiveCost()),
 			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		handler := newJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, runErr, opts...)
+		executionPlan := cwft.plan
+		if partial != nil {
+			executionPlan = &plan.Plan{Plan: &plan.Plan_Query{Query: partial}}
+		}
+		handler := newJsonPlanHandler(ctx, stm, cwft.ses, executionPlan, phyPlan, runErr, opts...)
 		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}
@@ -1865,7 +1869,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// Statements that are not re-bound per execution (DDL, SET, SHOW, ...)
 		// still read their parameters with source types. A parameter whose
 		// source type cannot be determined keeps the TEXT transport.
-		if bindings, bindErr := preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
+		if bindings, bindErr := preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
 			if err = installTypedPrepareParams(cwft.proc, bindings, &prepareStmt.typedParams); err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
@@ -1876,7 +1880,7 @@ func initExecuteStmtParamWithResolverInSession(
 	var runtimeColDefData [][]byte
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
-		cwft.paramBindings, err = preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
+		cwft.paramBindings, err = preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -2113,9 +2117,10 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 }
 
 // preparedExecutionRetry is an immutable snapshot of the execution-time
-// binding needed when Compile rebuilds a plan after a definition change. The
-// slice must not alias TxnComputationWrapper.paramVals because that field is
-// replaced on the next execution of the cached prepared statement.
+// binding needed when Compile rebuilds a plan after a definition change. Its
+// values and bindings are copies: they do not alias the statement storage
+// the execution reads (TxnComputationWrapper.paramVals and paramBindings),
+// which the next execution of the prepared statement rewrites.
 type preparedExecutionRetry struct {
 	temporalTypes      *plan2.PreparedTemporalTypes
 	fieldTypes         *plan2.PreparedFieldTypes
@@ -2700,8 +2705,14 @@ func (u *executeUserParams) release() {
 	*u = executeUserParams{}
 }
 
-// lend records that proc borrows the storage.
+// lend records that proc borrows the storage. A process that no longer
+// borrows it (freed, or rebound to other parameters) is forgotten, so an
+// owner that runs many executions, each on a fresh process, such as a stored
+// procedure, retains only the processes that still borrow the storage.
 func (u *executeUserParams) lend(proc *process.Process) {
+	u.borrowers = slices.DeleteFunc(u.borrowers, func(borrower *process.Process) bool {
+		return borrower != proc && (borrower == nil || borrower.GetPrepareParams() != u.vec)
+	})
 	if !slices.Contains(u.borrowers, proc) {
 		u.borrowers = append(u.borrowers, proc)
 	}

@@ -77,22 +77,30 @@ func (s *ParamValueStore) Ref(i int) *ParamValue {
 	return &s.params[i]
 }
 
-// CopyParamValues returns values with every prepared parameter value copied
-// out of the statement's storage, for a snapshot that must not change when the
-// storage is rewritten (a retry of the same execution, for example).
-func CopyParamValues(values []any) []any {
+// CopyFrom makes the store a snapshot of values: every prepared parameter
+// value is copied into the store, and the returned view points at the copies,
+// so rewriting the storage values point into does not change the snapshot.
+// Other elements are kept as they are. Once the store is large enough, taking
+// a snapshot allocates nothing.
+func (s *ParamValueStore) CopyFrom(values []any) []any {
 	if values == nil {
 		return nil
 	}
-	out := make([]any, len(values))
+	out := s.Reset(len(values))
 	for i, v := range values {
 		if param, ok := AsParamValue(v); ok {
-			out[i] = param
+			s.params[i] = param
 		} else {
 			out[i] = v
 		}
 	}
 	return out
+}
+
+// CopyParamValues returns a snapshot of values in new storage (see CopyFrom).
+func CopyParamValues(values []any) []any {
+	var s ParamValueStore
+	return s.CopyFrom(values)
 }
 
 // ParamValueType returns the SQL type a prepared parameter value carries: its

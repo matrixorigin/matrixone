@@ -230,6 +230,64 @@ func mergeToArray(origin []ByteJson) ByteJson {
 	return ByteJson{Type: TpCodeArray, Data: buf}
 }
 
+func mergeToArrayWithContext(ctx context.Context, values []ByteJson) (ByteJson, error) {
+	limit := uint64(min(uint64(math.MaxInt), uint64(math.MaxUint32)))
+	if uint64(len(values)) > (limit-headerSize)/valEntrySize {
+		return Null, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+	}
+	entriesEnd := headerSize + len(values)*valEntrySize
+	total := uint64(entriesEnd)
+	for i, value := range values {
+		if i%queryCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return Null, err
+			}
+		}
+		if value.Type != TpCodeLiteral {
+			if uint64(len(value.Data)) > limit-total {
+				return Null, moerr.NewInvalidInputNoCtx("JSON query result size overflow")
+			}
+			total += uint64(len(value.Data))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Null, err
+	}
+	buf := make([]byte, int(total))
+	endian.PutUint32(buf, uint32(len(values)))
+	endian.PutUint32(buf[docSizeOff:], uint32(total))
+	offset := entriesEnd
+	for i, value := range values {
+		if i%queryCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return Null, err
+			}
+		}
+		entry := headerSize + i*valEntrySize
+		buf[entry] = value.Type
+		if value.Type == TpCodeLiteral {
+			buf[entry+valTypeSize] = value.Data[0]
+			continue
+		}
+		endian.PutUint32(buf[entry+valTypeSize:], uint32(offset))
+		data := value.Data
+		const copyChunk = 64 << 10
+		for len(data) > copyChunk {
+			copy(buf[offset:], data[:copyChunk])
+			offset += copyChunk
+			data = data[copyChunk:]
+			if err := ctx.Err(); err != nil {
+				return Null, err
+			}
+		}
+		offset += copy(buf[offset:], data)
+	}
+	if err := ctx.Err(); err != nil {
+		return Null, err
+	}
+	return ByteJson{Type: TpCodeArray, Data: buf}, nil
+}
+
 // check unnest mode
 func checkMode(mode string) bool {
 	if mode == "both" || mode == "array" || mode == "object" {

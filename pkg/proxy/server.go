@@ -74,11 +74,11 @@ type Server struct {
 	viewMetadataAdmission           atomic.Pointer[logservicepb.ViewMetadataAdmission]
 	viewMetadataAdmissionUpdated    chan struct{}
 	viewMetadataHeartbeatWakeup     chan struct{}
-	viewMetadataAdmissionContext    context.Context
-	viewMetadataAdmissionCancel     context.CancelFunc
+	lifecycleCtx                    context.Context
+	lifecycleCancel                 context.CancelFunc
 	viewMetadataRevocationOnce      sync.Once
 	viewMetadataCloseFn             func() error
-	lifecycleMu                     sync.Mutex
+	lifecycleMu                     sync.RWMutex
 	started                         bool
 	closed                          bool
 	closeOnce                       sync.Once
@@ -107,7 +107,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		config:     config,
 		counterSet: newCounterSet(),
 	}
-	s.viewMetadataAdmissionContext, s.viewMetadataAdmissionCancel = context.WithCancel(ctx)
+	s.lifecycleCtx, s.lifecycleCancel = context.WithCancel(ctx)
 	initialized := false
 	statsRegistered := false
 	haKeeperClientOwned := false
@@ -115,15 +115,18 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		if initialized {
 			return
 		}
-		s.viewMetadataAdmissionCancel()
+		s.lifecycleCancel()
 		_ = s.closeIngress()
 		if s.handler != nil {
-			_ = s.handler.Close()
+			s.handler.moCluster.Close()
 		} else if haKeeperClientOwned && s.haKeeperClient != nil {
 			_ = s.haKeeperClient.Close()
 		}
 		if s.stopper != nil {
 			s.stopper.Stop()
+		}
+		if s.handler != nil {
+			s.handler.closeDependencies()
 		}
 		if statsRegistered {
 			stats.Unregister(statsFamilyName)
@@ -161,7 +164,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 
 	s.stopper = stopper.NewStopper("mo-proxy", stopper.WithLogger(s.runtime.Logger().RawLogger()))
 	h, err := newProxyHandler(
-		ctx,
+		s.lifecycleCtx,
 		s.runtime,
 		s.config,
 		s.stopper,
@@ -190,7 +193,16 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	)
 	app, err := goetty.NewApplicationWithListeners([]net.Listener{listener}, nil,
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
-		goetty.WithAppHandleSessionFunc(s.handler.handle),
+		goetty.WithAppHandleSessionFunc(func(session goetty.IOSession) error {
+			// Goetty may disconnect an accepted session during Stop while the
+			// handshake swaps its connection. Serialize only those pointer swaps
+			// with ingress shutdown; no I/O runs under the shared read lock.
+			return s.handler.handle(&lifecycleSession{
+				IOSession:         session,
+				BufferedIOSession: session.(goetty.BufferedIOSession),
+				mu:                &s.lifecycleMu,
+			})
+		}),
 		goetty.WithAppSessionOptions(
 			goetty.WithSessionCodec(newProxySessionCodec(config)),
 			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
@@ -219,6 +231,18 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	}
 	initialized = true
 	return s, nil
+}
+
+type lifecycleSession struct {
+	goetty.IOSession
+	goetty.BufferedIOSession
+	mu *sync.RWMutex
+}
+
+func (s *lifecycleSession) UseConn(conn net.Conn) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	s.IOSession.UseConn(conn)
 }
 
 func newProxySessionCodec(config Config) codec.Codec {
@@ -289,7 +313,7 @@ func runBootstrapTask(ctx context.Context, st *stopper.Stopper, h *handler) erro
 
 // Start starts the proxy server.
 func (s *Server) Start() error {
-	admissionCtx := s.viewMetadataAdmissionContext
+	admissionCtx := s.lifecycleCtx
 	if admissionCtx == nil {
 		admissionCtx = context.Background()
 	}
@@ -343,15 +367,27 @@ func (s *Server) closeIngress() error {
 // Close closes the proxy server.
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
-		if s.viewMetadataAdmissionCancel != nil {
-			s.viewMetadataAdmissionCancel()
+		if s.lifecycleCancel != nil {
+			s.lifecycleCancel()
 		}
 		s.closeErr = s.closeIngress()
 		if s.handler != nil {
-			_ = s.handler.Close()
+			// Release routing waiters if the first HAKeeper refresh never
+			// completed, but keep the RPC clients alive for session cleanup.
+			s.handler.moCluster.Close()
+		}
+		if s.app != nil {
+			// Revocation only stops ingress; the external owner joins handlers.
+			// Do not hold lifecycleMu while waiting for their cleanup.
+			if err := s.app.StopAndWait(); s.closeErr == nil {
+				s.closeErr = err
+			}
 		}
 		if s.stopper != nil {
 			s.stopper.Stop()
+		}
+		if s.handler != nil {
+			s.handler.closeDependencies()
 		}
 		stats.Unregister(statsFamilyName)
 	})

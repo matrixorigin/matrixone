@@ -6139,7 +6139,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 	ses.prepareStmts[stmtName] = prepareStmt
 
 	require.NoError(t, doReset(ctx, ses, tree.NewReset(tree.Identifier(stmtName))))
-	require.Nil(t, prepareStmt.params)
+	require.Nil(t, prepareStmt.params, "an explicit reset returns the parameter storage")
 	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 
@@ -6284,7 +6284,11 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, ErrorResponse, resp.category)
-	require.Nil(t, prepareStmt.params)
+	// The statement keeps its parameter storage for the next execution, but
+	// no values, and no process still reads it.
+	require.Same(t, params, prepareStmt.params)
+	require.Zero(t, prepareStmt.params.Length())
+	require.Nil(t, proc.GetPrepareParams())
 	require.Empty(t, prepareStmt.getFromSendLongData)
 	require.Zero(t, ses.diagnosticsSnapshot().length())
 }
@@ -11845,7 +11849,9 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedParamState(t *testing.T) {
 	resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_EXECUTE, data: payload})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	require.Nil(t, prepareStmt.params)
+	require.True(t, prepareStmt.params == nil || prepareStmt.params.Length() == 0,
+		"a failed execute leaves no parameter values")
+	require.NotSame(t, prepareStmt.params, ses.GetProc().GetPrepareParams())
 	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 
