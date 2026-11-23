@@ -183,6 +183,86 @@ select id from pk where match(body) against('gamma') order by id;
 select id from pk order by l2_distance(v, '[0,0,1]') limit 1;
 deallocate prepare check_pk;
 
+-- Foreign keys and multi-table DELETE use the legacy planner, which maintains
+-- the same indexes with the modern delete-by-key and rebuild sub-plans.
+create table fp (id int primary key);
+insert into fp values (1), (2), (3), (4);
+create table fs (code varchar(10) primary key);
+insert into fs values ('c1'), ('c2'), ('c3'), ('c4');
+create table fc (
+    pid int,
+    id int,
+    sc varchar(10),
+    body text,
+    a varchar(10),
+    v vecf32(3),
+    primary key (pid, id),
+    foreign key (pid) references fp(id) on delete cascade,
+    foreign key (sc) references fs(code) on delete set null
+);
+insert into fc values
+    (1, 1, 'c1', 'apple one', 'x1', '[1,0,0]'),
+    (1, 2, 'c2', 'banana two', 'x2', '[0,1,0]'),
+    (2, 1, 'c3', 'cherry three', 'x3', '[0,0,1]'),
+    (3, 1, 'c4', 'durian four', 'x4', '[1,1,0]'),
+    (4, 1, 'c3', 'elder five', 'x5', '[0,1,1]');
+create fulltext index ft_fc on fc(body, sc);
+create index ivf_fc using ivfflat on fc(v) lists = 1 op_type 'vector_l2_ops';
+create index ms_fc using master on fc(a, sc);
+set @fc_ft = (select index_table_name from mo_catalog.mo_indexes
+    where name = 'ft_fc' and algo = 'fulltext'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'fc')
+    limit 1);
+set @fc_ivf = (select index_table_name from mo_catalog.mo_indexes
+    where name = 'ivf_fc' and algo = 'ivfflat' and algo_table_type = 'entries'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'fc')
+    limit 1);
+set @fc_ms = (select index_table_name from mo_catalog.mo_indexes
+    where name = 'ms_fc' and algo = 'master'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'fc')
+    limit 1);
+set @check_fc_sql = concat(
+    'select ''ft'' as idx, ',
+    '(select count(distinct doc_id) from `', database(), '`.`', @fc_ft, '` where doc_id not in (select serial(pid, id) from fc)) as orphan, ',
+    '(select count(*) from fc where serial(pid, id) not in (select doc_id from `', database(), '`.`', @fc_ft, '`)) as missing ',
+    'union all select ''ivf'', ',
+    '(select count(*) from `', database(), '`.`', @fc_ivf, '` where __mo_index_pri_col not in (select serial(pid, id) from fc)), ',
+    '(select count(*) from fc where serial(pid, id) not in (select __mo_index_pri_col from `', database(), '`.`', @fc_ivf, '`)) ',
+    'union all select ''ms'', ',
+    '(select count(*) from `', database(), '`.`', @fc_ms, '` where __mo_index_pri_col not in (select serial(pid, id) from fc)), ',
+    '(select count(*) from fc where serial(pid, id) not in (select __mo_index_pri_col from `', database(), '`.`', @fc_ms, '`)) ',
+    'order by idx'
+);
+prepare check_fc from @check_fc_sql;
+execute check_fc;
+-- ON DELETE CASCADE removes the child rows and their index entries
+delete from fp where id = 2;
+execute check_fc;
+select count(*) from fc where match(body, sc) against('cherry');
+-- ON DELETE SET NULL changes fulltext- and master-indexed columns of child rows
+delete from fs where code in ('c2', 'c3');
+execute check_fc;
+select pid, id, sc from fc order by pid, id;
+select pid, id from fc where a = 'x5' and sc is null;
+select count(*) from fc where a = 'x5' and sc = 'c3';
+select pid, id from fc where match(body, sc) against('elder');
+select pid, id from fc order by l2_distance(v, '[0,1,0]') limit 1;
+-- a DELETE on the child table itself
+delete from fc where pid = 1 and id = 1;
+execute check_fc;
+select count(*) from fc where match(body, sc) against('apple');
+-- multi-table DELETE
+create table fx (id int primary key);
+insert into fx values (1);
+delete fc, fx from fc join fx on fc.pid = fx.id;
+execute check_fc;
+select pid, id from fc order by pid, id;
+-- an unrestricted DELETE of the parent cascades to every child row
+delete from fp;
+execute check_fc;
+select count(*) from fc;
+deallocate prepare check_fc;
+
 -- composite primary key: hidden tables store the serialized key
 create table ck (k1 varchar(10), k2 int, body text, a varchar(10), b varchar(10), primary key (k1, k2));
 insert into ck values ('p', 1, 'apple one', 'x1', 'y1'), ('p', 2, 'apple two', 'x2', 'y2'), ('q', 1, 'banana', 'x3', 'y3');
