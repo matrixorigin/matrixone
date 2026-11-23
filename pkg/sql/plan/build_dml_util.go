@@ -2351,8 +2351,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							return err
 						}
 						// inner join cannot dealwith null expr in projectList. so we append a project node
+						// REPLACE and already-tagged recursive plans are built
+						// before createQuery remaps the graph. They must keep
+						// planner bind tags and must not introduce the
+						// positional AGG used by post-remap DELETE (#33109).
+						preRemapSetNull := delCtx.skipTargetDelete || delCtx.sourceTag != 0
 						projectProjection := getProjectionByLastNode(builder, lastNodeId)
-						if delCtx.skipTargetDelete {
+						if preRemapSetNull {
 							projectProjection = DeepCopyExprList(builder.qry.Nodes[lastNodeId].ProjectList)
 						}
 						for _, e := range rightConds {
@@ -2372,7 +2377,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							BindingTags: []int32{builder.genNewBindTag()},
 						}, bindCtx)
 
-						if delCtx.skipTargetDelete {
+						if preRemapSetNull {
 							projectTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
 							lastNodeId = appendSinkNodeWithTag(builder, bindCtx, lastNodeId, projectTag)
 							if builder.preserveSinkProjection == nil {
@@ -2406,7 +2411,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
-						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
+						upPlanCtx.preserveUpdateSourceProjection = preRemapSetNull
 						upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(fk.Cols))
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
