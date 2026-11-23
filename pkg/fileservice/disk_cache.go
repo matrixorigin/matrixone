@@ -246,15 +246,25 @@ var _ IOVectorCache = new(DiskCache)
 func (d *DiskCache) Read(
 	ctx context.Context,
 	vector *IOVector,
+) error {
+	_, err := d.read(ctx, vector, false)
+	return err
+}
+
+func (d *DiskCache) read(
+	ctx context.Context,
+	vector *IOVector,
+	fullFileOnly bool,
 ) (
+	openedFullFile bool,
 	err error,
 ) {
 
 	if vector.Policy.Any(SkipDiskCacheReads) {
-		return nil
+		return false, nil
 	}
 
-	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
+	var numHit, numRead, numError int64
 	defer func() {
 		LogEvent(ctx, str_update_metrics_begin)
 
@@ -275,7 +285,7 @@ func (d *DiskCache) Read(
 
 	path, err := ParsePath(vector.FilePath)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	openedFiles := make(map[string]*os.File)
@@ -286,6 +296,23 @@ func (d *DiskCache) Read(
 		}
 		LogEvent(ctx, str_close_disk_files_end)
 	}()
+
+	fullPath := d.pathForFile(path.File)
+	if fullFileOnly {
+		// A skipped fill only justifies a lookup of the published full file.
+		// Eviction or a subsequent update can already have made it unavailable.
+		if !d.waitUpdateCompleteFor(ctx, fullPath, 0) {
+			return false, nil
+		}
+		LogEvent(ctx, str_disk_cache_file_open_begin)
+		file, err := os.Open(fullPath)
+		LogEvent(ctx, str_disk_cache_file_open_end)
+		if err != nil {
+			return false, nil
+		}
+		openedFiles[fullPath] = file
+		openedFullFile = true
+	}
 
 	fillEntry := func(entry *IOEntry) error {
 		LogEvent(ctx, str_disk_cache_fill_entry_begin)
@@ -304,36 +331,38 @@ func (d *DiskCache) Read(
 		var file *os.File
 
 		// entry file
-		diskPath := d.pathForIOEntry(path.File, *entry)
-		if f, ok := openedFiles[diskPath]; ok {
-			// use opened file
-			LogEvent(ctx, str_disk_cache_file_seek_begin)
-			// An IOEntry cache file contains only this range, so its content
-			// always starts at file offset zero. entry.Offset is only valid for
-			// a full-object cache file.
-			_, err = f.Seek(0, io.SeekStart)
-			LogEvent(ctx, str_disk_cache_file_seek_end)
-			if err == nil {
-				file = f
-			}
-		} else {
-			// open file
-			d.waitUpdateComplete(ctx, diskPath)
-			LogEvent(ctx, str_disk_cache_file_open_begin)
-			diskFile, err := os.Open(diskPath)
-			LogEvent(ctx, str_disk_cache_file_open_end)
-			if err == nil {
-				file = diskFile
-				defer func() {
-					openedFiles[diskPath] = diskFile
-				}()
-				numOpenIOEntry++
+		diskPath := fullPath
+		if !fullFileOnly {
+			diskPath = d.pathForIOEntry(path.File, *entry)
+			if f, ok := openedFiles[diskPath]; ok {
+				// use opened file
+				LogEvent(ctx, str_disk_cache_file_seek_begin)
+				// An IOEntry cache file contains only this range, so its content
+				// always starts at file offset zero. entry.Offset is only valid for
+				// a full-object cache file.
+				_, err = f.Seek(0, io.SeekStart)
+				LogEvent(ctx, str_disk_cache_file_seek_end)
+				if err == nil {
+					file = f
+				}
+			} else {
+				// open file
+				d.waitUpdateComplete(ctx, diskPath)
+				LogEvent(ctx, str_disk_cache_file_open_begin)
+				diskFile, err := os.Open(diskPath)
+				LogEvent(ctx, str_disk_cache_file_open_end)
+				if err == nil {
+					file = diskFile
+					defer func() {
+						openedFiles[diskPath] = diskFile
+					}()
+				}
 			}
 		}
 
 		if file == nil {
 			// try full file
-			diskPath = d.pathForFile(path.File)
+			diskPath = fullPath
 			if f, ok := openedFiles[diskPath]; ok {
 				// use opened file
 				LogEvent(ctx, str_disk_cache_file_seek_begin)
@@ -352,7 +381,7 @@ func (d *DiskCache) Read(
 						defer func() {
 							openedFiles[diskPath] = diskFile
 						}()
-						numOpenFull++
+						openedFullFile = true
 						// seek
 						LogEvent(ctx, str_disk_cache_file_seek_begin)
 						_, err = diskFile.Seek(entry.Offset, io.SeekStart)
@@ -391,7 +420,7 @@ func (d *DiskCache) Read(
 			}
 		}
 		readOffset, readSize := int64(0), entry.Size
-		if diskPath == d.pathForFile(path.File) {
+		if diskPath == fullPath {
 			readOffset = entry.Offset
 		}
 		if err := entry.ReadFromOSFile(ctx, file, allocator); err != nil {
@@ -407,6 +436,9 @@ func (d *DiskCache) Read(
 	}
 
 	for i := range vector.Entries {
+		if fullFileOnly && ctx.Err() != nil {
+			return openedFullFile, ctx.Err()
+		}
 		if err := fillEntry(&vector.Entries[i]); err != nil {
 			// ignore error
 			numError++
@@ -419,7 +451,7 @@ func (d *DiskCache) Read(
 		}
 	}
 
-	return nil
+	return openedFullFile, nil
 }
 
 func (d *DiskCache) Update(

@@ -221,6 +221,26 @@ func TestQCloudCOSHTTPStatusRetryable(t *testing.T) {
 	}
 }
 
+func TestCOSWrappedRangeNotSatisfiable(t *testing.T) {
+	rangeErr := newTestCOSError(http.StatusRequestedRangeNotSatisfiable)
+	for _, tc := range []struct {
+		name     string
+		attempts []error
+		want     bool
+	}{
+		{"single", []error{rangeErr}, true},
+		{"all-range", []error{rangeErr, rangeErr}, true},
+		{"cancelled", []error{rangeErr, context.Canceled}, false},
+		{"other-status", []error{newTestCOSError(http.StatusForbidden)}, false},
+		{"no-attempt", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fmt.Errorf("get object: %w", &cos.RetryError{Errs: tc.attempts})
+			require.Equal(t, tc.want, isHTTPRangeNotSatisfiable(err))
+		})
+	}
+}
+
 func TestQCloudCOSRetryErrorRetryable(t *testing.T) {
 	err := &cos.RetryError{
 		Errs: []error{

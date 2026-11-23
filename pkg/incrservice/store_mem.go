@@ -271,11 +271,11 @@ func (s *memStore) ForceSetOffset(
 
 func (s *memStore) Delete(
 	ctx context.Context,
-	tableID uint64) error {
+	tableID uint64, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
 	s.Lock()
 	defer s.Unlock()
 	delete(s.caches, tableID)
-	return nil
+	return timestamp.Timestamp{}, nil
 }
 
 func (s *memStore) Close() {

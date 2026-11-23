@@ -150,6 +150,10 @@ type IOVectorCache interface {
 var slowCacheReadThreshold = time.Second * 0
 
 func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error {
+	return readCacheWith(ctx, cache, vector, cache.Read)
+}
+
+func readCacheWith(ctx context.Context, cache IOVectorCache, vector *IOVector, read func(context.Context, *IOVector) error) error {
 	if vector.allDone() {
 		return nil
 	}
@@ -160,7 +164,7 @@ func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error
 		defer cancel()
 	}
 
-	err := cache.Read(ctx, vector)
+	err := read(ctx, vector)
 	if err != nil {
 
 		if errors.Is(err, context.DeadlineExceeded) {
