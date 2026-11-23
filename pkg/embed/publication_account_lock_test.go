@@ -44,6 +44,13 @@ func startPublicationAccountLockCluster(t *testing.T, lockBudget toml.ByteSize) 
 		if s.ServiceType() == metadata.ServiceType_CN {
 			s.Adjust(func(cfg *ServiceConfig) {
 				cfg.CN.LockService.MaxLockRowCount = lockBudget
+				// The tests commit on one CN and check the catalog on the
+				// other. With freshness sacrificed (the default), a new
+				// transaction starts at its CN's latest applied logtail and
+				// may miss the other CN's commit, so a positive check fails
+				// and a zero check passes vacuously. Start every
+				// transaction at the current time instead.
+				cfg.CN.Txn.EnableSacrificingFreshness = -1
 			})
 		}
 	}))
