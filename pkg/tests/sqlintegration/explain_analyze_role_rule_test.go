@@ -18,8 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -84,10 +82,10 @@ func TestExplainAnalyzeCarriesRoleRule(t *testing.T) {
 
 		// Both statements go through the same connection with no parameters,
 		// using the MySQL text protocol.
-		queryColumn := func(statement string) []string {
+		readColumn := func(query func() (*sql.Rows, error)) []string {
 			t.Helper()
-			rows, err := conn.QueryContext(ctx, statement)
-			require.NoError(t, err, statement)
+			rows, err := query()
+			require.NoError(t, err)
 			defer rows.Close()
 			var values []string
 			for rows.Next() {
@@ -98,33 +96,19 @@ func TestExplainAnalyzeCarriesRoleRule(t *testing.T) {
 			require.NoError(t, rows.Err())
 			return values
 		}
+		queryColumn := func(statement string) []string {
+			t.Helper()
+			return readColumn(func() (*sql.Rows, error) {
+				return conn.QueryContext(ctx, statement)
+			})
+		}
 		_, err = conn.ExecContext(ctx, "set enable_remap_hint = 1")
 		require.NoError(t, err)
 		require.Equal(t, []string{"42"}, queryColumn(query))
 
-		lines := queryColumn("explain analyze " + query)
-		require.NotEmpty(t, lines)
-		plan := strings.Join(lines, "\n")
+		plan := strings.Join(queryColumn("explain analyze "+query), "\n")
 		require.Contains(t, plan, "Table Scan on "+source)
-
-		// Text plans list each node before its details and children. Read only
-		// the initial node's Analyze field and stop at the next node.
-		var rootAnalyze string
-		for _, line := range lines[1:] {
-			detail := strings.TrimSpace(line)
-			if line == detail || strings.HasPrefix(detail, "->") {
-				break
-			}
-			if strings.HasPrefix(detail, "Analyze:") {
-				rootAnalyze = detail
-				break
-			}
-		}
-		match := regexp.MustCompile(`\boutputRows=(\d+)\b`).FindStringSubmatch(rootAnalyze)
-		require.Len(t, match, 2, "missing result root outputRows in plan:\n%s", plan)
-		outputRows, err := strconv.Atoi(match[1])
-		require.NoError(t, err)
-		require.Equal(t, 1, outputRows, "result root outputRows")
+		require.Contains(t, plan, "Result: outputRows=1")
 
 		execSQLRequire(t, ctx, admin, "create database "+remapDB)
 		execSQLRequire(t, ctx, admin, "create table "+remapDB+".target (id int)")
@@ -146,6 +130,51 @@ func TestExplainAnalyzeCarriesRoleRule(t *testing.T) {
 		physicalPlan := strings.Join(queryColumn("explain phyplan analyze "+remappedQuery), "\n")
 		require.Contains(t, physicalPlan, "DataSource: "+remapDB+".authorized_source[")
 		require.NotContains(t, physicalPlan, "DataSource: "+remapDB+".target[")
-		require.Regexp(t, `Pipeline: [^\n]*output [^\n]*\bOutRows:1\b`, physicalPlan)
+		require.Contains(t, physicalPlan, "Result: outputRows=1")
+
+		const filtered = remapDB + ".filtered"
+		const filteredQuery = "select id from " + filtered
+		execSQLRequire(t, ctx, admin, "create table "+filtered+" (id int, tenant int)")
+		execSQLRequire(t, ctx, admin, "insert into "+filtered+" values (7, 1), (8, 2)")
+		execSQLRequire(t, ctx, admin, "alter role "+role+
+			" add rule \"select id from "+filtered+" where tenant = 1\" on table "+filtered)
+		execSQLRequire(t, ctx, admin, "grant select on table "+filtered+" to "+role)
+
+		assertPlanStats := func(lines []string, count int) {
+			t.Helper()
+			plan := strings.Join(lines, "\n")
+			for _, field := range []string{"inputRows=", "InRows:", "OutRows:", "outcnt=", "InputSize=", "ScanBytes:"} {
+				require.NotContains(t, plan, field)
+			}
+			require.Regexp(t, fmt.Sprintf(`(?m)^ *Result: outputRows=%d$`, count), plan)
+		}
+		assertAuthorizedStats := func() {
+			t.Helper()
+			require.Equal(t, []string{"7"}, queryColumn(filteredQuery))
+			deniedQuery := filteredQuery + " where id = 8"
+			require.Empty(t, queryColumn(deniedQuery))
+			for _, prefix := range []string{"explain analyze verbose ", "explain phyplan analyze "} {
+				assertPlanStats(queryColumn(prefix+filteredQuery), 1)
+				assertPlanStats(queryColumn(prefix+deniedQuery), 0)
+			}
+		}
+		assertAuthorizedStats()
+		execSQLRequire(t, ctx, admin, "insert into "+filtered+" values (9, 2)")
+		assertAuthorizedStats()
+
+		for _, prefix := range []string{"explain analyze ", "explain phyplan analyze "} {
+			func() {
+				stmt, err := conn.PrepareContext(ctx, prefix+filteredQuery)
+				require.NoError(t, err)
+				defer stmt.Close()
+				assertPlanStats(readColumn(func() (*sql.Rows, error) {
+					return stmt.QueryContext(ctx)
+				}), 1)
+			}()
+		}
+		unrestricted := strings.Join(readColumn(func() (*sql.Rows, error) {
+			return admin.QueryContext(ctx, "explain analyze "+filteredQuery)
+		}), "\n")
+		require.Contains(t, unrestricted, "inputRows=")
 	})
 }

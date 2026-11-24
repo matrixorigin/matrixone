@@ -739,6 +739,16 @@ func (resper *MysqlResp) writeColumnDefs(ses *Session, execCtx *ExecCtx, columns
 	return
 }
 
+// hasExplainRoleRules uses the snapshot that supplied the query's rules,
+// including the retained snapshot marker for prepared execution.
+func (execCtx *ExecCtx) hasExplainRoleRules() bool {
+	if execCtx.input != nil && execCtx.input.rewritePolicy != nil && len(execCtx.input.rewritePolicy.roleRules) > 0 {
+		return true
+	}
+	cw, ok := execCtx.cw.(*TxnComputationWrapper)
+	return ok && cw.preparedStmt != nil && cw.preparedStmt.rewritePolicyHasRoleRules
+}
+
 func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	execCtx *ExecCtx) (err error) {
 	ses.EnterFPrint(FPRespStreamResultRow)
@@ -808,11 +818,14 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			return
 		}
 
+		option.ResultRowsOnly = execCtx.hasExplainRoleRules()
 		err = explainQuery.ExplainPlan(execCtx.reqCtx, buffer, option)
 		if err != nil {
 			return
 		}
-		appendSchedulingExplain(buffer, schedulingTraceForExplain(ses, execCtx.cw))
+		if !option.ResultRowsOnly {
+			appendSchedulingExplain(buffer, schedulingTraceForExplain(ses, execCtx.cw))
+		}
 
 		err = buildMoExplainQuery(execCtx, explainColName, buffer, ses, getDataFromPipeline)
 		if err != nil {
@@ -835,13 +848,17 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 
 		txnCompileWrapper := execCtx.cw.(*TxnComputationWrapper)
 		reader := bufio.NewReader(txnCompileWrapper.explainBuffer)
+		var trace schedule.Trace
+		if !execCtx.hasExplainRoleRules() {
+			trace = schedulingTraceForExplain(ses, execCtx.cw)
+		}
 		err = buildMoExplainPhyPlan(
 			execCtx,
 			explainColName,
 			reader,
 			ses,
 			getDataFromPipeline,
-			schedulingTraceForExplain(ses, execCtx.cw),
+			trace,
 		)
 		if err != nil {
 			return
