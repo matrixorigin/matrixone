@@ -1040,20 +1040,9 @@ read_disk_cache:
 		}
 	}
 
-	// A read that joined a download, or read the flights, reads the caches again: a
-	// flight caches its bytes before it ends, so the entries of one that ended since the
-	// caches were read are cached, in the index-file cache for an index object.
+	// A read that joined a download, or read the flights, reads the caches again.
 	if joined || flights {
-		if s.indexObjectReadable(vector.Policy) {
-
-			if err := s.readIndexObject(ctx, vector); err != nil {
-				return err
-			}
-			if vector.allDone() {
-				return finishCacheUpdates()
-			}
-		}
-		if err := readCache(ctx, s.diskCache, vector); err != nil {
+		if err := s.recheckPublished(ctx, vector); err != nil {
 			return err
 		}
 		if vector.allDone() {
@@ -1217,6 +1206,22 @@ read_s3:
 	}
 
 	return finishCacheUpdates()
+}
+
+// recheckPublished reads the entries of vector not done from what a source the read
+// joined, or a fill it gave up, may have published since the caches were read: the
+// index-file cache, for an index object, then the disk cache. A flight caches its bytes
+// before it ends.
+func (s *S3FS) recheckPublished(ctx context.Context, vector *IOVector) error {
+	if s.indexObjectReadable(vector.Policy) {
+		if err := s.readIndexObject(ctx, vector); err != nil || vector.allDone() {
+			return err
+		}
+	}
+	if s.diskCache == nil {
+		return nil
+	}
+	return readCache(ctx, s.diskCache, vector)
 }
 
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
