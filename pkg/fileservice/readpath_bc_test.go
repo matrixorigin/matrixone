@@ -169,3 +169,37 @@ func TestJoinedReadOfShortSourceReadsItsBytes(t *testing.T) {
 		}
 	}
 }
+
+// BC4: a read that started a whole-object download and cannot read the bytes the download
+// wrote, from the download's file, reads them elsewhere.
+func TestStreamedReadFallsBackOnUnreadableDownloadFile(t *testing.T) {
+	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
+	d := fs.diskCache
+	<-d.load.done
+	storage := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == 0 })
+	fs.storage = storage
+	release := sync.OnceFunc(func() { close(storage.gate) })
+	t.Cleanup(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	vec := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1000, Size: 4000}}}
+	defer vec.Release()
+	result := make(chan error, 1)
+	go func() { result <- fs.Read(ctx, vec) }()
+	diskPath := d.pathForFile("object")
+	var download *objectDownload
+	require.Eventually(t, func() bool {
+		if download = d.download(diskPath); download == nil {
+			return false
+		}
+		download.mu.Lock()
+		defer download.mu.Unlock()
+		return len(download.waiters) == 1
+	}, 5*time.Second, time.Millisecond, "the read waits for its download")
+	download.mu.Lock()
+	require.NoError(t, download.file.Close())
+	download.mu.Unlock()
+	release()
+	require.NoError(t, <-result)
+	require.True(t, bytes.Equal(data[1000:5000], vec.Entries[0].Data))
+}

@@ -1842,9 +1842,9 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return true, err
 	}
 	if captureErr != nil {
-		cancelFill()
+		// The bytes are read elsewhere once the download ends.
 		_ = waitSet()
-		return true, captureErr
+		return false, nil
 	}
 	if captured && s.asyncUpdate {
 		select {
@@ -1875,12 +1875,9 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		if err := ctx.Err(); err != nil {
 			return true, err
 		}
-		if captureErr != nil {
-			return true, captureErr
-		}
-		if !captured && !download.isComplete() {
-			// SetFile did not consume the whole reader. Keep the original read path so
-			// the caller still gets data without trusting a partial download.
+		if captureErr != nil || !captured && !download.isComplete() {
+			// The file is unreadable, or SetFile did not consume the whole reader: the
+			// bytes are read elsewhere, without trusting a partial download.
 			return false, nil
 		}
 	}
@@ -1923,8 +1920,13 @@ func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
 	return ret
 }
 
+// errCaptureUnreadable is the error of a capture that cannot read the bytes the download
+// wrote from its file.
+var errCaptureUnreadable = moerr.NewInternalErrorNoCtx("fileservice: download file unreadable")
+
 // capture reads available ranges from the request's admitted file. An incomplete
-// object may leave a range partial; a file read error is returned to the caller.
+// object may leave a range partial. It returns ctx's error, or errCaptureUnreadable for a
+// file it cannot read.
 func (r *fullObjectDiskCacheReader) capture(
 	ctx context.Context, download *objectDownload, source io.ReaderAt, file string,
 ) (bool, error) {
@@ -1952,11 +1954,8 @@ func (r *fullObjectDiskCacheReader) capture(
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return false, ctxErr
 				}
-				if err != nil {
-					return false, err
-				}
-				if n != want {
-					return false, moerr.NewUnexpectedEOFNoCtx(file)
+				if err != nil || n != want {
+					return false, errCaptureUnreadable
 				}
 				if ok {
 					r.toServe += n
