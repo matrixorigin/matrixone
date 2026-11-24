@@ -530,6 +530,10 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 				p.forgetLocked(e)
 				e.start()
 				next, scans := p.takeDeferredLocked(e)
+				if next != nil {
+					// The object stays known until its deferred request is queued.
+					p.known.Add(1)
+				}
 				p.mu.Unlock()
 				// The deferred request is queued before the worker takes its next download.
 				if next != nil {
@@ -538,6 +542,7 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 						req.Scan = s
 						p.add(req)
 					}
+					p.known.Add(-1)
 				}
 				p.mu.Lock()
 				q.running--
