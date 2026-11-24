@@ -42,6 +42,7 @@ func TestExplainAnalyzeCarriesRoleRule(t *testing.T) {
 
 		const (
 			dbName   = "explain_analyze_role_rule"
+			remapDB  = "explain_phyplan_role_remap"
 			target   = dbName + ".target"
 			source   = dbName + ".authorized_source"
 			role     = "explain_analyze_rule_role"
@@ -53,6 +54,7 @@ func TestExplainAnalyzeCarriesRoleRule(t *testing.T) {
 			"drop user if exists "+user,
 			"drop role if exists "+role,
 			"drop database if exists "+dbName,
+			"drop database if exists "+remapDB,
 		)
 		execSQLRequire(t, ctx, admin, "create database "+dbName)
 		execSQLRequire(t, ctx, admin, "create table "+target+" (id int)")
@@ -123,5 +125,27 @@ func TestExplainAnalyzeCarriesRoleRule(t *testing.T) {
 		outputRows, err := strconv.Atoi(match[1])
 		require.NoError(t, err)
 		require.Equal(t, 1, outputRows, "result root outputRows")
+
+		execSQLRequire(t, ctx, admin, "create database "+remapDB)
+		execSQLRequire(t, ctx, admin, "create table "+remapDB+".target (id int)")
+		execSQLRequire(t, ctx, admin, "create table "+remapDB+".authorized_source (id int)")
+		execSQLRequire(t, ctx, admin, "insert into "+remapDB+".target values (1), (2)")
+		execSQLRequire(t, ctx, admin, "insert into "+remapDB+".authorized_source values (43)")
+		execSQLRequire(t, ctx, admin, "grant select on table "+remapDB+".target to "+role)
+		execSQLRequire(t, ctx, admin, "grant select on table "+remapDB+".authorized_source to "+role)
+
+		_, err = conn.ExecContext(ctx, "use "+dbName)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, fmt.Sprintf(`set remap_rewrites = '{"remapdb":{"%s":"%s"}}'`, dbName, remapDB))
+		require.NoError(t, err)
+		const remappedQuery = "select id from target"
+		require.Equal(t, []string{"43"}, queryColumn(remappedQuery))
+
+		// PHYPLAN ANALYZE executes the same authorized source as the SELECT.
+		// The destination target has different rows to expose a missed rule.
+		physicalPlan := strings.Join(queryColumn("explain phyplan analyze "+remappedQuery), "\n")
+		require.Contains(t, physicalPlan, "DataSource: "+remapDB+".authorized_source[")
+		require.NotContains(t, physicalPlan, "DataSource: "+remapDB+".target[")
+		require.Regexp(t, `Pipeline: [^\n]*output [^\n]*\bOutRows:1\b`, physicalPlan)
 	})
 }
