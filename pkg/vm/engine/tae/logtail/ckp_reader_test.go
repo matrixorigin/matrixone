@@ -38,6 +38,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCheckpointPrefetchVisitsPhysicalFiles(t *testing.T) {
+	dataID, tombstoneID := objectio.NewObjectid(), objectio.NewObjectid()
+	data := objectio.NewObjectStatsWithObjectID(&dataID, false, false, false)
+	tombstone := objectio.NewObjectStatsWithObjectID(&tombstoneID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(data, 5))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(tombstone, 3))
+
+	for _, tc := range []struct {
+		name   string
+		reader CKPReader
+	}{
+		{
+			name: "legacy",
+			reader: CKPReader{
+				version: CheckpointVersion12,
+				dataLocations: map[string]objectio.Location{
+					data.ObjectName().String(): data.ObjectLocation(),
+				},
+				tombstoneLocations: map[string]objectio.Location{
+					data.ObjectName().String():      data.ObjectLocation(),
+					tombstone.ObjectName().String(): tombstone.ObjectLocation(),
+				},
+			},
+		},
+		{
+			name: "table ranges",
+			reader: CKPReader{
+				version:     CheckpointCurrentVersion,
+				withTableID: true,
+				dataRanges:  []ckputil.TableRange{{ObjectStats: *data}, {ObjectStats: *data}},
+				tombstoneRanges: []ckputil.TableRange{
+					{ObjectStats: *data}, {ObjectStats: *tombstone},
+				},
+			},
+		},
+		{
+			name: "entire checkpoint",
+			reader: CKPReader{
+				version:            CheckpointCurrentVersion,
+				ckpDataObjectStats: []objectio.ObjectStats{*data, *tombstone},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var files []string
+			tc.reader.visitFiles(func(loc objectio.Location) {
+				files = append(files, loc.Name().String())
+			})
+			require.ElementsMatch(t, []string{data.ObjectName().String(), tombstone.ObjectName().String()}, files)
+		})
+	}
+}
+
 type trackingDeleteFileService struct {
 	fileservice.FileService
 	err     error

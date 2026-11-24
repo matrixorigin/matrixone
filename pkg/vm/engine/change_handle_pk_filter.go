@@ -22,7 +22,7 @@ import (
 // implementations use to prune objects and blocks whose sort-key
 // range does not overlap with the requested PK values.
 //
-// Only the DATA BRANCH PICK path attaches this to the context;
+// DATA BRANCH PICK and catalog history lookups attach this to the context;
 // CDC, ISCP and other callers leave it nil so their behavior is
 // completely unchanged.
 type PKFilter struct {
@@ -50,9 +50,13 @@ type PKFilter struct {
 	// so object-level pruning must fail open in that case.
 	ObjectZMIsPK bool
 
-	// ReplaySpec carries an optional packed-PK predicate for row replay.
-	// When present, CollectChanges can avoid scanning the whole in-memory
-	// row tree and filter persisted rows that survive coarse zonemap pruning.
+	// PrefetchObjectMeta allows a bounded read-ahead window for persisted
+	// object metadata during historical range replay.
+	PrefetchObjectMeta bool
+
+	// ReplaySpec carries an optional packed-PK predicate for in-memory row replay.
+	// When present, CollectChanges can use it to avoid scanning the whole
+	// partition-state row tree and instead iterate only the matching PK entries.
 	//
 	// Unlike Segments, ReplaySpec preserves the original logical predicate
 	// (`Op` + `Keys`) rather than just a coarse ZoneMap approximation.

@@ -1074,6 +1074,94 @@ func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t
 	vec.Release()
 }
 
+type diskCacheWaitLocker struct {
+	sync.Mutex
+	unlocked chan struct{}
+}
+
+func (l *diskCacheWaitLocker) Unlock() {
+	l.Mutex.Unlock()
+	select {
+	case l.unlocked <- struct{}{}:
+	default:
+	}
+}
+
+func TestS3FSRangeCacheWaitStopsOnCancel(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+	}{
+		{name: "reading the cache entry"},
+		{name: "filling the cache entry", policy: SkipDiskCacheReads},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			store, err := NewS3FS(
+				ctx,
+				ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()},
+				CacheConfig{DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](1 << 20)},
+				nil, false, false,
+			)
+			require.NoError(t, err)
+			defer store.Close(ctx)
+
+			const path = "history/object"
+			require.NoError(t, store.Write(ctx, IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Size: 5, Data: []byte("abcde")}},
+				Policy:   SkipAllCache,
+			}))
+
+			cache := store.diskCache
+			locker := &diskCacheWaitLocker{unlocked: make(chan struct{}, 1)}
+			cache.updatingPaths.Cond = sync.NewCond(locker)
+			vector := &IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Offset: 1, Size: 3}},
+				Policy:   tc.policy | SkipFullFilePreloads,
+			}
+			diskPath := cache.pathForIOEntry(path, vector.Entries[0])
+			release := holdDiskCacheUpdate(t, cache, diskPath)
+			<-locker.unlocked
+			readCtx, cancel := context.WithCancel(ctx)
+			done := make(chan struct{})
+			var readErr error
+			go func() {
+				defer close(done)
+				readErr = store.Read(readCtx, vector)
+			}()
+			defer func() {
+				cancel()
+				release()
+				<-done
+				vector.Release()
+			}()
+
+			select {
+			case <-locker.unlocked:
+			case <-done:
+				t.Fatalf("read returned before encountering the held range: %v", readErr)
+			case <-time.After(2 * time.Second):
+				t.Fatal("read did not reach the held disk-cache range")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cancellation left the read waiting for the cache writer")
+			}
+			if tc.policy.Any(SkipDiskCacheReads) {
+				require.NoError(t, readErr)
+				require.Equal(t, []byte("bcd"), vector.Entries[0].Data)
+			} else {
+				require.ErrorIs(t, readErr, context.Canceled)
+			}
+			require.True(t, cache.isUpdating(diskPath), "cancelling a waiter must not release the writer")
+		})
+	}
+}
+
 func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	ctx := context.Background()
 	fs, err := NewS3FS(
@@ -1109,7 +1197,7 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	assert.Nil(t, err)
 
 	updatingPath := fs.diskCache.pathForFile("foo/bar")
-	doneUpdate := fs.diskCache.startUpdate(updatingPath)
+	doneUpdate := holdDiskCacheUpdate(t, fs.diskCache, updatingPath)
 	released := false
 	release := func() {
 		if !released {
@@ -2059,7 +2147,7 @@ func TestS3FSReadAfterMissRacesFullFilePublication(t *testing.T) {
 					// This update started after the initial disk lookup. Reusing
 					// the full file must not wait for an unrelated entry writer.
 					entryPath := fs.diskCache.pathForIOEntry(path, v.Entries[0])
-					finish := fs.diskCache.startUpdate(entryPath)
+					finish := holdDiskCacheUpdate(t, fs.diskCache, entryPath)
 					updateDone = make(chan struct{})
 					go func() {
 						defer close(updateDone)

@@ -56,6 +56,13 @@ func countLoggedEvents(ctx context.Context, ev stringRef) int {
 	return count
 }
 
+func holdDiskCacheUpdate(t *testing.T, cache *DiskCache, path string) func() {
+	t.Helper()
+	done, err := cache.startUpdateWithCleanup(t.Context(), path, nil)
+	require.NoError(t, err)
+	return func() { require.NoError(t, done()) }
+}
+
 func TestDiskCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -513,7 +520,7 @@ func TestDiskCacheEvictSkipsPathBeingUpdated(t *testing.T) {
 	require.NoError(t, err)
 
 	diskPath := cache.pathForFile("foo")
-	doneUpdate := cache.startUpdate(diskPath)
+	doneUpdate := holdDiskCacheUpdate(t, cache, diskPath)
 	cache.cache.Delete(ctx, diskPath)
 	doneUpdate()
 
@@ -535,9 +542,10 @@ func TestDiskCacheUpdateCleanupRemovesUnindexedFile(t *testing.T) {
 	require.NoError(t, err)
 
 	diskPath := cache.pathForFile("foo")
-	doneUpdate := cache.startUpdateWithCleanup(diskPath, func() error {
+	doneUpdate, err := cache.startUpdateWithCleanup(ctx, diskPath, func() error {
 		return cache.removeUnindexedFile(diskPath)
 	})
+	require.NoError(t, err)
 	cache.cache.Delete(ctx, diskPath)
 	require.NoError(t, doneUpdate())
 
@@ -554,7 +562,7 @@ func TestDiskCacheReadSkipsFullFileWhileUpdating(t *testing.T) {
 	defer cache.Close(ctx)
 
 	diskPath := cache.pathForFile("foo")
-	doneUpdate := cache.startUpdate(diskPath)
+	doneUpdate := holdDiskCacheUpdate(t, cache, diskPath)
 	defer doneUpdate()
 
 	readVector := &IOVector{
@@ -595,7 +603,7 @@ func TestDiskCacheReadWaitsForFullFileUpdateWithinShortWait(t *testing.T) {
 	require.NoError(t, err)
 
 	diskPath := cache.pathForFile("foo")
-	doneUpdate := cache.startUpdate(diskPath)
+	doneUpdate := holdDiskCacheUpdate(t, cache, diskPath)
 	released := false
 	release := func() {
 		if !released {

@@ -347,7 +347,9 @@ func (d *DiskCache) read(
 				}
 			} else {
 				// open file
-				d.waitUpdateComplete(ctx, diskPath)
+				if err := d.waitUpdateComplete(ctx, diskPath); err != nil {
+					return err
+				}
 				LogEvent(ctx, str_disk_cache_file_open_begin)
 				diskFile, err := os.Open(diskPath)
 				LogEvent(ctx, str_disk_cache_file_open_end)
@@ -436,10 +438,13 @@ func (d *DiskCache) read(
 	}
 
 	for i := range vector.Entries {
-		if fullFileOnly && ctx.Err() != nil {
-			return openedFullFile, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return openedFullFile, err
 		}
 		if err := fillEntry(&vector.Entries[i]); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return openedFullFile, ctxErr
+			}
 			// ignore error
 			numError++
 			logutil.Warn(
@@ -451,7 +456,7 @@ func (d *DiskCache) read(
 		}
 	}
 
-	return openedFullFile, nil
+	return openedFullFile, ctx.Err()
 }
 
 func (d *DiskCache) Update(
@@ -550,9 +555,12 @@ func (d *DiskCache) writeFile(
 		}
 	}()
 
-	doneUpdate := d.startUpdateWithCleanup(diskPath, func() error {
+	doneUpdate, err := d.startUpdateWithCleanup(ctx, diskPath, func() error {
 		return d.removeUnindexedFile(diskPath)
 	})
+	if err != nil {
+		return false, err
+	}
 	defer func() {
 		if updateErr := doneUpdate(); updateErr != nil {
 			if err == nil {
@@ -705,14 +713,30 @@ func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	return fromOSPath(path), nil
 }
 
-func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) {
+func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) error {
 	LogEvent(ctx, str_disk_cache_wait_update_complete_begin)
 	defer LogEvent(ctx, str_disk_cache_wait_update_complete_end)
 	d.updatingPaths.L.Lock()
-	for d.updatingPaths.m[path] {
+	defer d.updatingPaths.L.Unlock()
+	return d.waitPathUpdateLocked(ctx, path)
+}
+
+// The caller holds updatingPaths.L. A cancelled waiter never changes the
+// update slot, which is still owned by the writer.
+func (d *DiskCache) waitPathUpdateLocked(ctx context.Context, path string) error {
+	if !d.updatingPaths.m[path] {
+		return nil
+	}
+	stop := context.AfterFunc(ctx, func() {
+		d.updatingPaths.L.Lock()
+		d.updatingPaths.Broadcast()
+		d.updatingPaths.L.Unlock()
+	})
+	defer stop()
+	for d.updatingPaths.m[path] && ctx.Err() == nil {
 		d.updatingPaths.Wait()
 	}
-	d.updatingPaths.L.Unlock()
+	return ctx.Err()
 }
 
 func (d *DiskCache) waitUpdateCompleteFor(ctx context.Context, path string, timeout time.Duration) bool {
@@ -755,21 +779,15 @@ func (d *DiskCache) isUpdating(path string) bool {
 	return d.updatingPaths.m[path]
 }
 
-func (d *DiskCache) startUpdate(path string) (done func()) {
-	doneWithError := d.startUpdateWithCleanup(path, nil)
-	return func() {
-		_ = doneWithError()
-	}
-}
-
-func (d *DiskCache) startUpdateWithCleanup(path string, cleanup func() error) (done func() error) {
+func (d *DiskCache) startUpdateWithCleanup(ctx context.Context, path string, cleanup func() error) (func() error, error) {
 	d.updatingPaths.L.Lock()
-	for d.updatingPaths.m[path] {
-		d.updatingPaths.Wait()
+	if err := d.waitPathUpdateLocked(ctx, path); err != nil {
+		d.updatingPaths.L.Unlock()
+		return nil, err
 	}
 	d.updatingPaths.m[path] = true
 	d.updatingPaths.L.Unlock()
-	done = func() error {
+	return func() error {
 		d.updatingPaths.L.Lock()
 		defer d.updatingPaths.L.Unlock()
 		var err error
@@ -779,8 +797,7 @@ func (d *DiskCache) startUpdateWithCleanup(path string, cleanup func() error) (d
 		delete(d.updatingPaths.m, path)
 		d.updatingPaths.Broadcast()
 		return err
-	}
-	return
+	}, nil
 }
 
 func (d *DiskCache) tryStartUpdate(path string) (done func(), ok bool) {
@@ -848,7 +865,10 @@ func (d *DiskCache) DeletePaths(
 
 func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) {
 	diskPath := d.pathForFile(path)
-	doneUpdate := d.startUpdate(diskPath)
+	doneUpdate, err := d.startUpdateWithCleanup(ctx, diskPath, nil)
+	if err != nil {
+		return err
+	}
 	defer doneUpdate()
 	if err = os.Remove(diskPath); err != nil {
 		if !os.IsNotExist(err) {

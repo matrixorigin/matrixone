@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"go.uber.org/zap"
 )
 
@@ -693,6 +694,7 @@ func (l *localLockTable) handleLockConflictLocked(
 		return true
 	})
 
+	resource.ObserveLocalLockConflict(c.ctx, c.w.waitFor)
 	conflictWith.addWaiter(l.logger, c.w)
 	// Set waiter to blocking before adding to events.mu.blockedWaiters so
 	// waiter_events.check() won't remove it (check removes only non-blocking).
