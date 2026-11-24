@@ -2165,6 +2165,11 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 		{"'East'", "'east'", "", false},
 		{"'abc'", "abc", "", false},
 		{"concat(LABEL,'East')", "concat(label,'East')", "", true},
+		{"`Code`", "code", "", true},
+		{"trim(`Code`)", "trim(code)", "", true},
+		{`trim("Code")`, "trim(code)", "ANSI_QUOTES", true},
+		{`trim("Code")`, "trim(code)", "", false},
+		{"trim(`Code`)", "trim(`Other`)", "", false},
 		{"concat(label,'East')", "concat(label,'east')", "NO_BACKSLASH_ESCAPES", false},
 		{"cast(1 as enum('East'))", "cast(1 as enum('east'))", "", false},
 		{"cast(1 as enum('East'))", "cast(1 as enum('East'))", "", true},
@@ -2180,9 +2185,9 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 		got, err := mergeRewriteRulesInMode(t.Context(), left, right, mysql.ParseSQLModeFlags(tc.mode))
 		require.NoError(t, err, tc)
 		if tc.merge {
-			require.Equal(t, "select "+tc.left+" as x from db.t where (id = 1) or (id = 2)", got, tc)
+			assert.Equal(t, "select "+tc.left+" as x from db.t where (id = 1) or (id = 2)", got, tc)
 		} else {
-			require.Equal(t, right, got, tc)
+			assert.Equal(t, right, got, tc)
 		}
 	}
 	left := "select label AS 'Name' from db.t where id = 1"

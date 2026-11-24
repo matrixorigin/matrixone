@@ -562,8 +562,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	}
 	l.previousToken = l.lastToken
 	l.lastToken = typ
-	if l.whereSources != nil && (typ == ID || typ == HEXNUM || typ != 0 && keywords[strings.ToLower(str)] == typ) {
-		str = strings.ToLower(str)
+	if l.whereSources != nil {
+		switch {
+		case typ == ID || typ == QUOTE_ID:
+			str = tree.NewCStr(str, 1).Compare()
+		case typ == HEXNUM || typ != 0 && keywords[strings.ToLower(str)] == typ:
+			str = strings.ToLower(str)
+		}
 	}
 	lval.str = str
 	l.recordSyntaxToken(typ)

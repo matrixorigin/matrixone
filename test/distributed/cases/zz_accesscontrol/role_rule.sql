@@ -340,6 +340,13 @@ alter role test_rule_role_inherit_b add rule "select id, cast(code as char chara
 select id, code from db1.t_rule_text order by id;
 -- @session
 
+-- Quoted and unquoted references to the same column keep both roles' rows.
+alter role test_rule_role_inherit_a add rule "select trim(`Code`) as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select trim(code) as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select x from db1.t_rule_text order by x;
+-- @session
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
