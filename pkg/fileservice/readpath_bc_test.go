@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -475,4 +476,38 @@ func TestUncachingReadJoinsUncachingFlight(t *testing.T) {
 	require.NoError(t, <-secondDone)
 	require.Equal(t, data[r.Offset:r.Offset+r.Size], out.Bytes())
 	require.Zero(t, s.others.Load())
+}
+
+// BC11: a read of the disk cache takes its bytes from the fastest live FilePrefetchObject
+// holding them, not from the first one registered.
+func TestFileDownloadPicksFastestLiveObject(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 0, 64<<10)
+	d := fs.diskCache
+	<-d.load.done
+	diskPath := d.pathForFile("object")
+	tempPath := t.TempDir() + "/download"
+	require.NoError(t, os.WriteFile(tempPath, make([]byte, 64<<10), 0600))
+	object := func(written int64, stopped bool) *filePrefetchObject {
+		p := newFilePrefetchObject(context.Background(), 0, 64<<10)
+		o := newObjectDownload(tempPath, false, nil)
+		t.Cleanup(o.retire)
+		o.begin(0)
+		if written > 0 {
+			o.advance(0, written)
+		}
+		p.download = o
+		if stopped {
+			p.cancelRead()
+		}
+		return p
+	}
+	slow, fast, stoppedFast := object(0, false), object(64<<10, false), object(64<<10, true)
+	f := &d.prefetchObjects
+	f.mu.Lock()
+	f.registerLocked(diskPath, stoppedFast)
+	f.registerLocked(diskPath, slow)
+	f.registerLocked(diskPath, fast)
+	f.mu.Unlock()
+	got, _ := d.fileDownload(diskPath, 100, 200)
+	require.Same(t, fast.download, got)
 }
