@@ -71,6 +71,8 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 			{name: "composite", partition: "partition by key(id) partitions 8", composite: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+				defer cancel()
 				table := fmt.Sprintf("`%s`.`%s`", name, tc.name)
 				columns, seed, incoming := "(id int primary key, uk int unique, v int)", "(1,10,1)", "(100099,10,999)"
 				if tc.incoming != "" {

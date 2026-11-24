@@ -187,16 +187,22 @@ func TestIssue29492MultiCNCancellationCleanup(t *testing.T) {
 				return promtestutil.ToFloat64(metricv2.PipelineMessageSenderGauge) == 0 &&
 					promtestutil.ToFloat64(metricv2.PipelineStreamLifecycleGauge) == 0
 			}, 15*time.Second, 10*time.Millisecond, "all CN remote stream owners must finish")
+			// Cancellation and replay own separate budgets. A slow cleanup must
+			// still fail here rather than silently shortening the replay phase.
+			require.NoError(t, ctx.Err(), "KILL/cancellation cleanup exhausted its phase budget")
+			cancel()
+			replayCtx, replayCancel := context.WithTimeout(t.Context(), 3*time.Minute)
+			defer replayCancel()
 			// Removing the barrier makes the same query healthy. Keep the physical
 			// connection and, for binary execution, the same prepared statement.
 			if binary {
-				require.NoError(t, prepared.QueryRowContext(ctx, barrier).Scan(&cont))
+				require.NoError(t, prepared.QueryRowContext(replayCtx, barrier).Scan(&cont))
 			} else {
-				require.NoError(t, runner.QueryRowContext(ctx, query).Scan(&cont))
+				require.NoError(t, runner.QueryRowContext(replayCtx, query).Scan(&cont))
 			}
 			require.Equal(t, 12288.5, cont)
 			var reusedID uint64
-			require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&reusedID))
+			require.NoError(t, runner.QueryRowContext(replayCtx, "select connection_id()").Scan(&reusedID))
 			require.Equal(t, connectionID, reusedID)
 		}) {
 			return // Do not reuse a connection whose cancellation/recovery failed.
