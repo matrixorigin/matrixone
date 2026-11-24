@@ -34,7 +34,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -1197,18 +1196,14 @@ func (d *DiskCache) writeFileTo(
 }
 
 // sourceFailure returns err when it is a failed read of object storage by a fill whose
-// context readCtx did not end: it fails the reads waiting for the fill. A fill stopped
-// (idle, delete, close, its query), or whose object is gone, leaves them to read their own
-// bytes.
+// context readCtx did not end: it fails the reads waiting for the fill with the error of
+// object storage itself, as a read of their own would. A fill stopped (idle, delete,
+// close, its query) leaves them to read their own bytes.
 func sourceFailure(readCtx context.Context, err error) error {
 	var source *diskCacheSourceError
 	if err == nil || readCtx.Err() != nil || !errors.As(err, &source) || errors.Is(err, errSourceIdle) {
 		return nil
 	}
-	if me := (*moerr.Error)(nil); errors.As(err, &me) && me.ErrorCode() == moerr.ErrFileNotFound {
-		return nil
-	}
-	// The reads get the error of object storage itself, as a read of their own would.
 	return source.err
 }
 
