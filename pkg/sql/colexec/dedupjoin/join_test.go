@@ -926,7 +926,7 @@ func TestMergeCaptured_DisjointBuckets(t *testing.T) {
 	require.Equal(t, int32(10), vals[0])
 	require.Equal(t, int32(20), vals[2])
 
-	freeCapturedVecs(msg.capturedVecs, proc)
+	msg.free()
 	for _, v := range ctr.capturedVecs {
 		v.Free(proc.Mp())
 	}
@@ -952,7 +952,7 @@ func TestMergeCaptured_FirstWinsOnConflict(t *testing.T) {
 	vals := vector.MustFixedColNoTypeCheck[int32](ctr.capturedVecs[0])
 	require.Equal(t, int32(111), vals[0], "merger's existing capture must win")
 
-	freeCapturedVecs(msg.capturedVecs, proc)
+	msg.free()
 	for _, v := range ctr.capturedVecs {
 		v.Free(proc.Mp())
 	}
@@ -978,7 +978,7 @@ func TestMergeCaptured_EmptyWorkerMsg(t *testing.T) {
 	vals := vector.MustFixedColNoTypeCheck[int32](ctr.capturedVecs[0])
 	require.Equal(t, int32(77), vals[1])
 
-	freeCapturedVecs(msg.capturedVecs, proc)
+	msg.free()
 	for _, v := range ctr.capturedVecs {
 		v.Free(proc.Mp())
 	}
@@ -1011,7 +1011,7 @@ func TestWorkerJoinMsg_MailboxRoundTrip(t *testing.T) {
 	require.Same(t, msg, received)
 
 	require.NoError(t, ctr.mergeCaptured(ap, received, proc))
-	freeCapturedVecs(received.capturedVecs, proc)
+	received.free()
 
 	require.True(t, ctr.captured.Contains(0))
 	require.True(t, ctr.captured.Contains(1))
@@ -1094,7 +1094,7 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 	t.Run("merger already stopped", func(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mailbox := NewWorkerJoinMailbox(2)
-		mailbox.stopAndDrain(proc)
+		mailbox.stopAndDrain()
 		worker := &DedupJoin{
 			NumCPU:   2,
 			IsMerger: false,
@@ -1112,9 +1112,7 @@ func TestDedupFinalizeWorkerPublicationBoundaries(t *testing.T) {
 		sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{})
 		require.True(t, sent)
 		require.False(t, stopped)
-		t.Cleanup(func() {
-			mailbox.stopAndDrain(proc)
-		})
+		t.Cleanup(mailbox.stopAndDrain)
 		worker := &DedupJoin{
 			NumCPU:   2,
 			IsMerger: false,
@@ -1151,7 +1149,7 @@ func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			mailbox.stopAndDrain(proc)
+			mailbox.stopAndDrain()
 		}()
 		close(start)
 		wg.Wait()
@@ -1166,24 +1164,23 @@ func TestWorkerJoinMailboxStopAndSendHaveSingleCaptureOwner(t *testing.T) {
 }
 
 func TestWorkerJoinMailboxReopensAfterCompleteResetGeneration(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	mailbox := NewWorkerJoinMailbox(2)
 
-	mailbox.stopAndDrain(proc)
+	mailbox.stopAndDrain()
 	sent, stopped, _ := mailbox.trySend(&WorkerJoinMsg{})
 	require.False(t, sent)
 	require.True(t, stopped)
 
-	mailbox.resetParticipant(proc)
+	mailbox.resetParticipant()
 	sent, stopped, _ = mailbox.trySend(&WorkerJoinMsg{})
 	require.False(t, sent)
 	require.True(t, stopped)
 
-	mailbox.resetParticipant(proc)
+	mailbox.resetParticipant()
 	sent, stopped, _ = mailbox.trySend(&WorkerJoinMsg{})
 	require.True(t, sent)
 	require.False(t, stopped)
-	mailbox.drain(proc)
+	mailbox.drain()
 }
 
 func TestDedupFinalizeMissingWorkerHonorsCancellation(t *testing.T) {
@@ -1259,42 +1256,49 @@ func TestDedupFinalizeConcurrentCancellationReturns(t *testing.T) {
 	}
 }
 
-func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	baseline := proc.Mp().CurrNB()
-	captured := vector.NewVec(types.T_int32.ToType(), proc.Mp())
-	require.NoError(t, vector.AppendFixed(captured, int32(1), false, proc.Mp()))
+func TestDedupFinalizeReleasesTransferredCaptures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"consume", nil},
+		{"drain after worker failure", moerr.NewInternalErrorNoCtx("worker failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			baseline := proc.Mp().CurrNB()
+			worker := &DedupJoin{}
+			account := installTestAllocation(t, worker)
+			mp, err := worker.stateMP(proc)
+			require.NoError(t, err)
+			require.NotSame(t, proc.Mp(), mp)
 
-	workerErr := moerr.NewInternalErrorNoCtx("worker failed")
-	mailbox := NewWorkerJoinMailbox(3)
-	arg := &DedupJoin{
-		NumCPU:            3,
-		IsMerger:          true,
-		Mailbox:           mailbox,
-		OnDuplicateAction: plan.Node_FAIL,
+			merger := &DedupJoin{NumCPU: 2, IsMerger: true, OnDuplicateAction: plan.Node_FAIL}
+			if tc.err != nil {
+				merger.NumCPU++
+			}
+			merger.Mailbox = NewWorkerJoinMailbox(int(merger.NumCPU))
+			defer merger.Free(proc, tc.err != nil, tc.err)
+			merger.ctr.state = Finalize
+			if tc.err != nil {
+				sent, _, _ := merger.Mailbox.trySend(&WorkerJoinMsg{aborted: true, err: tc.err})
+				require.True(t, sent)
+			}
+			captured := vector.NewVec(types.T_int32.ToType(), mp)
+			require.NoError(t, vector.AppendFixed(captured, int32(1), false, mp))
+			require.Positive(t, account.Snapshot().Used)
+			sent, _, _ := merger.Mailbox.trySend(&WorkerJoinMsg{capturedVecs: []*vector.Vector{captured}})
+			require.True(t, sent)
+
+			result, err := merger.Call(proc)
+			require.ErrorIs(t, err, tc.err)
+			require.Nil(t, result.Batch)
+			require.Empty(t, merger.Mailbox.ch)
+			require.Zero(t, account.Snapshot().Used)
+			require.Equal(t, baseline, proc.Mp().CurrNB())
+		})
 	}
-	arg.ctr.state = Finalize
-	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
-	require.True(t, func() bool {
-		sent, _, _ := mailbox.trySend(&WorkerJoinMsg{aborted: true, err: workerErr})
-		return sent
-	}())
-	require.True(t, func() bool {
-		sent, _, _ := mailbox.trySend(&WorkerJoinMsg{capturedVecs: []*vector.Vector{captured}})
-		return sent
-	}())
-	t.Cleanup(func() {
-		arg.Free(proc, true, workerErr)
-		freeTestChildren(arg)
-		proc.Free()
-	})
-
-	result, err := arg.Call(proc)
-	require.ErrorIs(t, err, workerErr)
-	require.Nil(t, result.Batch)
-	require.Empty(t, mailbox.ch)
-	require.Equal(t, baseline, proc.Mp().CurrNB())
 }
 
 func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
@@ -1470,7 +1474,7 @@ func TestDedupFinalizeResetPublishesAbortForNextSpillBucket(t *testing.T) {
 	require.NotNil(t, second)
 	require.True(t, second.aborted)
 	require.NoError(t, second.err)
-	freeWorkerJoinMsg(second, proc)
+	second.free()
 
 	merger := &DedupJoin{
 		NumCPU:   2,
@@ -1508,7 +1512,7 @@ func TestDedupFinalizeCancellationAfterPublishDoesNotDuplicateStatus(t *testing.
 	require.ErrorIs(t, <-errC, context.Canceled)
 	worker.Reset(proc, true, context.Canceled)
 	require.Empty(t, mailbox.ch, "Reset must not publish a second status for the same worker and bucket")
-	mailbox.stopAndDrain(proc)
+	mailbox.stopAndDrain()
 }
 
 func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {

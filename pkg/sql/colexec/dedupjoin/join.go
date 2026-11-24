@@ -388,7 +388,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.spillEngine != nil {
 					ctr.cleanBuf(proc)
 					// Clear previous bucket state before advancing.
-					ctr.cleanBucketState(proc)
+					ctr.cleanBucketState()
 					var allocationErr error
 					ok, bktErr := ctr.spillEngine.AdvanceToNextBucket(proc, analyzer,
 						func(jm *message.JoinMap, res spillutil.BucketResult) {
@@ -556,7 +556,6 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 		return err
 	}
 	n := len(ap.OldColCapturePlaceholderIdxList)
-	ctr.capturedMP = stateMP
 	ctr.capturedVecs = make([]*vector.Vector, n)
 	for i, probePos := range ap.OldColCaptureProbeIdxList {
 		typ := ap.LeftTypes[probePos]
@@ -570,7 +569,7 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 	}
 	ctr.captured, err = colexec.NewRowBitmap(ctr.batchRowCount)
 	if err != nil {
-		ctr.cleanCaptured(proc)
+		ctr.cleanCaptured()
 		return err
 	}
 	ctr.captureResultIdx = make([]int32, len(ap.Result))
@@ -861,14 +860,14 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 			msg, err := receiveWorkerMsg(proc.Ctx, ap.Mailbox)
 			if err != nil {
-				freeWorkerJoinMsg(msg, proc)
-				ap.Mailbox.stopAndDrain(proc)
+				msg.free()
+				ap.Mailbox.stopAndDrain()
 				return err
 			}
 
 			if msg.aborted {
-				freeWorkerJoinMsg(msg, proc)
-				ap.Mailbox.stopAndDrain(proc)
+				msg.free()
+				ap.Mailbox.stopAndDrain()
 				if msg.err != nil {
 					return msg.err
 				}
@@ -887,14 +886,14 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 && msg.captured != nil {
 				mergeErr = ctr.mergeCaptured(ap, msg, proc)
 			}
-			freeWorkerJoinMsg(msg, proc)
+			msg.free()
 			if mergeErr != nil {
-				ap.Mailbox.stopAndDrain(proc)
+				ap.Mailbox.stopAndDrain()
 				return mergeErr
 			}
 		}
 		if err := context.Cause(proc.Ctx); err != nil {
-			ap.Mailbox.stopAndDrain(proc)
+			ap.Mailbox.stopAndDrain()
 			return err
 		}
 		// Do not release a fast worker into the next spill bucket until every
