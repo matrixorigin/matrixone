@@ -38,6 +38,7 @@ import (
 func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 	local := engine.Node{Id: "coord", Addr: "cn-coord:6001", Mcpu: 1}
 	remote := engine.Node{Id: "worker", Addr: "cn-worker:6001", Mcpu: 1}
+	peer := engine.Node{Id: "peer", Addr: "cn-peer:6001", Mcpu: 1}
 	for _, tc := range []struct {
 		name             string
 		probes           []engine.Node
@@ -48,13 +49,20 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 		preserveProbe    bool
 		wantRemoteInputs int
 		windowBuild      bool
+		distributed      bool
+		extraBuild       bool
 	}{
-		{"remote_probe_local_sink", []engine.Node{remote}, local, true, false, true, false, 1, false},
-		{"local_parallel_probe_local_sink", []engine.Node{scopeNodeWithMcpu(local, 4)}, local, true, false, true, true, 0, false},
-		{"remote_probe_and_build", []engine.Node{remote}, remote, false, false, false, true, 0, false},
-		{"local_probe_remote_build", []engine.Node{local}, remote, false, false, true, true, 1, false},
-		{"forced_single_cn_full_outer", []engine.Node{local, remote}, remote, false, true, true, false, 2, false},
-		{"remote_probe_local_window", []engine.Node{remote}, local, false, false, true, false, 1, true},
+		{name: "remote_probe_local_sink", probes: []engine.Node{remote}, sink: true, wantLocal: true, wantRemoteInputs: 1},
+		{name: "local_parallel_probe_local_sink", probes: []engine.Node{scopeNodeWithMcpu(local, 4)}, sink: true, wantLocal: true, preserveProbe: true},
+		{name: "remote_probe_and_build", probes: []engine.Node{remote}, build: remote, preserveProbe: true},
+		{name: "local_probe_remote_build", probes: []engine.Node{local}, build: remote, wantLocal: true, preserveProbe: true, wantRemoteInputs: 1},
+		{name: "forced_single_cn_full_outer", probes: []engine.Node{local, remote}, build: remote, fullOuter: true, wantLocal: true, wantRemoteInputs: 2},
+		{name: "remote_probe_local_window", probes: []engine.Node{remote}, build: local, windowBuild: true, wantLocal: true, wantRemoteInputs: 1},
+		{name: "sink_owner_first", probes: []engine.Node{local, remote}, sink: true, distributed: true},
+		{name: "sink_owner_last", probes: []engine.Node{remote, local}, sink: true, distributed: true},
+		{name: "sink_and_peer_build_input", probes: []engine.Node{remote, local}, sink: true, distributed: true, extraBuild: true},
+		{name: "no_probe_owns_sink", probes: []engine.Node{remote, peer}, sink: true, wantLocal: true, wantRemoteInputs: 2},
+		{name: "forced_single_with_sink_owner", probes: []engine.Node{remote, local}, sink: true, fullOuter: true, wantLocal: true, wantRemoteInputs: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newCompileForShuffleJoinTest(t, engine.Nodes{remote})
@@ -89,10 +97,10 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 			for _, node := range tc.probes {
 				probes = append(probes, newScan(node))
 			}
-			var build, producer *Scope
+			var build, producer, extra *Scope
 			var edge *process.WaitRegister
 			t.Cleanup(func() {
-				inputs := append([]*Scope{build}, probes...)
+				inputs := append([]*Scope{build, extra}, probes...)
 				for _, input := range inputs {
 					if input == nil {
 						continue
@@ -133,7 +141,20 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 					build.setRootOperator(window.NewArgument())
 				}
 			}
-			result = c.compileJoin(join, left, right, probes, []*Scope{build})
+			builds := []*Scope{build}
+			if tc.extraBuild {
+				extra = newScan(remote)
+				builds = append(builds, extra)
+			}
+			result = c.compileJoin(join, left, right, probes, builds)
+			if tc.sink {
+				require.Same(t, edge, build.Proc.Reg.MergeReceivers[0])
+				require.Same(t, edge, producer.RootOp.(*dispatch.Dispatch).LocalRegs[0], "step sender must target retained live register")
+			}
+			if tc.distributed {
+				checkTwoCNBroadcast(t, c.addr, probes, builds, result)
+				return
+			}
 			require.Len(t, result, 1)
 			stage := result[0]
 			require.IsType(t, &hashjoin.HashJoin{}, stage.RootOp)
@@ -153,8 +174,6 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 			}
 			require.Equal(t, 1, buildCount)
 			if tc.sink {
-				require.Same(t, edge, build.Proc.Reg.MergeReceivers[0])
-				require.Same(t, edge, producer.RootOp.(*dispatch.Dispatch).LocalRegs[0], "step sender must target retained live register")
 				require.IsType(t, &merge.Merge{}, build.RootOp.GetOperatorBase().GetChildren(0))
 			}
 			remoteInputs := 0
@@ -178,4 +197,62 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 			require.Equal(t, tc.wantRemoteInputs, remoteInputs)
 		})
 	}
+}
+
+func checkTwoCNBroadcast(t *testing.T, coordinator string, probes, builds, stages []*Scope) {
+	t.Helper()
+	require.Len(t, stages, 2)
+	var local, peer *Scope
+	for i, stage := range stages {
+		require.Same(t, probes[i], stage)
+		require.IsType(t, &hashjoin.HashJoin{}, stage.RootOp)
+		if stage.ipAddrMatch(coordinator) {
+			local = stage
+		} else {
+			peer = stage
+		}
+	}
+	require.NotNil(t, local)
+	require.NotNil(t, peer)
+	require.Len(t, local.PreScopes, 2)
+	var source, localBuild *Scope
+	for _, s := range local.PreScopes {
+		switch s.RootOp.(type) {
+		case *dispatch.Dispatch:
+			source = s
+		case *hashbuild.HashBuild:
+			localBuild = s
+		}
+	}
+	require.NotNil(t, source, "broadcast build batches, not peer probe rows")
+	require.NotNil(t, localBuild)
+	if len(builds) == 1 {
+		require.Same(t, builds[0], source)
+	} else {
+		require.Len(t, source.PreScopes, len(builds))
+		for i := range builds {
+			require.Same(t, builds[i], source.PreScopes[i])
+		}
+	}
+	sender := source.RootOp.(*dispatch.Dispatch)
+	require.Len(t, sender.LocalRegs, 1)
+	require.Same(t, sender.LocalRegs[0], localBuild.Proc.Reg.MergeReceivers[0])
+	require.Len(t, sender.RemoteRegs, 1)
+	require.Equal(t, peer.NodeInfo.Addr, sender.RemoteRegs[0].NodeAddr)
+
+	wire, err := encodeScope(peer)
+	require.NoError(t, err)
+	decoded, err := decodeScope(wire, testutil.NewProcess(t), true, nil)
+	require.NoError(t, err)
+	t.Cleanup(decoded.release)
+	require.IsType(t, &hashjoin.HashJoin{}, decoded.RootOp)
+	require.Len(t, decoded.PreScopes, 1)
+	peerBuild := decoded.PreScopes[0]
+	require.IsType(t, &hashbuild.HashBuild{}, peerBuild.RootOp)
+	require.Equal(t, peer.NodeInfo.Addr, peerBuild.NodeInfo.Addr)
+	require.Equal(t, decoded.RootOp.(*hashjoin.HashJoin).JoinMapTag, peerBuild.RootOp.(*hashbuild.HashBuild).JoinMapTag)
+	require.Len(t, peerBuild.RemoteReceivRegInfos, 1)
+	receiver := peerBuild.RemoteReceivRegInfos[0]
+	require.Equal(t, sender.RemoteRegs[0].Uuid, receiver.Uuid)
+	require.Equal(t, source.NodeInfo.Addr, receiver.FromAddr)
 }

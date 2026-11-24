@@ -91,3 +91,24 @@ func (c *Compile) colocateBroadcastJoinInputs(probe, build []*Scope) ([]*Scope, 
 	}
 	return c.singleCoordinatorJoinInput(probe), c.singleCoordinatorJoinInput(build)
 }
+
+// Multi-probe broadcast leaves each probe in place and dispatches build batches
+// to a HashBuild on each probe CN. Only the build source needs a host: attaching
+// a local SINK_SCAN under a peer would disconnect it from its producer.
+func (c *Compile) placeMultiProbeBroadcastBuild(probe, build []*Scope) ([]*Scope, []*Scope) {
+	if c.joinInputsOnCoordinator(probe, build) {
+		return probe, build
+	}
+	if _, hasSink := sinkScanDependencyNode(build); !hasSink {
+		return probe, build
+	}
+	build = c.singleCoordinatorJoinInput(build)
+	for _, p := range probe {
+		if sameExecutionNode(p.NodeInfo, build[0].NodeInfo) {
+			// compileBuildSideForBroadcastJoin attaches to this probe, even
+			// if it isn't the first one. Other CNs keep their own JoinMaps.
+			return probe, build
+		}
+	}
+	return c.singleCoordinatorJoinInput(probe), build
+}

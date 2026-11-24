@@ -4450,9 +4450,13 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 	// Protect coordinator-owned input before reducing the probe stage. A
 	// forced-single probe may then have a different owner; check its build
 	// again before installing the process-local JoinMap operators.
-	probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
 	if broadcastJoinForcesOneCN(node, isEq) {
+		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
 		probeScopes = c.forceSingleCNBroadcastProbe(probeScopes)
+	}
+	if len(probeScopes) > 1 {
+		probeScopes, buildScopes = c.placeMultiProbeBroadcastBuild(probeScopes, buildScopes)
+	} else {
 		probeScopes, buildScopes = c.colocateBroadcastJoinInputs(probeScopes, buildScopes)
 	}
 	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes, isEq)
