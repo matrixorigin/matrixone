@@ -36,8 +36,7 @@ type commandManager struct {
 	preparedSize  int
 }
 
-// At most 20,000 transactions can wait in the WAL queue. Retaining only small
-// records bounds this queue's additional serialized data to 80 MiB; large
+// Retain at most 4 KiB of serialized data per queued transaction. Large
 // records are encoded again when they enter the WAL stage.
 const maxRetainedPreflightRecordSize = 4 * 1024
 

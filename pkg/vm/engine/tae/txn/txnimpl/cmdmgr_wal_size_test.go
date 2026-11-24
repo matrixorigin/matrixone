@@ -144,3 +144,15 @@ func TestCommandManagerRetainsOnlySmallPreflightRecord(t *testing.T) {
 	e.DoneWithErr(nil)
 	e.Free()
 }
+
+func TestStoreCloseDiscardsUnconsumedPreflightRecord(t *testing.T) {
+	w := &recordingWALStore{}
+	mgr := newCommandManager(w)
+	txn := txnbase.NewTxn(nil, &txnbase.NoopTxnStore{}, []byte("rollback"), types.BuildTS(1, 0), types.TS{})
+	store := &txnStore{txn: txn, cmdMgr: mgr}
+	mgr.AddCmd(txnbase.NewTxnStateCmd("state", 0, types.TS{}))
+	require.NoError(t, mgr.PreflightTxnRecord(store))
+	require.NotNil(t, mgr.preparedEntry)
+	require.NoError(t, store.Close())
+	require.Nil(t, mgr.preparedEntry)
+}
