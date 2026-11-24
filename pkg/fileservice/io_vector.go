@@ -139,12 +139,17 @@ func (i *IOVector) readMinimalRange() (*int64, *int64) {
 }
 
 // sparse reports whether the range from the least offset to the greatest end of the
-// entries not done holds bytes no such entry covers.
+// entries not done holds bytes no such entry covers. An entry read to the end of the
+// object covers every byte from its offset.
 func (i *IOVector) sparse() bool {
 	var spans []PrefetchRange
 	for _, e := range i.Entries {
-		if !e.done && e.Size > 0 {
+		switch {
+		case e.done || e.Offset < 0:
+		case e.Size > 0:
 			spans = append(spans, PrefetchRange{Offset: e.Offset, Size: e.Size})
+		case e.Size < 0:
+			spans = append(spans, PrefetchRange{Offset: e.Offset, Size: math.MaxInt64 - e.Offset})
 		}
 	}
 	if len(spans) < 2 {

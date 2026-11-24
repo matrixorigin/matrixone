@@ -1201,7 +1201,7 @@ func (d *DiskCache) writeFileTo(
 // bytes.
 func sourceFailure(readCtx context.Context, err error) error {
 	var source *diskCacheSourceError
-	if err == nil || readCtx.Err() != nil || !errors.As(err, &source) {
+	if err == nil || readCtx.Err() != nil || !errors.As(err, &source) || errors.Is(err, errSourceIdle) {
 		return nil
 	}
 	if me := (*moerr.Error)(nil); errors.As(err, &me) && me.ErrorCode() == moerr.ErrFileNotFound {

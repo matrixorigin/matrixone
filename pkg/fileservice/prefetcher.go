@@ -121,7 +121,7 @@ func unionRanges(a, b []PrefetchRange, size int64) ([]PrefetchRange, int64) {
 
 // share returns, in tenths, the share of the object's blocks the read reads.
 func (r ObjectPrefetch) share() int {
-	if r.Blocks <= 0 || r.Reads >= r.Blocks {
+	if r.Blocks <= 0 || r.Reads <= 0 || r.Reads >= r.Blocks {
 		return 10
 	}
 	return r.Reads * 10 / r.Blocks
