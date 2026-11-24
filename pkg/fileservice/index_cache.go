@@ -27,6 +27,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -529,11 +530,13 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 }
 
 // entryRead is a read of generation gen of an entry; done ends it. dir is the entry the
-// read opened, kept open until done so that no other entry takes its identity, or nil.
+// read opened, kept open until done so that no other entry takes its identity, or nil;
+// absent is set when there was no entry to open.
 type entryRead struct {
-	gen  uint64
-	dir  os.FileInfo
-	done func()
+	gen    uint64
+	dir    os.FileInfo
+	absent bool
+	done   func()
 }
 
 // openEntryFile opens file of entry name for a read, through the file kept open for the
@@ -570,6 +573,7 @@ func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file st
 			if dirErr == nil {
 				read.dir, _ = dir.Stat()
 			}
+			read.absent = os.IsNotExist(dirErr)
 			read.done = func() {
 				if dirErr == nil {
 					_ = dir.Close()
@@ -712,6 +716,15 @@ func (c *IndexFileCache) dropBroken(ctx context.Context, name string, missing st
 	c.disk.cache.Delete(ctx, diskPath)
 }
 
+// dropUnopened drops entry name after read failed to open it, unless the entry is there
+// and read could not open it: its identity is unknown.
+func (c *IndexFileCache) dropUnopened(ctx context.Context, name string, missing string, read *entryRead) {
+	if read.dir == nil && !read.absent {
+		return
+	}
+	c.dropBroken(ctx, name, missing, read.gen, read.dir, "")
+}
+
 type dirHolds struct {
 	mu sync.Mutex
 	m  map[string]int
@@ -790,7 +803,7 @@ func (d *DiskCache) removeEvictedDir(path string, size int64) error {
 		d.cache.Set(context.Background(), path, struct{}{}, size)
 		return nil
 	}
-	trash, err := trashCacheDir(path)
+	trash, err := trashCacheDir(path, size)
 	d.held.mu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -823,7 +836,7 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 		d.held.mu.Unlock()
 		return false, err
 	}
-	trash, err := trashCacheDir(path)
+	trash, err := trashCacheDir(path, size)
 	d.held.mu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1203,7 +1216,7 @@ func (d *DiskCache) removeCachePath(path string) error {
 // renamed the entry is gone; files it fails to remove are kept as trash (see removeTrash).
 func (d *DiskCache) removeCacheDir(path string) error {
 	size, _ := d.cache.Size(path)
-	trash, err := trashCacheDir(path)
+	trash, err := trashCacheDir(path, size)
 	if err != nil {
 		return err
 	}
@@ -1224,7 +1237,8 @@ type cacheTrash struct {
 // removeTrash removes trash, an entry directory of size bytes renamed for removal. Trash
 // it fails to remove is kept with its bytes, which count against the capacity until
 // retryTrash removes it; its bytes are size, or those it was kept with, when it cannot be
-// listed. Trash left when the process ends is removed when the cache loads.
+// listed. Trash left when the process ends is removed when the cache loads, with the
+// bytes its name records.
 func (d *DiskCache) removeTrash(trash string, size int64) error {
 	err := os.RemoveAll(trash)
 	t := &d.trash
@@ -1265,7 +1279,19 @@ func (d *DiskCache) retryTrash() {
 	}
 }
 
-func trashCacheDir(path string) (string, error) {
-	trash := fmt.Sprintf("%s.%d-%d%s", path, os.Getpid(), cacheDirTrashSeq.Add(1), cacheDirTrashSuffix)
+// trashCacheDir renames entry directory path of size bytes to a trash name that records
+// size.
+func trashCacheDir(path string, size int64) (string, error) {
+	trash := fmt.Sprintf("%s.%d-%d-%d%s", path, os.Getpid(), cacheDirTrashSeq.Add(1), size, cacheDirTrashSuffix)
 	return trash, os.Rename(path, trash)
+}
+
+// trashSize returns the bytes trash name records, or 0.
+func trashSize(trash string) int64 {
+	s := strings.TrimSuffix(trash, cacheDirTrashSuffix)
+	size, err := strconv.ParseInt(s[strings.LastIndexByte(s, '-')+1:], 10, 64)
+	if err != nil || size < 0 {
+		return 0
+	}
+	return size
 }

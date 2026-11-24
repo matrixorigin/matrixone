@@ -471,8 +471,9 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - two cache instances sharing a directory never serve a partial entry, and exactly one
   publishes an entry both write;
 - cached entries are reused after a restart, and leftover temporary and trash directories
-  are removed; files a removal fails to remove count against the capacity until the
-  collector removes them;
+  are removed; files a removal fails to remove count against the capacity, also after
+  a restart, until the collector removes them; a read that cannot open an entry's directory keeps
+  the entry and reads from storage;
 - the index-file cache gets its configured capacity, or the default when unset, and a
   capacity of zero disables it; the table-data cache keeps its own capacity, and a runtime
   resize changes only that; only a CN's SHARED file service gets the cache; an

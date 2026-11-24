@@ -584,8 +584,9 @@ func TestIndexObjectStaleShortRepairKeepsOtherInstanceEntry(t *testing.T) {
 // Trash a removal failed to remove before a restart counts against the capacity of the
 // cache loaded after it, and the collector removes it once it can.
 func TestIndexFileCacheTrashChargedAfterRestart(t *testing.T) {
-	for _, fault := range []bool{true, false} {
-		t.Run(map[bool]string{true: "fault", false: "control"}[fault], func(t *testing.T) {
+	for _, mode := range []os.FileMode{0o500, 0o000, 0o755} {
+		fault := mode != 0o755
+		t.Run(mode.String(), func(t *testing.T) {
 			ctx := context.Background()
 			dir := t.TempDir()
 			data := bytes.Repeat([]byte{7}, 300<<10)
@@ -608,7 +609,7 @@ func TestIndexFileCacheTrashChargedAfterRestart(t *testing.T) {
 				}
 			})
 			if fault {
-				require.NoError(t, os.Chmod(diskPath, 0o500))
+				require.NoError(t, os.Chmod(diskPath, mode))
 				if f, err := os.Create(filepath.Join(diskPath, "probe")); err == nil {
 					_ = f.Close()
 					t.Skip("permissions are not enforced")
@@ -637,9 +638,9 @@ func TestIndexFileCacheTrashChargedAfterRestart(t *testing.T) {
 
 // A read whose open of a broken entry fails repairs only the entry it read: a
 // replacement published before its repair, by a read or by another cache instance on the
-// directory, is kept.
+// directory, is kept, also when the read could not open the entry.
 func TestIndexObjectStaleOpenRepairKeepsReplacement(t *testing.T) {
-	for _, by := range []string{"read", "other instance", "control"} {
+	for _, by := range []string{"read", "other instance", "unopenable", "control"} {
 		replaced := by != "control"
 		t.Run(by, func(t *testing.T) {
 			ctx := context.Background()
@@ -647,9 +648,23 @@ func TestIndexObjectStaleOpenRepairKeepsReplacement(t *testing.T) {
 			cacheIndexObject(t, fs, "object", data)
 			diskPath, ok := fs.indexObjectCached("object")
 			require.True(t, ok)
-			file := filepath.Join(diskPath, IndexObjectFile)
-			require.NoError(t, os.Remove(file))
-			require.NoError(t, os.Symlink(IndexObjectFile, file))
+			if by == "unopenable" {
+				require.NoError(t, os.Chmod(diskPath, 0))
+				t.Cleanup(func() {
+					m, _ := filepath.Glob(diskPath + "*")
+					for _, p := range m {
+						_ = os.Chmod(p, 0o755)
+					}
+				})
+				if f, err := os.Open(diskPath); err == nil {
+					_ = f.Close()
+					t.Skip("permissions are not enforced")
+				}
+			} else {
+				file := filepath.Join(diskPath, IndexObjectFile)
+				require.NoError(t, os.Remove(file))
+				require.NoError(t, os.Symlink(IndexObjectFile, file))
+			}
 			name := IndexObjectEntry("object")
 			_, read, err := fs.indexFileCache.openEntryFile(context.Background(), name, IndexObjectFile)
 			require.Error(t, err)
@@ -659,7 +674,7 @@ func TestIndexObjectStaleOpenRepairKeepsReplacement(t *testing.T) {
 				storage.reads.Store(0)
 				require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject, 2000, 10))
 				require.Equal(t, int64(1), storage.reads.Load(), "the read filled the entry again")
-			case "other instance":
+			case "other instance", "unopenable":
 				other, err := newIndexFileCache(ctx, fs.indexFileCache.disk.path, fscache.ConstCapacity(64<<20), "", "", 0, 0, 0)
 				require.NoError(t, err)
 				t.Cleanup(func() { other.Close(ctx) })
@@ -669,7 +684,7 @@ func TestIndexObjectStaleOpenRepairKeepsReplacement(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, written)
 			}
-			fs.indexFileCache.dropBroken(ctx, name, "", read.gen, read.dir, "")
+			fs.indexFileCache.dropUnopened(ctx, name, "", read)
 			read.done()
 			_, cached := fs.indexObjectCached("object")
 			require.Equal(t, replaced, cached)

@@ -189,7 +189,7 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			missing = IndexObjectFile
 		}
-		s.indexFileCache.dropBroken(ctx, name, missing, entry.gen, entry.dir, "")
+		s.indexFileCache.dropUnopened(ctx, name, missing, entry)
 		return nil
 	}
 	defer entry.done()

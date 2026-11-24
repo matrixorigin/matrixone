@@ -423,7 +423,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 			switch name := entry.Name(); {
 			case !d.dirEntries:
 			case strings.HasSuffix(name, cacheDirTrashSuffix):
-				_ = d.removeTrash(path, 0)
+				_ = d.removeTrash(path, trashSize(path))
 				numDeleted++
 				return fs.SkipDir
 			case strings.HasSuffix(name, cacheDirTempSuffix):
