@@ -1507,7 +1507,6 @@ func (bat *Batch) ViewInto(dst *Batch) {
 	dst.ExtraBuf = bat.ExtraBuf
 	dst.rowCount = bat.rowCount
 	dst.selection = bat.selection
-	dst.physicalRows = bat.physicalRows
 }
 
 func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
@@ -1538,7 +1537,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Attrs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
-	bat.selection, bat.physicalRows = nil, 0
+	bat.selection = nil
 }
 
 func (bat *Batch) Last() bool {
@@ -1565,7 +1564,7 @@ func (bat *Batch) CleanOnlyData() {
 	}
 	bat.leases.Release()
 	bat.rowCount = 0
-	bat.selection, bat.physicalRows = nil, 0
+	bat.selection = nil
 }
 
 func (bat *Batch) FreeColumns(m *mpool.MPool) {
@@ -1764,7 +1763,7 @@ func (bat *Batch) AddRowCount(rowCount int) {
 
 func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
-	bat.selection, bat.physicalRows = nil, 0
+	bat.selection = nil
 }
 
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, startIndex int) {

@@ -59,9 +59,9 @@ type Batch struct {
 	rowCount int
 
 	// selection, when non-nil, marks the physical rows that are the batch's
-	// logical rows (see selection.go); physicalRows is the vectors' row count.
-	selection    *bitmap.Bitmap
-	physicalRows int
+	// logical rows (see selection.go). Its length is the vectors' physical
+	// row count.
+	selection *bitmap.Bitmap
 
 	// mp is the pool for the batch's own memory allocations. Today it is
 	// set only when ExtraBuf was detached from an accounted off-heap buffer,

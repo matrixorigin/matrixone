@@ -138,7 +138,7 @@ func TestProjectionJSONSharesSelectedPhysicalRows(t *testing.T) {
 	selection.InitWithSize(3)
 	selection.Add(0)
 	selection.Add(2)
-	input.SetSelection(3, &selection)
+	input.SetSelection(&selection)
 	projection := Projection{ProjectList: []*plan.Expr{
 		jsonProjectionTestCall(t, proc, "json_unquote", types.T_varchar, jsonProjectionTestExtract(t, proc, 0, "$.a")),
 		jsonProjectionTestCall(t, proc, "json_unquote", types.T_varchar, jsonProjectionTestExtract(t, proc, 0, "$.b")),

@@ -117,7 +117,7 @@ func TestFilterSelectedInput(t *testing.T) {
 				wantRows = append(wantRows, flat[row])
 			}
 		}
-		source.SetSelection(physicalRows, &selection)
+		source.SetSelection(&selection)
 		tc.arg.Children = nil
 		tc.arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{source}))
 		require.NoError(t, tc.arg.Prepare(proc))

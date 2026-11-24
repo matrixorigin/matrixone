@@ -41,7 +41,7 @@ func TestBatchSelection(t *testing.T) {
 	var selection bitmap.Bitmap
 	selection.InitWithSize(6)
 	selection.AddMany([]uint64{1, 4, 5})
-	bat.SetSelection(6, &selection)
+	bat.SetSelection(&selection)
 	require.Equal(t, []int64{1, 4, 5}, bat.SelectionRows(nil))
 	require.True(t, bat.HasSelection())
 	require.Equal(t, 3, bat.RowCount())
@@ -82,7 +82,7 @@ func TestBatchSelection(t *testing.T) {
 	// Any explicit row count replaces the selection.
 	bat.ClearSelection()
 	require.Equal(t, 6, bat.RowCount())
-	bat.SetSelection(6, &selection)
+	bat.SetSelection(&selection)
 	bat.SetRowCount(6)
 	require.False(t, bat.HasSelection())
 

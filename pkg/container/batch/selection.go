@@ -34,11 +34,11 @@ import (
 // Call, the same as any other operator output.
 
 // SetSelection publishes the set bits of sel as this batch's logical rows over
-// its physical vectors. sel must have length physicalRows and must not be
-// modified while the batch is published; the producer keeps ownership.
-func (bat *Batch) SetSelection(physicalRows int, sel *bitmap.Bitmap) {
+// its physical vectors. sel's length (sel.Len()) must be the vectors' physical
+// row count, and sel must not be modified while the batch is published; the
+// producer keeps ownership.
+func (bat *Batch) SetSelection(sel *bitmap.Bitmap) {
 	bat.selection = sel
-	bat.physicalRows = physicalRows
 	bat.rowCount = sel.Count()
 }
 
@@ -47,9 +47,8 @@ func (bat *Batch) ClearSelection() {
 	if bat.selection == nil {
 		return
 	}
-	bat.rowCount = bat.physicalRows
+	bat.rowCount = int(bat.selection.Len())
 	bat.selection = nil
-	bat.physicalRows = 0
 }
 
 // HasSelection reports whether the batch's logical rows are a selection of
@@ -79,7 +78,7 @@ func (bat *Batch) SelectionRows(dst []int64) []int64 {
 // PhysicalRowCount returns the number of rows in the batch's vectors.
 func (bat *Batch) PhysicalRowCount() int {
 	if bat.selection != nil {
-		return bat.physicalRows
+		return int(bat.selection.Len())
 	}
 	return bat.rowCount
 }
@@ -94,7 +93,6 @@ func (bat *Batch) PhysicalView(dst *Batch) {
 	dst.Vecs = bat.Vecs
 	dst.ExtraBuf = bat.ExtraBuf
 	dst.selection = nil
-	dst.physicalRows = 0
 	dst.rowCount = bat.PhysicalRowCount()
 }
 
@@ -147,7 +145,7 @@ func (bat *Batch) SelectionMask(mask []bool) []bool {
 	if bat.selection == nil {
 		return nil
 	}
-	return SelectionMaskOf(bat.selection, bat.physicalRows, mask)
+	return SelectionMaskOf(bat.selection, int(bat.selection.Len()), mask)
 }
 
 // SelectionMaskOf expands sel into a per-row mask of length physicalRows.

@@ -75,7 +75,7 @@ func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, p
 	}
 	sel := request.PublishSelection
 	sel.InitWithRows(int64(physicalRows), rows)
-	output.SetSelection(physicalRows, sel)
+	output.SetSelection(sel)
 }
 
 // loadBorrowedLateColumns loads every column not read for the filter in

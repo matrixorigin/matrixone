@@ -131,7 +131,7 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	}
 	s.view = batch.Batch{}
 	input.PhysicalView(&s.view)
-	s.view.SetSelection(physicalRows, &s.rows)
+	s.view.SetSelection(&s.rows)
 	if s.output {
 		return &s.view, nil
 	}

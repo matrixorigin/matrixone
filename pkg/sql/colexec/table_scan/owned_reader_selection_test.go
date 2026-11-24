@@ -96,7 +96,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 		for _, row := range selected.Sels {
 			filter.PublishSelection.Add(uint64(row))
 		}
-		out.SetSelection(source.RowCount(), filter.PublishSelection)
+		out.SetSelection(filter.PublishSelection)
 		return false, nil
 	}
 	for col, v := range source.Vecs {
