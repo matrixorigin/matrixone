@@ -402,14 +402,14 @@ func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 	require.False(t, known, "a prefetch made before the delete does not store its size")
 }
 
-// Whole-object downloads hold at most half the configured connections per host, and at
-// least minDownloadConns: one configured connection still caches whole objects.
+// Whole-object downloads hold at most half the connections per host, which are at least
+// minMaxConnsPerHost: one configured connection still caches whole objects.
 func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 	for _, tc := range []struct {
 		conns    int
 		limit    int64
 		download bool
-	}{{1, int64(minDownloadConns), true}, {2, int64(minDownloadConns), true}, {256, 128, true}} {
+	}{{1, int64(minMaxConnsPerHost / 2), true}, {2, int64(minMaxConnsPerHost / 2), true}, {256, 128, true}} {
 		ctx := context.Background()
 		fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns}, CacheConfig{
 			DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),

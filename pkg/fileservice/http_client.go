@@ -35,10 +35,19 @@ var (
 	maxIdleConns        = 128
 	maxIdleConnsPerHost = 128
 	maxConnsPerHost     = 128
-	// minDownloadConns is the fewest object-storage connections downloads may hold.
-	minDownloadConns = 64
-	idleConnTimeout  = 10 * time.Second
+	// minMaxConnsPerHost is the fewest connections per host a configured limit gives.
+	minMaxConnsPerHost = 64
+	idleConnTimeout    = 10 * time.Second
 )
+
+// connsPerHost returns the connections per host of a configured limit n, 0 for the
+// default.
+func connsPerHost(n int) int {
+	if n > 0 {
+		return max(n, minMaxConnsPerHost)
+	}
+	return n
+}
 
 var dnsResolver = dns.NewCachingResolver(
 	nil,
@@ -213,7 +222,7 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 			MaxIdleConns:          maxIdleConns,
 			IdleConnTimeout:       idleConnTimeout,
 			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-			MaxConnsPerHost:       args.MaxConnsPerHost,
+			MaxConnsPerHost:       connsPerHost(args.MaxConnsPerHost),
 			TLSHandshakeTimeout:   connectTimeout,
 			ResponseHeaderTimeout: readWriteTimeout,
 			TLSClientConfig: &tls.Config{
