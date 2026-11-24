@@ -193,7 +193,7 @@ func NewS3FS(
 		}
 		if fs.diskCache != nil {
 			if args.MaxConnsPerHost > 0 {
-				fs.diskCache.conns.max = int64(connsPerHost(args.MaxConnsPerHost) / 2)
+				fs.diskCache.conns.max = int64(args.MaxConnsPerHost / 2)
 			}
 			workers := fs.diskCache.prefetchWorkers()
 			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(), fs.haveObject, fs.prefetchObject)
@@ -1454,7 +1454,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	// Any other range read takes its bytes from a prefetch object, which other reads of
 	// them join. A read that streams an entry to its caller opens its own reader.
-	streams := slices.ContainsFunc(vector.Entries, func(e IOEntry) bool { return !e.done && e.ReadCloserForRead != nil })
+	streams := slices.ContainsFunc(vector.Entries, func(e IOEntry) bool {
+		return !e.done && (e.ReadCloserForRead != nil || e.WriterForRead != nil)
+	})
 	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil &&
 		!vector.Policy.Any(SkipDiskCacheReads) && !streams {
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {

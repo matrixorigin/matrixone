@@ -416,7 +416,7 @@ func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 		conns    int
 		limit    int64
 		download bool
-	}{{1, int64(minMaxConnsPerHost / 2), true}, {2, int64(minMaxConnsPerHost / 2), true}, {256, 128, true}} {
+	}{{minMaxConnsPerHost, int64(minMaxConnsPerHost / 2), true}, {256, 128, true}} {
 		ctx := context.Background()
 		fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns}, CacheConfig{
 			DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),

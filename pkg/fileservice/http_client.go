@@ -35,19 +35,10 @@ var (
 	maxIdleConns        = 128
 	maxIdleConnsPerHost = 128
 	maxConnsPerHost     = 128
-	// minMaxConnsPerHost is the fewest connections per host a configured limit gives.
+	// minMaxConnsPerHost is the fewest connections per host a configured limit may set.
 	minMaxConnsPerHost = 64
 	idleConnTimeout    = 10 * time.Second
 )
-
-// connsPerHost returns the connections per host of a configured limit n, 0 for the
-// default.
-func connsPerHost(n int) int {
-	if n > 0 {
-		return max(n, minMaxConnsPerHost)
-	}
-	return n
-}
 
 var dnsResolver = dns.NewCachingResolver(
 	nil,
@@ -222,7 +213,7 @@ func newHTTPClient(args ObjectStorageArguments) *http.Client {
 			MaxIdleConns:          maxIdleConns,
 			IdleConnTimeout:       idleConnTimeout,
 			MaxIdleConnsPerHost:   maxIdleConnsPerHost,
-			MaxConnsPerHost:       connsPerHost(args.MaxConnsPerHost),
+			MaxConnsPerHost:       args.MaxConnsPerHost,
 			TLSHandshakeTimeout:   connectTimeout,
 			ResponseHeaderTimeout: readWriteTimeout,
 			TLSClientConfig: &tls.Config{

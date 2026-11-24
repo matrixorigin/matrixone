@@ -194,6 +194,11 @@ func (o *ObjectStorageArguments) validateWithRegionProbe(
 	probe func(context.Context, string) (string, error),
 ) error {
 
+	if o.MaxConnsPerHost < 0 || (o.MaxConnsPerHost > 0 && o.MaxConnsPerHost < minMaxConnsPerHost) {
+		return moerr.NewInvalidInputNoCtxf("max-conns-per-host must be 0 for the default or at least %d, got %d",
+			minMaxConnsPerHost, o.MaxConnsPerHost)
+	}
+
 	// validate endpoint
 	var endpointURL *url.URL
 	if o.Endpoint != "" {
