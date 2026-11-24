@@ -167,6 +167,74 @@ func TestS3FSReadDiskCacheAllocationFailure(t *testing.T) {
 			}
 		})
 	}
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "partial_hit_retry_owned_buffer"},
+		{name: "partial_hit_retry_caller_buffer", data: make([]byte, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.name
+			require.NoError(t, fs.Write(ctx, IOVector{
+				FilePath: path,
+				Entries:  []IOEntry{{Size: 2, Data: []byte("xy")}},
+				Policy:   SkipAllCache,
+			}))
+			require.NoError(t, fs.PrefetchFile(ctx, path))
+
+			ownedBuffers := 0
+			if tc.data == nil {
+				ownedBuffers = 1
+			}
+			firstRead := &limitedReadAllocator{successes: ownedBuffers}
+			var reader io.ReadCloser
+			vector := &IOVector{
+				FilePath: path,
+				Policy:   SkipMemoryCache | SkipDiskCacheWrites | SkipFullFilePreloads,
+				Entries: []IOEntry{
+					{Size: 1, Data: tc.data, ReadCloserForRead: &reader},
+					{Offset: 1, Size: 1},
+				},
+			}
+			t.Cleanup(vector.ReleaseReadResultOnError)
+			firstCtx := context.WithValue(ctx, ioEntryAllocatorKey{}, firstRead)
+			require.ErrorIs(t, fs.Read(firstCtx, vector), syscall.ENOMEM)
+			entry := &vector.Entries[0]
+			require.True(t, entry.done)
+			require.Equal(t, []byte("x"), entry.Data)
+			require.NotNil(t, reader)
+			require.False(t, vector.Entries[1].done)
+			require.Equal(t, ownedBuffers+1, firstRead.calls)
+
+			vector.ReleaseReadResultOnError()
+			require.False(t, entry.done)
+			require.Nil(t, entry.releaseData)
+			require.Equal(t, ownedBuffers, firstRead.releases)
+			if tc.data == nil {
+				require.Nil(t, entry.Data)
+				require.Nil(t, reader)
+			} else {
+				require.Same(t, &tc.data[0], &entry.Data[0])
+				require.NotNil(t, reader)
+			}
+
+			retry := &limitedReadAllocator{successes: ownedBuffers + 1}
+			retryCtx := context.WithValue(ctx, ioEntryAllocatorKey{}, retry)
+			require.NoError(t, fs.Read(retryCtx, vector))
+			require.Equal(t, ownedBuffers+1, retry.calls)
+			require.NotNil(t, reader)
+			got, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			require.Equal(t, []byte("x"), got)
+			require.NoError(t, reader.Close())
+			require.Equal(t, []byte("y"), vector.Entries[1].Data)
+			vector.ReleaseReadResultOnError()
+			require.Equal(t, ownedBuffers, firstRead.releases)
+			require.Equal(t, ownedBuffers+1, retry.releases)
+		})
+	}
 }
 
 func TestLocalFSReadBufferAllocationRollback(t *testing.T) {
