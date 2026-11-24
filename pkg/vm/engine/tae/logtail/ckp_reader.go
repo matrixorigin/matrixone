@@ -283,6 +283,9 @@ func (reader *CKPReader) GetTableRanges(
 func (reader *CKPReader) ReadMeta(
 	ctx context.Context,
 ) (err error) {
+	if reader.location.IsEmpty() {
+		return moerr.NewInvalidInput(ctx, "checkpoint meta location is empty")
+	}
 	if reader.version <= CheckpointVersion12 {
 		if reader.withTableID {
 			reader.dataLocations, reader.tombstoneLocations, err = readMetaForV12WithTableID(
