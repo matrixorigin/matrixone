@@ -960,7 +960,8 @@ func TestIndexObjectMissingFileRepairWaitsForNoPublication(t *testing.T) {
 	storage.reads.Store(0)
 	done := make(chan []byte, 1)
 	go func() {
-		done <- readIndexObjectRange(t, fs, IndexFileObject|SkipDiskCacheWrites, 2000, 10)
+		// The read fills no cache, so the dropped entry stays dropped.
+		done <- readIndexObjectRange(t, fs, IndexFileObject|SkipCacheWrites, 2000, 10)
 	}()
 	select {
 	case got := <-done:

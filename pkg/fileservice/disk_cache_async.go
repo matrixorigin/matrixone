@@ -509,7 +509,11 @@ func (d *DiskCache) runAsyncUpdates() {
 				if job.finalize != nil {
 					job.finalize.attempted = true
 					job.finalize.err = d.finalizeQueuedFile(job.diskPath, job.finalize)
-					d.evictForDiskFull(d.async.ctx, job.finalize.err)
+					full := d
+					if t := job.finalize.target; t != nil {
+						full = t.cache()
+					}
+					full.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
 					written, _ := d.publishUnlessDeleted(job.filePath, job.entry, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
 						return d.writeEntry(d.async.ctx, job.diskPath, job.entry, claim)

@@ -42,7 +42,12 @@ type fillTarget interface {
 	createTemp() (*os.File, error)
 	// publish makes the file written at tempPath, of size bytes, the target's file.
 	publish(ctx context.Context, tempPath string, size int64) error
+	// cache returns the cache whose files the target holds, which frees room when a write
+	// of its files finds the disk full.
+	cache() *DiskCache
 }
+
+func (t diskFillTarget) cache() *DiskCache { return t.d }
 
 // diskFillTarget publishes into the disk cache, at diskPath.
 type diskFillTarget struct {

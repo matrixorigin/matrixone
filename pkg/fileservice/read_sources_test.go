@@ -30,18 +30,26 @@ func wantSources(s *S3FS, p Policy, download, streamsLarge bool) readSources {
 	// its own reader.
 	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !download && !streamsLarge
 	// BC13: index-file cache reads are gated by SkipCacheReads, its fills by
-	// SkipCacheWrites, and a read that fills it writes no prefetch range to the disk cache.
-	indexFill := p.Any(IndexFileObject) && p&SkipCacheWrites != SkipCacheWrites && s.cachesIndexObjects()
+	// SkipCacheWrites. The bytes of an index object are cached in the index-file cache
+	// only, never in the disk cache.
+	index := p.Any(IndexFileObject) && s.cachesIndexObjects()
+	tier := diskTier
+	switch {
+	case index && p&SkipCacheWrites != SkipCacheWrites:
+		tier = indexTier
+	case index, p.Any(SkipDiskCacheWrites):
+		tier = noTier
+	}
 	return readSources{
-		indexRead: p.Any(IndexFileObject) && p&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects(),
-		indexFill: indexFill,
+		indexRead: index && p&SkipCacheReads != SkipCacheReads,
+		tier:      tier,
 		// BC16: an exact read joins queued ranges as a column read does.
 		queue:       disk && s.prefetcher != nil && !(!p.Any(ColumnPrefetch, ExactRead) && p.Any(SkipFullFilePreloads)),
 		queueRanges: p.Any(ColumnPrefetch, ExactRead),
 		flights:     disk && p.Any(ColumnPrefetch, ExactRead),
-		window:      disk && !indexFill,
+		window:      disk && tier == diskTier,
 		// BC10: a read that caches its bytes joins only objects that cache theirs.
-		caches: p.CacheIOEntry() && !p.Any(SkipDiskCacheWrites) && !indexFill,
+		caches: p.CacheIOEntry() && tier == diskTier,
 		fetch:  disk,
 	}
 }

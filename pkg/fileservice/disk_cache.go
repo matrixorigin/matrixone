@@ -1043,7 +1043,7 @@ func (d *DiskCache) writeFileTo(
 	}
 	callerCtx := ctx
 	defer func() {
-		d.evictForDiskFull(callerCtx, err)
+		target.cache().evictForDiskFull(callerCtx, err)
 	}()
 	// A whole-object download is a FilePrefetchObject, not registered after a delete of
 	// the object since the mark of ctx.

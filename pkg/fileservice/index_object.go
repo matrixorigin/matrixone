@@ -94,6 +94,45 @@ func (s *S3FS) indexObjectFillable(policy Policy) bool {
 	return s.indexObject(policy) && policy&SkipCacheWrites != SkipCacheWrites
 }
 
+// cacheTier is the cache on disk the bytes a read takes from object storage are cached in.
+type cacheTier int
+
+const (
+	noTier cacheTier = iota
+	diskTier
+	indexTier
+)
+
+// tierOf returns the cache on disk of a read under policy: the index-file cache for an
+// index object, whatever the skips of the disk cache, otherwise the disk cache; none when
+// the read skips its writes.
+func (s *S3FS) tierOf(policy Policy) cacheTier {
+	switch {
+	case s.indexObject(policy):
+		if s.indexObjectFillable(policy) {
+			return indexTier
+		}
+	case s.diskCache != nil && !policy.Any(SkipDiskCacheWrites):
+		return diskTier
+	}
+	return noTier
+}
+
+// readRange returns the range a read of vector reads from object storage, and whether it
+// reads the whole object to fill its tier: an index object whenever its policy caches
+// whole files, any other object when it also uses the disk cache.
+func (s *S3FS) readRange(vector *IOVector) (min, max *int64, readFull bool) {
+	p := vector.Policy
+	if !s.indexObject(p) {
+		return vector.readRange()
+	}
+	if p.CacheFullFile() && s.tierOf(p) == indexTier {
+		return ptrTo[int64](0), nil, true
+	}
+	min, max = vector.readMinimalRange()
+	return min, max, false
+}
+
 // fillTarget returns where a whole-object fill of the object at filePath for a read
 // under policy publishes: the index-file cache for an IndexFileObject read of an object it
 // keeps, otherwise the disk cache (nil).
@@ -131,6 +170,8 @@ func (t indexFillTarget) held(context.Context) (bool, error) {
 func (t indexFillTarget) reserve(context.Context, int64) {}
 
 func (t indexFillTarget) noteWritten(int64) {}
+
+func (t indexFillTarget) cache() *DiskCache { return t.s.indexFileCache.disk }
 
 // createTemp creates the file in the index-file cache's directory, so publishing it is a
 // rename on one file system.

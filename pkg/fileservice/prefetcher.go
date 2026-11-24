@@ -89,8 +89,12 @@ func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	return r
 }
 
-// covers reports whether the download of r downloads every byte o asks for.
+// covers reports whether the download of r downloads every byte o asks for into the cache
+// o asks for: a download into the disk cache covers no download into the index-file cache.
 func (r ObjectPrefetch) covers(o ObjectPrefetch) bool {
+	if o.indexObject && !r.indexObject {
+		return false
+	}
 	if len(r.Ranges) == 0 {
 		return true
 	}
