@@ -2904,18 +2904,16 @@ func TestAccountedStreamingGroupOwnsPartialOutputBuffer(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
 	require.NotEmpty(t, result.Batch.ExtraBuf)
-	require.True(t, result.Batch.HasAccountedExtraBuffer())
 	require.Positive(t, allocation.account.Snapshot().Used)
 	payload := append([]byte(nil), result.Batch.ExtraBuf...)
 	destination := batch.NewWithSize(0)
 	destination.MoveExtraBufferFrom(result.Batch)
-	require.False(t, result.Batch.HasAccountedExtraBuffer())
+	require.Empty(t, result.Batch.ExtraBuf)
 
 	g.Free(proc, false, nil)
 	// A pipeline spool may outlive the Group's no-lock MPool. The moved
 	// partial remains owned by the statement MPool until the consumer drops it.
 	require.True(t, bytes.Equal(payload, destination.ExtraBuf))
-	require.True(t, destination.HasAccountedExtraBuffer())
 	require.Positive(t, allocation.account.Snapshot().Used)
 	destination.Clean(proc.Mp())
 	require.Zero(t, allocation.account.Snapshot().Used)

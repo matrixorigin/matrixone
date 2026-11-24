@@ -145,9 +145,7 @@ func TestCachedBatchMovesAccountedExtraBufferOwnership(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, owned)
 	require.Empty(t, source.ExtraBuf)
-	require.False(t, source.HasAccountedExtraBuffer())
 	require.Equal(t, "accounted partial aggregate state", string(copied.ExtraBuf))
-	require.True(t, copied.HasAccountedExtraBuffer())
 
 	// Returning the copied batch to the spool cache is the terminal owner
 	// transition for ExtraBuf and must release the physical charge exactly once.

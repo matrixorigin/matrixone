@@ -1301,10 +1301,6 @@ func (bat *Batch) SetAccountedExtraBuffer(buffer *mpool.AccountedBuffer) error {
 	return nil
 }
 
-func (bat *Batch) HasAccountedExtraBuffer() bool {
-	return bat != nil && bat.mp != nil
-}
-
 func (bat *Batch) MoveExtraBufferFrom(source *Batch) {
 	if bat == nil || source == nil || bat == source {
 		return
