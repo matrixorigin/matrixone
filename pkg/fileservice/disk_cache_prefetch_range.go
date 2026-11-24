@@ -711,7 +711,7 @@ func (f *memoryPrefetchObject) run() {
 	if err == nil && len(content) == 0 {
 		err = errSourceShort
 	}
-	f.fail(sourceFailure(f.ctx, &diskCacheSourceError{err: err}))
+	f.fail(err)
 	if err == nil && !f.skipCache && reserve(int64(len(content))) {
 		err = d.Update(updateCtx, &IOVector{
 			FilePath: f.filePath,
@@ -1432,8 +1432,12 @@ func (f *memoryPrefetchObject) finish() {
 	f.fail(nil)
 }
 
-// fail finishes the flight, which failed to read its range with err when set.
+// fail finishes the flight, which failed to read its range with err when set and the
+// flight was not stopped: err then fails the reads waiting for its bytes.
 func (f *memoryPrefetchObject) fail(err error) {
+	if err != nil && (sourceStopped(err) || f.ctx != nil && f.ctx.Err() != nil) {
+		err = nil
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.finished {

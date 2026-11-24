@@ -770,13 +770,21 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 	if req.indexObject {
 		ctx = WithFileServicePolicy(ctx, GetFileServicePolicy(ctx)|IndexFileObject)
 	}
-	err = s.PrefetchFile(ctx, req.FilePath)
-	if err != nil {
+	s.countPrefetch(req, s.PrefetchFile(ctx, req.FilePath))
+}
+
+// countPrefetch counts the outcome of the prefetch of req that ended with err: a prefetch
+// of an object deleted since it was asked for ended.
+func (s *S3FS) countPrefetch(req ObjectPrefetch, err error) {
+	switch {
+	case err == nil:
+		metric.FSPrefetchDownloadedCounter.Inc()
+	case s.diskCache.deletes.since(s.diskCache.pathForFile(req.FilePath), req.deletes):
+		metric.FSPrefetchEndedCounter.Inc()
+	default:
 		metric.FSPrefetchFailedCounter.Inc()
 		logutil.Debug("fileservice: prefetch object", zap.String("path", req.FilePath), zap.Error(err))
-		return
 	}
-	metric.FSPrefetchDownloadedCounter.Inc()
 }
 
 // prefetchRanges reads into the disk cache the ranges of req not cached, those that are
@@ -790,12 +798,7 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 		}
 		// Reads of the ranges join their flights instead of reading their bytes again.
 		if ok, err := s.diskCache.readRanges(ctx, path.File, req.deletes, SkipMemoryCacheWrites|SkipFullFilePreloads|ColumnPrefetch, ranges, open); ok {
-			if err != nil {
-				metric.FSPrefetchFailedCounter.Inc()
-				logutil.Debug("fileservice: prefetch ranges", zap.String("path", req.FilePath), zap.Error(err))
-				return
-			}
-			metric.FSPrefetchDownloadedCounter.Inc()
+			s.countPrefetch(req, err)
 			return
 		}
 	}
@@ -808,12 +811,11 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 		err := s.Read(ctx, vector)
 		vector.Release()
 		if err != nil {
-			metric.FSPrefetchFailedCounter.Inc()
-			logutil.Debug("fileservice: prefetch ranges", zap.String("path", req.FilePath), zap.Error(err))
+			s.countPrefetch(req, err)
 			return
 		}
 	}
-	metric.FSPrefetchDownloadedCounter.Inc()
+	s.countPrefetch(req, nil)
 }
 
 // rangesToDownload returns the ranges of req not covered by cached ranges, in order, with

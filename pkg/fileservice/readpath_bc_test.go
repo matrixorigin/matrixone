@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -248,4 +250,33 @@ func TestDownloadWaitEndsWithReadContext(t *testing.T) {
 	}, 5*time.Second, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-result, context.Canceled)
+}
+
+// BC19: a prefetch whose object is deleted while it downloads counts as ended, not failed.
+func TestPrefetchOfDeletedObjectEnds(t *testing.T) {
+	for _, whole := range []bool{false, true} {
+		t.Run(map[bool]string{true: "whole", false: "ranges"}[whole], func(t *testing.T) {
+			fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
+			<-fs.diskCache.load.done
+			storage := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
+			fs.storage = storage
+			t.Cleanup(func() { close(storage.gate) })
+			failed := promtestutil.ToFloat64(metric.FSPrefetchFailedCounter)
+			ended := promtestutil.ToFloat64(metric.FSPrefetchEndedCounter)
+			req := ObjectPrefetch{FilePath: "object", Size: 300 << 10}
+			if !whole {
+				req.Ranges = []PrefetchRange{{Offset: 4096, Size: 4096}}
+			}
+			require.NoError(t, fs.PrefetchObject(context.Background(), req))
+			key := fs.pathToKey("object")
+			require.Eventually(t, func() bool {
+				cur, _, _ := storage.counts(key)
+				return cur == 1
+			}, 5*time.Second, time.Millisecond)
+			require.NoError(t, fs.Delete(context.Background(), "object"))
+			waitPrefetcherIdle(t, fs)
+			require.Equal(t, failed, promtestutil.ToFloat64(metric.FSPrefetchFailedCounter))
+			require.Equal(t, ended+1, promtestutil.ToFloat64(metric.FSPrefetchEndedCounter))
+		})
+	}
 }
