@@ -66,6 +66,7 @@ type cluster struct {
 	sync.RWMutex
 
 	id       uint64
+	socketID string
 	state    state
 	files    []string
 	services []*operator
@@ -500,6 +501,21 @@ func (c *cluster) initConfigs() error {
 	return c.initCNConfigs(0)
 }
 
+func (c *cluster) unixSocketPath(index int) string {
+	name := fmt.Sprintf("mysql%d.sock", index)
+	if c.options.testing {
+		// Test data paths inherit TMPDIR and can exceed the Unix socket path
+		// limit. A random per-cluster ID also avoids reusing crash-left sockets.
+		if c.socketID == "" {
+			c.socketID = uuid.NewString()
+		}
+		return filepath.Join("/tmp", fmt.Sprintf("mo-test-%s-%s", c.socketID, name))
+	}
+	// Preserve literal path concatenation: cleaning a symlink/.. path can
+	// change the directory where the socket is created.
+	return c.options.dataPath + "/" + name
+}
+
 func (c *cluster) initCNConfigs(from int) error {
 	for i := from; i < c.options.cn; i++ {
 		file := filepath.Join(c.options.dataPath, fmt.Sprintf("cn-%d.toml", i))
@@ -510,6 +526,7 @@ func (c *cluster) initCNConfigs(from int) error {
 				I:            i,
 				ID:           c.id,
 				DataDir:      c.options.dataPath,
+				UnixSocket:   c.unixSocketPath(i),
 				ServicePort:  c.ports.servicePort,
 				NextBasePort: c.nextBasePort,
 			},

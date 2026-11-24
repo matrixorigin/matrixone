@@ -23,6 +23,7 @@ type templateArgs struct {
 	I            int
 	ID           uint64
 	DataDir      string
+	UnixSocket   string
 	ServicePort  int
 	NextBasePort func() (int, error)
 }
@@ -148,7 +149,7 @@ type = "distributed-tae"
 
 [cn.frontend]
 port = {{call .NextBasePort}}
-unix-socket = "{{.DataDir}}/mysql{{.I}}.sock"
+unix-socket = "{{.UnixSocket}}"
 `))
 )
 
