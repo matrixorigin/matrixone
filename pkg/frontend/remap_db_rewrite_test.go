@@ -156,6 +156,42 @@ func TestApplyRemapDbKeepsRewriteKeysAndBodiesAligned(t *testing.T) {
 	})
 }
 
+func TestApplyRemapDbKeepsShowRewritePolicyAligned(t *testing.T) {
+	const hint = `/*+ {"rewrites":{"src_db.t":"select id from src_db.t"},"remapdb":{"src_db":"dst_db"}} */ `
+	for _, sql := range []string{
+		"show columns from t from src_db",
+		"prepare p from show create table src_db.t",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmts := parseWithRewriteHints(t, hint+sql)
+			stmt := stmts[0]
+			defer stmt.Free()
+			require.NoError(t, applyRemapDb(context.Background(), stmts, map[string]string{"src_db": "dst_db"}, 1))
+
+			if prepare, ok := stmt.(*tree.PrepareStmt); ok {
+				stmt = prepare.Stmt
+			}
+			var option *tree.RewriteOption
+			switch show := stmt.(type) {
+			case *tree.ShowColumns:
+				require.Equal(t, "dst_db", show.DBName)
+				option = show.RewriteOption
+			case *tree.ShowCreateTable:
+				require.Equal(t, "dst_db", show.Name.Parts[1])
+				option = show.RewriteOption
+			default:
+				t.Fatalf("unexpected statement type: %T", stmt)
+			}
+			require.NotNil(t, option)
+			require.NotContains(t, option.Rewrites, "src_db.t")
+			chain := option.Rewrites["dst_db.t"]
+			require.Len(t, chain, 1)
+			require.Equal(t, "dst_db", chain[0].DbName)
+			require.Equal(t, "select id from dst_db.t", tree.String(chain[0].Stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestApplyRemapDbRewriteKeysEdgePaths(t *testing.T) {
 	ctx := context.Background()
 
