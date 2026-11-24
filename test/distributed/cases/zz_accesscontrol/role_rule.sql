@@ -320,6 +320,26 @@ set session sql_mode = '';
 select x, count(*) from db1.t_rule_text group by x;
 -- @session
 
+-- Restore SQL mode even when the active role rule cannot parse in that mode.
+alter role test_rule_role_inherit_b drop rule on table db1.t_rule_text;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code = 'O\\'Brien'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text;
+set session sql_mode = 'NO_BACKSLASH_ESCAPES';
+select id from db1.t_rule_text;
+commit;
+rollback;
+set session sql_mode = '';
+select id from db1.t_rule_text;
+-- @session
+
+-- Quoted names referring to the same charset and collation keep both roles' rows.
+alter role test_rule_role_inherit_a add rule "select id, cast(code as char character set 'UTF8MB4') collate 'UTF8MB4_BIN' as code from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, cast(code as char character set 'utf8mb4') collate 'utf8mb4_bin' as code from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, code from db1.t_rule_text order by id;
+-- @session
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;

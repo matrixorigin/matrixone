@@ -506,10 +506,17 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		}
 		return sql, err
 	}
-	roleRules, ruleErr := policy.roleVariants.forMode(ctx, policy.roleRules, sqlMode)
+	resolveRoleRules := sync.OnceValues(func() (map[string]string, error) {
+		return policy.roleVariants.forMode(ctx, policy.roleRules, sqlMode)
+	})
 	rewrite := func(fragment string) (string, error) {
-		if ruleErr != nil && !isRoleRuleRecoveryStatement(ctx, fragment, sqlMode) {
-			return fragment, ruleErr
+		var roleRules map[string]string
+		if len(policy.roleRules) > 0 && !isRoleRuleRecoveryStatement(ctx, fragment, sqlMode) {
+			var err error
+			roleRules, err = resolveRoleRules()
+			if err != nil {
+				return fragment, err
+			}
 		}
 		return rewriteSingleSQL(ctx, fragment, roleRules, policy.sessionRules,
 			policy.sessionRemapDb, policy.sessionEnabled, policy.lowerCaseTableNames, sqlMode)
@@ -541,6 +548,16 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 // A broken rule must not prevent ending a transaction, dropping secondary roles,
 // or restoring a usable mode. None of these statements reads protected rows.
 func isRoleRuleRecoveryStatement(ctx context.Context, sql, sqlMode string) bool {
+	// Only parse statements whose first token can start a recovery statement.
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
+	token, _ := scanner.Scan()
+	mysql.PutScanner(scanner)
+	switch token {
+	case mysql.COMMIT, mysql.ROLLBACK, mysql.SET:
+	default:
+		return false
+	}
+
 	stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, sqlMode)
 	if err != nil {
 		return false

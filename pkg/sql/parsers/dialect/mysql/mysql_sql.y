@@ -12298,11 +12298,11 @@ row_format_options:
     }
 
 charset_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 collate_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 table_name_list:

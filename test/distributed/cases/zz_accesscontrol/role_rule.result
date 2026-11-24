@@ -328,6 +328,26 @@ set session sql_mode = '';
 select x, count(*) from db1.t_rule_text group by x;
 ➤ x[12,4,0]  ¦  count(*)[-5,64,0]  𝄀
 code  ¦  4
+alter role test_rule_role_inherit_b drop rule on table db1.t_rule_text;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code = 'O\\'Brien'" on table db1.t_rule_text;
+select id from db1.t_rule_text;
+➤ id[4,32,0]  𝄀
+4
+set session sql_mode = 'NO_BACKSLASH_ESCAPES';
+select id from db1.t_rule_text;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 52 near "Brien'";
+commit;
+rollback;
+set session sql_mode = '';
+select id from db1.t_rule_text;
+➤ id[4,32,0]  𝄀
+4
+alter role test_rule_role_inherit_a add rule "select id, cast(code as char character set 'UTF8MB4') collate 'UTF8MB4_BIN' as code from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, cast(code as char character set 'utf8mb4') collate 'utf8mb4_bin' as code from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, code from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  code[12,20,0]  𝄀
+1  ¦  0001  𝄀
+3  ¦  销售订单
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
 alter role test_rule_role_validate add rule "delete from db1.t1 where a = 1" on table db1.t1;

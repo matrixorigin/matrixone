@@ -31762,6 +31762,18 @@ yydefault:
 			yyLOCAL = tree.ROW_FORMAT_COMPACT
 		}
 		yyVAL.union = yyLOCAL
+	case 1796:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line mysql_sql.y:12301
+		{
+			yyVAL.str = yylex.(*Lexer).rewriteMergeName(yyDollar[1].str)
+		}
+	case 1798:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line mysql_sql.y:12305
+		{
+			yyVAL.str = yylex.(*Lexer).rewriteMergeName(yyDollar[1].str)
+		}
 	case 1800:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.TableNames

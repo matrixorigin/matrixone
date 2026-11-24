@@ -288,6 +288,14 @@ func (w WhereSource) Split(sql string, keepWhere bool) (prefix, predicate, suffi
 		balanceExecutableComment(sql[w.end:], w.endInComment, false), true
 }
 
+// rewriteMergeName folds names consumed by case-insensitive SQL catalogs.
+func (l *Lexer) rewriteMergeName(name string) string {
+	if l.whereSources != nil {
+		return strings.ToLower(name)
+	}
+	return name
+}
+
 // ParseOneForRewriteMerge parses comparison trees and records WHERE source ranges.
 // Identifier tokens are folded for shape comparison; literals retain their type and bytes.
 func ParseOneForRewriteMerge(ctx context.Context, sql string, lower int64, mode SQLModeFlags) (tree.Statement, map[*tree.Where]WhereSource, error) {

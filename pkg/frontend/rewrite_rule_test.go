@@ -29,6 +29,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2243,18 +2244,66 @@ func TestRoleRuleModesAndBinaryHint(t *testing.T) {
 
 func TestRoleRuleModeErrorRecovery(t *testing.T) {
 	const key = "db.t"
+	const mode = "NO_BACKSLASH_ESCAPES"
 	left := `select * from db.t where name = 'O\'Brien'`
 	right := "select * from db.t where id = 2"
-	policy := &rewritePolicySnapshot{enabled: true, roleRules: map[string]string{key: left},
-		roleVariants: &roleRuleVariants{byName: map[string][]string{key: {left, right}}}}
-	for _, sql := range []string{"set session sql_mode = default", "set sql_mode = ''", "rollback", "commit", "set secondary role none"} {
-		got, err := policy.rewrite(t.Context(), sql, "NO_BACKSLASH_ESCAPES")
-		require.NoError(t, err, sql)
-		require.Equal(t, sql, got)
+	parseWithHints := func(t *testing.T, policy *rewritePolicySnapshot, sql string) error {
+		t.Helper()
+		rewritten, err := policy.rewrite(t.Context(), sql, mode)
+		if err != nil {
+			return err
+		}
+		stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, rewritten, 1, mode)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return parsers.AddRewriteHintsWithSQLMode(t.Context(), []tree.Statement{stmt}, rewritten, mode)
 	}
-	for _, sql := range []string{"select * from db.t", "set global sql_mode = ''", "set sql_mode = (select name from db.t)"} {
-		_, err := policy.rewrite(t.Context(), sql, "NO_BACKSLASH_ESCAPES")
-		require.ErrorContains(t, err, "failed to parse rewrite rule", sql)
+	for _, tc := range []struct {
+		name    string
+		sources []string
+	}{
+		{"single", nil},
+		{"duplicate", []string{left, left}},
+		{"different", []string{left, right}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := &rewritePolicySnapshot{enabled: true, roleRules: map[string]string{key: left}}
+			if len(tc.sources) > 0 {
+				policy.roleVariants = &roleRuleVariants{byName: map[string][]string{key: tc.sources}}
+			}
+			for _, sql := range []string{"set session sql_mode = default", "set sql_mode = ''", "rollback", "commit", "set secondary role none", "/* comment */ commit"} {
+				assert.NoError(t, parseWithHints(t, policy, sql), sql)
+			}
+			for _, sql := range []string{"select * from db.t", "set global sql_mode = ''", "set sql_mode = (select name from db.t)", "set sql_mode = '', @x = (select name from db.t)"} {
+				assert.Error(t, parseWithHints(t, policy, sql), sql)
+			}
+		})
+	}
+}
+
+func TestMergeRewriteRulesQuotedCharsetAndCollation(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		mergeable   bool
+	}{
+		{"c collate 'UTF8MB4_BIN'", "c collate 'utf8mb4_bin'", true},
+		{"c collate 'UTF8MB4_BIN'", "c collate utf8mb4_bin", true},
+		{"cast(c as char character set 'UTF8MB4')", "cast(c as char character set 'utf8mb4')", true},
+		{"c collate 'utf8mb4_bin'", "c collate 'utf8mb4_general_ci'", false},
+		{"cast(c as char character set 'utf8mb4')", "cast(c as char character set 'latin1')", false},
+		{"'East' collate 'UTF8MB4_BIN'", "'east' collate 'utf8mb4_bin'", false},
+	} {
+		t.Run(tc.left+" / "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " as x from db.t where id = 1"
+			right := "select " + tc.right + " as x from db.t where id = 2"
+			merged, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if tc.mergeable {
+				require.Equal(t, "select "+tc.left+" as x from db.t where (id = 1) or (id = 2)", merged)
+			} else {
+				require.Equal(t, right, merged)
+			}
+		})
 	}
 }
 
