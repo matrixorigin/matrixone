@@ -6883,7 +6883,7 @@ func installTestTypedPrepareParams(t *testing.T, proc *process.Process, typs ...
 	for i, typ := range typs {
 		bindings[i] = plan.PreparedSourceBinding{Position: int32(i), Type: typ}
 	}
-	require.NoError(t, installTypedPrepareParams(proc, bindings))
+	require.NoError(t, installTypedPrepareParams(proc, bindings, nil))
 	for i := range typs {
 		require.NotNil(t, proc.GetTypedPrepareParam(i), "parameter %d must carry a typed value", i)
 	}

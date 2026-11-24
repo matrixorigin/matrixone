@@ -1581,9 +1581,6 @@ func validateVectorBinary(
 				}
 				payloadLen = size
 			}
-			if err := validateJSONPayload(typ, values[i].GetByteSlice(area)); err != nil {
-				return err
-			}
 			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
 				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
 			}
@@ -5534,9 +5531,6 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 		}
 		value.SetOffsetLen(uint32(offset), uint32(size))
 	}
-	if err = validateJSONPayload(vec.typ, value.GetByteSlice(vec.area)); err != nil {
-		return err
-	}
 	if err = types.ValidateCollationValue(vec.typ, value.GetByteSlice(vec.area)); err != nil {
 		return err
 	}
@@ -6377,17 +6371,38 @@ func (v *Vector) window(start, end int, logicalRows bool) (*Vector, error) {
 	return v.readOnlyWindow(start, end), nil
 }
 
+// WindowInto is Window into a descriptor the caller already holds: w becomes a
+// read-only reference to [start, end) of v's memory without allocating a new
+// Vector. w must be read-only (a reference or a zero Vector); whatever it
+// referenced before is dropped.
+func (v *Vector) WindowInto(w *Vector, start, end int) error {
+	if !w.IsReadOnly() {
+		return moerr.NewInternalErrorNoCtx("vector window target owns memory")
+	}
+	if !v.validWindowRange(start, end, false) {
+		return moerr.NewInvalidInputNoCtx("invalid vector window")
+	}
+	v.readOnlyWindowInto(w, start, end)
+	return nil
+}
+
 // readOnlyWindow is a read-only reference to [start, end) of v's memory. Row
 // metadata is copied.
 func (v *Vector) readOnlyWindow(start, end int) *Vector {
-	w := &Vector{typ: v.typ, class: v.class, length: end - start, sorted: v.sorted}
+	w := &Vector{}
+	v.readOnlyWindowInto(w, start, end)
+	return w
+}
+
+func (v *Vector) readOnlyWindowInto(w *Vector, start, end int) {
+	*w = Vector{typ: v.typ, class: v.class, length: end - start, sorted: v.sorted}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	if v.IsConst() {
 		if !v.IsConstNull() {
 			w.data = v.data
 		}
 		w.area = v.area
-		return w
+		return
 	}
 	if start != end {
 		w.data = v.data[start*v.typ.TypeSize() : end*v.typ.TypeSize()]
@@ -6395,7 +6410,6 @@ func (v *Vector) readOnlyWindow(start, end int) *Vector {
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
-	return w
 }
 
 func (v *Vector) validWindowRange(start, end int, logicalRows bool) bool {
@@ -7913,14 +7927,9 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 	if err := vec.checkMP(m); err != nil {
 		return err
 	}
-	if err := validateJSONPayload(vec.typ, *bs); err != nil {
-		return err
-	}
 	return buildVarlenaNoInline(vec, v1, bs, m)
 }
 
-// buildVarlenaNoInline copies bytes already admitted by a raw boundary or
-// borrowed from an immutable source vector of the same type.
 func buildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.MPool) error {
 	vlen := len(*bs)
 	area1 := vec.GetArea()
@@ -7949,9 +7958,6 @@ func buildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 
 func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
 	if err := vec.checkMP(m); err != nil {
-		return err
-	}
-	if err := validateJSONValue(vec.typ, bj); err != nil {
 		return err
 	}
 	return buildVarlenaNoInlineFromByteJson(vec, v1, bj, m)
@@ -8011,9 +8017,6 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 	if err := types.ValidateCollationValue(vec.typ, *bs); err != nil {
 		return err
 	}
-	if err := validateJSONPayload(vec.typ, *bs); err != nil {
-		return err
-	}
 	vlen := len(*bs)
 	if vlen <= types.VarlenaInlineSize {
 		// first clear varlena to 0
@@ -8030,9 +8033,6 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 
 func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
 	if err := vec.checkMP(m); err != nil {
-		return err
-	}
-	if err := validateJSONValue(vec.typ, bj); err != nil {
 		return err
 	}
 	stored, err := bj.StorageCompatible()
@@ -8055,8 +8055,8 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 	return buildVarlenaNoInlineFromByteJson(vec, v, bj, m)
 }
 
-// Validate the bytes emitted by the encoder before publishing the row. An
-// optional source validator cannot certify an arbitrary encoder's output.
+// BuildVarlenaFromByteJsonEncoded encodes enc directly into the vector. An
+// encoder whose source can be invalid validates it first.
 func BuildVarlenaFromByteJsonEncoded(
 	vec *Vector, v *types.Varlena, enc bytejson.ByteJsonDataEncoder, m *mpool.MPool,
 ) error {
@@ -8088,10 +8088,6 @@ func BuildVarlenaFromByteJsonEncoded(
 			return moerr.NewInternalErrorNoCtxf(
 				"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
 			)
-		}
-		if err := validateJSONPayload(vec.typ, v.GetByteSlice(nil)); err != nil {
-			*v = oldValue
-			return err
 		}
 		return nil
 	}
@@ -8126,10 +8122,6 @@ func BuildVarlenaFromByteJsonEncoded(
 		return moerr.NewInternalErrorNoCtxf(
 			"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
 		)
-	}
-	if err := validateJSONPayload(vec.typ, vec.area[oldAreaLen:int(newAreaLen)]); err != nil {
-		vec.area = vec.area[:oldAreaLen]
-		return err
 	}
 	v.SetOffsetLen(uint32(oldAreaLen), uint32(storageSize))
 	return nil

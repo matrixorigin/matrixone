@@ -202,7 +202,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			OriginString: "",
 		}
 	} else {
-		defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), scopeCols)
+		defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetContext()), specNewColumn, colType, ctx.GetProcess(), scopeCols)
 		if err != nil {
 			return nil, err
 		}

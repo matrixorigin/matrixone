@@ -16,7 +16,6 @@ package vector
 
 import (
 	"bytes"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -82,30 +81,10 @@ func (v *Vector) UnmarshalBinaryV1(data []byte) error {
 	if v.hasBackingStorage() {
 		return moerr.NewInternalErrorNoCtx("cannot replace vector storage without Free")
 	}
-	// JSON needs complete admission before any decoded descriptor can become
-	// visible; other types keep the legacy decoder contract.
-	validate := false
-	if len(data) >= 1+types.TSize {
-		typ, err := types.DecodeTypeChecked(data[1 : 1+types.TSize])
-		if err != nil {
-			return err
-		}
-		validate = typ.Oid == types.T_json
-	}
-	if validate {
-		if err := validateJSONLegacyWire(data); err != nil {
-			return err
-		}
-	}
 	// decoded aliases data and never escapes this call.
 	var decoded Vector
 	if err := decoded.unmarshalBinaryV1(data); err != nil {
 		return err
-	}
-	if validate {
-		if err := validateVectorBinary(byte(decoded.class), decoded.typ, uint32(decoded.length), decoded.data, decoded.area, &decoded.nsp, true); err != nil {
-			return err
-		}
 	}
 	if v.mp == nil {
 		// Read-only: reference data without copying.
@@ -196,45 +175,5 @@ func (v *Vector) unmarshalBinaryV1(data []byte) error {
 
 	v.sorted = types.DecodeBool(data[:1])
 
-	return nil
-}
-
-// Validate framing before the legacy alias decoder indexes it. The V1 bitmap
-// has a 4-byte reserved word followed by an 8-byte bit length and byte length.
-func validateJSONLegacyWire(data []byte) error {
-	cursor := vectorBinaryCursor{data: data}
-	if _, err := cursor.read(1 + types.TSize + 4); err != nil {
-		return err
-	}
-	for field := 0; field < 3; field++ {
-		size, err := cursor.readUint32()
-		if err != nil {
-			return err
-		}
-		if uint64(size) > uint64(math.MaxInt) {
-			return moerr.NewInvalidInputNoCtx("invalid legacy JSON vector size")
-		}
-		value, err := cursor.read(int(size))
-		if err != nil {
-			return err
-		}
-		if field == 2 && len(value) > 0 {
-			if len(value) < 20 {
-				return moerr.NewInvalidInputNoCtx("invalid legacy JSON null bitmap")
-			}
-			bits := types.DecodeUint64(value[4:12])
-			size := types.DecodeUint64(value[12:20])
-			if bits > math.MaxInt64 || size != uint64(len(value)-20) || size%8 != 0 || size != ((bits+63)/64)*8 {
-				return moerr.NewInvalidInputNoCtx("invalid legacy JSON null bitmap")
-			}
-		}
-	}
-	flag, err := cursor.read(1)
-	if err != nil {
-		return err
-	}
-	if flag[0] > 1 || cursor.offset != len(data) {
-		return moerr.NewInvalidInputNoCtx("invalid legacy JSON vector framing")
-	}
 	return nil
 }

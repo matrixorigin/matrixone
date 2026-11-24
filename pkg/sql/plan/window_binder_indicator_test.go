@@ -141,6 +141,8 @@ func TestIndicatorBinderSurface(t *testing.T) {
 	require.ErrorContains(t, err, periodError)
 	err = buildIndicatorPlan(t, "select ema(a, null) over (order by a) from select_test.bind_select")
 	require.ErrorContains(t, err, periodError)
+	err = buildIndicatorPlan(t, "select ema(a, json_length(json_extract('bad', '$'))) over (order by a) from select_test.bind_select")
+	require.ErrorContains(t, err, periodError)
 
 	// section 4's foldable-integer domain: deterministic constant period
 	// expressions are folded once at bind time and validated by their

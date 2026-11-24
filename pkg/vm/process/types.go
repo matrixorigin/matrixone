@@ -537,6 +537,10 @@ type BaseProcess struct {
 	// only supplied the legacy text transport.
 	typedPrepareParams      *batch.Batch
 	typedPrepareParamsOwned bool
+	// typedPrepareParamConversions holds typedPrepareParams converted once
+	// to the narrower integer types the plan reads them as; it lives and dies
+	// with typedPrepareParams.
+	typedPrepareParamConversions *TypedParamConversions
 	// prepareParamsStringSource records where this execution's parameter
 	// values came from (SQL PREPARE or COM_STMT_EXECUTE). Constant folding
 	// stamps it on literals built from parameters.

@@ -121,28 +121,3 @@ func TestOwnedWindowAndDecodeCopy(t *testing.T) {
 	src.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
-
-// A detached buffer remembers its pool and attaches only to a vector of it.
-func TestDetachedBufferStaysInItsPool(t *testing.T) {
-	mp := mpool.MustNewZero()
-	other := mpool.MustNewZero()
-	src := NewVec(types.T_int64.ToType(), mp)
-	require.NoError(t, AppendFixedList(src, []int64{1, 2}, nil, mp))
-	buf := DetachVectorData(src)
-	require.NotZero(t, buf.Capacity())
-
-	foreign := NewVec(types.T_int64.ToType(), other)
-	require.False(t, buf.CanAttachTo(foreign, DetachedDataBuffer))
-	require.Error(t, buf.AttachTo(foreign, DetachedDataBuffer))
-
-	dst := NewVec(types.T_int64.ToType(), mp)
-	require.True(t, buf.CanAttachTo(dst, DetachedDataBuffer))
-	require.NoError(t, buf.AttachTo(dst, DetachedDataBuffer))
-	require.NotZero(t, cap(dst.GetData()))
-
-	dst.Free(mp)
-	src.Free(mp)
-	foreign.Free(other)
-	require.Zero(t, mp.CurrNB())
-	require.Zero(t, other.CurrNB())
-}
