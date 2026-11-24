@@ -34,6 +34,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -613,6 +614,9 @@ func (d *DiskCache) Read(
 
 		if entry.done {
 			return nil
+		}
+		if entry.Size == 0 {
+			return &failingReadError{err: moerr.NewEmptyRangeNoCtx(path.File)}
 		}
 		if entry.Size < 0 {
 			// ignore size unknown entry

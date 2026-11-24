@@ -211,7 +211,7 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		}
 		if e.Size < 0 {
 			// The entry's file cannot tell its end from the object's: storage reads it.
-			return nil
+			continue
 		}
 		from := &sourceErrReader{Reader: io.NewSectionReader(file, e.Offset, e.Size)}
 		if err := e.readFrom(ctx, from, s); err != nil {

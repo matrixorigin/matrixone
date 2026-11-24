@@ -280,3 +280,27 @@ func TestPrefetchOfDeletedObjectEnds(t *testing.T) {
 		})
 	}
 }
+
+// BC6: an entry of no bytes is an empty range for the disk cache too.
+func TestDiskCacheReadOfEmptyEntryIsEmptyRange(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 0, 64<<10)
+	<-fs.diskCache.load.done
+	vec := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 10}}}
+	defer vec.Release()
+	err := fs.diskCache.Read(context.Background(), vec)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrEmptyRange), "got %v", err)
+}
+
+// BC7: the index-file cache serves every entry it can, also those after one read to the
+// end of the object.
+func TestIndexObjectServesEntriesAfterReadToEnd(t *testing.T) {
+	fs, _, data := newIndexObjectFS(t, true)
+	cacheIndexObject(t, fs, "object", data)
+	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache,
+		Entries: []IOEntry{{Offset: 0, Size: -1}, {Offset: 100, Size: 10}}}
+	defer vec.Release()
+	require.NoError(t, fs.readIndexObject(context.Background(), vec))
+	require.False(t, vec.Entries[0].done)
+	require.True(t, vec.Entries[1].done)
+	require.Equal(t, data[100:110], vec.Entries[1].Data)
+}
