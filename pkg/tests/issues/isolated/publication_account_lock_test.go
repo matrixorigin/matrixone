@@ -232,9 +232,10 @@ func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
 func TestCreatePublicationBeyondLockSliceCapacity(t *testing.T) {
 	const maxSlice = 16
 	locks := lockservice.Config{MaxLockRowCount: 4, MaxFixedSliceSize: maxSlice}
-	cluster := startAccountLockCluster(t, 2, locks, locks)
+	// Constrain the publishing CN so the named grant crosses a lock-key segment.
+	// DROP ACCOUNT also cleans up system tables using ordinary range locks.
+	cluster := startAccountLockCluster(t, 1, lockservice.Config{}, locks)
 	owner, _ := openAccountLockSQL(t, cluster, 0)
-	publisher, _ := openAccountLockSQL(t, cluster, 1)
 	ctx := t.Context()
 	_, err := owner.ExecContext(ctx, "create database wide_db")
 	require.NoError(t, err)
@@ -244,6 +245,10 @@ func TestCreatePublicationBeyondLockSliceCapacity(t *testing.T) {
 		_, err := owner.ExecContext(ctx, "create account "+names[i]+" admin_name 'admin' identified by '111'")
 		require.NoError(t, err)
 	}
+	// Creating the accounts before starting the publisher puts mo_account on
+	// the first CN and exercises remote lock bookkeeping on the publisher.
+	require.NoError(t, cluster.StartNewCNService(1))
+	publisher, _ := openAccountLockSQL(t, cluster, 1)
 	_, err = publisher.ExecContext(ctx, "create publication wide_pub database wide_db account "+strings.Join(names, ","))
 	require.NoError(t, err)
 	rows, err := owner.QueryContext(ctx, `select sub_account_name from mo_catalog.mo_subs where pub_account_id=0 and pub_name='wide_pub' and status=0 order by sub_account_name`)
