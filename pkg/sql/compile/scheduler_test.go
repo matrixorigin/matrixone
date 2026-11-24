@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	mockfrontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -267,6 +268,39 @@ func TestScheduleQueryWorkersKeepsIvfCurrentParticipantAtOrdinalZero(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	require.Equal(t, []string{"local:6001", "one:6001", "two:6001"}, []string{nodes[0].Addr, nodes[1].Addr, nodes[2].Addr})
+}
+
+func TestScheduleQueryWorkersChecksWorkspaceAtExecution(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		readonly bool
+		prepare  bool
+	}{
+		{name: "read-only", readonly: true},
+		{name: "prepare-does-not-run-an-AP-pipeline", prepare: true},
+		{name: "after-own-writes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr, c.execType, c.isPrepare = "ingress:6001", plan2.ExecTypeAP_MULTICN, tc.prepare
+			c.e = &schedulerTestEngine{nodes: engine.Nodes{{Id: "peer", Addr: "remote:6001"}}}
+			ctrl := gomock.NewController(t)
+			ws := mockfrontend.NewMockWorkspace(ctrl)
+			if !tc.prepare {
+				ws.EXPECT().Readonly().Return(tc.readonly)
+			}
+			_, c.proc.Base.TxnOperator = newTestTxnClientAndOp(ctrl, ws)
+			nodes, err := c.scheduleQueryWorkers()
+			if !tc.readonly && !tc.prepare {
+				require.ErrorContains(t, err, schedule.ReasonRequiredCurrentOutsidePool)
+				require.Empty(t, nodes)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, nodes, 1)
+			require.Equal(t, "remote:6001", nodes[0].Addr)
+		})
+	}
 }
 
 func TestScheduleQueryWorkersDoesNotUseClusterWideMixedCommitProxyForIvf(t *testing.T) {
