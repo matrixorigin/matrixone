@@ -442,3 +442,37 @@ func TestIndexObjectReadSkippingDiskReadsJoinsIndexDownload(t *testing.T) {
 	_, _, total := storage.counts(fs.pathToKey("object"))
 	require.Equal(t, 1, total, "the download alone reads the object")
 }
+
+// BC10: a read that caches nothing joins any prefetch object holding its bytes, also one
+// that caches nothing.
+func TestUncachingReadJoinsUncachingFlight(t *testing.T) {
+	r := PrefetchRange{Offset: 40 << 10, Size: 4 << 10}
+	fs, storage, data := newPrefetchRangeFS(t, 0, 300<<10)
+	<-fs.diskCache.load.done
+	s := &probeStorage{ObjectStorage: storage, at: r.Offset, gate: make(chan struct{}),
+		answer: func(rc io.ReadCloser) (io.ReadCloser, error) { return rc, nil }}
+	fs.storage = s
+	release := sync.OnceFunc(func() { close(s.gate) })
+	t.Cleanup(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	first := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: r.Offset, Size: r.Size}}}
+	defer first.Release()
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- fs.Read(ctx, first) }()
+	diskPath := fs.diskCache.pathForFile("object")
+	require.Eventually(t, s.hit.Load, 5*time.Second, time.Millisecond)
+	var out bytes.Buffer
+	second := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipDiskCacheWrites | SkipMemoryCache,
+		Entries: []IOEntry{{Offset: r.Offset, Size: r.Size, WriterForRead: &out}}}
+	defer second.Release()
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- fs.Read(ctx, second) }()
+	require.Eventually(t, func() bool { return memoryWaiters(fs, diskPath) == 2 }, 5*time.Second, time.Millisecond,
+		"the second read joins the first one's flight")
+	release()
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-secondDone)
+	require.Equal(t, data[r.Offset:r.Offset+r.Size], out.Bytes())
+	require.Zero(t, s.others.Load())
+}

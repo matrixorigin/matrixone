@@ -38,7 +38,9 @@ func wantSources(s *S3FS, p Policy, download, streams bool) readSources {
 		queueRanges: p.Any(ColumnPrefetch, ExactRead),
 		flights:     disk && p.Any(ColumnPrefetch, ExactRead),
 		window:      disk && !indexFill,
-		fetch:       disk && !streams,
+		// BC10: a read that caches its bytes joins only objects that cache theirs.
+		caches: p.CacheIOEntry() && !p.Any(SkipDiskCacheWrites) && !indexFill,
+		fetch:  disk && !streams,
 	}
 }
 

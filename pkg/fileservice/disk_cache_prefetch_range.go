@@ -1079,8 +1079,9 @@ func (f *memoryPrefetchObject) fitsLocked() bool {
 // readFromFlights fills the entries of vector not done, of the object at filePath, from the
 // flights reading their bytes, waiting for the bytes to arrive. Each entry holds its flight
 // only while it waits for and copies its bytes. One no flight holds, or whose flight ends
-// without its bytes, is left to the caller.
-func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector *IOVector) error {
+// without its bytes, is left to the caller. A read that caches its bytes joins only flights
+// that cache theirs.
+func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector *IOVector, caches bool) error {
 	diskPath := d.pathForFile(filePath)
 	f := &d.prefetchObjects
 	f.mu.Lock()
@@ -1093,7 +1094,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 	now := time.Now()
 	for i := range vector.Entries {
 		if e := &vector.Entries[i]; e.ranged() {
-			if d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, now, true) != nil {
+			if d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, now, caches) != nil {
 				inFlight[i], found = true, true
 			}
 		}
@@ -1108,7 +1109,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		}
 		e := &vector.Entries[i]
 		f.mu.Lock()
-		fl, release := heldLocked(d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, time.Now(), true))
+		fl, release := heldLocked(d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, time.Now(), caches))
 		f.mu.Unlock()
 		if fl == nil {
 			continue

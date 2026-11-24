@@ -572,6 +572,9 @@ type readSources struct {
 	// window is set when its range read may read prefetch ranges around it, through
 	// prefetchRead, as prefetchUnit allows.
 	window bool
+	// caches is set when the read caches the bytes it reads in the disk cache: it joins only
+	// prefetch objects that cache theirs.
+	caches bool
 	// fetch is set when its range read takes its bytes from a prefetch object, joined or
 	// its own, through fetchRange.
 	fetch bool
@@ -592,6 +595,7 @@ func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
 		queueRanges: columns,
 		flights:     join && columns,
 		window:      join && !indexFill,
+		caches:      p.CacheIOEntry() && !p.Any(SkipDiskCacheWrites) && !indexFill,
 		// A read that streams an entry to its caller opens its own reader.
 		fetch: join && !vector.streams(),
 	}
@@ -1069,7 +1073,7 @@ read_disk_cache:
 	flights := src.flights
 	if flights {
 		if path, perr := parseFilePathAtService(vector.FilePath, s.name); perr == nil {
-			if err := s.diskCache.readFromFlights(ctx, path.File, vector); err != nil {
+			if err := s.diskCache.readFromFlights(ctx, path.File, vector, src.caches); err != nil {
 				finishFill()
 				return err
 			}

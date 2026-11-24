@@ -158,7 +158,9 @@ bytes (decision 2026-11-13: with 8 concurrent TPC-H sessions on a 4 GB disk cach
 the read's whole span took about 80 s against about 68 s). Both kinds:
 - are joined by every read of their bytes, which waits for its own bytes, not for the
   whole prefetch object. A FilePrefetchObject is joined only when its bytes arrive no more
-  than `disk-download-max-extra-wait` later than a range read could fetch them;
+  than `disk-download-max-extra-wait` later than a range read could fetch them. A read
+  that caches its bytes joins only prefetch objects that cache theirs; one that caches
+  nothing joins any;
 - leave a read to fetch its bytes itself when they end without them, as when stopped by
   another query, a delete or a close, or when their source ends short of their bytes; a
   failed read of object storage fails the reads waiting on it, as a read of their own
