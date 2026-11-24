@@ -42,9 +42,6 @@ import (
 const (
 	FLAT     = iota // flat vector represent a uncompressed vector
 	CONSTANT        // const vector
-	// LegacyRowBufferClass is the retired class 2. Old encoded values are
-	// already materialized and decode as FLAT; vectors never carry it.
-	LegacyRowBufferClass
 )
 
 // Vector represent a column
@@ -722,9 +719,6 @@ func (v *Vector) IsConst() bool {
 }
 
 func (v *Vector) SetClass(class int) {
-	if class == LegacyRowBufferClass {
-		panic(moerr.NewInvalidStateNoCtx("class 2 is a retired legacy encoding"))
-	}
 	v.class = class
 }
 
@@ -1376,16 +1370,6 @@ type vectorBinaryLayout struct {
 	sorted bool
 }
 
-// decodedPhysicalClass preserves the legacy row-buffer class 2. Its encoded
-// values are already materialized; the format contains no dictionary base or
-// selection. Decode it as FLAT without rewriting the caller's input bytes.
-func decodedPhysicalClass(class byte) byte {
-	if class == LegacyRowBufferClass {
-		return FLAT
-	}
-	return class
-}
-
 type vectorBinaryCursor struct {
 	data   []byte
 	offset int
@@ -1473,9 +1457,8 @@ func decodeVectorBinaryLayout(
 	if err != nil {
 		return vectorBinaryLayout{}, err
 	}
-	physicalClass := decodedPhysicalClass(class[0])
 	if err = validateVectorBinary(
-		physicalClass,
+		class[0],
 		typ,
 		length,
 		vectorData,
@@ -1486,7 +1469,7 @@ func decodeVectorBinaryLayout(
 		return vectorBinaryLayout{}, err
 	}
 	return vectorBinaryLayout{
-		class:  physicalClass,
+		class:  class[0],
 		typ:    typ,
 		length: int(length),
 		data:   vectorData,
@@ -1737,7 +1720,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	if err != nil {
 		return err
 	}
-	v.class = int(decodedPhysicalClass(byte(encodedClass)))
+	v.class = encodedClass
 
 	if v.typ, err = types.ReadType(r); err != nil {
 		return err
