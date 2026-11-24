@@ -1386,6 +1386,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		if done {
 			return nil
 		}
+		// A fill stopped or skipped may have left the bytes cached meanwhile.
+		if err := s.recheckPublished(ctx, vector); err != nil || vector.allDone() {
+			return err
+		}
 		// A skipped cache fill does not imply the cache file is readable: another
 		// writer may still own its asynchronous publication after releasing the
 		// I/O merge. Fetch only the missing ranges instead of reading the whole

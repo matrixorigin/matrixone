@@ -272,7 +272,8 @@ loses little by reading its ranges.
   live queue and joins it.
 - A full-object read does not wait for another read of the same object to finish. It
   looks in the disk cache again once, because that other read's download may have
-  started by then.
+  started by then. A read whose own whole-object fill stops or is skipped looks in the
+  caches again before it reads object storage.
 
 ### The queue is bounded (decision)
 

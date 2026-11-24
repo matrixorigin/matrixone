@@ -336,3 +336,18 @@ func TestCachedBytesAcrossRangesAndWholeObject(t *testing.T) {
 		require.True(t, d.cache.Contains(d.pathForFile("object")), "a read past its end keeps the whole object")
 	})
 }
+
+// BC17: a read whose whole-object fill was skipped, as for an object cached meanwhile,
+// reads the disk cache again before object storage.
+func TestSkippedWholeFillReadsCacheAgain(t *testing.T) {
+	fs, storage, data := newPrefetchRangeFS(t, 0, 64<<10)
+	d := fs.diskCache
+	<-d.load.done
+	ctx := context.Background()
+	require.NoError(t, d.setFileContent(ctx, "object", data, false))
+	vec := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1000, Size: 100}}}
+	defer vec.Release()
+	require.NoError(t, fs.read(ctx, vec, false, false))
+	require.Equal(t, data[1000:1100], vec.Entries[0].Data)
+	require.Zero(t, storage.reads.Load(), "the cached object serves the read")
+}
