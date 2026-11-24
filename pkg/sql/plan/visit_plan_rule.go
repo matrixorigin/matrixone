@@ -548,7 +548,7 @@ func PreparedPlanNeedsNumericPrefixSpecialization(preparePlan *Plan, paramVals [
 		if !ok || !param.EnableNumericPrefix {
 			continue
 		}
-		positions[i] = param.PrepareParamKind
+		positions[i] = ParamValueKind(param)
 	}
 	if len(positions) == 0 {
 		return false
@@ -680,8 +680,8 @@ func hasRuntimeDecimalPrefixFilter(preparePlan *Plan, paramVals []any) bool {
 	positions := make(map[int]types.StringConversionKind)
 	for i, value := range paramVals {
 		param, ok := AsParamValue(value)
-		if ok && param.EnableNumericPrefix && param.PrepareParamKind == types.StringConversionDecimal {
-			positions[i] = param.PrepareParamKind
+		if ok && param.EnableNumericPrefix && ParamValueKind(param) == types.StringConversionDecimal {
+			positions[i] = ParamValueKind(param)
 		}
 	}
 	if len(positions) == 0 {
@@ -1144,7 +1144,7 @@ func (rule *ResetParamRefRule) SetParamValues(values []any) {
 			break
 		}
 		if param, ok := AsParamValue(value); ok {
-			rule.paramKinds[i] = param.PrepareParamKind
+			rule.paramKinds[i] = ParamValueKind(param)
 		}
 	}
 }
@@ -1156,7 +1156,7 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, types.StringConv
 	if pos < len(rule.paramValues) {
 		value := rule.paramValues[pos]
 		if param, ok := AsParamValue(value); ok {
-			return param.Value, param.PrepareParamKind, true
+			return param.Value, ParamValueKind(param), true
 		}
 		if value != nil {
 			kind := types.StringConversionString
@@ -1233,10 +1233,9 @@ func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNu
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
 		}, true, nil
 	}
-	if pos >= 0 && pos < len(rule.paramValues) {
-		if param, isParam := AsParamValue(rule.paramValues[pos]); isParam &&
-			value == nil && param.MaterializedValue != "" {
-			value = param.MaterializedValue
+	if pos < len(rule.paramValues) {
+		if _, isParam := AsParamValue(rule.paramValues[pos]); isParam {
+			value = preparedProtocolTextValue(rule.paramValues[pos])
 		}
 	}
 	srid, isNull, err := geometrySRIDRuntimeValue(value)
@@ -1295,23 +1294,16 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 	if value == nil {
 		return types.Type{}, false
 	}
-	switch kind {
-	case types.StringConversionInteger:
-		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok && typ.Oid.IsInteger() {
-			return typ, true
-		}
-	case types.StringConversionDecimal:
+	// Integer, float and Boolean parameters carry their type (RuntimeType or
+	// SourceType, above). DECIMAL and text are typed from their spelling.
+	if kind == types.StringConversionDecimal {
 		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok && typ.IsDecimal() {
 			return typ, true
 		}
-	case types.StringConversionFloat:
-		return types.T_float64.ToType(), true
-	case types.StringConversionBoolean:
-		return types.T_bool.ToType(), true
-	default:
-		if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok {
-			return typ, true
-		}
+		return types.Type{}, false
+	}
+	if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(value))); ok {
+		return typ, true
 	}
 	return types.Type{}, false
 }
@@ -2557,7 +2549,7 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		return e, nil
 	}
 	// A sibling direct assignment marker must keep its runtime vector metadata
-	// (notably PrepareParamKind for BIT). Replacing it with a TEXT literal while
+	// (notably the BIT type). Replacing it with a TEXT literal while
 	// another assignment triggers specialization changes numeric values to bytes.
 	if fn := e.GetF(); fn != nil && len(fn.Args) == 2 && !types.T(e.Typ.Id).IsInteger() {
 		switch fn.Func.GetObjName() {
@@ -2566,7 +2558,7 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 				position := int(param.Pos)
 				if position >= 0 && position < len(rule.paramValues) {
 					if value, ok := AsParamValue(rule.paramValues[position]); ok &&
-						(value.PrepareParamKind != types.StringConversionString ||
+						(ParamValueKind(value) != types.StringConversionString ||
 							(value.HasSourceType && value.SourceType.IsNumeric()) ||
 							(value.HasRuntimeType && value.RuntimeType.IsNumeric())) {
 						return e, nil
@@ -3476,7 +3468,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					stringType := types.T_varchar.ToType()
 					rewrittenArg.Typ = makePlan2Type(&stringType)
 				} else if param, ok := AsParamValue(rule.paramValues[paramPos]); ok &&
-					param.Value != nil && param.PrepareParamKind != types.StringConversionString {
+					param.Value != nil && ParamValueKind(param) != types.StringConversionString {
 					// SQL EXECUTE still materializes the value through a text
 					// transport literal. Recreate the assignment-time numeric
 					// literal before rebinding, otherwise the already-selected unit
@@ -4129,36 +4121,14 @@ func preparedParamValueUsesStringDomain(value any) bool {
 	if !ok || param.Value == nil {
 		return false
 	}
-	// SQL EXECUTE uses the marker's string type as a transport placeholder. Its
-	// assignment-time PrepareParamKind is the stronger signal: a numeric user
-	// variable must keep the legacy SRID overload even when the marker itself
-	// was provisionally typed VARCHAR during PREPARE.
-	if !param.IsBinaryProtocol && param.PrepareParamKind != types.StringConversionString {
-		return false
+	// The parameter's own type decides, not the marker's: SQL EXECUTE
+	// transports user variables through a TEXT vector, so a numeric user
+	// variable keeps the legacy SRID overload even though the marker was
+	// provisionally typed VARCHAR during PREPARE. An untyped value is text.
+	if typ, ok := ParamValueType(param); ok {
+		return isStringBackedType(typ)
 	}
-	// SQL EXECUTE transports user variables through a TEXT vector. When the
-	// assignment was numeric, the transport type remains TEXT but the prepared
-	// parameter kind is the authoritative numeric domain. Do not reinterpret
-	// that neutral transport type as a length-unit string.
-	if param.HasRuntimeType {
-		return isStringBackedType(param.RuntimeType)
-	}
-	if param.HasSourceType {
-		if param.SourceType.Oid == types.T_text && param.PrepareParamKind != types.StringConversionString {
-			return false
-		}
-		return isStringBackedType(param.SourceType)
-	}
-	// An explicit non-string source/runtime type is authoritative even when
-	// PrepareParamKind is left at None (the SQL EXECUTE path does not attach a
-	// protocol category). Do not mistake a numeric SRID marker for a unit name.
-	if param.HasSourceType || param.HasRuntimeType {
-		return false
-	}
-	if param.IsBinaryProtocol {
-		return param.PrepareParamKind == types.StringConversionString
-	}
-	return param.PrepareParamKind == types.StringConversionString
+	return true
 }
 
 // preparedComparisonExactIntegerExpr keeps an exact integral text prefix in
@@ -5124,12 +5094,8 @@ func (rule *ResetParamRefRule) preparedInetNtoaSourceExpr(pos int) (*Expr, bool,
 	if !hasSourceType || !isInetNtoaDomainSourceType(sourceType) {
 		return nil, false, nil
 	}
-	value := param.Value
-	if param.MaterializedValue != "" {
-		value = param.MaterializedValue
-	}
 	source, err := preparedRuntimeParamExpr(
-		rule.ctx, value, param.IsBin, sourceType)
+		rule.ctx, param.Value, param.IsBin, sourceType)
 	if err != nil {
 		return nil, false, err
 	}
@@ -5152,7 +5118,7 @@ func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool
 	if !ok || param.Value == nil {
 		return nil, false, nil
 	}
-	comStmtText := param.IsBinaryProtocol && param.PrepareParamKind == types.StringConversionString &&
+	comStmtText := param.IsBinaryProtocol && ParamValueKind(param) == types.StringConversionString &&
 		(param.Value != nil || param.HasRuntimeType)
 	if !(param.HasSourceType && isStringBackedType(param.SourceType)) &&
 		!(param.HasRuntimeType && isStringBackedType(param.RuntimeType)) && !comStmtText {
@@ -5222,9 +5188,7 @@ func (rule *ResetParamRefRule) preparedRuntimeSourceExpr(pos int, preserveProtoc
 	}
 
 	value := param.Value
-	if param.MaterializedValue != "" {
-		value = param.MaterializedValue
-	} else if bytes, ok := value.([]byte); ok {
+	if bytes, ok := value.([]byte); ok {
 		value = string(bytes)
 	}
 	source, err := preparedRuntimeParamExpr(rule.ctx, value, param.IsBin, sourceType)
@@ -5333,9 +5297,6 @@ func isBitwiseAggregatePrivateCast(expr *plan.Expr) bool {
 }
 
 func preparedParamValueText(param ParamValue) string {
-	if param.MaterializedValue != "" {
-		return param.MaterializedValue
-	}
 	switch value := param.Value.(type) {
 	case []byte:
 		return string(value)

@@ -45,7 +45,7 @@ func TestViewSchemaFrozenVariablesPreserveAttributesAndOwnBytes(t *testing.T) {
 		},
 		userDefinedVars: map[string]*UserDefinedVar{
 			"payload": {Value: bytes, Sql: "set @payload = 0x00ff41", IsBin: true, Type: wantType, RuntimeStringDomain: types.RuntimeStringBinary},
-			"amount":  {Value: "12.34", Type: pb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2}, PrepareParamKind: types.StringConversionDecimal},
+			"amount":  {Value: "12.34", Type: pb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2}},
 		},
 	}
 	source := &ExecCtx{reqCtx: t.Context(), ses: ses}
@@ -56,7 +56,7 @@ func TestViewSchemaFrozenVariablesPreserveAttributesAndOwnBytes(t *testing.T) {
 	// 修改原有值和整个变量槽位，不能改变已冻结的值或附带类型。
 	bytes[1] = 0
 	ses.userDefinedVars["payload"] = &UserDefinedVar{Value: "replacement", Type: pb.Type{Id: int32(types.T_varchar)}}
-	ses.userDefinedVars["amount"] = &UserDefinedVar{Value: int64(9), PrepareParamKind: types.StringConversionInteger}
+	ses.userDefinedVars["amount"] = &UserDefinedVar{Value: int64(9)}
 	ses.sesSysVars.Set("lower_case_table_names", int64(1))
 	ses.sesSysVars.Set("sql_mode", "")
 	value, err := c.ResolveVariable("PAYLOAD", false, false)
