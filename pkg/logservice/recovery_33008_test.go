@@ -32,11 +32,18 @@ import (
 
 func useRecoveryRPCSocket(t *testing.T, cfg *Config) {
 	t.Helper()
-	// Unix socket paths have a small length limit, even with a long TMPDIR.
 	dir, err := os.MkdirTemp("", "mo-log-")
 	require.NoError(t, err)
+	socket := filepath.Join(dir, "rpc.sock")
+	// Darwin's sockaddr_un has room for 103 pathname bytes.
+	if len(socket) > 103 {
+		require.NoError(t, os.Remove(dir))
+		dir, err = os.MkdirTemp("/var/tmp", "mo-log-")
+		require.NoError(t, err)
+		socket = filepath.Join(dir, "rpc.sock")
+	}
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
-	addr := "unix://" + filepath.Join(dir, "rpc.sock")
+	addr := "unix://" + socket
 	cfg.LogServicePort = 0
 	cfg.ServiceListenAddress = addr
 	cfg.ServiceAddress = addr

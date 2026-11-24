@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -318,6 +319,45 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	_, _, ok2, _ := svc3b.store.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	assert.False(t, ok2,
 		"svc3b has no running replica for shard 0 so GetLeaderID must be ok=false")
+
+	epoch, skipped := svc3b.store.skippedZombieEpoch(hakeeper.DefaultHAKeeperShardID, 3)
+	require.True(t, skipped)
+	require.NotZero(t, epoch)
+	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
+
+	command := func(kind pb.ConfigChangeType, id uint64) pb.ScheduleCommand {
+		return pb.ScheduleCommand{UUID: svc3b.ID(), ServiceType: pb.LogService,
+			ConfigChange: &pb.ConfigChange{ChangeType: kind, Replica: pb.Replica{UUID: svc3b.ID(), ReplicaID: id}}}
+	}
+	stale := command(pb.StartReplica, 3)
+	svc3b.handleCommands([]pb.ScheduleCommand{stale})
+	require.Empty(t, svc3b.store.startedReplicaIDs()[hakeeper.DefaultHAKeeperShardID])
+
+	// Kill removes local metadata but leaves the old Dragonboat bootstrap.
+	svc3b.handleCommands([]pb.ScheduleCommand{command(pb.KillZombie, 3), stale})
+	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
+	require.Empty(t, svc3b.store.startedReplicaIDs()[hakeeper.DefaultHAKeeperShardID])
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	current, err := svc1.store.nh.SyncGetShardMembership(ctx, hakeeper.DefaultHAKeeperShardID)
+	require.NoError(t, err)
+	require.NoError(t, svc1.store.nh.SyncRequestAddReplica(ctx, hakeeper.DefaultHAKeeperShardID, 4, svc3b.ID(), current.ConfigChangeID))
+	registry, ok := svc3b.store.nh.GetNodeHostRegistry()
+	require.True(t, ok)
+	require.Eventually(t, func() bool {
+		view, ok := registry.GetShardInfo(hakeeper.DefaultHAKeeperShardID)
+		return ok && view.ConfigChangeIndex > current.ConfigChangeID && view.Nodes[4] == svc3b.ID()
+	}, 5*time.Second, 25*time.Millisecond)
+	// Model an older startup observation that hadn't seen the addition. The
+	// newer local view must let this legitimate identity start.
+	svc3b.store.mu.Lock()
+	svc3b.store.mu.skippedZombies[zombieKey{replicaID: 4}] = current.ConfigChangeID
+	svc3b.store.mu.Unlock()
+	svc3b.handleCommands([]pb.ScheduleCommand{stale, command(pb.StartNonVotingReplica, 4), command(pb.StartReplica, 4)})
+	require.Equal(t, map[uint64]struct{}{4: {}}, svc3b.store.startedReplicaIDs()[hakeeper.DefaultHAKeeperShardID])
+	require.Equal(t, uint64(4), atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
+
 }
 
 // TestZombieRepro_WithoutFix disables the self-check via getShardMembershipFn
@@ -343,8 +383,8 @@ func TestZombieRepro_WithoutFix(t *testing.T) {
 	// is the pre-fix behavior).
 	origFn := getShardMembershipFn
 	defer func() { getShardMembershipFn = origFn }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		return nil, false, nil // shard unknown -> fallback = not a zombie
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, uint64, bool, error) {
+		return nil, 0, false, nil // shard unknown -> fallback = not a zombie
 	}
 
 	svc3b := restartService3(t, cfg3, obsLogger)

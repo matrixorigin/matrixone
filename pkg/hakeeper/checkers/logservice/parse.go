@@ -177,6 +177,33 @@ func getReplicasToStart(
 	return toStart
 }
 
+// canScheduleMembershipChange requires a reporting majority when a configured
+// voter has expired. Starts remain eligible so missing voters can recover.
+func canScheduleMembershipChange(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
+	for _, target := range shard.Replicas {
+		if !contains(expired, target) {
+			continue
+		}
+		reporting := 0
+		for replicaID, uuid := range shard.Replicas {
+			if contains(expired, uuid) {
+				continue
+			}
+			for _, replica := range stores[uuid].Replicas {
+				if replica.ShardID == shard.ShardID && replica.ReplicaID == replicaID && !replica.IsNonVoting {
+					reporting++
+					break
+				}
+			}
+			if reporting > len(shard.Replicas)/2 {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
 // parseLogShards collects stats for further use.
 // It returns two stats, the first is the stats for normal replicas
 // and the second one is for the non-voting replicas.
@@ -186,16 +213,16 @@ func parseLogShards(
 	normalStats, nonVotingStats := newStats(false), newStats(true)
 	for _, shardInfo := range infos.Shards {
 		shardID := shardInfo.ShardID
+		normalStats.toStart = append(normalStats.toStart, getReplicasToStart(shardID, shardInfo.Replicas, infos.Stores)...)
+		nonVotingStats.toStart = append(nonVotingStats.toStart, getReplicasToStart(shardID, shardInfo.NonVotingReplicas, infos.Stores)...)
+
+		if !canScheduleMembershipChange(shardInfo, infos.Stores, expired) {
+			continue
+		}
 		record := getRecord(shardID, cluster.LogShards)
 		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
-
-		// cal the toRemove field.
 		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
 		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
-
-		// cal the toStart field.
-		toStartNormal := getReplicasToStart(shardID, shardInfo.Replicas, infos.Stores)
-		toStartNonVoting := getReplicasToStart(shardID, shardInfo.NonVotingReplicas, infos.Stores)
 
 		if fixingNormal.toAdd > 0 {
 			normalStats.toAdd[shardID] = fixingNormal.toAdd
@@ -209,8 +236,6 @@ func parseLogShards(
 		if len(toRemoveNonVoting) > 0 {
 			nonVotingStats.toRemove[shardID] = toRemoveNonVoting
 		}
-		normalStats.toStart = append(normalStats.toStart, toStartNormal...)
-		nonVotingStats.toStart = append(nonVotingStats.toStart, toStartNonVoting...)
 	}
 	// Check zombies
 	for uuid, storeInfo := range infos.Stores {

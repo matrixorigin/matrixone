@@ -147,13 +147,10 @@ type store struct {
 	mu struct {
 		sync.Mutex
 		metadata metadata.LogStore
-		// skippedZombies is the set of (shardID, replicaID) pairs that
-		// startReplicas decided not to start because the cluster membership
-		// no longer listed them. Persisted here so later bootstrap paths
-		// (BootstrapHAKeeper in particular) can honor the same decision
-		// and do not re-start a replica we have already classified as
-		// removed.
-		skippedZombies map[zombieKey]struct{}
+		// skippedZombies records the newest absence observed at startup for
+		// each skipped local replica. Keep it while this store is open so a
+		// delayed Start cannot undo a Kill that leaves Raft files behind.
+		skippedZombies map[zombieKey]uint64
 	}
 	shardSnapshotInfo shardSnapshotInfo
 	snapshotMgr       *snapshotManager
@@ -294,8 +291,8 @@ var zombieSelfCheckTimeout = 2 * time.Second
 // are not blocked. The whole sweep is bounded by zombieSelfCheckTimeout;
 // if the budget expires, any replicas not already classified are treated as
 // not-a-zombie and normal startup continues.
-func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]struct{} {
-	zombies := make(map[zombieKey]struct{})
+func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogShard) map[zombieKey]uint64 {
+	zombies := make(map[zombieKey]uint64)
 	if len(shards) == 0 {
 		return zombies
 	}
@@ -316,11 +313,12 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 			continue
 		}
 		var authoritative, presentReplies int
+		var newestEpoch uint64
 		for _, address := range addresses {
 			if ctx.Err() != nil {
 				return zombies
 			}
-			members, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
+			members, epoch, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
 			if err != nil {
 				logger.Warn("zombie self-check: getShardMembership failed",
 					zap.String("address", address),
@@ -333,12 +331,13 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 				continue
 			}
 			authoritative++
+			newestEpoch = max(newestEpoch, epoch)
 			if _, present := members[rec.ReplicaID]; present {
 				presentReplies++
 			}
 		}
 		if authoritative > 0 && presentReplies == 0 {
-			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = newestEpoch
 		}
 	}
 	return zombies
@@ -385,13 +384,37 @@ func (l *store) zombieCheckAddresses() []string {
 // start it. Used by bootstrap paths to honor the same decision rather
 // than re-starting a replica we have deemed removed.
 func (l *store) isSkippedZombie(shardID, replicaID uint64) bool {
+	_, skipped := l.skippedZombieEpoch(shardID, replicaID)
+	return skipped
+}
+
+func (l *store) skippedZombieEpoch(shardID, replicaID uint64) (uint64, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.mu.skippedZombies == nil {
+	epoch, skipped := l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}]
+	return epoch, skipped
+}
+
+// A newer local gossip view can correct a stale startup observation. Older
+// views must not let a delayed Start reopen the skipped replica.
+func (l *store) canStartScheduledReplica(shardID, replicaID uint64, nonVoting bool) bool {
+	epoch, skipped := l.skippedZombieEpoch(shardID, replicaID)
+	if !skipped {
+		return true
+	}
+	registry, ok := l.nh.GetNodeHostRegistry()
+	if !ok {
 		return false
 	}
-	_, ok := l.mu.skippedZombies[zombieKey{shardID: shardID, replicaID: replicaID}]
-	return ok
+	shard, ok := registry.GetShardInfo(shardID)
+	if !ok || shard.ConfigChangeIndex <= epoch {
+		return false
+	}
+	members := shard.Nodes
+	if nonVoting {
+		members = shard.NonVotingNodes
+	}
+	return members[replicaID] == l.id()
 }
 
 func (l *store) startReplicas(ctx context.Context) error {

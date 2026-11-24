@@ -345,22 +345,24 @@ func TestTNRetryDoesNotResurrectObsoleteRemoval(t *testing.T) {
 func TestCoordinatorRepairsAfterMissingReplicaReport(t *testing.T) {
 	c, state, alloc := tnStartScenario(t)
 	state.Tick = 10000
+	state.NonVotingReplicaNum = 1
 	state.TNState.Stores["tn-a"] = pb.TNStoreInfo{Tick: state.Tick, TaskServiceCreated: true}
 	state.ClusterInfo.LogShards = []metadata.LogShardRecord{
 		{ShardID: 0, NumberOfReplicas: 3}, {ShardID: 1, NumberOfReplicas: 3},
-		{ShardID: 3, NumberOfReplicas: 1},
+		{ShardID: 3, NumberOfReplicas: 1}, {ShardID: 4, NumberOfReplicas: 1},
 	}
 	members := map[uint64]string{1: "log-a", 2: "log-b", 3: "log-c"}
 	data := pb.LogShardInfo{ShardID: 1, Replicas: members, LeaderID: 1, Epoch: 1}
 	control := pb.LogShardInfo{Replicas: members, LeaderID: 1, Epoch: 1}
 	sole := pb.LogShardInfo{ShardID: 3, Replicas: map[uint64]string{4: "log-b"}, LeaderID: 4, Epoch: 1}
+	independent := pb.LogShardInfo{ShardID: 4, Replicas: map[uint64]string{5: "log-a"}, NonVotingReplicas: map[uint64]string{6: "log-d"}, Epoch: 1}
 	state.LogState = pb.LogState{
-		Shards: map[uint64]pb.LogShardInfo{0: control, 1: data, 3: sole},
+		Shards: map[uint64]pb.LogShardInfo{0: control, 1: data, 3: sole, 4: independent},
 		Stores: map[string]pb.LogStoreInfo{
 			"log-a": {Tick: state.Tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: control, ReplicaID: 1}, {LogShardInfo: data, ReplicaID: 1}}},
 			"log-b": {Replicas: []pb.LogReplicaInfo{{LogShardInfo: control, ReplicaID: 2}, {LogShardInfo: data, ReplicaID: 2}, {LogShardInfo: sole, ReplicaID: 4}}},
 			"log-c": {Tick: state.Tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: control, ReplicaID: 3}}},
-			"log-d": {Tick: state.Tick},
+			"log-d": {Tick: state.Tick, Replicas: []pb.LogReplicaInfo{{LogShardInfo: independent, ReplicaID: 6, IsNonVoting: true}}},
 		},
 	}
 	recoveryCommands := func() []pb.ScheduleCommand {
@@ -382,8 +384,22 @@ func TestCoordinatorRepairsAfterMissingReplicaReport(t *testing.T) {
 	}
 	cmds := recoveryCommands()
 	require.True(t, hasChange(cmds, pb.StartReplica, 1, "log-c"), "start the missing configured replica")
+	require.True(t, hasChange(cmds, pb.StartReplica, 4, "log-a"), "the independent shard must recover on the surviving voter")
 	require.False(t, hasChange(cmds, pb.RemoveReplica, 3, "log-b"), "cannot remove the sole configured voter")
 	require.True(t, hasChange(cmds, pb.RemoveReplica, 0, "log-b"), "keep the existing HAKeeper replacement path")
+
+	for _, cmd := range cmds {
+		if cc := cmd.ConfigChange; cc != nil && cc.Replica.ShardID == 1 {
+			require.Equal(t, pb.StartReplica, cc.ChangeType, "do not propose membership changes on the unavailable shard")
+		}
+	}
+
+	store := state.LogState.Stores["log-c"]
+	store.Replicas = append(store.Replicas, pb.LogReplicaInfo{LogShardInfo: data, ReplicaID: 3})
+	state.LogState.Stores["log-c"] = store
+	resumed := recoveryCommands()
+	require.True(t, hasChange(resumed, pb.RemoveReplica, 1, "log-b"))
+	require.True(t, hasChange(resumed, pb.AddNonVotingReplica, 1, "log-d"))
 
 	control.Replicas = map[uint64]string{1: "log-a", 3: "log-c"}
 	control.Epoch++

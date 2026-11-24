@@ -517,8 +517,8 @@ func TestServiceBootstrap(t *testing.T) {
 			// Seed the skippedZombies set as if startReplicas had already
 			// classified this HAKeeper replica as removed.
 			s.store.mu.Lock()
-			s.store.mu.skippedZombies = map[zombieKey]struct{}{
-				{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: replicaID}: {},
+			s.store.mu.skippedZombies = map[zombieKey]uint64{
+				{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: replicaID}: 1,
 			}
 			s.store.mu.Unlock()
 
