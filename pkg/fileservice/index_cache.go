@@ -528,8 +528,8 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 	return c.disk.openDir(ctx, name, diskPath, files, &deadline)
 }
 
-// entryRead is a read of generation gen of an entry; done ends it. dir is the entry
-// directory found when the read opened the entry, or nil.
+// entryRead is a read of generation gen of an entry; done ends it. dir is the entry the
+// read opened, kept open until done so that no other entry takes its identity, or nil.
 type entryRead struct {
 	gen  uint64
 	dir  os.FileInfo
@@ -564,11 +564,22 @@ func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file st
 		d.cache.Get(ctx, diskPath)
 		opened.file = kept.file
 	} else {
-		read.dir, _ = os.Lstat(diskPath)
+		dir, dirErr := os.Open(diskPath)
 		files, err := d.openDir(ctx, name, diskPath, []string{file}, &deadline)
 		if err != nil {
-			read.done = func() { d.paths.endRead(diskPath, generation) }
+			if dirErr == nil {
+				read.dir, _ = dir.Stat()
+			}
+			read.done = func() {
+				if dirErr == nil {
+					_ = dir.Close()
+				}
+				d.paths.endRead(diskPath, generation)
+			}
 			return nil, read, err
+		}
+		if dirErr == nil {
+			_ = dir.Close()
 		}
 		opened.file = files[0]
 		opened.kept = d.paths.keep(diskPath, generation, files[0])

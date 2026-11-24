@@ -82,6 +82,7 @@ func TestPrefetchOfCachedObjectMarksItUsed(t *testing.T) {
 	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 1}, 1)
 	d := fs.diskCache
 	ctx := context.Background()
+	<-d.load.done
 	a, b := d.pathForFile("a"), d.pathForFile("b")
 	for _, p := range []string{a, b} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -101,6 +102,7 @@ func TestRangePrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
 	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 1}, 1)
 	d := fs.diskCache
 	ctx := context.Background()
+	<-d.load.done
 	a, b := d.pathForFile("a"), d.pathForFile("b")
 	for _, p := range []string{a, b} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
