@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -122,6 +123,27 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	cache.put(copied, aliased)
 	cache.free()
 	owner.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCachedBatchRejectsSelectedBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, vector.AppendFixedList(source.Vecs[0], []int64{1, 2, 3}, nil, mp))
+	var selection bitmap.Bitmap
+	selection.InitWithSize(3)
+	selection.Add(1)
+	source.SetSelection(&selection)
+
+	cache := newBatchCache(mp, 1)
+	copied, owned, _, err := cache.copyBatch(source)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "selected batch")
+	require.Nil(t, copied)
+	require.False(t, owned)
+	cache.free()
+	source.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
 

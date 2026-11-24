@@ -17,6 +17,7 @@ package pSpool
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -139,6 +140,12 @@ func dedupVectors(vecs []*vector.Vector) {
 func (c *batchCache) copyBatch(src *batch.Batch) (dst *batch.Batch, owned, aliased bool, err error) {
 	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
 		return src, false, false, nil
+	}
+	// A selection is borrowed for one operator edge; pipeline roots compact
+	// (vm.ConfigureSelectionEdges). Copying a selected batch would keep the
+	// physical rows under the logical row count.
+	if src.HasSelection() {
+		return nil, false, false, moerr.NewInternalErrorNoCtx("selected batch reached a pipeline spool; it requires compacted rows")
 	}
 
 	cached := c.get()
