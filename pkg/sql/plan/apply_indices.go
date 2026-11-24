@@ -2842,6 +2842,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
 	if sampleEligible && best.indexPos != -1 && sampleCount > 1 {
 		group := sampleGroup[:sampleCount]
 		if intervals, ok := builder.observePointIndexMatches(node, indexes, group); ok {
+			var work [engine.MaxPointSampleCandidates]indexPointInterval
 			for i, access := range group {
 				idx := indexes[access.index]
 				lower, _, lo := costCtx.scoreWithPointSample(idx, access.filters, nil, encodedRegularIndexCostBackfill, nil, 0, intervals[i].lower)
@@ -2850,10 +2851,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
 					sampleEligible = false
 					break
 				}
-				intervals[i] = indexPointInterval{lower, upper}
+				work[i] = indexPointInterval{lower, upper}
 			}
 			if sampleEligible {
-				if winner := separatedPointSampleWinner(intervals[:sampleCount]); winner >= 0 && group[winner].index != best.indexPos {
+				winner := separatedPointSampleWinner(work[:sampleCount])
+				// Sampled candidates keep every residual on the base scan.
+				// The sampled key's lower bound also bounds the filter's build rows.
+				if winner >= 0 && group[winner].index != best.indexPos &&
+					!costCtx.backfillCapacityExceeded(node.Stats.TableCnt*intervals[winner].lower) {
 					best.indexPos = group[winner].index
 					best.filterIdx = group[winner].filters
 				}
