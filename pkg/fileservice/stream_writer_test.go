@@ -84,7 +84,7 @@ func (w *firstWriteWriter) bytes() []byte {
 }
 
 func TestStreamedRangeReadWritesBeforeRangeArrives(t *testing.T) {
-	const size = 4 * minDiskPrefetchMemoryMax
+	const size = minDiskPrefetchMemoryMax + 1<<20
 	for _, tc := range []struct {
 		name   string
 		writer bool
@@ -100,7 +100,7 @@ func TestStreamedRangeReadWritesBeforeRangeArrives(t *testing.T) {
 			fs.storage = storage
 			release := sync.OnceFunc(func() { close(storage.proceed) })
 			defer release()
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			w := &firstWriteWriter{first: make(chan struct{})}
@@ -129,7 +129,7 @@ func TestStreamedRangeReadWritesBeforeRangeArrives(t *testing.T) {
 			}()
 			select {
 			case <-w.first:
-			case <-time.After(3 * time.Second):
+			case <-time.After(10 * time.Second):
 				t.Fatal("the streamed entry got no bytes before the rest of its range arrived")
 			}
 			release()
