@@ -201,9 +201,8 @@ func (d *DiskCache) prefetchRead(
 	// No run of the read starts after a delete of the object counted since it began, and
 	// no bytes it read across one are returned.
 	deletes := d.deletes.now()
-	key := d.rangeObjectKey(filePath)
 	diskPath := d.pathForFile(filePath)
-	ranges := d.ranges.of(key)
+	ranges := d.ranges.of(d.rangeObjectKey(filePath))
 
 	n := int((windowEnd - windowStart) / block)
 	needed := make([]bool, n)
@@ -252,7 +251,7 @@ func (d *DiskCache) prefetchRead(
 		if b.state != blockMissing {
 			continue
 		}
-		if f.fastestLocked(diskPath, b.start, b.end, now, d.downloadMaxExtraWait, true) != nil {
+		if d.joinableLocked(diskPath, b.start, b.end, now, true) != nil {
 			b.state = blockJoined
 		}
 	}
@@ -407,8 +406,7 @@ func (d *DiskCache) prefetchRead(
 				if o != nil && !o.caches() {
 					return nil, memoryRuns, false, nil
 				}
-				r, ok := smallestContaining(d.ranges.of(key), b.start, b.end-b.start, nil)
-				if !ok || !d.cache.Contains(r.diskPath) || !d.readCachedRange(ctx, r, b.start, dst, &deadline) {
+				if !d.readCachedBytes(ctx, filePath, b.start, dst, &deadline) {
 					return nil, memoryRuns, false, nil
 				}
 			}
@@ -691,7 +689,8 @@ func (d *DiskCache) fetchRange(
 		if errors.Is(err, errPrefetchMissed) {
 			// An object that caches its bytes and ended without them may have found them
 			// cached in a range.
-			if o.caches() && d.readCachedBytes(ctx, filePath, start, out) {
+			var deadline time.Time
+			if o.caches() && d.readCachedBytes(ctx, filePath, start, out, &deadline) {
 				return out, true, true, nil
 			}
 			return nil, false, false, nil
@@ -1068,7 +1067,7 @@ func (f *memoryPrefetchObject) registerLocked(ctx, closing context.Context, now 
 // joinLocked returns the fastest prefetch object reads can join holding the range of f,
 // one that caches when f caches.
 func (f *memoryPrefetchObject) joinLocked(now time.Time) prefetchObject {
-	return f.d.prefetchObjects.fastestLocked(f.diskPath, f.start, f.end, now, f.d.downloadMaxExtraWait, f.needs.caching)
+	return f.d.joinableLocked(f.diskPath, f.start, f.end, now, f.needs.caching)
 }
 
 // abandon ends f, never registered.
@@ -1100,7 +1099,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 	for i := range vector.Entries {
 		if e := &vector.Entries[i]; e.ranged() {
 
-			if f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, now, d.downloadMaxExtraWait, true) != nil {
+			if d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, now, true) != nil {
 				inFlight[i], found = true, true
 			}
 		}
@@ -1116,7 +1115,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		}
 		e := &vector.Entries[i]
 		f.mu.Lock()
-		fl := f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, time.Now(), d.downloadMaxExtraWait, true)
+		fl := d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, time.Now(), true)
 		if fl != nil {
 			fl.hold()
 		}
@@ -1158,13 +1157,12 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 
 // readCachedBytes reads len(dst) bytes at offset of the object at filePath from the
 // smallest cached range holding them, reporting whether it read them.
-func (d *DiskCache) readCachedBytes(ctx context.Context, filePath string, offset int64, dst []byte) bool {
+func (d *DiskCache) readCachedBytes(ctx context.Context, filePath string, offset int64, dst []byte, deadline *time.Time) bool {
 	r, ok := smallestContaining(d.ranges.of(d.rangeObjectKey(filePath)), offset, int64(len(dst)), nil)
 	if !ok || !d.cache.Contains(r.diskPath) {
 		return false
 	}
-	var deadline time.Time
-	return d.readCachedRange(ctx, r, offset, dst, &deadline)
+	return d.readCachedRange(ctx, r, offset, dst, deadline)
 }
 
 // readCachedRange reads len(dst) bytes at offset of the object from the cached range r.
@@ -1552,6 +1550,11 @@ func (f *prefetchObjects) fastestLocked(diskPath string, lo, hi int64, now time.
 	return best
 }
 
+// joinableLocked is fastestLocked of d's prefetch objects with d's max extra wait.
+func (d *DiskCache) joinableLocked(diskPath string, lo, hi int64, now time.Time, cached bool) prefetchObject {
+	return d.prefetchObjects.fastestLocked(diskPath, lo, hi, now, d.downloadMaxExtraWait, cached)
+}
+
 // coveringLocked returns a prefetch object of diskPath reads can join that caches the
 // bytes [lo, hi), and whose bytes are not out of reach, however long they take.
 func (f *prefetchObjects) coveringLocked(diskPath string, lo, hi int64, now time.Time) prefetchObject {
@@ -1571,7 +1574,7 @@ func (d *DiskCache) fastestPrefetch(diskPath string, lo, hi int64) (time.Duratio
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now()
-	if fl := f.fastestLocked(diskPath, lo, hi, now, d.downloadMaxExtraWait, true); fl != nil {
+	if fl := d.joinableLocked(diskPath, lo, hi, now, true); fl != nil {
 		return fl.eta(now, lo, hi), true
 	}
 	return 0, false
