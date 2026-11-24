@@ -156,11 +156,47 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
       if (data.workflow_runs.length < 100 || page * 100 >= data.total_count) return;
     }
   }
-  for (let round = 0; round < 3; round++) {
-    for (const status of active) await scan(status, first, last);
-    if (round < 2) await wait(5_000);
+  async function scanReservations() {
+    for (let round = 0; round < 3; round++) {
+      for (const status of active) await scan(status, first, last);
+      if (round < 2) await wait(5_000);
+    }
   }
-  const get = async id => (await github.rest.actions.getWorkflowRun({ ...repo, run_id: id })).data;
+  async function scanGrants() {
+    // The parent publishes coverage-admit-<child ID> before that child runs UT.
+    // A receipt is a lookup hint, not cancellation authority. Do not download
+    // grant.json. Artifacts can span attempts; matches() checks the live run.
+    for (let page = 1; ; page++) {
+      const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+        ...repo, run_id: parent.id, per_page: 100, page,
+      });
+      for (const { name } of data.artifacts) {
+        const match = /^coverage-admit-([1-9][0-9]*)$/.exec(name);
+        if (!match) continue;
+        const id = Number(match[1]);
+        if (Number.isSafeInteger(id) && name === `coverage-admit-${id}` && !candidates.has(id)) {
+          candidates.set(id, { id, run_attempt: 1 });
+        }
+      }
+      if (data.artifacts.length < 100) return;
+    }
+  }
+  // Query receipts last, after the late-index grace period. If one discovery
+  // API fails, clean up verified candidates from the other, then surface it.
+  let discoveryError;
+  for (const discover of [scanReservations, scanGrants]) {
+    try { await discover(); } catch (err) { discoveryError ??= err; }
+  }
+  const get = async id => {
+    try {
+      const { data } = await github.rest.actions.getWorkflowRun({ ...repo, run_id: id });
+      if (data.id !== id) throw new Error('Coverage worker lookup ID mismatch');
+      return data;
+    } catch (err) {
+      if (err.status === 404) return { id, status: 'missing' };
+      throw err;
+    }
+  };
   const stillCurrent = async () => {
     const { data: current } = await github.rest.actions.getWorkflowRunAttempt({
       ...repo, run_id: parent.id, attempt_number: parent.run_attempt,
@@ -169,6 +205,7 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
       current.status === 'completed' && current.head_sha === parent.head_sha;
   };
   await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait });
+  if (discoveryError) throw discoveryError;
 }
 
 async function cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait }) {

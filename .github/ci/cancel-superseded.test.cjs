@@ -258,7 +258,7 @@ test('closed PR cancellation handles normal completion, API errors and malformed
   assert.deepEqual(invalid.calls, []);
 });
 
-function coverageHarness({ children, parentOverride = {}, tick } = {}) {
+function coverageHarness({ children, parentOverride = {}, tick, receipts = [], listed = () => true } = {}) {
   const sha = 'a'.repeat(40);
   const parent = { id: 600, run_attempt: 2, workflow_id: 42, event: 'pull_request_target',
     path: '.github/workflows/entrypoint.yaml', repository: { full_name: 'matrixorigin/matrixone' },
@@ -276,6 +276,12 @@ function coverageHarness({ children, parentOverride = {}, tick } = {}) {
   const actions = {
     getWorkflow: async ({ workflow_id }) => ({ data: { id: workflow_id === 'entrypoint.yaml' ? 42 : 43 } }),
     getWorkflowRunAttempt: async () => ({ data: { ...parent } }),
+    listWorkflowRunArtifacts: async ({ run_id, page, per_page }) => {
+      assert.equal(run_id, parent.id);
+      assert.equal(per_page, 100);
+      return { data: { total_count: receipts.length,
+        artifacts: receipts.slice((page - 1) * per_page, page * per_page).map(name => ({ name })) } };
+    },
     listWorkflowRuns: async ({ workflow_id, branch, event, status, created, page, per_page }) => {
       assert.equal(workflow_id, 43);
       assert.equal(branch, 'main');
@@ -285,11 +291,14 @@ function coverageHarness({ children, parentOverride = {}, tick } = {}) {
       assert.ok(lo >= Date.parse(parent.run_started_at) && hi <= Date.parse(parent.updated_at) + 60000);
       const found = [...rows.values()].filter(run => {
         const when = Date.parse(run.created_at || parent.run_started_at);
-        return run.status === status && lo <= when && when <= hi;
+        return listed(run, elapsed) && run.status === status && lo <= when && when <= hi;
       });
       return { data: { total_count: found.length, workflow_runs: found.slice((page-1)*100, page*100) } };
     },
-    getWorkflowRun: async ({ run_id }) => ({ data: { ...rows.get(run_id) } }),
+    getWorkflowRun: async ({ run_id }) => {
+      if (!rows.has(run_id)) throw Object.assign(new Error('missing'), { status: 404 });
+      return { data: { ...rows.get(run_id) } };
+    },
     cancelWorkflowRun: async ({ run_id }) => { calls.push(['cancel', run_id, elapsed]); },
   };
   const core = { info() {}, summary: {
@@ -324,6 +333,44 @@ test('completed parent attempt releases only its queued and running standby chil
   await h.run();
   assert.deepEqual(h.calls, [['cancel', 700, 10000], ['cancel', 701, 10000],
     ['force', 700, 130000], ['force', 701, 130000]]);
+});
+
+test('admitted worker absent from all list scans is cancelled by its paginated receipt', async () => {
+  const h = coverageHarness({ listed: (_run, elapsed) => elapsed >= 15000,
+    receipts: [...Array(100).fill('irrelevant'), 'coverage-admit-701', 'coverage-admit-701'],
+    tick(rows, _p, elapsed) { if (elapsed === 20000) rows.get(701).status = 'completed'; } });
+  await h.run();
+  assert.deepEqual(h.calls, [['cancel', 701, 10000]]);
+});
+
+test('receipt names cannot authorize cancellation of unrelated runs', async () => {
+  const receipts = ['coverage-admit-404', 'coverage-admit-801', 'coverage-admit-802',
+    'coverage-admit-803', 'coverage-admit-804', 'coverage-admit-0700', 'coverage-admit-700-extra',
+    'coverage-admit-9007199254740992'];
+  const h = coverageHarness({ receipts, listed: () => false });
+  const base = h.child(700, 0, 'cs');
+  for (const [id, change] of [[801, { display_title: base.display_title.replace('600/2/', '600/1/') }],
+    [802, { workflow_id: 99 }], [803, { status: 'completed' }],
+    [804, { display_title: base.display_title.replace('600/2/', '602/2/') }]]) {
+    h.rows.set(id, { ...base, id, ...change });
+  }
+  await h.run();
+  assert.deepEqual(h.calls, []);
+});
+
+test('receipt and listing identify the same child only once', async () => {
+  const h = coverageHarness({ receipts: ['coverage-admit-701'] });
+  await h.run();
+  assert.equal(h.calls.filter(([action, id]) => action === 'cancel' && id === 701).length, 1);
+});
+
+test('failed discovery does not strand a verified child, or report successful cleanup', async () => {
+  for (const api of ['listWorkflowRuns', 'listWorkflowRunArtifacts']) {
+    const h = coverageHarness({ receipts: ['coverage-admit-701'] });
+    h.options.github.rest.actions[api] = async () => { throw new Error('discovery unavailable'); };
+    await assert.rejects(h.run(), /discovery unavailable/);
+    assert.equal(h.calls.filter(([action, id]) => action === 'cancel' && id === 701).length, 1);
+  }
 });
 
 test('standby cleanup excludes other parent attempts, heads, workflows and reruns', async () => {
