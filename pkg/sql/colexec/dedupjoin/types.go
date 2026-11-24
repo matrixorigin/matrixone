@@ -69,11 +69,12 @@ const (
 //
 // Ownership: once a non-merger successfully publishes this message to the
 // mailbox, it must relinquish captured / capturedVecs. The merger then becomes
-// the sole owner and is responsible for Free'ing capturedVecs.
+// the sole owner and releases capturedVecs with the worker's capturedMP.
 type WorkerJoinMsg struct {
 	matched      *bitmap.Bitmap
 	captured     *bitmap.Bitmap
 	capturedVecs []*vector.Vector
+	capturedMP   *mpool.MPool
 	aborted      bool
 	err          error
 }
@@ -205,19 +206,19 @@ func (m *WorkerJoinMailbox) resetParticipant() {
 	m.roundDone = make(chan struct{})
 }
 
-// A capture retains its allocating state pool even after ownership passes
-// from a worker to the merger. The consumer's process pool may differ.
-func freeCapturedVecs(vecs []*vector.Vector) {
+// Use the state pool recorded by the allocating worker, including after a
+// mailbox transfer. Vector.Free checks that each capture belongs to that pool.
+func freeCapturedVecs(vecs []*vector.Vector, mp *mpool.MPool) {
 	for _, v := range vecs {
 		if v != nil {
-			v.Free(v.MPool())
+			v.Free(mp)
 		}
 	}
 }
 
 func (msg *WorkerJoinMsg) free() {
 	if msg != nil {
-		freeCapturedVecs(msg.capturedVecs)
+		freeCapturedVecs(msg.capturedVecs, msg.capturedMP)
 	}
 }
 
@@ -297,6 +298,7 @@ type container struct {
 	// captured values are emitted into the Result slots that point at the
 	// build-side placeholder columns.
 	capturedVecs []*vector.Vector
+	capturedMP   *mpool.MPool // state pool used to allocate capturedVecs
 	// resultVecMP is the pool result vectors are created with (resultMP).
 	resultVecMP      *mpool.MPool
 	captured         *bitmap.Bitmap
@@ -601,8 +603,9 @@ func (ctr *container) cleanResultBatches(proc *process.Process) {
 }
 
 func (ctr *container) cleanCaptured() {
-	freeCapturedVecs(ctr.capturedVecs)
+	freeCapturedVecs(ctr.capturedVecs, ctr.capturedMP)
 	ctr.capturedVecs = nil
+	ctr.capturedMP = nil
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }

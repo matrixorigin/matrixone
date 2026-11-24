@@ -556,6 +556,7 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 		return err
 	}
 	n := len(ap.OldColCapturePlaceholderIdxList)
+	ctr.capturedMP = stateMP
 	ctr.capturedVecs = make([]*vector.Vector, n)
 	for i, probePos := range ap.OldColCaptureProbeIdxList {
 		typ := ap.LeftTypes[probePos]
@@ -817,6 +818,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 {
 				msg.captured = ctr.captured
 				msg.capturedVecs = ctr.capturedVecs
+				msg.capturedMP = ctr.capturedMP
 			}
 			if err := context.Cause(proc.Ctx); err != nil {
 				return err
@@ -837,6 +839,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			// point Reset/Free still owns and releases these vectors.
 			ctr.captured = nil
 			ctr.capturedVecs = nil
+			ctr.capturedMP = nil
 			ctr.matched = nil
 			// Publication, not acknowledgement, is the worker's single status
 			// for this round. Mark it before waiting so concurrent cancellation
