@@ -35,7 +35,9 @@ var (
 	maxIdleConns        = 128
 	maxIdleConnsPerHost = 128
 	maxConnsPerHost     = 128
-	idleConnTimeout     = 10 * time.Second
+	// minDownloadConns is the fewest object-storage connections downloads may hold.
+	minDownloadConns = 64
+	idleConnTimeout  = 10 * time.Second
 )
 
 var dnsResolver = dns.NewCachingResolver(
