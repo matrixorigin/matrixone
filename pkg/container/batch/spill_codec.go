@@ -59,7 +59,7 @@ func (bat *Batch) MarshalBinaryForSpillTo(w io.Writer) error {
 func (bat *Batch) spillView() Batch {
 	metadataFree := *bat
 	metadataFree.Attrs = nil
-	metadataFree.ExtraBuf = nil
+	metadataFree.extraBuf = nil
 	metadataFree.mp = nil
 	return metadataFree
 }

@@ -148,7 +148,7 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		err = rbat.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, tc.bat.ExtraBuf, rbat.ExtraBuf)
+		require.Equal(t, tc.bat.extraBuf, rbat.extraBuf)
 
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
@@ -631,7 +631,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 		}
 	}
 
-	bat.ExtraBuf = []byte("extra buf")
+	bat.extraBuf = []byte("extra buf")
 	bat.Attrs = []string{"1"}
 	return bat
 }
@@ -1160,7 +1160,7 @@ func TestSpillStreamingRejectsBatchMetadata(t *testing.T) {
 			source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
 			source.Attrs = test.attrs
-			source.ExtraBuf = test.extra
+			source.extraBuf = test.extra
 			source.SetRowCount(1)
 			var wire bytes.Buffer
 			require.NoError(t, source.MarshalBinaryTo(&wire))

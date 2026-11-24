@@ -154,7 +154,10 @@ func (c *batchCache) copyBatch(src *batch.Batch) (dst *batch.Batch, owned, alias
 		}
 	}
 
-	dst.MoveExtraBufferFrom(src)
+	if err = dst.MoveExtraBufferFrom(src, c.mp); err != nil {
+		c.put(dst, aliased)
+		return nil, false, false, err
+	}
 	dst.SetRowCount(src.RowCount())
 	return dst, true, aliased, nil
 }

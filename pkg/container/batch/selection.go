@@ -91,7 +91,8 @@ func (bat *Batch) PhysicalView(dst *Batch) {
 	dst.ShuffleIDX = bat.ShuffleIDX
 	dst.Attrs = bat.Attrs
 	dst.Vecs = bat.Vecs
-	dst.ExtraBuf = bat.ExtraBuf
+	dst.extraBuf = bat.extraBuf
+	dst.mp = nil // a view owns nothing
 	dst.selection = nil
 	dst.rowCount = bat.PhysicalRowCount()
 }

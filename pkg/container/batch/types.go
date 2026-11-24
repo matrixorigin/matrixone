@@ -52,7 +52,10 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 
-	ExtraBuf []byte
+	// extraBuf is an opaque payload carried with the batch (today: group's
+	// partial aggregate state). It is allocated from mp when mp is non-nil;
+	// with a nil mp it borrows memory the batch does not own.
+	extraBuf []byte
 
 	// row count of batch, to instead of old len(Zs). For a selected batch it
 	// is the logical (selected) row count.
@@ -63,9 +66,9 @@ type Batch struct {
 	// row count.
 	selection *bitmap.Bitmap
 
-	// mp is the pool for the batch's own memory allocations. Today it is
-	// set only when ExtraBuf was detached from an accounted off-heap buffer,
-	// and it then owns ExtraBuf; ordinary Go-heap ExtraBuf values leave it nil.
+	// mp is the pool for the batch's own memory allocations; today that is
+	// only extraBuf. nil means the batch owns nothing from a pool, as for
+	// a view or a batch decoded without a pool.
 	mp *mpool.MPool
 
 	// leases keeps alive the lent backings (for example pinned FileService

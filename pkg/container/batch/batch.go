@@ -156,7 +156,7 @@ func (bat *Batch) prepareMarshalBinary(
 	}
 	if uint64(len(bat.Vecs)) > uint64(^uint32(0)>>1) ||
 		uint64(len(bat.Attrs)) > uint64(^uint32(0)>>1) ||
-		uint64(len(bat.ExtraBuf)) > uint64(^uint32(0)>>1) {
+		uint64(len(bat.extraBuf)) > uint64(^uint32(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch field exceeds marshal format",
 		)
@@ -193,7 +193,7 @@ func (bat *Batch) prepareMarshalBinary(
 			)
 		}
 	}
-	if !add(uint64(len(bat.ExtraBuf))) {
+	if !add(uint64(len(bat.extraBuf))) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch marshal size exceeds platform limit",
 		)
@@ -265,11 +265,11 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 		}
 	}
 
-	extraSize := int32(len(bat.ExtraBuf))
+	extraSize := int32(len(bat.extraBuf))
 	if err := writeBatchMarshalInt32(w, extraSize); err != nil {
 		return err
 	}
-	if err := types.WriteFull(w, bat.ExtraBuf); err != nil {
+	if err := types.WriteFull(w, bat.extraBuf); err != nil {
 		return err
 	}
 
@@ -983,8 +983,17 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if err != nil {
 		return err
 	}
-	bat.releaseExtraBuf()
-	bat.ExtraBuf = append(bat.ExtraBuf, extraBuf...)
+	// With a nil mp the decoded vectors are read-only references to data;
+	// extraBuf borrows data the same way.
+	if mp == nil {
+		bat.releaseExtraBuf()
+		bat.mp = nil
+		if len(extraBuf) != 0 {
+			bat.extraBuf = extraBuf
+		}
+	} else if err := bat.SetExtraBuf(mp, extraBuf); err != nil {
+		return err
+	}
 
 	bat.Recursive, err = cursor.readInt32()
 	if err != nil {
@@ -1072,11 +1081,10 @@ func (bat *Batch) unmarshalFromReader(
 		bat.Attrs[i] = string(bs)
 	}
 
-	// ExtraBuf is a data-scaled Go-heap field in the stable Batch codec. Spill
+	// extraBuf is a data-scaled field in the stable Batch codec. Spill
 	// records do not use it and reject it before allocating its payload.
 	if allowMetadata {
-		bat.releaseExtraBuf()
-		if bat.ExtraBuf, err = readBatchSizedBytes(r); err != nil {
+		if err = bat.readExtraBuf(r, mp); err != nil {
 			return err
 		}
 	} else {
@@ -1122,6 +1130,43 @@ func readBatchSizedBytes(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// readExtraBuf reads a size-prefixed extraBuf from r into memory allocated
+// from mp, or into Go-heap memory the batch does not own when mp is nil.
+func (bat *Batch) readExtraBuf(r io.Reader, mp *mpool.MPool) error {
+	bat.releaseExtraBuf()
+	bat.mp = mp
+	if mp == nil {
+		data, err := readBatchSizedBytes(r)
+		bat.extraBuf = data
+		return err
+	}
+	size, err := types.ReadInt32AsInt(r)
+	if err != nil {
+		return err
+	}
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative batch buffer size")
+	}
+	if limited, ok := r.(*io.LimitedReader); ok && int64(size) > limited.N {
+		return io.ErrUnexpectedEOF
+	}
+	if lengthAware, ok := r.(interface{ Len() int }); ok && size > lengthAware.Len() {
+		return io.ErrUnexpectedEOF
+	}
+	if size == 0 {
+		return nil
+	}
+	data, err := mp.Alloc(size, true)
+	if err != nil {
+		return err
+	}
+	bat.extraBuf = data
+	if _, err = io.ReadFull(r, data); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateReaderElementCount(
@@ -1284,6 +1329,47 @@ func (bat *Batch) SetAttributes(attrs []string) {
 	bat.Attrs = attrs
 }
 
+// ExtraBuf returns the batch's opaque payload, or nil. The bytes stay owned
+// by the batch and are valid until it releases or replaces them.
+func (bat *Batch) ExtraBuf() []byte {
+	if bat == nil {
+		return nil
+	}
+	return bat.extraBuf
+}
+
+// SetExtraBuf replaces the payload with a copy of data allocated from mp.
+// data may alias the current payload.
+func (bat *Batch) SetExtraBuf(mp *mpool.MPool, data []byte) error {
+	if bat == nil || mp == nil {
+		return moerr.NewInternalErrorNoCtx("batch extra buffer needs a batch and a pool")
+	}
+	var copied []byte
+	if len(data) != 0 {
+		var err error
+		if copied, err = mp.Alloc(len(data), true); err != nil {
+			return err
+		}
+		copy(copied, data)
+	}
+	bat.AdoptExtraBuf(mp, copied)
+	return nil
+}
+
+// AdoptExtraBuf replaces the payload with data, an allocation from mp that the
+// batch now owns and releases.
+func (bat *Batch) AdoptExtraBuf(mp *mpool.MPool, data []byte) {
+	bat.releaseExtraBuf()
+	bat.mp = mp
+	if len(data) == 0 {
+		if mp != nil && cap(data) != 0 {
+			mp.Free(data)
+		}
+		return
+	}
+	bat.extraBuf = data
+}
+
 // SetAccountedExtraBuffer transfers one accounted byte buffer into the Batch.
 // Clean releases it exactly once; MoveExtraBufferFrom preserves ownership when
 // a pipeline spool moves the payload to another Batch object.
@@ -1295,37 +1381,43 @@ func (bat *Batch) SetAccountedExtraBuffer(buffer *mpool.AccountedBuffer) error {
 	if err != nil {
 		return err
 	}
-	bat.releaseExtraBuf()
-	bat.ExtraBuf = data
-	bat.mp = pool
+	bat.AdoptExtraBuf(pool, data)
 	return nil
 }
 
-func (bat *Batch) MoveExtraBufferFrom(source *Batch) {
+// MoveExtraBufferFrom moves source's payload, and the pool that owns it, to
+// bat; bat's previous payload is released first. When source only borrows its
+// payload (a view, or a batch decoded without a pool), bat gets a copy
+// allocated from mp instead, so it never outlives the real owner's memory.
+func (bat *Batch) MoveExtraBufferFrom(source *Batch, mp *mpool.MPool) error {
 	if bat == nil || source == nil || bat == source {
-		return
+		return nil
+	}
+	if len(source.extraBuf) != 0 && source.mp == nil {
+		return bat.SetExtraBuf(mp, source.extraBuf)
 	}
 	bat.releaseExtraBuf()
-	bat.ExtraBuf = source.ExtraBuf
+	bat.extraBuf = source.extraBuf
 	bat.mp = source.mp
-	source.ExtraBuf = nil
-	source.mp = nil
+	source.extraBuf = nil
+	return nil
 }
 
-// DropExtraBuffer releases an accounted payload or drops an ordinary Go-heap
-// payload. It is used by reusable pipeline batches before entering a cache.
+// DropExtraBuffer releases the payload. It is used by reusable pipeline
+// batches before entering a cache.
 func (bat *Batch) DropExtraBuffer() {
 	if bat != nil {
 		bat.releaseExtraBuf()
 	}
 }
 
+// releaseExtraBuf frees extraBuf through mp when the batch owns it. It keeps
+// mp: the pool belongs to the batch, not to one payload.
 func (bat *Batch) releaseExtraBuf() {
-	if bat.mp != nil && cap(bat.ExtraBuf) != 0 {
-		bat.mp.Free(bat.ExtraBuf)
+	if bat.mp != nil && cap(bat.extraBuf) != 0 {
+		bat.mp.Free(bat.extraBuf)
 	}
-	bat.ExtraBuf = nil
-	bat.mp = nil
+	bat.extraBuf = nil
 }
 
 // OwnReadOnlyVectors replaces every read-only (reference) vector of bat with
@@ -1500,7 +1592,8 @@ func (bat *Batch) ViewInto(dst *Batch) {
 	dst.ShuffleIDX = bat.ShuffleIDX
 	dst.Attrs = bat.Attrs
 	dst.Vecs = append(dst.Vecs[:0], bat.Vecs...)
-	dst.ExtraBuf = bat.ExtraBuf
+	dst.extraBuf = bat.extraBuf
+	dst.mp = nil // a view owns nothing
 	dst.rowCount = bat.rowCount
 	dst.selection = bat.selection
 }

@@ -1048,7 +1048,7 @@ func blockDataReadWithFilter(
 		return err
 	}
 	cacheVectors.Free(mp)
-	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf) == 0 &&
+	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf()) == 0 &&
 		canReadMembership(ctx, info, columns, colTypes, storageSelectRows, earlyColumns, applyFilter)
 	if !stageMembership {
 		applyFilter.FreeMembership(mp)
@@ -1126,7 +1126,7 @@ func blockDataReadWithFilter(
 			}
 		}
 
-		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf()) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
 			defer tombstones.Release()
 			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
 		}
@@ -1207,7 +1207,7 @@ func blockDataReadWithFilter(
 
 	var filterResult engine.ReaderFilterResult
 	selectedOutput := applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() &&
-		orderByLimit == nil && phyAddrColumnPos < 0 && len(outputBat.ExtraBuf) == 0
+		orderByLimit == nil && phyAddrColumnPos < 0 && len(outputBat.ExtraBuf()) == 0
 	if selectedOutput {
 		filterResult, err = applyFilter.Select(outputBat, earlyColumns)
 		if err != nil {
