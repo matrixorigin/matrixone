@@ -80,10 +80,11 @@ func TestMoIndexStatsAsyncCoverageUsesSourceCommitsAndLogicalTimestamp(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProc(t)
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
-			oldSQL, oldSource := indexStatsRunCurrentSQL, indexStatsSourceCommit
-			t.Cleanup(func() { indexStatsRunCurrentSQL, indexStatsSourceCommit = oldSQL, oldSource })
-			indexStatsRunCurrentSQL = func(_ context.Context, _ string, account uint32, _ string, query string) (executor.Result, error) {
-				require.Equal(t, uint32(catalog.System_Account), account)
+			oldSQL, oldSource := indexStatsRunSQL, indexStatsSourceCommit
+			t.Cleanup(func() { indexStatsRunSQL, indexStatsSourceCommit = oldSQL, oldSource })
+			indexStatsRunSQL = func(system *sqlexec.SqlProcess, query string) (executor.Result, error) {
+				require.Equal(t, uint32(catalog.System_Account), *system.AccountIDOverride)
+				require.Equal(t, catalog.MO_CATALOG, system.DatabaseOverride)
 				require.Contains(t, query, "account_id = 7 AND table_id = 42")
 				require.Contains(t, query, "job_name = 'index_i''vf'")
 				require.Contains(t, query, "drop_at IS NULL ORDER BY job_id DESC LIMIT 1")
@@ -125,15 +126,12 @@ func TestMoIndexStatsAsyncCoverageUsesSourceCommitsAndLogicalTimestamp(t *testin
 
 func TestMoIndexStatsMissingAsyncJobAndUninitializedIndex(t *testing.T) {
 	proc := testutil.NewProc(t)
-	oldSQL, oldCurrent, oldStorage := indexStatsRunSQL, indexStatsRunCurrentSQL, indexStatsReadStorage
+	oldSQL, oldStorage := indexStatsRunSQL, indexStatsReadStorage
 	t.Cleanup(func() {
-		indexStatsRunSQL, indexStatsRunCurrentSQL, indexStatsReadStorage = oldSQL, oldCurrent, oldStorage
+		indexStatsRunSQL, indexStatsReadStorage = oldSQL, oldStorage
 	})
 	indexStatsRunSQL = func(_ *sqlexec.SqlProcess, query string) (executor.Result, error) {
 		require.True(t, strings.HasPrefix(query, "SELECT "))
-		return executor.Result{}, nil
-	}
-	indexStatsRunCurrentSQL = func(context.Context, string, uint32, string, string) (executor.Result, error) {
 		return executor.Result{}, nil
 	}
 	indexStatsReadStorage = func(_ *process.Process, _ *sqlexec.SqlProcess, _ indexstats.Config) (map[string]any, error) {
@@ -188,13 +186,14 @@ func TestMoIndexStatsPrimaryStorageExcludesOtherSourceColumns(t *testing.T) {
 
 func TestMoIndexStatsAsyncObservationFailureDoesNotHideCounts(t *testing.T) {
 	proc := testutil.NewProc(t)
-	old := indexStatsRunCurrentSQL
-	t.Cleanup(func() { indexStatsRunCurrentSQL = old })
-	indexStatsRunCurrentSQL = func(context.Context, string, uint32, string, string) (executor.Result, error) {
+	old := indexStatsRunSQL
+	t.Cleanup(func() { indexStatsRunSQL = old })
+	indexStatsRunSQL = func(*sqlexec.SqlProcess, string) (executor.Result, error) {
 		return executor.Result{}, errors.New("sys history is unavailable")
 	}
 	metrics, err := readIndexStatsMaintenance(proc, sqlexec.NewSqlProcess(proc), indexstats.Config{})
 	require.NoError(t, err)
 	require.Equal(t, "task_status_unavailable", metrics["status"])
 	require.Nil(t, metrics["caught_up"])
+	require.Nil(t, metrics["lag_seconds"])
 }

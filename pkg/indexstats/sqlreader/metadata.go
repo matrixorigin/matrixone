@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
 	iscpmeta "github.com/matrixorigin/matrixone/pkg/iscp/metadata"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -135,14 +134,6 @@ func readIndexStatsSourceCommit(proc *process.Process, sqlproc *sqlexec.SqlProce
 }
 
 func readIndexStatsMaintenance(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config) (map[string]any, error) {
-	return readIndexStatsMaintenanceObserved(proc, sqlproc, cfg, func(query string) (executor.Result, error) {
-		return indexStatsRunCurrentSQL(proc.Ctx, proc.GetService(), catalog.System_Account, catalog.MO_CATALOG, query)
-	})
-}
-
-// Deep analysis observes progress in the same read view as the index entries.
-// The normal status endpoint deliberately observes the latest durable progress.
-func readIndexStatsMaintenanceObserved(proc *process.Process, sqlproc *sqlexec.SqlProcess, cfg indexstats.Config, observe func(string) (executor.Result, error)) (map[string]any, error) {
 	accountID, err := defines.GetAccountId(proc.Ctx)
 	if err != nil {
 		return nil, err
@@ -154,9 +145,11 @@ func readIndexStatsMaintenanceObserved(proc *process.Process, sqlproc *sqlexec.S
 		"FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND table_id = %d AND job_name = %s "+
 		"AND drop_at IS NULL ORDER BY job_id DESC LIMIT 1", accountID, cfg.TableID, sqlquote.String(iscpmeta.IndexJobName(cfg.Index)))
 	metrics := map[string]any{"status": "task_missing", "caught_up": nil, "lag_seconds": nil}
-	// The caller chooses latest durable status or the analysis read view;
-	// tenant/table/index filters and watermark semantics remain shared.
-	res, err := observe(query)
+	// The log is system-owned. Keep the diagnostic transaction and snapshot,
+	// switching only the identity used to read the tenant-filtered job row.
+	system := *sqlproc
+	system.WithExecutionIdentity(catalog.System_Account, catalog.MO_CATALOG)
+	res, err := indexStatsRunSQL(&system, query)
 	if err != nil {
 		if proc.Ctx.Err() != nil {
 			return nil, proc.Ctx.Err()
@@ -223,11 +216,10 @@ func readIndexStatsMaintenanceObserved(proc *process.Process, sqlproc *sqlexec.S
 func indexStatsWatermark(value string) (types.TS, bool) { return iscpmeta.ParseWatermark(value) }
 
 var (
-	indexStatsRunSQL        = sqlexec.RunSql
-	indexStatsRunCurrentSQL = sqlexec.RunSqlAutoCommit
-	indexStatsRunStreaming  = sqlexec.RunStreamingSql
-	indexStatsReadStorage   = readIndexStatsStorage
-	indexStatsSourceCommit  = readIndexStatsSourceCommit
+	indexStatsRunSQL       = sqlexec.RunSql
+	indexStatsRunStreaming = sqlexec.RunStreamingSql
+	indexStatsReadStorage  = readIndexStatsStorage
+	indexStatsSourceCommit = readIndexStatsSourceCommit
 )
 
 type metadataState struct {

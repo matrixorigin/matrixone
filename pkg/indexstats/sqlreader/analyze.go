@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/indexstats"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/diagnostic"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -52,21 +51,12 @@ func (s *ivfStats) analyzeIndex(proc *process.Process, sp *sqlexec.SqlProcess) (
 	if s.untrained || len(s.buckets) == 0 {
 		return unavailable("untrained", nil)
 	}
-	if s.config.Async {
-		system := *sp
-		system.WithExecutionIdentity(catalog.System_Account, catalog.MO_CATALOG)
-		progress, err := readIndexStatsMaintenanceObserved(proc, sp, s.config, func(query string) (executor.Result, error) { return indexStatsRunSQL(&system, query) })
-		if err != nil {
-			return unavailable("progress_snapshot_unavailable", err)
+	if s.config.Async && s.maintenance["caught_up"] != true {
+		out["maintenance"] = s.maintenance
+		if s.maintenance["caught_up"] == nil {
+			return unavailable("progress_snapshot_unavailable", nil)
 		}
-		if progress["caught_up"] != true {
-			out["maintenance"] = progress
-			status := "index_not_caught_up"
-			if progress["caught_up"] == nil {
-				status = "progress_snapshot_unavailable"
-			}
-			return unavailable(status, nil)
-		}
+		return unavailable("index_not_caught_up", nil)
 	}
 	opts := s.config.Analyze
 	limit := opts.SampleCount

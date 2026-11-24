@@ -220,13 +220,14 @@ IVF 的附加配置可能包括：`kmeans_train_percent`（训练数据百分比
 | `async.status` | 含义 |
 | --- | --- |
 | `task_missing` | 没有有效维护任务。 |
-| `task_status_unavailable` | 当前系统任务状态无法读取，其他统计仍返回。 |
+| `task_status_unavailable` | 查询快照中的任务状态无法读取，其他统计仍返回。 |
 | `initializing` | 初始化中，`caught_up=false`、`lag_seconds=null`。 |
 | `checkpoint_unavailable` | 无有效持久化消费水位。 |
 | `job_status_unavailable` | 缺少有效任务阶段。 |
 | `source_commit_ts_unavailable` | 无法取得源表所需水位，例如事务内有未提交写入。 |
 
-异步任务状态在独立的当前系统事务中观测，不借用租户历史快照：租户快照不保留系统任务表历史。从 `mo_catalog.mo_iscp_log` 读取该源表最新、未删除的 `index_<索引名>` 任务。解析持久化水位后，向源表的 `SourceCommitTS` 获取当前快照所需的覆盖水位：
+汇总和深度检查共用一次进度读取。在查询快照中，以系统身份从 `mo_catalog.mo_iscp_log` 读取所属租户和源表最近一条未删除的 `index_<索引名>` 任务，将持久化消费水位与同一快照下源表的 `SourceCommitTS` 比较。快照中的任务历史不可用时，追平状态和延迟均为 null。
+
 
 ```text
 caught_up = 消费水位 >= 源表所需水位     // 比较完整物理和逻辑时间

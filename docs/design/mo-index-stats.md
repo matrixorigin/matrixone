@@ -39,7 +39,7 @@ IVF returns one `index` summary row followed by `centroid` detail rows. Key inde
 and fulltext return exactly one `index` row; fulltext never enumerates vocabulary
 terms. All summary rows have a NULL `object_id`. For IVF, only the current metadata version is read,
 and empty buckets are included. Relational reads and physical-object visibility
-use the statement's transaction snapshot. Async job status is observed in a fresh system transaction, independently of that snapshot. The engine's
+use the statement's transaction snapshot. Async job state and its durable watermark use the same snapshot. The engine's
 size estimate can include asynchronously published statistics. Diagnostic results are not persisted. IVF CREATE/REINDEX may publish optional
 build metadata as described in [index health](mo-index-health.md).
 
@@ -217,8 +217,8 @@ I/O cost. Diagnostics do not request a flush or persist a diagnostic baseline.
 
 Synchronous indexes omit the `async` object. An async summary reads the latest
 non-dropped `index_<canonical-index-name>` job for the source account and table
-from the system-owned `mo_iscp_log`, in a fresh system transaction. Tenant snapshots
-do not retain sys-owned job history. A failed observation returns
+visible in the statement snapshot from the system-owned `mo_iscp_log`. Deep analysis
+uses the same observation. An unavailable job history returns
 `task_status_unavailable` with unknown coverage, preserving other statistics. It exposes
 `task_state` (the shared ISCP running/retrying/stopped/canceled names), UTC `synced_at`, nullable `caught_up`, and nullable `lag_seconds`.
 An actual error adds a nonzero `error_code` and available `error_message`.
@@ -237,7 +237,7 @@ zero seconds while `caught_up` is false. Durable watermarks may lag the
 consumer's in-memory progress until the existing ISCP flush occurs.
 
 When freshness cannot be established, `async.status` is `task_missing`, `initializing`,
-`checkpoint_unavailable`, `job_status_unavailable`, or
+`checkpoint_unavailable`, `job_status_unavailable`, `task_status_unavailable`, or
 `source_commit_ts_unavailable`. Unknown freshness has JSON null `caught_up` and
 `lag_seconds`. Initialization reports `caught_up: false` without a fabricated
 lag. Sentinel maximum timestamps are never accepted as proof of coverage.

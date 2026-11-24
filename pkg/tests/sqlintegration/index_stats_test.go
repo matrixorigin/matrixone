@@ -356,6 +356,10 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		require.GreaterOrEqual(t, maintenance["lag_seconds"].(float64), float64(0))
 		require.NotContains(t, metrics, "diagnosis")
 		require.NotContains(t, maintenance, "status")
+		maintenanceBeforeCatchup := maintenance
+		exec("create view ivf_health as select metrics from mo_index_stats('index_stats_async','vectors','ivf','{}') as s where row_type='index'")
+		exec("create snapshot index_stats_lagging for account")
+		defer cleanupSQLIntegration(t, cn, "drop snapshot index_stats_lagging")
 		exec("begin")
 		exec("insert into vectors values(4,'[40]')")
 		metrics, err = read()
@@ -371,6 +375,14 @@ func TestMoIndexStatsAsyncSQL(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(deepJSON), &deep))
 		require.NotContains(t, deep["analysis"], "status", "same-view durable progress permits coverage analysis")
 		require.Contains(t, deep["analysis"], "recall")
+		require.Equal(t, true, deep["async"].(map[string]any)["caught_up"])
+
+		var historicalJSON string
+		require.NoError(t, conn.QueryRowContext(ctx, "select metrics from ivf_health {snapshot='index_stats_lagging'}").Scan(&historicalJSON))
+		var historical map[string]any
+		require.NoError(t, json.Unmarshal([]byte(historicalJSON), &historical))
+		require.Equal(t, maintenanceBeforeCatchup, historical["async"])
+		require.Equal(t, "index_not_caught_up", historical["analysis"].(map[string]any)["status"])
 	})
 }
 
