@@ -1113,7 +1113,7 @@ func (d *DiskCache) writeFileTo(
 		if w.owner, ok = d.paths.tryAcquire(diskPath, cleanup); !ok {
 			return false, nil
 		}
-	} else if readStarted && p.readStarted && d.downloads.load(diskPath) != nil {
+	} else if readStarted && p.declined {
 		var ok bool
 		w.owner, ok = d.paths.tryAcquire(diskPath, cleanup)
 		unpublished = !ok

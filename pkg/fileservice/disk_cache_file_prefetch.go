@@ -43,6 +43,8 @@ type filePrefetchObject struct {
 	// before its download is registered.
 	holds       int
 	readStarted bool
+	// declined is set on one a read started past the download of its range it declined.
+	declined bool
 	// holdStarter is set when the download holds a reader for the read that started p,
 	// which reads it through readOwnAt, so that its file is not closed before that read
 	// copies its bytes: starterHeld while it holds one, starterDone once the read no longer

@@ -655,6 +655,8 @@ func (d *DiskCache) fetchRange(
 		deletes := d.deletes.now()
 		p := d.newFileObject(context.WithoutCancel(ctx), filePath, start, end, open, flightNeeds{deletes: &deletes})
 		p.readStarted, p.holdStarter = true, true
+		declined, _ := d.fileDownload(p.diskPath, start, end)
+		p.declined = declined != nil
 		if o, err = admit(ctx, p); o != prefetchObject(p) {
 			p.abandon()
 		} else {
