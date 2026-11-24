@@ -372,6 +372,77 @@ func TestHistoricalChangesAvoidUninterruptibleReadAhead(t *testing.T) {
 	}
 }
 
+type replayWindowScheduler struct {
+	schedule func(*tasks.Job)
+}
+
+func (s replayWindowScheduler) Schedule(job *tasks.Job) error {
+	s.schedule(job)
+	return nil
+}
+
+func (replayWindowScheduler) Stop() {}
+
+func TestHistoricalChangesReclaimAbortedWindows(t *testing.T) {
+	for _, scenario := range []string{"canceled after final window", "appendable read failure", "CN read failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			mem, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			defer mem.Close(ctx)
+
+			ts := types.BuildTS(100, 0)
+			first := writeReplayTestObject(t, ctx, mp, mem, ts, 11)
+			objects := []*objectio.ObjectEntry{first}
+			canceled := scenario == "canceled after final window"
+			if !canceled {
+				objects = append(objects, writeReplayTestObject(t, ctx, mp, mem, ts, 12))
+			}
+			baseline := mp.CurrNB()
+			payload := batch.NewWithSize(1)
+			defer func() {
+				if payload.RowCount() != 0 {
+					payload.Clean(mp)
+				}
+			}()
+			payload.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+			require.NoError(t, vector.AppendFixed(payload.Vecs[0], int32(12), false, mp))
+			payload.SetRowCount(1)
+
+			missing := moerr.NewFileNotFoundNoCtx(first.ObjectName().String())
+			scheduler := replayWindowScheduler{schedule: func(job *tasks.Job) {
+				if !canceled && job.ID() == first.ObjectName().String() {
+					job.DoneWithErr(missing)
+					return
+				}
+				job.DoneWithResult(&persistedBlockWindow{batch: payload, rows: 1, totalRows: 1})
+				if canceled {
+					cancel()
+				}
+			}}
+			base := &baseHandle{changesHandle: &ChangeHandler{scheduler: scheduler}}
+			if scenario == "CN read failure" {
+				handle := NewCNObjectHandle(false, objects, mem, base, mp)
+				defer handle.Close()
+				require.ErrorIs(t, handle.prefetch(ctx), missing)
+			} else {
+				handle := NewAObjectHandle(ctx, base, false, ts, ts, objects, mem, mp)
+				defer handle.Close()
+				err := handle.prefetch(ctx)
+				if canceled {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.ErrorIs(t, err, missing)
+				}
+			}
+			require.Equal(t, baseline, mp.CurrNB(), "an aborted replay must release its loaded data")
+		})
+	}
+}
+
 // Tombstones store the deleted user PK at seqnum 1, independently of its
 // position in the data schema. Both paths must prune the unrelated block, while
 // an unfiltered consumer must still read both blocks.

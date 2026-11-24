@@ -1314,10 +1314,15 @@ func NewCNObjectHandle(isTombstone bool, objects []*objectio.ObjectEntry, fs fil
 		maxBytes:    baseHandle.changesHandle.maxInMemoryBytes,
 	}
 }
-func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
+func (h *CNObjectHandle) prefetch(ctx context.Context) error {
 	t0 := time.Now()
+	defer func() { h.base.changesHandle.readDuration += time.Since(t0) }()
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
+	tsStart := len(h.TSs)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
 	for i := 0; i < prefetchWidth; i++ {
@@ -1334,7 +1339,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 		h.TSs = append(h.TSs, entry.CreateTime)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 		job := prefetchObjects(
-			ctx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
+			readCtx, uint32(h.blkOffsetCursor), rowOffset, h.fs, &stats,
 			h.base.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.base.changesHandle.spillConfig, h.mp,
 		)
@@ -1343,19 +1348,12 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			h.advanceBlock(stats.BlkCnt())
 		}
 	}
-	for i, job := range jobs {
-		res := job.GetResult()
-		if res.Err != nil {
-			err = res.Err
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-FileNotFound",
-					zap.String("err", err.Error()))
-			}
-			h.base.changesHandle.readDuration += time.Since(t0)
-			return
-		}
-		putJob(job)
-		window := res.Res.(*persistedBlockWindow)
+	var windows [LoadParallism]*persistedBlockWindow
+	if err := collectPrefetchWindows(readCtx, cancel, jobs, windows[:len(jobs)], nil, h.mp); err != nil {
+		h.TSs = h.TSs[:tsStart]
+		return err
+	}
+	for i, window := range windows[:len(jobs)] {
 		h.cache = append(h.cache, window.batch)
 		h.prepared = append(h.prepared, false)
 		h.blks = append(h.blks, blks[i])
@@ -1367,8 +1365,7 @@ func (h *CNObjectHandle) prefetch(ctx context.Context) (err error) {
 			}
 		}
 	}
-	h.base.changesHandle.readDuration += time.Since(t0)
-	return
+	return nil
 }
 
 func (h *CNObjectHandle) advanceBlock(blockCount uint32) {
@@ -2130,12 +2127,17 @@ func (h *AObjectHandle) prefetch(ctx context.Context) error {
 	return err
 }
 
-func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
+func (h *AObjectHandle) prefetchWindows(ctx context.Context) error {
 	t0 := time.Now()
+	defer func() { h.p.changesHandle.readDuration += time.Since(t0) }()
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	jobs := make([]*tasks.Job, 0)
 	blks := make([]types.Blockid, 0)
 	prefetchWidth := objectPrefetchWidth(h.maxRows, h.maxBytes)
 	bounded := h.maxRows > 0 || h.maxBytes > 0
+	var planningErr error
 	for i := 0; i < prefetchWidth; i++ {
 		var obj *objectio.ObjectEntry
 		var blk uint16
@@ -2143,15 +2145,9 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 			obj, blk = h.pendingObject, h.pendingBlock
 		} else {
 			var ok bool
-			var targetErr error
 			// Bounded reads plan only the current block.
-			obj, blk, ok, targetErr = h.nextPrefetchTarget(ctx, nil)
-			if targetErr != nil {
-				err = targetErr
-				h.p.changesHandle.readDuration += time.Since(t0)
-				return
-			}
-			if !ok {
+			obj, blk, ok, planningErr = h.nextPrefetchTarget(readCtx, nil)
+			if planningErr != nil || !ok {
 				break
 			}
 			if bounded {
@@ -2160,26 +2156,18 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 		}
 		stats := obj.ObjectStats
 		job := prefetchObjects(
-			ctx, uint32(blk), h.blockRowOffset, h.fs, &stats,
+			readCtx, uint32(blk), h.blockRowOffset, h.fs, &stats,
 			h.p.changesHandle.scheduler, h.maxRows, h.maxBytes,
 			h.p.changesHandle.spillConfig, h.mp,
 		)
 		jobs = append(jobs, job)
 		blks = append(blks, objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), blk))
 	}
-	for i, job := range jobs {
-		res := job.GetResult()
-		if res.Err != nil {
-			err = res.Err
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				logutil.Info("ChangesHandle-FileNotFound",
-					zap.String("err", err.Error()))
-			}
-			h.p.changesHandle.readDuration += time.Since(t0)
-			return
-		}
-		putJob(job)
-		window := res.Res.(*persistedBlockWindow)
+	var windows [LoadParallism]*persistedBlockWindow
+	if err := collectPrefetchWindows(readCtx, cancel, jobs, windows[:len(jobs)], planningErr, h.mp); err != nil {
+		return err
+	}
+	for i, window := range windows[:len(jobs)] {
 		h.cache = append(h.cache, window.batch)
 		h.specialLayouts = append(h.specialLayouts, window.specialLayout)
 		h.seqnums = append(h.seqnums, window.seqnums)
@@ -2192,8 +2180,7 @@ func (h *AObjectHandle) prefetchWindows(ctx context.Context) (err error) {
 			}
 		}
 	}
-	h.p.changesHandle.readDuration += time.Since(t0)
-	return
+	return nil
 }
 
 func (h *AObjectHandle) init(ctx context.Context, quick bool) (err error) {
@@ -4578,8 +4565,51 @@ func prefetchObjects(
 			return
 		},
 	)
-	scheduler.Schedule(job)
+	if err := scheduler.Schedule(job); err != nil {
+		job.DoneWithErr(err)
+	}
 	return
+}
+
+// collectPrefetchWindows owns all submitted jobs until the window can be
+// published. A failed plan or payload must leave no reads using the handle.
+func collectPrefetchWindows(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	jobs []*tasks.Job,
+	windows []*persistedBlockWindow,
+	err error,
+	mp *mpool.MPool,
+) error {
+	if err != nil {
+		cancel()
+	}
+	for i, job := range jobs {
+		res := job.GetResult()
+		putJob(job)
+		if res.Err != nil {
+			if err == nil {
+				err = res.Err
+				cancel()
+			}
+			continue
+		}
+		windows[i] = res.Res.(*persistedBlockWindow)
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		for _, window := range windows {
+			if window != nil {
+				window.batch.Clean(mp)
+			}
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			logutil.Info("ChangesHandle-FileNotFound", zap.String("err", err.Error()))
+		}
+	}
+	return err
 }
 
 func prependRowIDVectorIfNeeded(bat *batch.Batch, blk *types.Blockid, mp *mpool.MPool) error {
