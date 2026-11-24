@@ -17,7 +17,9 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
   only where the finished file is published differs. Reads of the object during the
   download join it and are served as its bytes arrive, as for any download of the disk
   cache, so a search never waits for an object to be loaded before reading it. The
-  download takes no room in the disk cache. A scan preloads an object the cache does not
+  download takes no room in the disk cache, nor do the ranges a read of the object
+  downloads, also when the index-file cache cannot be written; a read or prefetch that
+  skips every cache write loads it into neither cache. A scan preloads an object the cache does not
   hold whatever its read policy, as for a filtered search, so a CN without a disk cache
   does not keep index objects. An object deleted after its download started
   is not published. The IVF-Flat search's scan of the entries table holds the entries of

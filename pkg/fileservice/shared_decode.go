@@ -476,7 +476,7 @@ func sharedDecodeDiskFillAvailable(d *DiskCache, path string, vector *IOVector) 
 // sharedDecodeIndexFillAvailable reports whether the index-file cache holds the object of
 // an index-object read, which then fills the memory cache as a read of the disk cache does.
 func (s *S3FS) sharedDecodeIndexFillAvailable(vector *IOVector) bool {
-	if !vector.Policy.Any(IndexFileObject) || !s.cachesIndexObjects() {
+	if !s.indexObjectReadable(vector.Policy) {
 		return false
 	}
 	_, ok := s.indexObjectCached(vector.FilePath)
@@ -536,8 +536,8 @@ func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool
 	key := decodedReadKey{path: path.File, offset: entry.Offset, size: entry.Size, decoded: entry.CachedDataSize, policy: vector.Policy, codec: sharing}
 	var fill *decodedFillTicket
 	fillAttempted := false
-	if coordinateFill && !vector.Policy.Any(SkipDiskCacheReads) &&
-		(sharedDecodeDiskFillAvailable(s.diskCache, path.File, vector) || s.sharedDecodeIndexFillAvailable(vector)) {
+	if coordinateFill && (!vector.Policy.Any(SkipDiskCacheReads) && sharedDecodeDiskFillAvailable(s.diskCache, path.File, vector) ||
+		s.sharedDecodeIndexFillAvailable(vector)) {
 		mayStart := sharedDecodeFillMayStart(s.memCache, entry.CachedDataSize)
 		if vector.Policy.Any(MemoryCacheNoEvict) && s.memCache.cannotReserveWithoutEviction(entry.CachedDataSize) {
 			mayStart = false

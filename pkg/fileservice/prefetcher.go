@@ -669,12 +669,16 @@ func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 		return nil
 	}
 	req.FilePath = path.File
-	// An object the index-file cache holds is not downloaded into the disk cache.
-	if GetFileServicePolicy(ctx).Any(IndexFileObject) && s.cachesIndexObjects() {
-		if _, ok := s.indexObjectCached(req.FilePath); ok {
+	// An object the index-file cache holds is not downloaded into the disk cache, nor one
+	// that cannot fill it.
+	if policy := GetFileServicePolicy(ctx); s.indexObject(policy) {
+		if _, ok := s.indexObjectCached(req.FilePath); ok && s.indexObjectReadable(policy) {
 			return nil
 		}
 		req.indexObject = len(req.Ranges) == 0
+		if req.indexObject && !s.indexObjectFillable(policy) {
+			return nil
+		}
 	}
 	if s.prefetcher != nil && req.Size > 0 {
 		req.deletes = s.diskCache.deletes.now()

@@ -508,7 +508,8 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-	if s.diskCache == nil {
+	// An index object is filled only into the index-file cache.
+	if s.diskCache == nil || s.indexObject(GetFileServicePolicy(ctx)) && !s.indexObjectFillable(GetFileServicePolicy(ctx)) {
 		return nil
 	}
 
@@ -559,8 +560,9 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 // readSources are the shared sources of its bytes a read may take them from instead of
 // reading them itself.
 type readSources struct {
-	// indexRead is set when it reads the index-file cache.
-	indexRead bool
+	// indexRead is set when it reads the index-file cache, and indexFill when it fills it:
+	// its fills write nothing to the disk cache.
+	indexRead, indexFill bool
 	// queue is set when it joins the prefetcher's queued download of its whole object, and
 	// queueRanges when also one of ranges holding its bytes.
 	queue, queueRanges bool
@@ -582,12 +584,14 @@ func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
 	// of a download join no prefetch object.
 	join := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !isDownload(ctx)
 	columns := p.Any(ColumnPrefetch, ExactRead)
+	indexFill := s.indexObjectFillable(p)
 	return readSources{
 		indexRead:   s.indexObjectReadable(p),
+		indexFill:   indexFill,
 		queue:       join && s.prefetcher != nil && (columns || !p.Any(SkipFullFilePreloads)),
 		queueRanges: columns,
 		flights:     join && columns,
-		window:      join,
+		window:      join && !indexFill,
 		// A read that streams an entry to its caller opens its own reader.
 		fetch: join && !vector.streams(),
 	}
@@ -830,7 +834,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	// The disk cache's eviction of whole objects says nothing of an object the index-file
 	// cache keeps.
 	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
-		!(vector.Policy.Any(IndexFileObject) && s.cachesIndexObjects()) &&
+		!s.indexObjectFillable(vector.Policy) &&
 		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
 	}
@@ -1504,7 +1508,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 			return getReader(ctx, &start, &end)
 		}
 		// The read caches its entries unless the prefetch object caches its bytes.
-		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, vector.Policy, *min, *max, open)
+		policy := vector.Policy
+		if src.indexFill {
+			policy |= SkipDiskCacheWrites
+		}
+		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, policy, *min, *max, open)
 		if err != nil {
 			return err
 		}

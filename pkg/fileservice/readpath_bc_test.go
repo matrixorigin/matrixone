@@ -391,3 +391,16 @@ func TestReadOfDownloadJoinsNoPrefetchObject(t *testing.T) {
 		})
 	}
 }
+
+// BC13: a fill of an index object that skips every cache write fills neither the
+// index-file cache nor the disk cache.
+func TestIndexObjectFillSkippingCacheWrites(t *testing.T) {
+	fs, _, _ := newIndexObjectFS(t, true)
+	ctx := WithFileServicePolicy(context.Background(), IndexFileObject|SkipCacheWrites)
+	require.NoError(t, fs.PrefetchFile(ctx, "object"))
+	fs.diskCache.prefetchObjects.reads.Wait()
+	_, cached := fs.indexObjectCached("object")
+	require.False(t, cached)
+	require.Zero(t, fs.diskCache.cache.Used())
+	require.True(t, FullFilePreloadSkipped(ctx, fs, IndexFileObject|SkipCacheWrites, "object"))
+}

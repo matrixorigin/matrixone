@@ -76,17 +76,29 @@ func (s *S3FS) cachesIndexObjects() bool {
 	return s.indexFileCache != nil && s.diskCache != nil
 }
 
+// indexObject reports whether policy marks a read of an object the index-file cache keeps.
+func (s *S3FS) indexObject(policy Policy) bool {
+	return policy.Any(IndexFileObject) && s.cachesIndexObjects()
+}
+
 // indexObjectReadable reports whether a read under policy reads the index-file cache: a
-// read that skips every cache, not only the disk cache, skips it.
+// read that skips every cache read, not only the disk cache's, skips it.
 func (s *S3FS) indexObjectReadable(policy Policy) bool {
-	return policy.Any(IndexFileObject) && policy&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects()
+	return s.indexObject(policy) && policy&SkipCacheReads != SkipCacheReads
+}
+
+// indexObjectFillable reports whether a fill under policy fills the index-file cache: one
+// that skips every cache write skips it. A fill of an index object never fills the disk
+// cache.
+func (s *S3FS) indexObjectFillable(policy Policy) bool {
+	return s.indexObject(policy) && policy&SkipCacheWrites != SkipCacheWrites
 }
 
 // fillTarget returns where a whole-object fill of the object at filePath for a read
 // under policy publishes: the index-file cache for an IndexFileObject read of an object it
 // keeps, otherwise the disk cache (nil).
 func (s *S3FS) fillTarget(policy Policy, filePath string) fillTarget {
-	if !policy.Any(IndexFileObject) || !s.cachesIndexObjects() {
+	if !s.indexObjectFillable(policy) {
 		return nil
 	}
 	p, err := parseFilePathAtService(filePath, s.name)

@@ -27,13 +27,17 @@ import (
 func wantSources(s *S3FS, p Policy, download, streams bool) readSources {
 	// BC15: the reads of a download join no prefetch object.
 	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !download
+	// BC13: index-file cache reads are gated by SkipCacheReads, its fills by
+	// SkipCacheWrites, and a read that fills it writes no prefetch range to the disk cache.
+	indexFill := p.Any(IndexFileObject) && p&SkipCacheWrites != SkipCacheWrites && s.cachesIndexObjects()
 	return readSources{
 		indexRead: p.Any(IndexFileObject) && p&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects(),
+		indexFill: indexFill,
 		// BC16: an exact read joins queued ranges as a column read does.
 		queue:       disk && s.prefetcher != nil && !(!p.Any(ColumnPrefetch, ExactRead) && p.Any(SkipFullFilePreloads)),
 		queueRanges: p.Any(ColumnPrefetch, ExactRead),
 		flights:     disk && p.Any(ColumnPrefetch, ExactRead),
-		window:      disk,
+		window:      disk && !indexFill,
 		fetch:       disk && !streams,
 	}
 }
