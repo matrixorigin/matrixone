@@ -1254,7 +1254,7 @@ func binaryProtocolPrepareParamConcreteType(
 
 // binaryProtocolPrepareParamIsBinaryString identifies protocol domains whose
 // payload is an opaque byte string rather than a character string.  The
-// binary-string sidecar is intentionally independent from PrepareParamKind so
+// binary-string sidecar is intentionally independent from the conversion kind so
 // a BLOB value cannot be reparsed as a numeric or JSON text value.
 func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool {
 	switch mysqlType {
@@ -2148,7 +2148,7 @@ func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPosition
 			continue
 		}
 		param, ok := plan2.AsParamValue(paramVals[position])
-		if !ok || param.PrepareParamKind != types.StringConversionBoolean {
+		if !ok || plan2.ParamValueKind(param) != types.StringConversionBoolean {
 			continue
 		}
 		value, ok := param.Value.(bool)
@@ -2337,8 +2337,9 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 			IsBinaryProtocol:    true,
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
+		kind := types.StringConversionString
 		if i < len(kinds) {
-			paramValue.PrepareParamKind = kinds[i]
+			kind = kinds[i]
 		}
 		if params.IsNull(uint64(i)) && i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
@@ -2377,7 +2378,7 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 			// ordinary TINYINT callers, but restore the Boolean semantic kind
 			// before constructing the execute-time literal.  Otherwise JSON
 			// functions receive an integer 0/1 and change the stored JSON type.
-			if paramValue.PrepareParamKind == types.StringConversionBoolean {
+			if kind == types.StringConversionBoolean {
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
 			} else if runtimeType, directResultType, materializedValue, hasDirectResultType, ok :=
@@ -2394,11 +2395,12 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 				}
 				paramValue.DirectResultType = directResultType
 				paramValue.HasDirectResultType = hasDirectResultType
-				paramValue.MaterializedValue = materializedValue
 				if materializedValue != "" {
-					// The restored cached plan executes a typed ParamRef against this
-					// vector. Keep the raw packet spelling only in ParamValue provenance;
-					// otherwise the executor reparses input-sized leading zeroes.
+					// A DECIMAL is decoded once into its bounded canonical lexeme;
+					// the planner and the executor (which reads this vector) both use
+					// it, never the input-sized packet spelling. The visible scale of
+					// the spelling is already in DirectResultType.
+					paramValue.Value = materializedValue
 					if err = vector.SetStringAt(params, i, materializedValue, proc.Mp()); err != nil {
 						return nil, err
 					}
@@ -2407,6 +2409,12 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 				return nil, invalidBinaryDecimalParameter(proc.Ctx, paramValue.Value)
 			}
 		}
+		// A fixed-width numeric or Boolean parameter is planned from its value,
+		// not from a TEXT spelling that every consumer would parse again: give
+		// the planner the same native value the typed parameter batch holds.
+		if native, ok := binaryProtocolNativeParamValue(paramValue); ok {
+			paramValue.Value = native
+		}
 		// COM_STMT_EXECUTE values are binary-protocol values even when their
 		// declared MySQL type is VAR_STRING. Keep this provenance separate from
 		// RuntimeType so text values can safely participate in numeric overload
@@ -2414,6 +2422,39 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 		*store.Ref(i) = paramValue
 	}
 	return values, nil
+}
+
+// binaryProtocolNativeParamValue parses the canonical text of a COM_STMT
+// parameter whose runtime type is a fixed-width integer, BIT, YEAR, float or
+// Boolean into the Go value SQL EXECUTE user variables use for that type
+// (int64, uint64, float64, bool). The runtime type keeps the SQL domain, so a
+// BIT stays BIT and a YEAR stays YEAR. ok is false for every other type, which
+// keeps its text.
+func binaryProtocolNativeParamValue(param plan2.ParamValue) (any, bool) {
+	text, isText := param.Value.(string)
+	if !isText || !param.HasRuntimeType {
+		return nil, false
+	}
+	// typeswitch:partial COM_STMT runtime types come from MySQL wire types, which map FLOAT/DOUBLE only to T_float32/T_float64; other types keep their text
+	switch oid := param.RuntimeType.Oid; {
+	case oid == types.T_bool:
+		v, err := strconv.ParseBool(text)
+		return v, err == nil
+	case oid.IsSignedInt():
+		v, err := strconv.ParseInt(text, 10, 64)
+		return v, err == nil
+	case oid.IsUnsignedInt() || oid == types.T_bit:
+		v, err := strconv.ParseUint(text, 10, 64)
+		return v, err == nil
+	case oid == types.T_year:
+		v, err := strconv.ParseInt(text, 10, 64)
+		return v, err == nil
+	// typeswitch:partial the MySQL wire has only FLOAT and DOUBLE; no COM_STMT parameter has a low-precision float type
+	case oid == types.T_float32 || oid == types.T_float64:
+		v, err := strconv.ParseFloat(text, 64)
+		return v, err == nil
+	}
+	return nil, false
 }
 
 func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
@@ -2867,7 +2908,6 @@ func buildExecuteUserParamsInto(
 			Value:               param,
 			IsBin:               paramIsBin[i],
 			IsBinaryString:      paramBinaryString[i],
-			PrepareParamKind:    paramKinds[i],
 			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
