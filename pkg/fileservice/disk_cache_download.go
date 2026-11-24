@@ -801,6 +801,27 @@ func (s *diskCacheDownloads) store(diskPath string, o *objectDownload) {
 	}
 }
 
+// storeTaken registers o, which take counted.
+func (s *diskCacheDownloads) storeTaken(diskPath string, o *objectDownload) {
+	if _, loaded := s.m.Swap(diskPath, o); loaded {
+		s.n.Add(-1)
+	}
+}
+
+// take counts a download about to register while fewer than limit are counted, so a
+// decision bounded by the downloads in flight and the registration are one step.
+func (s *diskCacheDownloads) take(limit int64) bool {
+	for {
+		n := s.n.Load()
+		if n >= limit {
+			return false
+		}
+		if s.n.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
 func (s *diskCacheDownloads) remove(diskPath string, o *objectDownload) {
 	if s.m.CompareAndDelete(diskPath, o) {
 		s.n.Add(-1)
@@ -817,11 +838,17 @@ func (s *diskCacheDownloads) load(diskPath string) *objectDownload {
 	return nil
 }
 
-func (d *DiskCache) startDownload(diskPath, tempPath string, measured, indexFile bool, bounds []int64) *objectDownload {
+// startDownload registers the download of a cache file; taken is set when
+// diskCacheDownloads.take counted it already.
+func (d *DiskCache) startDownload(diskPath, tempPath string, measured, indexFile bool, bounds []int64, taken bool) *objectDownload {
 	o := newObjectDownload(tempPath, measured, bounds)
 	o.indexFile = indexFile
 	o.credit = func(n int64) { d.preloads.readDownload(diskPath, o, n) }
-	d.downloads.store(diskPath, o)
+	if taken {
+		d.downloads.storeTaken(diskPath, o)
+	} else {
+		d.downloads.store(diskPath, o)
+	}
 	return o
 }
 

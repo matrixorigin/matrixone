@@ -393,7 +393,8 @@ object.
   (default 16 MiB) reads `disk-prefetch-object-split` parts at once (default 2, at most
   4), aligned to 64 KiB, into one cache file. This happens only when the object's size
   is known and fewer than `disk-prefetch-object-split-downloads` (default 8) downloads
-  are in flight.
+  are in flight; a download that splits counts as in flight from that decision on, so
+  concurrent downloads never split past the limit.
 - A read-started download splits at the read's first needed block, so that read does
   not wait for the bytes before it.
 - The download takes its first part's object-storage connection before it starts; each

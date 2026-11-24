@@ -1078,7 +1078,7 @@ func (d *DiskCache) writeFileTo(
 	// before it holds the path; each later part takes its own when it starts. A range
 	// download holds the connection its FilePrefetchObject took.
 	var bounds []int64
-	lead := 0
+	lead, taken := 0, false
 	releaseConns := func() {}
 	if fill == storageFill {
 		var ok bool
@@ -1087,10 +1087,18 @@ func (d *DiskCache) writeFileTo(
 		}
 		ctx, releaseConns = whole.ctx, whole.releaseConn
 		w.releaseConns = releaseConns
-		if objectSize != nil && d.objectSplit.parts > 1 && d.downloading() < cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
+		// A download splits only when fewer than the limit are in flight once it is counted.
+		if objectSize != nil && d.objectSplit.parts > 1 {
 			if size, splitAt, err := objectSize(ctx); err == nil {
-				bounds = d.objectSplit.bounds(size, splitAt)
-				lead = leadPart(bounds, splitAt)
+				if b := d.objectSplit.bounds(size, splitAt); b != nil &&
+					d.downloads.take(int64(cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))) {
+					bounds, lead, taken = b, leadPart(b, splitAt), true
+					defer func() {
+						if taken {
+							d.downloads.n.Add(-1)
+						}
+					}()
+				}
 			}
 		}
 	}
@@ -1124,7 +1132,8 @@ func (d *DiskCache) writeFileTo(
 	var dst io.Writer = f
 	if fill != notWholeFill {
 		_, indexFile := target.(indexFillTarget)
-		download = d.startDownload(diskPath, f.Name(), fill != contentFill, indexFile, bounds)
+		download = d.startDownload(diskPath, f.Name(), fill != contentFill, indexFile, bounds, taken)
+		taken = false
 		// Its lead part holds the connection the download took.
 		download.begin(lead)
 		fileDownloadStarted(ctx, download)
