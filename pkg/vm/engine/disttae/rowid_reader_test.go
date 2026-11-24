@@ -28,7 +28,7 @@ import (
 func TestRowIDReaderValuePreservesNull(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	defer mpool.DeleteMPool(mp)
-	vec := vector.NewVec(types.T_float64.ToType())
+	vec := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, 0.0, true, mp))
 	require.NoError(t, vector.AppendFixed(vec, 20.0, false, mp))
 
@@ -55,7 +55,7 @@ func TestRowIDReaderValueHandlesConstVectors(t *testing.T) {
 func TestRowIDReaderRejectsOversizedVariableValueBeforeCharging(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	defer mpool.DeleteMPool(mp)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 	value := []byte(strings.Repeat("x", engine.MaxRowIDReadBytes/2+1))
 	require.NoError(t, vector.AppendBytes(vec, value, false, mp))
@@ -68,7 +68,7 @@ func TestRowIDReaderRejectsOversizedVariableValueBeforeCharging(t *testing.T) {
 func TestRowIDReaderOwnsVariableValuesAndChargesBeforeCopy(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	defer mpool.DeleteMPool(mp)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte("before"), false, mp))
 	owned, err := copyRowIDReaderRow([]*vector.Vector{vec}, 0, &engine.RowIDReadBudget{RemainingBytes: 268})
 	require.NoError(t, err)

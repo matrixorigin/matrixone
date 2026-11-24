@@ -480,10 +480,10 @@ func TestScanSnapshotWithCurrentRangesUsesRangePartitionState(t *testing.T) {
 		{rowID: rowID, ts: types.BuildTS(10, 0), id: 7, payload: 70},
 	})
 	// A later in-memory delete must not hide the row in this older snapshot.
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
+	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
+	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType(), mp)
 	defer rowIDVec.Free(mp)
 	defer tsVec.Free(mp)
 	defer pkVec.Free(mp)
