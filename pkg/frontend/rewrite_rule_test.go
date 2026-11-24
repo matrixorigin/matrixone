@@ -2230,6 +2230,33 @@ func TestMergeRewriteRulesTableNameMode(t *testing.T) {
 	}
 }
 
+func TestMergeRewriteRulesIcebergSource(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		merge       bool
+	}{
+		{"snapshot 101", "snapshot '101'", true},
+		{"snapshot 101", "snapshot ' 00101 '", true},
+		{"snapshot 101", "snapshot 202", false},
+		{"snapshot 0", "snapshot '0'", false},
+		{"ref `Audit`", "ref 'Audit'", true},
+		{"ref Audit", "ref 'Audit'", true},
+		{"ref `Audit`", "ref `audit`", false},
+	} {
+		t.Run(tc.left+" / "+tc.right, func(t *testing.T) {
+			left := "select id from db.t for iceberg " + tc.left + " where id = 1"
+			right := "select id from db.t for iceberg " + tc.right + " where id = 2"
+			got, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if tc.merge {
+				require.Equal(t, "select id from db.t for iceberg "+tc.left+" where (id = 1) or (id = 2)", got)
+			} else {
+				require.Equal(t, right, got)
+			}
+		})
+	}
+}
+
 func TestRoleRuleModesAndBinaryHint(t *testing.T) {
 	const key = "db.t"
 	const query = "select * from db.t"

@@ -560,9 +560,10 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if l.whereSources != nil && l.lastToken == UNDERSCORE_BINARY && typ == STRING && str != "" {
 		typ, str = HEXNUM, "0x"+hex.EncodeToString([]byte(str))
 	}
+	icebergRefName := l.previousToken == FOR_ICEBERG && l.lastToken == REF
 	l.previousToken = l.lastToken
 	l.lastToken = typ
-	if l.whereSources != nil {
+	if l.whereSources != nil && !icebergRefName {
 		switch {
 		case l.lower == 1 && (typ == ID || typ == QUOTE_ID):
 			str = tree.NewCStr(str, 1).Compare()

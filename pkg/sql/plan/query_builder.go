@@ -14837,6 +14837,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		}
 	}
 
+	binding.caseInsensitiveTable = alias.Alias == "" && slices.Contains(mysql.CaseInsensitiveDbs, sqlDatabase)
+
 	if bindingToReplace != nil {
 		ctx.replaceBinding(bindingToReplace, binding)
 	} else {
@@ -15706,7 +15708,7 @@ func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *
 
 	switch ref.Type {
 	case tree.IcebergRefSnapshot:
-		snapshotID, err := parseIcebergSnapshotID(builder.GetContext(), ref.Snapshot)
+		snapshotID, err := ParseIcebergSnapshotID(builder.GetContext(), ref.Snapshot)
 		if err != nil {
 			return err
 		}
@@ -15729,7 +15731,8 @@ func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *
 	return nil
 }
 
-func parseIcebergSnapshotID(ctx context.Context, expr tree.Expr) (int64, error) {
+// ParseIcebergSnapshotID converts an Iceberg snapshot literal to its catalog ID.
+func ParseIcebergSnapshotID(ctx context.Context, expr tree.Expr) (int64, error) {
 	raw, err := icebergRefLiteralText(ctx, expr, "snapshot")
 	if err != nil {
 		return 0, err

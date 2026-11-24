@@ -1121,18 +1121,39 @@ func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedNam
 // is a miss, so the binder can continue through its existing parent traversal.
 func (bc *BindContext) resolveTableBinding(db, table string) *Binding {
 	binding := bc.bindingByTable[table]
-	if db == "" {
-		return binding
-	}
-	if binding != nil && binding.db != "" &&
+	if binding != nil && (db == "" || binding.db != "" &&
 		(db == binding.db || db == tree.NewCStr(binding.db, bc.lower).Compare() ||
-			(slices.Contains(mysql.CaseInsensitiveDbs, binding.db) && strings.EqualFold(db, binding.db))) {
+			(slices.Contains(mysql.CaseInsensitiveDbs, binding.db) && strings.EqualFold(db, binding.db)))) {
 		return binding
 	}
-	if bc.remapOption != nil {
-		return bc.bindingByTable[db+"."+table]
+	if db != "" && bc.remapOption != nil {
+		if binding = bc.bindingByTable[db+"."+table]; binding != nil {
+			return binding
+		}
 	}
-	return nil
+
+	if bc.lower != 0 {
+		return nil
+	}
+	db = strings.ToLower(db)
+	if db != "" && !slices.Contains(mysql.CaseInsensitiveDbs, db) {
+		return nil
+	}
+	// Catalog case folding applies to implicit table names, while explicit
+	// aliases retain the spelling that was registered in the scope.
+	table = strings.ToLower(table)
+	var match *Binding
+	for _, candidate := range bc.bindings {
+		if !candidate.caseInsensitiveTable || table != strings.ToLower(candidate.table) ||
+			db != "" && db != strings.ToLower(candidate.db) {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = candidate
+	}
+	return match
 }
 
 func resolveColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {

@@ -164,3 +164,26 @@ func TestQualifiedSubscriptionColumnBinding(t *testing.T) {
 	_, err = runOneStmt(opt, t, "select tpch.nation.n_name from sub_db.nation")
 	require.Error(t, err)
 }
+
+func TestSystemTableQualifierBinding(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	ctx.lower = 0
+	system := &Binding{db: "information_schema", table: "character_sets", caseInsensitiveTable: true}
+	alias := &Binding{db: "information_schema", table: "Stats"}
+	ordinary := &Binding{db: "db", table: "CHARACTER_SETS"}
+	ctx.bindings = []*Binding{system, alias, ordinary}
+	for _, binding := range ctx.bindings {
+		ctx.bindingByTable[binding.table] = binding
+	}
+	require.Same(t, system, ctx.resolveTableBinding("INFORMATION_SCHEMA", "CHARACTER_SETS"))
+	require.Same(t, system, ctx.resolveTableBinding("", "Character_Sets"))
+	require.Same(t, ordinary, ctx.resolveTableBinding("", "CHARACTER_SETS"))
+	require.Same(t, alias, ctx.resolveTableBinding("information_schema", "Stats"))
+	require.Nil(t, ctx.resolveTableBinding("information_schema", "stats"))
+	require.Nil(t, ctx.resolveTableBinding("db", "character_sets"))
+	require.Nil(t, ctx.resolveTableBinding("mysql", "CHARACTER_SETS"))
+
+	ctx.bindings = append(ctx.bindings, &Binding{db: "mysql", table: "character_sets", caseInsensitiveTable: true})
+	require.Nil(t, ctx.resolveTableBinding("", "Character_Sets"))
+	require.Same(t, system, ctx.resolveTableBinding("information_schema", "Character_Sets"))
+}

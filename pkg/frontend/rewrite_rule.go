@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -1432,7 +1433,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string, lo
 		return "", false, nil
 	}
 
-	if !sameRewriteTableSource(leftShape.table, rightShape.table) {
+	if !sameRewriteTableSource(ctx, leftShape.table, rightShape.table) {
 		return "", false, nil
 	}
 	if !slices.EqualFunc(leftShape.clause.Exprs, rightShape.clause.Exprs, sameRewriteProjection) {
@@ -1586,7 +1587,7 @@ func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
 	}
 }
 
-func sameRewriteTableSource(a, b *tree.AliasedTableExpr) bool {
+func sameRewriteTableSource(ctx context.Context, a, b *tree.AliasedTableExpr) bool {
 	// Aliases follow the parser mode even when the catalog ignores case.
 	if a.As.Alias != b.As.Alias {
 		return false
@@ -1597,7 +1598,22 @@ func sameRewriteTableSource(a, b *tree.AliasedTableExpr) bool {
 		name.SchemaName, name.ObjectName = tree.Identifier(db), tree.Identifier(table)
 		return name
 	}
-	return reflect.DeepEqual(relation(a), relation(b))
+	left, right := relation(a), relation(b)
+	leftRef, rightRef := left.IcebergRef, right.IcebergRef
+	left.IcebergRef, right.IcebergRef = nil, nil
+	return reflect.DeepEqual(left, right) && sameRewriteIcebergRef(ctx, leftRef, rightRef)
+}
+
+func sameRewriteIcebergRef(ctx context.Context, left, right *tree.IcebergRefSpec) bool {
+	if left == nil || right == nil || left.Type != tree.IcebergRefSnapshot || right.Type != tree.IcebergRefSnapshot {
+		return reflect.DeepEqual(left, right)
+	}
+	leftID, err := plan2.ParseIcebergSnapshotID(ctx, left.Snapshot)
+	if err != nil {
+		return false
+	}
+	rightID, err := plan2.ParseIcebergSnapshotID(ctx, right.Snapshot)
+	return err == nil && leftID == rightID
 }
 
 func rewriteRuleSingleTableSource(from *tree.From) (*tree.AliasedTableExpr, bool) {

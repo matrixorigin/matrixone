@@ -6757,13 +6757,15 @@ func TestQueryBuilderIcebergComposesWithProjectionFilterJoinAggregate(t *testing
 func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, time.UTC)
 
-	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg snapshot 78124581230123")
-	require.NoError(t, err)
+	for _, spelling := range []string{"78124581230123", "'78124581230123'"} {
+		p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg snapshot "+spelling)
+		require.NoError(t, err)
 
-	scan := requireIcebergScan(t, p)
-	require.Equal(t, int64(78124581230123), scan.SnapshotId)
-	require.Zero(t, scan.TimestampAsOf)
-	require.Equal(t, "main", scan.Ref)
+		scan := requireIcebergScan(t, p)
+		require.Equal(t, int64(78124581230123), scan.SnapshotId)
+		require.Zero(t, scan.TimestampAsOf)
+		require.Equal(t, "main", scan.Ref)
+	}
 }
 
 func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T) {
@@ -6784,13 +6786,15 @@ func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T)
 func TestQueryBuilderIcebergNamedRef(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, time.UTC)
 
-	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg ref audit_branch")
-	require.NoError(t, err)
+	for _, tc := range [][2]string{{"audit_branch", "audit_branch"}, {"`Audit`", "Audit"}, {"'Audit'", "Audit"}, {"`audit`", "audit"}} {
+		p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg ref "+tc[0])
+		require.NoError(t, err)
 
-	scan := requireIcebergScan(t, p)
-	require.Zero(t, scan.SnapshotId)
-	require.Zero(t, scan.TimestampAsOf)
-	require.Equal(t, "audit_branch", scan.Ref)
+		scan := requireIcebergScan(t, p)
+		require.Zero(t, scan.SnapshotId)
+		require.Zero(t, scan.TimestampAsOf)
+		require.Equal(t, tc[1], scan.Ref)
+	}
 }
 
 func TestQueryBuilderIcebergTimeTravelRejectsNativeSnapshotMix(t *testing.T) {

@@ -363,7 +363,7 @@ set global lower_case_table_names = 1;
 -- System catalog source names compare without case in every table-name mode.
 grant select on table information_schema.character_sets to test_rule_role_inherit_a;
 alter role test_rule_role_inherit_a add rule "select character_set_name, maxlen from information_schema.character_sets where maxlen = 1" on table information_schema.character_sets;
-alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from INFORMATION_SCHEMA.CHARACTER_SETS where maxlen = 4" on table information_schema.character_sets;
+alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from INFORMATION_SCHEMA.CHARACTER_SETS where INFORMATION_SCHEMA.CHARACTER_SETS.maxlen = 4" on table information_schema.character_sets;
 -- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
 select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
 -- @session
