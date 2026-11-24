@@ -503,7 +503,7 @@ func testConnectorAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 		sp.ReleaseCurrent(0)
 	} else {
 		conn.cleanupSpool = sp
-		sp.ForceCleanupAfterTerminalSignal()
+		sp.ReleaseCache()
 	}
 	conn.CleanupDeferredSpool()
 	require.Same(t, sp, conn.cleanupSpool)
