@@ -2496,15 +2496,23 @@ func TestCheckZombieReplicas_NonVotingIsNotChecked(t *testing.T) {
 		"non-voting replicas must be skipped before any membership RPC is issued")
 }
 
-func TestCheckZombieReplicas_StopsWhenStartupBudgetExpires(t *testing.T) {
+func TestCheckZombieReplicas_ProbesLaterPeerAfterTimeoutError(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	var probed []string
+	var firstDeadline time.Time
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
-		<-ctx.Done()
-		return nil, false, ctx.Err()
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		if address == "10.0.0.1:32001" {
+			firstDeadline = deadline
+			return nil, false, context.DeadlineExceeded
+		}
+		require.True(t, deadline.After(firstDeadline),
+			"the next peer receives the remaining gossip budget")
+		return map[uint64]string{7: "uuid-1"}, true, nil
 	}
 
 	l := &store{cfg: Config{
@@ -2517,18 +2525,12 @@ func TestCheckZombieReplicas_StopsWhenStartupBudgetExpires(t *testing.T) {
 
 	origTimeout := zombieSelfCheckTimeout
 	defer func() { zombieSelfCheckTimeout = origTimeout }()
-	zombieSelfCheckTimeout = 10 * time.Millisecond
+	zombieSelfCheckTimeout = 2 * time.Second
 
-	shards := []metadata.LogShard{
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
-			ReplicaID:      7,
-		},
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: 4},
-			ReplicaID:      8,
-		},
-	}
+	shards := []metadata.LogShard{{
+		LogShardRecord: metadata.LogShardRecord{ShardID: 3},
+		ReplicaID:      7,
+	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies)
 	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001"}, probed,
