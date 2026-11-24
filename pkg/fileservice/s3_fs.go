@@ -556,15 +556,45 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	}}, nil
 }
 
+// readSources are the shared sources of its bytes a read may take them from instead of
+// reading them itself.
+type readSources struct {
+	// indexRead is set when it reads the index-file cache.
+	indexRead bool
+	// queue is set when it joins the prefetcher's queued download of its whole object, and
+	// queueRanges when also one of ranges holding its bytes.
+	queue, queueRanges bool
+	// flights is set when it takes its bytes from the prefetch objects under way that hold
+	// them, through readFromFlights.
+	flights bool
+	// fetch is set when its range read takes its bytes from a prefetch object, joined or
+	// its own, through fetchRange.
+	fetch bool
+}
+
+// sourcesFor returns the shared sources a read of vector under ctx may take its bytes from.
+func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
+	p := vector.Policy
+	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads)
+	columns := p.Any(ColumnPrefetch)
+	return readSources{
+		indexRead: s.indexObjectReadable(p),
+		// A read that skips the disk cache cannot read what a download puts there. The
+		// reads of a download join none.
+		queue:       disk && s.prefetcher != nil && (columns || !p.Any(SkipFullFilePreloads)) && !isDownload(ctx),
+		queueRanges: columns,
+		flights:     disk && p.Any(ColumnPrefetch, ExactRead),
+		// A read that streams an entry to its caller opens its own reader.
+		fetch: disk && !vector.streams(),
+	}
+}
+
 // joinQueued waits until the read can join the prefetcher's download of the object of
-// vector, when it is one the read would join and the read reads the disk cache: one of the whole object for a read that may
-// download it, and for a column read also one of ranges holding bytes it reads; it
-// reports whether there was one. A download still waiting moves to the live queue. The
-// reads of a download join none.
-func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) bool {
-	columns := vector.Policy.Any(ColumnPrefetch)
-	// A read that skips the disk cache cannot read what a download puts there.
-	if vector.Policy.Any(SkipDiskCacheReads) || !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
+// vector, when src joins it: one of the whole object, or with src.queueRanges also one
+// of ranges holding bytes it reads; it reports whether there was one. A download still
+// waiting moves to the live queue.
+func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector, src readSources) bool {
+	if !src.queue {
 		return false
 	}
 	path, err := parseFilePathAtService(vector.FilePath, s.name)
@@ -572,7 +602,7 @@ func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) bool {
 		return false
 	}
 	started, leave, ok := s.prefetcher.join(path.File, func(req ObjectPrefetch) bool {
-		return len(req.Ranges) == 0 || columns && rangesHoldNeeded(req.Ranges, vector)
+		return len(req.Ranges) == 0 || src.queueRanges && rangesHoldNeeded(req.Ranges, vector)
 	})
 	if !ok {
 		return false
@@ -947,7 +977,7 @@ read_disk_cache:
 			}
 		}
 	}
-	if s.indexObjectReadable(vector.Policy) {
+	if s.sourcesFor(ctx, vector).indexRead {
 		if err := s.readIndexObject(ctx, vector); err != nil {
 			finishFill()
 			return err
@@ -1019,7 +1049,8 @@ read_disk_cache:
 	}
 
 	// A read the caches do not hold waits to join a queued download of its object.
-	joined := s.prefetcher != nil && s.diskCache != nil && s.joinQueued(ctx, vector)
+	src := s.sourcesFor(ctx, vector)
+	joined := s.joinQueued(ctx, vector, src)
 	if joined {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1027,7 +1058,7 @@ read_disk_cache:
 	}
 
 	// An exact read of bytes a flight is reading waits for them instead of reading them.
-	flights := s.diskCache != nil && vector.Policy.Any(ColumnPrefetch, ExactRead) && !vector.Policy.Any(SkipDiskCacheReads)
+	flights := src.flights
 	if flights {
 		if path, perr := parseFilePathAtService(vector.FilePath, s.name); perr == nil {
 			if err := s.diskCache.readFromFlights(ctx, path.File, vector); err != nil {
@@ -1213,7 +1244,7 @@ read_s3:
 // index-file cache, for an index object, then the disk cache. A flight caches its bytes
 // before it ends.
 func (s *S3FS) recheckPublished(ctx context.Context, vector *IOVector) error {
-	if s.indexObjectReadable(vector.Policy) {
+	if s.sourcesFor(ctx, vector).indexRead {
 		if err := s.readIndexObject(ctx, vector); err != nil || vector.allDone() {
 			return err
 		}
@@ -1463,8 +1494,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	// Any other range read takes its bytes from a prefetch object, which other reads of
 	// them join. A read that streams an entry to its caller opens its own reader.
-	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil &&
-		!vector.Policy.Any(SkipDiskCacheReads) && !vector.streams() {
+	if prefetchContent == nil && !readFullObject && min != nil && max != nil && s.sourcesFor(ctx, vector).fetch {
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return getReader(ctx, &start, &end)
 		}
