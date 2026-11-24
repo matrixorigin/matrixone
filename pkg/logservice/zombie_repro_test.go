@@ -331,12 +331,12 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	}
 	stale := command(pb.StartReplica, 3)
 	svc3b.handleCommands([]pb.ScheduleCommand{stale})
-	require.Empty(t, svc3b.store.startedReplicaIDs()[hakeeper.DefaultHAKeeperShardID])
+	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
 
 	// Kill removes local metadata but leaves the old Dragonboat bootstrap.
 	svc3b.handleCommands([]pb.ScheduleCommand{command(pb.KillZombie, 3), stale})
 	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
-	require.Empty(t, svc3b.store.startedReplicaIDs()[hakeeper.DefaultHAKeeperShardID])
+	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -354,10 +354,15 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	svc3b.store.mu.Lock()
 	svc3b.store.mu.skippedZombies[zombieKey{replicaID: 4}] = current.ConfigChangeID
 	svc3b.store.mu.Unlock()
-	svc3b.handleCommands([]pb.ScheduleCommand{stale, command(pb.StartNonVotingReplica, 4), command(pb.StartReplica, 4)})
-	require.Equal(t, map[uint64]struct{}{4: {}}, svc3b.store.startedReplicaIDs()[hakeeper.DefaultHAKeeperShardID])
+	svc3b.handleCommands([]pb.ScheduleCommand{stale, command(pb.StartNonVotingReplica, 4)})
+	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
+	svc3b.handleCommands([]pb.ScheduleCommand{command(pb.StartReplica, 4)})
 	require.Equal(t, uint64(4), atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
-
+	require.Eventually(t, func() bool {
+		replicas := svc3b.store.startedReplicaIDs()[hakeeper.DefaultHAKeeperShardID]
+		_, active := replicas[4]
+		return active && len(replicas) == 1
+	}, 5*time.Second, 25*time.Millisecond)
 }
 
 // TestZombieRepro_WithoutFix disables the self-check via getShardMembershipFn
