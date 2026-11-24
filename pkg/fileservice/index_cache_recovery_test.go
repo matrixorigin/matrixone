@@ -371,3 +371,46 @@ func TestIndexFileCacheConcurrentLifecycleAgreement(t *testing.T) {
 	require.Empty(t, trash)
 	require.Zero(t, c.disk.trash.bytes.Load())
 }
+
+// The load finishes when it indexes an entry larger than the capacity that it cannot
+// rename away: the eviction that fails is not rescheduled while the load owns the path.
+func TestIndexFileCacheLoadFinishesWhenEvictionCannotRemove(t *testing.T) {
+	for _, by := range []string{"rename denied", "control"} {
+		t.Run(by, func(t *testing.T) {
+			if by != "control" && !permissionsEnforced(t) {
+				t.Skip("permissions are not enforced")
+			}
+			ctx := context.Background()
+			dir := t.TempDir()
+			c1, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(64<<20), "", "", 0, 0, 0)
+			require.NoError(t, err)
+			<-c1.disk.load.done
+			written, err := c1.Put(ctx, "entry", recoveryFiles(bytes.Repeat([]byte{7}, 300<<10)))
+			require.NoError(t, err)
+			require.True(t, written)
+			entry, err := c1.disk.pathForDir("entry")
+			require.NoError(t, err)
+			c1.Close(ctx)
+			shard := filepath.Dir(entry)
+			if by != "control" {
+				require.NoError(t, os.Chmod(shard, 0o500))
+				t.Cleanup(func() { _ = os.Chmod(shard, 0o755) })
+			}
+			c2, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(100<<10), "", "", 0, 0, 0)
+			require.NoError(t, err)
+			defer c2.Close(ctx)
+			select {
+			case <-c2.disk.load.done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the load did not finish")
+			}
+			_, err = os.Stat(entry)
+			if by == "control" {
+				require.True(t, os.IsNotExist(err), "the oversized entry is evicted")
+			} else {
+				require.NoError(t, err)
+				require.True(t, c2.disk.cache.Contains(entry), "the entry it cannot remove stays charged")
+			}
+		})
+	}
+}

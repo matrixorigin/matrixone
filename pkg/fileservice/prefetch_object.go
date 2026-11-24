@@ -155,6 +155,9 @@ func (p *filePrefetchObject) readAt(ctx context.Context, off int64, dst []byte) 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := o.failure(); err != nil {
+			return err
+		}
 		return errPrefetchMissed
 	}
 	return nil

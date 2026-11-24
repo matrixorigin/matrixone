@@ -40,6 +40,7 @@ type objectDownload struct {
 	parts       []downloadPart // the ranges of the object written at once, in order
 	ended       bool           // no more bytes will be written
 	complete    bool           // every byte of the object was written
+	err         error          // the failed read of object storage that ended it, or nil
 	waiters     byteWaiters
 	idle        idleReaders // the readers of the download's source
 	file        *os.File    // closed once the download is retired and no reader holds it
@@ -270,15 +271,28 @@ func (o *objectDownload) availableLocked(off int64) int64 {
 }
 
 func (o *objectDownload) end(complete bool) {
+	o.endWith(complete, nil)
+}
+
+// endWith ends the download; err is the failed read of object storage that ended it, which
+// fails the reads waiting for its bytes, or nil.
+func (o *objectDownload) endWith(complete bool, err error) {
 	o.mu.Lock()
 	if !o.ended {
-		o.ended, o.complete = true, complete
+		o.ended, o.complete, o.err = true, complete, err
 		o.waiters.wakeAll()
 		if complete && o.measured && !o.parts[0].first.IsZero() {
 			downloadRates.observe(o.writtenLocked()/int64(len(o.parts)), time.Since(o.parts[0].first))
 		}
 	}
 	o.mu.Unlock()
+}
+
+// failure returns the failed read of object storage that ended the download, or nil.
+func (o *objectDownload) failure() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.err
 }
 
 // estimate returns the bytes a part of the download still writes before the bytes in
@@ -325,8 +339,8 @@ func (o *objectDownload) estimate(off, end int64) (int64, time.Duration) {
 }
 
 // waitFor waits until the bytes in [off, end) are written, or until the whole object is
-// when end is negative. It returns the end of the written bytes from off, and false when
-// they will never cover end.
+// when end is negative, for at most timeout, or as long as ctx allows when timeout is 0.
+// It returns the end of the written bytes from off, and false when they do not cover end.
 func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout time.Duration) (int64, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -335,13 +349,17 @@ func (o *objectDownload) waitFor(ctx context.Context, off, end int64, timeout ti
 		ch := o.waiters.add(off, end)
 		o.mu.Unlock()
 		done := o.idle.wait()
-		timer := time.NewTimer(timeout)
+		var expired <-chan time.Time
+		if timeout > 0 {
+			timer := time.NewTimer(timeout)
+			defer timer.Stop()
+			expired = timer.C
+		}
 		select {
 		case <-ch:
 		case <-ctx.Done():
-		case <-timer.C:
+		case <-expired:
 		}
-		timer.Stop()
 		done()
 		o.mu.Lock()
 		o.waiters.remove(ch)
@@ -844,6 +862,9 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		}
 		// The read waits for the download it chose until its bytes are written or it ends.
 		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, maxIOWaitDuration); !ok {
+			if err := o.failure(); err != nil {
+				return true, false, err
+			}
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil
 		}

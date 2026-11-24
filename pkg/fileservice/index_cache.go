@@ -263,6 +263,7 @@ func (c *IndexFileCache) startGC(interval time.Duration) {
 				return
 			case <-timer.C:
 			}
+			c.disk.releaseStuckDirs()
 			c.disk.retryTrash()
 			if c.idleTTL > 0 {
 				if n, err := c.collectIdle(ctx, time.Now()); err != nil && ctx.Err() == nil {
@@ -731,6 +732,9 @@ func (c *IndexFileCache) dropUnopened(ctx context.Context, name string, missing 
 type dirHolds struct {
 	mu sync.Mutex
 	m  map[string]int
+	// stuck holds the entry directories an eviction could not remove: eviction skips them
+	// until the collector's next tick.
+	stuck map[string]struct{}
 }
 
 // loadedDir is an entry directory found when the cache loads.
@@ -762,7 +766,15 @@ func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
 func (d *DiskCache) dirHeld(path string) bool {
 	d.held.mu.Lock()
 	defer d.held.mu.Unlock()
-	return d.held.m[path] > 0
+	_, stuck := d.held.stuck[path]
+	return d.held.m[path] > 0 || stuck
+}
+
+// releaseStuckDirs lets eviction try again the entry directories it could not remove.
+func (d *DiskCache) releaseStuckDirs() {
+	d.held.mu.Lock()
+	defer d.held.mu.Unlock()
+	d.held.stuck = nil
 }
 
 func (d *DiskCache) holdDir(path string) {
@@ -794,7 +806,8 @@ func (d *DiskCache) releaseDir(path string, used bool) {
 }
 
 // removeEvictedDir removes an evicted entry directory, or puts it back in the cache with
-// size when it has a hold or cannot be removed.
+// size when it has a hold or cannot be removed; eviction skips one it cannot remove until
+// the collector's next tick.
 func (d *DiskCache) removeEvictedDir(path string, size int64) error {
 	d.held.mu.Lock()
 	if d.held.m[path] > 0 {
@@ -806,6 +819,12 @@ func (d *DiskCache) removeEvictedDir(path string, size int64) error {
 		return nil
 	}
 	trash, err := trashCacheDir(path, size)
+	if err != nil && !os.IsNotExist(err) {
+		if d.held.stuck == nil {
+			d.held.stuck = make(map[string]struct{})
+		}
+		d.held.stuck[path] = struct{}{}
+	}
 	d.held.mu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {

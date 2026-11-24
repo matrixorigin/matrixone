@@ -34,6 +34,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -263,6 +264,10 @@ func newDiskCache(
 	postEvict := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
 		ret.preloads.removed(path, size)
 		ret.ranges.remove(path)
+		// A read may have cached the file again since it was evicted.
+		if ret.cache.Contains(path) {
+			ret.ranges.add(ret.path, path)
+		}
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -777,7 +782,12 @@ func (d *DiskCache) Read(
 
 	for i := range vector.Entries {
 		if err := fillEntry(&vector.Entries[i]); err != nil {
-			// ignore error
+			// A failed read of object storage by a download the read joined fails the read;
+			// an error of the cache itself is ignored.
+			var source *diskCacheSourceError
+			if errors.As(err, &source) {
+				return err
+			}
 			numError++
 			logutil.Warn(
 				"read disk cache error",
@@ -1118,7 +1128,11 @@ func (d *DiskCache) writeFileTo(
 	}
 	from, err := idle.open(func() (io.ReadCloser, error) { return openReader(readCtx) })
 	if err != nil {
-		return false, &diskCacheSourceError{err: err}
+		err = &diskCacheSourceError{err: err}
+		if download != nil {
+			download.endWith(false, sourceFailure(readCtx, err))
+		}
+		return false, err
 	}
 	defer from.Close()
 	source := &diskCacheSourceReader{Reader: idle}
@@ -1151,7 +1165,7 @@ func (d *DiskCache) writeFileTo(
 		copied()
 	}
 	if download != nil {
-		download.end(err == nil)
+		download.endWith(err == nil, sourceFailure(readCtx, err))
 	}
 	if err != nil {
 		return false, err
@@ -1172,6 +1186,21 @@ func (d *DiskCache) writeFileTo(
 	}
 	w.file = nil
 	return true, nil
+}
+
+// sourceFailure returns err when it is a failed read of object storage by a fill whose
+// context readCtx did not end: it fails the reads waiting for the fill. A fill stopped
+// (idle, delete, close, its query), or whose object is gone, leaves them to read their own
+// bytes.
+func sourceFailure(readCtx context.Context, err error) error {
+	var source *diskCacheSourceError
+	if err == nil || readCtx.Err() != nil || !errors.As(err, &source) {
+		return nil
+	}
+	if me := (*moerr.Error)(nil); errors.As(err, &me) && me.ErrorCode() == moerr.ErrFileNotFound {
+		return nil
+	}
+	return err
 }
 
 // fileWrite is what a write of a cache file holds until it publishes the file or hands it

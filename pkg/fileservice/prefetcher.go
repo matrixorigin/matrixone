@@ -689,12 +689,16 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	if s.diskCache.cache.Contains(diskPath) && s.diskCache.cachedFileExists(ctx, diskPath) {
 		return true
 	}
+	// Every range is checked, so the record of a missing file is dropped before the
+	// download decides which ranges to fetch.
 	key := s.diskCache.rangeObjectKey(path.File)
 	checked := make(map[string]struct{})
+	have := true
 	for _, r := range req.Ranges {
 		rs, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size)
 		if !ok {
-			return false
+			have = false
+			continue
 		}
 		for _, c := range rs {
 			if _, ok := checked[c.diskPath]; ok {
@@ -702,11 +706,11 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 			}
 			checked[c.diskPath] = struct{}{}
 			if !s.diskCache.cachedFileExists(ctx, c.diskPath) {
-				return false
+				have = false
 			}
 		}
 	}
-	return true
+	return have
 }
 
 // prefetchObject downloads the whole object of req at its known size, or its ranges.

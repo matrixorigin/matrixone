@@ -200,8 +200,19 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		if e.done {
 			continue
 		}
+		if e.Size == 0 {
+			return moerr.NewEmptyRangeNoCtx(p.File)
+		}
 		if e.Size < 0 {
-			return nil
+			// A read to the end reads the rest of the object the entry holds.
+			info, err := file.Stat()
+			if err != nil {
+				return nil
+			}
+			if e.Offset >= info.Size() {
+				return moerr.NewEmptyRangeNoCtx(p.File)
+			}
+			e.Size = info.Size() - e.Offset
 		}
 		from := &sourceErrReader{Reader: io.NewSectionReader(file, e.Offset, e.Size)}
 		if err := e.readFrom(ctx, from, s); err != nil {
@@ -230,15 +241,20 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 	return nil
 }
 
-// touchIndexObject marks the entry at diskPath used, at most once per indexObjectTouch.
+// touchIndexObject marks the entry at diskPath used, at most once per indexObjectTouch,
+// or per half the idle TTL when that is shorter.
 func (s *S3FS) touchIndexObject(diskPath string) {
+	interval := indexObjectTouch
+	if ttl := s.indexFileCache.idleTTL; ttl > 0 {
+		interval = min(interval, ttl/2)
+	}
 	o := &s.indexObjects
 	now := time.Now()
 	o.mu.Lock()
 	if o.touched == nil {
 		o.touched = make(map[string]time.Time)
 	}
-	if now.Sub(o.touched[diskPath]) < indexObjectTouch {
+	if now.Sub(o.touched[diskPath]) < interval {
 		o.mu.Unlock()
 		return
 	}
