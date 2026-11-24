@@ -64,6 +64,10 @@ func (i *IOVector) ReleaseReadResultOnError() {
 		if entry.done && entry.releaseData != nil {
 			entry.releaseData()
 			entry.releaseData = nil
+			entry.Data = nil
+			if entry.ReadCloserForRead != nil {
+				*entry.ReadCloserForRead = nil
+			}
 		}
 		entry.decodeLease.release()
 		entry.decodeLease = nil
