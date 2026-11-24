@@ -5506,13 +5506,28 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		//ifInsertFromUniqueColMap = make(map[string]bool)
 
 	case *tree.ParenSelect:
-		// Bind the complete source select, not only the paren body: any WITH
-		// attached to the enclosing source node - and its wrapper clauses -
-		// carries the source's own lexical scope, so dropping the outer node
-		// lets a same-name physical table silently take over (or the CTE
-		// vanish entirely when no homonym exists). The binder resolves the
-		// paren body natively once the scope reaches it.
-		astSelect = rowsForInsert
+		// A parenthesized source that owns no WITH keeps the historical
+		// behavior of binding only the paren body: the base never passed
+		// the enclosing node's own clause set through this call, so the
+		// outer wrapper's LIMIT/ORDER BY stay as unapplied as they always
+		// were (the upstream separators insert every inner row for both
+		// outer LIMIT 0 and LIMIT 1). A source whose paren body actually
+		// carries WITH keeps the completed-source binding: its enclosing
+		// node holds the lexical scope and any wrapper clauses that the
+		// newly accepted parenthesized WITH body owns.
+		// The enclosing source node is the statement-level owner the grammar
+		// attaches WITH to; a root WITH preceding the parenthesized body
+		// must keep the complete statement. When no level owns WITH, the
+		// historical nested binding remains: exactly the paren body, with
+		// its own lexical owners intact and the bare enclosing wrapper -
+		// whose clause set the old call never applied - discarded.
+		if rowsForInsert.With != nil {
+			astSelect = rowsForInsert
+		} else if body := selectImpl.Select; body != nil && body.With == nil {
+			astSelect = body
+		} else {
+			astSelect = rowsForInsert
+		}
 
 		subCtx := NewBindContext(builder, bindCtx)
 		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef, builder.isInsertIgnore)

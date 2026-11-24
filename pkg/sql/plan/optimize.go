@@ -53,7 +53,14 @@ func (opt *BaseOptimizer) CurrentContext() CompilerContext {
 }
 
 func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool, input *PlanningInput) (*Query, error) {
-	pn, err := BuildPlan(opt.ctx, stmt, isPrepareStmt, input)
+	return opt.OptimizeWithExecutionOwner(stmt, isPrepareStmt, input, nil)
+}
+
+// OptimizeWithExecutionOwner preserves the prepare route's genuinely
+// executable SELECT identity through the optimizer's planning call; every
+// other optimize entry stays ownership-neutral.
+func (opt *BaseOptimizer) OptimizeWithExecutionOwner(stmt tree.Statement, isPrepareStmt bool, input *PlanningInput, execOwner *tree.Select) (*Query, error) {
+	pn, err := BuildPlanWithExecutionOwner(opt.ctx, stmt, isPrepareStmt, input, execOwner)
 	if err != nil {
 		return nil, err
 	}

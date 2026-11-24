@@ -417,6 +417,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.stmt,
 			execCtx.input.isPreparedExpr(),
 			planningInput,
+			executionOwnerOf(cwft.stmt),
 		)
 		if err != nil {
 			return nil, err
@@ -3012,7 +3013,7 @@ func (cwft *TxnComputationWrapper) validatedExecutionIntent() *plan2.ExecutionIn
 }
 
 func (cwft *TxnComputationWrapper) rebuildWithoutCapturedAccess(execCtx *ExecCtx) (*plan2.Plan, error) {
-	rebuilt, err := buildPlanWithPrepareMode(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt, execCtx.input.isPreparedExpr(), nil)
+	rebuilt, err := buildPlanWithPrepareMode(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt, execCtx.input.isPreparedExpr(), nil, executionOwnerOf(cwft.stmt))
 	if err != nil {
 		return nil, err
 	}
@@ -3329,7 +3330,7 @@ func buildPlanForCompileRetry(
 		input = plan2.NewPlanningInput(planningInputRoot(stmt), *intent, planningCompiler(compilerContext))
 	}
 	retryPlan, err := buildPlanWithPrepareMode(
-		ctx, ses, compilerContext, stmt, forcePrepare, input)
+		ctx, ses, compilerContext, stmt, forcePrepare, input, executionOwnerOf(stmt))
 	if err != nil {
 		return nil, err
 	}

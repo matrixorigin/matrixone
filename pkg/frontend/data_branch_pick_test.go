@@ -1975,13 +1975,15 @@ func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
 
 	wantErr := moerr.NewInternalErrorNoCtx("permission denied")
 	called := 0
+	var capturedNeutralOwner *tree.Select
 	buildPlanWithAuthorization = func(
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement, _ *plan2.PlanningInput,
+		stmt tree.Statement, _ *plan2.PlanningInput, owner *tree.Select,
 	) (*plan2.Plan, error) {
 		called++
+		capturedNeutralOwner = owner
 		return nil, wantErr
 	}
 
@@ -1997,6 +1999,10 @@ func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {
 	require.ErrorIs(t, err, wantErr)
 	require.Equal(t, 1, called)
 	require.Nil(t, pkFilter)
+	// The KEYS subquery is only preplanned for key materialization and never
+	// owns the session's export executor: its probe must thread the neutral
+	// owner even when the parsed KEYS SELECT itself carries an Ep.
+	require.Nil(t, capturedNeutralOwner, "the KEYS materialization probe must stay ownership-neutral")
 }
 
 func TestMaterializeSubqueryUnified_RejectsNilSelect(t *testing.T) {
@@ -2047,7 +2053,7 @@ func TestMaterializeSubqueryUnified_SinglePKSuccessBuildsFilterAndHashmap(t *tes
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement, _ *plan2.PlanningInput,
+		stmt tree.Statement, _ *plan2.PlanningInput, _ *tree.Select,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k"), nil
 	}
@@ -2124,7 +2130,7 @@ func TestMaterializeSubqueryUnified_PreservesStringLiteralQuotes(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement, _ *plan2.PlanningInput,
+		stmt tree.Statement, _ *plan2.PlanningInput, _ *tree.Select,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("order_id"), nil
 	}
@@ -2189,7 +2195,7 @@ func TestMaterializeSubqueryUnified_CompositePKOrdersAllColumns(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement, _ *plan2.PlanningInput,
+		stmt tree.Statement, _ *plan2.PlanningInput, _ *tree.Select,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k1", "k2"), nil
 	}
@@ -2254,7 +2260,7 @@ func TestMaterializeSubqueryUnified_PropagatesStreamingError(t *testing.T) {
 		reqCtx context.Context,
 		ses FeSession,
 		ctx plan2.CompilerContext,
-		stmt tree.Statement, _ *plan2.PlanningInput,
+		stmt tree.Statement, _ *plan2.PlanningInput, _ *tree.Select,
 	) (*plan2.Plan, error) {
 		return newPickSubqueryPlanForTest("k"), nil
 	}

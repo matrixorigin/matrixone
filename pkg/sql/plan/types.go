@@ -415,6 +415,15 @@ type QueryBuilder struct {
 	// expansion capture keys its freeze by the clause being bound: for a
 	// paginated view that clause is a clone, while the catalog formatter
 	// walks the authored statement, so the capture records the authored key.
+	// rootExecutableSelect holds the explicitly threaded owning statement
+	// identity: BuildPlan's direct and parenthesized SELECT entries thread
+	// the genuinely executable select, while every non-owning internal
+	// consumer (recursive EXPLAIN/DCL helpers, view/CTAS inference, restore
+	// probes) threads nil. Only the threaded identity's own INTO OUTFILE Ep
+	// is exempted at the pagination wrap's decline, so a nested or
+	// diagnostic binder can never confer export authority and the original
+	// frontend statement keeps its unique Ep and its executor cleanup.
+	rootExecutableSelect *tree.Select
 	clauseCorrespondence map[*tree.SelectClause]*tree.SelectClause
 
 	// syntheticStarOrdinals carries, for the wrap's generated star refs

@@ -82,7 +82,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	validate func(*Query) error,
 ) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
-		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "", zeroScalarExecutable, nil,
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "", zeroScalarExecutable, nil, nil,
 	)
 }
 
@@ -98,6 +98,13 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	persistedViewTarget string,
 	zeroScalarPolicy zeroScalarPolicy,
 	planningInput *PlanningInput,
+	// rootExecutableSelect is the genuinely owning statement identity when
+	// this binding IS the frontend/executor route (BuildPlan's direct and
+	// parenthesized SELECT entries), and nil for every non-owning internal
+	// consumer (recursive EXPLAIN/DCL helpers, view/CTAS inference, restore
+	// probes). The pagination wrap exempts exactly the threaded identity's
+	// own Ep; a nil keeps the wrap's strict nested-Ep decline.
+	rootExecutableSelect *tree.Select,
 ) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -128,6 +135,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	// createQuery parses the same setting again for the optimizer passes.
 	builder.parseOptimizeHints()
 
+	builder.rootExecutableSelect = rootExecutableSelect
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
 		return nil, err
@@ -766,7 +774,24 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 
 // BuildPlan forwards a single-attempt planning input only
 // through the root SELECT and its transparent statement wrappers.
+// BuildPlan is the general planning entry. It is deliberately
+// export-ownership-neutral: recursive diagnostics (EXPLAIN/EXPLAIN ANALYZE
+// and PHYPLAN), SHOW helpers, restore/CTAS inference, background and internal
+// executors all reach this entry, so the pagination wrap never sees an
+// executable Ep owner through them.
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, planningInput *PlanningInput) (result *Plan, err error) {
+	return buildPlan(ctx, stmt, isPrepareStmt, planningInput, nil)
+}
+
+// BuildPlanWithExecutionOwner carries the genuinely executable SELECT
+// identity from the real frontend execution boundary (direct and prepared
+// statement routes) so the pagination wrap exempts exactly that statement's
+// own INTO OUTFILE Ep. Non-owning callers keep using BuildPlan.
+func BuildPlanWithExecutionOwner(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, planningInput *PlanningInput, execOwner *tree.Select) (result *Plan, err error) {
+	return buildPlan(ctx, stmt, isPrepareStmt, planningInput, execOwner)
+}
+
+func buildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, planningInput *PlanningInput, execOwner *tree.Select) (result *Plan, err error) {
 	defer func() {
 		if err == nil {
 			err = plan.RequireLegacyCollations(result)
@@ -789,14 +814,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, pla
 		if stmt.IsPerform && selectHasExportParam(stmt) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
 		}
-		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false, nil, nil, false, "", zeroScalarExecutable, planningInput)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false, nil, nil, false, "", zeroScalarExecutable, planningInput, execOwner)
 		if err != nil {
 			return nil, err
 		}
 		applySQLSelectLimit(stmt, queryPlan)
 		return queryPlan, nil
 	case *tree.ParenSelect:
-		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false, nil, nil, false, "", zeroScalarExecutable, planningInput)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false, nil, nil, false, "", zeroScalarExecutable, planningInput, execOwner)
 		if err != nil {
 			return nil, err
 		}

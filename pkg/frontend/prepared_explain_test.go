@@ -447,7 +447,7 @@ func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
 
 	originalBuild := buildPlanWithAuthorization
 	defer func() { buildPlanWithAuthorization = originalBuild }()
-	buildPlanWithAuthorization = func(context.Context, FeSession, plan2.CompilerContext, tree.Statement, *plan2.PlanningInput) (*planPb.Plan, error) {
+	buildPlanWithAuthorization = func(context.Context, FeSession, plan2.CompilerContext, tree.Statement, *plan2.PlanningInput, *tree.Select) (*planPb.Plan, error) {
 		return nil, errors.New("prepared EXPLAIN must consume the initialized plan")
 	}
 
@@ -627,4 +627,37 @@ func TestCompileOutputCallbackCapturesSelectIntoUserVariables(t *testing.T) {
 	variable, err := ses.GetUserDefinedVar("out")
 	require.NoError(t, err)
 	require.Equal(t, int64(5), variable.Value)
+}
+
+// The real frontend EXPLAIN child-planning boundary must thread the NEUTRAL
+// ownership identity: the diagnostic route never owns the session's export
+// executor. A reachable export-bearing paginated child is parsed and driven
+// through the actual frontend EXPLAIN handler chain while the authorization
+// boundary stub captures the threaded identity and delegates every check to
+// the original planner: the child must refuse its duplicate pagination
+// clauses (1149) with the captured owner exactly nil.
+func TestExplainChildPlanningKeepsNeutralExportOwner(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 107, "select 1")
+	defer prepareStmt.Close()
+	sql := "explain with q as (select 1 as a union all select 2 as a) (select a from q limit 2) order by a limit 1 offset 1 into outfile '/tmp/p137-owner-guard.csv'"
+	ses.GetTxnCompileCtx().SetContext(execCtx.reqCtx)
+	stmts, err := mysql.Parse(execCtx.reqCtx, sql, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	explain, ok := stmts[0].(*tree.ExplainStmt)
+	require.True(t, ok, "the probe must parse as the frontend EXPLAIN statement")
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+
+	originalBuild := buildPlanWithAuthorization
+	defer func() { buildPlanWithAuthorization = originalBuild }()
+	var capturedOwner *tree.Select
+	buildPlanWithAuthorization = func(reqCtx context.Context, innerSes FeSession, compiler plan2.CompilerContext, innerStmt tree.Statement, input *plan2.PlanningInput, owner *tree.Select) (*planPb.Plan, error) {
+		capturedOwner = owner
+		return originalBuild(reqCtx, innerSes, compiler, innerStmt, input, owner)
+	}
+
+	err = handleExplainStmt(ses, execCtx, explain)
+	require.Error(t, err, "the neutral diagnostic must refuse the paginated export child")
+	require.Nil(t, capturedOwner, "the actual frontend EXPLAIN child planning must pass the neutral nil owner")
+	require.ErrorContains(t, err, "multiple LIMIT")
 }

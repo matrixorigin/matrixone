@@ -6244,12 +6244,12 @@ func TestExecRequestStmtCloseSuppressesDeallocateError(t *testing.T) {
 	oldBuild := buildPlanWithAuthorization
 	t.Cleanup(func() { buildPlanWithAuthorization = oldBuild })
 	deallocateCalled := false
-	buildPlanWithAuthorization = func(reqCtx context.Context, session FeSession, compiler plan.CompilerContext, statement tree.Statement, input *plan.PlanningInput) (*plan.Plan, error) {
+	buildPlanWithAuthorization = func(reqCtx context.Context, session FeSession, compiler plan.CompilerContext, statement tree.Statement, input *plan.PlanningInput, _ *tree.Select) (*plan.Plan, error) {
 		if _, ok := statement.(*tree.Deallocate); ok {
 			deallocateCalled = true
 			return nil, errors.New("injected deallocate planning failure")
 		}
-		return oldBuild(reqCtx, session, compiler, statement, input)
+		return oldBuild(reqCtx, session, compiler, statement, input, nil)
 	}
 
 	data := make([]byte, 4)
@@ -8031,7 +8031,7 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 		ctx context.Context,
 		_ FeSession,
 		compilerCtx plan.CompilerContext,
-		_ tree.Statement, _ *plan.PlanningInput,
+		_ tree.Statement, _ *plan.PlanningInput, _ *tree.Select,
 	) (*plan.Plan, error) {
 		checked = true
 		require.Same(t, currentExecCtx, compilerCtx.(*TxnCompilerContext).execCtx)
@@ -8058,7 +8058,7 @@ func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
 			input := &UserInput{sql: "procedure body"}
 			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: input, remapDb: map[string]string{"saved": "db"}}
 			planned := false
-			buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement, _ *plan.PlanningInput) (*plan.Plan, error) {
+			buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement, _ *plan.PlanningInput, _ *tree.Select) (*plan.Plan, error) {
 				planned = true
 				policy := execCtx.input.rewritePolicy
 				require.True(t, policy.captured)
@@ -8102,7 +8102,7 @@ func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
 		input := &UserInput{rewritePolicy: policy}
 		execCtx := &ExecCtx{reqCtx: ctx, input: input, rewriteEnabled: true,
 			sqlOfStmt: `/*+ {"rewrites":{"owner.t":"select id from owner.t where tenant = 1"}} */ prepare p from 'select id from owner.t'`}
-		buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement, _ *plan.PlanningInput) (*plan.Plan, error) {
+		buildPlanWithAuthorization = func(_ context.Context, _ FeSession, _ plan.CompilerContext, stmt tree.Statement, _ *plan.PlanningInput, _ *tree.Select) (*plan.Plan, error) {
 			require.Same(t, input, execCtx.input)
 			require.Same(t, policy, execCtx.input.rewritePolicy)
 			layers := stmt.(*tree.PrepareStmt).Stmt.(*tree.Select).RewriteOption.Rewrites["owner.t"]
@@ -8123,7 +8123,7 @@ func TestPreparedOwnerPolicyBeforePlanning(t *testing.T) {
 		bh.sql2err[getSqlForInheritedRoleIDsForRuleCache(0)] = failure
 		stub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer stub.Reset()
-		buildPlanWithAuthorization = func(context.Context, FeSession, plan.CompilerContext, tree.Statement, *plan.PlanningInput) (*plan.Plan, error) {
+		buildPlanWithAuthorization = func(context.Context, FeSession, plan.CompilerContext, tree.Statement, *plan.PlanningInput, *tree.Select) (*plan.Plan, error) {
 			t.Fatal("planning must not run after capture fails")
 			return nil, nil
 		}
@@ -8197,7 +8197,7 @@ func TestPreparedCreateViewUsesInnerRootSQL(t *testing.T) {
 		_ context.Context,
 		_ FeSession,
 		compilerCtx plan.CompilerContext,
-		stmt tree.Statement, _ *plan.PlanningInput,
+		stmt tree.Statement, _ *plan.PlanningInput, _ *tree.Select,
 	) (*plan.Plan, error) {
 		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
 	}
@@ -8254,7 +8254,7 @@ func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
 		_ context.Context,
 		_ FeSession,
 		compilerCtx plan.CompilerContext,
-		stmt tree.Statement, _ *plan.PlanningInput,
+		stmt tree.Statement, _ *plan.PlanningInput, _ *tree.Select,
 	) (*plan.Plan, error) {
 		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false, nil)
 	}
@@ -8703,10 +8703,10 @@ func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? + 1 from dual", 1)
 	require.NoError(t, err)
 
-	_, err = buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false, nil)
+	_, err = buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, false, nil, nil)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
+	preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil, nil)
 	require.NoError(t, err)
 	require.True(t, preparedPlan.GetIsPrepare())
 	require.Equal(t, []int32{0}, queryParamPositions(preparedPlan.GetQuery()))
@@ -8719,7 +8719,7 @@ func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
 
 	compCtx := plan.NewEmptyCompilerContext(nil)
 	compCtx.SetContext(nil)
-	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false, nil)
+	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, compCtx.GetContext())
 }
@@ -8734,7 +8734,7 @@ func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
 	require.Equal(t, 2, secondParam.Offset)
 	clause.Exprs = clause.Exprs[1:]
 
-	preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
+	preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(preparedPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset, "planning must not mutate the retained SET AST")
@@ -8762,7 +8762,7 @@ func TestPreparedSetExpressionPlanNormalizesAggregateAndWindowParams(t *testing.
 	} {
 		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
 		require.NoError(t, err)
-		preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil)
+		preparedPlan, err := buildPlanWithPrepareMode(ctx, nil, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), stmt, true, nil, nil)
 		require.NoError(t, err)
 		require.ElementsMatch(t, tc.want, queryParamPositions(preparedPlan.GetQuery()))
 	}
@@ -9608,7 +9608,7 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement, *plan.PlanningInput,
+		tree.Statement, *plan.PlanningInput, *tree.Select,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{
@@ -9656,7 +9656,7 @@ func TestDoExplainExecuteUsesPreparedSchedulingSQL(t *testing.T) {
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement, *plan.PlanningInput,
+		tree.Statement, *plan.PlanningInput, *tree.Select,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{
@@ -9706,7 +9706,7 @@ func TestDoExplainStmtKeepsSchedulingPreviewOptIn(t *testing.T) {
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement, *plan.PlanningInput,
+		tree.Statement, *plan.PlanningInput, *tree.Select,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{
@@ -9748,7 +9748,7 @@ func TestDoExplainStmtDoesNotSwallowRequestCancellation(t *testing.T) {
 		context.Context,
 		FeSession,
 		plan.CompilerContext,
-		tree.Statement, *plan.PlanningInput,
+		tree.Statement, *plan.PlanningInput, *tree.Select,
 	) (*plan.Plan, error) {
 		return &plan.Plan{
 			Plan: &plan0.Plan_Query{

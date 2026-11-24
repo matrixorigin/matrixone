@@ -6586,7 +6586,7 @@ func (builder *QueryBuilder) registerSyntheticPages(pages []*tree.Select) func()
 	}
 }
 
-func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
+func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tree.Select) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
 	if s == nil {
 		return nil, nil, nil, false
 	}
@@ -6624,7 +6624,7 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool) (*tree.Select, 
 			break
 		}
 		if cur.RankOption != nil || cur.TimeWindow != nil ||
-			cur.SelectLockInfo != nil || cur.Ep != nil || cur.IntoVars != nil {
+			cur.SelectLockInfo != nil || (exportOwner == nil || cur != exportOwner) && cur.Ep != nil || cur.IntoVars != nil {
 			// A wrapper carrying BY RANK or an interval window keeps the whole
 			// expression on the normal binder: its single-clause semantics and
 			// typed error behavior are already correct there. A wrapper whose
@@ -6862,7 +6862,7 @@ func (builder *QueryBuilder) bindCte(
 		// equivalent derived-table nest.
 		if ctx.legacyCTEScope {
 			bodyForBinding = s
-		} else if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(fullBody, ctx.captureViewStarExpansion); rewritten {
+		} else if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(fullBody, ctx.captureViewStarExpansion, nil); rewritten {
 			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 			defer unregisterSyntheticPages()
 			if len(clauseMemo) > 0 {
@@ -7120,56 +7120,71 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
-	if stmt != nil && stmt.Ep == nil && stmt.With != nil && !ctx.legacyCTEScope {
-		// Only a WITH-bearing consuming SELECT composes its parenthesized
-		// pagination stages here: its own WITH is hoisted verbatim onto the
-		// composed outermost level. An ordinary no-WITH statement keeps
-		// bindSelect's flatten-and-reject contract, so duplicate ORDER
-		// BY/LIMIT clause sets stay the documented syntax error. A
-		// marker-free persisted definition keeps the released bindSelect
-		// unwrap instead: its legacy route never reaches the generated
-		// pagination tree.
-		if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(stmt, ctx.captureViewStarExpansion); rewritten {
-			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
-			defer unregisterSyntheticPages()
-			if len(clauseMemo) > 0 {
-				previous := builder.clauseCorrespondence
-				composed := clauseMemo
-				if previous != nil {
-					composed = make(map[*tree.SelectClause]*tree.SelectClause, len(previous)+len(clauseMemo))
-					for k, v := range previous {
-						composed[k] = v
-					}
-					for k, v := range clauseMemo {
-						composed[k] = v
-					}
-					// Canonicalize per-entered origin: an inner wrap can clone
-					// an intermediate clause whose recorded counterpart is
-					// itself a clone of an enclosing wrap's authored clause.
-					// The capture boundary records one key, so resolve every
-					// entry to its final authored pointer here, bounded by the
-					// map size with a seen set.
-					for k, v := range composed {
-						final := v
-						seen := map[*tree.SelectClause]struct{}{final: {}}
-						for {
-							next, ok := composed[final]
-							if !ok || final == next {
-								break
-							}
-							if _, circular := seen[next]; circular {
-								break
-							}
-							seen[next] = struct{}{}
-							final = next
-						}
-						composed[k] = final
-					}
-				}
-				builder.clauseCorrespondence = composed
-				defer func() { builder.clauseCorrespondence = previous }()
+	withStmt := stmt
+	if stmt != nil && !ctx.legacyCTEScope {
+		// The consuming WITH-bearing query expression owns the composed
+		// pages. A transparent enclosing parenthesis group - one that owns
+		// no clause of its own - is read through without rewriting, so the
+		// pages of the WITH select it encloses still compose. The
+		// executable statement's INTO OUTFILE Ep is a planner-level
+		// exemption only: the frontend executor keeps the unique authored
+		// Ep, path authorization and deferred cleanup on the original
+		// statement. An ordinary no-WITH statement keeps the
+		// flatten-and-reject contract, so duplicate ORDER BY/LIMIT clause
+		// sets stay the documented syntax error. A marker-free persisted
+		// definition keeps the released bindSelect unwrap instead: its
+		// legacy route never reaches the generated pagination tree.
+		for withStmt.With == nil {
+			paren, ok := withStmt.Select.(*tree.ParenSelect)
+			if !ok || paren.Select == nil || withStmt.Ep != nil || withStmt.OrderBy != nil || withStmt.Limit != nil || withStmt.TimeWindow != nil || withStmt.RankOption != nil || withStmt.RewriteOption != nil || withStmt.SelectLockInfo != nil || withStmt.IntoVars != nil || withStmt.DeprecatedInto || withStmt.IsPerform {
+				withStmt = nil
+				break
 			}
-			return builder.bindSelect(wrapped, ctx, isRoot)
+			withStmt = paren.Select
+		}
+		if withStmt != nil {
+			if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(withStmt, ctx.captureViewStarExpansion, builder.rootExecutableSelect); rewritten {
+				unregisterSyntheticPages := builder.registerSyntheticPages(pages)
+				defer unregisterSyntheticPages()
+				if len(clauseMemo) > 0 {
+					previous := builder.clauseCorrespondence
+					composed := clauseMemo
+					if previous != nil {
+						composed = make(map[*tree.SelectClause]*tree.SelectClause, len(previous)+len(clauseMemo))
+						for k, v := range previous {
+							composed[k] = v
+						}
+						for k, v := range clauseMemo {
+							composed[k] = v
+						}
+						// Canonicalize per-entered origin: an inner wrap can clone
+						// an intermediate clause whose recorded counterpart is
+						// itself a clone of an enclosing wrap's authored clause.
+						// The capture boundary records one key, so resolve every
+						// entry to its final authored pointer here, bounded by the
+						// map size with a seen set.
+						for k, v := range composed {
+							final := v
+							seen := map[*tree.SelectClause]struct{}{final: {}}
+							for {
+								next, ok := composed[final]
+								if !ok || final == next {
+									break
+								}
+								if _, circular := seen[next]; circular {
+									break
+								}
+								seen[next] = struct{}{}
+								final = next
+							}
+							composed[k] = final
+						}
+					}
+					builder.clauseCorrespondence = composed
+					defer func() { builder.clauseCorrespondence = previous }()
+				}
+				return builder.bindSelect(wrapped, ctx, isRoot)
+			}
 		}
 	}
 

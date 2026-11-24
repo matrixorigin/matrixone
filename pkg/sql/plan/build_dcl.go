@@ -57,7 +57,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement, planningInput *Pla
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns,
 		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := NewPrepareOptimizer(ctx)
-		optimized, err := opt.Optimize(stmt, true, planningInput)
+		optimized, err := opt.OptimizeWithExecutionOwner(stmt, true, planningInput, executionOwnerOf(stmt))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -107,6 +107,19 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement, planningInput *Pla
 		p, err := BuildPlan(ctx, stmt, true, nil)
 		return p, nil, err
 	}
+}
+
+// executionOwnerOf extracts the genuinely executable SELECT identity from a
+// prepared statement body: the SELECT itself, or the parenthesized wrapper's
+// body that actually owns the Ep. Every other statement type stays neutral.
+func executionOwnerOf(stmt tree.Statement) *tree.Select {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		return s
+	case *tree.ParenSelect:
+		return s.Select
+	}
+	return nil
 }
 
 func buildPrepare(stmt tree.Prepare, ctx CompilerContext, planningInput *PlanningInput) (*Plan, error) {

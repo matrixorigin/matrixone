@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type restoredViewDefinitionKey struct{}
@@ -66,6 +67,61 @@ func restoredViewLowerCase(ctx context.Context, data ViewData, fallback int64) (
 		return 0, moerr.NewInvalidInput(ctx, "invalid restored lower_case_table_names")
 	}
 	return mode, nil
+}
+
+// restoredLegacyInnerWindowInferenceInput reproduces the released server's
+// one-level CREATE inference boundary for the one marker-free restored shape
+// that needs it: the defining select is a direct outer window on a
+// parenthesized SELECT whose inner body itself owns an authored window and no
+// WITH scope of its own. The released CREATE bound that inner body, so the
+// restored schema/dependency inference selects the same inner input instead
+// of rejecting the duplicated window ownership. Every other authored shape
+// (including any WITH-bearing source) keeps the complete defining select.
+func restoredLegacyInnerWindowInferenceInput(ctx CompilerContext, database, name string, stmt *tree.Select) *tree.Select {
+	inner, ok := restoredLegacyInnerWindow(ctx, database, name, stmt)
+	if !ok || inner == nil {
+		return stmt
+	}
+	return inner
+}
+
+func restoredLegacyInnerWindow(ctx CompilerContext, database, name string, stmt *tree.Select) (*tree.Select, bool) {
+	if ctx == nil || ctx.GetContext() == nil || stmt == nil {
+		return nil, false
+	}
+	source, ok := ctx.GetContext().Value(restoredViewDefinitionKey{}).(restoredViewDefinition)
+	if !ok || source.database != database || source.name != name || source.createSQL == "" {
+		return nil, false
+	}
+	var data ViewData
+	if err := json.Unmarshal([]byte(source.definition), &data); err != nil || data.CTEScopeProtocol != nil {
+		return nil, false
+	}
+	// The demonstrated released conflict is exactly a direct outer window on
+	// a parenthesized body whose inner select owns its own window and no
+	// LIMIT (the release witness decorates the outer level with both the
+	// window and the LIMIT). Any other authored field at either level - an
+	// outer ORDER BY or BY RANK, lock/export/INTO/rewrite state, a WITH, or
+	// a competing inner LIMIT - keeps the previous complete binding, so its
+	// duplicate-clause and typed denials stay enforced.
+	if stmt.Select == nil || stmt.TimeWindow == nil || stmt.With != nil {
+		return nil, false
+	}
+	if stmt.OrderBy != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.IntoVars != nil || stmt.DeprecatedInto || stmt.SelectLockInfo != nil || stmt.RewriteOption != nil || stmt.IsPerform {
+		return nil, false
+	}
+	paren, ok := stmt.Select.(*tree.ParenSelect)
+	if !ok || paren.Select == nil {
+		return nil, false
+	}
+	if paren.Select.With != nil || paren.Select.TimeWindow == nil || paren.Select.Limit != nil {
+		return nil, false
+	}
+	inner := paren.Select
+	if inner.OrderBy != nil || inner.RankOption != nil || inner.Ep != nil || inner.IntoVars != nil || inner.DeprecatedInto || inner.SelectLockInfo != nil || inner.RewriteOption != nil || inner.IsPerform {
+		return nil, false
+	}
+	return paren.Select, true
 }
 
 func restoredViewCreationContext(ctx CompilerContext, database, name string) (CompilerContext, error) {
