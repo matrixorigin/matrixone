@@ -696,10 +696,11 @@ func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 		if s.indexObjectReadable(policy) && s.indexObjectHeld(req.FilePath) {
 			return nil
 		}
-		req.indexObject = len(req.Ranges) == 0
-		if req.indexObject && !s.indexObjectFillable(policy) {
+		// No cache holds the ranges of an index object.
+		if len(req.Ranges) > 0 || !s.indexObjectFillable(policy) {
 			return nil
 		}
+		req.indexObject = true
 	}
 	if s.prefetcher != nil && req.Size > 0 {
 		req.deletes = s.diskCache.deletes.now()
