@@ -151,7 +151,7 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			mp := mpool.MustNewZero()
 			src := NewVec(types.T_int64.ToType(), mp)
 			dmp := state.view(t, mp)
-			dst := newAccountedTestVector(t, types.T_int64.ToType(), dmp)
+			dst := NewVec(types.T_int64.ToType(), dmp)
 			t.Cleanup(func() {
 				src.Free(mp)
 				dst.Free(dmp)

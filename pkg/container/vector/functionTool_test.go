@@ -70,7 +70,7 @@ func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
 	mp := mpool.MustNewZero()
 	dmp := state.view(t, mp)
-	vec := newAccountedTestVector(t, types.T_blob.ToType(), dmp)
+	vec := NewVec(types.T_blob.ToType(), dmp)
 	called := false
 
 	err := AppendBytesWithWriter(vec, 1, dmp, func([]byte) error {

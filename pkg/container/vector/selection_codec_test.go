@@ -537,7 +537,7 @@ func BenchmarkSelectedRowsVarlenaDecode(b *testing.B) {
 				source := NewVec(tc.typ, mp)
 				account := newTestVectorAllocationAccount(b, 16<<20, 64)
 				dmp := account.view(b, mp)
-				destination := newAccountedTestVector(b, tc.typ, dmp)
+				destination := NewVec(tc.typ, dmp)
 				b.Cleanup(func() {
 					destination.Free(dmp)
 					source.Free(mp)
@@ -607,7 +607,7 @@ func TestSelectedRowsVarlenaDecodeInlineBoundaryAndReuse(t *testing.T) {
 			source := NewVec(tc.typ, mp)
 			account := newTestVectorAllocationAccount(t, 1<<20, 64)
 			dmp := account.view(t, mp)
-			destination := newAccountedTestVector(t, tc.typ, dmp)
+			destination := NewVec(tc.typ, dmp)
 			t.Cleanup(func() {
 				destination.Free(dmp)
 				source.Free(mp)
@@ -661,7 +661,7 @@ func TestSelectedRowsVarlenaDecodeAccountCapacityAndReuse(t *testing.T) {
 		t.Helper()
 		account := newTestVectorAllocationAccount(t, limit, 64)
 		dmp := account.view(t, mp)
-		destination := newAccountedTestVector(t, source.typ, dmp)
+		destination := NewVec(source.typ, dmp)
 		t.Cleanup(func() {
 			destination.Free(dmp)
 			finalizeTestVectorAllocationAccount(t, account)

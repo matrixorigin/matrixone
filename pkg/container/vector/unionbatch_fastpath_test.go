@@ -821,7 +821,7 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 64*1024, 32)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 			dmp := state.view(t, mp)
-			dst := newAccountedTestVector(t, types.T_varchar.ToType(), dmp)
+			dst := NewVec(types.T_varchar.ToType(), dmp)
 			t.Cleanup(func() { dst.Free(dmp) })
 			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, dmp))
 			selected := 0
