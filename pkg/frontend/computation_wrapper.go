@@ -1814,7 +1814,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		cwft.proc.SetPrepareParams(prepareStmt.params)
 		cwft.proc.SetPrepareParamsStringSource(types.StringSourceCOMStmt)
-		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes, prepareStmt.paramKinds,
+		cwft.paramVals, err = preparedParamValues(cwft.proc, &prepareStmt.paramValues, prepareStmt.ParamTypes, prepareStmt.paramKinds,
 			prepareStmt.inetNtoaParamPositions, prepareStmt.temporalRuntimeParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
@@ -1869,7 +1869,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// Statements that are not re-bound per execution (DDL, SET, SHOW, ...)
 		// still read their parameters with source types. A parameter whose
 		// source type cannot be determined keeps the TEXT transport.
-		if bindings, bindErr := preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
+		if bindings, bindErr := preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
 			if err = installTypedPrepareParams(cwft.proc, bindings, &prepareStmt.typedParams); err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
@@ -1880,7 +1880,7 @@ func initExecuteStmtParamWithResolverInSession(
 	var runtimeColDefData [][]byte
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
-		cwft.paramBindings, err = preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
+		cwft.paramBindings, err = preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -2117,9 +2117,10 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 }
 
 // preparedExecutionRetry is an immutable snapshot of the execution-time
-// binding needed when Compile rebuilds a plan after a definition change. The
-// slice must not alias TxnComputationWrapper.paramVals because that field is
-// replaced on the next execution of the cached prepared statement.
+// binding needed when Compile rebuilds a plan after a definition change. Its
+// values and bindings are copies: they do not alias the statement storage
+// the execution reads (TxnComputationWrapper.paramVals and paramBindings),
+// which the next execution of the prepared statement rewrites.
 type preparedExecutionRetry struct {
 	temporalTypes      *plan2.PreparedTemporalTypes
 	fieldTypes         *plan2.PreparedFieldTypes
@@ -2134,7 +2135,7 @@ func newPreparedExecutionRetry(paramVals []any) *preparedExecutionRetry {
 	if len(paramVals) == 0 {
 		return nil
 	}
-	return &preparedExecutionRetry{paramVals: append([]any(nil), paramVals...)}
+	return &preparedExecutionRetry{paramVals: plan2.CopyParamValues(paramVals)}
 }
 
 func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPositions []int32, paramVals []any) error {
@@ -2146,7 +2147,7 @@ func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPosition
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}
-		param, ok := paramVals[position].(plan2.ParamValue)
+		param, ok := plan2.AsParamValue(paramVals[position])
 		if !ok || param.PrepareParamKind != types.StringConversionBoolean {
 			continue
 		}
@@ -2309,7 +2310,9 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 
 // preparedParamValues reads the binary-protocol parameters. kinds holds each
 // parameter's protocol conversion kind, as computed for the prepared statement.
-func preparedParamValues(proc *process.Process, paramTypes []byte, kinds []types.StringConversionKind, positionArgs ...[]int32) ([]any, error) {
+// store, when not nil, is the prepared statement's value storage: the result
+// points into it and is rewritten by the next execution.
+func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, paramTypes []byte, kinds []types.StringConversionKind, positionArgs ...[]int32) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -2322,7 +2325,10 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, kinds []types
 	if len(positionArgs) > 1 {
 		temporalRuntimePositions = positionArgs[1]
 	}
-	values := make([]any, params.Length())
+	if store == nil {
+		store = &plan2.ParamValueStore{}
+	}
+	values := store.Reset(params.Length())
 	for i := range values {
 		paramValue := plan2.ParamValue{
 			IsBin: proc.GetPrepareParamIsBin(i),
@@ -2346,7 +2352,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, kinds []types
 			// position, protocol source, and negotiated capabilities. A bare nil
 			// would make execute-time common-type rebinding forget that this is the
 			// same eligible marker used by a preceding non-NULL execution.
-			values[i] = paramValue
+			*store.Ref(i) = paramValue
 			continue
 		}
 		raw, err := proc.GetPrepareParamsAt(i)
@@ -2405,7 +2411,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, kinds []types
 		// declared MySQL type is VAR_STRING. Keep this provenance separate from
 		// RuntimeType so text values can safely participate in numeric overload
 		// inference without changing direct string result metadata.
-		values[i] = paramValue
+		*store.Ref(i) = paramValue
 	}
 	return values, nil
 }
@@ -2415,7 +2421,7 @@ func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}
-		param, ok := paramVals[position].(plan2.ParamValue)
+		param, ok := plan2.AsParamValue(paramVals[position])
 		if !ok || param.Value == nil || param.HasRuntimeType {
 			continue
 		}
@@ -2428,7 +2434,7 @@ func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
 		}
 		param.RuntimeType = runtimeType
 		param.HasRuntimeType = true
-		paramVals[position] = param
+		plan2.SetParamValueAt(paramVals, int(position), param)
 	}
 }
 
@@ -2507,10 +2513,10 @@ func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) b
 			// parameter category. Rewrite it together with the latch so planning,
 			// cache identity, and later string executions cannot observe different
 			// sides of the same state transition.
-			if paramValue, ok := values[index].(plan2.ParamValue); ok {
+			if paramValue, ok := plan2.AsParamValue(values[index]); ok {
 				paramValue.RuntimeType = runtimeType
 				paramValue.HasRuntimeType = true
-				values[index] = paramValue
+				plan2.SetParamValueAt(values, index, paramValue)
 			}
 			numeric = true
 			continue
@@ -2519,7 +2525,7 @@ func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) b
 		// NULL has no runtime type and must not clear the marker's last numeric
 		// type. It does not need specialization for this execution, because both
 		// overloads return NULL. A later non-NULL value will reuse the latch.
-		paramValue, ok := values[index].(plan2.ParamValue)
+		paramValue, ok := plan2.AsParamValue(values[index])
 		if !ok || paramValue.Value == nil {
 			continue
 		}
@@ -2529,7 +2535,7 @@ func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) b
 		}
 		paramValue.RuntimeType = rememberedType
 		paramValue.HasRuntimeType = true
-		values[index] = paramValue
+		plan2.SetParamValueAt(values, index, paramValue)
 		numeric = true
 	}
 	return numeric
@@ -2642,7 +2648,7 @@ func untypedUserParamKindForType(typ types.T) (types.StringConversionKind, bool)
 type executeUserParams struct {
 	mp           *mpool.MPool
 	vec          *vector.Vector
-	vals         []any
+	values       plan2.ParamValueStore
 	isBin        []bool
 	binaryString []bool
 	domains      []types.RuntimeStringDomain
@@ -2699,7 +2705,6 @@ func (u *executeUserParams) prepare(proc *process.Process, n int) {
 	} else {
 		u.vec.CleanOnlyData()
 	}
-	u.vals = resetSlice(u.vals, n)
 	u.isBin = resetSlice(u.isBin, n)
 	u.binaryString = resetSlice(u.binaryString, n)
 	u.domains = resetSlice(u.domains, n)
@@ -2755,7 +2760,7 @@ func buildExecuteUserParamsInto(
 ) {
 	store.prepare(proc, len(args))
 	params = store.vec
-	paramVals = store.vals
+	paramVals = store.values.Reset(len(args))
 	paramIsBin = store.isBin
 	paramBinaryString = store.binaryString
 	paramDomains := store.domains
@@ -2895,7 +2900,7 @@ func buildExecuteUserParamsInto(
 			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		}
-		paramVals[i] = paramValue
+		*store.values.Ref(i) = paramValue
 	}
 	return
 }
