@@ -1215,7 +1215,7 @@ func (d *DiskCache) removeCachePath(path string) error {
 // removeCacheDir renames the entry out of its name in one step, then removes it. Once
 // renamed the entry is gone; files it fails to remove are kept as trash (see removeTrash).
 func (d *DiskCache) removeCacheDir(path string) error {
-	size, _ := d.cache.Size(path)
+	size := d.cacheDirBytes(path)
 	trash, err := trashCacheDir(path, size)
 	if err != nil {
 		return err
@@ -1226,44 +1226,128 @@ func (d *DiskCache) removeCacheDir(path string) error {
 	return nil
 }
 
-// cacheTrash holds the entry directories renamed for removal whose files are not all
-// removed, with their bytes.
-type cacheTrash struct {
-	mu    sync.Mutex
-	m     map[string]int64
-	bytes atomic.Int64
+// removeUnlistedDir removes an entry directory the load cannot list, as trash of unknown
+// bytes.
+func (d *DiskCache) removeUnlistedDir(ctx context.Context, path string) {
+	owner, err := d.paths.acquire(ctx, path, nil)
+	if err != nil {
+		return
+	}
+	defer owner.release()
+	trash, err := trashCacheDir(path, -1)
+	if err != nil {
+		return
+	}
+	if err := d.removeTrash(trash, -1); err != nil {
+		logutil.Error("index file cache: remove entry files", zap.String("path", trash), zap.Error(err))
+	}
 }
 
-// removeTrash removes trash, an entry directory of size bytes renamed for removal. Trash
-// it fails to remove is kept with its bytes, which count against the capacity until
-// retryTrash removes it; its bytes are size, or those it was kept with, when it cannot be
-// listed. Trash left when the process ends is removed when the cache loads, with the
-// bytes its name records.
+// cacheDirBytes returns the bytes of entry directory path: those it is indexed with, those
+// the load measured, or those it holds; -1 when none is known.
+func (d *DiskCache) cacheDirBytes(path string) int64 {
+	if size, ok := d.cache.Size(path); ok {
+		return size
+	}
+	d.trash.mu.Lock()
+	size, ok := d.trash.loading[path]
+	d.trash.mu.Unlock()
+	if ok {
+		return size
+	}
+	if size, err := cacheDirSize(path); err == nil {
+		return size
+	}
+	return -1
+}
+
+// cacheTrash holds the entry directories renamed for removal whose files are not all
+// removed, with their bytes, -1 when unknown.
+type cacheTrash struct {
+	mu sync.Mutex
+	m  map[string]int64
+	// loading holds the bytes the load measured of the entry directories it has not
+	// indexed yet.
+	loading map[string]int64
+	unknown int
+	loaded  bool
+	bytes   atomic.Int64
+	// limit caps the capacity while trash of unknown bytes is kept: the bytes the cache
+	// used when such trash was first kept after the load, or -1.
+	limit atomic.Int64
+}
+
+// removeTrash removes trash, an entry directory of size bytes renamed for removal, -1
+// when unknown. Trash it fails to remove is kept with its bytes, which count against the
+// capacity until retryTrash removes it; its bytes are size, or those it was kept with,
+// when it cannot be listed. While trash of unknown bytes is kept, the cache holds no more
+// than it did once it was kept. Trash left when the process ends is removed when the
+// cache loads, with the bytes its name records.
 func (d *DiskCache) removeTrash(trash string, size int64) error {
 	err := os.RemoveAll(trash)
 	t := &d.trash
 	t.mu.Lock()
-	old := t.m[trash]
+	defer t.mu.Unlock()
+	old, had := t.m[trash]
+	if !had {
+		old = -1
+	}
+	cur := int64(0)
 	if err != nil {
 		if n, sizeErr := cacheDirSize(trash); sizeErr == nil {
-			size = n
+			cur = n
 		} else {
-			size = max(size, old)
+			cur = max(size, old)
 		}
-	} else {
-		size = 0
-	}
-	if err == nil {
-		delete(t.m, trash)
-	} else {
 		if t.m == nil {
 			t.m = make(map[string]int64)
 		}
-		t.m[trash] = size
+		t.m[trash] = cur
+	} else {
+		delete(t.m, trash)
 	}
-	t.bytes.Add(size - old)
-	t.mu.Unlock()
+	t.bytes.Add(max(cur, 0) - max(old, 0))
+	if wasUnknown, isUnknown := had && old < 0, err != nil && cur < 0; wasUnknown != isUnknown {
+		if isUnknown {
+			t.unknown++
+		} else {
+			t.unknown--
+		}
+		d.limitTrashLocked()
+	}
 	return err
+}
+
+// limitTrashLocked sets the capacity limit of trash of unknown bytes.
+func (d *DiskCache) limitTrashLocked() {
+	t := &d.trash
+	switch {
+	case t.unknown == 0:
+		t.limit.Store(-1)
+	case t.loaded && t.limit.Load() < 0:
+		used := d.cache.Used()
+		t.limit.Store(used)
+		logutil.Error("index file cache: trash of unknown size holds the cache at its bytes used",
+			zap.String("path", d.path), zap.Int64("used", used))
+	}
+}
+
+// loadingDir records the bytes the load measured of entry directory path, or ends the
+// records when path is empty.
+func (d *DiskCache) loadingDir(path string, size int64) {
+	t := &d.trash
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if path == "" {
+		t.loading = nil
+		t.loaded = true
+		d.limitTrashLocked()
+		return
+	}
+	if t.loading == nil {
+		t.loading = make(map[string]int64)
+	}
+	t.loading[path] = size
 }
 
 // retryTrash removes the trash removeTrash failed to remove.
@@ -1275,23 +1359,27 @@ func (d *DiskCache) retryTrash() {
 	}
 	d.trash.mu.Unlock()
 	for _, p := range paths {
-		_ = d.removeTrash(p, 0)
+		_ = d.removeTrash(p, -1)
 	}
 }
 
-// trashCacheDir renames entry directory path of size bytes to a trash name that records
-// size.
+// trashCacheDir renames entry directory path of size bytes, -1 when unknown, to a trash
+// name that records a known size.
 func trashCacheDir(path string, size int64) (string, error) {
-	trash := fmt.Sprintf("%s.%d-%d-%d%s", path, os.Getpid(), cacheDirTrashSeq.Add(1), size, cacheDirTrashSuffix)
+	trash := fmt.Sprintf("%s.%d-%d", path, os.Getpid(), cacheDirTrashSeq.Add(1))
+	if size >= 0 {
+		trash += "." + strconv.FormatInt(size, 10)
+	}
+	trash += cacheDirTrashSuffix
 	return trash, os.Rename(path, trash)
 }
 
-// trashSize returns the bytes trash name records, or 0.
+// trashSize returns the bytes trash name records, or -1.
 func trashSize(trash string) int64 {
 	s := strings.TrimSuffix(trash, cacheDirTrashSuffix)
-	size, err := strconv.ParseInt(s[strings.LastIndexByte(s, '-')+1:], 10, 64)
-	if err != nil || size < 0 {
-		return 0
+	size, err := strconv.ParseUint(s[strings.LastIndexByte(s, '.')+1:], 10, 63)
+	if err != nil {
+		return -1
 	}
-	return size
+	return int64(size)
 }
