@@ -7449,7 +7449,7 @@ func TestParenthesizedTimeWindowPagination(t *testing.T) {
 		{
 			name:       "offset with order",
 			input:      "(SELECT 1) INTERVAL(ts, 1, day) ORDER BY 1 OFFSET 1",
-			output:     "(select 1) order by 1 interval(ts, 1, day) offset 1",
+			output:     "(select 1) interval(ts, 1, day) order by 1 offset 1",
 			wantOffset: true,
 			wantOrder:  true,
 		},
