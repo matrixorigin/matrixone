@@ -749,7 +749,9 @@ func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
 	runHook(d.hooks.beforeIndexLoadedDirs)
 	for _, e := range dirs {
 		owner, _ := d.paths.acquireKeeping(context.Background(), e.path)
-		if _, err := os.Stat(e.path); err == nil {
+		if size, err := cacheDirSize(e.path); err == nil {
+			lru.SetOldest(ctx, e.path, struct{}{}, size)
+		} else if !os.IsNotExist(err) {
 			lru.SetOldest(ctx, e.path, struct{}{}, e.size)
 		}
 		_ = owner.release()
@@ -792,16 +794,13 @@ func (d *DiskCache) releaseDir(path string, used bool) {
 }
 
 // removeEvictedDir removes an evicted entry directory, or puts it back in the cache with
-// size when it has a hold.
+// size when it has a hold or cannot be removed.
 func (d *DiskCache) removeEvictedDir(path string, size int64) error {
 	d.held.mu.Lock()
 	if d.held.m[path] > 0 {
 		d.held.mu.Unlock()
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return nil
 		}
 		d.cache.Set(context.Background(), path, struct{}{}, size)
 		return nil
@@ -812,6 +811,7 @@ func (d *DiskCache) removeEvictedDir(path string, size int64) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		d.cache.Set(context.Background(), path, struct{}{}, size)
 		return err
 	}
 	metric.FSDiskCacheEvictCounter.Add(1)
@@ -833,7 +833,7 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 	}
 	defer owner.release()
 	// The size is read before d.held.mu: eviction takes d.held.mu under the cache's lock.
-	size, _ := d.cache.Size(path)
+	size := d.cacheDirBytes(path)
 	d.held.mu.Lock()
 	if idle, err = d.idleDirLocked(path, before); !idle {
 		d.held.mu.Unlock()
@@ -848,7 +848,10 @@ func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.
 		return false, err
 	}
 	d.cache.Delete(ctx, path)
-	return true, d.removeTrash(trash, size)
+	if err := d.removeTrash(trash, size); err != nil {
+		logutil.Error("index file cache: remove entry files", zap.String("path", trash), zap.Error(err))
+	}
+	return true, nil
 }
 
 // anyLastUse is a cutoff later than any entry's last use, even one recorded before the
@@ -993,7 +996,18 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	if err := syncDir(tmp); err != nil {
 		return false, err
 	}
-	if err := os.Rename(tmp, diskPath); err != nil {
+	// The hold is checked under the lock that sets it, so no publication starts once it is set.
+	d.trash.mu.Lock()
+	held := d.trashHoldsPublicationsLocked()
+	var renameErr error
+	if !held {
+		renameErr = os.Rename(tmp, diskPath)
+	}
+	d.trash.mu.Unlock()
+	if held {
+		return false, nil
+	}
+	if err := renameErr; err != nil {
 		if existing, statErr := cacheDirSize(diskPath); statErr == nil {
 			// published by another cache instance on the same directory
 			if !d.cache.Contains(diskPath) {
@@ -1346,10 +1360,13 @@ func (d *DiskCache) limitTrashLocked() {
 // trashHoldsPublications reports whether trash of unknown bytes is kept while the cache
 // loads: nothing is published until the load has indexed the entries it found.
 func (d *DiskCache) trashHoldsPublications() bool {
-	t := &d.trash
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.unknown > 0 && !t.loaded
+	d.trash.mu.Lock()
+	defer d.trash.mu.Unlock()
+	return d.trashHoldsPublicationsLocked()
+}
+
+func (d *DiskCache) trashHoldsPublicationsLocked() bool {
+	return d.trash.unknown > 0 && !d.trash.loaded
 }
 
 // startLoading starts the records of a load.
