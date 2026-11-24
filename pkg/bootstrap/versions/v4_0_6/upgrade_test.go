@@ -29,7 +29,8 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 4)
+	require.Len(t, tenantUpgEntries, 5)
+	require.Equal(t, sysview.InformationSchemaColumnsUTF8MB4DDL(), tenantUpgEntries[4].UpgSql)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)

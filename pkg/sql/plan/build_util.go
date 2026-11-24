@@ -329,6 +329,44 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 	return nil
 }
 
+// Use the same selector as main for explicitly declared utf8mb4_bin. In
+// 4.2 the underlying text storage and comparison already use UTF-8 and
+// binary order. The selector preserves the declaration for metadata and DDL.
+const utf8mb4BinColumnScale = 1
+
+func supportsColumnCharset(typ *plan.Type) bool {
+	return typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar) || typ.Id == int32(types.T_text)
+}
+
+func hasExplicitUTF8MB4Bin(typ *plan.Type) bool {
+	return supportsColumnCharset(typ) && typ.Scale == utf8mb4BinColumnScale
+}
+
+func applyColumnCharset(typ *plan.Type, attrs []tree.ColumnAttribute) bool {
+	var explicit bool
+	for _, attr := range attrs {
+		switch a := attr.(type) {
+		case *tree.AttributeCharset:
+			if !strings.EqualFold(a.Charset, "utf8mb4") {
+				return false
+			}
+			explicit = true
+		case *tree.AttributeCollate:
+			if !strings.EqualFold(a.Collate, "utf8mb4_bin") {
+				return false
+			}
+			explicit = true
+		}
+	}
+	if explicit {
+		if !supportsColumnCharset(typ) {
+			return false
+		}
+		typ.Scale = utf8mb4BinColumnScale
+	}
+	return true
+}
+
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil

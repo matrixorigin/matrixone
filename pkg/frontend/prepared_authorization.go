@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -38,10 +39,14 @@ type planAuthorization struct {
 	writeTargets                   []string
 	required, moCtrl, sysWhitelist bool
 	dynamic                        bool
+	createIndexTable               *plan.TableDef
 }
 
 func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, admission *privilege) planAuthorization {
 	result := planAuthorization{privilege: *admission, moCtrl: hasMoCtrl(p), sysWhitelist: isTargetSysWhiteList(p)}
+	if createIndex := p.GetDdl().GetCreateIndex(); createIndex != nil {
+		result.createIndexTable = createIndex.GetTableDef()
+	}
 	arr, insertTarget := extractPrivilegeTipsAndInsertTarget(p)
 	if _, ok := stmt.(*tree.Replace); ok {
 		arr = addReplaceDeletePrivilegeTips(arr, p)
@@ -106,8 +111,65 @@ func evaluatePlanAuthorization(ctx context.Context, ses *Session, requirement *p
 	if allowed, err := checkProtectedDatabaseWrite(ctx, ses, requirement.writeTargets...); !allowed || err != nil {
 		return false, stats, err
 	}
-	ok, stats, _, err := determineUserHasPrivilegeSet(ctx, ses, &requirement.privilege)
+	priv := &requirement.privilege
+	if requirement.createIndexTable != nil {
+		owner, err := indexTargetOwnerInTransaction(ctx, ses, requirement.createIndexTable)
+		if err != nil {
+			return false, stats, err
+		}
+		if owner != nil {
+			local := *priv
+			local.transactionTableOwner = owner
+			priv = &local
+		}
+	}
+	ok, stats, _, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 	return ok, stats, err
+}
+
+type transactionTableOwner struct {
+	roleID   int64
+	database string
+	table    string
+}
+
+// indexTargetOwnerInTransaction reads only the ownership of the plan's new
+// table. Role membership and committed privileges still use the authorization
+// snapshot, and the ordinary privilege cache never records this local grant.
+func indexTargetOwnerInTransaction(ctx context.Context, ses *Session, table *plan.TableDef) (*transactionTableOwner, error) {
+	txn := ses.GetTxnHandler().GetTxn()
+	if txn == nil {
+		return nil, nil
+	}
+	workspace, ok := txn.GetWorkspace().(interface{ IsTableCreatedInTxn(uint64) bool })
+	physicalID, logicalID := table.GetTblId(), table.GetLogicalId()
+	if !ok || physicalID == 0 || logicalID == 0 ||
+		!workspace.IsTableCreatedInTxn(physicalID) || !workspace.IsTableCreatedInTxn(logicalID) {
+		return nil, nil
+	}
+
+	bh := ses.GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	// Use the catalog's physical and logical IDs so a same-named table or a
+	// replacement of an existing table cannot supply ownership for this plan.
+	sql := fmt.Sprintf(`select t.owner from mo_catalog.mo_tables t
+where t.account_id = current_account_id() and t.rel_id = %d and t.rel_logical_id = %d
+and exists (select 1 from mo_catalog.mo_role_privs p
+where p.obj_type = 'table' and p.obj_id = t.rel_logical_id and p.role_id = t.owner
+and p.privilege_id = %d and p.privilege_level in ('d.t', 't'))`,
+		physicalID, logicalID, PrivilegeTypeTableOwnership)
+	if err := bh.Exec(ctx, sql); err != nil {
+		return nil, err
+	}
+	rows, err := getResultSet(ctx, bh)
+	if err != nil || !execResultArrayHasData(rows) {
+		return nil, err
+	}
+	owner, err := rows[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &transactionTableOwner{roleID: owner, database: table.GetDbName(), table: table.GetName()}, nil
 }
 
 func (prepareStmt *PrepareStmt) authorizationRequirements(ses *Session, stmt tree.Statement, p *plan.Plan) *preparedAuthorization {

@@ -434,8 +434,18 @@ ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
 
 -- Alter column collation
-ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+INSERT INTO t_alter VALUES (1, '😀');
+ALTER TABLE t_alter MODIFY COLUMN name LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Publish Error Message';
 SHOW CREATE TABLE t_alter;
+SHOW FULL COLUMNS FROM t_alter LIKE 'name';
+SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
+SELECT HEX(name), CHAR_LENGTH(name) FROM t_alter;
+
+-- A later COPY must preserve the explicit declaration.
+ALTER TABLE t_alter ALGORITHM=COPY, ADD COLUMN extra INT;
+SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
 
 -- @case
 -- @desc: Test index with different collations

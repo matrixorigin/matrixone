@@ -142,7 +142,7 @@ name_utf8mb4_general VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_
 );
 SHOW CREATE TABLE t_column_charset;
 Table    Create Table
-t_column_charset    CREATE TABLE `t_column_charset` (\n  `id` int NOT NULL,\n  `name_default` varchar(100) DEFAULT NULL,\n  `name_utf8` varchar(100) DEFAULT NULL,\n  `name_utf8mb4` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_bin` varchar(100) DEFAULT NULL,\n  `name_utf8mb4_general` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+t_column_charset    CREATE TABLE `t_column_charset` (\n  `id` int NOT NULL,\n  `name_default` varchar(100) DEFAULT NULL,\n  `name_utf8` varchar(100) DEFAULT NULL,\n  `name_utf8mb4` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,\n  `name_utf8mb4_bin` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,\n  `name_utf8mb4_general` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 DESC t_column_charset;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
@@ -513,15 +513,37 @@ SHOW CREATE TABLE t_alter;
 Table    Create Table
 t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
-not supported: unsupport column definition <nil>
 SHOW CREATE TABLE t_alter;
-Table    Create Table
-t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
-ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-not supported: unsupport column definition <nil>
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t_alter  ¦  CREATE TABLE `t_alter` (
+  `id` int NOT NULL,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
+INSERT INTO t_alter VALUES (1, '😀');
+ALTER TABLE t_alter MODIFY COLUMN name LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Publish Error Message';
 SHOW CREATE TABLE t_alter;
-Table    Create Table
-t_alter    CREATE TABLE `t_alter` (\n  `id` int NOT NULL,\n  `name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t_alter  ¦  CREATE TABLE `t_alter` (
+  `id` int NOT NULL,
+  `name` text CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT 'Publish Error Message',
+  PRIMARY KEY (`id`)
+)
+SHOW FULL COLUMNS FROM t_alter LIKE 'name';
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+name  ¦  TEXT(0)  ¦  utf8mb4_bin  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  Publish Error Message
+SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
+➤ CHARACTER_SET_NAME[12,-1,0]  ¦  COLLATION_NAME[12,-1,0]  𝄀
+utf8mb4  ¦  utf8mb4_bin
+SELECT HEX(name), CHAR_LENGTH(name) FROM t_alter;
+➤ HEX(name)[12,-1,0]  ¦  CHAR_LENGTH(name)[-5,64,0]  𝄀
+F09F9880  ¦  1
+ALTER TABLE t_alter ALGORITHM=COPY, ADD COLUMN extra INT;
+SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
+➤ CHARACTER_SET_NAME[12,-1,0]  ¦  COLLATION_NAME[12,-1,0]  𝄀
+utf8mb4  ¦  utf8mb4_bin
 CREATE TABLE t_index_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100),

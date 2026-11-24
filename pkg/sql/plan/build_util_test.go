@@ -801,3 +801,30 @@ func TestGetTypeFromAstEnumAndSetMemberBoundary(t *testing.T) {
 	require.ErrorContains(t, err, "contains ','")
 	require.Zero(t, got.Id)
 }
+
+func TestExplicitUTF8MB4ColumnType(t *testing.T) {
+	charset := &tree.AttributeCharset{Charset: "UTF8MB4"}
+	binaryCollation := &tree.AttributeCollate{Collate: "utf8mb4_bin"}
+	for _, tc := range []struct {
+		name     string
+		oid      types.T
+		attrs    []tree.ColumnAttribute
+		accepted bool
+		marked   bool
+	}{
+		{name: "implicit", oid: types.T_text, accepted: true},
+		{name: "explicit text", oid: types.T_text, attrs: []tree.ColumnAttribute{charset, binaryCollation}, accepted: true, marked: true},
+		{name: "charset only", oid: types.T_varchar, attrs: []tree.ColumnAttribute{charset}, accepted: true, marked: true},
+		{name: "unsupported collation", oid: types.T_char, attrs: []tree.ColumnAttribute{charset, &tree.AttributeCollate{Collate: "utf8mb4_general_ci"}}},
+		{name: "numeric", oid: types.T_int32, attrs: []tree.ColumnAttribute{charset}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := plan.Type{Id: int32(tc.oid)}
+			require.Equal(t, tc.accepted, applyColumnCharset(&typ, tc.attrs))
+			require.Equal(t, tc.marked, hasExplicitUTF8MB4Bin(&typ))
+			if !tc.marked {
+				require.Zero(t, typ.Scale)
+			}
+		})
+	}
+}
