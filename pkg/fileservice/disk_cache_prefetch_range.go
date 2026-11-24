@@ -391,10 +391,7 @@ func (d *DiskCache) prefetchRead(
 		}
 		// A failed read of object storage fails the read. An object that caches its bytes
 		// and ended before the read reached the block left them in a cached range.
-		if ctx.Err() != nil {
-			return false, ctx.Err()
-		}
-		if !errors.Is(err, errPrefetchMissed) {
+		if err := readFailure(ctx, filePath, fromSource, err); err != nil {
 			return false, err
 		}
 		if o != nil && !o.caches() {
@@ -1132,12 +1129,9 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 			return decodeErr
 		}
 		if err != nil {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 			// A flight that ended without the bytes leaves them to the caller; a failed
 			// read of object storage fails the read.
-			if !errors.Is(err, errPrefetchMissed) {
+			if err := readFailure(ctx, filePath, fromSource, err); err != nil {
 				return err
 			}
 			continue
