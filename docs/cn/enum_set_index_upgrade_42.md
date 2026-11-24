@@ -24,7 +24,8 @@ LIKE`、克隆、部分恢复或复制式 ALTER 也可能被拒绝。
 ## 升级前检查保留的快照和 PITR
 
 删除当前表的索引不会修改旧快照里的表和索引定义。含旧 ENUM/SET 前缀索引的快照
-仍可能支持读取基础行，但新版的 `RESTORE TABLE` 和 `CLONE` 无法重建原表定义。
+仍可能支持读取基础行。新版的 `RESTORE TABLE` 和 `CLONE` 遇到可识别的此类前缀时
+会拒绝重建原表定义。
 在升级前，按租户盘点仍在恢复承诺内的备份、快照和 PITR。核对系统及各租户的权限和
 可见范围；`SHOW SNAPSHOTS` 只用于盘点当前身份可见的命名快照，不能代替 PITR 或其他
 保留点的盘点。每个仍需可恢复的受影响保留点都要有经过演练的数据恢复路径。
@@ -37,7 +38,7 @@ LIKE`、克隆、部分恢复或复制式 ALTER 也可能被拒绝。
 ```sql
 SHOW SNAPSHOTS;
 
-SELECT t.rel_id, i.name, i.column_name, i.algo_params,
+SELECT t.rel_id, i.name, i.type AS index_type, i.column_name, i.algo_params,
        CASE WHEN LENGTH(c.attr_enum) > 0 THEN mo_show_visible_bin_enum(c.atttyp, c.attr_enum)
             ELSE mo_show_visible_bin(c.atttyp, 3) END AS column_type,
        t.rel_createsql
@@ -49,8 +50,14 @@ WHERE t.reldatabase = 'db_name' AND t.relname = 't'
 ORDER BY i.name, i.ordinal_position;
 ```
 
-在 `prefix_lengths` 或 `prefix_lengths_v2` 中，找出具有正前缀长度的实际键列，与
-`column_type` 对照。自动附加的 `__mo_alias_` 主键列不属于用户声明的前缀。
+先记录所有包含 ENUM/SET 键列的索引，包括没有前缀的复合索引，并用 `index_type`
+确认快照里的有效唯一性。即使 `RESTORE TABLE` 或 `CLONE` 成功，旧隐藏索引对象
+仍可能包含混用的键编码。对来自受影响版本的这些索引，恢复后要保持停流，
+按下文适用的普通表或分区流程从基础行重建，并核验实际索引键和主键归属，
+完成后再提供服务。
+
+在 `prefix_lengths` 或 `prefix_lengths_v2` 中再找出具有正前缀长度的实际键列，与
+`column_type` 对照。这些定义不能按上述方式原样创建，需先确认离线替代方案。自动附加的 `__mo_alias_` 主键列不属于用户声明的前缀。
 普通字符串前缀不属于此问题。旧 `SET('')` 可能在目录里显示为 `BIGINT UNSIGNED`；
 对有前缀而有效列类型不明的条目，核对建表和变更记录或在源版本演练。原始
 `rel_createsql` 可帮助定位，经过 ALTER 后它可能过时。
