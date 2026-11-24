@@ -2523,10 +2523,10 @@ func TestChaos1(t *testing.T) {
 	assert.NoError(t, err)
 	defer view.Close()
 	assert.Equal(t, int(appendCnt), view.Length())
-	mask := view.Deletes
+	// Compact releases the deletes bitmap, so count it first.
+	assert.Equal(t, int(deleteCnt), view.Deletes.Count())
 	view.Compact()
 	t.Log(view.String())
-	assert.Equal(t, int(deleteCnt), mask.Count())
 }
 
 // Testing Steps

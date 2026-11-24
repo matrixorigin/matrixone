@@ -15,10 +15,9 @@
 package bitmap
 
 import (
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 // Word storage and ownership.
@@ -125,14 +124,14 @@ func wordBytes(words []uint64) []byte {
 	if cap(words) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(words))), cap(words)*8)[:len(words)*8]
+	return util.UnsafeSliceCast[byte](words)
 }
 
 func bytesWords(b []byte) []uint64 {
 	if cap(b) < 8 {
 		return nil
 	}
-	return unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(b))), cap(b)/8)[:len(b)/8]
+	return util.UnsafeSliceCast[uint64](b)
 }
 
 // allocWords returns words zeroed words with capacity for at least capWords
