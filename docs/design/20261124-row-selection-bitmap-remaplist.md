@@ -8,7 +8,7 @@ Replace every row-selection index list with a bitmap, and move every reordering 
 
 1. **A bitmap is the only representation of "which rows survive".** `[]int64` sels used as a filter, `[]uint8` flags in `UnionBatch`, and the `[]bool` select list in expression evaluation are all replaced by `bitmap.Bitmap`. `Shrink([]int64)` and the use of `Union(sels)` for filtering go away.
 2. **Lists stay only where rows are reordered or repeated.** Sort and top permutations, join gathers, hash buckets and inverse (old→new) maps move into one `RemapList` type with one gather kernel. A bitmap cannot express these, and a list should not be used for anything else.
-3. **One owner, one allocation, one free per query.** The operator or reader that produces a bitmap or RemapList allocates it once (sized for the largest batch), re-initializes it per batch without reallocating, and frees it in `Free`. Downstream code only borrows it, for example through `Batch.SetSelection`.
+3. **A selection is owned or borrowed by its batch, like a vector.** A batch carries storage for its own selection. A producer, or a consumer that narrows a selection, fills its output batch's storage; a consumer that forwards a selection unchanged, and every view, borrows the input's bitmap read-only until the producer's next `Call`, exactly as batches already borrow vectors. Copy only to modify. `Clean` frees only the batch's own storage. Every other bitmap and every RemapList keeps one owner: the operator or reader that produces it allocates it once (sized for the largest batch), re-initializes it per batch without reallocating, and frees it in `Free`.
 4. **Each phase is its own PR with a benchmark.** The work is split so each step removes a conversion and can be measured on its own.
 
 ## Findings
@@ -61,24 +61,56 @@ Three sites need care: the hash-join left rows are ascending but stay paired one
 
 ## Design: bitmap as the row selection
 
-The batch selection that already exists is the model: a producer owns one bitmap and lends it to its consumers through the batch.
+The batch selection that already exists is the starting point, with one change: the selection's storage moves from the producing operator into the batch, and a batch's selection is either its own or borrowed, under the rule batches already follow for vectors.
 
-**How the batch selection works on main.** `Batch.SetSelection(physicalRows, sel)` stores a pointer; the batch never owns the bitmap. The filter's `ctr.selection.rows`, table_scan's `ctr.selection.rows`, and the reader's `ReaderFilterRequest.PublishSelection` (owned by table_scan) are the owners. A consumer may read the bitmap until the producer's next `Call`, the same lifetime as the batch's vectors. Only operators that declare `vm.SelectionConsumer` (filter and projection today) receive a selected batch; every other consumer gets compacted rows.
+**How the batch selection works on main.** `Batch.SetSelection(sel)` stores a pointer; the batch never owns the bitmap, and the physical row count is `sel.Len()`. The filter's `ctr.selection.rows`, table_scan's `ctr.selection.rows`, and the reader's `ReaderFilterRequest.PublishSelection` (owned by table_scan) are the owners. A consumer may read the bitmap until the producer's next `Call`, the same lifetime as the batch's vectors. projection and evalProjection forward the input's pointer unchanged. Only operators that declare `vm.SelectionConsumer` (filter and projection today) receive a selected batch; every other consumer gets compacted rows, and pSpool rejects a selected batch.
+
+**Why change it.** A batch owns the vectors it creates and frees them in `Clean`, and it may also hold its input's vectors read-only until the producer's next `Call`; it copies a vector only to modify it. The selection was the exception: its storage always belonged to an operator, so the batch could only borrow it. Moving the storage into the batch makes the selection follow the same rule as the vectors, lets `Clean` release it, and removes the producers' separate selection state. Nothing is copied that is not copied today.
+
+| Site | Main | Owned or borrowed |
+| --- | --- | --- |
+| table_scan / blockio | fills table_scan's bitmap, passed as `PublishSelection` | fills the output batch's own selection; same work |
+| filter | copies the input's bitmap into its own `s.rows`, then narrows it | copies it into its output batch's own selection, then narrows it; same work |
+| projection, evalProjection | forward the input's pointer | borrow the input's selection; unchanged |
+| views (`ViewInto`) | share the parent's pointer | borrow the parent's selection; unchanged |
+
+**The batch API.**
+
+```go
+// OwnSelection returns the batch's own selection storage, cleared and sized to
+// physicalRows. The caller fills it (or copies an input selection into it and
+// narrows it) and then publishes it with SetSelection.
+func (bat *Batch) OwnSelection(physicalRows int) *bitmap.Bitmap
+// SetSelection publishes sel as the batch's logical rows. sel is either the
+// batch's own storage (from OwnSelection) or a borrowed bitmap that stays valid
+// and unmodified until the producer's next Call.
+func (bat *Batch) SetSelection(sel *bitmap.Bitmap)
+func (bat *Batch) Selection() *bitmap.Bitmap // read-only; nil when the batch is not selected
+func (bat *Batch) ClearSelection()           // not selected; keeps the storage
+```
+
+The batch owns its selection exactly when `Selection()` is its own storage; no flag records it.
 
 **Rules.**
 
 - Every row-selection producer publishes its result as the output batch's selection instead of compacting into a list.
-- A consumer that narrows the selection copies the input bitmap into its own bitmap and clears bits there (at most 128 words). It never modifies the producer's bitmap.
+- A consumer that forwards a selection unchanged borrows it (`SetSelection(input.Selection())`).
+- A consumer that narrows a selection copies the input's bitmap into its output batch's own storage and clears bits there. It never modifies a bitmap it borrowed.
 - A consumer that needs flat rows compacts with a gather by mask; it never converts the bitmap to a list.
-- Bitmaps that are not about the current batch keep their own owner and the same rule: the join's matched-row bitmap covers the build side and is sized once when the build finishes; the reader's delete mask is reused for every block.
+- A view borrows everything: the parent's vectors, `extraBuf` and selection. `ViewInto` borrows the parent's selection and `PhysicalView` clears it. A view is dropped, never cleaned.
+- A batch copied by value (`b := *bat`) shares its original's storage, so it must never fill its own selection; it may only borrow. The by-value copies in the batch codecs are short-lived and never selected.
+- Selected batches still stop at pipeline roots, codecs and spools (`vm.ConfigureSelectionEdges`, `errSelectedBatch`, pSpool's check). Whether a selection should ever cross those boundaries is a separate decision.
+- Bitmaps that are not about the current batch keep their own owner and the producer rule: the join's matched-row bitmap covers the build side and is sized once when the build finishes; the reader's delete mask is reused for every block.
 
 **Ownership and allocation.** A batch holds at most 8192 rows, so a full selection bitmap is 128 words (1 KiB).
 
-1. The owner allocates once, in `Prepare` or on the first `Call`, with capacity for the largest batch.
-2. Each batch re-initializes the bitmap to that batch's row count by clearing the existing words. It never reallocates.
-3. The owner frees it once, in `Free`. Consumers neither allocate nor free.
+1. A batch's own selection storage lives in the batch and is reused for every batch it carries. Producers reuse their output batches, so in practice it is allocated once per producer.
+2. Each batch re-initializes the storage to that batch's row count by clearing the existing words. It never reallocates.
+3. `Clean` releases the storage. Producers and consumers neither allocate nor free it.
 
-This needs `InitWithSize` to reuse capacity the way `InitWithRows` already does, and it fits the pool-owned bitmaps of #33144, where every bitmap has one owner that frees it.
+Other bitmaps and RemapLists follow the producer rule: the owner allocates once, in `Prepare` or on the first `Call`, re-initializes per batch, and frees in `Free`.
+
+Both rules need `InitWithSize` to reuse capacity the way `InitWithRows` already does (PR 1). Until then, `OwnSelection` allocates new words for each batch, as filter and table_scan do on main. Both rules also fit the pool-owned bitmaps of #33144, where every bitmap has one owner that frees it. For a batch's own selection that owner is the batch: once #33144 lands, the storage comes from `Batch.mp` and `Clean` frees it there.
 
 **Primitives to add to `pkg/common/bitmap`.**
 
@@ -141,7 +173,7 @@ func (r *RemapList) Invert(srcRows int, dst []int32) []int32 // old→new with -
 
 ## Implementation plan
 
-Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup.
+Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup. Moving the selection's storage into the batch comes first, in the `Batch` cleanup PR (#33184, issue #33182): it adds `OwnSelection`, makes blockio and filter fill their output batch's own selection, turns `ReaderFilterRequest.PublishSelection` into a flag, and removes the producers' own selection bitmaps. projection and evalProjection already borrow and do not change.
 
 | # | Track | PR | What changes | Measured by |
 | --- | --- | --- | --- | --- |
@@ -169,5 +201,6 @@ Every PR follows the same checks:
 - **Sparse selections.** A point lookup is 1 element as a list and 128 words as a bitmap. That is bounded, but hot loops must iterate words, not bits.
 - **The `int32` cap.** Whole-input sorts above 2^31 rows would now fail instead of running. Open question: is there any path that sorts that many rows in memory without spilling?
 - **Dependency on #33144.** The ownership rule assumes pool-owned bitmaps with an explicit `Free`. If #33144 changes, the allocation details here change with it.
+- **Batches copied by value.** A by-value copy of a `Batch` shares its original's selection storage. Once PR 1 makes re-initialization reuse words, a copy that filled its own selection would overwrite the original's. Mitigation: the rule above, and the only by-value copies today are short-lived codec views that are never selected.
 - **Join hot path.** PR 10 touches the most performance-sensitive code; it goes last and only with a benchmark showing no regression.
 - **Open question: location.** `pkg/common/bitmap/remaplist.go` or a sibling `pkg/common/remap` package.
