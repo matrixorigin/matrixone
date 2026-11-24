@@ -433,26 +433,34 @@ docker_compose_start()
 	return "$OCF_SUCCESS"
 }
 
-# The project name compose down will use. Prefer the resolved Compose
-# model, then the directory name Compose uses when the file sets none.
-compose_project_name()
+# Sets compose_project and modeled_services from one successful Compose
+# model. A failed lookup does not guess the directory name: that guess can
+# authorize stopping the current project. An empty configured name after a
+# successful model is the directory name Compose itself uses.
+load_stop_model()
 {
-	fallback=$(printf '%s\n' "${DIR##*/}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
-	name=
-	if [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ]; then
-		if model=$(run_compose config --format json); then
-			name=$(printf '%s\n' "$model" | python3 -I -c '
+	compose_project=
+	modeled_services=
+	model=$(run_compose config --format json) || return 1
+	parsed=$(printf '%s\n' "$model" | python3 -I -c '
 import json, re, sys
 document = json.load(sys.stdin)
-value = document.get("name") or ""
-if not isinstance(value, str):
-    value = ""
-print(re.sub(r"[^a-z0-9_-]", "", value.lower()))
-') || name=
-		fi
+services = document.get("services")
+if not isinstance(services, dict):
+    raise SystemExit(1)
+raw = document.get("name") or ""
+if not isinstance(raw, str):
+    raw = ""
+print(re.sub(r"[^a-z0-9_-]", "", raw.lower()))
+for name in services:
+    print(name)
+') || return 1
+	compose_project=$(printf '%s\n' "$parsed" | awk 'NR==1 { printf "%s", $0; exit }')
+	modeled_services=$(printf '%s\n' "$parsed" | awk 'NR>1 && NF { print }')
+	if [ -z "$compose_project" ]; then
+		compose_project=$(printf '%s\n' "${DIR##*/}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
 	fi
-	[ -n "$name" ] || name=$fallback
-	printf '%s\n' "$name"
+	[ -n "$compose_project" ] && [ -n "$modeled_services" ]
 }
 
 confirm_containers_stopped()
@@ -482,21 +490,30 @@ docker_compose_stop()
 	stop_pid=
 	compose_project=
 	modeled_services=
+	discovery_complete=0
+	stop_started=$(date +%s) || return "$OCF_ERR_GENERIC"
 	if [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ]; then
-		compose_project=$(compose_project_name) || compose_project=
-		if service_lines=$(desired_services); then
-			modeled_services=$(printf '%s\n' "$service_lines" | awk 'NF { print $1 }')
+		# Project name and service set come from the same successful model.
+		# Retry that lookup once; do not overlap stops from a directory guess.
+		if ! load_stop_model; then
+			ocf_log warn "Compose model failed before shutdown; retrying for $CONFIG_FILE"
+			load_stop_model || true
 		fi
-		# A single failed listing must not drop the overlapped stop. Retry
-		# once before down so a transient docker ps error still starts the
-		# retired-service grace period together with Compose.
 		skipped=
-		if [ -n "$compose_project" ]; then
+		if [ -n "$compose_project" ] && [ -n "$modeled_services" ]; then
 			if ! skipped=$(labeled_container_ids shutdown); then
 				ocf_log warn "Docker listing failed before shutdown; retrying for $CONFIG_FILE"
-				skipped=$(labeled_container_ids shutdown) || skipped=
+				if ! skipped=$(labeled_container_ids shutdown); then
+					skipped=
+				else
+					discovery_complete=1
+				fi
+			else
+				discovery_complete=1
 			fi
-			if [ -n "$skipped" ]; then
+			# Discovery succeeded, so this stop keeps each container's
+			# configured grace period. No -t/--time is passed.
+			if [ "$discovery_complete" = 1 ] && [ -n "$skipped" ]; then
 				docker stop $skipped >/dev/null 2>&1 &
 				stop_pid=$!
 			fi
@@ -519,9 +536,25 @@ docker_compose_stop()
 	fi
 
 	# down can miss one-offs, removed services, and earlier project names.
+	# When the skipped set was known before down, this is a short recovery
+	# and keeps the container grace period. When discovery stayed incomplete,
+	# bound the stop so it and the following check fit in the 120s budget
+	# after down has already used part of that budget.
 	remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
 	if [ -n "$remaining" ]; then
-		docker stop $remaining >/dev/null
+		now=$(date +%s) || return "$OCF_ERR_GENERIC"
+		remain=$((120 - (now - stop_started) - 10))
+		# A full 60s grace still fits, or the skipped set was known before
+		# down: keep the container's configured StopTimeout. Otherwise the
+		# recovery stop must finish in the time still left for verification.
+		if [ "$discovery_complete" = 1 ] || [ "$remain" -ge 60 ]; then
+			docker stop $remaining >/dev/null
+		elif [ "$remain" -lt 1 ]; then
+			ocf_log err "no time left in the 120s stop budget for $remaining"
+			return "$OCF_ERR_GENERIC"
+		else
+			docker stop -t "$remain" $remaining >/dev/null
+		fi
 		# A --rm container may disappear during stop. Verify the final state.
 		remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
 		if [ -n "$remaining" ]; then

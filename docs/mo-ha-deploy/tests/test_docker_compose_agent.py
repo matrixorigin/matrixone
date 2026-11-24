@@ -31,6 +31,11 @@ COMPOSE = """\
 printf 'compose %s\\n' "$*" >> "$TRACE"
 case "$3" in
     config)
+        if [ "${CONFIG_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$CONFIG_ONCE_MARK" ]; then
+            : > "$CONFIG_ONCE_MARK"
+            echo "Error: compose config failed" >&2
+            exit 1
+        fi
         [ "${CONFIG_ERROR:-0}" = 0 ] || exit "$CONFIG_ERROR"
         case "$4 $5" in
             "--format json") printf '%s\\n' "$CONFIG_JSON" ;;
@@ -89,6 +94,9 @@ case "$3" in
             fi
             touch "$STOP_BARRIER.seen"
         fi
+        if [ -n "${DOWN_ELAPSED:-}" ] && [ -n "${DATE_OFFSET_FILE:-}" ]; then
+            printf '%s\\n' "$DOWN_ELAPSED" > "$DATE_OFFSET_FILE"
+        fi
         if [ "${DOWN_NO_EFFECT:-0}" != 1 ]; then
             touch "$COMPOSE_STOPPED"
             # down stops only the current project's containers, in Compose's
@@ -96,6 +104,7 @@ case "$3" in
             # not required for those ids.
             for id in $COMPOSE_IDS; do
                 [ -n "$id" ] || continue
+                printf 'down ordered %s\\n' "$id" >> "$TRACE"
                 touch "$TRACE.$id.stopped"
             done
             if [ "$remove_orphans" = 1 ]; then
@@ -145,6 +154,16 @@ DOCKER = """\
 printf 'docker %s\\n' "$*" >> "$TRACE"
 case "$1" in
     ps)
+        if [ "${DOCKER_PS_FAIL_COUNT:-0}" -gt 0 ]; then
+            ps_count=0
+            [ -f "$DOCKER_PS_COUNT_FILE" ] && ps_count=$(cat "$DOCKER_PS_COUNT_FILE")
+            ps_count=$((ps_count + 1))
+            printf '%s\\n' "$ps_count" > "$DOCKER_PS_COUNT_FILE"
+            if [ "$ps_count" -le "${DOCKER_PS_FAIL_COUNT}" ]; then
+                echo "Error: docker ps failed" >&2
+                exit 1
+            fi
+        fi
         if [ "${DOCKER_PS_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$DOCKER_PS_ONCE_MARK" ]; then
             : > "$DOCKER_PS_ONCE_MARK"
             echo "Error: docker ps failed" >&2
@@ -247,6 +266,24 @@ case "$1" in
     stop)
         [ "${STOP_ERROR:-0}" = 0 ] || exit "$STOP_ERROR"
         shift
+        ids=
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -t|--time)
+                    shift
+                    [ $# -gt 0 ] || break
+                    shift
+                    ;;
+                --time=*|-t*)
+                    shift
+                    ;;
+                *)
+                    ids="$ids $1"
+                    shift
+                    ;;
+            esac
+        done
+        set -- $ids
         for id do
             if [ -f "$TRACE.$id.stop-claimed" ]; then
                 printf 'docker stop repeated %s\\n' "$id" >> "$TRACE"
@@ -295,6 +332,16 @@ class ResourceAgentTests(unittest.TestCase):
         self.trace = self.root / "trace"
         self.trace.touch()
         (self.root / "ocf-shellfuncs").write_text(OCF)
+        (self.root / "date").write_text(
+            "#!/bin/sh\n"
+            "base=${DATE_BASE:-1700000000}\n"
+            "offset=0\n"
+            "if [ -n \"${DATE_OFFSET_FILE:-}\" ] && [ -f \"$DATE_OFFSET_FILE\" ]; then\n"
+            "    offset=$(cat \"$DATE_OFFSET_FILE\")\n"
+            "fi\n"
+            "echo $((base + offset))\n"
+        )
+        (self.root / "date").chmod(0o700)
         for name, script in (("compose", COMPOSE), ("docker", DOCKER)):
             stub = self.root / name
             stub.write_text(script)
@@ -322,6 +369,9 @@ class ResourceAgentTests(unittest.TestCase):
             VANISHED=str(self.root / "vanished"),
             INSPECT_ONCE_MARK=str(self.root / "inspect-once"),
             DOCKER_PS_ONCE_MARK=str(self.root / "docker-ps-once"),
+            DOCKER_PS_COUNT_FILE=str(self.root / "docker-ps-count"),
+            CONFIG_ONCE_MARK=str(self.root / "config-once"),
+            DATE_OFFSET_FILE=str(self.root / "date-offset"),
         )
         project_name = settings.pop("PROJECT_NAME", None)
         env.update(settings)
@@ -897,6 +947,95 @@ class ResourceAgentTests(unittest.TestCase):
                 any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments),
                 call,
             )
+        self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+        self.assertTrue((self.root / "trace.helper.stopped").exists())
+
+    def test_stop_recovered_model_does_not_stop_current_services_early(self):
+        def run(fail_once):
+            self.trace.write_text("")
+            mark = self.root / "config-once"
+            if mark.exists():
+                mark.unlink()
+            for name in ("trace.matrixone.stopped", "trace.worker.stopped"):
+                path = self.root / name
+                if path.exists():
+                    path.unlink()
+            settings = dict(
+                SERVICES="app\nworker",
+                COMPOSE_IDS="worker\nmatrixone",
+                PROJECT_NAME="renamed",
+                STOP_BARRIER=str(self.root / "barrier"),
+            )
+            if fail_once:
+                settings["CONFIG_FAIL_ONCE"] = "1"
+            calls = self.action("stop", 0, **settings)
+            stop_calls = [call for call in calls if call.startswith("docker stop ")]
+            for call in stop_calls:
+                arguments = call.split()[2:]
+                self.assertNotIn("matrixone", arguments, call)
+                self.assertNotIn("worker", arguments, call)
+                self.assertFalse(
+                    any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments),
+                    call,
+                )
+            self.assertNotIn("docker stop repeated matrixone", calls)
+            self.assertNotIn("docker stop repeated worker", calls)
+            self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+            ordered = [call.split()[-1] for call in calls if call.startswith("down ordered ")]
+            self.assertEqual(ordered, ["worker", "matrixone"], calls)
+            self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+            self.assertTrue((self.root / "trace.worker.stopped").exists())
+            self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+
+        self.add_container("matrixone", "renamed", self.yaml, container_id="matrixone", service="app")
+        self.add_container("worker", "renamed", self.yaml, container_id="worker", service="worker")
+        run(False)
+        (self.root / "stopped").unlink(missing_ok=True)
+        run(True)
+
+    def test_stop_retries_model_so_removed_service_overlaps_down(self):
+        self.add_container("matrixone", "my-project", self.yaml, container_id="matrixone", service="app")
+        self.add_container("helper", "my-project", self.yaml, container_id="helper", service="helper")
+        calls = self.action(
+            "stop",
+            0,
+            SERVICES="app",
+            COMPOSE_IDS="matrixone",
+            CONFIG_FAIL_ONCE="1",
+            STOP_BARRIER=str(self.root / "barrier"),
+        )
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertEqual([call.split()[2:] for call in stop_calls], [["helper"]], calls)
+        self.assertIn("down overlapped stop", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+        self.assertNotIn("docker stop repeated helper", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+        self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+        self.assertTrue((self.root / "trace.helper.stopped").exists())
+
+    def test_stop_bounds_retired_service_when_listings_fail_until_after_down(self):
+        self.add_container("matrixone", "my-project", self.yaml, container_id="matrixone", service="app")
+        self.add_container("helper", "my-project", self.yaml, container_id="helper", service="helper")
+        calls = self.action(
+            "stop",
+            0,
+            SERVICES="app",
+            COMPOSE_IDS="matrixone",
+            DOCKER_PS_FAIL_COUNT="2",
+            DOWN_ELAPSED="60",
+        )
+        self.assertNotIn("down overlapped stop", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertEqual(len(stop_calls), 1, calls)
+        down_at = calls.index("compose -f docker-compose.yaml down --remove-orphans=false")
+        stop_at = calls.index(stop_calls[0])
+        self.assertLess(down_at, stop_at, calls)
+        arguments = stop_calls[0].split()[2:]
+        self.assertEqual(arguments[:2], ["-t", "50"], calls)
+        self.assertEqual(arguments[2:], ["helper"], calls)
+        self.assertNotIn("docker stop repeated helper", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
         self.assertTrue((self.root / "trace.matrixone.stopped").exists())
         self.assertTrue((self.root / "trace.helper.stopped").exists())
 
