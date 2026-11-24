@@ -325,7 +325,10 @@ func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) error {
 	}
 	d := s.diskCache
 	diskPath := d.pathForFile(p.File)
-	if o := d.download(diskPath); o == nil || !o.indexFile {
+	// The read takes every entry from the download it found, which is into the
+	// index-file cache, even once another download of the object replaces it.
+	o := d.download(diskPath)
+	if o == nil || !o.indexFile {
 		return nil
 	}
 	for i := range vector.Entries {
@@ -333,7 +336,7 @@ func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) error {
 		if !e.ranged() || !e.materializes(d.memoryPrefetchMax) {
 			continue
 		}
-		_, filled, err := d.readFromDownload(ctx, diskPath, e, vector)
+		_, filled, err := d.readDownloadEntry(ctx, diskPath, o, 0, true, e, vector)
 		var failing *failingReadError
 		if errors.As(err, &failing) {
 			return failing.err

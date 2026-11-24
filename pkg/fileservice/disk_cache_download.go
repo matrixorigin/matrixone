@@ -978,6 +978,13 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 			return false, false, nil
 		}
 	}
+	return d.readDownloadEntry(ctx, diskPath, o, base, whole, entry, vector)
+}
+
+// readDownloadEntry is readFromDownload of entry from o, whose bytes start at base in the
+// object, a whole-object download when whole is set.
+func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, o *objectDownload, base int64, whole bool, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
+	end := entry.Offset + entry.Size
 	behind, wait := o.estimate(entry.Offset-base, end-base)
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
