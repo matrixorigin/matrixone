@@ -54,6 +54,8 @@ type diskCacheAsyncUpdate struct {
 	diskPath  string
 	entry     IOEntry
 	callbacks []OnDiskCacheWrittenFunc
+	// nextCallback is the index of the next callback to run.
+	nextCallback int
 	// callbackTurn is the update's place in the submission order of callbacks.
 	callbackTurn *asyncCallbackTurn
 	finalize     *diskCacheAsyncFileFinalize
@@ -607,20 +609,30 @@ func (d *DiskCache) startCallbacksLocked() {
 }
 
 // runAsyncCallbacks runs the callbacks of the ready head turns, in submission order.
+// A callback that exits its goroutine continues the runner on a new one.
 func (d *DiskCache) runAsyncCallbacks() {
 	a := &d.async
+	exited := true
+	defer func() {
+		if exited {
+			go d.runAsyncCallbacks()
+		}
+	}()
 	for {
 		a.callbackMu.Lock()
 		turn := a.callbackHead
 		if turn == nil || !turn.ready {
 			a.callbackRunning = false
 			a.callbackMu.Unlock()
+			exited = false
 			return
 		}
 		a.callbackMu.Unlock()
 		job := turn.job
-		for i, fn := range job.callbacks {
-			d.runAsyncUpdateCallback(job, i, fn)
+		for job.nextCallback < len(job.callbacks) {
+			i := job.nextCallback
+			job.nextCallback++
+			d.runAsyncUpdateCallback(job, i, job.callbacks[i])
 		}
 		d.releaseAsyncUpdateResources(job)
 		a.callbackMu.Lock()
