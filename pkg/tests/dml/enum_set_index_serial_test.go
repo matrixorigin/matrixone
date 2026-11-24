@@ -253,7 +253,7 @@ func TestDeleteRejectsLegacyEnumIndexKeyMismatch(t *testing.T) {
 		exec("create table indexed_rows(id int primary key,e enum('a','b'),n int,key ix(e,n))")
 		exec("insert into indexed_rows values(1,'a',null),(2,'b',null),(3,'a',1)")
 		exec("create table delete_side(id int primary key)")
-		exec("insert into delete_side values(1),(2)")
+		exec("insert into delete_side values(1),(2),(4)")
 
 		var indexTable string
 		require.NoError(t, conn.QueryRowContext(ctx, `select distinct i.index_table_name
@@ -297,8 +297,47 @@ where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).S
 
 		beforeBase := baseIDs()
 		beforeEntries := indexEntries()
-		_, err = conn.ExecContext(ctx, "delete from indexed_rows where id=1")
+
+		// An unmatched row from the preserved side of an outer join is not a
+		// target row and must not be treated as a missing index entry.
+		result := exec("delete r from delete_side s left join indexed_rows r on s.id=r.id where s.id=4")
+		affected, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.Zero(t, affected)
+		require.Equal(t, beforeBase, baseIDs())
+		require.Equal(t, beforeEntries, indexEntries())
+
+		// DELETE RETURNING wraps execution errors while aborting its result sink.
+		// The corruption error must still force rollback of prior transaction work.
+		exec("create table returning_rows(id int primary key,e enum('a','b'),n int,key ix(e,n))")
+		exec("insert into returning_rows values(1,'a',null)")
+		var returningIndexTable string
+		require.NoError(t, conn.QueryRowContext(ctx, "select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname='returning_rows' and i.name='ix'", database).Scan(&returningIndexTable))
+		quotedReturningIndex := string(rune(96)) + strings.ReplaceAll(returningIndexTable, string(rune(96)), string(rune(96))+string(rune(96))) + string(rune(96))
+		exec("update " + quotedReturningIndex + " set __mo_index_idx_col=serial_full('a',null,serial(1)) where __mo_index_pri_col=1")
+		exec("set mo_rollback_txn_on_error=0")
+		exec("begin")
+		exec("insert into delete_side values(3)")
+		returningErr := func() error {
+			returningRows, err := conn.QueryContext(ctx, "delete from returning_rows where id=1 returning id")
+			if err != nil {
+				return err
+			}
+			defer returningRows.Close()
+			for returningRows.Next() {
+			}
+			return returningRows.Err()
+		}()
 		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, returningErr, &mysqlErr)
+		require.EqualValues(t, 1712, mysqlErr.Number)
+		require.Equal(t, 3, count("select count(*) from delete_side"))
+		require.Equal(t, 1, count("select count(*) from returning_rows"))
+		var returningEntryCount int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+quotedReturningIndex).Scan(&returningEntryCount))
+		require.Equal(t, 1, returningEntryCount)
+
+		_, err = conn.ExecContext(ctx, "delete from indexed_rows where id=1")
 		require.ErrorAs(t, err, &mysqlErr)
 		require.EqualValues(t, 1712, mysqlErr.Number)
 		require.Equal(t, beforeBase, baseIDs())
@@ -310,12 +349,29 @@ where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).S
 		require.ErrorAs(t, err, &mysqlErr)
 		require.EqualValues(t, 1712, mysqlErr.Number)
 		require.Equal(t, beforeBase, baseIDs())
-		require.Equal(t, 2, count("select count(*) from delete_side"))
+		require.Equal(t, 3, count("select count(*) from delete_side"))
 		require.Equal(t, beforeEntries, indexEntries())
 
+		// A MASTER sibling selects the legacy maintenance path for a filtered
+		// single-target DELETE. The regular ENUM index must still be checked.
+		exec("create table master_rows(id int primary key,e enum('a','b'),n int,v varchar(16),key ix(e,n))")
+		exec("create index mx using master on master_rows(v)")
+		exec("insert into master_rows values(1,'a',null,'one')")
+		var masterIndexTable string
+		require.NoError(t, conn.QueryRowContext(ctx, "select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname='master_rows' and i.name='ix'", database).Scan(&masterIndexTable))
+		quotedMasterIndex := string(rune(96)) + strings.ReplaceAll(masterIndexTable, string(rune(96)), string(rune(96))+string(rune(96))) + string(rune(96))
+		exec("update " + quotedMasterIndex + " set __mo_index_idx_col=serial_full('a',null,serial(1)) where __mo_index_pri_col=1")
+		_, err = conn.ExecContext(ctx, "delete from master_rows where id=1")
+		require.ErrorAs(t, err, &mysqlErr)
+		require.EqualValues(t, 1712, mysqlErr.Number)
+		require.Equal(t, 1, count("select count(*) from master_rows"))
+		var masterIndexEntries int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+quotedMasterIndex).Scan(&masterIndexEntries))
+		require.Equal(t, 1, masterIndexEntries)
+
 		// Composite serial_full keys are present even when a key part is NULL.
-		result := exec("delete from indexed_rows where id=2")
-		affected, err := result.RowsAffected()
+		result = exec("delete from indexed_rows where id=2")
+		affected, err = result.RowsAffected()
 		require.NoError(t, err)
 		require.EqualValues(t, 1, affected)
 		require.Equal(t, []int{1, 3}, baseIDs())
@@ -326,5 +382,16 @@ where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).S
 			}
 		}
 		require.Equal(t, expectedEntries, indexEntries())
+
+		// R-tree indexes omit NULL geometries. An ENUM primary-key owner alias
+		// must not make that intentionally absent entry look corrupt.
+		exec("create table spatial_rows(id int primary key,e enum('a','b'),g point null,key ei(e))")
+		exec("create spatial index sx on spatial_rows(g)")
+		exec("insert into spatial_rows values(1,'a',null),(2,'b',st_geomfromtext('POINT(2 2)'))")
+		spatialDelete := exec("delete from spatial_rows where id=1")
+		spatialAffected, err := spatialDelete.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 1, spatialAffected)
+		require.Equal(t, 1, count("select count(*) from spatial_rows"))
 	})
 }

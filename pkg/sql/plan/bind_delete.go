@@ -392,7 +392,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
-			checkIndexEntry := !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo)
+			checkIndexEntry := !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef)
 			if checkIndexEntry {
 				checkIndexEntry = false
 				for _, part := range idxDef.Parts {
@@ -562,7 +562,20 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				if err != nil {
 					return 0, err
 				}
-				entryRequired := makePlan2BoolConstExprWithType(true)
+				baseRowIDPos, ok := colName2Idx[i][catalog.Row_ID]
+				if !ok || baseRowIDPos < 0 || int(baseRowIDPos) >= len(selectNode.ProjectList) {
+					return 0, moerr.NewInternalError(builder.GetContext(), "DELETE cannot locate target row ID")
+				}
+				baseRowID := &plan.Expr{
+					Typ: selectNode.ProjectList[baseRowIDPos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag, ColPos: baseRowIDPos, Name: catalog.Row_ID,
+					}},
+				}
+				entryRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{baseRowID})
+				if err != nil {
+					return 0, err
+				}
 				if len(idxDef.Parts) == 1 {
 					part := catalog.ResolveAlias(idxDef.Parts[0])
 					colPos, ok := colName2Idx[i][part]
@@ -575,7 +588,11 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 							RelPos: selectNodeTag, ColPos: colPos, Name: part,
 						}},
 					}
-					entryRequired, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
+					valueRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
+					if err != nil {
+						return 0, err
+					}
+					entryRequired, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{entryRequired, valueRequired})
 					if err != nil {
 						return 0, err
 					}

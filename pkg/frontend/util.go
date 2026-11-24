@@ -1748,8 +1748,8 @@ func isErrorRollbackWholeTxn(inputErr error) bool {
 	if inputErr == nil {
 		return false
 	}
-	me, ok := inputErr.(*moerr.Error)
-	if !ok {
+	var me *moerr.Error
+	if !errors.As(inputErr, &me) {
 		// This is not a moerr
 		return false
 	}

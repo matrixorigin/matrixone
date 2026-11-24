@@ -5557,7 +5557,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 		delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-		if delCtx.isMulti && !isUpdate && isSK && !delCtx.isDeleteWithoutFilters {
+		if !isUpdate && isSK && !isSpatialIndexDef(indexdef) && !delCtx.isDeleteWithoutFilters {
 			requiresEntry := false
 			for _, part := range indexdef.Parts {
 				if typ, ok := typMap[catalog.ResolveAlias(part)]; ok &&
@@ -5567,7 +5567,17 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 				}
 			}
 			if requiresEntry {
-				required := makePlan2BoolConstExprWithType(true)
+				baseRowIDPos, ok := posMap[catalog.Row_ID]
+				if !ok || baseRowIDPos < 0 || baseRowIDPos >= len(builder.qry.Nodes[lastNodeId].ProjectList) {
+					putDeleteNodeInfo(delNodeInfo)
+					return moerr.NewInternalError(builder.GetContext(), "DELETE cannot locate target row ID")
+				}
+				baseRowID := &plan.Expr{Typ: builder.qry.Nodes[lastNodeId].ProjectList[baseRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(baseRowIDPos)}}}
+				required, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{baseRowID})
+				if err != nil {
+					putDeleteNodeInfo(delNodeInfo)
+					return err
+				}
 				if len(indexdef.Parts) == 1 {
 					part := catalog.ResolveAlias(indexdef.Parts[0])
 					pos, ok := posMap[part]
@@ -5576,7 +5586,12 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 						return moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
 					}
 					value := &plan.Expr{Typ: builder.qry.Nodes[lastNodeId].ProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(pos)}}}
-					required, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
+					valueRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
+					if err != nil {
+						putDeleteNodeInfo(delNodeInfo)
+						return err
+					}
+					required, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{required, valueRequired})
 					if err != nil {
 						putDeleteNodeInfo(delNodeInfo)
 						return err
