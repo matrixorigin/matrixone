@@ -513,7 +513,7 @@ func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
 
 // A read that joins bytes at copy time takes no download whose part holding them has not
 // begun, and takes it once the part begins.
-func TestCoveringSkipsPartNotBegun(t *testing.T) {
+func TestJoinableSkipsPartNotBegun(t *testing.T) {
 	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
 	diskPath := d.pathForFile("object")
@@ -530,7 +530,7 @@ func TestCoveringSkipsPartNotBegun(t *testing.T) {
 	covering := func(lo, hi int64) prefetchObject {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return f.coveringLocked(diskPath, lo, hi, time.Now())
+		return d.joinableLocked(diskPath, lo, hi, time.Now(), true)
 	}
 	require.NotNil(t, covering(1, 2), "the first part has begun")
 	require.Nil(t, covering(5, 6), "the second part has not begun")

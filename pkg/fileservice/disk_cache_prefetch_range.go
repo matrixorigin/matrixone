@@ -370,11 +370,15 @@ func (d *DiskCache) prefetchRead(
 				}
 			}
 		}
-		if o == nil && (b.run == nil || b.run.releasedOnAdmit()) {
-			// The read chose to join it, or a run it started that ended left its bytes
-			// cached: it is joined however long its bytes take.
+		if b.run == nil {
+			// The read joins the block as it chose to when it planned it.
 			f.mu.Lock()
-			o, release = heldLocked(f.coveringLocked(diskPath, b.start, b.end, time.Now()))
+			o, release = heldLocked(d.joinableLocked(diskPath, b.start, b.end, time.Now(), true))
+			f.mu.Unlock()
+		} else if b.run.releasedOnAdmit() {
+			// A run of the read's own that ended left its bytes cached.
+			f.mu.Lock()
+			o, release = heldLocked(f.registeredLocked(diskPath, b.run.got))
 			f.mu.Unlock()
 		}
 		var err error = errPrefetchMissed
@@ -1567,14 +1571,10 @@ func (d *DiskCache) joinableLocked(diskPath string, lo, hi int64, now time.Time,
 	return d.prefetchObjects.fastestLocked(diskPath, lo, hi, now, d.downloadMaxExtraWait, cached)
 }
 
-// coveringLocked returns a prefetch object of diskPath reads can join that caches the
-// bytes [lo, hi), and whose bytes are not out of reach, however long they take.
-func (f *prefetchObjects) coveringLocked(diskPath string, lo, hi int64, now time.Time) prefetchObject {
-	for _, o := range f.m[diskPath] {
-		if start, end := o.span(); start <= lo && hi <= end && o.joinable() && o.caches() &&
-			o.eta(now, lo, hi) != time.Duration(math.MaxInt64) {
-			return o
-		}
+// registeredLocked returns o while it is a prefetch object of diskPath, nil once it ended.
+func (f *prefetchObjects) registeredLocked(diskPath string, o prefetchObject) prefetchObject {
+	if slices.Contains(f.m[diskPath], o) {
+		return o
 	}
 	return nil
 }
