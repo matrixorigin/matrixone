@@ -818,6 +818,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 {
 				msg.captured = ctr.captured
 				msg.capturedVecs = ctr.capturedVecs
+				msg.capturedMP = ctr.capturedMP
 			}
 			if err := context.Cause(proc.Ctx); err != nil {
 				return err
@@ -835,9 +836,11 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				)
 			}
 			// Ownership transfers only after trySend succeeds. Before that
-			// point Reset/Free still owns and releases these vectors.
+			// point Reset/Free still owns and releases the capture vectors and
+			// their pool.
 			ctr.captured = nil
 			ctr.capturedVecs = nil
+			ctr.capturedMP = nil
 			ctr.matched = nil
 			// Publication, not acknowledgement, is the worker's single status
 			// for this round. Mark it before waiting so concurrent cancellation
@@ -861,14 +864,14 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 			msg, err := receiveWorkerMsg(proc.Ctx, ap.Mailbox)
 			if err != nil {
-				freeWorkerJoinMsg(msg, proc)
-				ap.Mailbox.stopAndDrain(proc)
+				freeWorkerJoinMsg(msg)
+				ap.Mailbox.stopAndDrain()
 				return err
 			}
 
 			if msg.aborted {
-				freeWorkerJoinMsg(msg, proc)
-				ap.Mailbox.stopAndDrain(proc)
+				freeWorkerJoinMsg(msg)
+				ap.Mailbox.stopAndDrain()
 				if msg.err != nil {
 					return msg.err
 				}
@@ -887,14 +890,14 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 && msg.captured != nil {
 				mergeErr = ctr.mergeCaptured(ap, msg, proc)
 			}
-			freeWorkerJoinMsg(msg, proc)
+			freeWorkerJoinMsg(msg)
 			if mergeErr != nil {
-				ap.Mailbox.stopAndDrain(proc)
+				ap.Mailbox.stopAndDrain()
 				return mergeErr
 			}
 		}
 		if err := context.Cause(proc.Ctx); err != nil {
-			ap.Mailbox.stopAndDrain(proc)
+			ap.Mailbox.stopAndDrain()
 			return err
 		}
 		// Do not release a fast worker into the next spill bucket until every
