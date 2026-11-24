@@ -441,6 +441,39 @@ func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
 	}
 }
 
+func TestBuildCreateTableJSONDefaultUsesRequestContext(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	cancelPrevious()
+	proc.Ctx = previous
+	compiler := NewMockCompilerContext(false, proc)
+
+	for _, typ := range []string{"int", "mediumint", "decimal(8,2) unsigned"} {
+		t.Run(typ, func(t *testing.T) {
+			current, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			compiler.SetContext(current)
+			build := func() (*Plan, error) {
+				t.Helper()
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+					`create table t (v `+typ+` default (json_length(json_extract('{"n":[1]}', '$.n'))))`, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				return BuildPlan(compiler, stmt, false, nil)
+			}
+			p, err := build()
+			require.NoError(t, err)
+			require.NotNil(t, p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetExpr())
+			require.Same(t, previous, proc.Ctx)
+
+			cancel()
+			_, err = build()
+			require.ErrorIs(t, err, context.Canceled)
+			require.Same(t, previous, proc.Ctx)
+		})
+	}
+}
+
 func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 	testCases := []struct {
 		name      string

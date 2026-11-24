@@ -26,10 +26,10 @@ This is the most common source of subtle operator bugs: premature pipeline termi
 |--------|----------|----------|
 | `Close()` | Wait for consumers to acknowledge end of stream by consuming nil batches | Graceful legacy nil-batch protocol |
 | `CloseWithTimeout()` | Same as `Close()` but bounded by a timeout | Legacy nil-batch cleanup only |
-| `ForceCleanupAfterTerminalSignal()` | Release deferred spool state after a successfully delivered typed `EventEnd` and paired receiver cleanup | Graceful typed-signal completion |
+| `ReleaseCache()` | Free the batches cached for reuse after a successfully delivered typed `EventEnd` and paired receiver cleanup | Graceful typed-signal completion |
 | `Abort(cause)` | Immediately release unconsumed slots and record failure/abort state | Error, cancel, abort, or terminal-delivery failure |
 
-Critical rule: typed termination has two outcomes. A successfully delivered `EventEnd` defers spool reclamation until paired receiver cleanup returns, then calls `ForceCleanupAfterTerminalSignal()`. Error/abort/cancel paths and terminal-delivery failures call `Abort(cause)` immediately. Do not use legacy `CloseWithTimeout()` for either typed path.
+Critical rule: typed termination has two outcomes. A successfully delivered `EventEnd` defers spool reclamation until paired receiver cleanup returns, then calls `ReleaseCache()`. Error/abort/cancel paths and terminal-delivery failures call `Abort(cause)` immediately. Do not use legacy `CloseWithTimeout()` for either typed path.
 
 ### Pipeline Signal Types
 

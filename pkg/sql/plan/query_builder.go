@@ -4502,6 +4502,7 @@ func (builder *QueryBuilder) appendValidationPrivilegeCarriers() {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	defer func() { builder.queryCreated = true }()
 	if err := builder.qry.ValidateIntegerPrecision(); err != nil {
 		return nil, err
 	}

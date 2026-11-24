@@ -384,6 +384,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.retryTimes = 0
 	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
+	// Prepare can fail or stop before visiting every reused operator. Clear
+	// their previous calls before admitting this execution generation.
+	forEachLocalOperator(c.scopes, c.addr, func(op vm.Operator) {
+		if analyzer := op.GetOperatorBase().OpAnalyzer; analyzer != nil {
+			analyzer.Reset()
+		}
+	})
 
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
@@ -807,8 +814,9 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err   error
-	scope *Scope
+	err            error
+	scope          *Scope
+	recoveredPanic bool
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
@@ -1077,8 +1085,8 @@ func (r *materializedSpillDiskReservation) Grow(size uint64) error {
 	return nil
 }
 
-// run once
-func (c *Compile) runOnce() (err error) {
+// runOnce returns whether local pipeline scopes joined a known terminal state.
+func (c *Compile) runOnce() (quiesced bool, err error) {
 	//c.printPipeline()
 
 	// defer cleanup at the end of runOnce()
@@ -1093,7 +1101,7 @@ func (c *Compile) runOnce() (err error) {
 	if query != nil && len(query.GetDetectSqls()) != 0 {
 		if err = validateForeignKeyParentTxnMode(
 			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
-			return err
+			return quiesced, err
 		}
 	}
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
@@ -1102,7 +1110,7 @@ func (c *Compile) runOnce() (err error) {
 				continue
 			} else if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
 				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
-					return err
+					return quiesced, err
 				}
 			} else if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
@@ -1111,13 +1119,13 @@ func (c *Compile) runOnce() (err error) {
 					// errors (syntax, permissions, network, txn conflicts) so
 					// they are not masked.
 					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
-						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+						return false, moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
 					}
-					return err
+					return quiesced, err
 				}
 			} else if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")); err != nil {
-					return err
+					return quiesced, err
 				}
 			}
 		}
@@ -1128,15 +1136,18 @@ func (c *Compile) runOnce() (err error) {
 	// local source is still blocked before vm.Prepare reaches its Dispatch.
 	registrations, err := registerLocalDispatchReceivers(c.scopes, c.addr)
 	if err != nil {
-		return err
+		return quiesced, err
 	}
 	defer registrations.cleanup()
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
-		if err = c.run(c.scopes[0]); err != nil {
-			return err
+		err = c.run(c.scopes[0])
+		quiesced = true
+		if err != nil {
+			return quiesced, err
 		}
 	} else {
+		quiesced = true
 		errC := make(chan scopeRunResult, len(c.scopes))
 		for i := range c.scopes {
 			scope := c.scopes[i]
@@ -1147,7 +1158,9 @@ func (c *Compile) runOnce() (err error) {
 						c.proc.Error(c.proc.Ctx, "panic in run",
 							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
-						errC <- newScopeRunResult(err, scope)
+						result := newScopeRunResult(err, scope)
+						result.recoveredPanic = true
+						errC <- result
 					}
 				}()
 				errC <- newScopeRunResult(c.run(scope), scope)
@@ -1166,6 +1179,7 @@ func (c *Compile) runOnce() (err error) {
 		}
 		for i := 0; i < cap(errC); i++ {
 			result := <-errC
+			quiesced = quiesced && !result.recoveredPanic
 			if !c.auxiliaryProductScopes[result.scope] {
 				primaryRemaining--
 				if primaryRemaining == 0 {
@@ -1193,7 +1207,7 @@ func (c *Compile) runOnce() (err error) {
 		close(errC)
 
 		if resultToThrowOut.err != nil {
-			return resultToThrowOut.err
+			return quiesced, resultToThrowOut.err
 		}
 	}
 
@@ -1201,7 +1215,7 @@ func (c *Compile) runOnce() (err error) {
 		err = c.runSql(sql)
 		if err != nil {
 			c.debugLogFor19288(err, sql)
-			return err
+			return quiesced, err
 		}
 	}
 
@@ -1213,7 +1227,7 @@ func (c *Compile) runOnce() (err error) {
 			}
 			err = f.backgroundSQLCheck(c)
 			if err != nil {
-				return err
+				return quiesced, err
 			}
 		}
 	}
@@ -1245,7 +1259,7 @@ func (c *Compile) runOnce() (err error) {
 			err = detectFkSelfRefer(c, alterTable.GetDetectSqls())
 		}
 	}
-	return err
+	return quiesced, err
 }
 
 func validateForeignKeyParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {

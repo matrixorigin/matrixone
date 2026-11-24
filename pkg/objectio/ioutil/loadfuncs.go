@@ -41,12 +41,32 @@ func LoadColumnsData(
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
 	var meta objectio.ObjectMeta
-	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
-	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
+	release, fromCache, err = LoadColumnsDataFromMeta(
+		ctx, dataMeta, columns, typs, fs, location, cacheVectors, m, policy,
+	)
+	return
+}
+
+// LoadColumnsDataFromMeta reads columns using the already loaded data metadata
+// for location. Its release and cache-vector ownership are the same as
+// LoadColumnsData.
+func LoadColumnsDataFromMeta(
+	ctx context.Context,
+	dataMeta objectio.ObjectDataMeta,
+	columns []uint16,
+	typs []types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	cacheVectors containers.Vectors,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (release func(), fromCache bool, err error) {
+	var vectors fileservice.IOVector
+	name := location.Name().UnsafeString()
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
 		&dataMeta,
@@ -324,30 +344,7 @@ func loadColumnsDataInto(
 		}
 	}
 
-	publication := objectio.JSONReadSetFromContext(ctx)
 	for i := range columns {
-		if destinations[i].Length() != 0 && publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
-			publication.Disable()
-		}
-		if publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
-			reader, openErr := objectio.OpenJSONReader(ioVectors.Entries[i].CachedData, m, publication.CachePinAdmission())
-			if openErr != nil {
-				publication.Disable()
-				err = openErr
-				return
-			}
-			if sels != nil {
-				selected, selectErr := reader.Select(sels, m)
-				reader.Close()
-				if selectErr != nil {
-					publication.Disable()
-					err = selectErr
-					return
-				}
-				reader = selected
-			}
-			publication.Publish(columns[i], reader)
-		}
 		// A destination is filled through its own pool. An empty read-only
 		// destination (a column borrowed by an earlier block) becomes an owned
 		// vector of m again.
@@ -356,7 +353,6 @@ func loadColumnsDataInto(
 			var borrowed bool
 			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, dm, keeper)
 			if err != nil {
-				publication.Disable()
 				return
 			}
 			if borrowed {
@@ -384,7 +380,6 @@ func loadColumnsDataInto(
 			)
 		}
 		if err != nil {
-			publication.Disable()
 			logutil.Errorf("LoadColumnsDataInto %s error: %v", location.String(), err)
 			return
 		}

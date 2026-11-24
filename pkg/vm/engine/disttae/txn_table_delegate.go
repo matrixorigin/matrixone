@@ -1578,8 +1578,5 @@ func decodeShardingReadBatch(ctx context.Context, response []byte, output *batch
 	if err := output.UnmarshalBinaryWithAnyMp(response[5:5+int(length)], mp); err != nil {
 		return false, err
 	}
-	if err := objectio.JSONReadSetFromContext(ctx).PublishMutableColumnsForEvaluation(output.Vecs, mp, output.RowCount()); err != nil {
-		return false, err
-	}
 	return false, nil
 }

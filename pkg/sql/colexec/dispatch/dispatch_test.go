@@ -1111,7 +1111,7 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 		sp.ReleaseCurrent(0)
 	} else {
 		d.cleanupSpool = sp
-		sp.ForceCleanupAfterTerminalSignal()
+		sp.ReleaseCache()
 	}
 	d.CleanupDeferredSpool()
 	require.Same(t, sp, d.cleanupSpool)

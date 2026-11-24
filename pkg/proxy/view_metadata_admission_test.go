@@ -147,8 +147,8 @@ func TestProxyAdmissionRevokesIngressForHigherGeneration(t *testing.T) {
 		app:                             app,
 		viewMetadataAdmissionGeneration: 9,
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
-		viewMetadataAdmissionContext:    ctx,
-		viewMetadataAdmissionCancel:     cancel,
+		lifecycleCtx:                    ctx,
+		lifecycleCancel:                 cancel,
 		viewMetadataCloseFn: func() error {
 			close(closeRequested)
 			return errors.New("expected close error")
@@ -182,10 +182,10 @@ func TestProxyCloseIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	address := listener.Addr().String()
 	s := &Server{
-		app:                          app,
-		listener:                     listener,
-		viewMetadataAdmissionCancel:  cancel,
-		viewMetadataAdmissionContext: ctx,
+		app:             app,
+		listener:        listener,
+		lifecycleCancel: cancel,
+		lifecycleCtx:    ctx,
 	}
 	require.NoError(t, s.Close())
 	require.NoError(t, s.Close())
@@ -238,8 +238,8 @@ func TestProxyStartRetriesAdmissionTimeoutUntilReady(t *testing.T) {
 		app:                             app,
 		viewMetadataAdmissionGeneration: 12,
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
-		viewMetadataAdmissionContext:    ctx,
-		viewMetadataAdmissionCancel:     cancel,
+		lifecycleCtx:                    ctx,
+		lifecycleCancel:                 cancel,
 	}
 	s.config.HAKeeper.HeartbeatInterval.Duration = time.Millisecond
 	s.config.HAKeeper.HeartbeatTimeout.Duration = time.Millisecond
@@ -287,8 +287,8 @@ func TestProxyStartHonorsAdmissionCancellation(t *testing.T) {
 		app:                             app,
 		viewMetadataAdmissionGeneration: 12,
 		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
-		viewMetadataAdmissionContext:    ctx,
-		viewMetadataAdmissionCancel:     cancel,
+		lifecycleCtx:                    ctx,
+		lifecycleCancel:                 cancel,
 	}
 	s.config.HAKeeper.HeartbeatInterval.Duration = time.Millisecond
 	s.config.HAKeeper.HeartbeatTimeout.Duration = time.Millisecond

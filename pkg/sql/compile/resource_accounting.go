@@ -507,40 +507,44 @@ func composeRemoteResourceAggregate(
 	return result
 }
 
-func collectScopeResourceDelta(scopes []*Scope, localAddress string) resource.Delta {
-	var result resource.Delta
+func scopeRunsLocally(scope *Scope, address string) bool {
+	return scope != nil &&
+		(scope.Magic != Remote || scope.ipAddrMatch(address) || scope.resourceExecutedLocally)
+}
+
+func forEachLocalOperator(scopes []*Scope, localAddress string, fn func(vm.Operator)) {
 	seen := make(map[vm.Operator]struct{})
 	var visit func(*Scope)
 	visit = func(scope *Scope) {
-		if scope == nil {
-			return
-		}
-		if scope.Magic == Remote && !scope.ipAddrMatch(localAddress) && !scope.resourceExecutedLocally {
+		if !scopeRunsLocally(scope, localAddress) {
 			return
 		}
 		for _, pre := range scope.PreScopes {
 			visit(pre)
 		}
 		_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			if op == nil {
-				return nil
+			if op != nil {
+				if _, ok := seen[op]; !ok {
+					seen[op] = struct{}{}
+					fn(op)
+				}
 			}
-			if _, ok := seen[op]; ok {
-				return nil
-			}
-			seen[op] = struct{}{}
-			analyzer := op.GetOperatorBase().OpAnalyzer
-			if analyzer == nil {
-				return nil
-			}
-			delta := analyzer.GetOpStats().ResourceDelta()
-			result.Quality |= delta.Quality | resource.MergeUsage(&result.Usage, delta.Usage)
 			return nil
 		})
 	}
 	for _, scope := range scopes {
 		visit(scope)
 	}
+}
+
+func collectScopeResourceDelta(scopes []*Scope, localAddress string) resource.Delta {
+	var result resource.Delta
+	forEachLocalOperator(scopes, localAddress, func(op vm.Operator) {
+		if analyzer := op.GetOperatorBase().OpAnalyzer; analyzer != nil {
+			delta := analyzer.GetOpStats().ResourceDelta()
+			result.Quality |= delta.Quality | resource.MergeUsage(&result.Usage, delta.Usage)
+		}
+	})
 	return result
 }
 
@@ -551,7 +555,7 @@ func countExpectedRemoteScopes(scopes []*Scope, localAddress string) uint64 {
 		if scope == nil {
 			return
 		}
-		if scope.Magic == Remote && !scope.ipAddrMatch(localAddress) && !scope.resourceExecutedLocally {
+		if !scopeRunsLocally(scope, localAddress) {
 			count++
 			return
 		}

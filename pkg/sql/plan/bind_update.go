@@ -545,13 +545,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 
 		var unsupportedIrregularRoute bool
 		inlineIrregularIndexes[i], unsupportedIrregularRoute, err = classifyIrregularIndexesForUpdate(
-			builder.GetContext(), tableDef, dmlCtx.updateCol2Expr[i])
+			tableDef, withSelfForeignKeyActionColumns(tableDef, dmlCtx.updateCol2Expr[i]))
 		if err != nil {
-			if stmt.HasReturning() {
-				if feature := returningUpdatePlannerFeature(err); feature != "" {
-					return 0, returningNotSupported(builder, feature)
-				}
-			}
 			return 0, err
 		}
 		if unsupportedIrregularRoute {
@@ -2831,21 +2826,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		if err != nil {
 			return 0, err
 		}
-		builder.irregularUpdateMaints = append(
-			builder.irregularUpdateMaints,
-			irregularUpdateMaintenance{
-				sourceStep:              builder.irregularMaintSourceStep,
-				deleteStep:              builder.irregularMaintDeleteStep,
-				deletePkPos:             builder.irregularMaintDeletePkPos,
-				deletePkTyp:             builder.irregularMaintDeletePkTyp,
-				indexes:                 builder.irregularMaintIndexes,
-				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
-				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
-				valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
-				tableDef:                builder.irregularMaintTableDef,
-				objRef:                  builder.irregularMaintObjRef,
-			},
-		)
+		builder.queueIrregularUpdateMaint()
 	}
 
 	dmlNode := &plan.Node{
@@ -4941,6 +4922,13 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 	return projectID, projectNode, nil
 }
 
+// queueIrregularUpdateMaint moves the maintenance recorded in the builder's
+// single-target fields to the queue finishIrregularIndexMaintenance emits.
+func (builder *QueryBuilder) queueIrregularUpdateMaint() {
+	builder.irregularUpdateMaints = append(builder.irregularUpdateMaints, builder.saveIrregularMaint())
+	builder.restoreIrregularMaint(irregularUpdateMaintenance{sourceStep: -1, deleteStep: -1, insertOnlySourceStep: -1})
+}
+
 func buildIrregularUpdateTargetProjection(
 	alias string,
 	tableDef *plan.TableDef,
@@ -5327,13 +5315,9 @@ func irregularIndexAffectedByUpdatedColumnNames(
 // from CDC-only indexes using plugin metadata. MASTER has no plugin, but shares
 // the modern synchronous maintenance pipeline with the plugin-backed indexes.
 // The bool return reports an affected irregular algorithm that has not migrated
-// to either mechanism. MASTER indexes delete
-// by the old source PK and rebuild from the final row image, so changing the
-// base-table PK is handled by the same maintenance pipeline. Plugin-backed
-// synchronous full-text/vector indexes retain their existing PK-update
-// restriction until their complete hidden-table groups support that contract.
+// to either mechanism. Synchronous indexes delete by the old source PK and
+// rebuild from the final row image, so a primary-key change affects every one.
 func classifyIrregularIndexesForUpdate(
-	ctx context.Context,
 	tableDef *plan.TableDef,
 	updateCols map[string]tree.Expr,
 ) (inline []*plan.IndexDef, unsupported bool, err error) {
@@ -5351,43 +5335,17 @@ func classifyIrregularIndexesForUpdate(
 		if err != nil {
 			return nil, false, err
 		}
-
-		p, ok := indexplugin.Get(idxDef.IndexAlgo)
-		if !ok {
-			if !isModernMaintainedIrregularAlgo(idxDef.IndexAlgo) {
-				if affected || pkUpdated {
-					return nil, true, nil
-				}
-				continue
-			}
-			if affected || pkUpdated {
-				affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
-			}
-			continue
-		}
-		desc := p.Catalog().SyncDescriptor()
-		if desc.AlwaysAsync {
-			continue
-		}
-		async, err := catalog.IndexParamAsync(idxDef.IndexAlgoParams)
+		sync, maintained, err := syncIrregularIndex(idxDef)
 		if err != nil {
 			return nil, false, err
 		}
-		if async {
+		if !sync || !(affected || pkUpdated) {
 			continue
 		}
-		if pkUpdated {
-			return nil, false, newUpdatePlannerRouteError(
-				updatePlannerRejected,
-				updateRouteReasonIrregularIndex,
-				moerr.NewUnsupportedDML(
-					ctx,
-					"update primary key on a table with a synchronous full-text/vector index"),
-			)
+		if !maintained {
+			return nil, true, nil
 		}
-		if affected {
-			affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
-		}
+		affectedSyncGroups[idxDef.IndexName+"\x00"+idxDef.IndexTableName] = true
 	}
 
 	for _, idxDef := range tableDef.Indexes {
@@ -5397,6 +5355,48 @@ func classifyIrregularIndexesForUpdate(
 		inline = append(inline, idxDef)
 	}
 	return inline, false, nil
+}
+
+// withSelfForeignKeyActionColumns returns updateCols plus the columns that
+// self-referencing ON UPDATE CASCADE / SET NULL actions change on rows merged
+// into the same UPDATE, followed to a fixpoint.
+func withSelfForeignKeyActionColumns(tableDef *plan.TableDef, updateCols map[string]tree.Expr) map[string]tree.Expr {
+	if len(tableDef.Fkeys) == 0 {
+		return updateCols
+	}
+	colNames := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		colNames[col.ColId] = col.Name
+	}
+	cols := maps.Clone(updateCols)
+	for changed := true; changed; {
+		changed = false
+		for _, fk := range tableDef.Fkeys {
+			if fk.ForeignTbl != 0 && fk.ForeignTbl != tableDef.TblId {
+				continue
+			}
+			if fk.OnUpdate != plan.ForeignKeyDef_CASCADE && fk.OnUpdate != plan.ForeignKeyDef_SET_NULL {
+				continue
+			}
+			referenced := false
+			for _, colID := range fk.ForeignCols {
+				if _, ok := cols[colNames[colID]]; ok {
+					referenced = true
+					break
+				}
+			}
+			if !referenced {
+				continue
+			}
+			for _, colID := range fk.Cols {
+				if _, ok := cols[colNames[colID]]; !ok {
+					cols[colNames[colID]] = nil
+					changed = true
+				}
+			}
+		}
+	}
+	return cols
 }
 
 func updateHasMultipleSourceTables(stmt *tree.Update) bool {
