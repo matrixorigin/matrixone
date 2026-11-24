@@ -42,7 +42,12 @@ var wandBufPool = sync.Pool{
 	},
 }
 
-func getWandBuf() *wandBuf { return wandBufPool.Get().(*wandBuf) }
+// getWandBuf and putWandBuf move wandIter buffers in and out of the pool.
+// They are variables so tests can count buffers taken and returned.
+var (
+	getWandBuf = func() *wandBuf { return wandBufPool.Get().(*wandBuf) }
+	putWandBuf = func(b *wandBuf) { wandBufPool.Put(b) }
+)
 
 // releaseWandIters returns every cursor's block buffer to the pool. Safe to defer right
 // after buildWandIters (a nil/empty slice is a no-op) and idempotent per cursor (buf is
@@ -52,7 +57,7 @@ func releaseWandIters(iters []*wandIter) {
 		if it == nil || it.buf == nil {
 			continue
 		}
-		wandBufPool.Put(it.buf)
+		putWandBuf(it.buf)
 		it.buf = nil
 		it.bDocs = nil
 		it.bTfs = nil

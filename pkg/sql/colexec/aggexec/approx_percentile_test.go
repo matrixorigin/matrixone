@@ -23,7 +23,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -255,9 +254,6 @@ func TestInterpolateFloat64(t *testing.T) {
 }
 
 func TestPercentileArithmeticScratchDoesNotAllocatePerGroup(t *testing.T) {
-	if util.RaceDetectorEnabled {
-		t.Skip("allocation counts include race-detector instrumentation")
-	}
 	p := new(big.Rat)
 	_, ok := p.SetString("0.12345678901234567890123456789012345678")
 	require.True(t, ok)

@@ -198,6 +198,9 @@ func FloatGetMinAndMax[T ~float32 | ~float64](vec *Vector) (
 	ok bool,
 ) {
 	col := MustFixedColNoTypeCheck[T](vec)
+	if vec.class == FLAT && len(col) >= minMaxUnrollRows && !vec.HasNull() {
+		return floatMinMaxNoNull(col)
+	}
 	nulls := vec.GetNulls()
 	for i, value := range col {
 		if nulls.Contains(uint64(i)) || math.IsNaN(float64(value)) {
