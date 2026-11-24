@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -157,13 +158,11 @@ type indexFillTarget struct {
 }
 
 func (t indexFillTarget) heldBeforeLock(context.Context) bool {
-	_, ok := t.s.indexObjectCached(t.filePath)
-	return ok
+	return t.s.indexObjectHeld(t.filePath)
 }
 
 func (t indexFillTarget) held(context.Context) (bool, error) {
-	_, ok := t.s.indexObjectCached(t.filePath)
-	return ok, nil
+	return t.s.indexObjectHeld(t.filePath), nil
 }
 
 // reserve makes no room: the index-file cache evicts when the entry is put.
@@ -216,6 +215,17 @@ func (s *S3FS) indexObjectCached(filePath string) (string, bool) {
 		return "", false
 	}
 	return diskPath, d.dirCached(diskPath)
+}
+
+// indexObjectHeld reports whether the index-file cache holds the object at filePath with
+// its file, so that a fill or prefetch of it has nothing to do.
+func (s *S3FS) indexObjectHeld(filePath string) bool {
+	diskPath, ok := s.indexObjectCached(filePath)
+	if !ok {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(diskPath, IndexObjectFile))
+	return err == nil
 }
 
 // readIndexObject fills the entries of vector not done from the object's entry in the

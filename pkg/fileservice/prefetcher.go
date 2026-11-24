@@ -676,7 +676,7 @@ func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
 	// An object the index-file cache holds is not downloaded into the disk cache, nor one
 	// that cannot fill it.
 	if policy := GetFileServicePolicy(ctx); s.indexObject(policy) {
-		if _, ok := s.indexObjectCached(req.FilePath); ok && s.indexObjectReadable(policy) {
+		if s.indexObjectReadable(policy) && s.indexObjectHeld(req.FilePath) {
 			return nil
 		}
 		req.indexObject = len(req.Ranges) == 0
@@ -706,8 +706,7 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	}
 	// A download into the index-file cache is had only once that cache holds the object.
 	if req.indexObject && s.cachesIndexObjects() {
-		_, ok := s.indexObjectCached(req.FilePath)
-		return ok
+		return s.indexObjectHeld(req.FilePath)
 	}
 	diskPath := s.diskCache.pathForFile(path.File)
 	if s.diskCache.download(diskPath) != nil {

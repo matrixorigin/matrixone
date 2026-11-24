@@ -988,7 +988,8 @@ func TestIndexObjectMissingFileOwnedIsKept(t *testing.T) {
 	require.True(t, ok)
 	mark := fs.indexFileCache.DeleteMark()
 	storage.reads.Store(0)
-	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache | SkipDiskCacheWrites,
+	// The read fills no cache, so it does not wait for the holder to publish.
+	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipMemoryCache | SkipCacheWrites,
 		Entries: []IOEntry{{Offset: 2000, Size: 10}}}
 	require.NoError(t, fs.Read(context.Background(), vec))
 	require.Equal(t, data[2000:2010], vec.Entries[0].Data)

@@ -36,8 +36,9 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
   index-file cache holds is served from there, and the decoded data still enters the
   memory cache; concurrent reads of an entry share its decode as reads of an object the
   disk cache holds do. A prefetch with it, through the prefetcher or the IO pipeline, of an
-  object the cache holds is not downloaded into the disk cache. Anything else takes the
-  normal path.
+  object the cache holds is not downloaded into the disk cache; an entry whose file is
+  missing does not hold the object, and a prefetch or fill of it loads it again. Anything
+  else takes the normal path.
 - **Eviction.** An object's entry is an index file like any other: the cache's LRU evicts
   it, and the next scan that needs it reads it again. A held entry is not evicted, and the
   release of a hold, or a read, marks it used.
