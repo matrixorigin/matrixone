@@ -239,7 +239,7 @@ func TestReadLegacyColumnWindowRejectsInvalidInputs(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestReadOneBlockAllColumnsWindowNormalizesLegacyClass(t *testing.T) {
+func TestReadOneBlockAllColumnsWindowClass(t *testing.T) {
 	type windowCase struct {
 		name, kind     string
 		version        uint16
@@ -256,7 +256,7 @@ func TestReadOneBlockAllColumnsWindowNormalizesLegacyClass(t *testing.T) {
 				name    string
 				tag     byte
 				invalid bool
-			}{{"flat", vector.FLAT, false}, {"legacy", vector.LegacyRowBufferClass, false}, {"unknown", vector.LegacyRowBufferClass + 1, true}} {
+			}{{"flat", vector.FLAT, false}, {"unknown", vector.CONSTANT + 1, true}} {
 				if class.invalid && kind == "varlen" {
 					continue
 				}
