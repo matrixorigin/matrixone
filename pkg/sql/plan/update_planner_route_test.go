@@ -590,7 +590,8 @@ func TestUpdateIrregularIndexLocksBeforeMaintenanceFanout(t *testing.T) {
 			require.NoError(t, err)
 
 			query := builder.qry
-			maintenanceSinkID := query.Steps[builder.irregularMaintSourceStep]
+			require.Len(t, builder.irregularUpdateMaints, 1)
+			maintenanceSinkID := query.Steps[builder.irregularUpdateMaints[0].sourceStep]
 			require.Equal(t, planpb.Node_SINK, query.Nodes[maintenanceSinkID].NodeType)
 
 			visited := make(map[int32]struct{})

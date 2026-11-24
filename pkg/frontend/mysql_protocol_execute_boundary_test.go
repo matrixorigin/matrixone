@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,4 +282,47 @@ func TestParseExecuteDataNonzeroNewTypesWithNullParam(t *testing.T) {
 	require.NoError(t, proto.ParseExecuteData(context.Background(), proc, stmt, data, 0))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_TINY), 0}, stmt.ParamTypes)
 	require.True(t, stmt.params.GetNulls().Contains(0))
+}
+
+// A string parameter is rewritten into the statement's existing parameter
+// storage: after the first execution its area grows only for a longer value.
+func TestParseExecuteDataReusesStringParamStorage(t *testing.T) {
+	ctx := context.Background()
+	proto, proc, stmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer stmt.Close()
+	packet := func(value string) []byte {
+		data := []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+		data = append(data, byte(len(value)))
+		return append(data, value...)
+	}
+	long := func(c byte, n int) string { return strings.Repeat(string(c), n) }
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, packet(long('a', 40)), 0))
+	require.Equal(t, long('a', 40), stmt.params.GetStringAt(0))
+	area := len(stmt.params.GetArea())
+	allocs := proc.Mp().Stats().NumAlloc.Load()
+	for _, c := range []byte("bcdef") {
+		require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, packet(long(c, 40)), 0))
+		require.Equal(t, long(c, 40), stmt.params.GetStringAt(0))
+		require.Equal(t, area, len(stmt.params.GetArea()), "the area is reused, not appended to")
+	}
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load(), "re-executing must not allocate")
+
+	// A longer value grows the storage once; shorter ones reuse it.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, packet(long('x', 100)), 0))
+	require.Equal(t, long('x', 100), stmt.params.GetStringAt(0))
+	allocs = proc.Mp().Stats().NumAlloc.Load()
+	for _, n := range []int{100, 40, 3, 100} {
+		require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, packet(long('y', n)), 0))
+		require.Equal(t, long('y', n), stmt.params.GetStringAt(0))
+	}
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load())
+
+	// NULL after a value, then a value again.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt,
+		[]byte{0, 1, 0, 0, 0, 1, 0}, 0))
+	require.True(t, stmt.params.GetNulls().Contains(0))
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, packet("z"), 0))
+	require.False(t, stmt.params.GetNulls().Contains(0))
+	require.Equal(t, "z", stmt.params.GetStringAt(0))
 }

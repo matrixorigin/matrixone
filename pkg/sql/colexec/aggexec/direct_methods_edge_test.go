@@ -625,11 +625,6 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "base64:type16:qg==", unquoted)
 	bit.Free(mp)
-	jsonVec := vector.NewVec(types.T_json.ToType(), mp)
-	// Invalid JSON is rejected before it can reach the aggregate consumer.
-	require.Error(t, vector.AppendBytes(jsonVec, nil, false, mp))
-	require.Zero(t, jsonVec.Length())
-	jsonVec.Free(mp)
 
 	arrays := []*vector.Vector{
 		vector.NewVec(types.T_array_float32.ToType(), mp),

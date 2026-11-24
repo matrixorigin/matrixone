@@ -709,3 +709,24 @@ func TestReduceSinkSinkScanKeepsOtherApplyInput(t *testing.T) {
 	require.Equal(t, []int32{2, 3}, query.Nodes[4].Children,
 		"sink reduction must not replace both APPLY inputs with the sink input")
 }
+
+func TestReduceSinkSinkScanFoldsChainedSinks(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		query := &planpb.Query{
+			Nodes: []*planpb.Node{
+				{NodeType: planpb.Node_VALUE_SCAN},                        // 0: chain input
+				{NodeType: planpb.Node_SINK, Children: []int32{0}},        // 1: step 0
+				{NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}}, // 2
+				{NodeType: planpb.Node_SINK, Children: []int32{2}},        // 3: step 1
+				{NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{1}}, // 4
+				{NodeType: planpb.Node_PROJECT, Children: []int32{4}},     // 5: step 2
+			},
+			Steps: []int32{1, 3, 5},
+		}
+
+		reduceSinkSinkScanNodes(query)
+
+		require.Equal(t, []int32{5}, query.Steps)
+		require.Equal(t, []int32{0}, query.Nodes[5].Children)
+	}
+}

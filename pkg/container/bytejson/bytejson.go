@@ -1095,10 +1095,14 @@ func (bj ByteJson) queryValByKeyExists(key []byte) (ByteJson, bool) {
 
 var queryCollectorElementSize = uint64(reflect.TypeFor[ByteJson]().Size())
 
+const queryCheckInterval = 64
+
 type queryCollector struct {
 	values  []ByteJson
 	reserve func(uint64) (func(), error)
 	release func()
+	ctx     context.Context
+	steps   uint64
 	err     error
 }
 
@@ -1106,7 +1110,7 @@ func (c *queryCollector) append(value ByteJson) {
 	if c.err != nil {
 		return
 	}
-	if c.reserve == nil {
+	if c.reserve == nil && c.ctx == nil {
 		c.values = append(c.values, value)
 		return
 	}
@@ -1119,16 +1123,34 @@ func (c *queryCollector) append(value ByteJson) {
 			c.err = moerr.NewInvalidInputNoCtx("JSON query result size overflow")
 			return
 		}
-		release, err := c.reserve(uint64(capacity) * queryCollectorElementSize)
-		if err != nil {
-			if release != nil {
-				release()
+		var release func()
+		if c.reserve != nil {
+			var err error
+			release, err = c.reserve(uint64(capacity) * queryCollectorElementSize)
+			if err != nil {
+				if release != nil {
+					release()
+				}
+				c.err = err
+				return
 			}
-			c.err = err
-			return
 		}
 		values := make([]ByteJson, len(c.values), capacity)
-		copy(values, c.values)
+		if c.ctx == nil {
+			copy(values, c.values)
+		} else {
+			// A growth can itself copy many matches from a single row.
+			for start := 0; start < len(c.values); start += 1024 {
+				if c.err = c.ctx.Err(); c.err != nil {
+					if release != nil {
+						release()
+					}
+					return
+				}
+				end := min(start+1024, len(c.values))
+				copy(values[start:end], c.values[start:end])
+			}
+		}
 		if c.release != nil {
 			c.release()
 		}
@@ -1148,6 +1170,14 @@ func (c *queryCollector) close() {
 func (bj ByteJson) query(cur *queryCollector, path *Path) {
 	if cur.err != nil {
 		return
+	}
+	if cur.ctx != nil {
+		if cur.steps%queryCheckInterval == 0 {
+			if cur.err = cur.ctx.Err(); cur.err != nil {
+				return
+			}
+		}
+		cur.steps++
 	}
 	if path.empty() {
 		cur.append(bj)
@@ -1260,6 +1290,47 @@ func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 		return out[0], true
 	}
 	return mergeToArray(out), true
+}
+
+// QueryWithExistsContext checks cancellation during path traversal and result
+// assembly. Match order, missing values and array wrapping follow QueryWithExists.
+func (bj ByteJson) QueryWithExistsContext(ctx context.Context, paths []*Path) (ByteJson, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	collector := queryCollector{ctx: ctx}
+	for _, path := range paths {
+		if path.IsSimple() {
+			value, exists, err := bj.querySimpleExistWithCancellation(path, true, true, ctx.Err)
+			if err != nil || len(paths) == 1 {
+				return value, exists, err
+			}
+			if exists {
+				collector.append(value)
+				if collector.err != nil {
+					return Null, false, collector.err
+				}
+			}
+			continue
+		}
+		bj.query(&collector, path)
+		if collector.err != nil {
+			return Null, false, collector.err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Null, false, err
+	}
+	switch len(collector.values) {
+	case 0:
+		return Null, false, nil
+	case 1:
+		if len(paths) == 1 && !paths[0].mayReturnMultiple() {
+			return collector.values[0], true, nil
+		}
+	}
+	value, err := mergeToArrayWithContext(ctx, collector.values)
+	return value, err == nil, err
 }
 
 // QueryWithMemory uses the ordinary JSON path semantics while reserving each
@@ -1436,34 +1507,48 @@ func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJ
 // querySimpleExistWithWrapping keeps scalar and object index wrapping explicit.
 // ARRAY_INSERT must follow only real arrays when seeking its parent.
 func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex, autowrapObjectIndex bool) (ByteJson, bool) {
-	cur := bj
-	// don't go through th step(), recursive call route.  We know
-	// we have a simple path, each step will bring us to ONE SINGLE next value.
+	value, exists, _ := bj.querySimpleExistWithCancellation(path, autowrapScalarIndex, autowrapObjectIndex, nil)
+	return value, exists
+}
 
-	for _, sub := range path.paths {
+func (bj ByteJson) querySimpleExistWithCancellation(path *Path, autowrapScalarIndex, autowrapObjectIndex bool, checkCanceled func() error) (ByteJson, bool, error) {
+	cur := bj
+	// Each step of a simple path resolves to at most one value.
+
+	if checkCanceled != nil {
+		if err := checkCanceled(); err != nil {
+			return Null, false, err
+		}
+	}
+	for i, sub := range path.paths {
+		if checkCanceled != nil && i != 0 && i%queryCheckInterval == 0 {
+			if err := checkCanceled(); err != nil {
+				return Null, false, err
+			}
+		}
 		if cur.Type == TpCodeObject {
 			switch sub.tp {
 			case subPathIdx:
 				if !autowrapObjectIndex {
-					return Null, false
+					return Null, false, nil
 				}
 				// obj[0] is itself, continue
 				start, _, _ := sub.idx.genIndex(1)
 				if start != 0 {
-					return Null, false
+					return Null, false, nil
 				}
 			case subPathKey:
 				var ok bool
 				cur, ok = cur.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
 				if !ok {
-					return Null, false
+					return Null, false, nil
 				}
 			default:
-				return Null, false
+				return Null, false, nil
 			}
 		} else if cur.Type == TpCodeArray {
 			if sub.tp != subPathIdx {
-				return Null, false
+				return Null, false, nil
 			}
 			cnt := cur.GetElemCnt()
 			idx, _, _ := sub.idx.genIndex(cnt)
@@ -1472,7 +1557,7 @@ func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex,
 			// if (last && idx < 0) || cnt <= idx {
 			if idx < 0 || cnt <= idx {
 				// out of range
-				return Null, false
+				return Null, false, nil
 			} else {
 				cur = cur.getArrayElem(idx)
 			}
@@ -1483,10 +1568,10 @@ func (bj ByteJson) querySimpleExistWithWrapping(path *Path, autowrapScalarIndex,
 					continue
 				}
 			}
-			return Null, false
+			return Null, false, nil
 		}
 	}
-	return cur, true
+	return cur, true, nil
 }
 
 func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
@@ -2055,6 +2140,7 @@ func (p *parser) appendToLastGroup(n Node) {
 	}
 	old := g.Values[dupIdx]
 	old.Free()
+	g.Keys[last] = ""
 	g.Keys = g.Keys[:last]
 	g.Values[dupIdx] = n
 }
@@ -2087,6 +2173,7 @@ func (g *Group) reset() {
 
 func (g *Group) free() {
 	g.Obj = false
+	clear(g.Keys)
 	g.Keys = g.Keys[:0]
 	for _, sub := range g.Values {
 		sg, ok := sub.V.(*Group)
@@ -2095,6 +2182,7 @@ func (g *Group) free() {
 		}
 		sg.free()
 	}
+	clear(g.Values)
 	g.Values = g.Values[:0]
 	reuse.Free(g, nil)
 }
@@ -2115,7 +2203,66 @@ func (g *groupSortKeys) Swap(i, j int) {
 }
 
 type byteJsonWriter struct {
-	buf []byte
+	buf    []byte
+	cancel *jsonWriteBudget
+}
+
+func (w *byteJsonWriter) reserve(ctx context.Context, size int) error {
+	if w.cancel == nil || cap(w.buf)-len(w.buf) >= size {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	buf := make([]byte, len(w.buf), max(len(w.buf)+size, cap(w.buf)+cap(w.buf)/2))
+	for start := 0; start < len(buf); start += jsonParseChunk {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := min(len(buf), start+jsonParseChunk)
+		copy(buf[start:end], w.buf[start:end])
+	}
+	w.buf = buf
+	return nil
+}
+
+func (w *byteJsonWriter) extend(ctx context.Context, size int) error {
+	if w.cancel == nil {
+		w.buf = extendByte(w.buf, size)
+		return nil
+	}
+	if err := w.reserve(ctx, size); err != nil {
+		return err
+	}
+	// The cancellable writer only appends and its spare capacity is zeroed.
+	for size > 0 {
+		chunk := min(size, jsonParseChunk)
+		if err := w.cancel.check(ctx, chunk); err != nil {
+			return err
+		}
+		w.buf = w.buf[:len(w.buf)+chunk]
+		size -= chunk
+	}
+	return nil
+}
+
+func (w *byteJsonWriter) appendText(ctx context.Context, text string) error {
+	if w.cancel == nil {
+		w.buf = append(w.buf, text...)
+		return nil
+	}
+	if err := w.reserve(ctx, len(text)); err != nil {
+		return err
+	}
+	for len(text) > 0 {
+		chunk := min(len(text), jsonParseChunk)
+		if err := w.cancel.check(ctx, chunk); err != nil {
+			return err
+		}
+		w.buf = append(w.buf, text[:chunk]...)
+		text = text[chunk:]
+	}
+	return nil
 }
 
 func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error) {
@@ -2123,6 +2270,14 @@ func (w *byteJsonWriter) writeNode(root bool, node Node) (TpCode, uint32, error)
 }
 
 func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, node Node) (TpCode, uint32, error) {
+	if w.cancel != nil {
+		if err := w.cancel.check(ctx, 16); err != nil {
+			return 0, 0, err
+		}
+		if err := w.reserve(ctx, 16); err != nil {
+			return 0, 0, err
+		}
+	}
 	start := len(w.buf)
 	switch val := node.V.(type) {
 	case *Group:
@@ -2138,19 +2293,31 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 			w.buf = endian.AppendUint32(w.buf, uint32(n))
 			w.buf = endian.AppendUint32(w.buf, 0) // object buf length
 
-			w.buf = extendByte(w.buf, n*(keyEntrySize+valEntrySize))
+			if w.cancel != nil && n > 1 {
+				if err := sortJSONKeysCancellable(ctx, w.cancel, obj); err != nil {
+					return 0, 0, err
+				}
+			}
+			if err := w.extend(ctx, n*(keyEntrySize+valEntrySize)); err != nil {
+				return 0, 0, err
+			}
 
 			loc := uint32(headerSize + n*(keyEntrySize+valEntrySize))
 			for i, k := range keys {
 				o := baseOffset + headerSize + i*keyEntrySize
 				length := uint32(len(k))
 				if length > math.MaxUint16 {
+					if w.cancel != nil {
+						return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "json key exceeds %d bytes", math.MaxUint16)
+					}
 					return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "json key %s", k)
 				}
 				endian.PutUint32(w.buf[o:], loc)
 				endian.PutUint16(w.buf[o+keyOriginOff:], uint16(length))
 				loc += length
-				w.buf = append(w.buf, k...)
+				if err := w.appendText(ctx, k); err != nil {
+					return 0, 0, err
+				}
 			}
 
 			for i := range keys {
@@ -2181,7 +2348,9 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 		}
 		w.buf = endian.AppendUint32(w.buf, uint32(n))
 		w.buf = endian.AppendUint32(w.buf, 0) // array buf length
-		w.buf = extendByte(w.buf, n*5)
+		if err := w.extend(ctx, n*valEntrySize); err != nil {
+			return 0, 0, err
+		}
 
 		loc := uint32(headerSize + n*valEntrySize)
 		for i := range arr.Values {
@@ -2216,6 +2385,13 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 		}
 		return TpCodeLiteral, uint32(LiteralNull), nil
 	case json.Number:
+		if w.cancel != nil && len(val) > jsonParseChunk {
+			short, err := shortJSONFloat(ctx, string(val))
+			if err != nil {
+				return 0, 0, err
+			}
+			val = json.Number(short)
+		}
 		tp, data, err := w.parseNumberWithContext(ctx, val)
 		if err != nil {
 			return 0, 0, err
@@ -2229,7 +2405,14 @@ func (w *byteJsonWriter) writeNodeWithContext(ctx context.Context, root bool, no
 		if root {
 			w.buf = append(w.buf, byte(TpCodeString))
 		}
-		w.buf = addString(w.buf, val)
+		if w.cancel == nil {
+			w.buf = addString(w.buf, val)
+		} else {
+			w.buf = binary.AppendUvarint(w.buf, uint64(len(val)))
+			if err := w.appendText(ctx, val); err != nil {
+				return 0, 0, err
+			}
+		}
 		return TpCodeString, uint32(len(w.buf) - start), nil
 	default:
 		return 0, 0, moerr.NewInvalidInputf(parseErrorContext(ctx), "unknown type %T", node)

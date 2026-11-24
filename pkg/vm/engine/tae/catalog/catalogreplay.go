@@ -14,8 +14,11 @@
 package catalog
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -37,7 +41,7 @@ const (
 )
 
 type ObjectListReplayer interface {
-	Submit(uint64, func())
+	Submit(context.Context, uint64, func()) error
 }
 
 //#region Replay WAL related
@@ -295,113 +299,248 @@ func (catalog *Catalog) onReplayUpdateObject(
 
 //#region Replay Checkpoint related
 
-func (catalog *Catalog) RelayFromSysTableObjects(
+type replayTableKey struct {
+	id   uint64
+	name string
+}
+
+type replayTable struct {
+	db     *DBEntry
+	id     uint64
+	schema *Schema
+	// Missing sequence metadata must not silently renumber evolved columns.
+	nonOrdinalSeq bool
+	missingSeq    bool
+}
+
+func replayVector(bat *containers.Batch, name string) *vector.Vector {
+	idx, ok := bat.Nameidx[name]
+	if !ok {
+		return nil
+	}
+	return bat.Vecs[idx].GetDownstreamVector()
+}
+
+func replayFixed[T any](bat *containers.Batch, name string, row int) T {
+	v := replayVector(bat, name)
+	if v == nil || v.IsNull(uint64(row)) {
+		var zero T
+		return zero
+	}
+	return vector.GetFixedAtNoTypeCheck[T](v, row)
+}
+
+func replayString(bat *containers.Batch, name string, row int) string {
+	v := replayVector(bat, name)
+	if v == nil || v.IsNull(uint64(row)) {
+		return ""
+	}
+	return v.GetStringAt(row)
+}
+
+// replayBytes returns a view that must be copied before the scanner advances.
+func replayBytes(bat *containers.Batch, name string, row int) []byte {
+	v := replayVector(bat, name)
+	if v == nil || v.IsNull(uint64(row)) {
+		return nil
+	}
+	return v.GetBytesAt(row)
+}
+
+func requireReplayFields(bat *containers.Batch, row int, names ...string) error {
+	for _, name := range names {
+		v := replayVector(bat, name)
+		if v == nil || v.IsNull(uint64(row)) {
+			return moerr.NewInternalErrorNoCtxf("missing required catalog field %s", name)
+		}
+	}
+	return nil
+}
+
+// ReplayFromSysTableObjects rebuilds the catalog without retaining raw system
+// table batches. Only owned schemas and their lookup by table identity remain
+// live while columns are read. Replay tasks do not borrow scanner buffers.
+func (catalog *Catalog) ReplayFromSysTableObjects(
 	ctx context.Context,
 	readTxn txnif.AsyncTxn,
-	readFunc func(context.Context, *TableEntry, txnif.AsyncTxn) *containers.Batch,
-	sortFunc func([]containers.Vector, int) error,
+	scan func(context.Context, *TableEntry, txnif.AsyncTxn, func(*containers.Batch, int) error) error,
 	replayer ObjectListReplayer,
-) (closeCB []func()) {
-	closeCB = make([]func(), 0)
+) error {
 	db, err := catalog.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	dbTbl, err := db.GetTableEntryByID(pkgcatalog.MO_DATABASE_ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	tableTbl, err := db.GetTableEntryByID(pkgcatalog.MO_TABLES_ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	columnTbl, err := db.GetTableEntryByID(pkgcatalog.MO_COLUMNS_ID)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	////  Note: do not use ckp-end as txnNode
-	// Running
-	// ------+------+---------+----+-----------+-> time
-	//       |      |         |    |           |
-	//  create-db-s |         |  ckp-end     drop-db-c
-	//         create-db-c  drop-db-s
-	//
-	// Replay
-	// -----------------------+----+-----------+-> time
-	//                        |    |           |
-	//                  drop-db-s  |          drop-db-c
-	//                             ckp-end
-	//                             create-db-s
-	//                             create-db-c
-	// create-db entry was replayed from checkpoint and drop-db entry was replayed from WAL
-	// If ckp-end was used, the create-db and drop-db are disordered, leading to ExpectedDup error
-
+	// Keep checkpoint-created entries before WAL operations that may drop them.
 	panguEpoch := types.BuildTS(42424242, 0)
-	txnNode := &txnbase.TxnMVCCNode{
-		Start:   panguEpoch,
-		Prepare: panguEpoch,
-		End:     panguEpoch,
-	}
-
-	// replay database catalog
-	if dbBatch := readFunc(ctx, dbTbl, readTxn); dbBatch != nil {
-		closeCB = append(closeCB, dbBatch.Close)
-		catalog.ReplayMODatabase(ctx, txnNode, dbBatch)
-	}
-
-	// replay table catalog
-	if tableBatch := readFunc(ctx, tableTbl, readTxn); tableBatch != nil {
-		if err := sortFunc(
-			tableBatch.Vecs, pkgcatalog.MO_TABLES_REL_ID_IDX,
-		); err != nil {
-			panic(err)
+	txnNode := &txnbase.TxnMVCCNode{Start: panguEpoch, Prepare: panguEpoch, End: panguEpoch}
+	if err = scan(ctx, dbTbl, readTxn, func(bat *containers.Batch, row int) error {
+		if err := requireReplayFields(bat, row, pkgcatalog.SystemDBAttr_ID, pkgcatalog.SystemDBAttr_Name); err != nil {
+			return err
 		}
-		closeCB = append(closeCB, tableBatch.Close)
-		columnBatch := readFunc(ctx, columnTbl, readTxn)
-		if err := sortFunc(
-			columnBatch.Vecs, pkgcatalog.MO_COLUMNS_ATT_RELNAME_ID_IDX,
-		); err != nil {
-			panic(err)
-		}
-		closeCB = append(closeCB, columnBatch.Close)
-		catalog.ReplayMOTables(
-			ctx, txnNode, tableBatch, columnBatch, replayer,
-		)
-	}
-	// logutil.Info(catalog.SimplePPString(common.PPL3))
-	return
-}
-
-func (catalog *Catalog) ReplayMODatabase(ctx context.Context, txnNode *txnbase.TxnMVCCNode, bat *containers.Batch) {
-	dbids := vector.MustFixedColNoTypeCheck[uint64](
-		bat.GetVectorByName(pkgcatalog.SystemDBAttr_ID).GetDownstreamVector(),
-	)
-	tenantIDs := vector.MustFixedColNoTypeCheck[uint32](
-		bat.GetVectorByName(pkgcatalog.SystemDBAttr_AccID).GetDownstreamVector(),
-	)
-	userIDs := vector.MustFixedColNoTypeCheck[uint32](
-		bat.GetVectorByName(pkgcatalog.SystemDBAttr_Creator).GetDownstreamVector(),
-	)
-	roleIDs := vector.MustFixedColNoTypeCheck[uint32](
-		bat.GetVectorByName(pkgcatalog.SystemDBAttr_Owner).GetDownstreamVector(),
-	)
-	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](
-		bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateAt).GetDownstreamVector(),
-	)
-	for i := 0; i < bat.Length(); i++ {
-		dbid := dbids[i]
-		name := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).GetDownstreamVector().GetStringAt(i)
-		tenantID := tenantIDs[i]
-		userID := userIDs[i]
-		roleID := roleIDs[i]
-		createAt := createAts[i]
-		createSql := bat.GetVectorByName(pkgcatalog.SystemDBAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
-		datType := bat.GetVectorByName(pkgcatalog.SystemDBAttr_Type).GetDownstreamVector().GetStringAt(i)
 		catalog.onReplayCreateDB(
-			dbid, name, txnNode, tenantID, userID, roleID, createAt, createSql, datType,
+			replayFixed[uint64](bat, pkgcatalog.SystemDBAttr_ID, row),
+			replayString(bat, pkgcatalog.SystemDBAttr_Name, row), txnNode,
+			replayFixed[uint32](bat, pkgcatalog.SystemDBAttr_AccID, row),
+			replayFixed[uint32](bat, pkgcatalog.SystemDBAttr_Creator, row),
+			replayFixed[uint32](bat, pkgcatalog.SystemDBAttr_Owner, row),
+			replayFixed[types.Timestamp](bat, pkgcatalog.SystemDBAttr_CreateAt, row),
+			replayString(bat, pkgcatalog.SystemDBAttr_CreateSQL, row),
+			replayString(bat, pkgcatalog.SystemDBAttr_Type, row),
 		)
+		return nil
+	}); err != nil {
+		return err
 	}
+
+	var tables []*replayTable
+	byKey := make(map[replayTableKey][]*replayTable)
+	if err = scan(ctx, tableTbl, readTxn, func(bat *containers.Batch, row int) error {
+		if err := requireReplayFields(bat, row, pkgcatalog.SystemRelAttr_ID, pkgcatalog.SystemRelAttr_DBID, pkgcatalog.SystemRelAttr_Name); err != nil {
+			return err
+		}
+		tableDB, err := catalog.GetDatabaseByID(replayFixed[uint64](bat, pkgcatalog.SystemRelAttr_DBID, row))
+		if err != nil {
+			return err
+		}
+		table := &replayTable{
+			db:     tableDB,
+			id:     replayFixed[uint64](bat, pkgcatalog.SystemRelAttr_ID, row),
+			schema: NewEmptySchema(replayString(bat, pkgcatalog.SystemRelAttr_Name, row)),
+		}
+		schema := table.schema
+		schema.Comment = replayString(bat, pkgcatalog.SystemRelAttr_Comment, row)
+		schema.Version = replayFixed[uint32](bat, pkgcatalog.SystemRelAttr_Version, row)
+		schema.CatalogVersion = replayFixed[uint32](bat, pkgcatalog.SystemRelAttr_CatalogVersion, row)
+		schema.Partitioned = replayFixed[int8](bat, pkgcatalog.SystemRelAttr_Partitioned, row)
+		schema.Partition = replayString(bat, pkgcatalog.SystemRelAttr_Partition, row)
+		schema.Relkind = replayString(bat, pkgcatalog.SystemRelAttr_Kind, row)
+		schema.Createsql = replayString(bat, pkgcatalog.SystemRelAttr_CreateSQL, row)
+		schema.View = replayString(bat, pkgcatalog.SystemRelAttr_ViewDef, row)
+		schema.Constraint = bytes.Clone(replayBytes(bat, pkgcatalog.SystemRelAttr_Constraint, row))
+		schema.AcInfo.RoleID = replayFixed[uint32](bat, pkgcatalog.SystemRelAttr_Owner, row)
+		schema.AcInfo.UserID = replayFixed[uint32](bat, pkgcatalog.SystemRelAttr_Creator, row)
+		schema.AcInfo.CreateAt = replayFixed[types.Timestamp](bat, pkgcatalog.SystemRelAttr_CreateAt, row)
+		schema.AcInfo.TenantID = replayFixed[uint32](bat, pkgcatalog.SystemRelAttr_AccID, row)
+		// Unmarshal while the source block is alive; the schema owns the result.
+		if err := schema.restoreExtra(replayBytes(bat, pkgcatalog.SystemRelAttr_ExtraInfo, row)); err != nil {
+			return err
+		}
+		if schema.Extra.BlockMaxRows == 0 {
+			schema.Extra.BlockMaxRows = objectio.BlockMaxRows
+		}
+		if schema.Extra.ObjectMaxBlocks == 0 {
+			schema.Extra.ObjectMaxBlocks = uint32(options.DefaultBlocksPerObject)
+		}
+		tables = append(tables, table)
+		key := replayTableKey{id: table.id, name: schema.Name}
+		byKey[key] = append(byKey[key], table)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(tables) == 0 {
+		return nil
+	}
+	if err = scan(ctx, columnTbl, readTxn, func(bat *containers.Batch, row int) error {
+		if err := requireReplayFields(bat, row, pkgcatalog.SystemColAttr_RelID, pkgcatalog.SystemColAttr_RelName); err != nil {
+			return err
+		}
+		key := replayTableKey{
+			id:   replayFixed[uint64](bat, pkgcatalog.SystemColAttr_RelID, row),
+			name: replayString(bat, pkgcatalog.SystemColAttr_RelName, row),
+		}
+		matches := byKey[key]
+		if len(matches) == 0 {
+			return nil
+		}
+		if err := requireReplayFields(bat, row, pkgcatalog.SystemColAttr_Name, pkgcatalog.SystemColAttr_Type, pkgcatalog.SystemColAttr_Num); err != nil {
+			return err
+		}
+		for _, table := range matches {
+			if err := table.schema.readReplayColumn(bat, row); err != nil {
+				return err
+			}
+			def := table.schema.ColDefs[len(table.schema.ColDefs)-1]
+			seqVec := replayVector(bat, pkgcatalog.SystemColAttr_Seqnum)
+			if !def.PhyAddr {
+				if seqVec == nil || seqVec.IsNull(uint64(row)) {
+					table.missingSeq = true
+				} else {
+					table.nonOrdinalSeq = table.nonOrdinalSeq || int(def.SeqNum) != def.Idx
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// The old replay sorts by table ID before submission. Keep that ordering,
+	// and replay multiple visible versions of an ID in version order.
+	slices.SortStableFunc(tables, func(a, b *replayTable) int {
+		if order := cmp.Compare(a.id, b.id); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.schema.Version, b.schema.Version)
+	})
+	for _, table := range tables {
+		if err := ctx.Err(); err != nil {
+			return context.Cause(ctx)
+		}
+		nextSeq := table.schema.Extra.NextColSeqnum
+		if nextSeq > uint32(objectio.SEQNUM_UPPER) {
+			return moerr.NewInternalErrorNoCtxf("catalog replay table %d has an invalid column sequence high water mark", table.id)
+		}
+		if nextSeq == 0 && table.nonOrdinalSeq {
+			return moerr.NewInternalErrorNoCtxf("catalog replay table %d is missing column sequence metadata", table.id)
+		}
+		if nextSeq > 0 {
+			if table.missingSeq {
+				return moerr.NewInternalErrorNoCtxf("catalog replay table %d has a column without a sequence number", table.id)
+			}
+			for _, def := range table.schema.ColDefs {
+				if !def.PhyAddr && uint32(def.SeqNum) >= nextSeq {
+					return moerr.NewInternalErrorNoCtxf("catalog replay table %d has a column sequence beyond its high water mark", table.id)
+				}
+			}
+		}
+		slices.SortStableFunc(table.schema.ColDefs, func(a, b *ColDef) int {
+			return cmp.Compare(a.Idx, b.Idx)
+		})
+		if err := table.schema.Finalize(true); err != nil {
+			return err
+		}
+		if table.schema.PhyAddrKey == nil || table.schema.PhyAddrKey.Type.Oid != types.T_Rowid {
+			return moerr.NewInternalErrorNoCtxf("catalog replay table %d has no valid physical row ID column", table.id)
+		}
+		if len(table.schema.SeqnumMap) != len(table.schema.ColDefs) {
+			return moerr.NewInternalErrorNoCtxf("catalog replay table %d has duplicate column sequence numbers", table.id)
+		}
+	}
+	for _, table := range tables {
+		if err := ctx.Err(); err != nil {
+			return context.Cause(ctx)
+		}
+		if err := replayer.Submit(ctx, table.db.ID, func() {
+			catalog.onReplayCreateTable(table.db, table.id, table.schema, txnNode)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (catalog *Catalog) onReplayCreateDB(
@@ -441,77 +580,8 @@ func (catalog *Catalog) onReplayCreateDB(
 	db.InsertLocked(un)
 }
 
-func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.TxnMVCCNode, tblBat, colBat *containers.Batch, replayer ObjectListReplayer) {
-	tids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector())
-	dbids := vector.MustFixedColNoTypeCheck[uint64](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).GetDownstreamVector())
-	versions := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).GetDownstreamVector())
-	catalogVersions := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion).GetDownstreamVector())
-	partitioneds := vector.MustFixedColNoTypeCheck[int8](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).GetDownstreamVector())
-	roleIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Owner).GetDownstreamVector())
-	userIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).GetDownstreamVector())
-	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).GetDownstreamVector())
-	tenantIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).GetDownstreamVector())
-
-	colTids := vector.MustFixedColNoTypeCheck[uint64](colBat.GetVectorByName(pkgcatalog.SystemColAttr_RelID).GetDownstreamVector())
-	nullables := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_NullAbility).GetDownstreamVector())
-	isHiddens := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsHidden).GetDownstreamVector())
-	clusterbys := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsClusterBy).GetDownstreamVector())
-	autoIncrements := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsAutoIncrement).GetDownstreamVector())
-	idxes := vector.MustFixedColNoTypeCheck[int32](colBat.GetVectorByName(pkgcatalog.SystemColAttr_Num).GetDownstreamVector())
-	seqNums := vector.MustFixedColNoTypeCheck[uint16](colBat.GetVectorByName(pkgcatalog.SystemColAttr_Seqnum).GetDownstreamVector())
-
-	schemaOffset := 0
-	for i := 0; i < tblBat.Length(); i++ {
-		startOffset := schemaOffset
-		tid := tids[i]
-		for i := startOffset; i < len(colTids); i++ {
-			if tid != colTids[i] {
-				schemaOffset = i
-				break
-			}
-		}
-		replayFn := func() {
-			dbid := dbids[i]
-			name := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).GetDownstreamVector().GetStringAt(i)
-			schema := NewEmptySchema(name)
-			schema.ReadFromBatch(
-				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset,
-				func(currentName string, currentTid uint64) (goNext bool) {
-					return currentName == name && currentTid == tid
-				},
-			)
-			schema.Comment = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).GetDownstreamVector().GetStringAt(i)
-			schema.Version = versions[i]
-			schema.CatalogVersion = catalogVersions[i]
-			schema.Partitioned = partitioneds[i]
-			schema.Partition = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).GetDownstreamVector().GetStringAt(i)
-			schema.Relkind = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).GetDownstreamVector().GetStringAt(i)
-			schema.Createsql = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).GetDownstreamVector().GetStringAt(i)
-			schema.View = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).GetDownstreamVector().GetStringAt(i)
-			schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().CloneBytesAt(i)
-			schema.AcInfo = accessInfo{}
-			schema.AcInfo.RoleID = roleIDs[i]
-			schema.AcInfo.UserID = userIDs[i]
-			schema.AcInfo.CreateAt = createAts[i]
-			schema.AcInfo.TenantID = tenantIDs[i]
-			// unmarshal before releasing, no need to copy
-			extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).GetDownstreamVector().GetBytesAt(i)
-			schema.MustRestoreExtra(extra)
-			if err := schema.Finalize(true); err != nil {
-				panic(err)
-			}
-			catalog.onReplayCreateTable(dbid, tid, schema, txnNode)
-		}
-		replayer.Submit(dbids[i], replayFn)
-	}
-}
-
-func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, txnNode *txnbase.TxnMVCCNode) {
+func (catalog *Catalog) onReplayCreateTable(db *DBEntry, tid uint64, schema *Schema, txnNode *txnbase.TxnMVCCNode) {
 	catalog.OnReplayTableID(tid)
-	db, err := catalog.GetDatabaseByID(dbid)
-	if err != nil {
-		panic(err)
-	}
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAtLocked()
@@ -673,49 +743,6 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 		next.objData = obj.objData
 	}
 }
-func (catalog *Catalog) OnReplayObjectBatch(
-	replayer ObjectListReplayer,
-	objectInfo *containers.Batch,
-	isTombstone bool,
-	forSys bool,
-) {
-	tids := vector.MustFixedColNoTypeCheck[uint64](
-		objectInfo.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
-	)
-	dbids := vector.MustFixedColNoTypeCheck[uint64](
-		objectInfo.GetVectorByName(SnapshotAttr_DBID).GetDownstreamVector(),
-	)
-	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](
-		objectInfo.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector(),
-	)
-	prepareTSs := vector.MustFixedColNoTypeCheck[types.TS](
-		objectInfo.GetVectorByName(txnbase.SnapshotAttr_PrepareTS).GetDownstreamVector(),
-	)
-	startTSs := vector.MustFixedColNoTypeCheck[types.TS](
-		objectInfo.GetVectorByName(txnbase.SnapshotAttr_StartTS).GetDownstreamVector(),
-	)
-	createTSs := vector.MustFixedColNoTypeCheck[types.TS](
-		objectInfo.GetVectorByName(EntryNode_CreateAt).GetDownstreamVector(),
-	)
-	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](
-		objectInfo.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
-	)
-	objs := objectInfo.GetVectorByName(ObjectAttr_ObjectStats).GetDownstreamVector()
-	for i, tid := range tids {
-		if forSys != pkgcatalog.IsSystemTable(tid) {
-			continue
-		}
-		replayFn := func() {
-			dbid := dbids[i]
-			objectNode := ReadObjectInfoTuple(objs, i)
-			sid := objectNode.ObjectName().ObjectId()
-			catalog.onReplayCheckpointObject(
-				dbid, tid, sid, createTSs[i], deleteTSs[i], startTSs[i], prepareTSs[i], commitTSs[i], objectNode, isTombstone)
-		}
-		replayer.Submit(tid, replayFn)
-	}
-}
-
 func replayCheckpointDeleteObject(
 	rel *TableEntry,
 	obj *ObjectEntry,
