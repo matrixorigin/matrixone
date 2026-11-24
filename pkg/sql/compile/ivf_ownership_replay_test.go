@@ -23,13 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -137,7 +139,7 @@ func TestIVFEntriesOwnershipAcrossReplayPhases(t *testing.T) {
 	require.NoError(t, postFlushMem.Close())
 	require.Equal(t, 1, before.ApproxInMemRows(), "other replica still precedes the flush")
 
-	keys := func(ownerCtx context.Context, p *logtailreplay.PartitionState, cnidx, cncnt int32, partitioned, remote bool) []string {
+	keys := func(p *logtailreplay.PartitionState, cnidx, cncnt int32, partitioned, remote bool) []string {
 		t.Helper()
 		node := ivfTestEntriesScanNode()
 		if partitioned {
@@ -160,7 +162,7 @@ func TestIVFEntriesOwnershipAcrossReplayPhases(t *testing.T) {
 			}
 		}
 		scope := Scope{NodeInfo: engine.Node{CNCNT: cncnt, CNIDX: cnidx}, DataSource: &Source{node: node}, IsRemote: remote}
-		rsp := scope.rangesShuffleParam(ownerCtx)
+		rsp := scope.rangesShuffleParam()
 		blocks := objectio.PreAllocBlockInfoSlice(2)
 		err := readutil.FilterTxnObjects(ctx, engine.RangesParam{Policy: policy, Rsp: rsp}, snapshot.ToTimestamp(), nil, nil, nil, nil, nil, p, nil, nil, &blocks, nil, fs, false)
 		require.NoError(t, err)
@@ -183,17 +185,13 @@ func TestIVFEntriesOwnershipAcrossReplayPhases(t *testing.T) {
 		return out
 	}
 
-	legacyCtx := context.WithValue(ctx, defines.RemoteRunContext{}, true)
-	markedRemoteCtx := context.WithValue(legacyCtx, stableIvfOwnershipKey{}, true)
 	for _, route := range []struct {
 		name           string
-		ctx            context.Context
 		partitioned    bool
 		physicalRemote bool
 	}{
-		{name: "parallel-table-function", ctx: markedRemoteCtx, partitioned: true},
-		{name: "local-nested-executor", ctx: ctx, partitioned: true},
-		{name: "filtered-generic-fanout", ctx: ctx, physicalRemote: true},
+		{name: "parallel-table-function-locally-nested-scan", partitioned: true},
+		{name: "filtered-generic-fanout", physicalRemote: true},
 	} {
 		t.Run(route.name, func(t *testing.T) {
 			for _, phases := range []struct {
@@ -206,24 +204,15 @@ func TestIVFEntriesOwnershipAcrossReplayPhases(t *testing.T) {
 				{"post-pre", after, before},
 			} {
 				t.Run(phases.name, func(t *testing.T) {
-					require.Equal(t, []string{pk}, keys(route.ctx, phases.owner, 0, 2, route.partitioned, false))
-					require.Empty(t, keys(route.ctx, phases.other, 1, 2, route.partitioned, route.physicalRemote))
+					require.Equal(t, []string{pk}, keys(phases.owner, 0, 2, route.partitioned, false))
+					require.Empty(t, keys(phases.other, 1, 2, route.partitioned, route.physicalRemote))
 				})
 			}
 		})
 	}
 	t.Run("one-CN", func(t *testing.T) {
-		require.Equal(t, []string{pk}, keys(ctx, before, 0, 1, false, false))
-		require.Equal(t, []string{pk}, keys(ctx, after, 0, 1, false, false))
-	})
-	t.Run("legacy-wire-reproduces-both-failures", func(t *testing.T) {
-		read := func(owner, other *logtailreplay.PartitionState) []string {
-			return append(keys(legacyCtx, owner, 0, 2, true, false), keys(legacyCtx, other, 1, 2, true, false)...)
-		}
-		require.Equal(t, []string{pk}, read(before, before))
-		require.Equal(t, []string{pk}, read(after, after))
-		require.Equal(t, []string{pk, pk}, read(before, after))
-		require.Empty(t, read(after, before))
+		require.Equal(t, []string{pk}, keys(before, 0, 1, false, false))
+		require.Equal(t, []string{pk}, keys(after, 0, 1, false, false))
 	})
 	t.Run("immutable-distribution-unchanged", func(t *testing.T) {
 		partitionsSeen := map[int32]bool{}
@@ -234,10 +223,7 @@ func TestIVFEntriesOwnershipAcrossReplayPhases(t *testing.T) {
 			var kept []int32
 			for idx := int32(0); idx < 3; idx++ {
 				scope := Scope{NodeInfo: engine.Node{CNCNT: 3, CNIDX: idx}, DataSource: &Source{node: ivfTestEntriesScanNode()}}
-				fixed := plan2.ShouldSkipObjByShuffle(scope.rangesShuffleParam(ctx), &stats)
-				legacy := plan2.ShouldSkipObjByShuffle(scope.rangesShuffleParam(legacyCtx), &stats)
-				require.Equal(t, legacy, fixed)
-				if !fixed {
+				if !plan2.ShouldSkipObjByShuffle(scope.rangesShuffleParam(), &stats) {
 					kept = append(kept, idx)
 					partitionsSeen[idx] = true
 				}
@@ -246,7 +232,36 @@ func TestIVFEntriesOwnershipAcrossReplayPhases(t *testing.T) {
 		}
 		require.Len(t, partitionsSeen, 3)
 	})
-	t.Logf("snapshot=%s flush-start=%s flush-commit=%s object=%s legacy-hash-owner=%d", snapshot.ToString(), flushStart.ToString(), flushCommit.ToString(), objID.String(), plan2.IVFObjectIDHashToRange(objID, 2))
+	t.Logf("snapshot=%s flush-start=%s flush-commit=%s object=%s hash-partition=%d", snapshot.ToString(), flushStart.ToString(), flushCommit.ToString(), objID.String(), plan2.IVFObjectIDHashToRange(objID, 2))
+}
+
+// Both distributed IVF paths use ordinary pipeline instructions. The scan's
+// existing partition fields suffice to determine who may read appendable rows.
+func TestIVFDistributedScopesKeepNativeOperators(t *testing.T) {
+	c, node := ivfCandidateCompileFixture(t, 2, nil)
+	scopes, err := c.compileIvfSearchParallel(node)
+	require.NoError(t, err)
+	t.Cleanup(func() { ReleaseScopes(scopes) })
+	require.Len(t, scopes, 2)
+	scan := newScope(Remote)
+	t.Cleanup(scan.release)
+	scan.Proc = testutil.NewProcess(t)
+	t.Cleanup(scan.Proc.Free)
+	scan.Proc.BuildPipelineContext(scan.Proc.GetTopContext())
+	scan.DataSource = &Source{node: ivfTestEntriesScanNode()}
+	scan.NodeInfo = engine.Node{CNCNT: 2, CNIDX: 1}
+	scan.setRootOperator(table_scan.NewArgument())
+	for _, tc := range []struct {
+		scope *Scope
+		op    vm.OpType
+	}{{scopes[1], vm.TableFunction}, {scan, vm.TableScan}} {
+		data, err := encodeScope(tc.scope)
+		require.NoError(t, err)
+		var p pipeline.Pipeline
+		require.NoError(t, p.Unmarshal(data))
+		require.Len(t, p.InstructionList, 1)
+		require.Equal(t, int32(tc.op), p.InstructionList[0].GetOp())
+	}
 }
 
 func ivfTestImmutableStats(t *testing.T, id *types.Objectid) objectio.ObjectStats {

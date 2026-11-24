@@ -1045,15 +1045,11 @@ type RangesShuffleParam struct {
 	CNCNT     int32 // number of all cns
 	CNIDX     int32 // cn index , starts from 0
 	IsLocalCN bool
-	// ShuffleByObjectID assigns IVF persisted objects by their complete object ID.
-	ShuffleByObjectID bool
-	// KeepAppendableLocal keeps the persisted representation of an appendable
-	// object on the same logical partition as its in-memory representation.
-	// Unversioned remote IVF pipelines retain their legacy hashing rule.
-	KeepAppendableLocal bool
-	ShuffleRangeUint64  []uint64
-	ShuffleRangeInt64   []int64
-	Init                bool
+	// ShuffleByObjectID assigns immutable IVF objects by their complete object ID.
+	ShuffleByObjectID  bool
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
+	Init               bool
 }
 
 type RangesParam struct {

@@ -1028,7 +1028,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		return nil
 	}
 
-	rsp := s.rangesShuffleParam(c.proc.GetTopContext())
+	rsp := s.rangesShuffleParam()
 
 	policyForLocal := localRangesPolicy(s.DataSource.node, s.NodeInfo.CNIDX)
 	policyForRemote := engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData)
@@ -1068,19 +1068,17 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	return err
 }
 
-func (s *Scope) rangesShuffleParam(ctx context.Context) *engine.RangesShuffleParam {
+func (s *Scope) rangesShuffleParam() *engine.RangesShuffleParam {
 	node := s.DataSource.node
 	ivf := plan2.IsIvfSearchEntriesInternalScan(node)
-	stable := ivf && stableIvfOwnership(ctx)
 	return &engine.RangesShuffleParam{
-		Node:                node,
-		CNCNT:               s.NodeInfo.CNCNT,
-		CNIDX:               s.NodeInfo.CNIDX,
-		ShuffleByObjectID:   ivf,
-		KeepAppendableLocal: stable,
+		Node:              node,
+		CNCNT:             s.NodeInfo.CNCNT,
+		CNIDX:             s.NodeInfo.CNIDX,
+		ShuffleByObjectID: ivf,
 		// The entries query runs locally inside each outer table-function
 		// worker. Physical locality alone does not identify the memtable owner.
-		IsLocalCN: !s.IsRemote && (!stable || s.NodeInfo.CNIDX == 0),
+		IsLocalCN: !s.IsRemote && (!ivf || s.NodeInfo.CNIDX == 0),
 	}
 }
 

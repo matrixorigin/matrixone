@@ -269,9 +269,6 @@ type scopeContext struct {
 	children []*scopeContext
 	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
-	// Only consulted on the fragment root; all affected instructions must
-	// use the same IVF ownership contract.
-	ivfOwnership ivfOwnershipMode
 }
 
 // Compile contains all the information needed for compilation.

@@ -172,7 +172,7 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
 	}
-	if objstats.GetAppendable() && (!rsp.ShuffleByObjectID || rsp.KeepAppendableLocal) {
+	if objstats.GetAppendable() {
 		// A snapshot can see these rows in the coordinator's replay memtable
 		// or in the original object's snapshot file after another CN replays a
 		// later flush. Both representations must be owned by the same reader.
