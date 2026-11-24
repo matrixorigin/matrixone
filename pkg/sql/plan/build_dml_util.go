@@ -128,6 +128,11 @@ type deleteNodeInfo struct {
 	pkTyp              plan.Type
 	lockTable          bool
 	preserveProjection bool
+	assertIndexEntry   bool
+	indexEntryRequired *Expr
+	indexEntryRowIDPos int
+	indexEntryName     string
+	indexEntryTable    string
 }
 
 type ivfIncludeSourceCol struct {
@@ -2272,6 +2277,19 @@ func makeOneDeletePlan(
 	isSK bool,
 	canTruncate bool,
 ) (int32, error) {
+	if delNodeInfo.assertIndexEntry {
+		rowIdTyp := types.T_Rowid.ToType()
+		rowID := &plan.Expr{Typ: makePlan2Type(&rowIdTyp), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(delNodeInfo.indexEntryRowIDPos)}}}
+		entryExists, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{rowID})
+		if err != nil {
+			return -1, err
+		}
+		assertExpr, err := makeDeleteIndexEntryAssert(builder, entryExists, delNodeInfo.indexEntryRequired, delNodeInfo.indexEntryName, delNodeInfo.indexEntryTable)
+		if err != nil {
+			return -1, err
+		}
+		lastNodeId = builder.appendNode(&Node{NodeType: plan.Node_FILTER, Children: []int32{lastNodeId}, FilterList: []*plan.Expr{assertExpr}, ProjectList: getProjectionByLastNode(builder, lastNodeId)}, bindCtx)
+	}
 	if isUK || isSK {
 
 		// For the hidden table of the secondary index, there will be no null situation, only unique key hidden table need this filter
@@ -3528,6 +3546,22 @@ func appendPreInsertPlan(
 	return sourceStep, nil
 }
 
+func makeDeleteIndexEntryAssert(builder *QueryBuilder, entryExists, entryRequired *Expr, indexName, tableName string) (*Expr, error) {
+	notRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*Expr{entryRequired})
+	if err != nil {
+		return nil, err
+	}
+	valid, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{notRequired, entryExists})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{
+		valid,
+		makePlan2StringConstExprWithType(fmt.Sprintf("DELETE found no required entry for index %s on table %s; index is corrupted, stop writes and rebuild it from base rows", indexName, tableName)),
+		makePlan2StringConstExprWithType("index_corrupt"),
+	})
+}
+
 func appendDeleteIndexTablePlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -3538,6 +3572,7 @@ func appendDeleteIndexTablePlan(
 	posMap map[string]int,
 	baseNodeId int32,
 	baseTableDef *TableDef,
+	entryRowIDPosOut *int,
 	isUK bool,
 ) (int32, error) {
 	/********
@@ -3547,6 +3582,7 @@ func appendDeleteIndexTablePlan(
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
+	baseProjectionLength := len(projectList)
 	rfTag := builder.genNewMsgTag()
 
 	var rightRowIdPos int32 = -1
@@ -3592,6 +3628,9 @@ func appendDeleteIndexTablePlan(
 	leftId := builder.appendNode(leftscan, bindCtx)
 
 	// append projection
+	if entryRowIDPosOut != nil {
+		*entryRowIDPosOut = baseProjectionLength
+	}
 	projectList = append(projectList, &plan.Expr{
 		Typ: uniqueTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
@@ -3790,6 +3829,7 @@ func appendDeleteIndexTablePlan(
 	if hasRuntimeFilter {
 		recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], joinNode, builder)
 	}
+
 	return lastNodeId, nil
 }
 
@@ -5440,6 +5480,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	}
 	var lastNodeId int32
 	var uniqueDeleteIdx int
+	var indexEntryRowIDPos int
 	var uniqueTblPkPos int
 	var uniqueTblPkTyp Type
 
@@ -5453,7 +5494,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		if !isUpdate {
 			ownerTable = delCtx.tableDef
 		}
-		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, ownerTable, isUk)
+		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, ownerTable, &indexEntryRowIDPos, isUk)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
 		uniqueTblPkTyp = uniqueTableDef.Cols[0].Typ
@@ -5533,6 +5574,40 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 		delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
+		if !isUpdate && isSK && !delCtx.isDeleteWithoutFilters {
+			requiredParts := make([]*Expr, 0, len(indexdef.Parts))
+			for _, part := range indexdef.Parts {
+				part = catalog.ResolveAlias(part)
+				pos, ok := posMap[part]
+				if !ok || pos < 0 || pos >= len(builder.qry.Nodes[lastNodeId].ProjectList) {
+					putDeleteNodeInfo(delNodeInfo)
+					return moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
+				}
+				value := &plan.Expr{Typ: builder.qry.Nodes[lastNodeId].ProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(pos)}}}
+				partRequired, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
+				if bindErr != nil {
+					putDeleteNodeInfo(delNodeInfo)
+					return bindErr
+				}
+				requiredParts = append(requiredParts, partRequired)
+			}
+			var bindErr error
+			required := makePlan2BoolConstExprWithType(true)
+			if len(requiredParts) == 1 {
+				required = requiredParts[0]
+			} else if len(requiredParts) > 1 {
+				required, bindErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", requiredParts)
+				if bindErr != nil {
+					putDeleteNodeInfo(delNodeInfo)
+					return bindErr
+				}
+			}
+			delNodeInfo.assertIndexEntry = true
+			delNodeInfo.indexEntryName = indexdef.IndexName
+			delNodeInfo.indexEntryTable = delCtx.tableDef.Name
+			delNodeInfo.indexEntryRequired = required
+			delNodeInfo.indexEntryRowIDPos = indexEntryRowIDPos
+		}
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 		putDeleteNodeInfo(delNodeInfo)
 		if err != nil {

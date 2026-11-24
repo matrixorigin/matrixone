@@ -556,6 +556,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			posMap,
 			lastNodeID,
 			nil,
+			nil,
 			true,
 		)
 
@@ -579,6 +580,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			nil,
 			false,
 		)
@@ -609,6 +611,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			nil,
 			true,
 		)
@@ -684,6 +687,16 @@ func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	assertPlanHasPrefixCount(t, "insert into constraint_test.single_idx_t values (1, 'abcdef-long') on duplicate key update val = values(val)", "val", 2)
 	assertPlanHasPrefixCount(t, "update constraint_test.single_idx_t set val = 'abcdef-long' where id = 1", "val", 2)
 	assertPlanHasPrefixCount(t, "delete from constraint_test.single_idx_t where id = 1", "val", 1)
+
+	// Composite ENUM secondary-index DELETEs use the legacy outer-join path,
+	// which keeps selected base rows visible long enough to reject a missing entry.
+	singleIdx.Cols[1].Typ = plan.Type{Id: int32(types.T_enum), Enumvalues: "x,y"}
+	singleIdx.Indexes[0].Parts = []string{"val", "id"}
+	singleIdx.Indexes[0].IndexAlgoParams = ""
+	singleIdxIndexTable.Cols[0].Typ = plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	logicPlan, err := runOneStmt(mock, t, "delete from constraint_test.single_idx_t where id = 1")
+	require.NoError(t, err)
+	require.True(t, updateFkPlanContainsFunc(logicPlan.GetQuery(), "assert"), "composite ENUM DELETE must include the index-entry assertion")
 }
 
 func queryHasPrefixSubstring(query *plan.Query, colName string, length int64) bool {

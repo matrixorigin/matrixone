@@ -43,6 +43,28 @@ func TestClassifyIndexPKPart(t *testing.T) {
 	}
 }
 
+func TestIndexNeedsOwnerMatch(t *testing.T) {
+	table := &planpb.TableDef{Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id"}}
+	regular := catalog.MoIndexDefaultAlgo.ToString()
+	for _, tc := range []struct {
+		name   string
+		parts  []string
+		prefix map[string]int
+		unique bool
+		want   bool
+	}{
+		{name: "single nonunique key needs owner", parts: []string{"e"}, want: true},
+		{name: "composite serialized key carries full owner", parts: []string{"e", "ts"}, want: false},
+		{name: "prefix primary key needs full owner", parts: []string{"id", "e"}, prefix: map[string]int{"id": 1}, want: true},
+		{name: "unique key has no separate owner check", parts: []string{"e"}, unique: true, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := &planpb.IndexDef{TableExist: true, Unique: tc.unique, IndexAlgo: regular, Parts: tc.parts}
+			require.Equal(t, tc.want, indexNeedsOwnerMatch(table, idx, tc.prefix))
+		})
+	}
+}
+
 func TestIndexOwnerProbeKeySlot(t *testing.T) {
 	typ := planpb.Type{Id: int32(types.T_varchar)}
 	scan := &planpb.Node{

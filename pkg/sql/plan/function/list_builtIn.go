@@ -14599,6 +14599,9 @@ var supportedOthersBuiltIns = []FuncNew{
 								if errType == "fk_ambiguous_parent_mapping" {
 									return moerr.NewNotSupported(proc.Ctx, errMsg)
 								}
+								if errType == "index_corrupt" {
+									return moerr.NewIndexCorrupt(proc.Ctx, errMsg)
+								}
 								return moerr.NewInternalError(proc.Ctx, errMsg)
 							}
 							res.AppendMustValue(true)

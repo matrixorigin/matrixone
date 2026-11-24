@@ -1696,6 +1696,7 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrLockConflict:             false,
 	moerr.ErrRemoteLockWaitTimeout:    false,
 	moerr.ErrLockWaitTimeout:          false,
+	moerr.ErrIndexCorrupt:             true,
 	moerr.ErrTxnUnknown:               false,
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,
@@ -1788,6 +1789,8 @@ func newErrorRollbackWholeTxn(code uint16) error {
 		return moerr.NewRemoteLockWaitTimeoutNoCtx()
 	case moerr.ErrLockWaitTimeout:
 		return moerr.NewLockWaitTimeoutNoCtx()
+	case moerr.ErrIndexCorrupt:
+		return moerr.NewIndexCorrupt(context.Background(), "test")
 	case moerr.ErrTxnUnknown:
 		return moerr.NewTxnUnknown(context.Background(), "test")
 	case moerr.ErrBackendClosed:

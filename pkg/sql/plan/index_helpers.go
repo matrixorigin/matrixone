@@ -41,10 +41,12 @@ func classifyIndexPKPart(parts []string, pkName string, prefixLengths map[string
 }
 
 func indexNeedsOwnerMatch(tableDef *planpb.TableDef, indexDef *planpb.IndexDef, prefixLengths map[string]int) bool {
-	return tableDef != nil && tableDef.Pkey != nil && indexDef != nil &&
-		indexDef.TableExist && !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) &&
-		!catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo) &&
-		classifyIndexPKPart(indexDef.Parts, tableDef.Pkey.PkeyColName, prefixLengths) == indexPKPartPrefix
+	if tableDef == nil || tableDef.Pkey == nil || indexDef == nil || !indexDef.TableExist || indexDef.Unique ||
+		!catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) || catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo) {
+		return false
+	}
+	kind := classifyIndexPKPart(indexDef.Parts, tableDef.Pkey.PkeyColName, prefixLengths)
+	return kind == indexPKPartPrefix || (len(indexDef.Parts) == 1 && kind == indexPKPartAbsent)
 }
 
 func isSpatialIndexDef(idxDef *planpb.IndexDef) bool {

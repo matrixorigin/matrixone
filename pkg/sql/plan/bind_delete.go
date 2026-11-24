@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -371,6 +372,22 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		tableDef.Indexes = validIndexes
 
 		idxDefs := tableDef.Indexes
+		for _, idxDef := range idxDefs {
+			if idxDef.Unique || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+				continue
+			}
+			for _, part := range idxDef.Parts {
+				part = catalog.ResolveAlias(part)
+				colPos, ok := colName2Idx[i][part]
+				if !ok || colPos < 0 || int(colPos) >= len(selectNode.ProjectList) {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
+				}
+				typ := selectNode.ProjectList[colPos].Typ
+				if typ.Id == int32(types.T_enum) || typ.Enumvalues != "" {
+					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "DELETE with ENUM/SET secondary indexes uses the integrity-checking plan")
+				}
+			}
+		}
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
