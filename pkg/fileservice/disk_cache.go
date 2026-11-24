@@ -1104,11 +1104,19 @@ func (d *DiskCache) writeFileTo(
 	}
 
 	cleanup := func() error { return d.removeUnindexedFile(diskPath) }
+	// The download of a FilePrefetchObject a read started does not wait for the download
+	// of its path the read declined: it then publishes nothing.
+	p, readStarted := ctx.Value(fileDownloadKey{}).(*filePrefetchObject)
+	unpublished := false
 	if asyncFinalize {
 		var ok bool
 		if w.owner, ok = d.paths.tryAcquire(diskPath, cleanup); !ok {
 			return false, nil
 		}
+	} else if readStarted && p.readStarted && d.downloads.load(diskPath) != nil {
+		var ok bool
+		w.owner, ok = d.paths.tryAcquire(diskPath, cleanup)
+		unpublished = !ok
 	} else if w.owner, err = d.paths.acquire(ctx, diskPath, cleanup); err != nil {
 		return false, err
 	}
@@ -1132,14 +1140,19 @@ func (d *DiskCache) writeFileTo(
 	var dst io.Writer = f
 	if fill != notWholeFill {
 		_, indexFile := target.(indexFillTarget)
-		download = d.startDownload(diskPath, f.Name(), fill != contentFill, indexFile, bounds, taken)
-		taken = false
+		if unpublished {
+			download = newObjectDownload(f.Name(), false, bounds)
+			defer download.retire()
+		} else {
+			download = d.startDownload(diskPath, f.Name(), fill != contentFill, indexFile, bounds, taken)
+			taken = false
+			w.owner.first(func() { d.finishDownload(diskPath, download) })
+		}
 		// Its lead part holds the connection the download took.
 		download.begin(lead)
 		fileDownloadStarted(ctx, download)
 		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
-		w.owner.first(func() { d.finishDownload(diskPath, download) })
 	}
 
 	readCtx, idle := newIdleReader(ctx)
@@ -1192,6 +1205,9 @@ func (d *DiskCache) writeFileTo(
 		return false, err
 	}
 
+	if unpublished {
+		return false, nil
+	}
 	if download != nil && fill != rangeFill {
 		target.noteWritten(n)
 	}
