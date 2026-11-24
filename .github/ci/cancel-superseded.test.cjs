@@ -262,6 +262,7 @@ function coverageHarness({ children, parentOverride = {}, tick } = {}) {
   const sha = 'a'.repeat(40);
   const parent = { id: 600, run_attempt: 2, workflow_id: 42, event: 'pull_request_target',
     path: '.github/workflows/entrypoint.yaml', repository: { full_name: 'matrixorigin/matrixone' },
+    run_started_at: '2026-11-20T10:00:00Z', updated_at: '2026-11-20T11:00:00Z',
     head_sha: sha, status: 'completed', conclusion: 'cancelled', ...parentOverride };
   const child = (id, group, pool, overrides = {}) => ({ id, run_attempt: 1, workflow_id: 43,
     event: 'workflow_dispatch', path: '.github/workflows/coverage-standby-worker.yaml',
@@ -275,12 +276,18 @@ function coverageHarness({ children, parentOverride = {}, tick } = {}) {
   const actions = {
     getWorkflow: async ({ workflow_id }) => ({ data: { id: workflow_id === 'entrypoint.yaml' ? 42 : 43 } }),
     getWorkflowRunAttempt: async () => ({ data: { ...parent } }),
-    listWorkflowRuns: async ({ workflow_id, branch, event, status }) => {
+    listWorkflowRuns: async ({ workflow_id, branch, event, status, created, page, per_page }) => {
       assert.equal(workflow_id, 43);
       assert.equal(branch, 'main');
       assert.equal(event, 'workflow_dispatch');
-      const found = [...rows.values()].filter(run => run.status === status);
-      return { data: { total_count: found.length, workflow_runs: found } };
+      assert.equal(per_page, 100);
+      const [lo, hi] = created.split('..').map(Date.parse);
+      assert.ok(lo >= Date.parse(parent.run_started_at) && hi <= Date.parse(parent.updated_at) + 60000);
+      const found = [...rows.values()].filter(run => {
+        const when = Date.parse(run.created_at || parent.run_started_at);
+        return run.status === status && lo <= when && when <= hi;
+      });
+      return { data: { total_count: found.length, workflow_runs: found.slice((page-1)*100, page*100) } };
     },
     getWorkflowRun: async ({ run_id }) => ({ data: { ...rows.get(run_id) } }),
     cancelWorkflowRun: async ({ run_id }) => { calls.push(['cancel', run_id, elapsed]); },
@@ -297,6 +304,20 @@ function coverageHarness({ children, parentOverride = {}, tick } = {}) {
   } }, context, core, wait: async ms => { elapsed += ms; if (tick) tick(rows, parent, elapsed); } };
   return { rows, parent, child, calls, options, run: () => releaseCompletedCoverageWorkers(options) };
 }
+
+test('congested standby discovery paginates and only cancels the owned child', async () => {
+  for (const n of [101, 1001]) {
+    const h = coverageHarness({ children: [] });
+    for (let i = 0; i < n; i++) {
+      h.rows.set(i+1, h.child(i+1, 0, 'cs', { display_title: 'another parent',
+        created_at: new Date(Date.parse(h.parent.run_started_at) + i*1000).toISOString() }));
+    }
+    h.rows.set(9900, h.child(9900, 1, 'idc'));
+    h.rows.set(9901, h.child(9901, 1, 'cs', {created_at: '2020-01-01T00:00:00Z'}));
+    await h.run();
+    assert.deepEqual(h.calls.map(([kind,id]) => [kind,id]), [['cancel',9900],['force',9900]]);
+  }
+});
 
 test('completed parent attempt releases only its queued and running standby children', async () => {
   const h = coverageHarness();

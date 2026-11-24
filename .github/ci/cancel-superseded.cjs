@@ -132,17 +132,32 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
   const candidates = new Map();
   // A 204 dispatch response can become visible shortly after the parent ends.
   // Rescan briefly so a late-indexed, still-queued child is not left behind.
-  for (let round = 0; round < 3; round++) {
-    for (const status of active) {
+  const first = Math.floor(Date.parse(parent.run_started_at || parent.created_at) / 1000);
+  const last = Math.floor(Date.parse(parent.updated_at) / 1000) + 60;
+  if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || last < first) {
+    throw new Error('Invalid completed parent time window');
+  }
+  const stamp = sec => new Date(sec * 1000).toISOString().replace('.000Z', 'Z');
+  async function scan(status, lo, hi) {
+    for (let page = 1; ; page++) {
       const { data } = await github.rest.actions.listWorkflowRuns({
         ...repo, workflow_id: worker.id, branch: 'main', event: 'workflow_dispatch',
-        status, per_page: 100,
+        status, created: `${stamp(lo)}..${stamp(hi)}`, per_page: 100, page,
       });
-      if (data.total_count > 100 || data.workflow_runs.length !== data.total_count) {
-        throw new Error('Incomplete coverage worker discovery; inspect manually');
+      // GitHub caps filtered searches at 1000 results, even with pagination.
+      if (data.total_count > 1000) {
+        if (lo === hi) throw new Error('Coverage worker search saturated within one second');
+        const mid = Math.floor((lo + hi) / 2);
+        await scan(status, lo, mid);
+        await scan(status, mid + 1, hi);
+        return;
       }
       for (const run of data.workflow_runs) if (matches(run)) candidates.set(run.id, run);
+      if (data.workflow_runs.length < 100 || page * 100 >= data.total_count) return;
     }
+  }
+  for (let round = 0; round < 3; round++) {
+    for (const status of active) await scan(status, first, last);
     if (round < 2) await wait(5_000);
   }
   const get = async id => (await github.rest.actions.getWorkflowRun({ ...repo, run_id: id })).data;
