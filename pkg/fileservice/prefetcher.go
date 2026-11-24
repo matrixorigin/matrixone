@@ -282,6 +282,11 @@ func (p *prefetcher) add(req ObjectPrefetch) {
 	have := p.have(req)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.addLocked(req, have)
+}
+
+// addLocked is add of req, of which have reports whether it is cached or downloading.
+func (p *prefetcher) addLocked(req ObjectPrefetch, have bool) {
 	if p.closed {
 		return
 	}
@@ -526,23 +531,30 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 		p.wg.Add(1)
 		go func() {
 			defer func() {
+				// The deferred request is queued, joinable, as the download ends, and dropped
+				// once found cached, before the worker takes its next download.
 				p.mu.Lock()
 				p.forgetLocked(e)
 				e.start()
 				next, scans := p.takeDeferredLocked(e)
+				var deferred *prefetchEntry
+				for _, s := range scans {
+					req := *next
+					req.Scan = s
+					p.addLocked(req, false)
+				}
 				if next != nil {
-					// The object stays known until its deferred request is queued.
-					p.known.Add(1)
+					deferred = p.entries[next.FilePath]
 				}
 				p.mu.Unlock()
-				// The deferred request is queued before the worker takes its next download.
-				if next != nil {
-					for _, s := range scans {
-						req := *next
-						req.Scan = s
-						p.add(req)
+				if deferred != nil && p.have(*next) {
+					p.mu.Lock()
+					// Unless it started, or another request grew it, meanwhile.
+					if p.entries[next.FilePath] == deferred && deferred.queue != nil && deferred.req.Size == next.Size {
+						metric.FSPrefetchCachedCounter.Inc()
+						p.removeLocked(deferred)
 					}
-					p.known.Add(-1)
+					p.mu.Unlock()
 				}
 				p.mu.Lock()
 				q.running--
