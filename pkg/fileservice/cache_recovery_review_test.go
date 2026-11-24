@@ -404,6 +404,8 @@ func TestReadCloserReturnsBeforeReadingBody(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			fs, _, data := newPrefetchRangeFS(t, 0, 1024)
+			// A streamed entry past the bytes a prefetch object buffers opens its own reader.
+			fs.diskCache.memoryPrefetchMax = 32
 			<-fs.diskCache.load.done
 			storage := &stallingStorage{ObjectStorage: fs.storage, stalled: make(chan struct{}), release: make(chan struct{})}
 			fs.storage = storage
