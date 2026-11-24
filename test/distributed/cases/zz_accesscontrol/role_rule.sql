@@ -360,6 +360,25 @@ select id from db1.t_rule_text order by id;
 -- @session
 set global lower_case_table_names = 1;
 
+-- System catalog source names compare without case in every table-name mode.
+grant select on table information_schema.character_sets to test_rule_role_inherit_a;
+alter role test_rule_role_inherit_a add rule "select character_set_name, maxlen from information_schema.character_sets where maxlen = 1" on table information_schema.character_sets;
+alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from INFORMATION_SCHEMA.CHARACTER_SETS where maxlen = 4" on table information_schema.character_sets;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+set global lower_case_table_names = 0;
+-- @session:id=29&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select @@lower_case_table_names;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+set global lower_case_table_names = 2;
+-- @session:id=30&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select @@lower_case_table_names;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+-- @session
+set global lower_case_table_names = 1;
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;

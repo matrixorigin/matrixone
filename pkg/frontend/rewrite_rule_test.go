@@ -2209,6 +2209,12 @@ func TestMergeRewriteRulesTableNameMode(t *testing.T) {
 		{"mode one folds aliases", "db.t as `X`", "db.t as x", 1, true},
 		{"same alias", "db.t as `x`", "db.t as x", 0, true},
 		{"different sources", "db.T as x", "db.t as x", 0, false},
+		{"system source mode zero", "information_schema.character_sets as x", "INFORMATION_SCHEMA.CHARACTER_SETS as x", 0, true},
+		{"system source mode one", "information_schema.character_sets as x", "INFORMATION_SCHEMA.CHARACTER_SETS as x", 1, true},
+		{"system source mode two", "information_schema.character_sets as x", "INFORMATION_SCHEMA.CHARACTER_SETS as x", 2, true},
+		{"mysql source", "mysql.user as x", "MYSQL.USER as x", 0, true},
+		{"system source with different aliases", "information_schema.character_sets as X", "INFORMATION_SCHEMA.CHARACTER_SETS as x", 0, false},
+		{"different system tables", "information_schema.tables as x", "INFORMATION_SCHEMA.CHARACTER_SETS as x", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			left := "select trim(`Code`) as code from " + tc.left + " where id = 1"
@@ -2548,7 +2554,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 			}
 			require.NotNil(t, shape)
 			require.Equal(t, tc.selectList, tree.String(&shape.clause.Exprs, dialect.MYSQL))
-			require.Equal(t, tc.table, shape.table)
+			require.Equal(t, tc.table, tree.String(shape.table, dialect.MYSQL))
 		})
 	}
 }

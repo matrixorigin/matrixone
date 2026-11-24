@@ -1406,7 +1406,7 @@ type rewriteRuleMergeShape struct {
 	predicate mysql.WhereSource
 	stmt      *tree.Select
 	clause    *tree.SelectClause
-	table     string
+	table     *tree.AliasedTableExpr
 }
 
 // Rewrite rules from active roles are a source-row visibility union: if any
@@ -1432,7 +1432,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string, lo
 		return "", false, nil
 	}
 
-	if leftShape.table != rightShape.table {
+	if !sameRewriteTableSource(leftShape.table, rightShape.table) {
 		return "", false, nil
 	}
 	if !slices.EqualFunc(leftShape.clause.Exprs, rightShape.clause.Exprs, sameRewriteProjection) {
@@ -1586,17 +1586,25 @@ func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
 	}
 }
 
-func rewriteRuleSingleTableSource(from *tree.From) (string, bool) {
+func sameRewriteTableSource(a, b *tree.AliasedTableExpr) bool {
+	// Aliases follow the parser mode even when the catalog ignores case.
+	if a.As.Alias != b.As.Alias {
+		return false
+	}
+	relation := func(expr *tree.AliasedTableExpr) tree.TableName {
+		name := *expr.Expr.(*tree.TableName)
+		db, table := normalizeSystemRelationNames(string(name.Schema()), string(name.Name()))
+		name.SchemaName, name.ObjectName = tree.Identifier(db), tree.Identifier(table)
+		return name
+	}
+	return reflect.DeepEqual(relation(a), relation(b))
+}
+
+func rewriteRuleSingleTableSource(from *tree.From) (*tree.AliasedTableExpr, bool) {
 	if from == nil || len(from.Tables) != 1 {
-		return "", false
+		return nil, false
 	}
-
-	tableExpr, ok := rewriteRuleSingleTableExpr(from.Tables[0])
-	if !ok {
-		return "", false
-	}
-
-	return tree.String(tableExpr, dialect.MYSQL), true
+	return rewriteRuleSingleTableExpr(from.Tables[0])
 }
 
 func rewriteRuleSingleTableExpr(expr tree.TableExpr) (*tree.AliasedTableExpr, bool) {
