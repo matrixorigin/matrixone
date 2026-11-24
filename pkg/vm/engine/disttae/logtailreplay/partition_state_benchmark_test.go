@@ -36,11 +36,12 @@ func BenchmarkPartitionStateHandleRowsInsert(b *testing.B) {
 	packer := types.NewPacker()
 	b.Cleanup(packer.Close)
 	ctx := context.Background()
+	entry := &api.Entry{EntryType: api.Entry_Insert, TableName: "t", Bat: input}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		state.HandleRowsInsert(ctx, input, 0, packer, pool)
+		state.HandleLogtailEntry(ctx, nil, entry, 0, packer, pool)
 	}
 }
 

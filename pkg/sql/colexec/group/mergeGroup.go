@@ -398,7 +398,6 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					mergeGroup.ctr.cancelGroupByPreflights()
 				}
 				if err == nil {
-					mergeGroup.ctr.sanityCheck()
 					vals, more, insertErr := mergeGroup.ctr.commitGroupByChunk(
 						bat.Vecs, i, n, preview)
 					if insertErr != nil {
@@ -438,8 +437,6 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					return false, err
 				}
 			}
-
-			mergeGroup.ctr.sanityCheck()
 		}
 	}
 
