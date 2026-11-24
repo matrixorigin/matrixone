@@ -4188,7 +4188,7 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 			short, cancel, hit      bool
 			stream, writer, convert bool
 			sameOffset, bodyError   bool
-			unexpected              bool
+			unexpected, ok          bool
 			opens, closes           int
 			offsets                 []int64
 		}{
@@ -4198,7 +4198,8 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 			{name: "cached first 416", first: 9 << 20, second: 25 << 20, firstErr: rangeStatusError{}, hit: true, opens: 1},
 			{name: "cached later 416", first: 9 << 20, second: 25 << 20, secondErr: rangeStatusError{}, hit: true, unexpected: true, opens: 2, closes: 1},
 			{name: "same offset 416", first: 9 << 20, second: 9 << 20, secondErr: rangeStatusError{}, sameOffset: true, opens: 2, closes: 1},
-			{name: "short", first: 9 << 20, second: 25 << 20, short: true, unexpected: true, opens: 2, closes: 2},
+			// A source that ends short leaves the read to read the range itself.
+			{name: "short", first: 9 << 20, second: 25 << 20, short: true, ok: true, opens: 3, closes: 3, offsets: []int64{9 << 20, 25 << 20, 25 << 20}},
 			{name: "body 416", first: 9 << 20, second: 25 << 20, bodyError: true, opens: 2, closes: 2},
 			{name: "cancel", first: 9 << 20, second: 25 << 20, cancel: true, opens: 1, closes: 1},
 			{name: "converter 416", first: 9 << 20, second: 25 << 20, convert: true, opens: 2, closes: 2},
@@ -4312,6 +4313,8 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 					unexpected, tc.offsets = true, []int64{9 << 20, 25 << 20}
 				}
 				switch {
+				case tc.ok:
+					require.NoError(t, err)
 				case tc.cancel:
 					if err != nil {
 						require.ErrorIs(t, err, context.Canceled)
