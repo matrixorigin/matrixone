@@ -125,6 +125,11 @@ func TestIssue30084ODKUPartitionSnapshotValidation(t *testing.T) {
 				return
 			}
 		}
+		// The partition cases own their budgets; terminal lifecycle coverage
+		// must not inherit the database setup context's consumed deadline.
+		cancel()
+		ctx, cancel = context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancel()
 		// Exercise terminal paths on the same fixture, then make a normal
 		// request to prove hooks do not leak into the next operation.
 		table := fmt.Sprintf("`%s`.`barrier_lifecycle`", name)

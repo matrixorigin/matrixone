@@ -225,10 +225,14 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 		}) {
 			return
 		}
+		// Shared setup stays outside selectable siblings and has its own budget.
+		// Selecting any later scenario still observes the enabled session policy.
+		sharedCtx, sharedCancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer sharedCancel()
+		ctx = sharedCtx
+		exec(t, "set session mo_pk_check_by_cn=on")
+		exec(t, "create table t(id bigint primary key, name varchar(256))")
 		if !runScenario("input duplicate and rollback", func(t *testing.T) {
-			// The remaining cases exercise the explicitly enabled policy.
-			exec(t, "set session mo_pk_check_by_cn=on")
-			exec(t, "create table t(id bigint primary key, name varchar(256))")
 			path := writeInput(t, "duplicate.csv", "1,a\n1,b\n")
 			requireDuplicate(t, load(path, "t"))
 			require.Zero(t, count(t, "t"))
