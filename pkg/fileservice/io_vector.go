@@ -35,14 +35,21 @@ func (e *IOEntry) ranged() bool {
 	return !e.done && e.Size > 0
 }
 
-// streams reports whether an entry not done writes its bytes to its caller.
-func (i *IOVector) streams() bool {
+// materializes reports whether the entry may take its bytes from a shared source that
+// hands them over once all arrived: one that does not stream them to its caller, or
+// streams at most max bytes. A larger or read-to-end streamed entry opens its own reader.
+func (e *IOEntry) materializes(max int64) bool {
+	return !e.streams() || e.Size > 0 && e.Size <= max
+}
+
+// materializes reports whether every entry not done materializes under max.
+func (i *IOVector) materializes(max int64) bool {
 	for j := range i.Entries {
-		if e := &i.Entries[j]; !e.done && e.streams() {
-			return true
+		if e := &i.Entries[j]; !e.done && !e.materializes(max) {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func (i *IOVector) allDone() bool {

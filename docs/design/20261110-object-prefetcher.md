@@ -153,7 +153,11 @@ that misses the cache takes its bytes from a prefetch object under way, or start
 MemoryPrefetchObject of its own when its range is at most `disk-prefetch-memory-max`; a
 larger read reads directly, through a FilePrefetchObject of its own that takes its
 connection from the same pool. A FilePrefetchObject of a read that declined the download
-of its range does not wait for that download's cache file, and caches nothing. A MemoryPrefetchObject a read starts caches nothing: the read
+of its range does not wait for that download's cache file, and caches nothing. An entry a
+read streams to its caller, through a writer or a reader, takes its bytes from a prefetch
+object, a queued download or a download in the disk cache only when it is at most
+`disk-prefetch-memory-max` bytes; a larger one, or one read to the end of the object,
+opens its own reader, so its caller gets its bytes as they arrive. A MemoryPrefetchObject a read starts caches nothing: the read
 caches its entries as its policy says, unless the prefetch object it joined caches its
 bytes (decision 2026-11-13: with 8 concurrent TPC-H sessions on a 4 GB disk cache, caching
 the read's whole span took about 80 s against about 68 s). Both kinds:

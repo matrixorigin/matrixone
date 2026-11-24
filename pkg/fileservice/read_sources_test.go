@@ -23,10 +23,12 @@ import (
 )
 
 // wantSources is the table of the shared sources a read may take its bytes from, by its
-// policy, whether it is a read of a download and whether it streams an entry.
-func wantSources(s *S3FS, p Policy, download, streams bool) readSources {
-	// BC15: the reads of a download join no prefetch object.
-	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !download
+// policy, whether it is a read of a download and whether it streams an entry larger than
+// a prefetch object buffers.
+func wantSources(s *S3FS, p Policy, download, streamsLarge bool) readSources {
+	// BC15: the reads of a download join no prefetch object. A large streamed entry opens
+	// its own reader.
+	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !download && !streamsLarge
 	// BC13: index-file cache reads are gated by SkipCacheReads, its fills by
 	// SkipCacheWrites, and a read that fills it writes no prefetch range to the disk cache.
 	indexFill := p.Any(IndexFileObject) && p&SkipCacheWrites != SkipCacheWrites && s.cachesIndexObjects()
@@ -40,7 +42,7 @@ func wantSources(s *S3FS, p Policy, download, streams bool) readSources {
 		window:      disk && !indexFill,
 		// BC10: a read that caches its bytes joins only objects that cache theirs.
 		caches: p.CacheIOEntry() && !p.Any(SkipDiskCacheWrites) && !indexFill,
-		fetch:  disk && !streams,
+		fetch:  disk,
 	}
 }
 
@@ -49,16 +51,16 @@ func TestSourcesForTable(t *testing.T) {
 	require.NotNil(t, fs.prefetcher)
 	for p := Policy(0); p < IndexFileObject<<1; p++ {
 		for _, download := range []bool{false, true} {
-			for _, streams := range []bool{false, true} {
+			for _, streams := range []int64{0, 1, fs.diskCache.memoryPrefetchMax + 1} {
 				ctx := context.Background()
 				if download {
 					ctx = withDownloadStarted(ctx, func() {})
 				}
 				vec := &IOVector{FilePath: "object", Policy: p, Entries: []IOEntry{{Size: 1}}}
-				if streams {
-					vec.Entries[0].WriterForRead = new(bytes.Buffer)
+				if streams > 0 {
+					vec.Entries[0].Size, vec.Entries[0].WriterForRead = streams, new(bytes.Buffer)
 				}
-				require.Equal(t, wantSources(fs, p, download, streams), fs.sourcesFor(ctx, vec),
+				require.Equal(t, wantSources(fs, p, download, streams > fs.diskCache.memoryPrefetchMax), fs.sourcesFor(ctx, vec),
 					"policy %b, download %v, streams %v", p, download, streams)
 			}
 		}

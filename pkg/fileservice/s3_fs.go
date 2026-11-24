@@ -585,7 +585,9 @@ func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
 	p := vector.Policy
 	// A read that skips the disk cache cannot read what a download puts there. The reads
 	// of a download join no prefetch object.
-	join := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !isDownload(ctx)
+	// A streamed entry past the bytes a prefetch object buffers opens its own reader.
+	join := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !isDownload(ctx) &&
+		vector.materializes(s.diskCache.memoryPrefetchMax)
 	columns := p.Any(ColumnPrefetch, ExactRead)
 	indexFill := s.indexObjectFillable(p)
 	return readSources{
@@ -596,8 +598,7 @@ func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
 		flights:     join && columns,
 		window:      join && !indexFill,
 		caches:      p.CacheIOEntry() && !p.Any(SkipDiskCacheWrites) && !indexFill,
-		// A read that streams an entry to its caller opens its own reader.
-		fetch: join && !vector.streams(),
+		fetch:       join,
 	}
 }
 

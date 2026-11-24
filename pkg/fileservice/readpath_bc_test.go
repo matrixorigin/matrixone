@@ -511,3 +511,150 @@ func TestFileDownloadPicksFastestLiveObject(t *testing.T) {
 	got, _ := d.fileDownload(diskPath, 100, 200)
 	require.Same(t, fast.download, got)
 }
+
+// tailHeldStorage returns the first 64 KiB of every read at once and holds the rest until
+// gate is closed.
+type tailHeldStorage struct {
+	ObjectStorage
+	gate  chan struct{}
+	opens atomic.Int64
+}
+
+func (s *tailHeldStorage) Read(ctx context.Context, key string, from, to *int64) (io.ReadCloser, error) {
+	s.opens.Add(1)
+	r, err := s.ObjectStorage.Read(ctx, key, from, to)
+	if err != nil {
+		return nil, err
+	}
+	return readCloser2{Reader: io.MultiReader(io.LimitReader(r, 64<<10), &heldTail{ctx: ctx, gate: s.gate, r: r}), Closer: r}, nil
+}
+
+type heldTail struct {
+	ctx  context.Context
+	gate chan struct{}
+	r    io.Reader
+	open bool
+}
+
+func (h *heldTail) Read(b []byte) (int, error) {
+	if !h.open {
+		select {
+		case <-h.gate:
+		case <-h.ctx.Done():
+			return 0, h.ctx.Err()
+		}
+		h.open = true
+	}
+	return h.r.Read(b)
+}
+
+// firstWriteSignal closes first on its first write. It has no ReadFrom, so a copy to it
+// writes each chunk.
+type firstWriteSignal struct {
+	mu    sync.Mutex
+	buf   []byte
+	first chan struct{}
+	once  sync.Once
+}
+
+func (w *firstWriteSignal) Write(b []byte) (int, error) {
+	w.once.Do(func() { close(w.first) })
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, b...)
+	return len(b), nil
+}
+
+func (w *firstWriteSignal) Bytes() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf
+}
+
+// A streamed entry larger than a prefetch object buffers opens its own reader, and gets its
+// first bytes before a running range download that holds them sends its last; one of at
+// most that many bytes joins the download.
+func TestStreamedEntryPastPrefetchBufferReadsItself(t *testing.T) {
+	const max = minDiskPrefetchMemoryMax
+	for _, tc := range []struct {
+		name   string
+		size   int64
+		reader bool
+		policy Policy
+	}{
+		{name: "writer", size: max + 1<<20},
+		{name: "writer_skip_disk_reads", size: max + 1<<20, policy: SkipDiskCacheReads},
+		{name: "reader", size: max + 1<<20, reader: true},
+		{name: "reader_skip_disk_reads", size: max + 1<<20, reader: true, policy: SkipDiskCacheReads},
+		{name: "writer_joins_at_most_buffer", size: 128 << 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, _, data := newPrefetchRangeFS(t, 0, max+2<<20)
+			d := fs.diskCache
+			d.memoryPrefetchMax = max
+			d.downloadMaxExtraWait = time.Hour
+			d.objectSplit.parts = 1
+			<-d.load.done
+			storage := &tailHeldStorage{ObjectStorage: fs.storage, gate: make(chan struct{})}
+			fs.storage = storage
+			release := sync.OnceFunc(func() { close(storage.gate) })
+			t.Cleanup(release)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			r := PrefetchRange{Size: max + 1<<20}
+			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: r.Size, Ranges: []PrefetchRange{r}}))
+			diskPath := d.pathForFile("object")
+			var download *objectDownload
+			require.Eventually(t, func() bool {
+				download, _ = d.fileDownload(diskPath, 0, r.Size)
+				return download != nil
+			}, 60*time.Second, time.Millisecond)
+
+			entry := IOEntry{Size: tc.size}
+			writer := &firstWriteSignal{first: make(chan struct{})}
+			var stream io.ReadCloser
+			if tc.reader {
+				entry.ReadCloserForRead = &stream
+			} else {
+				entry.WriterForRead = writer
+			}
+			vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache | tc.policy, Entries: []IOEntry{entry}}
+			defer vec.Release()
+			result := make(chan error, 1)
+			go func() { result <- fs.Read(ctx, vec) }()
+			if tc.size <= max {
+				require.Eventually(t, func() bool {
+					download.mu.Lock()
+					defer download.mu.Unlock()
+					return len(download.waiters) == 1
+				}, 60*time.Second, time.Millisecond, "the read joins the download")
+				release()
+				require.NoError(t, <-result)
+				require.Equal(t, data[:tc.size], writer.Bytes())
+				require.EqualValues(t, 1, storage.opens.Load())
+				return
+			}
+			if tc.reader {
+				require.NoError(t, <-result)
+				var first [1]byte
+				_, err := io.ReadFull(stream, first[:])
+				require.NoError(t, err, "the reader returns bytes before the download's tail")
+				require.Equal(t, data[0], first[0])
+				release()
+				rest, err := io.ReadAll(stream)
+				require.NoError(t, err)
+				require.Equal(t, data[1:tc.size], rest)
+				require.NoError(t, stream.Close())
+				return
+			}
+			select {
+			case <-writer.first:
+			case <-ctx.Done():
+				t.Fatal("the writer got no bytes before the download's tail")
+			}
+			release()
+			require.NoError(t, <-result)
+			require.Equal(t, data[:tc.size], writer.Bytes())
+		})
+	}
+}

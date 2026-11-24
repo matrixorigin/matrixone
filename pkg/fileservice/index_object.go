@@ -273,7 +273,7 @@ func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) (bool, e
 	}
 	for i := range vector.Entries {
 		e := &vector.Entries[i]
-		if !e.ranged() {
+		if !e.ranged() || !e.materializes(d.memoryPrefetchMax) {
 			continue
 		}
 		_, filled, err := d.readFromDownload(ctx, diskPath, e, vector)

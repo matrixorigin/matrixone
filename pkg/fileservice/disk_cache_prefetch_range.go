@@ -86,7 +86,7 @@ func (d *DiskCache) prefetchUnit(vector *IOVector) (int64, bool) {
 	}
 	for i := range vector.Entries {
 		e := &vector.Entries[i]
-		if !e.done && (e.Size <= 0 || e.streams()) {
+		if !e.done && (e.Size <= 0 || !e.materializes(d.memoryPrefetchMax)) {
 			return 0, false
 		}
 	}
@@ -1097,7 +1097,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 	found := false
 	now := time.Now()
 	for i := range vector.Entries {
-		if e := &vector.Entries[i]; e.ranged() {
+		if e := &vector.Entries[i]; e.ranged() && e.materializes(d.memoryPrefetchMax) {
 			if d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, now, caches) != nil {
 				inFlight[i], found = true, true
 			}

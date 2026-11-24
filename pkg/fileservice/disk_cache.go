@@ -643,8 +643,8 @@ func (d *DiskCache) Read(
 			// try full file
 			diskPath = objectPath()
 			var filled bool
-			// The reads of a download join no other.
-			if !isDownload(ctx) {
+			// The reads of a download join no other, nor does a large streamed entry.
+			if !isDownload(ctx) && entry.materializes(d.memoryPrefetchMax) {
 				downloading, filled, err = d.readFromDownload(ctx, diskPath, entry, vector)
 			}
 			if err != nil {
