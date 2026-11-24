@@ -349,11 +349,18 @@ func TestZombieRepro_WithFix(t *testing.T) {
 		view, ok := registry.GetShardInfo(hakeeper.DefaultHAKeeperShardID)
 		return ok && view.ConfigChangeIndex > current.ConfigChangeID && view.Nodes[4] == svc3b.ID()
 	}, 5*time.Second, 25*time.Millisecond)
-	// Model an older startup observation that hadn't seen the addition. The
-	// newer local view must let this legitimate identity start.
-	svc3b.store.mu.Lock()
-	svc3b.store.mu.skippedZombies[zombieKey{replicaID: 4}] = current.ConfigChangeID
-	svc3b.store.mu.Unlock()
+	view, ok := registry.GetShardInfo(hakeeper.DefaultHAKeeperShardID)
+	require.True(t, ok)
+	mark := func(epoch uint64) {
+		svc3b.store.mu.Lock()
+		svc3b.store.mu.skippedZombies[zombieKey{replicaID: 4}] = epoch
+		svc3b.store.mu.Unlock()
+	}
+	mark(view.ConfigChangeIndex)
+	svc3b.handleCommands([]pb.ScheduleCommand{command(pb.StartReplica, 4)})
+	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
+	// An older absent view must not fence a now-confirmed identity.
+	mark(current.ConfigChangeID)
 	svc3b.handleCommands([]pb.ScheduleCommand{stale, command(pb.StartNonVotingReplica, 4)})
 	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
 	svc3b.handleCommands([]pb.ScheduleCommand{command(pb.StartReplica, 4)})

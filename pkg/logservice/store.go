@@ -507,43 +507,43 @@ func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
 
 func (l *store) startReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	return l.startDataReplica(shardID, replicaID, initialReplicas, join, false)
+}
+
+func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
+	return l.startDataReplica(shardID, replicaID, initialReplicas, join, true)
+}
+
+func (l *store) startDataReplica(shardID, replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join, nonVoting bool) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		return moerr.NewInvalidInputNoCtxf("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
 	}
-	cfg := getRaftConfig(shardID, replicaID)
-	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
-		panic(err)
-	}
-	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
+	if err := l.openDataReplica(shardID, replicaID, initialReplicas, join, nonVoting); err != nil {
 		return err
 	}
-	l.addMetadata(shardID, replicaID, false)
 	if l.onReplicaChanged != nil {
 		l.onReplicaChanged(shardID, replicaID, AddReplica)
 	}
 	return nil
 }
 
-func (l *store) startNonVotingReplica(shardID uint64, replicaID uint64,
-	initialReplicas map[uint64]dragonboat.Target, join bool) error {
-	if shardID == hakeeper.DefaultHAKeeperShardID {
-		return moerr.NewInvalidInputNoCtx(fmt.Sprintf(
-			"shardID %d does not match DefaultHAKeeperShardID %d",
-			shardID, hakeeper.DefaultHAKeeperShardID),
-		)
-	}
+func (l *store) openDataReplica(shardID, replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target, join, nonVoting bool) error {
+	// Publish the NodeHost claim and metadata together with respect to stale
+	// replica cleanup. The external replica callback runs after unlocking.
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	cfg := getRaftConfig(shardID, replicaID)
-	cfg.IsNonVoting = true
+	cfg.IsNonVoting = nonVoting
 	if err := l.snapshotMgr.Init(shardID, replicaID); err != nil {
 		panic(err)
 	}
 	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
 		return err
 	}
-	l.addMetadata(shardID, replicaID, true)
-	if l.onReplicaChanged != nil {
-		l.onReplicaChanged(shardID, replicaID, AddReplica)
-	}
+	l.addMetadataLocked(shardID, replicaID, nonVoting)
 	return nil
 }
 
