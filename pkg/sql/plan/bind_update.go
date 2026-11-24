@@ -130,6 +130,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		for _, col := range tableDef.Cols {
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			e.StoredValue = isEnumOrSetPlanType(&col.Typ)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
 			})
@@ -292,15 +293,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					}
 				}
 
-				// The updated column's OLD value was appended to the project list as
-				// the raw column scan, which for ENUM/SET/geometry columns is a
-				// VARCHAR display value (cast_index_to_value for ENUM). Index tables
-				// store the typed value (e.g. the T_enum index), and INSERT casts the
-				// value before building index keys (bind_insert.go). Cast the OLD
-				// value the same way so UPDATE index-maintenance joins build keys in
-				// the stored typed representation; otherwise the join compares VARCHAR
-				// against the typed index key and either fails to bind (nil-pointer
-				// panic) or silently misses the row (update does not take effect).
+				// The generated OLD projection retains the physical ENUM/SET value.
+				// Keep it aligned with the column type used for index maintenance.
 				if oldPos, ok := oldColName2Idx[alias+"."+col.Name]; ok && oldPos != colPos {
 					oldExpr := selectNode.ProjectList[oldPos]
 					if isEnumPlanType(&col.Typ) {

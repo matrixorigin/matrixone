@@ -156,6 +156,36 @@ where t.reldatabase=database() and t.relname='prefix_guard' and i.name='ux'`).Sc
 		require.Equal(t, 1, count("select count(*) from "+prefixIndex+" where __mo_index_pri_col=3"))
 		checkPublicSerial()
 
+		// An empty SET member and an empty bitmap have the same display value.
+		// Updating either the SET or an unrelated column must keep the old bitmap.
+		exec("create table update_set(id int primary key, s set('','a'), n int, key ix(s))")
+		exec("insert into update_set values (1,1,0),(2,1,0)")
+		result = exec("update update_set set n=9 where id=1")
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 1, affected)
+		var bitmap, n int
+		require.NoError(t, conn.QueryRowContext(ctx, "select s+0,n from update_set where id=1").Scan(&bitmap, &n))
+		require.Equal(t, 1, bitmap)
+		require.Equal(t, 9, n)
+		result = exec("update update_set set s=2 where id=2")
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 1, affected)
+		require.NoError(t, conn.QueryRowContext(ctx, "select s+0 from update_set where id=2").Scan(&bitmap))
+		require.Equal(t, 2, bitmap)
+
+		// Multi-target UPDATE takes the legacy planner route.
+		exec("create table update_aux(id int primary key, n int)")
+		exec("insert into update_aux values (1,0)")
+		result = exec("update update_set a join update_aux b on a.id=b.id set a.n=8,b.n=7 where a.id=1")
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 2, affected)
+		require.NoError(t, conn.QueryRowContext(ctx, "select s+0,n from update_set where id=1").Scan(&bitmap, &n))
+		require.Equal(t, 1, bitmap)
+		require.Equal(t, 8, n)
+
 		// Older catalogs can contain an ENUM in a table-level composite PK.
 		// MASTER stores that PK in both its key and owner during backfill.
 		for _, tc := range []struct {

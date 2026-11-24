@@ -152,7 +152,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				}
 			}
 		}
-		expr, err = b.impl.BindColRef(exprImpl, depth, isRoot)
+		if exprImpl.StoredValue {
+			expr, err = b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
+				return b.impl.BindColRef(exprImpl, depth, isRoot)
+			})
+		} else {
+			expr, err = b.impl.BindColRef(exprImpl, depth, isRoot)
+		}
 
 	case *tree.SerialExtractExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)

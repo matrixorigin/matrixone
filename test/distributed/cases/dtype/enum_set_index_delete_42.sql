@@ -52,6 +52,18 @@ select row_count();
 select id,opts from set_delete_backfill_42 order by id;
 drop table set_delete_backfill_42;
 
+-- UPDATE must retain the empty SET member in its old and new images.
+drop table if exists set_update_storage_42;
+create table set_update_storage_42 (id int primary key, opts set('','a'), n int, key idx_opts(opts));
+insert into set_update_storage_42 values (1,1,0),(2,1,0);
+update set_update_storage_42 set n=9 where id=1;
+select row_count();
+select id,opts+0,n from set_update_storage_42 order by id;
+update set_update_storage_42 set opts=2 where id=2;
+select row_count();
+select id,opts+0,n from set_update_storage_42 order by id;
+drop table set_update_storage_42;
+
 -- A prefix of the primary key does not identify a secondary-index owner.
 drop table if exists enum_delete_prefix_42;
 create table enum_delete_prefix_42 (

@@ -3,6 +3,8 @@
 旧版回填 ENUM/SET 二级索引时可能保存显示字符串，而普通写入保存 ENUM ordinal 或
 SET bitmap。修复版使用存储值维护索引，但不会自动改写旧索引。升级时必须在恢复业务
 前从基础表重建所有受影响的二级索引，包括复合索引。
+旧版 UPDATE 还可能已错误改写基础表中的 SET bitmap；索引重建不能恢复这些值，
+需要结合备份或业务记录核对基础数据。
 
 **先检查整个集群的受影响表，再安排升级。** 如果任一表不能按下面的条件安全重建，
 先不要升级集群。维护期间停止应用和后台读写、连接池重试及相关 DDL，等待所有 CN 上的
@@ -39,8 +41,10 @@ DROP 和 CREATE 分别执行，不能在索引缺失时恢复业务。UNIQUE 重
 不要对分区父表照搬上面的 DROP/CREATE：已有叶可能遗留旧键，后续新分区也可能缺索引或
 写错索引表。本流程为已验证的有限场景提供迁移：同库普通表，显式稳定整数主键，RANGE
 分区，以及能在初始 CREATE 中无损表达的可见普通二级索引。已使用 `v4.2.8-hotfix-20261119`
-和 `v4.2.9` 的持久化数据验证 ENUM/SET 复合索引、普通兄弟索引、NULL、空成员和新增分区；
-其他源版本、索引类型、分区类型或复杂表结构需要另行验证。后续 ALTER 索引可能使保存的
+和 `v4.2.9` 的持久化数据验证 ENUM/SET 复合索引、普通兄弟索引、NULL、空成员和新增分区。
+对 `v4.2.9` 的两叶 HASH 表，还验证了父表无索引、两个叶表均有同一个普通 ENUM 索引的迁移：
+迁移前有一行缺少叶索引键；迁移后逐叶比较键和主键归属，并在切换、删除和重启后复核。
+其他 HASH 定义、源版本、索引类型、分区类型或复杂表结构需要另行验证。后续 ALTER 索引可能使保存的
 建表定义与当前定义不一致；
 本流程不保证这种变更后再 ADD PARTITION 的行为，需在执行前另行评估。
 
@@ -101,6 +105,16 @@ CREATE TABLE db_name.t_rebuild (
 
 INSERT INTO db_name.t_rebuild (id, e, s, n)
 SELECT id, e, s + 0, n FROM db_name.t USE INDEX();
+```
+
+例如，上述 HASH 已验证场景的源表是 `id INT PRIMARY KEY, e ENUM('z','a')`，
+父表没有索引，两个叶表各有 `KEY idx(e)`。影子表的定义和复制语句为：
+
+```sql
+CREATE TABLE db_name.t_rebuild (
+    id INT PRIMARY KEY, e ENUM('z','a'), KEY idx(e)
+) PARTITION BY HASH(id) PARTITIONS 2;
+INSERT INTO db_name.t_rebuild (id, e) SELECT id, e FROM db_name.t USE INDEX();
 ```
 
 为每个 SET 列使用数值投影。直接复制 SET 的显示字符串可能将 bitmap 1 变成 0，而两者都
