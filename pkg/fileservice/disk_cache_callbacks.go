@@ -142,7 +142,7 @@ func (d *DiskCache) deferWriteCallbacks(ctx context.Context) (_ context.Context,
 		defer copies.Add(-reserved)
 		for _, w := range entries {
 			for i, fn := range callbacks.OnWritten {
-				runWrittenCallback(w.filePath, "", i, fn, w.entry)
+				d.runAsyncUpdateCallback(w.filePath, "", i, fn, w.entry)
 			}
 		}
 	}

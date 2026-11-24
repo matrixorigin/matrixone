@@ -642,7 +642,7 @@ func (d *DiskCache) runAsyncCallbacks() {
 		for job.nextCallback < len(job.callbacks) {
 			i := job.nextCallback
 			job.nextCallback++
-			runWrittenCallback(job.filePath, job.diskPath, i, job.callbacks[i], job.entry)
+			d.runAsyncUpdateCallback(job.filePath, job.diskPath, i, job.callbacks[i], job.entry)
 		}
 		d.releaseAsyncUpdateResources(job)
 		a.callbackMu.Lock()
@@ -651,9 +651,9 @@ func (d *DiskCache) runAsyncCallbacks() {
 	}
 }
 
-// runWrittenCallback runs fn on filePath and entry on a DiskCache-owned goroutine,
+// runAsyncUpdateCallback runs fn on filePath and entry on a DiskCache-owned goroutine,
 // and logs and counts a panic of fn instead of propagating it.
-func runWrittenCallback(
+func (d *DiskCache) runAsyncUpdateCallback(
 	filePath string,
 	diskPath string,
 	index int,
