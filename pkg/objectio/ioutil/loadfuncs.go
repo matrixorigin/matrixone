@@ -344,30 +344,7 @@ func loadColumnsDataInto(
 		}
 	}
 
-	publication := objectio.JSONReadSetFromContext(ctx)
 	for i := range columns {
-		if destinations[i].Length() != 0 && publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
-			publication.Disable()
-		}
-		if publication.Requested(columns[i]) && typs[i].Oid == types.T_json {
-			reader, openErr := objectio.OpenJSONReader(ioVectors.Entries[i].CachedData, m, publication.CachePinAdmission())
-			if openErr != nil {
-				publication.Disable()
-				err = openErr
-				return
-			}
-			if sels != nil {
-				selected, selectErr := reader.Select(sels, m)
-				reader.Close()
-				if selectErr != nil {
-					publication.Disable()
-					err = selectErr
-					return
-				}
-				reader = selected
-			}
-			publication.Publish(columns[i], reader)
-		}
 		// A destination is filled through its own pool. An empty read-only
 		// destination (a column borrowed by an earlier block) becomes an owned
 		// vector of m again.
@@ -376,7 +353,6 @@ func loadColumnsDataInto(
 			var borrowed bool
 			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, dm, keeper)
 			if err != nil {
-				publication.Disable()
 				return
 			}
 			if borrowed {
@@ -404,7 +380,6 @@ func loadColumnsDataInto(
 			)
 		}
 		if err != nil {
-			publication.Disable()
 			logutil.Errorf("LoadColumnsDataInto %s error: %v", location.String(), err)
 			return
 		}

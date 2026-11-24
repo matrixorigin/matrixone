@@ -19,9 +19,19 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func encodeJSONText(t testing.TB, text string) []byte {
+	t.Helper()
+	value, err := bytejson.ParseFromString(text)
+	require.NoError(t, err)
+	raw, err := value.Marshal()
+	require.NoError(t, err)
+	return raw
+}
 
 func TestLegacyClassDecodeNormalization(t *testing.T) {
 	type encodedClass struct {
@@ -59,7 +69,7 @@ func TestLegacyClassDecodeNormalization(t *testing.T) {
 				values := [][]byte{[]byte("short"), nil, []byte("a value longer than the inline string representation")}
 				if kind == "json" {
 					typ = types.T_json.ToType()
-					values = [][]byte{jsonAdmissionValue(t, `[1]`), nil, jsonAdmissionValue(t, `{"value":"longer than inline storage"}`)}
+					values = [][]byte{encodeJSONText(t, `[1]`), nil, encodeJSONText(t, `{"value":"longer than inline storage"}`)}
 				}
 				source = NewVec(typ, mp)
 				for row, value := range values {
