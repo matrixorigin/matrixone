@@ -664,14 +664,8 @@ func (d *DiskCache) fetchRange(
 	} else {
 		o, err = admit(ctx, fl)
 	}
-	if errors.Is(err, errPrefetchClosed) || errors.Is(err, errPrefetchDeleted) {
-		return nil, false, false, nil
-	}
-	if err != nil {
-		return nil, false, false, err
-	}
-	if o == nil {
-		return nil, false, false, nil
+	if err != nil || o == nil {
+		return nil, false, false, readFailure(ctx, filePath, fromSource, err)
 	}
 	defer o.release()
 	if o == prefetchObject(fl) {
@@ -685,16 +679,16 @@ func (d *DiskCache) fetchRange(
 		read = own.readOwnAt
 	}
 	if err := read(ctx, start, out); err != nil {
-		if errors.Is(err, errPrefetchMissed) {
-			// An object that caches its bytes and ended without them may have found them
-			// cached in a range.
-			var deadline time.Time
-			if o.caches() && d.readCachedBytes(ctx, filePath, start, out, &deadline) {
-				return out, true, true, nil
-			}
-			return nil, false, false, nil
+		if err := readFailure(ctx, filePath, fromSource, err); err != nil {
+			return nil, false, false, err
 		}
-		return nil, false, false, objectReadError(err, filePath)
+		// An object that caches its bytes and ended without them may have found them
+		// cached in a range.
+		var deadline time.Time
+		if o.caches() && d.readCachedBytes(ctx, filePath, start, out, &deadline) {
+			return out, true, true, nil
+		}
+		return nil, false, false, nil
 	}
 	return out, true, o.caches(), nil
 }

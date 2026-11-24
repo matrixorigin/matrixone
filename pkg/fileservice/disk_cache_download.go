@@ -322,6 +322,36 @@ func objectReadError(err error, filePath string) error {
 	return err
 }
 
+// errOrigin is where an error a read gets from a source of its bytes comes from.
+type errOrigin int
+
+const (
+	// fromSource is an error of a shared source of the bytes, or of object storage.
+	fromSource errOrigin = iota
+	// fromLocalCache is an error of a cache file.
+	fromLocalCache
+	// fromConsumer is an error of the read's entry: its decode, allocation or writer.
+	fromConsumer
+)
+
+// readFailure returns the error that fails a read of the object at filePath for err from
+// origin, or nil when the read takes its bytes elsewhere.
+func readFailure(ctx context.Context, filePath string, origin errOrigin, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	switch {
+	case origin == fromConsumer:
+		return err
+	case origin == fromLocalCache, errors.Is(err, errPrefetchMissed), errors.Is(err, errPrefetchClosed), errors.Is(err, errPrefetchDeleted):
+		return nil
+	}
+	return objectReadError(err, filePath)
+}
+
 // failure returns the failed read of object storage that ended the download, or nil.
 func (o *objectDownload) failure() error {
 	o.mu.Lock()
