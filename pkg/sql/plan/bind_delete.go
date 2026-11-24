@@ -411,6 +411,13 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			}
 
 			var leftExpr *plan.Expr
+			var prefixLengths map[string]int
+			if !isSpatialIndexDef(idxDef) {
+				prefixLengths, err = catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
+			}
 
 			argsLen := len(idxDef.Parts)
 			if isSpatialIndexDef(idxDef) {
@@ -425,10 +432,6 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					},
 				}
 			} else if !indexTableStoresSerializedKey(idxDef) {
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-				if err != nil {
-					return 0, err
-				}
 				partName := indexPrimaryPartName(idxDef)
 				colPos, ok := colName2Idx[i][partName]
 				if !ok {
@@ -440,10 +443,6 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				}
 			} else {
 				args := make([]*plan.Expr, argsLen)
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-				if err != nil {
-					return 0, err
-				}
 				var colPos int32
 				var ok bool
 				for k, colName := range idxDef.Parts {
@@ -474,12 +473,45 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			if idxDef.Unique || isSpatialIndexDef(idxDef) {
 				joinType = plan.Node_LEFT
 			}
+			joinConditions := []*plan.Expr{joinCond}
+			if indexNeedsOwnerMatch(tableDef, idxDef, prefixLengths) {
+				ownerPos, ok := idxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
+				if !ok || ownerPos < 0 || int(ownerPos) >= len(idxTableDef.Cols) {
+					return 0, moerr.NewInternalError(builder.GetContext(), "DELETE index table has no owner column")
+				}
+				pkName := tableDef.Pkey.PkeyColName
+				basePos, ok := colName2Idx[i][pkName]
+				if !ok || basePos < 0 || int(basePos) >= len(selectNode.ProjectList) {
+					return 0, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate primary key %s", pkName)
+				}
+				baseOwner := &plan.Expr{
+					Typ: selectNode.ProjectList[basePos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag, ColPos: basePos, Name: pkName,
+					}},
+				}
+				indexOwner := &plan.Expr{
+					Typ: idxTableDef.Cols[ownerPos].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: idxTag, ColPos: ownerPos, Name: catalog.IndexTablePrimaryColName,
+					}},
+				}
+				ownerCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{baseOwner, indexOwner})
+				if err != nil {
+					return 0, err
+				}
+				joinConditions = append(joinConditions, ownerCond)
+				if builder.indexOwnerProbes == nil {
+					builder.indexOwnerProbes = make(map[int32]indexOwnerProbe)
+				}
+				builder.indexOwnerProbes[idxTag] = indexOwnerProbe{keyCol: rightPkPos, ownerCol: ownerPos}
+			}
 
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: []int32{lastNodeID, idxTableNodeID},
 				JoinType: joinType,
-				OnList:   []*plan.Expr{joinCond},
+				OnList:   joinConditions,
 			}, bindCtx)
 		}
 	}

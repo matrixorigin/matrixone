@@ -555,6 +555,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			true,
 		)
 
@@ -578,6 +579,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			false,
 		)
 
@@ -607,6 +609,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
+			nil,
 			true,
 		)
 

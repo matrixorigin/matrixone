@@ -51,3 +51,41 @@ delete from set_delete_backfill_42 where id in (1,2) order by id limit 1;
 select row_count();
 select id,opts from set_delete_backfill_42 order by id;
 drop table set_delete_backfill_42;
+
+-- A prefix of the primary key does not identify a secondary-index owner.
+drop table if exists enum_delete_prefix_42;
+create table enum_delete_prefix_42 (
+    id varchar(8) primary key,
+    e enum('x','y'),
+    n int,
+    key ix(id(1),e,n)
+);
+insert into enum_delete_prefix_42 values ('aa','x',0),('ab','x',0);
+delete from enum_delete_prefix_42 where id='ab';
+select row_count();
+select id from enum_delete_prefix_42 use index() order by id;
+delete from enum_delete_prefix_42 where id='aa';
+select row_count();
+select count(*) from enum_delete_prefix_42;
+drop table enum_delete_prefix_42;
+
+-- Multi-target DELETE follows the legacy index-maintenance path.
+drop table if exists set_delete_prefix_42;
+drop table if exists set_delete_prefix_aux_42;
+create table set_delete_prefix_42 (
+    id varchar(8) primary key,
+    s set('','a'),
+    n int,
+    key ix(id(1),s,n)
+);
+create table set_delete_prefix_aux_42(id int primary key);
+insert into set_delete_prefix_42 values ('aa',1,0),('ab',1,0);
+insert into set_delete_prefix_aux_42 values (1);
+delete t,a from set_delete_prefix_42 t join set_delete_prefix_aux_42 a on a.id=1 where t.id='ab';
+select row_count();
+select id from set_delete_prefix_42 use index() order by id;
+delete from set_delete_prefix_42 where id='aa';
+select row_count();
+select count(*) from set_delete_prefix_42;
+drop table set_delete_prefix_aux_42;
+drop table set_delete_prefix_42;

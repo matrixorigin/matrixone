@@ -529,9 +529,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
+		rawSpecial := b.bindRawMySQLSpecialType
+		if binding := b.ctx.bindingByTag[relPos]; binding != nil && binding.indexBackfillRaw {
+			rawSpecial = true
+		}
 		// Display-wrapped special columns historically do not participate in
 		// this binder's bare-column accounting.
-		if b.bindRawMySQLSpecialType || !isEnumOrSetPlanType(typ) {
+		if rawSpecial || !isEnumOrSetPlanType(typ) {
 			b.boundCols = append(b.boundCols, table+"."+col)
 		}
 
@@ -558,7 +562,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 		// Preserve the column's correlation depth inside its display wrapper.
 		// Numeric contexts use the raw storage value instead.
-		if !b.bindRawMySQLSpecialType && isEnumOrSetPlanType(typ) {
+		if !rawSpecial && isEnumOrSetPlanType(typ) {
 			expr, err = makeEnumOrSetDisplayValue(b.GetContext(), expr)
 		}
 		if err != nil {
@@ -2823,7 +2827,6 @@ func (b *baseBinder) bindFuncExprImplByAstExprWithRepeatedOperands(
 			return nil, err
 		}
 	}
-	args = useStoredMySQLSpecialTypesForIndexSerial(name, args)
 	args, err = b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(b.GetContext(), name, args)
 	if err != nil {
 		return nil, err
@@ -5100,36 +5103,6 @@ func storedMySQLSpecialTypeExpr(expr *Expr) (*Expr, bool) {
 		return expr, false
 	}
 	return DeepCopyExpr(fn.Args[1]), true
-}
-
-// useStoredMySQLSpecialTypesForIndexSerial keeps internal index serialization
-// on the physical ENUM ordinal or SET bitmap. The display wrappers are
-// non-injective for ordinal zero and empty SET members, so serializing their
-// VARCHAR result cannot reproduce the key written by ordinary INSERT.
-func useStoredMySQLSpecialTypesForIndexSerial(name string, args []*Expr) []*Expr {
-	if name != "serial" && name != "serial_full" {
-		return args
-	}
-	var result []*Expr
-	for i, arg := range args {
-		if !isEnumOrSetDisplayValueExpr(arg) {
-			continue
-		}
-		fn := arg.GetF()
-		if !validMySQLSpecialDisplayCall(fn) {
-			continue
-		}
-		if result == nil {
-			result = append([]*Expr(nil), args...)
-		}
-		// Preserve the declared SET domain on the raw bitmap. Serialization
-		// uses this same type metadata for keys emitted by INSERT.
-		result[i] = DeepCopyExpr(fn.Args[1])
-	}
-	if result != nil {
-		return result
-	}
-	return args
 }
 
 // useStoredMySQLSpecialTypesForNumericContract chooses ENUM/SET storage from

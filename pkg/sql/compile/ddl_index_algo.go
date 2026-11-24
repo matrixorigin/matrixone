@@ -50,24 +50,27 @@ func (s *Scope) handleUniqueIndexTable(
 	}
 	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
 	// it will be processed when inserting into the hidden table.
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, mainTableID, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
-func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
+func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, sourceID uint64, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 	// Skip index data population for CCPR tables when this is a CCPR task transaction.
 	// The index data will be synced via CCPR data synchronization instead.
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
 		return nil
 	}
+	if sourceID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "index backfill source table ID is missing")
+	}
 	insertSQL, err := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
 	if err != nil {
 		return err
 	}
 	if indexDef.Unique {
-		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
+		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL, sourceID)
 	}
-	return c.runSql(insertSQL)
+	return c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithIndexBackfillSourceID(sourceID))
 }
 
 func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, int, error) {
@@ -134,14 +137,19 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 	tableDef *plan.TableDef,
 	indexDef *plan.IndexDef,
 	insertSQL string,
+	sourceID uint64,
 ) error {
+	if sourceID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "index backfill source table ID is missing")
+	}
 	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
 	// backfill filter and only groups non-NULL keys.
 	duplicateCheckSQL, resultColCount, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
 	if err != nil {
 		return err
 	}
-	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
+	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId,
+		executor.StatementOption{}.WithDisableLog().WithIndexBackfillSourceID(sourceID))
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "create unique index duplicate check failed, sql is %s", duplicateCheckSQL)
 		return err
@@ -158,7 +166,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 		TargetTableName: indexDef.IndexTableName,
 		SkipPkDedup:     true,
 	}
-	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt)
+	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt).WithIndexBackfillSourceID(sourceID)
 
 	restoreCtx := c.proc.Ctx
 	if restoreCtx == nil {
@@ -194,7 +202,7 @@ func (s *Scope) handleRegularSecondaryIndexTable(
 		return err
 	}
 
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, mainTableID, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
 func (s *Scope) handleMasterIndexTable(
@@ -222,10 +230,13 @@ func (s *Scope) handleMasterIndexTable(
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
 		return nil
 	}
+	if mainTableID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "index backfill source table ID is missing")
+	}
 
 	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
+		err = c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithIndexBackfillSourceID(mainTableID))
 		if err != nil {
 			return err
 		}

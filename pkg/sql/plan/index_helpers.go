@@ -19,6 +19,34 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+type indexPKPartKind uint8
+
+const (
+	indexPKPartAbsent indexPKPartKind = iota
+	indexPKPartFull
+	indexPKPartPrefix
+)
+
+// classifyIndexPKPart follows the same alias and prefix rules as index writes.
+func classifyIndexPKPart(parts []string, pkName string, prefixLengths map[string]int) indexPKPartKind {
+	for _, part := range parts {
+		if catalog.ResolveAlias(part) == pkName {
+			if prefixLengths[pkName] > 0 {
+				return indexPKPartPrefix
+			}
+			return indexPKPartFull
+		}
+	}
+	return indexPKPartAbsent
+}
+
+func indexNeedsOwnerMatch(tableDef *planpb.TableDef, indexDef *planpb.IndexDef, prefixLengths map[string]int) bool {
+	return tableDef != nil && tableDef.Pkey != nil && indexDef != nil &&
+		indexDef.TableExist && !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) &&
+		!catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo) &&
+		classifyIndexPKPart(indexDef.Parts, tableDef.Pkey.PkeyColName, prefixLengths) == indexPKPartPrefix
+}
+
 func isSpatialIndexDef(idxDef *planpb.IndexDef) bool {
 	return idxDef != nil && catalog.IsRTreeIndexAlgo(idxDef.IndexAlgo)
 }

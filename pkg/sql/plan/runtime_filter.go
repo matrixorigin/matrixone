@@ -513,6 +513,42 @@ func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 	return probeSpec, buildSpec, true
 }
 
+// indexOwnerProbeKeySlot identifies the physical-key equality of a DELETE
+// join that also checks the owner. Both equalities remain in the hash join.
+func (builder *QueryBuilder) indexOwnerProbeKeySlot(node, scan *plan.Node) (int, bool) {
+	if node.JoinType != plan.Node_INNER || node.IsRightJoin || len(node.OnList) != 2 ||
+		len(scan.BindingTags) != 1 || scan.TableDef == nil || scan.TableDef.Pkey == nil ||
+		scan.TableDef.Pkey.PkeyColName != catalog.IndexTableIndexColName {
+		return 0, false
+	}
+	tag := scan.BindingTags[0]
+	probe, ok := builder.indexOwnerProbes[tag]
+	keyCol, hasKey := scan.TableDef.Name2ColIndex[catalog.IndexTableIndexColName]
+	ownerCol, hasOwner := scan.TableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
+	if !ok || !hasKey || !hasOwner || probe.keyCol == probe.ownerCol ||
+		keyCol != probe.keyCol || ownerCol != probe.ownerCol {
+		return 0, false
+	}
+	keySlot, ownerSlot := -1, -1
+	for i, expr := range node.OnList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+			return 0, false
+		}
+		col := fn.Args[0].GetCol()
+		if col == nil || col.RelPos != tag {
+			return 0, false
+		}
+		switch col.ColPos {
+		case probe.keyCol:
+			keySlot = i
+		case probe.ownerCol:
+			ownerSlot = i
+		}
+	}
+	return keySlot, keySlot >= 0 && ownerSlot >= 0 && keySlot != ownerSlot
+}
+
 func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 	sid := builder.compCtx.GetProcess().GetService()
@@ -613,6 +649,17 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	// No equi condition found
 	if probeExprs == nil {
 		return
+	}
+
+	// The owner equality must stay in the join, but need not be part of the
+	// scan filter. The physical key remains a necessary condition on its own.
+	ownerKeySlot := -1
+	if len(probeExprs) == 2 {
+		if slot, ok := builder.indexOwnerProbeKeySlot(node, leftChild); ok {
+			ownerKeySlot = slot
+			probeExprs = probeExprs[slot : slot+1]
+			buildExprs = buildExprs[slot : slot+1]
+		}
 	}
 
 	for i := range probeExprs {
@@ -802,6 +849,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			rfTag, false, inLimit, probeExprs[0], buildExpr, notOnPk)
 		if !ok {
 			return
+		}
+		if ownerKeySlot == 1 {
+			// HashBuild's RF reads slot 0. Keep its actual key order aligned.
+			node.OnList[0], node.OnList[1] = node.OnList[1], node.OnList[0]
 		}
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, probeSpec)
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, buildSpec)
