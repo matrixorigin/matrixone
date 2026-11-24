@@ -21,6 +21,68 @@ SET bitmap。修复版使用存储值维护索引，但不会自动改写旧索�
 使 `ADD PARTITION` 失败；需要先按下述条件验证并处理旧定义。基于旧定义的 `CREATE TABLE
 LIKE`、克隆、部分恢复或复制式 ALTER 也可能被拒绝。
 
+## 升级前检查保留的快照和 PITR
+
+删除当前表的索引不会修改旧快照里的表和索引定义。含旧 ENUM/SET 前缀索引的快照
+仍可能支持读取基础行，但新版的 `RESTORE TABLE` 和 `CLONE` 无法重建原表定义。
+在升级前，按租户盘点仍在恢复承诺内的备份、快照和 PITR。核对系统及各租户的权限和
+可见范围；`SHOW SNAPSHOTS` 只用于盘点当前身份可见的命名快照，不能代替 PITR 或其他
+保留点的盘点。每个仍需可恢复的受影响保留点都要有经过演练的数据恢复路径。
+
+对命名快照，查询**同一快照**里的表、列和索引目录。以下例子查询单个表；同一份查询
+去掉三个快照提示后可用于当前表。数据库或账户范围需要覆盖其中的所有表，包括实际
+保存索引的每个分区叶。目录不可访问、范围不完整或索引与列无法匹配时，需要离线
+恢复演练来确认，不能把这种结果当成没有受影响的索引。
+
+```sql
+SHOW SNAPSHOTS;
+
+SELECT t.rel_id, i.name, i.column_name, i.algo_params,
+       CASE WHEN LENGTH(c.attr_enum) > 0 THEN mo_show_visible_bin_enum(c.atttyp, c.attr_enum)
+            ELSE mo_show_visible_bin(c.atttyp, 3) END AS column_type,
+       t.rel_createsql
+FROM mo_catalog.mo_tables {snapshot='snapshot_name'} AS t
+JOIN mo_catalog.mo_indexes {snapshot='snapshot_name'} AS i ON i.table_id = t.rel_id
+LEFT JOIN mo_catalog.mo_columns {snapshot='snapshot_name'} AS c
+       ON c.att_relname_id = t.rel_id AND c.attname = i.column_name
+WHERE t.reldatabase = 'db_name' AND t.relname = 't'
+ORDER BY i.name, i.ordinal_position;
+```
+
+在 `prefix_lengths` 或 `prefix_lengths_v2` 中，找出具有正前缀长度的实际键列，与
+`column_type` 对照。自动附加的 `__mo_alias_` 主键列不属于用户声明的前缀。
+普通字符串前缀不属于此问题。旧 `SET('')` 可能在目录里显示为 `BIGINT UNSIGNED`；
+对有前缀而有效列类型不明的条目，核对建表和变更记录或在源版本演练。原始
+`rel_createsql` 可帮助定位，经过 ALTER 后它可能过时。
+
+对仍需恢复的受影响保留点，在维护窗口前完成离线演练：
+
+1. 保留源版本及升级前备份，在隔离环境上验证可读性。需要保留历史数据时，从该
+   保留点读取基础行并按已确认的新定义复制；如无法直接读取，使用源版本和相应的
+   备份在隔离环境恢复。使用源版本前先确认该备份与它匹配。
+2. 显式决定每个旧前缀索引的替代定义。普通索引可以由表负责人选择全列索引。
+   唯一索引需要确认替代约束是否符合业务规则，并核对基础行有无冲突。把唯一前缀换成
+   全列唯一索引会改变约束；遇到冲突先处理数据和约束，不能自动改索引或丢行。
+3. 对照源保留点核验主键、ENUM 序号、SET 位图、NULL 和替代索引的数据，并验证
+   重建表的新快照可以恢复。需要保留的恢复点还没有可用路径时，停止升级验收。
+
+已验证的例子是单个普通表，显式整数主键和 `ENUM('abc','abd')` 列。在隔离的新版
+实例可以用如下方式从仍可读的命名快照提取基础行，再为修复后的表创建新快照：
+
+```sql
+CREATE TABLE db_name.t_recovered (
+    id INT PRIMARY KEY, e ENUM('abc','abd'), KEY ix(e)
+);
+
+INSERT INTO db_name.t_recovered (id, e)
+SELECT id, e FROM db_name.t {snapshot='snapshot_name'} USE INDEX();
+```
+
+这个示例选择全列非唯一索引作为替代。实际表要显式补齐可写列及其类型，
+按下文的规则无损复制 SET 并逐行对照。表有依赖或有原先的唯一前缀约束时，
+需要核对应有的权限和约束后再确定替换方式。这里的新快照保存修复后表的数据和表
+定义，旧快照仍保留原定义。多表快照的一致性及 PITR 能力需要按原恢复范围验证。
+
 ## 非分区表
 
 保存 `SHOW CREATE TABLE` 和索引目录，记录每个索引的列顺序、前缀、唯一性、选项及
