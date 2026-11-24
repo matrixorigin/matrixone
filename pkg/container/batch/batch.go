@@ -1688,6 +1688,20 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 	return nil
 }
 
+// UnionByMask appends, in order, the rows of bat2 set in mask to every
+// column of bat: the row-selection form of Union, with no row list.
+func (bat *Batch) UnionByMask(bat2 *Batch, mask *bitmap.Bitmap, m *mpool.MPool) error {
+	for i, vec := range bat.Vecs {
+		if err := vec.UnionByMask(bat2.Vecs[i], mask, m); err != nil {
+			return err
+		}
+	}
+	if len(bat.Vecs) > 0 {
+		bat.rowCount = bat.Vecs[0].Length()
+	}
+	return nil
+}
+
 func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {

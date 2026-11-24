@@ -2238,6 +2238,7 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 
 // Shrink compacts a vector. For nonconstant vectors, sels must be ordered.
 func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	assertAscendingSels(sels)
 
 	if v.IsConst() {
 		if negate {

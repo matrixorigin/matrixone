@@ -1923,3 +1923,38 @@ func TestOwnReadOnlyVectorsFreesReplacedOnDupError(t *testing.T) {
 	big.Free(srcMP)
 	require.Zero(t, srcMP.CurrNB())
 }
+
+func TestBatchUnionByMask(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := New([]string{"a", "b"})
+	src.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	src.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	for i := 0; i < 100; i++ {
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(i), i%10 == 0, mp))
+		require.NoError(t, vector.AppendBytes(src.Vecs[1], []byte(fmt.Sprintf("row-%03d-long-enough-to-spill", i)), false, mp))
+	}
+	src.SetRowCount(100)
+	mask := new(bitmap.Bitmap)
+	require.NoError(t, mask.InitWithSize(100, mp))
+	for r := 0; r < 100; r += 3 {
+		mask.Add(uint64(r))
+	}
+
+	dst := New([]string{"a", "b"})
+	dst.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	dst.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	require.NoError(t, dst.UnionByMask(src, mask, mp))
+	require.Equal(t, 34, dst.RowCount())
+	for i := 0; i < 34; i++ {
+		r := 3 * i
+		require.Equal(t, r%10 == 0, dst.Vecs[0].IsNull(uint64(i)))
+		if r%10 != 0 {
+			require.Equal(t, int64(r), vector.GetFixedAtNoTypeCheck[int64](dst.Vecs[0], i))
+		}
+		require.Equal(t, fmt.Sprintf("row-%03d-long-enough-to-spill", r), dst.Vecs[1].GetStringAt(i))
+	}
+	dst.Clean(mp)
+	src.Clean(mp)
+	mask.Free()
+	require.Zero(t, mp.CurrNB())
+}
