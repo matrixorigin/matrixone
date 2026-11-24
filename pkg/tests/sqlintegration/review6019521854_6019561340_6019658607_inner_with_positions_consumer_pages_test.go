@@ -24,9 +24,13 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // The pagination closure of reviews 6019521854/6019561340/6019658607: an
@@ -448,6 +452,151 @@ func TestInnerWithPositionsConsumerAndReleasePages(t *testing.T) {
 			expect(t, "SELECT a FROM v_release_pages", []string{"2"})
 			_, e = conn.ExecContext(ctx, "DROP VIEW v_release_pages")
 			require.NoError(t, e)
+
+		})
+
+		t.Run("page_order_by_scalar_subquery_binds_authored_cte_over_same_name_physical", func(t *testing.T) {
+			// The moved page's ORDER BY reads x through a scalar subquery:
+			// abs(a - (SELECT max(a) FROM x)) is tie-free over the rows 1 and 2
+			// and its winner REVERSES with the source - the authored CTE has
+			// max(a)=2 so row 2 wins (distance 0), while a same-name physical
+			// x holding (1) has max(a)=1 so row 1 would win. If the generated
+			// page bound outside the WITH that declared x, the physical table
+			// (when present) or an absent-name 1146 would take the reference.
+			wire109 := func(t *testing.T, sql string) []int {
+				t.Helper()
+				stmt109, perr := conn.PrepareContext(ctx, sql)
+				require.NoError(t, perr, "prepare must accept the nested page shape")
+				defer func() { require.NoError(t, stmt109.Close()) }()
+				rows109, qerr := stmt109.QueryContext(ctx)
+				require.NoError(t, qerr, "the paginated shape must bind: %s", sql)
+				defer func() { require.NoError(t, rows109.Close()) }()
+				headings109, herr := rows109.Columns()
+				require.NoError(t, herr)
+				require.Equal(t, []string{"a"}, headings109, "the wire headings stay the authored projection")
+				var got []int
+				for rows109.Next() {
+					var v int
+					require.NoError(t, rows109.Scan(&v))
+					got = append(got, v)
+				}
+				require.NoError(t, rows109.Err())
+				sort.Ints(got)
+				return got
+			}
+			pageSQL := "WITH q AS (WITH x AS (SELECT 1 AS a UNION ALL SELECT 2 AS a) (SELECT a FROM x) ORDER BY abs(a - (SELECT max(a) FROM x)) LIMIT 1) SELECT a FROM q"
+			// No physical x: the moved ORDER BY must resolve the authored CTE.
+			require.Equal(t, []int{2}, wire109(t, pageSQL),
+				"the moved ORDER BY's scalar subquery must read the authored CTE (max=2 picks row 2), not an absent name")
+			// The same-name/same-column physical x holding (1) would reverse the
+			// winner to row 1 if it captured the reference: the authored WITH
+			// must still own the page's scope.
+			_, derr := conn.ExecContext(ctx, "drop table if exists x")
+			require.NoError(t, derr)
+			_, cerr := conn.ExecContext(ctx, "create table x(a int)")
+			require.NoError(t, cerr)
+			_, ierr := conn.ExecContext(ctx, "insert into x values (1)")
+			require.NoError(t, ierr)
+			defer func() { _, _ = conn.ExecContext(ctx, "drop table if exists x") }()
+			require.Equal(t, []int{2}, wire109(t, pageSQL),
+				"a same-name physical x with a reversing winner must not capture the page's ORDER BY subquery")
+			// The explicit legal derived-table equivalence returns the authored
+			// winner independently of the generated page machinery.
+			derivedSQL := "SELECT a FROM (WITH x AS (SELECT 1 AS a UNION ALL SELECT 2 AS a) SELECT a FROM x ORDER BY abs(a - (SELECT max(a) FROM x)) LIMIT 1) AS page"
+			require.Equal(t, []int{2}, wire109(t, derivedSQL),
+				"the derived equivalent, with the ORDER BY inside the WITH's lexical region, picks the same authored winner")
+			require.Equal(t, []int{2}, wire109(t, pageSQL),
+				"after the derived control the paginated shape still picks the authored winner")
+			_, derr2 := conn.ExecContext(ctx, "drop table if exists x")
+			require.NoError(t, derr2)
+
+			// The preserved unpaged inner owner under a real enclosing page: the
+			// WITH-bearing level has no local clauses of its own, so its
+			// declaration stays on its unchanged authored owner and the outer
+			// stage pages its output without any missing-relation error.
+			unpagedSQL := "WITH q AS ((WITH y AS (SELECT 7 AS b) (SELECT b FROM y)) LIMIT 1) SELECT b FROM q"
+			stmtU, uerr := conn.PrepareContext(ctx, unpagedSQL)
+			require.NoError(t, uerr, "the unpaged inner WITH under an outer page must prepare")
+			defer func() { require.NoError(t, stmtU.Close()) }()
+			rowsU, rerr := stmtU.QueryContext(ctx)
+			require.NoError(t, rerr, "the unpaged inner WITH must bind through its own declaration")
+			defer func() { require.NoError(t, rowsU.Close()) }()
+			headingsU, herrU := rowsU.Columns()
+			require.NoError(t, herrU)
+			require.Equal(t, []string{"b"}, headingsU)
+			var rowU []int
+			for rowsU.Next() {
+				var v int
+				require.NoError(t, rowsU.Scan(&v))
+				rowU = append(rowU, v)
+			}
+			require.NoError(t, rowsU.Err())
+			require.Equal(t, []int{7}, rowU, "the unpaged inner owner keeps its local CTE visible")
+		})
+
+		t.Run("nested_with_owner_page_binds_moved_order_by_in_x_scope", func(t *testing.T) {
+			// The nested owner the review #6029591213 witness targets: q's body
+			// ROOT is a clause-bearing ParenSelect wrapper with NO WITH, and its
+			// CHILD level is the one that owns WITH x plus its own ORDER BY and
+			// LIMIT. The generated page that consumes those clauses must own
+			// that exact WITH (the page-local move), so the moved ORDER BY's
+			// scalar subquery reads the authored CTE even when a same-name
+			// physical x(a) holding (1) would reverse the winner.
+			sql110 := "WITH q AS ((WITH x AS (SELECT 1 AS a UNION ALL SELECT 2 AS a) (SELECT a FROM x) ORDER BY abs(a - (SELECT max(a) FROM x)) LIMIT 1) LIMIT 1) SELECT a FROM q"
+			// Structural assertion on the parsed AST: q.Stmt's root is the
+			// parenthesized wrapper carrying the outer LIMIT and no WITH; the
+			// WITH x, its ORDER BY and its LIMIT live on the CHILD level.
+			parsed, err110 := parsers.ParseOne(ctx, dialect.MYSQL, sql110, 1)
+			require.NoError(t, err110, "the nested owner witness must parse")
+			outerStmt, okOuter := parsed.(*tree.Select)
+			require.True(t, okOuter, "the witness parses as a select statement")
+			require.NotNil(t, outerStmt.With, "the consuming statement declares WITH q")
+			require.NotEmpty(t, outerStmt.With.CTEs, "the q declaration exists")
+			root110, ok110 := outerStmt.With.CTEs[0].Stmt.(*tree.Select)
+			require.True(t, ok110, "q's body is a select expression")
+			require.Nil(t, root110.With, "the body root wrapper carries no WITH")
+			require.NotNil(t, root110.Limit, "the body root carries the outer stage LIMIT")
+			paren110, okParen := root110.Select.(*tree.ParenSelect)
+			require.True(t, okParen, "the body root is a parenthesized wrapper")
+			child110 := paren110.Select
+			require.NotNil(t, child110.With, "the child level owns the WITH x")
+			require.NotNil(t, child110.Limit, "the child level owns its own LIMIT")
+			require.NotEmpty(t, child110.OrderBy, "the child level owns its own ORDER BY")
+
+			wire110 := func(t *testing.T, sql string) []int {
+				t.Helper()
+				stmt110, perr := conn.PrepareContext(ctx, sql)
+				require.NoError(t, perr)
+				defer func() { require.NoError(t, stmt110.Close()) }()
+				rows110, qerr := stmt110.QueryContext(ctx)
+				require.NoError(t, qerr)
+				defer func() { require.NoError(t, rows110.Close()) }()
+				headings110, herr := rows110.Columns()
+				require.NoError(t, herr)
+				require.Equal(t, []string{"a"}, headings110)
+				var got []int
+				for rows110.Next() {
+					var v int
+					require.NoError(t, rows110.Scan(&v))
+					got = append(got, v)
+				}
+				require.NoError(t, rows110.Err())
+				sort.Ints(got)
+				return got
+			}
+			require.Equal(t, []int{2}, wire110(t, sql110),
+				"no physical x: the generated page owning the child's clauses binds x's scope (max=2), not an absent name")
+			_, derr := conn.ExecContext(ctx, "drop table if exists x")
+			require.NoError(t, derr)
+			_, cerr := conn.ExecContext(ctx, "create table x(a int)")
+			require.NoError(t, cerr)
+			_, ierr := conn.ExecContext(ctx, "insert into x values (1)")
+			require.NoError(t, ierr)
+			defer func() { _, _ = conn.ExecContext(ctx, "drop table if exists x") }()
+			require.Equal(t, []int{2}, wire110(t, sql110),
+				"a same-name physical x(1) must not reverse the page's winner: the authored CTE still owns the moved ORDER BY")
+			_, derr2 := conn.ExecContext(ctx, "drop table if exists x")
+			require.NoError(t, derr2)
 		})
 	})
 }

@@ -410,6 +410,13 @@ type QueryBuilder struct {
 	// pagination wrap generated as internal page stages: pointer identity of
 	// the generated page owner, not any alias spelling or shared flag.
 	syntheticPageClauses map[*tree.SelectClause]bool
+	// clauseCorrespondence maps the cloned SelectClause pointers produced by the
+	// pagination wrap copy back to the authored counterparts. The view star
+	// expansion capture keys its freeze by the clause being bound: for a
+	// paginated view that clause is a clone, while the catalog formatter
+	// walks the authored statement, so the capture records the authored key.
+	clauseCorrespondence map[*tree.SelectClause]*tree.SelectClause
+
 	// syntheticStarOrdinals carries, for the wrap's generated star refs
 	// only, the sole derived binding's visible column by relation tag and
 	// ordinal, so duplicate authored headings bind positionally while a

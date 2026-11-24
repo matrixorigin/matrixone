@@ -6586,9 +6586,9 @@ func (builder *QueryBuilder) registerSyntheticPages(pages []*tree.Select) func()
 	}
 }
 
-func ordinaryPaginationWrap(s *tree.Select) (*tree.Select, []*tree.Select, bool) {
+func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
 	if s == nil {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	// The CTE body AST is owned by the declaration (cteRef.ast.Stmt) and can
 	// be bound repeatedly - by rebinds, prepared replans or persisted-view
@@ -6605,6 +6605,8 @@ func ordinaryPaginationWrap(s *tree.Select) (*tree.Select, []*tree.Select, bool)
 	var stages []pageStage
 	withStopped := false
 	var withLevel *tree.Select
+	var stageWith *tree.With
+	var clauseMemo map[*tree.SelectClause]*tree.SelectClause
 	// An inner wrapper's WITH owns that level's lexical region: its own trailing
 	// clauses are captured as the page wrapping that whole level and cleared
 	// from the node, so the WITH keeps owning its scope while the enclosing
@@ -6629,7 +6631,7 @@ func ordinaryPaginationWrap(s *tree.Select) (*tree.Select, []*tree.Select, bool)
 			// authored state the reconstruction would discard - a lock, an
 			// export (INTO) or variable targets - stays whole for the same
 			// reason: nothing may silently strip an authored clause there.
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		if cur.With != nil && cur != s {
 			collectInnerWithStage(cur)
@@ -6645,7 +6647,7 @@ func ordinaryPaginationWrap(s *tree.Select) (*tree.Select, []*tree.Select, bool)
 		}
 	}
 	if nonEmpty == 0 {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if nonEmpty < 2 && !withStopped && cur.Limit == nil && len(cur.OrderBy) == 0 {
 		// One enclosing page over a plain, clause-free innermost select keeps
@@ -6653,18 +6655,30 @@ func ordinaryPaginationWrap(s *tree.Select) (*tree.Select, []*tree.Select, bool)
 		// through a synthetic star, so an explicit CTE column list still
 		// renames duplicate inner headings by position, and a single stage
 		// applied on one flattened select stays one legal clause set.
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if withLevel != nil {
-		content := cloneTreeSelect(withLevel)
+		content, withClauseMemo := cloneTreeSelectCorrespondence(withLevel, captureOrigins)
 		if content == nil {
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
+		clauseMemo = withClauseMemo
 		// The inner WITH-bearing level's own page moves out of the content:
 		// clear it on the copy alone so the authored declaration keeps its
 		// clauses for every later reader (rebinds, prepared replans and
-		// persisted-view regeneration).
-		content.Limit, content.OrderBy = nil, nil
+		// persisted-view regeneration). Its WITH owns exactly that page's
+		// lexical region: the generated node which receives this level's
+		// clauses binds the WITH through the normal preprocessCte and the
+		// ordinary binder, so the moved ORDER BY and its expressions resolve
+		// in the scope that authored them, while the copied content below
+		// only binds as that page's input.
+		if withLevel.Limit != nil || len(withLevel.OrderBy) > 0 {
+			// This level owns a local page that carries its clauses, so its
+			// WITH moves with them. An unpaged WITH-bearing level keeps the
+			// declaration on its unchanged authored owner: nothing skips it.
+			stageWith = content.With
+			content.Limit, content.OrderBy, content.With = nil, nil, nil
+		}
 		cur = content
 	}
 	inner := cur
@@ -6696,16 +6710,41 @@ func ordinaryPaginationWrap(s *tree.Select) (*tree.Select, []*tree.Select, bool)
 			Limit:   limit,
 			OrderBy: orderBy,
 		}
+		if stageWith != nil && i == len(stages)-1 {
+			wrapped.With = stageWith
+		}
 		inner = wrapped
 		pages = append(pages, wrapped)
 	}
 	// The body's own WITH declares the fragments the whole expression
-	// reads: it moves to the outermost wrapped select, keeping the lexical
-	// scope identical.
+	// reads: it lands on the outermost wrapped select, keeping the lexical
+	// scope identical. When the inner page that now owns its level's WITH
+	// is itself the outermost node, a distinct clause-free outer owner
+	// carries the consuming root's WITH: it introduces no pagination stage
+	// of its own and passes the child's projection through by ordinal.
 	if s.With != nil {
-		inner.With = s.With
+		if inner.With != nil {
+			outer := &tree.Select{
+				Select: &tree.SelectClause{
+					Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
+					From: &tree.From{
+						Tables: tree.TableExprs{
+							&tree.AliasedTableExpr{
+								Expr: &tree.ParenTableExpr{Expr: inner},
+								As:   tree.AliasClause{Alias: tree.Identifier("ordinary_cte_page_outer")},
+							},
+						},
+					},
+				},
+				With: s.With,
+			}
+			inner = outer
+			pages = append(pages, outer)
+		} else {
+			inner.With = s.With
+		}
 	}
-	return inner, pages, true
+	return inner, pages, clauseMemo, true
 }
 
 func (builder *QueryBuilder) bindCte(
@@ -6823,9 +6862,46 @@ func (builder *QueryBuilder) bindCte(
 		// equivalent derived-table nest.
 		if ctx.legacyCTEScope {
 			bodyForBinding = s
-		} else if wrapped, pages, rewritten := ordinaryPaginationWrap(fullBody); rewritten {
+		} else if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(fullBody, ctx.captureViewStarExpansion); rewritten {
 			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 			defer unregisterSyntheticPages()
+			if len(clauseMemo) > 0 {
+				previous := builder.clauseCorrespondence
+				composed := clauseMemo
+				if previous != nil {
+					composed = make(map[*tree.SelectClause]*tree.SelectClause, len(previous)+len(clauseMemo))
+					for k, v := range previous {
+						composed[k] = v
+					}
+					for k, v := range clauseMemo {
+						composed[k] = v
+					}
+					// Canonicalize per-entered origin: an inner wrap can clone
+					// an intermediate clause whose recorded counterpart is
+					// itself a clone of an enclosing wrap's authored clause.
+					// The capture boundary records one key, so resolve every
+					// entry to its final authored pointer here, bounded by the
+					// map size with a seen set.
+					for k, v := range composed {
+						final := v
+						seen := map[*tree.SelectClause]struct{}{final: {}}
+						for {
+							next, ok := composed[final]
+							if !ok || final == next {
+								break
+							}
+							if _, circular := seen[next]; circular {
+								break
+							}
+							seen[next] = struct{}{}
+							final = next
+						}
+						composed[k] = final
+					}
+				}
+				builder.clauseCorrespondence = composed
+				defer func() { builder.clauseCorrespondence = previous }()
+			}
 			// An ordinary CTE body can be a whole parenthesized query
 			// expression whose enclosing wrappers each carry their own
 			// OFFSET/LIMIT/ORDER BY stage (MySQL parenthesized query
@@ -6995,34 +7071,42 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 		// visible when an inner (possibly parenthesized) WITH is preprocessed
 		// into the same BindContext, inner names legally shadow the outer
 		// ones with declaration order preserved, and a parent-shared map
-		// inherited through BindContext is never mutated.
-		merged := make(map[string]*CTERef, len(ctx.cteByName)+len(refs))
-		for name, ref := range ctx.cteByName {
-			merged[name] = ref
-		}
-		for name, ref := range refs {
-			if outer, ok := ctx.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
-				// Same-name inner declaration: keep the displaced enclosing
-				// definition reachable for lookups that happen before the
-				// inner name enters scope.
-				ref.shadowedOuter = outer
-			} else if ref.shadowedOuter == nil {
-				// The per-body declaration scope starts empty (body
-				// isolation), so the enclosing definition this inner name
-				// displaces may live only in an ancestor frame: walk outward
-				// and record the first visible same-name definition so the
-				// displaced chain keeps the real declaration ancestry across
-				// multiple pending scopes.
-				for p := ctx.parent; p != nil; p = p.parent {
-					if outer, ok := p.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
-						ref.shadowedOuter = outer
-						break
+		// inherited through BindContext is never mutated. A marker-free
+		// persisted definition keeps the released preprocessing instead:
+		// its binder replaced the visible map, so the enclosing declarations
+		// this stored WITH shadowed at authoring time do not resurface while
+		// replaying the released rows.
+		if ctx.legacyCTEScope {
+			ctx.cteByName = refs
+		} else {
+			merged := make(map[string]*CTERef, len(ctx.cteByName)+len(refs))
+			for name, ref := range ctx.cteByName {
+				merged[name] = ref
+			}
+			for name, ref := range refs {
+				if outer, ok := ctx.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
+					// Same-name inner declaration: keep the displaced enclosing
+					// definition reachable for lookups that happen before the
+					// inner name enters scope.
+					ref.shadowedOuter = outer
+				} else if ref.shadowedOuter == nil {
+					// The per-body declaration scope starts empty (body
+					// isolation), so the enclosing definition this inner name
+					// displaces may live only in an ancestor frame: walk outward
+					// and record the first visible same-name definition so the
+					// displaced chain keeps the real declaration ancestry across
+					// multiple pending scopes.
+					for p := ctx.parent; p != nil; p = p.parent {
+						if outer, ok := p.cteByName[name]; ok && outer != ref && (outer.withClause == nil || outer.withClause != ref.withClause) {
+							ref.shadowedOuter = outer
+							break
+						}
 					}
 				}
+				merged[name] = ref
 			}
-			merged[name] = ref
+			ctx.cteByName = merged
 		}
-		ctx.cteByName = merged
 		// One declaration scope per WITH clause: every ref in the same WITH
 		// shares a single declaration context, which is also the identifier
 		// the masked-lookup walk uses to distinguish a pending same-WITH
@@ -7036,15 +7120,55 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
-	if stmt != nil && stmt.Ep == nil && stmt.With != nil {
+	if stmt != nil && stmt.Ep == nil && stmt.With != nil && !ctx.legacyCTEScope {
 		// Only a WITH-bearing consuming SELECT composes its parenthesized
 		// pagination stages here: its own WITH is hoisted verbatim onto the
 		// composed outermost level. An ordinary no-WITH statement keeps
 		// bindSelect's flatten-and-reject contract, so duplicate ORDER
-		// BY/LIMIT clause sets stay the documented syntax error.
-		if wrapped, pages, rewritten := ordinaryPaginationWrap(stmt); rewritten {
+		// BY/LIMIT clause sets stay the documented syntax error. A
+		// marker-free persisted definition keeps the released bindSelect
+		// unwrap instead: its legacy route never reaches the generated
+		// pagination tree.
+		if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(stmt, ctx.captureViewStarExpansion); rewritten {
 			unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 			defer unregisterSyntheticPages()
+			if len(clauseMemo) > 0 {
+				previous := builder.clauseCorrespondence
+				composed := clauseMemo
+				if previous != nil {
+					composed = make(map[*tree.SelectClause]*tree.SelectClause, len(previous)+len(clauseMemo))
+					for k, v := range previous {
+						composed[k] = v
+					}
+					for k, v := range clauseMemo {
+						composed[k] = v
+					}
+					// Canonicalize per-entered origin: an inner wrap can clone
+					// an intermediate clause whose recorded counterpart is
+					// itself a clone of an enclosing wrap's authored clause.
+					// The capture boundary records one key, so resolve every
+					// entry to its final authored pointer here, bounded by the
+					// map size with a seen set.
+					for k, v := range composed {
+						final := v
+						seen := map[*tree.SelectClause]struct{}{final: {}}
+						for {
+							next, ok := composed[final]
+							if !ok || final == next {
+								break
+							}
+							if _, circular := seen[next]; circular {
+								break
+							}
+							seen[next] = struct{}{}
+							final = next
+						}
+						composed[k] = final
+					}
+				}
+				builder.clauseCorrespondence = composed
+				defer func() { builder.clauseCorrespondence = previous }()
+			}
 			return builder.bindSelect(wrapped, ctx, isRoot)
 		}
 	}
@@ -7408,7 +7532,16 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				if isRoot {
 					builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 				}
-				captureGroupingSetViewStarExpansion(ctx, expandedSelectClause, selectStmts, hiddenResultLen)
+				groupingCapturedClause := expandedSelectClause
+				if authoredClause, ok := builder.clauseCorrespondence[expandedSelectClause]; ok {
+					groupingCapturedClause = authoredClause
+				}
+				for i, branch := range selectStmts {
+					if authoredBranch, ok := builder.clauseCorrespondence[branch]; ok {
+						selectStmts[i] = authoredBranch
+					}
+				}
+				captureGroupingSetViewStarExpansion(ctx, groupingCapturedClause, selectStmts, hiddenResultLen)
 				return
 			}
 		}
@@ -7460,7 +7593,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if len(headings) > len(selectList) {
 			headings = headings[len(headings)-len(selectList):]
 		}
-		ctx.expandedSelectLists[expandedSelectClause] = cloneViewSelectExprsForView(
+		captureClause := expandedSelectClause
+		if authoredClause, ok := builder.clauseCorrespondence[expandedSelectClause]; ok {
+			// A paginated view binds its authored star through the wrap copy:
+			// the freeze walk looks the expansion up on the authored clause,
+			// so the capture records the authored identity.
+			captureClause = authoredClause
+		}
+		ctx.expandedSelectLists[captureClause] = cloneViewSelectExprsForView(
 			ctx,
 			expandedSelectClause,
 			selectList,
@@ -11801,6 +11941,31 @@ func cloneTreeSelect(stmt *tree.Select) *tree.Select {
 	return cloned.Interface().(*tree.Select)
 }
 
+// cloneTreeSelectCorrespondence returns the pure clone together with the
+// bounded clone-to-authored SelectClause mapping for one pagination wrap. The
+// correspondence is scoped to the active bind: the wrapped tree, the star
+// expansion capture inside it and the cleanup happen in the same bind.
+func cloneTreeSelectCorrespondence(stmt *tree.Select, captureOrigins bool) (*tree.Select, map[*tree.SelectClause]*tree.SelectClause) {
+	if stmt == nil {
+		return nil, nil
+	}
+	if !captureOrigins {
+		// The ordinary path never builds an origin map: no view capture is
+		// pending, so the clone stays the plain deep copy with no extra walk.
+		return cloneTreeSelect(stmt), nil
+	}
+	visited := make(map[treeClonePointer]reflect.Value)
+	origins := make(map[*tree.SelectClause]*tree.SelectClause)
+	cloned := cloneTreeValueCapture(reflect.ValueOf(stmt), visited, &origins)
+	if !cloned.IsValid() || cloned.IsNil() {
+		return nil, nil
+	}
+	if len(origins) == 0 {
+		return cloned.Interface().(*tree.Select), nil
+	}
+	return cloned.Interface().(*tree.Select), origins
+}
+
 func cloneTreeSelectExprs(exprs tree.SelectExprs) tree.SelectExprs {
 	if len(exprs) == 0 {
 		return nil
@@ -11958,6 +12123,10 @@ func DeepCopySelect(source *tree.Select) *tree.Select {
 }
 
 func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Value) reflect.Value {
+	return cloneTreeValueCapture(value, visited, nil)
+}
+
+func cloneTreeValueCapture(value reflect.Value, visited map[treeClonePointer]reflect.Value, selectOrigins *map[*tree.SelectClause]*tree.SelectClause) reflect.Value {
 	if !value.IsValid() {
 		return value
 	}
@@ -11967,7 +12136,7 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		if value.IsNil() {
 			return reflect.Zero(value.Type())
 		}
-		cloned := cloneTreeValue(value.Elem(), visited)
+		cloned := cloneTreeValueCapture(value.Elem(), visited, selectOrigins)
 		result := reflect.New(value.Type()).Elem()
 		result.Set(cloned)
 		return result
@@ -11983,20 +12152,32 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		visited[key] = result
 		if value.Elem().Kind() == reflect.Struct {
 			result.Elem().Set(value.Elem())
-			cloneTreeStructFields(result.Elem(), value.Elem(), visited)
+			cloneTreeStructFields(result.Elem(), value.Elem(), visited, selectOrigins)
 			if sample, ok := value.Interface().(*tree.SampleExpr); ok {
 				columns, star := sample.GetColumns()
 				result.Interface().(*tree.SampleExpr).SetColumns(
-					cloneTreeValue(reflect.ValueOf(columns), visited).Interface().(tree.Exprs), star)
+					cloneTreeValueCapture(reflect.ValueOf(columns), visited, selectOrigins).Interface().(tree.Exprs), star)
+			}
+			if selectOrigins != nil && value.Type() == reflect.TypeOf((*tree.SelectClause)(nil)) {
+				// Typed origin recorded at creation: this same traversal copies
+				// every branch the clone supports - a WITH's CTE bodies, derived
+				// FROM subqueries, scalar subqueries and the accessor-copied
+				// SAMPLE branches included - so the capture receives a complete
+				// clone-to-authored SelectClause map with no second walk.
+				authoredClause, authoredOK := value.Interface().(*tree.SelectClause)
+				clonedClause, clonedOK := result.Interface().(*tree.SelectClause)
+				if authoredOK && clonedOK && authoredClause != nil && clonedClause != nil {
+					(*selectOrigins)[clonedClause] = authoredClause
+				}
 			}
 		} else {
-			result.Elem().Set(cloneTreeValue(value.Elem(), visited))
+			result.Elem().Set(cloneTreeValueCapture(value.Elem(), visited, selectOrigins))
 		}
 		return result
 	case reflect.Struct:
 		result := reflect.New(value.Type()).Elem()
 		result.Set(value)
-		cloneTreeStructFields(result, value, visited)
+		cloneTreeStructFields(result, value, visited, selectOrigins)
 		return result
 	case reflect.Slice:
 		if value.IsNil() {
@@ -12004,7 +12185,7 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		}
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		for i := 0; i < value.Len(); i++ {
-			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+			result.Index(i).Set(cloneTreeValueCapture(value.Index(i), visited, selectOrigins))
 		}
 		return result
 	case reflect.Map:
@@ -12018,13 +12199,13 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		result := reflect.MakeMapWithSize(value.Type(), value.Len())
 		visited[key] = result
 		for iter := value.MapRange(); iter.Next(); {
-			result.SetMapIndex(cloneTreeValue(iter.Key(), visited), cloneTreeValue(iter.Value(), visited))
+			result.SetMapIndex(cloneTreeValueCapture(iter.Key(), visited, selectOrigins), cloneTreeValueCapture(iter.Value(), visited, selectOrigins))
 		}
 		return result
 	case reflect.Array:
 		result := reflect.New(value.Type()).Elem()
 		for i := 0; i < value.Len(); i++ {
-			result.Index(i).Set(cloneTreeValue(value.Index(i), visited))
+			result.Index(i).Set(cloneTreeValueCapture(value.Index(i), visited, selectOrigins))
 		}
 		return result
 	default:
@@ -12032,12 +12213,12 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 	}
 }
 
-func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]reflect.Value) {
+func cloneTreeStructFields(dst, src reflect.Value, visited map[treeClonePointer]reflect.Value, selectOrigins *map[*tree.SelectClause]*tree.SelectClause) {
 	for i := 0; i < src.NumField(); i++ {
 		if src.Type().Field(i).PkgPath != "" {
 			continue
 		}
-		dst.Field(i).Set(cloneTreeValue(src.Field(i), visited))
+		dst.Field(i).Set(cloneTreeValueCapture(src.Field(i), visited, selectOrigins))
 	}
 }
 

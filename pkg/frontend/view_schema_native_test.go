@@ -19,6 +19,7 @@ package frontend_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -187,6 +188,103 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			testNativeViewSchemaRootScopes(t, ctx, cn, svc, database)
 		})
 		var historical timestamp.Timestamp
+		t.Run("committed_generation_viewdef_create_alter", func(t *testing.T) {
+			// The review6029591213 nested-paginated star case runs OUTSIDE the
+			// shared lifecycle transaction: each generation's DDL commits
+			// through the cluster executor and every read opens its own fresh
+			// transaction-bound request, so the immutable visibility stamp
+			// stays intact across ALTER (the stale-request invariant stands).
+			exec("drop view if exists page_nested", executor.Options{}.WithDatabase(database))
+			exec("drop view if exists page_plain", executor.Options{}.WithDatabase(database))
+			exec("create view page_nested as with q as ((with x as (select id, label from source) (select * from x) order by id limit 1) limit 1) select id, label from q", executor.Options{}.WithDatabase(database))
+			withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
+				viewDefs, verr := frontend.ReadNativeViewMetadataSQLForTest(ctx, compiler,
+					"select viewdef, owner from mo_catalog.mo_tables where reldatabase = '"+database+"' and relname = 'page_nested'")
+				require.NoError(t, verr)
+				require.NotEmpty(t, viewDefs)
+				require.NotEmpty(t, viewDefs[0][0], "the complete raw CREATE ViewDef bytes are kept untruncated")
+				t.Logf("CREATE ViewDef raw bytes: %s", viewDefs[0][0])
+				var createViews plan.ViewData
+				require.NoError(t, json.Unmarshal([]byte(viewDefs[0][0]), &createViews))
+				require.NotNil(t, createViews.CTEScopeProtocol, "the current cte_scope_protocol marker is persisted")
+				require.EqualValues(t, 1, *createViews.CTEScopeProtocol)
+				require.Contains(t, createViews.Stmt, "select `source`.`id`, `source`.`label` from `source`", "the authored inner star is frozen as the explicit id/label projection")
+				require.Contains(t, createViews.Definition, "select `x`.`id` as `id`, `x`.`label` as `label` from `x`", "the inner derived projection stays explicit")
+				require.NotContains(t, viewDefs[0][0], " * ", "the authored inner star is stored as the explicit projection")
+				require.NotContains(t, viewDefs[0][0], "__mo_", "no hidden source field leaks into the persisted definition")
+				request := compiler.NewViewSchemaRequest(ctx, func(context.Context, string, string, *plan.Snapshot) error {
+					return nil
+				})
+				defer request.Close()
+				value := describeNativeViewSchema(t, request, database, "page_nested", nil)
+				require.Len(t, value.columns, 2)
+				require.Equal(t, "id", value.columns[0].Name)
+				require.Equal(t, "label", value.columns[1].Name)
+				nestedDeps := make(map[string]bool)
+				for _, dependency := range value.dependencies {
+					require.NotZero(t, dependency.RelationID)
+					t.Logf("CREATE dependency %s RelationID=%d", dependency.RelationName, dependency.RelationID)
+					nestedDeps[dependency.RelationName] = true
+				}
+				require.True(t, nestedDeps["source"], "the physical source is the real dependency; a lexical CTE is not")
+				require.False(t, nestedDeps["x"], "no CTE dependency leaks into the persisted relation set")
+				request.Close()
+			})
+			// A literal ALTER with an observably distinct authored projection.
+			exec("alter view page_nested as with q as ((with x as (select id, label from source) (select * from x) order by id limit 1) limit 1) select label as renamed_label, id from q", executor.Options{}.WithDatabase(database))
+			withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
+				alterDefs, aerr := frontend.ReadNativeViewMetadataSQLForTest(ctx, compiler,
+					"select viewdef, owner from mo_catalog.mo_tables where reldatabase = '"+database+"' and relname = 'page_nested'")
+				require.NoError(t, aerr)
+				require.NotEmpty(t, alterDefs)
+				require.NotEmpty(t, alterDefs[0][0], "the complete raw ALTER ViewDef bytes are kept untruncated")
+				t.Logf("ALTER ViewDef raw bytes: %s", alterDefs[0][0])
+				var alterViews plan.ViewData
+				require.NoError(t, json.Unmarshal([]byte(alterDefs[0][0]), &alterViews))
+				require.NotNil(t, alterViews.CTEScopeProtocol, "the ALTER generation keeps the current marker")
+				require.EqualValues(t, 1, *alterViews.CTEScopeProtocol)
+				require.Contains(t, alterViews.Stmt, "renamed_label", "the ALTER ViewDef keeps the authored rename")
+				require.Contains(t, alterViews.Definition, "select `x`.`id` as `id`, `x`.`label` as `label` from `x`", "the inner derived projection stays explicit after ALTER")
+				require.Contains(t, alterDefs[0][0], "renamed_label", "the ALTER projection is the authored rename")
+				require.NotContains(t, alterDefs[0][0], " * ", "the authored inner star is stored as the explicit projection after ALTER")
+				require.NotContains(t, alterDefs[0][0], "__mo_", "no hidden source field leaks after ALTER")
+				request := compiler.NewViewSchemaRequest(ctx, func(context.Context, string, string, *plan.Snapshot) error {
+					return nil
+				})
+				defer request.Close()
+				altered := describeNativeViewSchema(t, request, database, "page_nested", nil)
+				require.Len(t, altered.columns, 2)
+				require.Equal(t, "renamed_label", altered.columns[0].Name, "the ALTER generation is observably distinct")
+				require.Equal(t, "id", altered.columns[1].Name)
+				alterDeps := make(map[string]bool)
+				for _, dependency := range altered.dependencies {
+					require.NotZero(t, dependency.RelationID)
+					t.Logf("ALTER dependency %s RelationID=%d", dependency.RelationName, dependency.RelationID)
+					alterDeps[dependency.RelationName] = true
+				}
+				require.True(t, alterDeps["source"])
+				require.False(t, alterDeps["x"])
+				request.Close()
+			})
+			// The no-page control through the same committed DDL + a fresh read.
+			exec("create view page_plain as with x as (select * from source) select id, label from x", executor.Options{}.WithDatabase(database))
+			withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
+				request := compiler.NewViewSchemaRequest(ctx, func(context.Context, string, string, *plan.Snapshot) error {
+					return nil
+				})
+				defer request.Close()
+				plain := describeNativeViewSchema(t, request, database, "page_plain", nil)
+				require.Len(t, plain.columns, 2)
+				require.Equal(t, "id", plain.columns[0].Name)
+				require.Equal(t, "label", plain.columns[1].Name)
+				plainDeps := make(map[string]bool)
+				for _, dependency := range plain.dependencies {
+					plainDeps[dependency.RelationName] = true
+				}
+				require.True(t, plainDeps["source"])
+				request.Close()
+			})
+		})
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(_ *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
 			historical = op.SnapshotTS()
 		})
