@@ -308,6 +308,18 @@ alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text wher
 select id from db1.t_rule_text order by id;
 -- @session
 
+-- Double quotes denote a string or an identifier depending on the reader.
+alter role test_rule_role_inherit_a add rule 'select "code" as x from db1.t_rule_text where (select true)' on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select 'code' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+set session sql_mode = '';
+select x, count(*) from db1.t_rule_text group by x;
+set session sql_mode = 'ANSI_QUOTES';
+select x, count(*) from db1.t_rule_text group by x;
+set session sql_mode = '';
+select x, count(*) from db1.t_rule_text group by x;
+-- @session
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;

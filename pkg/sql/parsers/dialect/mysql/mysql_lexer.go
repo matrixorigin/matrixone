@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
@@ -287,10 +288,10 @@ func (w WhereSource) Split(sql string, keepWhere bool) (prefix, predicate, suffi
 		balanceExecutableComment(sql[w.end:], w.endInComment, false), true
 }
 
-// ParseOneWithWhereSources also records the source of each WHERE by node,
-// letting callers select the outer predicate even when it contains subqueries.
-func ParseOneWithWhereSources(ctx context.Context, sql string, lower int64) (tree.Statement, map[*tree.Where]WhereSource, error) {
-	l := NewLexer(dialect.MYSQL, sql, lower)
+// ParseOneForRewriteMerge parses comparison trees and records WHERE source ranges.
+// Identifier tokens are folded for shape comparison; literals retain their type and bytes.
+func ParseOneForRewriteMerge(ctx context.Context, sql string, lower int64, mode SQLModeFlags) (tree.Statement, map[*tree.Where]WhereSource, error) {
+	l := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, mode)
 	defer PutScanner(l.scanner)
 	l.whereSources = make(map[*tree.Where]WhereSource)
 	stmt, err := parseOne(ctx, l)
@@ -548,8 +549,14 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ = ADMIN
 	}
 
+	if l.whereSources != nil && l.lastToken == UNDERSCORE_BINARY && typ == STRING && str != "" {
+		typ, str = HEXNUM, "0x"+hex.EncodeToString([]byte(str))
+	}
 	l.previousToken = l.lastToken
 	l.lastToken = typ
+	if l.whereSources != nil && (typ == ID || typ == HEXNUM || typ != 0 && keywords[strings.ToLower(str)] == typ) {
+		str = strings.ToLower(str)
+	}
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ

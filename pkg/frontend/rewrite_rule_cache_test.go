@@ -261,7 +261,7 @@ func TestPreparedRefreshDoesNotMaterializeOrAliasPolicy(t *testing.T) {
 func TestRewriteRuleCacheFreshness(t *testing.T) {
 	for _, materialize := range []bool{true, false} {
 		t.Run(fmt.Sprintf("materialize_%v", materialize), func(t *testing.T) {
-			for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
+			for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "changed competing source", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
 				t.Run(scenario, func(t *testing.T) {
 					ctx := context.Background()
 					ses := newSes(&privilege{}, gomock.NewController(t))
@@ -282,6 +282,14 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						require.NoError(t, err)
 						return &policy
 					}
+					// The default-mode winner stays identical; only ANSI_QUOTES makes
+					// the earlier projection compatible with the later identifier.
+					if scenario == "changed competing source" {
+						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
+							{10, "db.t", "select 'East' from db.t where a = 1"},
+							{10, "db.t", "select east from db.t where a = 2"},
+						})
+					}
 					initial := capture()
 					old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyGeneration: initial.generation}
 					ses.prepareStmts["old"] = old
@@ -297,6 +305,12 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						bh.sql2result[getSqlForRoleIDsOfUserForRuleCache(42)] = newMrsForRoleIdOfUserId(nil)
 					case "unrelated catalog change":
 						proof = 2
+					case "changed competing source":
+						proof = 2
+						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
+							{10, "db.t", `select "East" from db.t where a = 1`},
+							{10, "db.t", "select east from db.t where a = 2"},
+						})
 					case "changed rules":
 						proof = 2
 						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{{10, "db.t", "select * from db.t where tenant=1"}})
@@ -337,7 +351,7 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 						return
 					}
 					refreshed := capture()
-					changed := scenario == "changed rules" || scenario == "unknown proof" || scenario == "proof error"
+					changed := scenario == "changed rules" || scenario == "changed competing source" || scenario == "unknown proof" || scenario == "proof error"
 					require.Equal(t, changed, old.rewritePolicyInvalidated.Load())
 					if changed {
 						require.NotEmpty(t, ses.ruleCache)
@@ -391,7 +405,7 @@ func TestLoadRuleCacheTransactionFailures(t *testing.T) {
 			bh.sql2err[failing] = failure
 			stub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer stub.Reset()
-			_, err := loadRuleCache(context.Background(), ses)
+			_, _, err := loadRuleCache(context.Background(), ses)
 			require.ErrorIs(t, err, failure)
 			require.Equal(t, "begin;", bh.executedSQLs[0])
 			if failing != "begin;" {

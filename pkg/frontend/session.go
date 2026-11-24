@@ -262,6 +262,7 @@ type Session struct {
 	// A loaded cache is reused only while a fresh proof still matches it, so a
 	// rule change committed through another CN is observed here (issue #29133).
 	// The zero version never authorizes reuse.
+	ruleVariants             *roleRuleVariants
 	ruleCacheIdentity        rewriteRuleIdentity
 	ruleCacheVersion         any
 	ruleCacheVersionProvider func(context.Context, *Session) (any, error)
@@ -2650,6 +2651,7 @@ func (ses *Session) invalidateRewriteRuleCacheLocked() {
 	ses.ruleCacheMu.Lock()
 	roleRulesActive := len(ses.ruleCache) > 0
 	ses.ruleCache = nil
+	ses.ruleVariants = nil
 	ses.ruleCacheVersion = nil
 	ses.rewritePolicyGeneration++
 	ses.ruleCacheMu.Unlock()

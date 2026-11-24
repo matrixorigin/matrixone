@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -680,7 +681,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{10, "db3.t3", "select * from db3.t3 /* persisted */ where id = 1"},
 	})
 
-	rules, err := loadRuleCache(context.Background(), ses)
+	rules, _, err := loadRuleCache(context.Background(), ses)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
 		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
@@ -723,7 +724,7 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 		{10, "db1.t1", "select a from"},
 	})
 
-	_, err := loadRuleCache(context.Background(), ses)
+	_, _, err := loadRuleCache(context.Background(), ses)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
 }
@@ -2140,6 +2141,123 @@ func TestMergeRewriteRulesPreservesPredicateSource(t *testing.T) {
 	}
 }
 
+func TestMergeRewriteRulesScalarSubquery(t *testing.T) {
+	const base = "select a from db.t where "
+	for _, scalar := range []string{"(select true)", "((select true))"} {
+		for _, pair := range [][3]string{
+			{scalar, "a = 2", scalar + " or (a = 2)"},
+			{"a = 2", scalar, "(a = 2) or " + scalar},
+		} {
+			got, err := mergeRewriteRules(t.Context(), base+pair[0], base+pair[1])
+			require.NoError(t, err)
+			require.Equal(t, base+pair[2], got)
+		}
+	}
+}
+
+func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		left, right, mode string
+		merge             bool
+	}{
+		{"'1'", "1", "", false},
+		{"'East'", "'east'", "", false},
+		{"'abc'", "abc", "", false},
+		{"concat(LABEL,'East')", "concat(label,'East')", "", true},
+		{"concat(label,'East')", "concat(label,'east')", "NO_BACKSLASH_ESCAPES", false},
+		{"cast(1 as enum('East'))", "cast(1 as enum('east'))", "", false},
+		{"cast(1 as enum('East'))", "cast(1 as enum('East'))", "", true},
+		{"_binary 'East'", "'East'", "", false},
+		{"_binary 'East'", "_binary 0x45617374", "", true},
+		{`"East"`, "'East'", "", true},
+		{`"East"`, "'East'", "ANSI_QUOTES", false},
+		{`'a\nb'`, "'a\nb'", "NO_BACKSLASH_ESCAPES", false},
+		{`'a\nb'`, "'a\nb'", "", true},
+	} {
+		left := "select " + tc.left + " as x from db.t where id = 1"
+		right := "select " + tc.right + " as x from db.t where id = 2"
+		got, err := mergeRewriteRulesInMode(t.Context(), left, right, mysql.ParseSQLModeFlags(tc.mode))
+		require.NoError(t, err, tc)
+		if tc.merge {
+			require.Equal(t, "select "+tc.left+" as x from db.t where (id = 1) or (id = 2)", got, tc)
+		} else {
+			require.Equal(t, right, got, tc)
+		}
+	}
+	left := "select label AS 'Name' from db.t where id = 1"
+	got, err := mergeRewriteRules(t.Context(), left, "select LABEL as name from db.t where id = 2")
+	require.NoError(t, err)
+	require.Equal(t, "select label AS 'Name' from db.t where (id = 1) or (id = 2)", got)
+
+}
+
+func TestRoleRuleModesAndBinaryHint(t *testing.T) {
+	const key = "db.t"
+	const query = "select * from db.t"
+	const raw = "_binary '\xff\\\\'"
+	left := `select "East" as x from db.t where payload = ` + raw
+	right := "select 'East' as x from db.t where id = 2"
+	defaultRule, err := mergeRewriteRules(t.Context(), left, right)
+	require.NoError(t, err)
+	policy := &rewritePolicySnapshot{enabled: true, roleRules: map[string]string{key: defaultRule},
+		roleVariants: &roleRuleVariants{hasNonUTF8: true, byName: map[string][]string{key: {left, right}}}}
+	check := func(t *testing.T, mode, want string) {
+		t.Helper()
+		sql, err := policy.rewrite(t.Context(), query, mode)
+		require.NoError(t, err)
+		stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, sql, 1, mode)
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.NoError(t, parsers.AddRewriteHintsWithSQLMode(t.Context(), []tree.Statement{stmt}, sql, mode))
+		got := stmt.(*tree.Select).RewriteOption.Rewrites[key][0].Stmt
+		expected, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, want, 1, mode)
+		require.NoError(t, err)
+		defer expected.Free()
+		require.Equal(t, expected, got)
+	}
+	cases := [][2]string{
+		{"", `select "East" as x from db.t where (payload = _binary 0xff5c) or (id = 2)`},
+		{"ANSI_QUOTES", right},
+		{"NO_BACKSLASH_ESCAPES", `select "East" as x from db.t where (payload = _binary 0xff5c5c) or (id = 2)`},
+	}
+	for _, tc := range cases {
+		check(t, tc[0], tc[1])
+	}
+	t.Run("shared snapshot", func(t *testing.T) {
+		for _, tc := range cases {
+			t.Run(tc[0], func(t *testing.T) {
+				t.Parallel()
+				check(t, tc[0], tc[1])
+			})
+		}
+	})
+
+	policy.roleVariants = &roleRuleVariants{hasNonUTF8: true}
+	policy.roleRules[key] = "select " + raw + " as x from db.t"
+	check(t, "", "select _binary 0xff5c as x from db.t")
+	policy.roleVariants = &roleRuleVariants{hasNonUTF8: true}
+	policy.roleRules[key] += " where name = '\xff'"
+	_, err = policy.rewrite(t.Context(), query, "")
+	require.ErrorContains(t, err, "invalid UTF-8 outside binary literals")
+}
+
+func TestRoleRuleModeErrorRecovery(t *testing.T) {
+	const key = "db.t"
+	left := `select * from db.t where name = 'O\'Brien'`
+	right := "select * from db.t where id = 2"
+	policy := &rewritePolicySnapshot{enabled: true, roleRules: map[string]string{key: left},
+		roleVariants: &roleRuleVariants{byName: map[string][]string{key: {left, right}}}}
+	for _, sql := range []string{"set session sql_mode = default", "set sql_mode = ''", "rollback", "commit", "set secondary role none"} {
+		got, err := policy.rewrite(t.Context(), sql, "NO_BACKSLASH_ESCAPES")
+		require.NoError(t, err, sql)
+		require.Equal(t, sql, got)
+	}
+	for _, sql := range []string{"select * from db.t", "set global sql_mode = ''", "set sql_mode = (select name from db.t)"} {
+		_, err := policy.rewrite(t.Context(), sql, "NO_BACKSLASH_ESCAPES")
+		require.ErrorContains(t, err, "failed to parse rewrite rule", sql)
+	}
+}
+
 func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
 	for _, tc := range []struct {
 		projection string
@@ -2340,7 +2458,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule)
+			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule, 0)
 			require.NoError(t, err)
 			require.Equal(t, tc.ok, ok)
 			if !tc.ok {
@@ -2348,7 +2466,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 				return
 			}
 			require.NotNil(t, shape)
-			require.Equal(t, tc.selectList, shape.selectList)
+			require.Equal(t, tc.selectList, tree.String(&shape.clause.Exprs, dialect.MYSQL))
 			require.Equal(t, tc.table, shape.table)
 		})
 	}
