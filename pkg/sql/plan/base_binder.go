@@ -572,11 +572,11 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			state := preparedBindingState(b.GetContext())
 			if state != nil && astExpr.Offset > 0 && astExpr.Offset <= len(state.values) {
 				value := state.values[astExpr.Offset-1]
-				if source, ok := value.(ParamValue); ok {
+				if source, ok := AsParamValue(value); ok {
 					value = source.Value
 				}
 				if value == nil {
-					source, _ := state.values[astExpr.Offset-1].(ParamValue)
+					source, _ := AsParamValue(state.values[astExpr.Offset-1])
 					if !source.IsBinaryProtocol {
 						// SQL user-variable NULL has a TEXT source for FIELD and
 						// for a bare visible projection.
@@ -5184,7 +5184,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			if peer.IsInteger() && pos >= 0 && int(pos) < len(state.values) {
 				state.valueDependent = true
 				value := state.values[pos]
-				if param, ok := value.(ParamValue); ok {
+				if param, ok := AsParamValue(value); ok {
 					value = param.Value
 					if param.MaterializedValue != "" {
 						value = param.MaterializedValue
