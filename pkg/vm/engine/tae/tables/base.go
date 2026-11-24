@@ -631,12 +631,7 @@ func (obj *baseObject) Scan(
 	// (vectors, Deletes) does not leak. A batch the caller passed in stays
 	// the caller's to close.
 	created := *bat == nil
-	defer func() {
-		if err != nil && created && *bat != nil {
-			(*bat).Close()
-			*bat = nil
-		}
-	}()
+	defer func() { closeBatchOnError(err, created, bat) }()
 	return node.Scan(
 		ctx, bat, txn, readSchema.(*catalog.Schema), blkID, colIdxes, mp)
 }

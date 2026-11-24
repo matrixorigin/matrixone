@@ -82,6 +82,16 @@ func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Null
 	return nil
 }
 
+// closeBatchOnError closes *bat and sets it to nil when err is set and the
+// caller is responsible for the batch (own), so a partly built batch is
+// neither leaked nor handed back closed.
+func closeBatchOnError(err error, own bool, bat **containers.Batch) {
+	if err != nil && own && *bat != nil {
+		(*bat).Close()
+		*bat = nil
+	}
+}
+
 func HybridScanByBlock(
 	ctx context.Context,
 	tableEntry *catalog.TableEntry,
@@ -96,12 +106,7 @@ func HybridScanByBlock(
 	// caller passed one in: it may hold part of this block. Errors before
 	// that leave the caller's batch alone.
 	scanned := false
-	defer func() {
-		if err != nil && scanned && *bat != nil {
-			(*bat).Close()
-			*bat = nil
-		}
-	}()
+	defer func() { closeBatchOnError(err, scanned, bat) }()
 	dataObject, err := tableEntry.GetObjectByID(blkID.Object(), false)
 	if err != nil {
 		return err
