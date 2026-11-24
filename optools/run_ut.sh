@@ -657,24 +657,47 @@ function report_active_ut_cases(){
 }
 
 function report_slow_ut_cases(){
-    if [[ ! -s "${UT_REPORT}" ]]; then
-        logger "ERR" "No Go test JSON is available to identify slow UT cases"
-        return 0
-    fi
-
     local slow_report="${UT_DIAGNOSTIC_DIR}/top.txt"
     local slow_output=""
     local lifecycle_report="${UT_REPORT}.lifecycle"
     local -a lifecycle_args=(--active-out "${lifecycle_report}")
+    local -a sources=() extra_reports=()
+    local family report source live
     if [[ -n "${CURRENT_UT_PID}" ]] || (( CURRENT_UT_DRAIN_FAILED != 0 )); then
         lifecycle_args+=(--require-lifecycle-lf)
     fi
     if (( UT_TERMINATING != 0 )); then
         lifecycle_args+=(--failures)
+        # Only still-owned reports were not transferred to UT_REPORT. Select
+        # the same ready base or shards used by the report consumer.
+        for family in LIGHT ENGINE PLAN PREBUILT; do
+            case "${family}" in
+                LIGHT) report=${LIGHT_RACE_REPORT}; live=${LIGHT_RACE_DRAIN_FAILED}; [[ -z "${LIGHT_RACE_JOB_PID}" ]] || live=1 ;;
+                ENGINE) report=${ENGINE_RACE_REPORT}; live=${ENGINE_RACE_DRAIN_FAILED}; [[ -z "${ENGINE_RACE_JOB_PID}" ]] || live=1 ;;
+                PLAN) report=${PLAN_RACE_REPORT}; live=${PLAN_RACE_DRAIN_FAILED}; [[ -z "${PLAN_RACE_JOB_PID}" ]] || live=1 ;;
+                PREBUILT) report=${PREBUILT_RACE_REPORT}; live=${CURRENT_UT_DRAIN_FAILED}; [[ -z "${CURRENT_UT_PID}" ]] || live=1 ;;
+            esac
+            [[ -n "${report}" ]] || continue
+            if ! collect_ut_report_sources "${report}"; then
+                logger "ERR" "cannot select UT report sources: ${report}"
+                continue
+            fi
+            for source in ${sources[@]+"${sources[@]}"}; do
+                if (( live != 0 )); then
+                    extra_reports+=(--live-source "${source}")
+                else
+                    extra_reports+=(--stopped-source "${source}")
+                fi
+            done
+        done
+    fi
+    if [[ ! -s "${UT_REPORT}" && -z "${extra_reports[*]-}" ]]; then
+        logger "ERR" "No Go test JSON is available to identify slow UT cases"
+        return 0
     fi
     rm -f "${lifecycle_report}"
     if ! slow_output=$(python3 -B "${BUILD_WKSP}/optools/summarize_ut_slow_cases.py" \
-        "${UT_REPORT}" "${lifecycle_args[@]}"); then
+        "${UT_REPORT}" "${lifecycle_args[@]}" ${extra_reports[@]+"${extra_reports[@]}"}); then
         logger "ERR" "failed to summarize slow UT cases from ${UT_REPORT}"
         return 0
     fi

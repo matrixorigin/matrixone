@@ -1162,6 +1162,90 @@ exit 0
 	}
 }
 
+func TestCancellationSummarizesUnmergedFailureReports(t *testing.T) {
+	for _, mode := range []string{"joined", "prebuilt", "empty-main", "light", "engine", "plan"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+UT_REPORT="$CASE_DIR/main-report"
+: > "$UT_REPORT"
+if [[ "$MODE" != empty-main ]]; then
+ printf '%s\n' '{"Action":"pass","Package":"example/main","Elapsed":3}' > "$UT_REPORT"
+fi
+report="$CASE_DIR/helper-report"
+cat > "$report.00" <<'EOF'
+{"Action":"start","Package":"example/issues"}
+{"Action":"run","Package":"example/issues","Test":"TestShardFailure"}
+{"Action":"output","Package":"example/issues","Test":"TestShardFailure","Output":"shard assertion\n"}
+{"Action":"fail","Package":"example/issues","Test":"TestShardFailure","Elapsed":0.01}
+{"Action":"fail","Package":"example/issues","Elapsed":0.1}
+EOF
+printf '%s' '{"Action":"fail","Package":"example/issues","Test":"TestIncomplete","Elapsed":1}' > "$report.01"
+case "$MODE" in
+ joined) PREBUILT_RACE_REPORT="$report" ;;
+ prebuilt|empty-main) PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
+ light) LIGHT_RACE_REPORT="$report.00"; LIGHT_RACE_DRAIN_FAILED=1 ;;
+ engine) ENGINE_RACE_REPORT="$report"; ENGINE_RACE_DRAIN_FAILED=1; cp "$report.00" "$report"; : > "$report.ready" ;;
+ plan) PLAN_RACE_REPORT="$report"; PLAN_RACE_DRAIN_FAILED=1; printf 'partial base\n' > "$report" ;;
+esac
+set +e
+( handle_ut_termination )
+status=$?
+set -e
+if [[ "$MODE" == joined ]]; then
+ [[ "$status" == 143 ]] || exit 90
+ grep -q TestShardFailure "$UT_DIAGNOSTIC_DIR/ut-report.json" || exit 91
+else
+ [[ "$status" == 125 ]] || exit 92
+ ! grep -q TestShardFailure "$UT_DIAGNOSTIC_DIR/ut-report.json" || exit 93
+ [[ -f "$report.00" ]] || exit 94
+fi
+[[ $(grep -c 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt") == 1 ]] || exit 95
+grep -q 'shard assertion' "$UT_DIAGNOSTIC_DIR/top.txt" || exit 96
+if [[ "$MODE" != joined ]]; then
+ ! grep -q TestIncomplete "$UT_DIAGNOSTIC_DIR/top.txt" || exit 97
+fi
+`
+			out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, "MODE="+mode)
+			if err != nil {
+				t.Fatalf("termination report %s: %v\n%s", mode, err, out)
+			}
+		})
+	}
+}
+
+func TestCancellationSummarizesMainWhenHelperHasNoSource(t *testing.T) {
+	for _, mode := range []string{"absent", "missing-ready-base"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+set -u
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+UT_REPORT="$CASE_DIR/main-report"
+printf '%s\n' '{"Action":"fail","Package":"example/main","Test":"TestMainFailure"}' > "$UT_REPORT"
+PREBUILT_RACE_REPORT="$CASE_DIR/helper-report"
+CURRENT_UT_DRAIN_FAILED=1
+if [[ "$MODE" == missing-ready-base ]]; then : > "$PREBUILT_RACE_REPORT.ready"; fi
+set +e
+( handle_ut_termination )
+status=$?
+set -e
+[[ "$status" == 125 ]] || exit 90
+grep -q 'action=fail package="example/main" test="TestMainFailure"' "$UT_DIAGNOSTIC_DIR/top.txt" || exit 91
+`
+			out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, "MODE="+mode)
+			if err != nil {
+				t.Fatalf("termination report %s: %v\n%s", mode, err, out)
+			}
+		})
+	}
+}
+
 func TestCgroupResourceBreakdown(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT

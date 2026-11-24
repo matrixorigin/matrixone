@@ -7,6 +7,7 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
 
 import json
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -17,7 +18,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import active_ut_incremental as reader
-from summarize_ut_slow_cases import summarize
+import summarize_ut_slow_cases as slow
+from summarize_ut_slow_cases import snapshot_lines, summarize
 
 
 class IncrementalReaderTest(unittest.TestCase):
@@ -32,6 +34,138 @@ class IncrementalReaderTest(unittest.TestCase):
         if test:
             value["Test"] = test
         return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+
+    def test_failure_sources_are_independent_bounded_and_ignore_live_fragments(self):
+        self.report.write_bytes(b"")
+        first = Path(self.directory.name) / "first"
+        second = Path(self.directory.name) / "second"
+        def line(action, output=""):
+            return json.dumps({"Action": action, "Package": "example/pkg", "Test": "TestSame", "Output": output}).encode() + b"\n"
+        first.write_bytes(line("output", "first assertion") + line("fail") +
+                          b'{"Action":"fail","Package":"example/pkg","Test":"TestPartial","Elapsed":1}')
+        second.write_bytes(line("output", "second assertion") + line("fail"))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report), "--failures",
+                                          "--live-source", str(first), "--live-source", str(second),
+                                          "--live-source", str(first)], text=True)
+        self.assertEqual(2, output.count('action=fail package="example/pkg" test="TestSame"'))
+        self.assertEqual(1, output.count("first assertion"))
+        self.assertEqual(1, output.count("second assertion"))
+        self.assertNotIn("TestPartial", output)
+
+    def test_snapshot_does_not_follow_new_appends(self):
+        self.report.write_bytes(self.event("run"))
+        with self.report.open("rb") as stream:
+            lines = snapshot_lines(stream, True)
+            self.assertEqual(self.event("run"), next(lines))
+            with self.report.open("ab") as writer:
+                writer.write(self.event("fail"))
+            self.assertEqual([], list(lines))
+
+    def test_source_lifecycle_does_not_leak_between_files(self):
+        self.report.write_bytes(b"")
+        first = Path(self.directory.name) / "first"
+        second = Path(self.directory.name) / "second"
+        first.write_bytes(self.event("start", "") + self.event("run") + self.event("start", "") +
+                          self.event("run") + json.dumps({"Action": "output", "Package": "example/test",
+                          "Test": "TestOne", "Output": "unfinished assertion"}).encode() + b"\n")
+        second.write_bytes(json.dumps({"Action": "output", "Package": "example/test", "Test": "TestOne",
+                           "Output": "passing assertion"}).encode() + b"\n" +
+                           self.event("pass") + self.event("fail"))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report), "--failures",
+                                          "--live-source", str(first), "--live-source", str(second)], text=True)
+        self.assertIn('action=fail package="example/test" test="TestOne"', output)
+        self.assertNotIn("unfinished assertion", output)
+        self.assertNotIn("passing assertion", output)
+
+    def test_read_error_preserves_completed_failure(self):
+        self.report.write_bytes(self.event("fail") + self.event("run", "TestLater"))
+        diagnostics = []
+        with self.report.open("rb", buffering=0) as source:
+            class FaultReader:
+                name = str(self.report)
+                def fileno(self):
+                    return source.fileno()
+                def readline(self, size):
+                    if source.tell():
+                        raise OSError("injected read failure")
+                    return source.readline(size)
+            _, _, _, failures, _ = summarize(self.report, capture_failures=True,
+                                               stream=FaultReader(), diagnostics=diagnostics)
+        self.assertEqual("TestOne", failures[0][1])
+        self.assertTrue(any("injected read failure" in message for message in diagnostics))
+
+    def test_truncation_after_complete_record_is_reported(self):
+        first = self.event("fail")
+        self.report.write_bytes(first + self.event("run", "TestLater"))
+        diagnostics = []
+        with self.report.open("rb", buffering=0) as stream:
+            lines = snapshot_lines(stream, True, diagnostics)
+            self.assertEqual(first, next(lines))
+            os.truncate(self.report, len(first))
+            self.assertEqual([], list(lines))
+        self.assertTrue(any("truncated while reading" in message for message in diagnostics))
+
+    def test_rotation_deduplicates_opened_descriptor(self):
+        self.report.write_bytes(b"")
+        shard = Path(self.directory.name) / "shard"
+        replacement = Path(self.directory.name) / "replacement"
+        shard.write_bytes(self.event("fail", "TestOld"))
+        replacement.write_bytes(self.event("fail", "TestNew"))
+        original_open = slow.open_report
+        rotated = False
+        def open_with_rotation(path):
+            nonlocal rotated
+            if path == shard and not rotated:
+                os.replace(replacement, shard)
+                rotated = True
+            return original_open(path)
+        output = io.StringIO()
+        with mock.patch.object(slow, "open_report", open_with_rotation), mock.patch("sys.stdout", output):
+            self.assertEqual(0, slow.main(["summary", str(self.report), "--failures",
+                                           "--live-source", str(shard), "--live-source", str(shard)]))
+        self.assertEqual(1, output.getvalue().count('test="TestNew"'))
+        self.assertNotIn('test="TestOld"', output.getvalue())
+
+    def test_fifo_sources_do_not_block_other_failures(self):
+        fifo = Path(self.directory.name) / "fifo"
+        os.mkfifo(fifo)
+        shard = Path(self.directory.name) / "shard"
+        shard.write_bytes(self.event("fail"))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(fifo), "--failures",
+                                          "--live-source", str(fifo), "--live-source", str(shard)],
+                                         text=True, timeout=3)
+        self.assertIn('test="TestOne"', output)
+        self.assertIn("report is not a regular file", output)
+
+    def test_stopped_source_accepts_complete_eof_without_newline(self):
+        self.report.write_bytes(b"")
+        shard = Path(self.directory.name) / "shard"
+        shard.write_bytes(self.event("fail").rstrip(b"\n"))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report), "--failures",
+                                          "--stopped-source", str(shard)], text=True)
+        self.assertIn('action=fail package="example/test" test="TestOne"', output)
+
+    def test_failure_source_limit_and_unavailable_source(self):
+        self.report.write_bytes(b"")
+        first = Path(self.directory.name) / "first"
+        second = Path(self.directory.name) / "second"
+        first.write_bytes(b"".join(self.event("fail", f"Test{i}") for i in range(25)))
+        second.write_bytes(b"x" * (reader.MAX_LIFECYCLE_LINE_BYTES + 10) + b"\n" +
+                           b"".join(self.event("fail", f"Test{i}") for i in range(25, 35)))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report), "--failures",
+                                          "--live-source", str(first), "--live-source", str(second),
+                                          "--live-source", str(Path(self.directory.name) / "missing")], text=True)
+        self.assertEqual(32, output.count('action=fail package="example/test"'))
+        self.assertIn('test="Test31"', output)
+        self.assertNotIn('test="Test32"', output)
+        self.assertIn("additional failure or context events omitted=3", output)
+        self.assertIn("ignored malformed JSON lines=1", output)
+        self.assertIn("report unavailable", output)
 
     def test_timeout_failure_details_preserve_context_and_bound_output(self):
         events = [

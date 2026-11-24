@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import stat
 import sys
 from collections import OrderedDict
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -74,9 +77,60 @@ def format_duration(seconds: float) -> str:
     return f"{seconds * 1e6:.2f}us"
 
 
+def open_report(path: Path):
+    # A path can change after selection. Never block on a substituted FIFO.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("report is not a regular file")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None):
+    """Read only the regular-file prefix present when this descriptor opens."""
+    info = os.fstat(report.fileno())
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("report is not a regular file")
+    name = source_name if source_name is not None else report.name
+    remaining = info.st_size
+    try:
+        while remaining:
+            line = report.readline(min(remaining, MAX_LIFECYCLE_LINE_BYTES + 1))
+            if not line:
+                if diagnostics is not None:
+                    diagnostics.append(f"report truncated while reading: {name}")
+                break
+            remaining -= len(line)
+            oversized = len(line) + (0 if line.endswith(b"\n") else 1) > MAX_LIFECYCLE_LINE_BYTES
+            if not line.endswith(b"\n") and remaining:
+                oversized = True
+            if oversized:
+                while remaining and not line.endswith(b"\n"):
+                    line = report.readline(min(remaining, MAX_LIFECYCLE_LINE_BYTES + 1))
+                    if not line:
+                        if diagnostics is not None:
+                            diagnostics.append(f"report truncated while reading: {name}")
+                        break
+                    remaining -= len(line)
+                yield b"!"  # Count the discarded oversized or torn record.
+                continue
+            if not line.endswith(b"\n") and (require_lf or remaining):
+                break
+            yield line
+    except OSError as error:
+        if diagnostics is not None:
+            diagnostics.append(f"report read failed: {name}: {error}")
+        else:
+            raise
+
+
 def summarize(
     report_path: Path, limit: int = 20, active_out: Optional[Path] = None,
     *, require_lifecycle_lf: bool = False, capture_failures: bool = False,
+    failure_only: bool = False, stream=None, diagnostics=None,
 ) -> Tuple[
     List[Tuple[float, str, str, str, str]],
     List[Tuple[float, str, str, str, str]],
@@ -97,8 +151,8 @@ def summarize(
     lifecycle = fresh(None) if active_out is not None or capture_failures else None
     unfinished = []
 
-    with report_path.open("rb") as report:
-        for raw_line in report:
+    with (nullcontext(stream) if stream is not None else open_report(report_path)) as report:
+        for raw_line in snapshot_lines(report, require_lifecycle_lf, diagnostics, report_path):
             try:
                 line = raw_line.decode("utf-8")
             except UnicodeDecodeError:
@@ -188,7 +242,9 @@ def summarize(
                 # merged record, including the separator in the size budget.
                 framed_size = len(raw_line) + (0 if has_lf else 1)
                 if framed_size <= MAX_LIFECYCLE_LINE_BYTES and (has_lf or not require_lifecycle_lf):
-                    apply_event(lifecycle, event, unfinished)
+                    apply_event(lifecycle, event, None if failure_only else unfinished)
+            if failure_only:
+                continue
             timestamp = parse_time(event.get("Time"))
             if isinstance(test, str) and test:
                 key = (package, test)
@@ -267,18 +323,57 @@ def main(argv: List[str]) -> int:
     parser.add_argument("--active-out", type=Path)
     parser.add_argument("--require-lifecycle-lf", action="store_true")
     parser.add_argument("--failures", action="store_true", help="include bounded output from failed cases")
+    parser.add_argument("--live-source", action="append", type=Path, default=[])
+    parser.add_argument("--stopped-source", action="append", type=Path, default=[])
     args = parser.parse_args(argv[1:])
     limit = args.limit
     if limit <= 0:
         parser.error("LIMIT must be a positive integer")
-    if not args.report.is_file():
-        print(f"slow UT case report missing: {args.report}", file=sys.stderr)
-        return 1
-
-    tests, packages, malformed, failures, omitted = summarize(
-        args.report, limit, args.active_out, require_lifecycle_lf=args.require_lifecycle_lf,
-        capture_failures=args.failures,
-    )
+    tests, packages, malformed, failures, omitted = [], [], 0, [], 0
+    seen = set()
+    diagnostics = []
+    try:
+        with open_report(args.report) as stream:
+            info = os.fstat(stream.fileno())
+            seen.add((info.st_dev, info.st_ino))
+            tests, packages, malformed, failures, omitted = summarize(
+                args.report, limit, args.active_out, require_lifecycle_lf=args.require_lifecycle_lf,
+                capture_failures=args.failures, stream=stream, diagnostics=diagnostics,
+            )
+    except OSError as error:
+        if not (args.live_source or args.stopped_source):
+            print(f"slow UT case report unavailable: {args.report}: {error}", file=sys.stderr)
+            return 1
+        diagnostics.append(f"main report unavailable: {args.report}: {error}")
+    if args.failures:
+        for path, live in [(p, True) for p in args.live_source] + [(p, False) for p in args.stopped_source]:
+            try:
+                with open_report(path) as stream:
+                    info = os.fstat(stream.fileno())
+                    identity = (info.st_dev, info.st_ino)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    _, _, source_malformed, source_failures, source_omitted = summarize(
+                        path, require_lifecycle_lf=live, capture_failures=True, failure_only=True,
+                        stream=stream, diagnostics=diagnostics,
+                    )
+            except OSError as error:
+                diagnostics.append(f"report unavailable: {path}: {error}")
+                continue
+            malformed += source_malformed
+            omitted += source_omitted
+            for failure in source_failures:
+                action = failure[2]
+                count = sum(item[2] == "unresolved-output" for item in failures)
+                if (action == "unresolved-output" and count >= MAX_UNRESOLVED_OUTPUTS) or (
+                    action != "unresolved-output" and len(failures) - count >= MAX_FAILURES
+                ):
+                    omitted += 1
+                else:
+                    failures.append(failure)
+    for diagnostic in diagnostics:
+        print(f"[failed_ut_cases] {diagnostic}")
     print(f"[slow_ut_cases] completed test cases (top {limit}):")
     if tests:
         for elapsed, package, test, result, ended in tests:
