@@ -22,10 +22,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1216,6 +1219,7 @@ func trimRewriteRuleForMerge(rule string) string {
 }
 
 type rewriteRuleMergeShape struct {
+	predicate  mysql.WhereSource
 	stmt       *tree.Select
 	clause     *tree.SelectClause
 	selectList string
@@ -1249,20 +1253,53 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string) (s
 		return "", false, nil
 	}
 
-	merged := *leftShape.stmt
-	mergedClause := *leftShape.clause
-	mergedClause.Where = mergeRewriteRuleWhere(leftShape.clause.Where, rightShape.clause.Where)
-	merged.Select = &mergedClause
+	if leftShape.clause.Where == nil {
+		return leftRule, true, nil
+	}
 
-	return tree.String(&merged, dialect.MYSQL), true, nil
+	// The hint is parsed as SQL again. Copy the original predicates, including
+	// literal spelling, and keep the SELECT surrounding the left predicate.
+	prefix, left, suffix, ok := leftShape.predicate.Split(leftRule, rightShape.clause.Where != nil)
+	if !ok {
+		return "", false, moerr.NewInternalError(ctx, "missing left rewrite predicate source")
+	}
+	sql := strings.TrimSpace(prefix + " " + suffix)
+	if rightShape.clause.Where != nil {
+		_, right, _, ok := rightShape.predicate.Split(rightRule, true)
+		if !ok {
+			return "", false, moerr.NewInternalError(ctx, "missing right rewrite predicate source")
+		}
+		sql = strings.TrimSpace(prefix + " (" + strings.TrimLeft(left, " \t\r\n") + ") or (" +
+			strings.TrimLeft(right, " \t\r\n") + ") " + suffix)
+	}
+	if !utf8.ValidString(sql) {
+		return "", false, moerr.NewInvalidInput(ctx, "merged rewrite rule cannot be represented in a JSON hint")
+	}
+	got, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	if err != nil {
+		return "", false, err
+	}
+	defer got.Free()
+	shape, ok := rewriteRuleMergeShapeForStatement(got)
+	want := *leftShape.stmt
+	clause := *leftShape.clause
+	clause.Where = mergeRewriteRuleWhere(clause.Where, rightShape.clause.Where)
+	want.Select = &clause
+	if !ok || !reflect.DeepEqual(shape.stmt, &want) {
+		return "", false, moerr.NewInvalidInput(ctx, "merged rewrite rule does not match its source predicates")
+	}
+	return sql, true, nil
 }
 
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule string) (*rewriteRuleMergeShape, bool, error) {
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	stmt, sources, err := mysql.ParseOneWithWhereSources(ctx, rule, 1)
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
 	shape, ok := rewriteRuleMergeShapeForStatement(stmt)
+	if ok {
+		shape.predicate = sources[shape.clause.Where]
+	}
 	return shape, ok, nil
 }
 

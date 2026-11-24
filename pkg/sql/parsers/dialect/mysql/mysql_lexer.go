@@ -261,6 +261,55 @@ func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, err
 func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	return parseOne(ctx, lexer)
+}
+
+// WhereSource identifies a WHERE expression in the original SQL. Its offsets
+// include trivia between WHERE and the first expression token.
+type WhereSource struct {
+	start, end                   int
+	startInComment, endInComment bool
+}
+
+// Split returns independently embeddable SQL before, inside, and after the
+// predicate. MySQL executable comments can cross either grammar boundary.
+func (w WhereSource) Split(sql string, keepWhere bool) (prefix, predicate, suffix string, ok bool) {
+	if w.start < len("where") || w.end <= w.start || w.end > len(sql) ||
+		!strings.EqualFold(sql[w.start-len("where"):w.start], "where") {
+		return "", "", "", false
+	}
+	prefixEnd := w.start
+	if !keepWhere {
+		prefixEnd -= len("where")
+	}
+	return balanceExecutableComment(sql[:prefixEnd], false, w.startInComment),
+		balanceExecutableComment(sql[w.start:w.end], w.startInComment, w.endInComment),
+		balanceExecutableComment(sql[w.end:], w.endInComment, false), true
+}
+
+// ParseOneWithWhereSources also records the source of each WHERE by node,
+// letting callers select the outer predicate even when it contains subqueries.
+func ParseOneWithWhereSources(ctx context.Context, sql string, lower int64) (tree.Statement, map[*tree.Where]WhereSource, error) {
+	l := NewLexer(dialect.MYSQL, sql, lower)
+	defer PutScanner(l.scanner)
+	l.whereSources = make(map[*tree.Where]WhereSource)
+	stmt, err := parseOne(ctx, l)
+	return stmt, l.whereSources, err
+}
+
+func (l *Lexer) whereClause(expr tree.Expr, start int, lookahead bool) *tree.Where {
+	w := &tree.Where{Type: tree.AstWhere, Expr: expr}
+	if l.whereSources != nil {
+		end, inside := l.scanner.Pos, l.scanner.CommentFlag
+		if lookahead {
+			end, inside = l.beforeLookahead, l.beforeInComment
+		}
+		l.whereSources[w] = WhereSource{start, end, l.whereInComment[start], inside}
+	}
+	return w
+}
+
+func parseOne(ctx context.Context, lexer *Lexer) (tree.Statement, error) {
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
 			s.Free()
@@ -299,6 +348,10 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	whereSources          map[*tree.Where]WhereSource
+	whereInComment        map[int]bool
+	beforeLookahead       int
+	beforeInComment       bool
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -403,6 +456,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if l.stopLexing {
 		return 0
 	}
+	if l.whereSources != nil {
+		l.beforeLookahead, l.beforeInComment = l.scanner.Pos, l.scanner.CommentFlag
+	}
 	var typ int
 	var str string
 	if l.lastToken == int('.') {
@@ -411,6 +467,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ, str = l.scanner.Scan()
 	}
 	lval.pos = l.scanner.Pos
+	if l.whereSources != nil && typ == WHERE && l.scanner.CommentFlag {
+		if l.whereInComment == nil {
+			l.whereInComment = make(map[int]bool)
+		}
+		l.whereInComment[lval.pos] = true
+	}
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
 	// that the grammar places at the unary-operator precedence.

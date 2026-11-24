@@ -2091,6 +2091,55 @@ func TestMergeRewriteRules(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMergeRewriteRulesPreservesPredicateSource(t *testing.T) {
+	const base = "select a from db1.t1 where "
+	const left = "trim(kind) != '销售订单' and code in (select code from db1.codes where region in ('0001', '0010'))"
+	const right = `label = 'O''Brien\\west'`
+	parse := func(sql, mode string) tree.Statement {
+		stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, sql, 1, mode)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return stmt
+	}
+	merged, err := mergeRewriteRules(t.Context(), base+left+" -- first role", base+right)
+	require.NoError(t, err)
+	again, err := mergeRewriteRules(t.Context(), merged, base+"a = 3")
+	require.NoError(t, err)
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES"} {
+		want := "(" + left + ") or (" + right + ")"
+		require.Equal(t, parse(base+want, mode), parse(merged, mode))
+		require.Equal(t, parse(base+"("+want+") or (a = 3)", mode), parse(again, mode))
+	}
+
+	// A parenthesized top-level SELECT has always used later-role precedence.
+	fallback, err := mergeRewriteRules(t.Context(), "("+base+left+")", base+right)
+	require.NoError(t, err)
+	require.Equal(t, base+right, fallback)
+
+	// The WHERE keyword and its expression can independently start or end
+	// inside a MySQL executable comment.
+	for _, rule := range []string{
+		"select a from db1.t1 /*! where */ " + left,
+		"select a from db1.t1 /*! where " + left + " */",
+		"select a from db1.t1 where /*! " + left + " */",
+	} {
+		got, err := mergeRewriteRules(t.Context(), rule, base+right)
+		require.NoError(t, err, rule)
+		want := parse(rule, "").(*tree.Select)
+		clause := want.Select.(*tree.SelectClause)
+		other := parse(base+right, "").(*tree.Select).Select.(*tree.SelectClause)
+		clause.Where.Expr = tree.NewOrExpr(tree.NewParentExpr(clause.Where.Expr), tree.NewParentExpr(other.Where.Expr))
+		require.Equal(t, want, parse(got, ""), rule)
+
+		const unfiltered = "select a from db1.t1"
+		for _, pair := range [][2]string{{rule, unfiltered}, {unfiltered, rule}} {
+			got, err := mergeRewriteRules(t.Context(), pair[0], pair[1])
+			require.NoError(t, err, rule)
+			require.Equal(t, parse(unfiltered, ""), parse(got, ""), rule)
+		}
+	}
+}
+
 func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
 	for _, tc := range []struct {
 		projection string

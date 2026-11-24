@@ -290,6 +290,24 @@ set enable_remap_hint = 1;
 select * from db2.t2 order by a;
 -- @session
 
+-- A leading-zero code must remain distinct from its unpadded spelling.
+create table db1.t_rule_text(id int, code varchar(20));
+insert into db1.t_rule_text values (1, '0001'), (2, '1'), (3, '销售订单'), (4, 'O''Brien');
+grant select on table db1.t_rule_text to test_rule_role_inherit_a;
+grant select on table db1.t_rule_text to test_rule_role_inherit_b;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code = '0001'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where trim(code) = '销售订单'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where code = 'O''Brien'" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
