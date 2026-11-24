@@ -204,7 +204,10 @@ func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	go func() { done <- fs.Read(context.Background(), vec) }()
 	require.Eventually(t, func() bool { return storage.held.Load() == 1 && memoryObjects() == 1 },
 		10*time.Second, time.Millisecond, "the first range's object ended; the second waits")
-	require.Equal(t, flightBufSize(unit), bytes(), "the read copied from the ended object and released its buffer")
+	// The read releases the ended object's buffer once it has copied from it, while its
+	// second range still waits.
+	require.Eventually(t, func() bool { return bytes() == flightBufSize(unit) }, 10*time.Second, time.Millisecond,
+		"the read copied from the ended object and released its buffer")
 
 	close(storage.release)
 	require.NoError(t, <-done)
