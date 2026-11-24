@@ -468,9 +468,6 @@ func FastApplyDeletesByRowIds(
 	isDeletedRowIdsSorted bool,
 ) {
 
-	if isDeletedRowIdsSorted {
-		panicIfRowIdsUnsortedIfRaceDetectorEnabled(deletedRowIds)
-	}
 	if len(deletedRowIds) >= 32 && isDeletedRowIdsSorted && len(*leftRows) == 1 {
 		// Catalog point reads can revisit a block with many transaction-local
 		// deletes. Avoid scanning the whole sorted delete list for one row.

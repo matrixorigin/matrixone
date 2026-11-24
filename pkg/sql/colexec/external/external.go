@@ -1457,6 +1457,17 @@ func makeType(typ *plan.Type, flag bool) types.Type {
 // the pipeline while the project casts the value.  Vectors are already parsed
 // by getColData in the non-parallel path, so keeping their target type here
 // avoids that duplicate large allocation.
+// appendFieldText appends a field's raw text. This is where file input
+// becomes a typed value, so a native Unicode column admits only valid text in
+// its charset.
+func appendFieldText(vec *vector.Vector, text string, mp *mpool.MPool) error {
+	value := []byte(text)
+	if err := types.ValidateCollationValue(*vec.GetType(), value); err != nil {
+		return err
+	}
+	return vector.AppendBytes(vec, value, false, mp)
+}
+
 func isDirectParallelLoadType(id types.T) bool {
 	return id == types.T_array_float32 || id == types.T_array_float64
 }
@@ -2238,11 +2249,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 
 	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) ||
 		loadAttributedDecimalTextInput(param, &col.Typ) {
-		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
-		if err != nil {
-			return err
-		}
-		return nil
+		return appendFieldText(vec, field.Val, mp)
 	}
 
 	// roundTextInteger classifies when integer assignment may use the exact
@@ -2527,8 +2534,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
-		if err != nil {
+		if err := appendFieldText(vec, field.Val, mp); err != nil {
 			return err
 		}
 	case types.T_array_float32:

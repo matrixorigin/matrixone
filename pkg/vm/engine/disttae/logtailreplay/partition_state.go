@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"go.uber.org/zap"
 
@@ -654,6 +655,9 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 
 	return
 }
+
+// HandleLogtailEntry consumes a received entry. Its decoded buffers must be
+// immutable: partition snapshots can retain row data after this call returns.
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	fs fileservice.FileService,
@@ -679,7 +683,7 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool, keys...)
+			p.replayImmutableInsert(ctx, entry.Bat, primarySeqnum, packer, keys...)
 		}
 
 	case api.Entry_Delete:
@@ -1043,7 +1047,22 @@ func (p *PartitionState) HandleRowsInsert(
 	input *api.Batch,
 	primarySeqnum int,
 	packer *types.Packer,
-	mp *mpool.MPool,
+	_ *mpool.MPool,
+	keys ...*readutil.ClusterKeyDescriptor,
+) [][]byte {
+	// Local callers (notably catalog bootstrap) can pass a shallow
+	// BatchToProtoBatch view of mutable engine vectors. Detach before retaining.
+	if !p.noData {
+		input = proto.Clone(input).(*api.Batch)
+	}
+	return p.replayImmutableInsert(ctx, input, primarySeqnum, packer, keys...)
+}
+
+func (p *PartitionState) replayImmutableInsert(
+	ctx context.Context,
+	input *api.Batch,
+	primarySeqnum int,
+	packer *types.Packer,
 	keys ...*readutil.ClusterKeyDescriptor,
 ) (
 	primaryKeys [][]byte,
@@ -1051,7 +1070,9 @@ func (p *PartitionState) HandleRowsInsert(
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsInsert")
 	defer task.End()
 
-	sourceBatch, err := batch.ProtoBatchToBatch(input, mp)
+	// Snapshots share RowEntry batches. Their immutable payload must follow
+	// Go reachability: removing a row is not a last-owner notification.
+	sourceBatch, err := batch.ProtoBatchToBatch(input, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -1118,8 +1139,8 @@ func (p *PartitionState) HandleRowsInsert(
 		// the physical RowID and commit time, so release the decoded vectors'
 		// references after the entire replay loop has consumed them. Their
 		// types and positions remain for existing in-memory column readers.
-		sourceBatch.Vecs[0].Free(mp)
-		sourceBatch.Vecs[1].Free(mp)
+		sourceBatch.Vecs[0].Free(nil)
+		sourceBatch.Vecs[1].Free(nil)
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {

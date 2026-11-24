@@ -2021,7 +2021,13 @@ type ExecutionMemoryCeiling struct {
 }
 
 func executionMemoryHeadroomSafety(ceiling ExecutionMemoryCeiling) uint64 {
-	safety := ceiling.EffectiveCN / 20
+	effective := ceiling.EffectiveCN
+	// A private limit stands in for a smaller container: the margin is sized
+	// from what this process may use, not from the whole host.
+	if limit := executionPrivateMemoryLimit.Load(); limit > 0 && limit < effective {
+		effective = limit
+	}
+	safety := effective / 20
 	if safety < executionResourceMinimumRuntimeHeadroom {
 		safety = executionResourceMinimumRuntimeHeadroom
 	}
@@ -2160,7 +2166,7 @@ func (proc *Process) getExecutionResourceBudget(withSpill bool) (*ExecutionResou
 			if createErr != nil {
 				return nil
 			}
-			b.memoryHeadroomProvider = system.MemoryAvailableIncludingCache
+			b.memoryHeadroomProvider = executionPhysicalMemoryHeadroom
 			b.memoryHeadroomTTL = executionResourceBudgetCapRefreshTTL
 			b.memoryHeadroomNow = time.Now
 			b.memoryHeadroomSafety = executionMemoryHeadroomSafety(ceiling)
