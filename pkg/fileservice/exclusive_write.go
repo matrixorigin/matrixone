@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 
@@ -33,7 +34,7 @@ func CheckExclusiveWrite(fs FileService) error {
 	switch f := fs.(type) {
 	case *subPathFS:
 		return CheckExclusiveWrite(f.upstream)
-	case *LocalETLFS:
+	case *LocalFS, *LocalETLFS:
 		return nil
 	case *MemoryFS:
 		// Write holds the same mutex across existence checking and insertion.
@@ -56,6 +57,16 @@ func CheckExclusiveWrite(fs FileService) error {
 		}
 	}
 	return moerr.NewNotSupportedNoCtxf("exclusive publication for %T", fs)
+}
+
+// linkLocalFile publishes a complete temporary file without replacing an
+// existing name, using the filesystem's own alias equivalence.
+func linkLocalFile(tempPath, nativePath, logicalPath string) error {
+	err := os.Link(tempPath, nativePath)
+	if os.IsExist(err) {
+		return moerr.NewFileAlreadyExistsNoCtx(logicalPath)
+	}
+	return err
 }
 
 // Match S3 API endpoints, optionally prefixed by a virtual-hosted bucket.

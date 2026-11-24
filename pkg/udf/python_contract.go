@@ -24,6 +24,11 @@ import (
 )
 
 const (
+	// PythonArtifactDirectory stores immutable artifacts by account and digest.
+	PythonArtifactDirectory = "udf-artifacts"
+	// PythonArtifactAdmissionDirectory stores immutable lifetime admission slots.
+	PythonArtifactAdmissionDirectory = "udf-artifact-admission/v1"
+
 	pythonInlineArtifactDigestDomain = "matrixone-python-inline-artifact"
 	pythonEnvironmentDigestDomain    = "matrixone-python-environment"
 )

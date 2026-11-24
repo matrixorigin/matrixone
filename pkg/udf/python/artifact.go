@@ -151,7 +151,7 @@ func (s *FileArtifactStore) existingArtifact(ctx context.Context, accountID uint
 }
 
 func artifactAdmissionPath(slot int) string {
-	return fileservice.JoinPath(defines.SharedFileServiceName, fmt.Sprintf("udf-artifact-admission/v1/%04d", slot))
+	return fileservice.JoinPath(defines.SharedFileServiceName, fmt.Sprintf("%s/%04d", udf.PythonArtifactAdmissionDirectory, slot))
 }
 
 func (s *FileArtifactStore) admitPublication(ctx context.Context, accountID uint64, digest string) error {
@@ -280,6 +280,6 @@ func (s *FileArtifactStore) validate() error {
 func artifactPath(accountID uint64, digest string) string {
 	return fileservice.JoinPath(
 		defines.SharedFileServiceName,
-		fmt.Sprintf("udf-artifacts/%d/%s", accountID, digest),
+		fmt.Sprintf("%s/%d/%s", udf.PythonArtifactDirectory, accountID, digest),
 	)
 }

@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -656,6 +657,32 @@ func TestBackupData3(t *testing.T) {
 
 }
 
+func TestCopyPythonArtifactFilesReusesOnlyIdenticalObjects(t *testing.T) {
+	ctx := t.Context()
+	src := newBackupMemoryFS(t, "source")
+	dst := newBackupMemoryFS(t, "destination")
+	slot := path.Join(udf.PythonArtifactAdmissionDirectory, "0001")
+	require.NoError(t, writeFile(ctx, src, slot, []byte("reservation")))
+	require.NoError(t, writeFile(ctx, src, udf.PythonArtifactDirectory+"-other/7/digest", []byte("unrelated")))
+	// A neighboring namespace and an unknown admission version are outside v1.
+	require.NoError(t, writeFile(ctx, src, "udf-artifact-admission/v10/0001", []byte("another version")))
+	copier := backupFileCopier{}
+	first, err := copier.copyPythonArtifactFiles(ctx, src, dst, types.TS{})
+	require.NoError(t, err)
+	require.Equal(t, []string{slot}, taeFilePaths(first))
+	second, err := copier.copyPythonArtifactFiles(ctx, src, dst, types.TS{})
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+
+	require.NoError(t, dst.Delete(ctx, slot))
+	require.NoError(t, writeFile(ctx, dst, slot, []byte("different reservation")))
+	_, err = copier.copyPythonArtifactFiles(ctx, src, dst, types.TS{})
+	require.ErrorContains(t, err, "admission checksum mismatch")
+	value, err := readFile(ctx, dst, slot)
+	require.NoError(t, err)
+	require.Equal(t, "different reservation", string(value))
+}
+
 func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
@@ -677,12 +704,25 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 
 	var sourceGlobalLSN uint64
 	var sourceGlobalEnd types.TS
+	const udfSource = "def f(ctx): return 1"
+	digest := udf.PythonInlineArtifactDigest("f", udfSource)
+	artifact := path.Join(udf.PythonArtifactDirectory, "7", digest)
+	quota := path.Join(udf.PythonArtifactAdmissionDirectory, "0000")
+	abandoned := path.Join(udf.PythonArtifactAdmissionDirectory, "0001")
+	pythonObjects := map[string]string{
+		artifact:  udfSource,
+		quota:     "7/" + digest,
+		abandoned: "7/" + udf.PythonInlineArtifactDigest("f", "def f(ctx): return 2"),
+	}
 	func() {
 		opts := config.WithLongScanAndCKPOpts(nil)
 		source := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 		defer opts.Fs.Close(context.Background())
 		defer func() { require.NoError(t, source.Close()) }()
 		source.BindSchema(schema)
+		for name, value := range pythonObjects {
+			require.NoError(t, writeFile(ctx, opts.Fs, name, []byte(value)))
+		}
 		// Four small commits make the source WAL generation observably newer
 		// than the single post-restore append/delete transaction below.
 		for offset := 0; offset < sourceRows; offset += 5 {
@@ -757,6 +797,13 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 		require.NoError(t, err)
 		manifestRows, err := fromCsvBytes(manifest)
 		require.NoError(t, err)
+		for name, value := range pythonObjects {
+			checksum, err := checksumFile(ctx, opts.Fs, name)
+			require.NoError(t, err)
+			require.Equal(t, strconv.Itoa(len(value)), csvFieldForPath(t, manifestRows, name, 1))
+			require.Equal(t, fmt.Sprintf("%x", checksum), csvFieldForPath(t, manifestRows, name, 2))
+			require.Equal(t, "true", csvFieldForPath(t, manifestRows, name, 3))
+		}
 		for index := 0; index < indexLocations.Len(); index++ {
 			name := indexLocations.Get(index).Name().String()
 			stat, err := dstFs.StatFile(ctx, name)
@@ -775,6 +822,11 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 	opts.Fs = dstFs
 	restored := testutil.NewTestEngineWithDir(ctx, t.TempDir(), t, opts)
 	defer func() { require.NoError(t, restored.Close()) }()
+	for name, value := range pythonObjects {
+		got, err := readFile(ctx, dstFs, name)
+		require.NoError(t, err)
+		require.Equal(t, value, string(got))
+	}
 	restored.BindSchema(schema)
 	require.NoError(t, restored.ForceGlobalCheckpoint(ctx, restored.TxnMgr.Now(), time.Second))
 	global := restored.BGCheckpointRunner.MaxGlobalCheckpoint()

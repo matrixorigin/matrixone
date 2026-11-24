@@ -99,6 +99,45 @@ func TestWriteExclusiveDelayedPublisher(t *testing.T) {
 	require.NoError(t, WriteExclusive(context.Background(), fs, publicationVector("other/manifest.json", "C")))
 }
 
+func TestWriteExclusiveDelayedLocalPublisher(t *testing.T) {
+	for _, backend := range []string{"DISK", "DISK-V2"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := t.Context()
+			root := t.TempDir()
+			fs, err := NewFileService(ctx, Config{Name: "shared", Backend: backend, DataDir: root}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			require.NoError(t, CheckExclusiveWrite(fs))
+
+			r := &publicationReader{Reader: bytes.NewBufferString("A"), entered: make(chan struct{}), release: make(chan struct{})}
+			var release sync.Once
+			defer release.Do(func() { close(r.release) })
+			const name = "artifacts/source"
+			done := make(chan error, 1)
+			go func() {
+				done <- WriteExclusive(ctx, fs, IOVector{FilePath: name, Entries: []IOEntry{{ReaderForWrite: r, Size: 1}}})
+			}()
+			select {
+			case err := <-done:
+				t.Fatalf("publisher stopped before reaching temporary write: %v", err)
+			case <-r.entered:
+			}
+			winner := WriteExclusive(ctx, fs, publicationVector(name, "B"))
+			release.Do(func() { close(r.release) })
+			loser := <-done
+			require.NoError(t, winner)
+			require.True(t, moerr.IsMoErrCode(loser, moerr.ErrFileAlreadyExists), "%v", loser)
+			v := &IOVector{FilePath: name, Entries: []IOEntry{{Size: 1}}}
+			defer v.Release()
+			require.NoError(t, fs.Read(ctx, v))
+			require.Equal(t, []byte("B"), v.Entries[0].Data)
+			temps, err := filepath.Glob(filepath.Join(root, ".tmp.*"))
+			require.NoError(t, err)
+			require.Empty(t, temps)
+		})
+	}
+}
+
 func TestWriteExclusiveFilesystemAliases(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "Destination")

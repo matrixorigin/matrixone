@@ -335,9 +335,12 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	if err != nil {
 		return 0, err
 	}
+	exclusive := exclusiveWrite(ctx)
 	defer func() {
 		if err != nil {
 			_ = f.Close()
+		}
+		if err != nil || exclusive {
 			_ = os.Remove(f.Name())
 		}
 	}()
@@ -381,8 +384,11 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 		return 0, err
 	}
 
-	// move
-	if err := os.Rename(f.Name(), nativePath); err != nil {
+	if exclusive {
+		if err := linkLocalFile(f.Name(), nativePath, path.File); err != nil {
+			return 0, err
+		}
+	} else if err := os.Rename(f.Name(), nativePath); err != nil {
 		return 0, err
 	}
 
