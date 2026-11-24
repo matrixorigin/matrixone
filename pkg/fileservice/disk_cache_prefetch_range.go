@@ -346,6 +346,62 @@ func (d *DiskCache) prefetchRead(
 	}
 	out := make([]byte, hi-lo)
 	var deadline time.Time
+	// copyBlock copies the bytes of b from the prefetch object reading them, holding it
+	// while it copies. It reports false when they are not read, with the error failing the
+	// read.
+	copyBlock := func(b *prefetchBlock, dst []byte) (bool, error) {
+		var o prefetchObject
+		release := func() {}
+		if r := b.run; r != nil {
+			select {
+			case <-r.admitted:
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
+			if r.err != nil {
+				return false, ctx.Err()
+			}
+			if !r.releasedOnAdmit() {
+				o = r.got
+				release = func() {
+					if remaining[r]--; remaining[r] == 0 {
+						r.done()
+					}
+				}
+			}
+		}
+		if o == nil && (b.run == nil || b.run.releasedOnAdmit()) {
+			// The read chose to join it, or a run it started that ended left its bytes
+			// cached: it is joined however long its bytes take.
+			f.mu.Lock()
+			o, release = heldLocked(f.coveringLocked(diskPath, b.start, b.end, time.Now()))
+			f.mu.Unlock()
+		}
+		var err error = errPrefetchMissed
+		if o != nil {
+			err = func() error {
+				defer release()
+				return o.readAt(ctx, b.start, dst)
+			}()
+		} else {
+			release()
+		}
+		if err == nil {
+			return true, nil
+		}
+		// A failed read of object storage fails the read. An object that caches its bytes
+		// and ended before the read reached the block left them in a cached range.
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if !errors.Is(err, errPrefetchMissed) {
+			return false, err
+		}
+		if o != nil && !o.caches() {
+			return false, nil
+		}
+		return d.readCachedBytes(ctx, filePath, b.start, dst, &deadline), nil
+	}
 	for i := 0; i < len(blocks); i++ {
 		b := &blocks[i]
 		if !b.needed {
@@ -354,61 +410,8 @@ func (d *DiskCache) prefetchRead(
 		dst := out[b.start-lo : b.end-lo]
 		switch b.state {
 		case blockInFlight, blockJoined:
-			var o prefetchObject
-			if r := b.run; r != nil {
-				select {
-				case <-r.admitted:
-				case <-ctx.Done():
-					return nil, memoryRuns, false, ctx.Err()
-				}
-				if r.err != nil {
-					if ctx.Err() != nil {
-						return nil, memoryRuns, false, ctx.Err()
-					}
-					return nil, memoryRuns, false, nil
-				}
-				if !r.releasedOnAdmit() {
-					o = r.got
-				}
-			}
-			if o == nil && (b.run == nil || b.run.releasedOnAdmit()) {
-				// The read chose to join it, or a run it started that ended left its bytes
-				// cached: it is joined however long its bytes take.
-				f.mu.Lock()
-				if o = f.coveringLocked(diskPath, b.start, b.end, time.Now()); o != nil {
-					o.hold()
-				}
-				f.mu.Unlock()
-			}
-			var err error
-			if o == nil {
-				err = errPrefetchMissed
-			} else {
-				err = o.readAt(ctx, b.start, dst)
-			}
-			if r := b.run; r != nil && !r.releasedOnAdmit() {
-				if remaining[r]--; remaining[r] == 0 {
-					r.done()
-				}
-			} else if o != nil {
-				o.release()
-			}
-			if err != nil {
-				// A failed read of object storage fails the read. An object that caches its
-				// bytes and ended before the read reached the block left them in a cached
-				// range.
-				if ctx.Err() != nil {
-					return nil, memoryRuns, false, ctx.Err()
-				}
-				if !errors.Is(err, errPrefetchMissed) {
-					return nil, memoryRuns, false, err
-				}
-				if o != nil && !o.caches() {
-					return nil, memoryRuns, false, nil
-				}
-				if !d.readCachedBytes(ctx, filePath, b.start, dst, &deadline) {
-					return nil, memoryRuns, false, nil
-				}
+			if ok, err := copyBlock(b, dst); !ok {
+				return nil, memoryRuns, false, err
 			}
 		case blockCached:
 			j := i
@@ -612,13 +615,11 @@ func readDownload(ctx context.Context, o *objectDownload, off int64, dst []byte)
 	if _, ok := o.waitFor(ctx, off, off+int64(len(dst)), maxIOWaitDuration); !ok {
 		return false, false
 	}
-	f, ok := o.acquire()
-	if !ok {
-		return false, true
-	}
-	defer o.release()
-	_, err := f.ReadAt(dst, off)
-	return err == nil, true
+	held, err := o.with(func(f *os.File) error {
+		_, err := f.ReadAt(dst, off)
+		return err
+	})
+	return held && err == nil, true
 }
 
 // fetchRange returns the bytes [start, end) of the object at filePath from a prefetch
@@ -647,9 +648,7 @@ func (d *DiskCache) fetchRange(
 		// joins one under way.
 		f := &d.prefetchObjects
 		f.mu.Lock()
-		if o = fl.joinLocked(time.Now()); o != nil {
-			o.hold()
-		}
+		o, _ = heldLocked(fl.joinLocked(time.Now()))
 		f.mu.Unlock()
 	} else if end-start > d.memoryPrefetchMax {
 		deletes := d.deletes.now()
@@ -712,6 +711,10 @@ func (f *memoryPrefetchObject) run() {
 	defer d.prefetchObjects.reads.Done()
 	defer f.cancelRead()
 	defer context.AfterFunc(f.closing, f.cancelRead)()
+	defer func() {
+		d.endPrefetch(f.diskPath, f)
+		f.release()
+	}()
 	err := f.readHeld()
 	content := f.content()
 	if err == nil && len(content) == 0 {
@@ -726,8 +729,6 @@ func (f *memoryPrefetchObject) run() {
 		}, false)
 	}
 	f.cacheErr = err
-	d.endPrefetch(f.diskPath, f)
-	f.release()
 }
 
 // closingValues is a context with the values of values that ends once Context does.
@@ -797,6 +798,9 @@ func (d *DiskCache) readRanges(
 		started()
 	}()
 	releaseFrom := func(i int) {
+		if i == len(runs) {
+			return
+		}
 		go func() {
 			for _, r := range runs[i:] {
 				r.done()
@@ -805,22 +809,23 @@ func (d *DiskCache) readRanges(
 	}
 	underWay, closed := false, false
 	var err error
+	next := 0
+	defer func() { releaseFrom(next) }()
 	for i, r := range runs {
 		select {
 		case <-r.admitted:
 		case <-ctx.Done():
-			releaseFrom(i)
 			return true, ctx.Err()
 		}
 		if r.got != nil {
 			underWay = true
 			if err := waitFlights(ctx, []prefetchObject{r.got}); err != nil {
-				releaseFrom(i)
 				return true, err
 			}
 			r.err = r.got.err()
 		}
 		r.done()
+		next = i + 1
 		if errors.Is(r.err, errPrefetchClosed) {
 			closed = true
 		} else if err == nil {
@@ -1115,10 +1120,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		}
 		e := &vector.Entries[i]
 		f.mu.Lock()
-		fl := d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, time.Now(), true)
-		if fl != nil {
-			fl.hold()
-		}
+		fl, release := heldLocked(d.joinableLocked(diskPath, e.Offset, e.Offset+e.Size, time.Now(), true))
 		f.mu.Unlock()
 		if fl == nil {
 			ended = true
@@ -1126,7 +1128,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		}
 		var decodeErr error
 		err := func() error {
-			defer fl.release()
+			defer release()
 			return fl.use(ctx, e.Offset, e.Size, func(bs []byte) error {
 				decodeErr = e.readFrom(ctx, bytes.NewReader(bs), d.cacheDataAllocator)
 				return decodeErr
@@ -1346,6 +1348,15 @@ func (f *prefetchObjects) openLocked() (context.Context, bool) {
 		f.closing, f.cancelReads = context.WithCancel(context.Background())
 	}
 	return f.closing, true
+}
+
+// heldLocked holds o, when set, and returns it with the function releasing it once.
+func heldLocked(o prefetchObject) (prefetchObject, func()) {
+	if o == nil {
+		return nil, func() {}
+	}
+	o.hold()
+	return o, sync.OnceFunc(o.release)
 }
 
 // waitFlights waits for the prefetch objects to end, or ctx.

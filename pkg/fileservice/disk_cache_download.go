@@ -119,6 +119,17 @@ func (o *objectDownload) acquire() (*os.File, bool) {
 	return o.file, true
 }
 
+// with calls fn with the download's file while it holds it, reporting false once the
+// file is closed.
+func (o *objectDownload) with(fn func(*os.File) error) (bool, error) {
+	f, ok := o.acquire()
+	if !ok {
+		return false, nil
+	}
+	defer o.release()
+	return true, fn(f)
+}
+
 // hold holds the download as a reader, as acquire does, without taking its file.
 func (o *objectDownload) hold() bool {
 	_, ok := o.acquire()
@@ -920,18 +931,19 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		}
 		metric.FSDiskCacheDownloadReadWaitedCounter.Inc()
 	}
-	f, ok := o.acquire()
-	if !ok {
+	held, err := o.with(func(f *os.File) error {
+		if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset-base, entry.Size), d.cacheDataAllocator); err != nil {
+			return err
+		}
+		// Only bytes delivered successfully count toward read share. Eviction accounting
+		// waits for active readers, so publication and eviction cannot lose this read.
+		o.serve(entry.Size)
+		return nil
+	})
+	if !held {
 		return false, false, nil
 	}
-	defer o.release()
-	if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset-base, entry.Size), d.cacheDataAllocator); err != nil {
-		return true, false, err
-	}
-	// Only bytes delivered successfully count toward read share. Eviction accounting
-	// waits for active readers, so publication and eviction cannot lose this read.
-	o.serve(entry.Size)
-	return true, true, nil
+	return true, err == nil, err
 }
 
 const (
