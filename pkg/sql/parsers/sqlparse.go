@@ -775,6 +775,15 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 		if prepare, ok := stmt.(*tree.PrepareStmt); ok && prepare.Stmt != nil {
 			attachStmt = prepare.Stmt
 		}
+		// EXPLAIN builds its plan from the wrapped statement's read source.
+		switch explain := attachStmt.(type) {
+		case *tree.ExplainStmt:
+			attachStmt = explain.Statement
+		case *tree.ExplainAnalyze:
+			attachStmt = explain.Statement
+		case *tree.ExplainPhyPlan:
+			attachStmt = explain.Statement
+		}
 		switch s := attachStmt.(type) {
 		case *tree.Select:
 			s.RewriteOption = rewriteOption
