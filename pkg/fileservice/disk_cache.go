@@ -1201,10 +1201,17 @@ func (d *DiskCache) writeFileTo(
 // close, its query) leaves them to read their own bytes.
 func sourceFailure(readCtx context.Context, err error) error {
 	var source *diskCacheSourceError
-	if err == nil || readCtx.Err() != nil || !errors.As(err, &source) || errors.Is(err, errSourceIdle) {
+	if err == nil || readCtx.Err() != nil || !errors.As(err, &source) || sourceStopped(err) {
 		return nil
 	}
 	return source.err
+}
+
+// sourceStopped reports whether err ends a source without failing the reads of its
+// bytes: it was canceled, sent no bytes within the idle timeout, or ended short of its
+// range, so the reads read their own bytes.
+func sourceStopped(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, errSourceIdle) || errors.Is(err, errSourceShort)
 }
 
 // fileWrite is what a write of a cache file holds until it publishes the file or hands it

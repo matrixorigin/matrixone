@@ -138,8 +138,6 @@ func TestJoinedReadReportsUnexpectedEOFAsOwnRead(t *testing.T) {
 	}
 }
 
-var _ = bytes.Equal
-
 // BC1: a read whose joined prefetch object finds the object gone fails as its own read
 // would, without reading object storage again.
 func TestJoinedReadFailsOnMissingObject(t *testing.T) {
@@ -153,5 +151,21 @@ func TestJoinedReadFailsOnMissingObject(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 			require.Zero(t, s.others.Load(), "the read does not read the object again")
 		})
+	}
+}
+
+// BC3: a read whose joined prefetch object's source ends short of its bytes reads them
+// itself.
+func TestJoinedReadOfShortSourceReadsItsBytes(t *testing.T) {
+	r := PrefetchRange{Offset: 40 << 10, Size: 4 << 10}
+	for _, k := range joinedKinds {
+		for _, short := range []int64{100, r.Size} {
+			t.Run(k.name+"/"+map[bool]string{true: "empty", false: "short"}[short == r.Size], func(t *testing.T) {
+				got, want, err, s := joinedColumnRead(t, k.fileBacked, r, shortBy(r, short))
+				require.NoError(t, err)
+				require.True(t, bytes.Equal(want, got))
+				require.EqualValues(t, 1, s.others.Load(), "the read reads its bytes itself")
+			})
+		}
 	}
 }

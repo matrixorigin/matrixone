@@ -1812,10 +1812,10 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		default:
 		}
 	}
-	// A delete of the object, a close of the cache or a source that stops sending stops
-	// the download, not the read, which then reads its ranges.
+	// A delete of the object, a close of the cache, a source that stops sending or one that
+	// ends short stops the download, not the read, which then reads its ranges.
 	stopped := func(err error) bool {
-		return (errors.Is(err, context.Canceled) || errors.Is(err, errSourceIdle)) && ctx.Err() == nil
+		return sourceStopped(err) && ctx.Err() == nil
 	}
 	if admitted.download == nil {
 		if err := waitSet(); err != nil {

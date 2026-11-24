@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -437,6 +438,9 @@ var sourceIdleTimeout = readWriteTimeout
 
 var errSourceIdle = moerr.NewInternalErrorNoCtx("fileservice: no bytes from the source within the idle timeout")
 
+// errSourceShort is the error of a source that ended before the range it was read for.
+var errSourceShort = fmt.Errorf("fileservice: source ended before its range: %w", io.ErrUnexpectedEOF)
+
 // idleReader reads r, which reads through ctx, and cancels ctx when a Read waits for
 // bytes past sourceIdleTimeout while it is not attached. While attached, a Read is
 // bounded by ctx only.
@@ -764,7 +768,7 @@ func copyPart(ctx context.Context, f *os.File, download *objectDownload, open ra
 		return err
 	}
 	if n != end-start {
-		return &diskCacheSourceError{err: io.ErrUnexpectedEOF}
+		return &diskCacheSourceError{err: errSourceShort}
 	}
 	return nil
 }

@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -70,9 +69,8 @@ func (f *memoryPrefetchObject) use(ctx context.Context, off, n int64, fn func([]
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// A stopped object misses the bytes, also one that stopped for the source's idle
-		// timeout; the error of a failed read is the read's.
-		if err := f.failure(); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errSourceIdle) {
+		// A stopped object misses the bytes; the error of a failed read is the read's.
+		if err := f.failure(); err != nil {
 			return err
 		}
 		return errPrefetchMissed

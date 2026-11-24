@@ -709,9 +709,9 @@ func (f *memoryPrefetchObject) run() {
 	err := f.readHeld()
 	content := f.content()
 	if err == nil && len(content) == 0 {
-		err = io.ErrUnexpectedEOF
+		err = errSourceShort
 	}
-	f.fail(err)
+	f.fail(sourceFailure(f.ctx, &diskCacheSourceError{err: err}))
 	if err == nil && !f.skipCache && reserve(int64(len(content))) {
 		err = d.Update(updateCtx, &IOVector{
 			FilePath: f.filePath,

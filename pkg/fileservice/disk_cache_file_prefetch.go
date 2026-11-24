@@ -279,7 +279,7 @@ func (r *objectEndReader) Read(b []byte) (int, error) {
 	r.at += int64(n)
 	if err == io.EOF && r.at < r.end {
 		r.objectEnd.Store(r.at)
-		err = io.ErrUnexpectedEOF
+		err = errSourceShort
 	}
 	return n, err
 }

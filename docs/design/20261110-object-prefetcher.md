@@ -160,8 +160,9 @@ the read's whole span took about 80 s against about 68 s). Both kinds:
   whole prefetch object. A FilePrefetchObject is joined only when its bytes arrive no more
   than `disk-download-max-extra-wait` later than a range read could fetch them;
 - leave a read to fetch its bytes itself when they end without them, as when stopped by
-  another query, a delete or a close; a failed read of object storage fails the reads
-  waiting on it;
+  another query, a delete or a close, or when their source ends short of their bytes; a
+  failed read of object storage fails the reads waiting on it, as a read of their own
+  would fail;
 - wait in the prefetch queue and move to the live queue when a read reaches them before
   they start (below);
 - end the same way on a delete of their object: the delete cancels them before it
@@ -395,7 +396,8 @@ object.
 - The size is the one the prefetch passed. When no prefetch passed a size, the
   download is one stream and makes no size request.
 - The last part reads to the object's end, so a wrong size makes the download fail.
-  Any failed part fails the whole download, which publishes nothing.
+  Any failed part fails the whole download, which publishes nothing. A download whose
+  source ends short of its range leaves the reads waiting for it to read their own bytes.
 - Downloads hold at most half of the host's object-storage connections, so range
   reads always keep connections of their own. A download that cannot reserve its
   parts runs as one stream; one that cannot reserve even one connection waits until
