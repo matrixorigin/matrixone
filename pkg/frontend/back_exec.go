@@ -25,7 +25,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -453,7 +452,6 @@ func doComQueryInBack(
 		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
-		Buf:           backSes.buf,
 		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
@@ -469,7 +467,6 @@ func doComQueryInBack(
 	proc.SetResolveVariableTypeFunc(backSes.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
 	proc.SetResolveVariableStringDomainFunc(backSes.txnCompileCtx.ResolveVariableStringDomain)
-	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.
 	refreshBackgroundStatementScopedSessionInfo(backSes, input, proc)
@@ -1055,6 +1052,7 @@ func executeStmtInSameSession(
 	ses *Session,
 	execCtx *ExecCtx,
 	stmt tree.Statement,
+	resper Responser,
 	preparedExpression bool,
 	preparedParamVals []any,
 	preparedBinaryExecute bool,
@@ -1080,10 +1078,8 @@ func executeStmtInSameSession(
 	// the result batch will be saved in the session.
 	// you can get the result batch by calling GetResultBatches()
 	ses.SetOutputCallback(batchFetcher)
-	//2. replace protocol by FakeProtocol.
-	// Any response yielded during running query will be dropped by the NullResp.
-	// The client will not receive any response from the NullResp.
-	prevProto := ses.ReplaceResponser(&NullResp{})
+	//2. Use the internal responder so query output never reaches the client.
+	prevProto := ses.ReplaceResponser(resper)
 	//3. replace the derived stmt
 	prevDerivedStmt := ses.ReplaceDerivedStmt(true)
 	// inherit database
@@ -1240,7 +1236,6 @@ func (backSes *backSession) initFeSes(
 	db string,
 	callBack outputCallBackFunc) *backSession {
 	backSes.pool = ses.GetMemPool()
-	backSes.buf = buffer.New()
 	backSes.stmtProfile = process.StmtProfile{}
 	backSes.tenant = nil
 	backSes.txnHandler = txnHandler

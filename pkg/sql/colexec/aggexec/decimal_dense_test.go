@@ -37,7 +37,7 @@ func TestDecimalDenseGroupBoundary(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/groups=%d/sum=%t", param, count, isSum), func(t *testing.T) {
 					mp := mpool.MustNewZero()
 					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-					vec := vector.NewVec(param)
+					vec := vector.NewVec(param, mp)
 					t.Cleanup(func() { vec.Free(mp) })
 					groups := make([]uint64, count*2+3)
 					for row := 0; row <= len(groups); row++ {
@@ -105,9 +105,9 @@ func TestDecimalDenseCheckedOverflow(t *testing.T) {
 				t.Run(fmt.Sprintf("groups=%d/sum=%t/%s", count, isSum, test.name), func(t *testing.T) {
 					mp := mpool.MustNewZero()
 					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-					vec := vector.NewVec(param)
+					vec := vector.NewVec(param, mp)
 					t.Cleanup(func() { vec.Free(mp) })
-					seed := vector.NewVec(param)
+					seed := vector.NewVec(param, mp)
 					t.Cleanup(func() { seed.Free(mp) })
 					for range 6 {
 						require.NoError(t, vector.AppendFixed(seed, test.seed, false, mp))

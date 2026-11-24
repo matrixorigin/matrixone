@@ -99,9 +99,7 @@ func NewConstNullVector(
 }
 
 func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
-	vec := &vectorWrapper{
-		wrapped: vector.NewOffHeapVecWithType(typ),
-	}
+	vec := &vectorWrapper{}
 
 	// setting mpool variables
 	var (
@@ -116,6 +114,7 @@ func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 		alloc = common.DefaultAllocator
 	}
 	vec.mpool = alloc
+	vec.wrapped = vector.NewVec(typ, alloc)
 	if capacity > 0 {
 		if err := vec.wrapped.PreExtend(capacity, vec.mpool); err != nil {
 			panic(err)
@@ -125,7 +124,7 @@ func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 }
 
 func (vec *vectorWrapper) ApproxSize() int {
-	if vec.wrapped.NeedDup() {
+	if vec.wrapped.IsReadOnly() {
 		return 0
 	} else {
 		return vec.wrapped.Size()
@@ -200,7 +199,7 @@ func (vec *vectorWrapper) IsNull(i int) bool {
 	if inner.IsConst() {
 		return false
 	}
-	return nulls.Contains(inner.GetNulls(), uint64(i))
+	return inner.GetNulls().Contains(uint64(i))
 }
 
 func (vec *vectorWrapper) NullMask() *nulls.Nulls {
@@ -381,7 +380,7 @@ func (vec *vectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 
 	t := vec.wrapped.GetType()
 	vec.releaseWrapped()
-	vec.wrapped = vector.NewVec(*t)
+	vec.wrapped = vector.NewVec(*t, nil)
 	if err = vec.wrapped.UnmarshalBinary(buf); err != nil {
 		return
 	}
@@ -408,7 +407,7 @@ func (vec *vectorWrapper) ReadFromV1(r io.Reader) (n int64, err error) {
 
 	t := vec.wrapped.GetType()
 	vec.releaseWrapped()
-	vec.wrapped = vector.NewVec(*t)
+	vec.wrapped = vector.NewVec(*t, nil)
 	if err = vec.wrapped.UnmarshalBinaryV1(buf); err != nil {
 		return
 	}
@@ -434,7 +433,7 @@ func (vec *vectorWrapper) NullCount() int {
 		return 0
 	}
 	if vec.NullMask() != nil {
-		return vec.NullMask().GetCardinality()
+		return vec.NullMask().Count()
 	}
 	return 0
 }
@@ -450,8 +449,7 @@ func (vec *vectorWrapper) IsConstNull() bool {
 // conver a const vectorWrapper to a normal one, getting ready to edit
 func (vec *vectorWrapper) TryConvertConst() Vector {
 	if vec.wrapped.IsConstNull() {
-		ret := NewVector(*vec.GetType())
-		ret.mpool = vec.mpool
+		ret := NewVector(*vec.GetType(), Options{Allocator: vec.mpool})
 		for i := 0; i < vec.Length(); i++ {
 			ret.Append(nil, true)
 		}
@@ -459,8 +457,7 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 	}
 
 	if vec.wrapped.IsConst() {
-		ret := NewVector(*vec.GetType())
-		ret.mpool = vec.mpool
+		ret := NewVector(*vec.GetType(), Options{Allocator: vec.mpool})
 		v := vec.Get(0)
 		for i := 0; i < vec.Length(); i++ {
 			ret.Append(v, false)
@@ -470,11 +467,11 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 	return vec
 }
 
-func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Bitmap) error {
+func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Nulls) error {
 	return vec.ForeachWindow(0, vec.wrapped.Length(), op, sels)
 }
 
-func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) (err error) {
+func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Nulls) (err error) {
 	return ForeachVectorWindow(vec, offset, length, nil, op, sels)
 }
 
@@ -497,14 +494,14 @@ func (vec *vectorWrapper) releaseWrapped() {
 	if vec.wrapped == nil {
 		return
 	}
-	if !vec.wrapped.NeedDup() {
+	if !vec.wrapped.IsReadOnly() {
 		vec.wrapped.Free(vec.mpool)
 	}
 	vec.wrapped = nil
 }
 
 func (vec *vectorWrapper) Allocated() int {
-	if vec.wrapped.NeedDup() {
+	if vec.wrapped.IsReadOnly() {
 		return 0
 	}
 	return vec.wrapped.Allocated()
@@ -512,7 +509,7 @@ func (vec *vectorWrapper) Allocated() int {
 
 // When a new Append() is happening on a SharedMemory vectorWrapper, we allocate the data[] from the mpool.
 func (vec *vectorWrapper) tryCOW() {
-	if !vec.wrapped.NeedDup() {
+	if !vec.wrapped.IsReadOnly() {
 		return
 	}
 
@@ -531,7 +528,7 @@ func (vec *vectorWrapper) Window(offset, length int) Vector {
 	if err != nil {
 		panic(err)
 	}
-
+	// The wrapped window is a read-only reference to vec's memory.
 	return win
 }
 
@@ -581,14 +578,13 @@ func (vec *vectorWrapper) extendWithOffset(src *vector.Vector, srcOff, srcLen in
 	return
 }
 
-func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
+func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Nulls) {
 	if mask.IsEmpty() {
 		return
 	}
 	vec.tryCOW()
 
-	dels := vector.GetSels()
-	defer func() { vector.PutSels(dels) }()
+	var dels []int64
 	mask.Foreach(func(i uint64) bool {
 		dels = append(dels, int64(i))
 		return true
@@ -604,8 +600,7 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	}
 	vec.tryCOW()
 
-	dels := vector.GetSels()
-	defer func() { vector.PutSels(dels) }()
+	var dels []int64
 	itr := deletes.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
@@ -621,8 +616,19 @@ func (vec *vectorWrapper) GetDownstreamVector() *vector.Vector {
 	return vec.wrapped
 }
 
+// setDownstreamVector makes the wrapper wrap dsVec. An owned dsVec is then
+// operated through its own pool; a read-only dsVec keeps the wrapper's pool,
+// which copy-on-write (tryCOW) allocates from.
 func (vec *vectorWrapper) setDownstreamVector(dsVec *vector.Vector) {
+	if vec.wrapped != nil && vec.wrapped != dsVec && vec.wrapped.Allocated() == 0 {
+		// An owned wrapped vector is operated through vec.mpool (see below);
+		// a read-only one only drops references.
+		vec.wrapped.Free(vec.mpool)
+	}
 	vec.wrapped = dsVec
+	if dsVec != nil && !dsVec.IsReadOnly() {
+		vec.mpool = dsVec.MPool()
+	}
 }
 
 /****** Below functions are not used in critical path. Used mainly for testing */

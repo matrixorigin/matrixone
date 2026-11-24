@@ -47,7 +47,7 @@ func TestDedupJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(82), uint8(dedupJoinAllocationSiteMatched))
 	require.Equal(t, uint8(88), uint8(dedupJoinAllocationSiteFinalizeSelections))
 	require.Equal(t, uint8(110), uint8(dedupJoinAllocationSiteResultData))
-	require.Equal(t, uint8(113), uint8(dedupJoinAllocationSiteResultGrouping))
+	require.Equal(t, uint8(111), uint8(dedupJoinAllocationSiteResultArea))
 }
 
 func TestDedupJoinAuxiliaryArbitration(t *testing.T) {
@@ -72,9 +72,11 @@ func TestDedupJoinAuxiliaryArbitration(t *testing.T) {
 				defer func() {
 					if join != nil {
 						join.Free(proc, false, nil)
+						freeTestChildren(join)
 					}
 					if build != nil {
 						build.Free(proc, false, nil)
+						freeTestChildren(build)
 					}
 					buildBat.Clean(proc.Mp())
 					probeBat.Clean(proc.Mp())
@@ -93,9 +95,9 @@ func TestDedupJoinAuxiliaryArbitration(t *testing.T) {
 				intType, boolType := types.T_int32.ToType(), types.T_bool.ToType()
 				rightTypes := []types.Type{intType, intType, boolType, intType}
 				for i, typ := range rightTypes {
-					buildBat.Vecs[i] = vector.NewVec(typ)
+					buildBat.Vecs[i] = vector.NewVec(typ, proc.Mp())
 				}
-				probeBat.Vecs[0] = vector.NewVec(intType)
+				probeBat.Vecs[0] = vector.NewVec(intType, proc.Mp())
 				appendBuild := func(key, previous, id int32, auxiliary, release bool) {
 					require.NoError(t, vector.AppendFixed(buildBat.Vecs[0], key, false, proc.Mp()))
 					require.NoError(t, vector.AppendFixed(buildBat.Vecs[1], previous, auxiliary && !release, proc.Mp()))
@@ -223,9 +225,11 @@ func runDedupJoinDoubleSignedZeroContract(
 	defer func() {
 		if dedupArg != nil {
 			dedupArg.Free(proc, false, nil)
+			freeTestChildren(dedupArg)
 		}
 		if buildArg != nil {
 			buildArg.Free(proc, false, nil)
+			freeTestChildren(buildArg)
 		}
 		if buildBatch != nil {
 			buildBatch.Clean(proc.Mp())
@@ -259,8 +263,8 @@ func runDedupJoinDoubleSignedZeroContract(
 	joinMapTag := tag
 
 	const buildRows = hashmap.UnitLimit + 1
-	buildKeys := vector.NewVec(floatType)
-	buildPlaceholder := vector.NewVec(intType)
+	buildKeys := vector.NewVec(floatType, proc.Mp())
+	buildPlaceholder := vector.NewVec(intType, proc.Mp())
 	for key := 1; key < buildRows; key++ {
 		require.NoError(t, vector.AppendFixed(buildKeys, float64(key), false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(buildPlaceholder, int32(0), true, proc.Mp()))
@@ -277,8 +281,8 @@ func runDedupJoinDoubleSignedZeroContract(
 	}
 
 	probeBatch = batch.NewWithSize(2)
-	probeBatch.Vecs[0] = vector.NewVec(floatType)
-	probeBatch.Vecs[1] = vector.NewVec(intType)
+	probeBatch.Vecs[0] = vector.NewVec(floatType, proc.Mp())
+	probeBatch.Vecs[1] = vector.NewVec(intType, proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		probeBatch.Vecs[0],
 		math.Copysign(0, -1),
@@ -491,9 +495,11 @@ func runDedupJoinRemainingKeyContract(
 	defer func() {
 		if dedupArg != nil {
 			dedupArg.Free(proc, false, nil)
+			freeTestChildren(dedupArg)
 		}
 		if buildArg != nil {
 			buildArg.Free(proc, false, nil)
+			freeTestChildren(buildArg)
 		}
 		if buildBatch != nil {
 			buildBatch.Clean(proc.Mp())
@@ -531,7 +537,7 @@ func runDedupJoinRemainingKeyContract(
 	}
 	buildValues[buildRows-1] = tc.build
 	buildKeys := makeDedupContractKeyVector(t, proc, tc.typ, buildValues)
-	buildPlaceholder := vector.NewVec(intType)
+	buildPlaceholder := vector.NewVec(intType, proc.Mp())
 	for i := 0; i < buildRows; i++ {
 		require.NoError(t, vector.AppendFixed(buildPlaceholder, int32(0), true, proc.Mp()))
 	}
@@ -545,7 +551,7 @@ func runDedupJoinRemainingKeyContract(
 
 	probeBatch = batch.NewWithSize(2)
 	probeBatch.Vecs[0] = makeDedupContractKeyVector(t, proc, tc.typ, []any{tc.probe})
-	probeBatch.Vecs[1] = vector.NewVec(intType)
+	probeBatch.Vecs[1] = vector.NewVec(intType, proc.Mp())
 	require.NoError(t, vector.AppendFixed(probeBatch.Vecs[1], int32(42), false, proc.Mp()))
 	probeBatch.SetRowCount(1)
 
@@ -649,7 +655,7 @@ func makeDedupContractKeyVector(
 	typ types.Type,
 	values []any,
 ) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	for _, value := range values {
 		switch typ.Oid {
 		case types.T_float32:

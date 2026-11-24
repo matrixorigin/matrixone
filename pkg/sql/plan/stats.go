@@ -3294,6 +3294,9 @@ func orSelectivity(s1, s2 float64) float64 {
 
 func HasShuffleInPlan(qry *plan.Query) bool {
 	for _, node := range qry.GetNodes() {
+		if IsValidationPrivilegeCarrier(node) {
+			continue
+		}
 		if node.NodeType != plan.Node_TABLE_SCAN && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
 			return true
 		}
@@ -3405,6 +3408,9 @@ func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	qry := p.GetQuery()
 	if typ == ExecTypeTP || ncpu == 1 {
 		for i := range qry.Nodes {
+			if IsValidationPrivilegeCarrier(qry.Nodes[i]) {
+				continue
+			}
 			qry.Nodes[i].Stats.Dop = 1
 		}
 		return
@@ -3471,7 +3477,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	vectorID, _, localIndexScans, distributedPRE := RequiredIVFPlacement(qry)
 	deferredOnly := adaptiveDeferredOnlyNodes(qry)
 	for id, node := range qry.GetNodes() {
-		if node == nil {
+		if node == nil || IsValidationPrivilegeCarrier(node) {
 			continue
 		}
 		if _, deferred := deferredOnly[int32(id)]; deferred {
@@ -3518,7 +3524,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
 	for id, node := range qry.GetNodes() {
-		if node == nil {
+		if node == nil || IsValidationPrivilegeCarrier(node) {
 			continue
 		}
 		if _, deferred := deferredOnly[int32(id)]; deferred {

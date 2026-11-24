@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
@@ -106,7 +104,7 @@ func ReadDataByFilter(
 		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
-			sels = util.RemoveIf(sels, func(i int64) bool {
+			sels = slices.DeleteFunc(sels, func(i int64) bool {
 				return deleteMask.Contains(uint64(i))
 			})
 		}
@@ -231,6 +229,16 @@ func BlockDataReadWithFilter(
 	return preFilterRows, err
 }
 
+// readerOutputMP is the pool a filtered read allocates through. Output vectors
+// carry no allocation account, so a request with an output allocation view
+// reads through that view and the produced columns stay charged to it.
+func readerOutputMP(mp *mpool.MPool, applyFilter *engine.ReaderFilterRequest) *mpool.MPool {
+	if applyFilter != nil && applyFilter.OutputAllocation != nil {
+		return applyFilter.OutputAllocation
+	}
+	return mp
+}
+
 func blockDataRead(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -253,6 +261,7 @@ func blockDataRead(
 	applyFilter *engine.ReaderFilterRequest,
 	preFilterRows *int,
 ) error {
+	mp = readerOutputMP(mp, applyFilter)
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
@@ -337,6 +346,7 @@ func blockDataRead(
 	if applyFilter != nil && applyFilter.Exact != nil &&
 		orderByLimit == nil && !info.IsAppendable() && phyAddrColumnPos < 0 {
 		cacheVectors.Free(mp)
+		applyFilter.FreeMembership(mp)
 		return blockDataReadExactFilter(ctx, info, ds, columns, colTypes, sels, policy, bat, mp, fs, applyFilter, preFilterRows)
 	}
 
@@ -565,6 +575,9 @@ func CopyBlockData(
 	return
 }
 
+// BlockDataReadBackup loads a block for backup. Columns it has to shrink are
+// copied into mp; the others are read-only references to the cache. The
+// caller cleans the batch with mp.
 func BlockDataReadBackup(
 	ctx context.Context,
 	info *objectio.BlockInfo,
@@ -572,6 +585,7 @@ func BlockDataReadBackup(
 	idxes []uint16,
 	ts types.TS,
 	fs fileservice.FileService,
+	mp *mpool.MPool,
 ) (loaded *batch.Batch, sortKey uint16, err error) {
 	location := info.MetaLocation()
 	requestedColumnCount := len(idxes)
@@ -620,13 +634,13 @@ func BlockDataReadBackup(
 	}
 	defer func() {
 		if err != nil {
-			loaded.Clean(common.DebugAllocator)
+			loaded.Clean(mp)
 			loaded = nil
 			return
 		}
 		if requestedColumnCount > 0 {
 			for i := requestedColumnCount; i < len(loaded.Vecs); i++ {
-				loaded.Vecs[i].Free(common.DebugAllocator)
+				loaded.Vecs[i].Free(mp)
 				loaded.Vecs[i] = nil
 			}
 			loaded.Vecs = loaded.Vecs[:requestedColumnCount]
@@ -648,7 +662,11 @@ func BlockDataReadBackup(
 		rows := tombstones.ToI64Array(nil)
 		if len(rows) > 0 {
 			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(rows)))
-			if err = loaded.Shrink(rows, true, common.DebugAllocator); err != nil {
+			// The decoded columns reference the cache; shrink owned copies.
+			if err = loaded.OwnReadOnlyVectors(mp); err != nil {
+				return
+			}
+			if err = loaded.Shrink(rows, true, mp); err != nil {
 				return
 			}
 		}
@@ -674,7 +692,11 @@ func BlockDataReadBackup(
 		visibleRows = append(visibleRows, int64(row))
 	}
 	if len(visibleRows) != len(commitTSs) {
-		if err = loaded.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+		// The decoded columns reference the cache; shrink owned copies.
+		if err = loaded.OwnReadOnlyVectors(mp); err != nil {
+			return
+		}
+		if err = loaded.Shrink(visibleRows, false, mp); err != nil {
 			return
 		}
 		logutil.Info("[BlockDataReadBackup]",
@@ -743,7 +765,7 @@ func fillOutputBatchBySelectedRows(
 
 	if orderByLimit != nil && !orderByLimit.OrderedLimit {
 		if len(outputBat.Vecs) == len(columns) {
-			distVec := vector.NewVec(types.T_float64.ToType())
+			distVec := vector.NewVec(types.T_float64.ToType(), mp)
 			if err = vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
 				return err
 			}
@@ -1021,10 +1043,16 @@ func blockDataReadWithFilter(
 	orderByLimit *objectio.IndexReaderTopOp,
 	preFilterRows *int,
 ) (err error) {
+	mp = readerOutputMP(mp, applyFilter)
 	if err = validateLateMaterializationOutput(columns, colTypes, outputBat); err != nil {
 		return err
 	}
 	cacheVectors.Free(mp)
+	stageMembership := phyAddrColumnPos < 0 && orderByLimit == nil && ds != nil && len(outputBat.ExtraBuf) == 0 &&
+		canReadMembership(ctx, info, columns, colTypes, storageSelectRows, earlyColumns, applyFilter)
+	if !stageMembership {
+		applyFilter.FreeMembership(mp)
+	}
 	if len(storageSelectRows) > 0 &&
 		!info.IsAppendable() && orderByLimit != nil && !orderByLimit.OrderedLimit {
 		topColPos := int(orderByLimit.ColPos)
@@ -1085,8 +1113,20 @@ func blockDataReadWithFilter(
 			tombstones.Release()
 			return tombstoneErr
 		}
+		if stageMembership {
+			if tombstones.IsEmpty() {
+				handled, memberErr := blockDataReadMembership(ctx, info, columns, colTypes, earlyColumns,
+					policy, outputBat, mp, fs, applyFilter, preFilterRows)
+				if handled || memberErr != nil {
+					tombstones.Release()
+					return memberErr
+				}
+			} else {
+				applyFilter.FreeMembership(mp)
+			}
+		}
 
-		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
 			defer tombstones.Release()
 			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
 		}
@@ -1103,7 +1143,9 @@ func blockDataReadWithFilter(
 				typs[i] = colTypes[pos]
 				dest[i] = outputBat.Vecs[pos]
 			}
-			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)))
+			// The output batch is the lender of every borrowed column: it holds the
+			// cache pins until its next CleanOnlyData/Clean.
+			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)), outputBat)
 		} else {
 			deleteMask, err = materializeBlockColumnsAtPositions(
 				ctx,
@@ -1134,16 +1176,12 @@ func blockDataReadWithFilter(
 
 		physicalRowCount = outputBat.Vecs[earlyColumns[0]].Length()
 		if !deleteMask.IsEmpty() {
-			deleted := vector.GetSels()
-			defer func() { vector.PutSels(deleted) }()
+			var deleted []int64
 			deleted = deleteMask.ToI64Array(&deleted)
 			for _, pos := range earlyColumns {
 				if err := outputBat.Vecs[pos].Shrink(deleted, true, mp); err != nil {
 					return err
 				}
-			}
-			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deleted, mp); err != nil {
-				return err
 			}
 		}
 	}
@@ -1182,10 +1220,21 @@ func blockDataReadWithFilter(
 		if err = validateReaderFilterResult(filterResult, liveRows, selectedRows); err != nil {
 			return err
 		}
+		// The block's live rows are its physical rows only without deletes or
+		// a storage row selection. Then every column can stay a read-only
+		// reference to the cache and the batch carries the selection.
+		publishSelection := applyFilter.PublishSelection != nil && deleteMask.IsEmpty() &&
+			physicalRows == nil
 		if !filterResult.All {
+			if publishSelection && len(filterResult.Sels) > 0 {
+				publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter)
+				return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
+			}
 			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
 				return err
 			}
+		} else if publishSelection {
+			return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
 		}
 	} else {
 		filterResult, err = applyFilter.Apply(outputBat, earlyColumns)
@@ -1193,11 +1242,6 @@ func blockDataReadWithFilter(
 			return err
 		}
 		if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
-			return err
-		}
-	}
-	if !filterResult.All {
-		if err := objectio.JSONReadSetFromContext(ctx).SelectRows(filterResult.Sels, mp); err != nil {
 			return err
 		}
 	}
@@ -1223,8 +1267,11 @@ func blockDataReadWithFilter(
 		// Map only the surviving logical rows back to block offsets. In
 		// particular, a zero-result filter returns above without building an
 		// O(block rows) live-row slice.
-		selectedPhysicalRows = vector.GetSels()
-		defer func() { vector.PutSels(selectedPhysicalRows) }()
+		capacity := len(filterResult.Sels)
+		if filterResult.All {
+			capacity = physicalRowCount
+		}
+		selectedPhysicalRows = make([]int64, 0, capacity)
 		nextSelected := 0
 		liveRow := int64(0)
 		for physicalRow := 0; physicalRow < physicalRowCount; physicalRow++ {
@@ -1244,8 +1291,8 @@ func blockDataReadWithFilter(
 		if physicalRows == nil {
 			selectedPhysicalRows = filterResult.Sels
 		} else {
-			selectedPhysicalRows = vector.GetSels()
-			defer func() { vector.PutSels(selectedPhysicalRows) }()
+			// A new slice: physicalRows belongs to the caller.
+			selectedPhysicalRows = make([]int64, 0, len(filterResult.Sels))
 			for _, row := range filterResult.Sels {
 				selectedPhysicalRows = append(selectedPhysicalRows, physicalRows[row])
 			}
@@ -1440,7 +1487,7 @@ func blockDataReadWithSelectedFilterTopK(
 				return selectedPhysicalRows, nil
 			}
 
-			pooledPhysicalRows = vector.GetSels()
+			pooledPhysicalRows = pooledPhysicalRows[:0]
 			for _, row := range filterResult.Sels {
 				pooledPhysicalRows = append(pooledPhysicalRows, storageSelectRows[row])
 			}
@@ -1451,9 +1498,6 @@ func blockDataReadWithSelectedFilterTopK(
 		mp,
 		policy,
 	)
-	if pooledPhysicalRows != nil {
-		defer vector.PutSels(pooledPhysicalRows)
-	}
 	if err != nil {
 		return err
 	}
@@ -1527,7 +1571,7 @@ func appendVectorTopNDistances(
 ) error {
 	var distVec *vector.Vector
 	if len(outputBat.Vecs) == columnCount {
-		distVec = vector.NewVec(types.T_float64.ToType())
+		distVec = vector.NewVec(types.T_float64.ToType(), mp)
 		outputBat.Vecs = append(outputBat.Vecs, distVec)
 	} else {
 		distVec = outputBat.Vecs[columnCount]
@@ -1639,16 +1683,12 @@ func BlockDataReadInner(
 		defer deleteMask.Release()
 
 		if !deleteMask.IsEmpty() {
-			arr := vector.GetSels()
-			defer vector.PutSels(arr)
+			var arr []int64
 			deletedRows = deleteMask.ToI64Array(&arr)
 			for i := range columns {
 				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
 					return err
 				}
-			}
-			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deletedRows, mp); err != nil {
-				return err
 			}
 		}
 		return nil
@@ -1773,10 +1813,7 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		arr := vector.GetSels()
-		defer func() {
-			vector.PutSels(arr)
-		}()
+		var arr []int64
 
 		deletedRows = deleteMask.ToI64Array(&arr)
 	}
@@ -1901,7 +1938,7 @@ func materializeVectorTopNRows(
 
 	var distVec *vector.Vector
 	if len(outputBat.Vecs) == len(columns) {
-		distVec = vector.NewVec(types.T_float64.ToType())
+		distVec = vector.NewVec(types.T_float64.ToType(), mp)
 		outputBat.Vecs = append(outputBat.Vecs, distVec)
 	} else {
 		distVec = outputBat.Vecs[len(columns)]

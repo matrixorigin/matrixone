@@ -46,7 +46,7 @@ func TestFoldedDecimalDependencySurvivesPackedVector(t *testing.T) {
 
 func TestGetConstantValue2AppendsEnumLiteralWithEnumWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	vec := vector.NewVec(types.T_enum.ToType())
+	vec := vector.NewVec(types.T_enum.ToType(), proc.Mp())
 	defer vec.Free(proc.Mp())
 
 	for _, value := range []uint32{0, 1, 3} {
@@ -74,9 +74,9 @@ func TestConstantFoldRuleRetainsStandaloneInterval(t *testing.T) {
 	require.Same(t, expr, NewConstantFold(false).constantFold(expr, testutil.NewProcess(t)))
 }
 
-func TestGetConstantValue2PreservesAndValidatesLiteralStringSource(t *testing.T) {
+func TestGetConstantValue2AcceptsAndValidatesLiteralStringSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer vec.Free(proc.Mp())
 	for _, test := range []struct {
 		source types.StringSource
@@ -104,7 +104,6 @@ func TestGetConstantValue2PreservesAndValidatesLiteralStringSource(t *testing.T)
 		require.NoError(t, err)
 		require.True(t, constant)
 		row := vec.Length() - 1
-		require.Equal(t, test.source, vec.GetStringSourceAt(row))
 		require.Equal(t, test.null, vec.IsNull(uint64(row)))
 	}
 
@@ -149,7 +148,7 @@ func TestGetConstantValue2PhysicalFamilySource(t *testing.T) {
 	} {
 		t.Run(test.oid.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			vec := vector.NewVec(test.oid.ToType())
+			vec := vector.NewVec(test.oid.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()); require.Zero(t, proc.Mp().CurrNB()) })
 			expr := &plan.Expr{Typ: plan.Type{Id: int32(test.oid)}, Expr: &plan.Expr_Lit{Lit: test.literal}}
 			for i := 0; i < 2; i++ {
@@ -157,7 +156,6 @@ func TestGetConstantValue2PhysicalFamilySource(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, ok)
 				require.False(t, vec.IsNull(uint64(i)))
-				require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(i))
 			}
 			test.literal.Isnull = true
 			ok, err := GetConstantValue2(proc, expr, vec)
@@ -165,8 +163,6 @@ func TestGetConstantValue2PhysicalFamilySource(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, 3, vec.Length())
 			require.True(t, vec.IsNull(2))
-			require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(2))
-			require.Nil(t, vec.GetStringSources())
 
 			// A missing payload keeps the established fallback placeholder
 			// behavior; the DATETIME branch historically reports a constant NULL.
@@ -175,12 +171,6 @@ func TestGetConstantValue2PhysicalFamilySource(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.oid == types.T_datetime, ok)
 			require.Equal(t, 4, vec.Length())
-			wantSource := types.StringSourceExpression
-			if ok {
-				wantSource = types.StringSourceLiteral
-			}
-			require.Equal(t, wantSource, vec.GetStringSourceAt(3))
-			require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(2))
 			require.Equal(t, !vec.GetType().IsVarlen(), vec.IsNull(3))
 		})
 	}
@@ -198,7 +188,7 @@ func TestGetConstantValue2TemporalFallback(t *testing.T) {
 	} {
 		t.Run(test.oid.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			vec := vector.NewVec(test.oid.ToType())
+			vec := vector.NewVec(test.oid.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()); require.Zero(t, proc.Mp().CurrNB()) })
 			expr := &plan.Expr{Typ: plan.Type{Id: int32(test.oid)}, Expr: &plan.Expr_Lit{Lit: test.literal}}
 			ok, err := GetConstantValue2(proc, expr, vec)
@@ -206,7 +196,6 @@ func TestGetConstantValue2TemporalFallback(t *testing.T) {
 			require.False(t, ok)
 			require.Equal(t, 1, vec.Length())
 			require.True(t, vec.IsNull(0))
-			require.Equal(t, types.StringSourceExpression, vec.GetStringSourceAt(0))
 		})
 	}
 }
@@ -218,7 +207,7 @@ func TestGetConstantValue2UniformSourceAllocation(t *testing.T) {
 		for _, n := range []int{100, 1000, 10000} {
 			t.Run(fmt.Sprintf("%s/%d", oid, n), func(t *testing.T) {
 				proc := testutil.NewProcess(t)
-				vec := vector.NewVec(oid.ToType())
+				vec := vector.NewVec(oid.ToType(), proc.Mp())
 				t.Cleanup(func() {
 					vec.Free(proc.Mp())
 					require.Zero(t, proc.Mp().CurrNB())
@@ -239,10 +228,8 @@ func TestGetConstantValue2UniformSourceAllocation(t *testing.T) {
 				t.Logf("rows=%d allocations=%d bytes=%d", n, stats.NumAlloc.Load()-allocs, stats.NumAllocBytes.Load()-bytes)
 				require.Equal(t, allocs, stats.NumAlloc.Load())
 				require.Equal(t, bytes, stats.NumAllocBytes.Load())
-				require.Nil(t, vec.GetStringSources())
 				require.Equal(t, n, vec.Length())
 				for i := 0; i < n; i++ {
-					require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(i))
 					if oid == types.T_varchar {
 						require.Equal(t, "inline", vec.GetStringAt(i))
 					} else {
@@ -264,7 +251,7 @@ func BenchmarkGetConstantValue2StringSource(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for iteration := 0; iteration < b.N; iteration++ {
-					vec := vector.NewVec(types.T_int32.ToType())
+					vec := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 					if err := vec.PreExtend(n, proc.Mp()); err != nil {
 						b.Fatal(err)
 					}
@@ -617,7 +604,7 @@ func TestDecimal256ScalarConstantAdmission(t *testing.T) {
 			case tc.null:
 				value = vector.NewConstNull(wide, 1, proc.Mp())
 			case tc.flat:
-				value = vector.NewVec(wide)
+				value = vector.NewVec(wide, proc.Mp())
 				err = vector.AppendFixed(value, types.Decimal256{}, false, proc.Mp())
 			case tc.mismatch:
 				value, err = vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
@@ -669,7 +656,7 @@ func TestScalarConstantVectorAdmission(t *testing.T) {
 				}
 				require.NoError(t, err)
 			} else {
-				value = vector.NewVec(types.T_int64.ToType())
+				value = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				defer value.Free(proc.Mp())
 				for range tc.length {
 					require.NoError(t, vector.AppendFixed(value, int64(900), false, proc.Mp()))

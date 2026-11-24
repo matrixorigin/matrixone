@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -132,7 +131,7 @@ func preparedExactNumericStringType(ctx context.Context, ordinal int) (types.Typ
 		return types.Type{}, false
 	}
 	value := state.values[ordinal]
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		value = param.Value
 	}
 	spelling, ok := value.(string)
@@ -164,7 +163,7 @@ func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
 	}
 	state.valueDependent = true
 	value := state.values[position]
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		if param.MaterializedValue != "" {
 			return param.MaterializedValue, true
 		}
@@ -398,9 +397,9 @@ func bindPreparedIntegerValue(ctx context.Context, column, source *Expr) (*Expr,
 	// copy to one transport conversion; retain the original full guard above,
 	// source marker, sibling consumers and source-domain cache key.
 	if binding.Type.Oid == types.T(source.Typ.Id) {
-		if value, ok := state.values[source.GetP().Pos].(ParamValue); ok &&
+		if value, ok := AsParamValue(state.values[source.GetP().Pos]); ok &&
 			value.IsBinaryProtocol && !value.IsBin && !value.IsBinaryString &&
-			value.PrepareParamKind == vector.PrepareParamInteger {
+			value.PrepareParamKind == types.StringConversionInteger {
 			narrowed := DeepCopyExpr(source)
 			narrowed.Typ = converted.Typ
 			return narrowed, true, nil
@@ -562,7 +561,7 @@ func specializePreparedTemporalDecimalCasts(proc *process.Process, state *prepar
 		if warned || vec == nil || vec.Length() == 0 {
 			return nil
 		}
-		literal := rule.GetConstantValue(vec, false, 0)
+		literal := rule.GetConstantValue(vec, false, 0, rule.ExprStringSource(child, proc))
 		if literal != nil {
 			rule.PreserveFoldedDecimalLiteralSemantics(child, literal)
 			child.Expr = &plan.Expr_Lit{Lit: literal}
@@ -590,29 +589,6 @@ func (builder *QueryBuilder) preparedParameterDiagnosticsFree() bool {
 // reused. Keep that lifetime separate from PREPARE's unresolved-type mode.
 func (builder *QueryBuilder) isReusablePlan() bool {
 	return builder.isPrepareStatement || preparedBindingState(builder.GetContext()) != nil
-}
-
-// lowerPreparedSourceTransports runs after SQL binding and optimization. Keep
-// the physical representation compatible with existing readers and remote CNs
-// without letting transport casts participate in semantic type selection.
-func lowerPreparedSourceTransports(ctx context.Context, p *Plan) error {
-	return plan.VisitExpressionsInOwner(p, func(root *Expr) error {
-		return plan.VisitExprTree(root, func(expr *Expr) error {
-			if expr.GetP() == nil || types.T(expr.Typ.Id).IsMySQLString() || expr.Typ.Id == int32(types.T_any) {
-				return nil
-			}
-			source := &Expr{
-				Typ:  plan.Type{Id: int32(types.T_text)},
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: expr.GetP().Pos}},
-			}
-			physical, err := makePlan2CastExpr(ctx, source, expr.Typ)
-			if err != nil {
-				return err
-			}
-			*expr = *physical
-			return nil
-		})
-	})
 }
 
 // SQL EXECUTE exposes a bare marker as TEXT, even when its source domain is
@@ -648,7 +624,7 @@ func presentPreparedSQLResults(ctx context.Context, query *plan.Query) {
 		if !direct || pos < 0 || int(pos) >= len(state.values) {
 			continue
 		}
-		param, ok := state.values[pos].(ParamValue)
+		param, ok := AsParamValue(state.values[pos])
 		if !ok || param.IsBinaryProtocol {
 			continue
 		}
@@ -742,18 +718,16 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if !ok {
 			continue
 		}
-		if name == "member of" && i == 0 && binding.Type.Oid.IsArrayRelate() {
-			// MEMBER OF rejects SQL arrays with an argument-specific runtime
-			// error. Keep a direct prepared array in its TEXT transport form so
-			// the existing checker can report that error using source metadata.
-			args[i] = &Expr{Typ: makeSimplePlan2Type(types.T_text),
-				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: source.GetP().Pos}}}
-			continue
+		if name == "member of" && i == 0 &&
+			(binding.Type.Oid.IsArrayRelate() || binding.Type.Oid == types.T_bit) {
+			// MEMBER OF rejects SQL arrays. A protocol BIT parameter carries no
+			// width, so its JSON value would be ambiguous: reject it too.
+			return nil, moerr.NewInvalidTypeForJSON(ctx, 1, "member of")
 		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&
 			binding.Type.IsNumeric() && int(source.GetP().Pos) < len(state.values) {
-			if param, ok := state.values[source.GetP().Pos].(ParamValue); ok && !param.IsBinaryProtocol {
+			if param, ok := AsParamValue(state.values[source.GetP().Pos]); ok && !param.IsBinaryProtocol {
 				// A SQL PREPARE marker compared directly with FLOAT inherits
 				// that column's storage precision. Comparing DECIMAL transport
 				// against FLOAT via DOUBLE would miss the stored rounded value.
@@ -959,7 +933,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			}
 		}
 		if int(source.GetP().Pos) < len(state.values) {
-			if param, ok := state.values[source.GetP().Pos].(ParamValue); ok {
+			if param, ok := AsParamValue(state.values[source.GetP().Pos]); ok {
 				if target, ok := preparedSQLExecuteTextConsumerType(name, source, param); ok {
 					var err error
 					args[i], err = preparedSQLExecuteTextConsumerCast(ctx, source, target)
@@ -986,7 +960,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if pos < 0 || pos >= len(state.values) {
 			return false, 0
 		}
-		param, ok := state.values[pos].(ParamValue)
+		param, ok := AsParamValue(state.values[pos])
 		if !ok || !param.EnableNumericPrefix {
 			return false, 0
 		}
@@ -1286,9 +1260,6 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	}
 	p := &Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
 	presentPreparedSQLResults(planning, query)
-	if err = lowerPreparedSourceTransports(planning, p); err != nil {
-		return nil, err
-	}
 	state := preparedBindingState(planning)
 	return &PreparedExecutionPlan{TemporalTypes: state.temporalTypes, Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil

@@ -27,7 +27,7 @@ import (
 )
 
 // Independent producers model separate spools. Each producer owns its source:
-// GetCopiedBatch transfers ExtraBuf and must not share a mutable source batch.
+// copyBatch transfers ExtraBuf and must not share a mutable source batch.
 func BenchmarkCachedBatchProducerShapes(b *testing.B) {
 	for _, tc := range []struct {
 		name                string
@@ -47,7 +47,7 @@ func BenchmarkCachedBatchProducerShapes(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			type producer struct {
-				cache   *cachedBatch
+				cache   *batchCache
 				sources [2]*batch.Batch
 			}
 			producers := make([]producer, runtime.GOMAXPROCS(0))
@@ -64,12 +64,12 @@ func BenchmarkCachedBatchProducerShapes(b *testing.B) {
 					b.Cleanup(func() { source.Clean(sm) })
 					for column := range tc.columns {
 						if tc.fixed {
-							source.Vecs[column] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+							source.Vecs[column] = vector.NewVec(types.T_int64.ToType(), sm)
 							if e := vector.AppendFixedList(source.Vecs[column], make([]int64, tc.rows), nil, sm); e != nil {
 								b.Fatal(e)
 							}
 						} else {
-							source.Vecs[column] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+							source.Vecs[column] = vector.NewVec(types.T_text.ToType(), sm)
 							size := tc.size
 							if tc.ragged {
 								size += column*17 + version*(64+column*14)
@@ -92,14 +92,14 @@ func BenchmarkCachedBatchProducerShapes(b *testing.B) {
 						b.Error("target leak")
 					}
 				})
-				producers[worker].cache = initCachedBatch(mp, 1)
+				producers[worker].cache = newBatchCache(mp, 1)
 				b.Cleanup(producers[worker].cache.free)
 				for warm := range 4 {
-					got, use, id, e := producers[worker].cache.GetCopiedBatch(producers[worker].sources[warm%2])
+					got, _, id, e := producers[worker].cache.copyBatch(producers[worker].sources[warm%2])
 					if e != nil {
 						b.Fatal(e)
 					}
-					producers[worker].cache.CacheBatch(use, id, got)
+					producers[worker].cache.put(got, id)
 				}
 			}
 			var next atomic.Int64
@@ -109,12 +109,12 @@ func BenchmarkCachedBatchProducerShapes(b *testing.B) {
 				p := &producers[next.Add(1)-1]
 				iteration := 0
 				for pb.Next() {
-					got, use, id, e := p.cache.GetCopiedBatch(p.sources[iteration%2])
+					got, _, id, e := p.cache.copyBatch(p.sources[iteration%2])
 					if e != nil {
 						b.Error(e)
 						return
 					}
-					p.cache.CacheBatch(use, id, got)
+					p.cache.put(got, id)
 					iteration++
 				}
 			})

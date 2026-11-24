@@ -26,7 +26,7 @@ import (
 // Exercise the existing preflight/encoder boundary, including the complete
 // sizing pass. Both baseline and candidate compile this same fixture.
 func BenchmarkCharKeyPreparation(b *testing.B) {
-	for _, shape := range []string{"flags", "high-ndv", "nullable", "all-null", "area", "unicode", "varchar", "constant", "grouping", "tiny", "empty"} {
+	for _, shape := range []string{"flags", "high-ndv", "nullable", "all-null", "area", "unicode", "varchar", "constant", "tiny", "empty"} {
 		b.Run(shape, func(b *testing.B) {
 			mp := mpool.MustNewZero()
 			m, err := NewStrHashMap(true, mp)
@@ -50,7 +50,7 @@ func BenchmarkCharKeyPreparation(b *testing.B) {
 			}
 			vecs := make([]*vector.Vector, 2)
 			for col := range vecs {
-				vec := vector.NewVec(typ)
+				vec := vector.NewVec(typ, mp)
 				vecs[col] = vec
 				defer vec.Free(mp)
 				if shape == "constant" {
@@ -75,9 +75,6 @@ func BenchmarkCharKeyPreparation(b *testing.B) {
 							b.Fatal(err)
 						}
 					}
-				}
-				if shape == "grouping" {
-					vec.GetGrouping().Add(17)
 				}
 			}
 			itr := m.NewIterator().(*strHashmapIterator)

@@ -58,8 +58,8 @@ func TestCompleteKeyShufflePreservesEqualityAndReuse(t *testing.T) {
 			want := make(map[string]int)
 			tuple := func(b *batch.Batch, row int) string {
 				first := "null"
-				if b.Vecs[0].GetGrouping().Contains(uint64(row)) {
-					first = "grouping"
+				if !b.Vecs[0].IsNull(uint64(row)) {
+					first = fmt.Sprintf("v%d", vector.GetFixedAtNoTypeCheck[int64](b.Vecs[0], row))
 				}
 				return fmt.Sprintf("%s/%d", first, vector.GetFixedAtNoTypeCheck[int64](b.Vecs[1], row))
 			}
@@ -67,13 +67,11 @@ func TestCompleteKeyShufflePreservesEqualityAndReuse(t *testing.T) {
 				b := batch.NewWithSize(2)
 				inputs[i] = b
 				defer b.Clean(mp)
-				b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 32, mp)
-				b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+				b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+				b.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 				for row := 0; row < 32; row++ {
+					require.NoError(t, vector.AppendFixed(b.Vecs[0], int64(7), row%8 != 0, mp))
 					require.NoError(t, vector.AppendFixed(b.Vecs[1], int64(row%16), false, mp))
-					if row%8 == 0 {
-						b.Vecs[0].GetGrouping().Add(uint64(row))
-					}
 				}
 				b.SetRowCount(32)
 				for row := 0; row < 32; row++ {
@@ -1054,7 +1052,7 @@ func TestEqualStringKeysKeepOneOwnerAcrossCoordinatorAndRemoteProcesses(t *testi
 
 func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_text.ToType())
+	vec := vector.NewVec(types.T_text.ToType(), mp)
 	defer func() {
 		vec.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1091,7 +1089,7 @@ func TestAppendStringHashSelsCompleteKeysAndNulls(t *testing.T) {
 func TestAppendStringHashSelsUsesUnicodeComparisonDomain(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	defer func() {
 		vec.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1126,7 +1124,7 @@ func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
 	for _, keyLength := range []int{8, 32, 64, 1024, 64 << 10, 1 << 20} {
 		rows := min(256, max(1, (4<<20)/keyLength))
 		mp := mpool.MustNewZero()
-		vec := vector.NewVec(types.T_text.ToType())
+		vec := vector.NewVec(types.T_text.ToType(), mp)
 		for row := 0; row < rows; row++ {
 			value := make([]byte, keyLength)
 			for i := range value {
@@ -1835,7 +1833,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 	}
 
 	t.Run("varbinary", func(t *testing.T) {
-		vec := vector.NewVec(types.T_varbinary.ToType())
+		vec := vector.NewVec(types.T_varbinary.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
@@ -1853,7 +1851,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 	})
 
 	t.Run("varbinary with null", func(t *testing.T) {
-		vec := vector.NewVec(types.T_varbinary.ToType())
+		vec := vector.NewVec(types.T_varbinary.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, proc.Mp()))
@@ -1872,7 +1870,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 
 	t.Run("binary and blob", func(t *testing.T) {
 		for _, oid := range []types.T{types.T_binary, types.T_blob, types.T_datalink} {
-			vec := vector.NewVec(oid.ToType())
+			vec := vector.NewVec(oid.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, proc.Mp()))
 
@@ -1896,7 +1894,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 			return u
 		}
 		u1, u2 := mkUuid(1, 7), mkUuid(2, 8)
-		vec := vector.NewVec(types.T_uuid.ToType())
+		vec := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(vec, u1, false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(vec, u2, false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(vec, u1, false, proc.Mp()))
@@ -1918,7 +1916,7 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		binary.LittleEndian.PutUint64(u1[8:16], 7)
 		binary.LittleEndian.PutUint64(u2[0:8], 2)
 		binary.LittleEndian.PutUint64(u2[8:16], 8)
-		vec := vector.NewVec(types.T_uuid.ToType())
+		vec := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(vec, u1, false, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(vec, u1, true, proc.Mp()))
 		require.NoError(t, vector.AppendFixed(vec, u2, false, proc.Mp()))

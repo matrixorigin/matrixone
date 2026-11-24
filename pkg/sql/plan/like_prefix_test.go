@@ -810,7 +810,7 @@ func TestRangeAlternativeLiteralStringINTotality(t *testing.T) {
 	node := &planpb.Node{BindingTags: []int32{7}}
 	makeExpr := func(charset uint8) *planpb.Expr {
 		typ := types.NewWithCharset(types.T_varchar, 40, 0, charset)
-		values := vector.NewVec(typ)
+		values := vector.NewVec(typ, proc.Mp())
 		defer values.Free(proc.Mp())
 		for _, value := range []string{"abc", "abc", "中文", "a\x00b", "\xff"} {
 			require.NoError(t, vector.AppendBytes(values, []byte(value), false, proc.Mp()))

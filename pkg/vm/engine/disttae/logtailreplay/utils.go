@@ -61,7 +61,7 @@ func IsTransferredDels(name string) bool {
 }
 
 func mustVectorFromProto(v api.Vector) *vector.Vector {
-	ret, err := vector.ProtoVectorToVector(v)
+	ret, err := vector.ProtoVectorToVector(v, nil)
 	if err != nil {
 		panic(err)
 	}

@@ -81,7 +81,7 @@ func TestParquetMediumIntEnforcesLogicalBounds(t *testing.T) {
 			proc := testutil.NewProc(t)
 			file, page := writeDictAndGetPage(t, tc.node, tc.values)
 			typ := types.New(tc.target, 24, -1)
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var handler ParquetHandler
 			mapper := handler.getMapper(file.Root().Column("c"), plan.Type{

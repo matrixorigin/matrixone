@@ -104,9 +104,9 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 	}
 
 	if len(l.lockMetaVecs) == 0 {
-		accountIdVec := vector.NewVec(types.T_uint32.ToType())
-		dbName := vector.NewVec(types.T_varchar.ToType())
-		tableName := vector.NewVec(types.T_varchar.ToType())
+		accountIdVec := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
+		dbName := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+		tableName := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		l.lockMetaVecs = []*vector.Vector{
 			accountIdVec,
 			dbName,

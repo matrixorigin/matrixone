@@ -48,7 +48,7 @@ func BenchmarkRowNumberFullDrain(b *testing.B) {
 					n = shape.rows - n
 				}
 				for col := range shape.cols {
-					input.Vecs[col] = vector.NewVec(types.T_int64.ToType())
+					input.Vecs[col] = vector.NewVec(types.T_int64.ToType(), mp)
 					for row := range n {
 						require.NoError(b, vector.AppendFixed(input.Vecs[col], int64(row+col), false, mp))
 					}
@@ -106,6 +106,7 @@ func BenchmarkRowNumberFullDrain(b *testing.B) {
 				require.Equal(b, uint64(shape.rows), last)
 				arg.Reset(proc, false, nil)
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				require.NoError(b, arg.ClearAllocationAccount(account))
 				require.Zero(b, account.Snapshot().Used)
 				measured, ok := mp.EndResourcePeakEpoch(token)

@@ -164,7 +164,7 @@ func (s *subscriptionMetadataState) start(
 ) error {
 	s.stopStreaming()
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		s.batch.CleanOnlyData()
 	}

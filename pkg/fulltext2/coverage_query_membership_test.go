@@ -175,7 +175,7 @@ func TestContainsPkTypes(t *testing.T) {
 		}
 		seg, err := b.Finish()
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(types.T_uint64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 8, 0), mp)
 		for i := 0; i < 6; i += 2 {
 			require.NoError(t, vector.AppendFixed(vec, uint64(i), false, mp))
 		}
@@ -200,7 +200,7 @@ func TestContainsPkTypes(t *testing.T) {
 		}
 		seg, err := b.Finish()
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(types.T_int32, 4, 0))
+		vec := vector.NewVec(types.New(types.T_int32, 4, 0), mp)
 		for i := 0; i < 6; i += 2 {
 			require.NoError(t, vector.AppendFixed(vec, int32(i), false, mp))
 		}
@@ -223,7 +223,7 @@ func TestContainsPkTypes(t *testing.T) {
 		}
 		seg, err := b.Finish()
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(types.T_uint32, 4, 0))
+		vec := vector.NewVec(types.New(types.T_uint32, 4, 0), mp)
 		for i := 0; i < 6; i += 2 {
 			require.NoError(t, vector.AppendFixed(vec, uint32(i), false, mp))
 		}
@@ -247,7 +247,7 @@ func TestContainsPkTypes(t *testing.T) {
 		}
 		seg, err := b.Finish()
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(types.T_uuid, 16, 0))
+		vec := vector.NewVec(types.New(types.T_uuid, 16, 0), mp)
 		for i := 0; i < 6; i += 2 {
 			require.NoError(t, vector.AppendFixed(vec, mkUuid(i), false, mp))
 		}
@@ -271,7 +271,7 @@ func TestContainsPkTypes(t *testing.T) {
 		}
 		seg, err := b.Finish()
 		require.NoError(t, err)
-		vec := vector.NewVec(types.New(types.T_varchar, 64, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 64, 0), mp)
 		for i := 0; i < 6; i += 2 {
 			require.NoError(t, vector.AppendBytes(vec, []byte(keys[i]), false, mp))
 		}
@@ -307,7 +307,7 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 			require.Nil(t, loaded.pks)
 			t.Cleanup(func() { _ = loaded.dict.Close() })
 
-			vec := vector.NewVec(tc.typ.ToType())
+			vec := vector.NewVec(tc.typ.ToType(), mp)
 			require.NoError(t, vector.AppendAny(vec, tc.value, false, mp))
 			t.Cleanup(func() { vec.Free(mp) })
 			payload, err := docfilter.Build(vec)
@@ -389,7 +389,7 @@ func TestLoadedContainsPkNoAlloc(t *testing.T) {
 			// the runtime-filter source vector and catches a loaded/source encoding
 			// mismatch instead of comparing the loaded representation with itself.
 			mp := mpool.MustNewZero()
-			vec := vector.NewVec(tc.typ.ToType())
+			vec := vector.NewVec(tc.typ.ToType(), mp)
 			require.NoError(t, vector.AppendAny(vec, tc.value, false, mp))
 			t.Cleanup(func() { vec.Free(mp) })
 			target := sourcePkBytes(vec, tc.typ.ToType())
@@ -440,7 +440,7 @@ func TestLoadedContainsPkBoxingCounterexample(t *testing.T) {
 	// Build the probe from an independent runtime-filter source vector, as in the
 	// no-allocation matrix, so both paths test the same membership decision.
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(tc.typ.ToType())
+	vec := vector.NewVec(tc.typ.ToType(), mp)
 	require.NoError(t, vector.AppendAny(vec, tc.value, false, mp))
 	t.Cleanup(func() { vec.Free(mp) })
 	filter := noAllocMembershipFilter{target: sourcePkBytes(vec, tc.typ.ToType())}

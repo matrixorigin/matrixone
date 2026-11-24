@@ -44,12 +44,6 @@ func Prepare(op Operator, proc *process.Process) error {
 		return nil
 	}
 
-	if producer, ok := op.(DictionaryProducer); ok {
-		state := producer.DictionaryOutputState()
-		state.BeginCall()
-		*state = DictionaryOutputState{}
-	}
-
 	childrenProc := proc
 	if preparer, ok := op.(childrenProcessPreparer); ok {
 		childrenProc = preparer.PrepareChildrenProcess(proc)
@@ -62,7 +56,7 @@ func Prepare(op Operator, proc *process.Process) error {
 	if err := op.Prepare(proc); err != nil {
 		return err
 	}
-	configureDictionaryEdges(op)
+	configureSelectionChildren(op)
 	return nil
 }
 
@@ -74,4 +68,14 @@ func ModifyOutputOpNodeIdx(rootOp Operator, proc *process.Process) {
 		}
 		return nil
 	})
+}
+
+// Reset resets op after its producer work has stopped.
+func Reset(op Operator, proc *process.Process, failed bool, err error) {
+	op.Reset(proc, failed, err)
+}
+
+// Free releases op's resources.
+func Free(op Operator, proc *process.Process, failed bool, err error) {
+	op.Free(proc, failed, err)
 }

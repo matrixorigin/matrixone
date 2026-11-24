@@ -81,7 +81,10 @@ func newBenchmarkPhyPlan(operatorCount int, withBackgroundQuery bool) *PhyPlan {
 }
 
 func newPhyPlanExportCloneFixture() (*PhyPlan, *process.OperatorStats) {
-	resourceSummary := &resource.StatementResourceSummary{StatementWallNS: 17}
+	resourceSummary := &resource.StatementResourceSummary{
+		StatementWallNS: 17,
+		LockRead:        &resource.LockReadDiagnostic{AcquisitionNS: 11},
+	}
 	if quality := resourceSummary.Allocation.AddGeneration(7, 0, true); quality != 0 {
 		panic(quality)
 	}
@@ -176,7 +179,7 @@ func TestPhyPlanCloneForExportReferenceSchemaIsExplicit(t *testing.T) {
 		{
 			name:                  "StatementResourceSummary",
 			value:                 source.Resource,
-			referenceBearingField: []string{"Allocation"},
+			referenceBearingField: []string{"Allocation", "LockRead"},
 		},
 	}
 
@@ -207,6 +210,7 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	require.Same(t, got.LocalScope[0].RootOperator.Children[0], got.RemoteScope[0].RootOperator)
 
 	source.Resource.StatementWallNS = 19
+	source.Resource.LockRead.AcquisitionNS = 29
 	source.LocalScope[0].Receiver[0].Idx = 20
 	source.LocalScope[0].DataSource.Attributes[0] = "mutated"
 	source.LocalScope[0].RootOperator.DestReceiver[0].Idx = 21
@@ -217,6 +221,7 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	require.Zero(t, source.Resource.Allocation.AddOwnerGeneration(1, 5, 0))
 
 	require.Equal(t, uint64(17), got.Resource.StatementWallNS)
+	require.Equal(t, uint64(11), got.Resource.LockRead.AcquisitionNS)
 	require.Equal(t, 2, got.LocalScope[0].Receiver[0].Idx)
 	require.Equal(t, "a", got.LocalScope[0].DataSource.Attributes[0])
 	require.Equal(t, 1, got.LocalScope[0].RootOperator.DestReceiver[0].Idx)

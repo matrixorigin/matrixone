@@ -39,7 +39,8 @@ func TestExecuteParamCountMismatchMapsToMySQL1210(t *testing.T) {
 	// Binary-protocol mismatch: two wire parameters for a one-placeholder plan.
 	cw.discardRuntimeCacheCandidate()
 	prepared.clearBinaryParamState(cw.proc)
-	prepared.params = vector.NewVec(types.T_text.ToType())
+	prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepared.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("9"), false, cw.proc.Mp()))
 	prepared.ParamTypes = []byte{
@@ -60,7 +61,8 @@ func TestExecuteParamCountMismatchMapsToMySQL1210(t *testing.T) {
 	// Corrected binding succeeds on the same handle.
 	cw.discardRuntimeCacheCandidate()
 	prepared.clearBinaryParamState(cw.proc)
-	prepared.params = vector.NewVec(types.T_text.ToType())
+	prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepared.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("7"), false, cw.proc.Mp()))
 	prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0}
 	_, p, stmt, _, owned, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)

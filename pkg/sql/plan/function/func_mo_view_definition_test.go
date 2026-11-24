@@ -549,7 +549,7 @@ func TestBuiltInViewDefinition(t *testing.T) {
 	legacy := `{"Stmt":"create /* migration view fake as */ view v as select 1"}`
 
 	t.Run("evaluates valid and invalid persisted rows", func(t *testing.T) {
-		input := vector.NewVec(types.T_varchar.ToType())
+		input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		defer input.Free(proc.Mp())
 		require.NoError(t, vector.AppendStringList(input,
 			[]string{current, legacy, `{"Stmt":"CREATE VIEW"}`},
@@ -572,7 +572,7 @@ func TestBuiltInViewDefinition(t *testing.T) {
 	})
 
 	t.Run("preserves null inputs and selection mask", func(t *testing.T) {
-		input := vector.NewVec(types.T_varchar.ToType())
+		input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		defer input.Free(proc.Mp())
 		require.NoError(t, vector.AppendStringList(input,
 			[]string{current, legacy}, []bool{false, false}, proc.Mp()))
@@ -611,7 +611,7 @@ func TestBuiltInViewCheckOption(t *testing.T) {
 		proc.Free()
 		mpool.DeleteMPool(proc.Mp())
 	}()
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendStringList(input,
 		[]string{

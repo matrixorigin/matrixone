@@ -105,8 +105,8 @@ func TestHnswReaderSearchesTheCachedIndex(t *testing.T) {
 
 	attrs := []string{planreader.KeyColumn, planreader.ScoreColumn}
 	out := batch.NewWithSize(2)
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	out.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	out.Vecs[1] = vector.NewVec(types.T_float64.ToType(), proc.Mp())
 	defer out.Clean(proc.Mp())
 	done, err := reader.Read(context.Background(), attrs, nil, proc.Mp(), out)
 	require.NoError(t, err)

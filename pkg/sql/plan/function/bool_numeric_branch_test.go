@@ -270,7 +270,7 @@ func TestBoolToDecimalAssignmentRangeCheck(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	cast := func(target types.Type, value bool) error {
-		src := vector.NewVec(types.T_bool.ToType())
+		src := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 		defer src.Free(proc.Mp())
 		require.NoError(t, vector.AppendFixed(src, value, false, proc.Mp()))
 		targetVec := vector.NewConstNull(target, 1, proc.Mp())

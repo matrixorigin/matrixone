@@ -80,7 +80,7 @@ func TestIssue25590RollbackHandoffRetiresRecordedNamesAtQueueSettle(t *testing.T
 
 	admit := func() { issue25590AdmitBoundary(t, txn, ctx) }
 	record := func(name string, stats objectio.ObjectStats) error {
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		defer recBat.Clean(mp)
 		if err := colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, stats); err != nil {
@@ -233,7 +233,7 @@ func TestIssue25590PoolHandoffTailRetiresRecordedNamesAtQueueSettle(t *testing.T
 
 	admit := func() { issue25590AdmitBoundary(t, txn, ctx) }
 	record := func(name string, stats objectio.ObjectStats) error {
-		recBat := colexec.AllocCNS3ResultBat(false)
+		recBat := colexec.AllocCNS3ResultBat(false, mp)
 		defer recBat.Clean(mp)
 		if err := colexec.ExpandObjectStatsToBatch(
 			mp, false, recBat, false, stats); err != nil {

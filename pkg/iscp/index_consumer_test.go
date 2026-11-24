@@ -1104,7 +1104,7 @@ func TestIvfSnapshot(t *testing.T) {
 				testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
 			}, nil)
 
-		defer bat.Clean(mp)
+		defer bat.Clean(proc.Mp())
 
 		insertAtomicBat := &AtomicBatch{
 			Mp:      nil,

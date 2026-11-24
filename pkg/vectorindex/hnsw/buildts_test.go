@@ -35,18 +35,18 @@ func metaBatch(t *testing.T, mp *mpool.MPool, withProvenance bool, nrow, buildTS
 		n = 6
 	}
 	bat := batch.NewWithSize(n)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("m0"), false, mp))
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("chk"), false, mp))
-	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[2], 111, false, mp))
-	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[3], 2222, false, mp))
 	if withProvenance {
-		bat.Vecs[4] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[4] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[4], nrow, false, mp))
-		bat.Vecs[5] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[5] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[5], buildTS, false, mp))
 	}
 	bat.SetRowCount(1)

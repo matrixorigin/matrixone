@@ -124,7 +124,7 @@ func (node *persistedNode) Scan(
 		length := vecs[0].Length()
 		vecs[i].Close()
 		vecs[i] = node.object.rt.VectorPool.Transient.GetVector(&objectio.TSType)
-		vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, length, mp)
+		vector.AppendMultiFixed(vecs[i].GetDownstreamVector(), createTS, false, length, vecs[i].GetAllocator())
 	}
 	if err != nil {
 		return err
@@ -197,7 +197,7 @@ func (node *persistedNode) Scan(
 				destIdx := (*bat).Nameidx[attr]
 				constInner := destVec.GetDownstreamVector()
 				length := constInner.Length()
-				newInner := vector.NewVec(*constInner.GetType())
+				newInner := vector.NewVec(*constInner.GetType(), mp)
 				if err = newInner.UnionBatch(constInner, 0, length, nil, mp); err != nil {
 					return
 				}

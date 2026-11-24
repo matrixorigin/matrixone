@@ -172,7 +172,7 @@ func TestFillLinearStopsAtPartitionBoundary(t *testing.T) {
 	// partition, and partition 2's leading NULL has no previous one: without
 	// the boundary, linear would interpolate 30 and 100 across the groups.
 	typ := types.New(types.T_decimal128, 38, 0)
-	valVec := vector.NewVec(typ)
+	valVec := vector.NewVec(typ, proc.Mp())
 	set := func(v int64, isNull bool) {
 		require.NoError(t, vector.AppendFixed(valVec, types.Decimal128FromInt64(v), isNull, proc.Mp()))
 	}

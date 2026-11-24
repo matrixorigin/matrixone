@@ -57,7 +57,7 @@ func compactGroupColumns(vecs []*vector.Vector, start, count int) bool {
 		}
 		typ := vec.GetType()
 		if typ.Oid != types.T_char || typ.Width != 1 || types.IsUnicodeCollation(typ.Charset) ||
-			vec.IsConst() || vec.HasNull() || vec.HasGrouping() || vec.HasStringSourceMetadata() ||
+			vec.IsConst() || vec.HasNull() ||
 			start > vec.Length() || count > vec.Length()-start {
 			return false
 		}
@@ -70,7 +70,7 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 	if hr.compact != nil {
 		hr.compact.eligible = false
 	}
-	if hr.compactDisabled || ctr.groupKeyStringSourceMetadata || !compactGroupColumns(vecs, start, count) {
+	if hr.compactDisabled || !compactGroupColumns(vecs, start, count) {
 		return groupInsertPreview{}, false, nil
 	}
 	if hr.compact == nil {
@@ -109,32 +109,11 @@ func (ctr *container) previewCompactGroups(vecs []*vector.Vector, start, count i
 	if (len(lookup.ids) == compactCharDomain) != (len(vecs) == 1) {
 		return groupInsertPreview{}, false, nil
 	}
-	if len(vecs) == 2 && count > 1 && !vecs[0].IsDictionary() && !vecs[1].IsDictionary() {
+	if len(vecs) == 2 && count > 1 {
 		return lookup.previewFlatTuple(vecs, start, count)
 	}
 	clear(lookup.codes[:count])
 	for col, vec := range vecs {
-		if vec.IsDictionary() {
-			view := vector.ResolveVarlenaReadView(vec)
-			for i := 0; i < count; i++ {
-				physical := int(view.Selection[start+i])
-				if view.Constant {
-					physical = 0
-				}
-				value := &view.Values[physical]
-				code, ok := compactInlineCharCode(value)
-				if !ok {
-					return groupInsertPreview{}, false, nil
-				}
-				if col == 0 {
-					lookup.codes[i] = code
-				} else {
-					lookup.codes[i] = lookup.codes[i]*compactCharDomain + code
-				}
-			}
-			continue
-		}
-
 		vals, _ := vector.MustVarlenaRawData(vec)
 		for i := 0; i < count; i++ {
 			value := &vals[start+i]

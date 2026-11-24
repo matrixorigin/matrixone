@@ -29,7 +29,7 @@ var lowPrecTypes = []types.T{types.T_bf16, types.T_float16, types.T_float8, type
 // lowPrecVector holds 1.5 and -0.5, exact in every low-precision type, then a NULL.
 func lowPrecVector(t *testing.T, oid types.T, mp *mpool.MPool) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for i, v := range []float32{1.5, -0.5, 0} {
 		null := i == 2
 		var err error

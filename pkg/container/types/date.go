@@ -104,10 +104,10 @@ func parseDateCastComponents(s string) (int32, uint8, uint8, bool, error) {
 }
 
 func parseDateCastComponentsWithContext(ctx context.Context, s string) (int32, uint8, uint8, bool, error) {
-	return parseDateCastComponentsObserved(ctx, s, false)
+	return parseDateCastComponentsObserved(ctx, s, false, nil)
 }
 
-func parseDateCastComponentsObserved(ctx context.Context, s string, observe bool) (int32, uint8, uint8, bool, error) {
+func parseDateCastComponentsObserved(ctx context.Context, s string, observe bool, discardedClock *bool) (int32, uint8, uint8, bool, error) {
 	if isZeroDatetimeString(s) {
 		return 0, 0, 0, true, nil
 	}
@@ -138,7 +138,7 @@ func parseDateCastComponentsObserved(ctx context.Context, s string, observe bool
 		var state = start
 		var yearLen, monthLen, dayLen, hourLen, minuteLen, secondLen int
 		var hour, minute, second uint8
-		var hasTime bool
+		var hasTime, fractionNonzero bool
 		for i := 0; i < len(s); i++ {
 			switch state {
 			case start:
@@ -259,6 +259,11 @@ func parseDateCastComponentsObserved(ctx context.Context, s string, observe bool
 				}
 			case msState:
 				if isAllDigit(s[i:]) {
+					if discardedClock != nil {
+						for j := i; j < len(s); j++ {
+							fractionNonzero = fractionNonzero || s[j] != '0'
+						}
+					}
 					state = end
 					i = len(s)
 				} else {
@@ -272,6 +277,11 @@ func parseDateCastComponentsObserved(ctx context.Context, s string, observe bool
 		year = normalizeDateCastYear(year, yearLen)
 		if hasTime && !ValidTimeInDay(hour, minute, second) {
 			return 0, 0, 0, false, temporalInvalidArg(ctx, "parsedate", s, observe)
+		}
+		if discardedClock != nil && hasTime {
+			// A fractional second can be smaller than one microsecond. DATE
+			// assignment must still report that it discards the clock.
+			*discardedClock = hour != 0 || minute != 0 || second != 0 || fractionNonzero
 		}
 	}
 	if year > MaxDateYear || month > MaxMonthInYear || day > 31 {
@@ -334,10 +344,18 @@ func ParseDateCast(s string) (Date, error) {
 
 // ParseDateCastWithContext parses with the caller's error reporting context.
 func ParseDateCastWithContext(ctx context.Context, s string) (Date, error) {
-	return parseDateCast(ctx, s, false)
+	return parseDateCast(ctx, s, false, nil)
 }
 
-func parseDateCast(ctx context.Context, s string, observe bool) (Date, error) {
+// ParseDateCastForAssignment reports whether accepted text contains a nonzero
+// clock that a DATE destination would discard.
+func ParseDateCastForAssignment(s string) (Date, bool, error) {
+	var discardedClock bool
+	date, err := parseDateCast(defaultParseContext, s, false, &discardedClock)
+	return date, discardedClock, err
+}
+
+func parseDateCast(ctx context.Context, s string, observe bool, discardedClock *bool) (Date, error) {
 	s = strings.TrimSpace(s)
 	if len(s) > 0 && s[0] == '0' && isZeroDatetimeString(s) {
 		return ZeroDate, nil
@@ -367,10 +385,21 @@ func parseDateCast(ctx context.Context, s string, observe bool) (Date, error) {
 		}
 	}
 	if date, ok := parseFixedDateCast(s); ok {
+		if discardedClock != nil {
+			*discardedClock = s[11:13] != "00" || s[14:16] != "00" || s[17:19] != "00"
+			if !*discardedClock && len(s) > 19 {
+				for i := 20; i < len(s); i++ {
+					if s[i] != '0' {
+						*discardedClock = true
+						break
+					}
+				}
+			}
+		}
 		return date, nil
 	}
 
-	year, month, day, isZero, err := parseDateCastComponentsObserved(ctx, s, observe)
+	year, month, day, isZero, err := parseDateCastComponentsObserved(ctx, s, observe, discardedClock)
 	if err != nil {
 		return -1, err
 	}

@@ -44,7 +44,7 @@ func benchmarkSumDecimal64(b *testing.B, useFast bool) {
 	const nGroups = 4
 
 	// Build input vector with Decimal64 values.
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	for i := 0; i < nRows; i++ {
 		val := types.Decimal64(int64(i*100 + 1)) // simulates DECIMAL(15,2) values
@@ -89,7 +89,7 @@ func TestSumDecimal128Fast_Basic(t *testing.T) {
 	const nGroups = 2
 
 	// Build input vector with known Decimal128 values.
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	for i := 0; i < nRows; i++ {
 		val := types.Decimal128{B0_63: uint64(i*100 + 1), B64_127: 0}
@@ -145,7 +145,7 @@ func TestSumDecimal128Fast_WithNulls(t *testing.T) {
 	param := types.New(types.T_decimal128, 38, 2)
 
 	const nRows = 10
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 
 	// Even indices are non-null, odd indices are null.
@@ -186,7 +186,7 @@ func TestSumDecimal128Fast_Negative(t *testing.T) {
 
 	param := types.New(types.T_decimal128, 38, 2)
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 
 	// Add positive and negative values that should cancel.
@@ -227,7 +227,7 @@ func TestSumDecimal128Fast_Overflow(t *testing.T) {
 	// decimal(38,3): precision > 28, so overflow checking is enabled.
 	param := types.New(types.T_decimal128, 38, 3)
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 
 	// Near-max Decimal128 value: 99999999999999999999999999999999999833
@@ -265,7 +265,7 @@ func benchmarkSumDecimal128(b *testing.B, useFast bool) {
 	const nRows = 8192
 	const nGroups = 4
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	for i := 0; i < nRows; i++ {
 		val := types.Decimal128{B0_63: uint64(i*100 + 1), B64_127: 0}
@@ -308,7 +308,7 @@ func TestSumDecimal64Fast_Basic(t *testing.T) {
 	const nRows = 100
 	const nGroups = 2
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	for i := 0; i < nRows; i++ {
 		val := types.Decimal64(int64(i*100 + 1))
@@ -359,7 +359,7 @@ func TestSumDecimal64Fast_Fill(t *testing.T) {
 
 	param := types.New(types.T_decimal64, 15, 2)
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	for i := 0; i < 3; i++ {
 		require.NoError(t, vector.AppendFixed(vec, types.Decimal64(int64(i+1)*100), false, mp))
@@ -405,7 +405,7 @@ func TestSumDecimal64Fast_Merge(t *testing.T) {
 	param := types.New(types.T_decimal64, 15, 2)
 
 	// Exec 1: fill group 0 with values 100, 200
-	vec1 := vector.NewVec(param)
+	vec1 := vector.NewVec(param, mp)
 	defer vec1.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal64(100), false, mp))
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal64(200), false, mp))
@@ -415,7 +415,7 @@ func TestSumDecimal64Fast_Merge(t *testing.T) {
 	require.NoError(t, exec1.BatchFill(0, []uint64{1, 1}, []*vector.Vector{vec1}))
 
 	// Exec 2: fill group 0 with values 300, 400
-	vec2 := vector.NewVec(param)
+	vec2 := vector.NewVec(param, mp)
 	defer vec2.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal64(300), false, mp))
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal64(400), false, mp))
@@ -450,7 +450,7 @@ func TestSumDecimal64Fast_BatchMerge(t *testing.T) {
 	param := types.New(types.T_decimal64, 15, 2)
 
 	// Exec 1: 2 groups
-	vec1 := vector.NewVec(param)
+	vec1 := vector.NewVec(param, mp)
 	defer vec1.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal64(10), false, mp))
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal64(20), false, mp))
@@ -460,7 +460,7 @@ func TestSumDecimal64Fast_BatchMerge(t *testing.T) {
 	require.NoError(t, exec1.BatchFill(0, []uint64{1, 2}, []*vector.Vector{vec1}))
 
 	// Exec 2: 2 groups
-	vec2 := vector.NewVec(param)
+	vec2 := vector.NewVec(param, mp)
 	defer vec2.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal64(30), false, mp))
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal64(40), false, mp))
@@ -495,7 +495,7 @@ func TestSumDecimal64Fast_BatchMergeAcrossChunks(t *testing.T) {
 
 	param := types.New(types.T_decimal64, 15, 2)
 	values := []types.Decimal64{10, 20, 30, 40}
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
@@ -523,7 +523,7 @@ func TestSumDecimal64Fast_BatchMergeAcrossChunks(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		for _, result := range vecs {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 	}()
 
@@ -541,7 +541,7 @@ func TestSumDecimal64Fast_AVG(t *testing.T) {
 
 	param := types.New(types.T_decimal64, 15, 2)
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	// Add values 100, 200, 300 (scale=2 → 1.00, 2.00, 3.00)
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal64(100), false, mp))
@@ -578,7 +578,7 @@ func TestSumDecimal128Fast_Fill(t *testing.T) {
 
 	param := types.New(types.T_decimal128, 38, 2)
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	for i := 0; i < 3; i++ {
 		require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: uint64(i+1) * 100}, false, mp))
@@ -621,7 +621,7 @@ func TestSumDecimal128Fast_Merge(t *testing.T) {
 
 	param := types.New(types.T_decimal128, 38, 2)
 
-	vec1 := vector.NewVec(param)
+	vec1 := vector.NewVec(param, mp)
 	defer vec1.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal128{B0_63: 100}, false, mp))
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal128{B0_63: 200}, false, mp))
@@ -630,7 +630,7 @@ func TestSumDecimal128Fast_Merge(t *testing.T) {
 	require.NoError(t, exec1.GroupGrow(1))
 	require.NoError(t, exec1.BatchFill(0, []uint64{1, 1}, []*vector.Vector{vec1}))
 
-	vec2 := vector.NewVec(param)
+	vec2 := vector.NewVec(param, mp)
 	defer vec2.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal128{B0_63: 300}, false, mp))
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal128{B0_63: 400}, false, mp))
@@ -662,7 +662,7 @@ func TestSumDecimal128Fast_BatchMerge(t *testing.T) {
 
 	param := types.New(types.T_decimal128, 38, 2)
 
-	vec1 := vector.NewVec(param)
+	vec1 := vector.NewVec(param, mp)
 	defer vec1.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal128{B0_63: 10}, false, mp))
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal128{B0_63: 20}, false, mp))
@@ -671,7 +671,7 @@ func TestSumDecimal128Fast_BatchMerge(t *testing.T) {
 	require.NoError(t, exec1.GroupGrow(2))
 	require.NoError(t, exec1.BatchFill(0, []uint64{1, 2}, []*vector.Vector{vec1}))
 
-	vec2 := vector.NewVec(param)
+	vec2 := vector.NewVec(param, mp)
 	defer vec2.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal128{B0_63: 30}, false, mp))
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal128{B0_63: 40}, false, mp))
@@ -705,7 +705,7 @@ func TestSumDecimal128Fast_AVG(t *testing.T) {
 
 	param := types.New(types.T_decimal128, 30, 2)
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 100}, false, mp))
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 200}, false, mp))
@@ -765,7 +765,7 @@ func TestAvgDecimal128PromotedFinalization(t *testing.T) {
 			value, err := types.ParseDecimal128(tc.value, param.Width, param.Scale)
 			require.NoError(t, err)
 
-			vec := vector.NewVec(param)
+			vec := vector.NewVec(param, mp)
 			defer vec.Free(mp)
 			require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 
@@ -777,7 +777,7 @@ func TestAvgDecimal128PromotedFinalization(t *testing.T) {
 			results, err := exec.Flush()
 			defer func() {
 				for _, result := range results {
-					result.Free(mp)
+					result.Free(result.MPool())
 				}
 			}()
 			require.NoError(t, err)
@@ -798,7 +798,7 @@ func TestSumDecimal128Fast_OverflowCheck_BatchFill(t *testing.T) {
 	// precision > 28 triggers overflow checking path
 	param := types.New(types.T_decimal128, 38, 3)
 
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	// Normal values that won't overflow
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 12345}, false, mp))
@@ -829,7 +829,7 @@ func TestSumDecimal128Fast_BatchMerge_WithOverflowCheck(t *testing.T) {
 	// precision > 28 triggers overflow checking
 	param := types.New(types.T_decimal128, 38, 3)
 
-	vec1 := vector.NewVec(param)
+	vec1 := vector.NewVec(param, mp)
 	defer vec1.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec1, types.Decimal128{B0_63: 100}, false, mp))
 
@@ -837,7 +837,7 @@ func TestSumDecimal128Fast_BatchMerge_WithOverflowCheck(t *testing.T) {
 	require.NoError(t, exec1.GroupGrow(1))
 	require.NoError(t, exec1.BatchFill(0, []uint64{1}, []*vector.Vector{vec1}))
 
-	vec2 := vector.NewVec(param)
+	vec2 := vector.NewVec(param, mp)
 	defer vec2.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec2, types.Decimal128{B0_63: 200}, false, mp))
 
@@ -891,7 +891,7 @@ func TestSumDecimal64Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
 	defer mp.Free(nil)
 
 	param := types.New(types.T_decimal64, 15, 2)
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal64(100), false, mp))
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal64(999), true, mp))
@@ -920,8 +920,8 @@ func TestSumDecimal128Fast_BulkFillMerge(t *testing.T) {
 	defer mp.Free(nil)
 
 	param := types.New(types.T_decimal128, 38, 2)
-	leftVec := vector.NewVec(param)
-	rightVec := vector.NewVec(param)
+	leftVec := vector.NewVec(param, mp)
+	rightVec := vector.NewVec(param, mp)
 	defer leftVec.Free(mp)
 	defer rightVec.Free(mp)
 	require.NoError(t, vector.AppendFixed(leftVec, types.Decimal128{B0_63: 100}, false, mp))
@@ -957,7 +957,7 @@ func TestSumDecimal128Fast_BulkFillOverflowCheck(t *testing.T) {
 	defer mp.Free(nil)
 
 	param := types.New(types.T_decimal128, 38, 3)
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 
 	nearMax, _, err := types.Parse128("99999999999999999999999999999999999833")
@@ -981,8 +981,8 @@ func TestSumDecimal128Fast_BulkFillPreservesBatchFillOverflowSemantics(t *testin
 	seedVal, err := types.Decimal128Max.Sub128(one)
 	require.NoError(t, err)
 
-	seed := vector.NewVec(param)
-	delta := vector.NewVec(param)
+	seed := vector.NewVec(param, mp)
+	delta := vector.NewVec(param, mp)
 	defer seed.Free(mp)
 	defer delta.Free(mp)
 	require.NoError(t, vector.AppendFixed(seed, seedVal, false, mp))
@@ -1029,7 +1029,7 @@ func TestSumDecimal128Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
 	defer mp.Free(nil)
 
 	param := types.New(types.T_decimal128, 30, 2)
-	vec := vector.NewVec(param)
+	vec := vector.NewVec(param, mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 100}, false, mp))
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 999}, true, mp))
@@ -1071,7 +1071,7 @@ func TestSumDecimal64Fast_BatchFillSlotInitialization(t *testing.T) {
 			require.True(t, ok)
 			require.NoError(t, actual.GroupGrow(765))
 
-			input := vector.NewVec(param)
+			input := vector.NewVec(param, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			const offset, rows = 2, 256
 			for row := range offset + rows {
@@ -1116,7 +1116,7 @@ func TestSumDecimal64Fast_BatchFillMultiChunkInitialization(t *testing.T) {
 			actual, ok := exec.(*sumDecimal64FastExec)
 			require.True(t, ok)
 			require.NoError(t, actual.GroupGrow(AggBatchSize+1))
-			input := vector.NewVec(param)
+			input := vector.NewVec(param, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			for _, value := range []int64{-2, 3, 4, 5, -6} {
 				require.NoError(t, vector.AppendFixed(input, types.Decimal64(value), false, mp))

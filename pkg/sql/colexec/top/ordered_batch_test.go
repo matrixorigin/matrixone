@@ -68,7 +68,7 @@ func TestTopVerifiedBatchSuffix(t *testing.T) {
 			defer tc.proc.Free()
 			bat := batch.NewWithSize(1)
 			defer bat.Clean(mp)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			for _, v := range tt.values {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], v, false, mp))
 			}
@@ -90,7 +90,7 @@ func TestTopBatchPruningUnsupportedKeysDoNotBind(t *testing.T) {
 			defer tc.proc.Free()
 			bat := batch.NewWithSize(2)
 			defer bat.Clean(mp)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			for row := range 5 {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(row), false, mp))
 			}
@@ -100,12 +100,12 @@ func TestTopBatchPruningUnsupportedKeysDoNotBind(t *testing.T) {
 				bat.Vecs[1], err = vector.NewConstFixed(types.T_int64.ToType(), int64(7), 5, mp)
 				require.NoError(t, err)
 			case "array":
-				bat.Vecs[1] = vector.NewVec(types.T_array_float64.ToType())
+				bat.Vecs[1] = vector.NewVec(types.T_array_float64.ToType(), mp)
 				for row := range 5 {
 					require.NoError(t, vector.AppendBytes(bat.Vecs[1], types.ArrayToBytes([]float64{float64(row)}), false, mp))
 				}
 			case "json":
-				bat.Vecs[1] = vector.NewVec(types.T_json.ToType())
+				bat.Vecs[1] = vector.NewVec(types.T_json.ToType(), mp)
 				for row := range 5 {
 					value, err := bytejson.CreateByteJSON(int64(row))
 					require.NoError(t, err)
@@ -137,8 +137,8 @@ func TestTopBatchPruningJSONNumericFallback(t *testing.T) {
 	tc.arg.AppendChild(child)
 	bat := batch.NewWithSize(2)
 	child.WithBatchs([]*batch.Batch{bat})
-	bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_json.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 
 	high, err := bytejson.CreateByteJSON(int64(1000000000000000200))
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestTopBatchPruningJSONNumericFallback(t *testing.T) {
 }
 
 func TestTopOrderedBatchMixedKeysAndPayload(t *testing.T) {
-	// Each batch is reverse-ordered for (a ASC NULLS FIRST, b DESC).
+	// Each batch is reverse-ordered for (a ASC NULLS FIRST, b DESC, a DESC NULLS LAST).
 	batches := [][]orderedTestRow{
 		{{3, false, 1, 31}, {3, false, 2, 32}, {2, false, 1, 21}, {2, false, 2, 22}, {1, false, 1, 11}, {1, false, 2, 12}},
 		{{4, false, 1, 41}, {4, false, 2, 42}, {3, false, 3, 33}, {1, false, 3, 13}, {0, true, 1, 101}, {0, true, 2, 102}},
@@ -179,7 +179,11 @@ func TestTopOrderedBatchMixedKeysAndPayload(t *testing.T) {
 				payloadType = types.T_varchar.ToType()
 			}
 			tc := newTestCase(t, mp, []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), payloadType}, 3,
-				[]*plan.OrderBySpec{{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_NULLS_FIRST}, {Expr: newTypedInt64Expression(1), Flag: plan.OrderBySpec_DESC}})
+				[]*plan.OrderBySpec{
+					{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_NULLS_FIRST},
+					{Expr: newTypedInt64Expression(1), Flag: plan.OrderBySpec_DESC},
+					{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST},
+				})
 			defer tc.proc.Free()
 			defer tc.arg.Free(tc.proc, false, nil)
 			// Rebuild inputs and reset the same operator to cover the next generation.
@@ -192,9 +196,9 @@ func TestTopOrderedBatchMixedKeysAndPayload(t *testing.T) {
 					for _, rows := range batches {
 						bat := batch.NewWithSize(3)
 						child.WithBatchs([]*batch.Batch{bat})
-						bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-						bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-						bat.Vecs[2] = vector.NewVec(payloadType)
+						bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+						bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+						bat.Vecs[2] = vector.NewVec(payloadType, mp)
 						for _, row := range rows {
 							require.NoError(t, vector.AppendFixed(bat.Vecs[0], row.a, row.null, mp))
 							require.NoError(t, vector.AppendFixed(bat.Vecs[1], row.b, false, mp))
@@ -271,8 +275,8 @@ func TestTopOrderedBatchFloatNaNAndArrayFallback(t *testing.T) {
 			tc.arg.AppendChild(child)
 			bat := batch.NewWithSize(2)
 			child.WithBatchs([]*batch.Batch{bat})
-			bat.Vecs[0] = vector.NewVec(typ)
-			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(typ, mp)
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 			vals := []float64{math.NaN(), 3, 2, 1}
 			if array {
 				vals = []float64{2, math.NaN(), 0, math.NaN(), 1}
@@ -310,7 +314,7 @@ func TestTopBatchVerificationCancellation(t *testing.T) {
 	tc.arg.AppendChild(child)
 	bat := batch.NewWithSize(1)
 	child.WithBatchs([]*batch.Batch{bat})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < evalSpillChunkSize+1; i++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
 	}
@@ -336,7 +340,7 @@ func TestTopBatchPruningKeepsDistinctTies(t *testing.T) {
 	bat := batch.NewWithSize(2)
 	child.WithBatchs([]*batch.Batch{bat})
 	for i := range 2 {
-		bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 	}
 	for id, key := range []int64{9, 8, 7, 6, 6, 4, 4, 4, 3} {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, mp))
@@ -371,8 +375,8 @@ func TestTopBatchPruningResidentToSpill(t *testing.T) {
 			for start := 0; start < 16; start += 8 {
 				bat := batch.NewWithSize(2)
 				child.WithBatchs([]*batch.Batch{bat})
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 				for value := start; value < start+8; value++ {
 					payload := []byte(fmt.Sprintf("v%d", value))
 					if value == 15 {
@@ -442,9 +446,9 @@ func TestTopBatchPruningComputedAndRemappedKeys(t *testing.T) {
 			for base := 0; base < 16; base += 8 {
 				bat := batch.NewWithSize(3)
 				child.WithBatchs([]*batch.Batch{bat})
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[2] = vector.NewVec(payloadType)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[2] = vector.NewVec(payloadType, mp)
 				for rank := base; rank < base+8; rank++ {
 					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(100-rank), false, mp))
 					require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(rank), false, mp))
@@ -510,7 +514,7 @@ func TestTopBatchPruningFallbackKeepsLateWinners(t *testing.T) {
 		bat := batch.NewWithSize(2)
 		child.WithBatchs([]*batch.Batch{bat})
 		for i := range 2 {
-			bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[i] = vector.NewVec(types.T_int64.ToType(), mp)
 		}
 		for id, key := range rows {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], key, false, mp))
@@ -541,7 +545,7 @@ func TestTopBatchPruningKeepsConstantPayloads(t *testing.T) {
 	tc.arg.AppendChild(child)
 	bat := batch.NewWithSize(3)
 	child.WithBatchs([]*batch.Batch{bat})
-	bat.Vecs[0] = vector.NewVec(typesIn[0])
+	bat.Vecs[0] = vector.NewVec(typesIn[0], mp)
 	for row := range 6 {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(row), false, mp))
 	}

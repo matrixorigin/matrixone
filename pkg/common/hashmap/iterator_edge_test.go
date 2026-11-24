@@ -26,7 +26,7 @@ import (
 
 func TestIteratorValidationAndNonMatchingHelpers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	plain := vector.NewVec(types.T_int64.ToType())
+	plain := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(plain, []int64{1, 2}, nil, mp))
 	constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
 	require.NoError(t, err)
@@ -38,9 +38,6 @@ func TestIteratorValidationAndNonMatchingHelpers(t *testing.T) {
 	require.ErrorIs(t, validateIteratorVectors([]*vector.Vector{plain}, 1, 2), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, validateIteratorVectors([]*vector.Vector{constant}, 12, 4))
 
-	plain.GetGrouping().Add(1)
-	require.True(t, hasGroupingInRange([]*vector.Vector{plain}, 0, 2))
-	require.True(t, rowHasGrouping([]*vector.Vector{plain}, 1))
 	plain.GetNulls().Add(0)
 	require.True(t, rowHasNull([]*vector.Vector{plain}, 0))
 	require.False(t, rowHasNull([]*vector.Vector{plain}, 1))
@@ -52,9 +49,9 @@ func TestIteratorValidationAndNonMatchingHelpers(t *testing.T) {
 	mask = prepareNonMatchingMask(nil, 3, true)
 	require.Equal(t, []bool{false, false, false}, mask)
 
-	float32Vec := vector.NewVec(types.T_float32.ToType())
+	float32Vec := vector.NewVec(types.T_float32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(float32Vec, float32(math.NaN()), false, mp))
-	float64Vec := vector.NewVec(types.T_float64.ToType())
+	float64Vec := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(float64Vec, math.NaN(), false, mp))
 	arrayVecs := make([]*vector.Vector, 0, 4)
 	for _, tc := range []struct {
@@ -66,7 +63,7 @@ func TestIteratorValidationAndNonMatchingHelpers(t *testing.T) {
 		{types.T_array_bf16.ToType(), types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, float32(math.NaN())}))},
 		{types.T_array_float16.ToType(), types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, float32(math.NaN())}))},
 	} {
-		vec := vector.NewVec(tc.typ)
+		vec := vector.NewVec(tc.typ, mp)
 		require.NoError(t, vector.AppendBytes(vec, tc.data, false, mp))
 		arrayVecs = append(arrayVecs, vec)
 	}
@@ -160,7 +157,7 @@ func TestPreviewMissingHelpersAndRowPublication(t *testing.T) {
 func TestTransactionalIteratorWrapperAndEmptyPlanPaths(t *testing.T) {
 	mp := mpool.MustNewZero()
 
-	intInput := vector.NewVec(types.T_int64.ToType())
+	intInput := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(intInput, []int64{7, 8}, nil, mp))
 	intMap, err := NewIntHashMap(false, mp)
 	require.NoError(t, err)
@@ -186,7 +183,7 @@ func TestTransactionalIteratorWrapperAndEmptyPlanPaths(t *testing.T) {
 	intMap.Free()
 	intInput.Free(mp)
 
-	strInput := vector.NewVec(types.T_varchar.ToType())
+	strInput := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytesList(
 		strInput, [][]byte{[]byte("seven"), []byte("eight")}, nil, mp))
 	strMap, err := NewStrHashMap(false, mp)

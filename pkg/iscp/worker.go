@@ -159,40 +159,29 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 		return
 	}
 	if err != nil {
-		statuses := jobStatusesForIterationError(iterCtx, err)
-		preLSN := make([]uint64, len(iterCtx.lsn))
-		for i := range iterCtx.lsn {
-			preLSN[i] = iterCtx.lsn[i] - 1
-		}
-		err = retry(
-			w.ctx,
-			func() error {
-				return FlushJobStatusOnIterationState(
-					w.ctx,
-					w.cnUUID,
-					w.cnEngine,
-					w.cnTxnClient,
-					iterCtx.accountID,
-					iterCtx.tableID,
-					iterCtx.jobNames,
-					iterCtx.jobIDs,
-					iterCtx.lsn,
-					statuses,
-					iterCtx.fromTS,
-					ISCPJobState_Completed,
-					preLSN,
-				)
-			},
-			SubmitRetryTimes,
-			DefaultRetryInterval,
-			SubmitRetryDuration,
-		)
-		if err != nil && !isSupersededIteration(err) {
-			logutil.Error(
-				"ISCP-Task workerflush job status failed",
-				zap.Error(err),
-			)
-		}
+		w.finishFailedIteration(iterCtx, err)
+	}
+}
+
+func (w *worker) finishFailedIteration(iterCtx *IterationContext, cause error) {
+	statuses := jobStatusesForIterationError(iterCtx, cause)
+	prevLSN := make([]uint64, len(iterCtx.lsn))
+	for i, lsn := range iterCtx.lsn {
+		prevLSN[i] = lsn - 1
+	}
+	// The catalog CAS decides whether a retiring job is still active.
+	// An in-memory fence may be lifted when the DDL rolls back.
+	err := retry(
+		w.ctx,
+		func() error {
+			return FlushJobStatusOnIterationState(w.ctx, w.cnUUID, w.cnEngine, w.cnTxnClient,
+				iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames, iterCtx.jobIDs,
+				iterCtx.lsn, statuses, nil, ISCPJobState_Completed, prevLSN)
+		},
+		SubmitRetryTimes, DefaultRetryInterval, SubmitRetryDuration,
+	)
+	if err != nil && !isSupersededIteration(err) && w.ctx.Err() == nil {
+		logutil.Error("ISCP-Task worker flush job status failed", zap.Error(err))
 	}
 }
 

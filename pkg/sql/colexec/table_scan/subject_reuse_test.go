@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -63,8 +64,9 @@ func orLikeOperatorOne(t testing.TB, proc *process.Process) *plan.Expr {
 	return orLikeOperatorBind(t, proc, "<=", col, zero)
 }
 
-// The caller owns this batch. Filter fixtures transfer that ownership to MockOperator.
-func orLikeOperatorBatch(t testing.TB, proc *process.Process, rows int, mode string) (*batch.Batch, []int64) {
+// The caller owns this batch, created in mp. Filter fixtures transfer that
+// ownership to MockOperator.
+func orLikeOperatorBatch(t testing.TB, mp *mpool.MPool, rows int, mode string) (*batch.Batch, []int64) {
 	values := make([]string, rows)
 	ids := make([]int64, rows)
 	var nulls []uint64
@@ -90,8 +92,8 @@ func orLikeOperatorBatch(t testing.TB, proc *process.Process, rows int, mode str
 		}
 	}
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = testutil.MakeVarcharVector(values, nulls, proc.Mp())
-	input.Vecs[1] = testutil.MakeInt64Vector(ids, nil, proc.Mp())
+	input.Vecs[0] = testutil.MakeVarcharVector(values, nulls, mp)
+	input.Vecs[1] = testutil.MakeInt64Vector(ids, nil, mp)
 	input.SetRowCount(rows)
 	return input, want
 }
@@ -109,13 +111,15 @@ func orLikeOperatorIDs(t testing.TB, input *batch.Batch, want []int64) {
 func orLikeScanArgument(expression *plan.Expr) *TableScan {
 	return &TableScan{Attrs: []string{"text", "id", "payload"}, Types: []plan.Type{types.New(types.T_varchar, 128, 0).PlanType(), types.T_int64.ToType().PlanType(), types.T_text.ToType().PlanType()}, FilterExprs: []*plan.Expr{expression}}
 }
-func orLikeScanBatch(t testing.TB, proc *process.Process, rows int, mode string, late bool) (*batch.Batch, []int64) {
-	input, want := orLikeOperatorBatch(t, proc, rows, mode)
-	payload := vector.NewVec(types.T_text.ToType())
+
+// orLikeScanBatch builds a scan output batch in mp, the scan's output pool.
+func orLikeScanBatch(t testing.TB, mp *mpool.MPool, rows int, mode string, late bool) (*batch.Batch, []int64) {
+	input, want := orLikeOperatorBatch(t, mp, rows, mode)
+	payload := vector.NewVec(types.T_text.ToType(), mp)
 	input.Vecs = append(input.Vecs, payload)
 	if !late {
 		for range rows {
-			require.NoError(t, vector.AppendBytes(payload, []byte("payload"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(payload, []byte("payload"), false, mp))
 		}
 	}
 	return input, want
@@ -149,25 +153,31 @@ func TestORLikeSubjectReuseTableScanLifetime(t *testing.T) {
 			proc := testutil.NewProc(t)
 			expr := orLikeOperatorExpression(t, proc)
 			arg := orLikeScanArgument(expr)
+			// batches live in the current arg's output pool; they are cleaned
+			// before that scan is freed.
 			batches := make([]*batch.Batch, 0, 4)
-			t.Cleanup(func() {
-				arg.Free(proc, false, nil)
+			cleanBatches := func() {
 				for _, b := range batches {
-					b.Clean(proc.Mp())
+					b.Clean(arg.mp(proc))
 				}
+				batches = batches[:0]
+			}
+			t.Cleanup(func() {
+				cleanBatches()
+				arg.Free(proc, false, nil)
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			require.NoError(t, arg.Prepare(proc))
 			require.False(t, orLikeOperatorShared(arg.ctr.filterExecutors[0]))
 			require.False(t, arg.ctr.subjectReuseAdmissionDone)
-			first, want := orLikeScanBatch(t, proc, rows, "pattern", true)
+			first, want := orLikeScanBatch(t, arg.mp(proc), rows, "pattern", true)
 			batches = append(batches, first)
 			orLikeScanEval(t, proc, arg, first, true, want)
 			owner := arg.ctr.filterExecutors[0]
 			require.Equal(t, rows >= 1024, orLikeOperatorShared(owner))
 			require.Same(t, owner, arg.ctr.allFilterExecutors[0])
 			require.True(t, arg.ctr.subjectReuseAdmissionDone)
-			next, wantNext := orLikeScanBatch(t, proc, 1024, "match", false)
+			next, wantNext := orLikeScanBatch(t, arg.mp(proc), 1024, "match", false)
 			batches = append(batches, next)
 			orLikeScanEval(t, proc, arg, next, false, wantNext)
 			require.Same(t, owner, arg.ctr.filterExecutors[0])
@@ -175,15 +185,16 @@ func TestORLikeSubjectReuseTableScanLifetime(t *testing.T) {
 			require.NoError(t, arg.Prepare(proc))
 			require.Same(t, owner, arg.ctr.filterExecutors[0])
 			require.True(t, arg.ctr.subjectReuseAdmissionDone)
-			afterReset, wantReset := orLikeScanBatch(t, proc, 1024, "pattern", true)
+			afterReset, wantReset := orLikeScanBatch(t, arg.mp(proc), 1024, "pattern", true)
 			batches = append(batches, afterReset)
 			orLikeScanEval(t, proc, arg, afterReset, true, wantReset)
 			require.Same(t, owner, arg.ctr.filterExecutors[0])
+			cleanBatches()
 			arg.Free(proc, false, nil)
 			require.False(t, arg.ctr.subjectReuseAdmissionDone)
 			arg = orLikeScanArgument(expr)
 			require.NoError(t, arg.Prepare(proc))
-			fresh, wantFresh := orLikeScanBatch(t, proc, 1024, "match", true)
+			fresh, wantFresh := orLikeScanBatch(t, arg.mp(proc), 1024, "match", true)
 			batches = append(batches, fresh)
 			orLikeScanEval(t, proc, arg, fresh, true, wantFresh)
 			require.True(t, orLikeOperatorShared(arg.ctr.filterExecutors[0]))
@@ -195,18 +206,19 @@ func TestORLikeSubjectReuseTableScanEmptyBeforeDecision(t *testing.T) {
 	arg := orLikeScanArgument(orLikeOperatorExpression(t, proc))
 	batches := make([]*batch.Batch, 0, 2)
 	t.Cleanup(func() {
-		arg.Free(proc, false, nil)
+		// The batches live in the scan's output pool: clean them first.
 		for _, b := range batches {
-			b.Clean(proc.Mp())
+			b.Clean(arg.mp(proc))
 		}
+		arg.Free(proc, false, nil)
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 	require.NoError(t, arg.Prepare(proc))
-	empty, wantEmpty := orLikeScanBatch(t, proc, 0, "pattern", true)
+	empty, wantEmpty := orLikeScanBatch(t, arg.mp(proc), 0, "pattern", true)
 	batches = append(batches, empty)
 	orLikeScanEval(t, proc, arg, empty, true, wantEmpty)
 	require.False(t, arg.ctr.subjectReuseAdmissionDone)
-	large, want := orLikeScanBatch(t, proc, 1024, "pattern", true)
+	large, want := orLikeScanBatch(t, arg.mp(proc), 1024, "pattern", true)
 	batches = append(batches, large)
 	orLikeScanEval(t, proc, arg, large, true, want)
 	require.True(t, orLikeOperatorShared(arg.ctr.filterExecutors[0]))
@@ -236,9 +248,10 @@ func TestORLikeSubjectReuseTableScanPrecedingShrinkAndExclusions(t *testing.T) {
 				arg.FilterExprs = []*plan.Expr{orLikeOperatorLiteral("bad"), expr}
 				target = 1
 			}
-			input, want := orLikeScanBatch(t, proc, 8192, "match", true)
-			t.Cleanup(func() { arg.Free(proc, false, nil); input.Clean(proc.Mp()); require.Zero(t, proc.Mp().CurrNB()) })
 			require.NoError(t, arg.Prepare(proc))
+			// The input lives in the scan's output pool: clean it before Free.
+			input, want := orLikeScanBatch(t, arg.mp(proc), 8192, "match", true)
+			t.Cleanup(func() { input.Clean(arg.mp(proc)); arg.Free(proc, false, nil); require.Zero(t, proc.Mp().CurrNB()) })
 			if kind == "unreached_error" {
 				_, err := arg.ctr.readerFilter.Apply(input, []int{0, 1})
 				require.ErrorContains(t, err, "filter condition is not boolean")
@@ -279,10 +292,19 @@ func BenchmarkORLikeSubjectReuseTableScanFirstBatch(b *testing.B) {
 					b.ResetTimer()
 					for range b.N {
 						b.StopTimer()
-						input, want := orLikeScanBatch(b, proc, rows, mode, true)
 						arg := orLikeScanArgument(expr)
 						if rows == 8192 {
 							arg.RuntimeFilterExprs = []*plan.Expr{one}
+						}
+						b.StartTimer()
+						err := arg.Prepare(proc)
+						if err != nil {
+							b.Fatal(err)
+						}
+						b.StopTimer()
+						// The input lives in the scan's output pool.
+						input, want := orLikeScanBatch(b, arg.mp(proc), rows, mode, true)
+						if rows == 8192 {
 							if mode == "match" {
 								want = []int64{0}
 							} else {
@@ -290,10 +312,6 @@ func BenchmarkORLikeSubjectReuseTableScanFirstBatch(b *testing.B) {
 							}
 						}
 						b.StartTimer()
-						err := arg.Prepare(proc)
-						if err != nil {
-							b.Fatal(err)
-						}
 						if baseline {
 							arg.ctr.subjectReuseAdmissionDone = true
 						}
@@ -305,8 +323,8 @@ func BenchmarkORLikeSubjectReuseTableScanFirstBatch(b *testing.B) {
 						orLikeOperatorIDs(b, input, want)
 						require.Equal(b, !baseline && rows >= 1024 && rows != 8192, orLikeOperatorShared(arg.ctr.filterExecutors[0]))
 						b.StartTimer()
+						input.Clean(arg.mp(proc))
 						arg.Free(proc, false, nil)
-						input.Clean(proc.Mp())
 					}
 					b.StopTimer()
 					require.Zero(b, proc.Mp().CurrNB())

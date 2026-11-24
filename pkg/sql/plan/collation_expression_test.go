@@ -853,8 +853,8 @@ func TestPatternConsumersDeliverSelectedCollation(t *testing.T) {
 			defer executor.Free()
 			bat := batch.NewWithSize(2)
 			defer bat.Clean(proc.Mp())
-			bat.Vecs[0] = vector.NewVec(generalType)
-			bat.Vecs[1] = vector.NewVec(binType)
+			bat.Vecs[0] = vector.NewVec(generalType, proc.Mp())
+			bat.Vecs[1] = vector.NewVec(binType, proc.Mp())
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("A"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("Alice"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("a"), false, proc.Mp()))
@@ -887,8 +887,8 @@ func TestPatternConsumersDeliverSelectedCollation(t *testing.T) {
 			defer executor.Free()
 			bat := batch.NewWithSize(2)
 			defer bat.Clean(proc.Mp())
-			bat.Vecs[0] = vector.NewVec(generalType)
-			bat.Vecs[1] = vector.NewVec(binType)
+			bat.Vecs[0] = vector.NewVec(generalType, proc.Mp())
+			bat.Vecs[1] = vector.NewVec(binType, proc.Mp())
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(tc.generalVal), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(tc.binVal), false, proc.Mp()))
 			bat.SetRowCount(1)
@@ -918,8 +918,8 @@ func TestPatternConsumersDeliverSelectedCollation(t *testing.T) {
 			defer executor.Free()
 			bat := batch.NewWithSize(2)
 			defer bat.Clean(proc.Mp())
-			bat.Vecs[0] = vector.NewVec(generalType)
-			bat.Vecs[1] = vector.NewVec(binType)
+			bat.Vecs[0] = vector.NewVec(generalType, proc.Mp())
+			bat.Vecs[1] = vector.NewVec(binType, proc.Mp())
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("A"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("Alice"), false, proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("a"), false, proc.Mp()))
@@ -1032,7 +1032,7 @@ func TestPatternBinaryColumnCastTieRestored(t *testing.T) {
 	}
 	newBatch := func(value string) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(uciType)
+		bat.Vecs[0] = vector.NewVec(uciType, proc.Mp())
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, proc.Mp()))
 		bat.SetRowCount(1)
 		return bat
@@ -1199,7 +1199,7 @@ func TestExpressionCollationVectorAndReuse(t *testing.T) {
 			defer executor.Free()
 			bat := batch.NewWithSize(1)
 			defer bat.Clean(proc.Mp())
-			bat.Vecs[0] = vector.NewVec(typ)
+			bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 			for i, value := range []string{"Á", "a ", "z"} {
 				require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), nullable && i == 1, proc.Mp()))
 			}

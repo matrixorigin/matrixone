@@ -150,7 +150,7 @@ func TestJsonLineBinaryNullMetadataSeparated(t *testing.T) {
 			require.Equal(t, tc.wantNull, line[0].IsNull)
 
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			param := &ExternalParam{
@@ -227,7 +227,7 @@ func TestJSONLineObjectProjectionUsesPhysicalFieldIndex(t *testing.T) {
 			require.Len(t, line, fieldIdx+1)
 
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			param := &ExternalParam{
@@ -271,7 +271,7 @@ func TestJSONLineNullRemainsNullWithParallelLoad(t *testing.T) {
 			require.Equal(t, []csvparser.Field{{IsNull: true}}, line)
 
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 
 			param := &ExternalParam{
@@ -327,7 +327,7 @@ func TestJSONLineNullSentinelTextRemainsNonNull(t *testing.T) {
 				ExParam: ExParam{Fileparam: &ExFileparam{}},
 			}
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer bat.Clean(proc.Mp())
 			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
 			require.False(t, bat.Vecs[0].GetNulls().Contains(0))
@@ -335,7 +335,7 @@ func TestJSONLineNullSentinelTextRemainsNonNull(t *testing.T) {
 
 			// An explicit user NULL map remains an opt-in conversion of this text.
 			mappedBat := batch.NewWithSize(1)
-			mappedBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+			mappedBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer mappedBat.Clean(proc.Mp())
 			param.Extern.NullMap = map[string][]string{"s": {`\N`}}
 			require.NoError(t, getOneRowData(proc, mappedBat, line, 0, param))
@@ -362,8 +362,8 @@ func TestJSONLineObjectProjectionSkipsExternalFilepath(t *testing.T) {
 	require.Len(t, line, 3)
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer bat.Clean(proc.Mp())
 
 	param := &ExternalParam{
@@ -443,7 +443,7 @@ func TestJSONLineVectorArrayValues(t *testing.T) {
 						line, err := (&CsvReader{}).transJson2Lines(proc.Ctx, input, attrs, cols, shape)
 						require.NoError(t, err)
 						bat := batch.NewWithSize(1)
-						bat.Vecs[0] = vector.NewVec(types.New(tc.typ, 3, 0))
+						bat.Vecs[0] = vector.NewVec(types.New(tc.typ, 3, 0), proc.Mp())
 						defer bat.Clean(proc.Mp())
 						param := &ExternalParam{
 							ExParamConst: ExParamConst{
@@ -523,7 +523,7 @@ func TestJSONLineVectorArrayConsumerErrors(t *testing.T) {
 			line, err := (&CsvReader{}).transJsonObject2Lines(proc.Ctx, `{"v":`+tc.value+`}`, attrs, cols)
 			require.NoError(t, err) // Type/range/dimension validation belongs to the consumer.
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(tc.typ, tc.width, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(tc.typ, tc.width, 0), proc.Mp())
 			defer bat.Clean(proc.Mp())
 			param := &ExternalParam{
 				ExParamConst: ExParamConst{
@@ -547,7 +547,7 @@ func TestJSONLineVectorArrayErrorModeRecovery(t *testing.T) {
 			param, proc, bat := errorModeParam(t, tree.JSONLINE, shape, numTestCols)
 			param.Cols[1].Typ = plan.Type{Id: int32(types.T_array_float32), Width: 3}
 			bat.Vecs[1].Free(proc.Mp())
-			bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0))
+			bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp())
 			invalid := `{"a":1,"s":[4,"5",6]}`
 			wrongDim := `{"a":2,"s":[4,5]}`
 			valid := `{"a":3,"s":[4,5,6]}`

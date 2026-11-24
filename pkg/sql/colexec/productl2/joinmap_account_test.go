@@ -42,18 +42,18 @@ func TestProductL2ReleasesProducerAccountedJoinMap(t *testing.T) {
 	arrayType := types.T_array_float32.ToType()
 	arrayType.Width = 2
 	build := batch.NewWithSize(2)
-	build.Vecs[0] = vector.NewVec(arrayType)
+	build.Vecs[0] = vector.NewVec(arrayType, mp)
 	require.NoError(t, vector.AppendArrayList(
 		build.Vecs[0], [][]float32{{0, 0}, {10, 10}}, nil, mp,
 	))
-	build.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	build.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		build.Vecs[1], []int64{10, 20}, nil, mp,
 	))
 	build.SetRowCount(2)
 
 	probe := batch.NewWithSize(1)
-	probe.Vecs[0] = vector.NewVec(arrayType)
+	probe.Vecs[0] = vector.NewVec(arrayType, mp)
 	require.NoError(t, vector.AppendArrayList(
 		probe.Vecs[0], [][]float32{{1, 1}}, nil, mp,
 	))
@@ -91,7 +91,10 @@ func TestProductL2ReleasesProducerAccountedJoinMap(t *testing.T) {
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 	consumer.Free(proc, false, nil)
+	freeTestChildren(consumer)
 	producer.Free(proc, false, nil)
+	freeTestChildren(consumer)
+	freeTestChildren(producer)
 	proc.Free()
 	require.Zero(t, mp.CurrNB())
 }

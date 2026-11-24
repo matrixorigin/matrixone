@@ -34,10 +34,10 @@ func TestMixedDecimalPlusReuse(t *testing.T) {
 	for _, constant := range []bool{false, true} {
 		for _, nullSide := range []int{0, 1} {
 			t.Run(fmt.Sprintf("constant=%v/null_side=%d", constant, nullSide), func(t *testing.T) {
-				a := vector.NewVec(dt)
+				a := vector.NewVec(dt, proc.Mp())
 				defer a.Free(proc.Mp())
 				require.NoError(t, vector.AppendFixed(a, types.Decimal64(123), false, proc.Mp()))
-				b := vector.NewVec(types.T_float64.ToType())
+				b := vector.NewVec(types.T_float64.ToType(), proc.Mp())
 				defer b.Free(proc.Mp())
 				require.NoError(t, vector.AppendFixed(b, float64(2), false, proc.Mp()))
 				if constant {

@@ -182,7 +182,7 @@ func TestGenRowsGeometry(t *testing.T) {
 
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{"g"}
-	vec := vector.NewVec(types.T_geometry.ToType())
+	vec := vector.NewVec(types.T_geometry.ToType(), mp)
 	require.NoError(t, vector.AppendBytesList(vec, [][]byte{
 		[]byte("POINT(1 1)"),
 		[]byte("POINT(2 2)"),

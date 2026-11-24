@@ -19,6 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -26,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +40,26 @@ func TestBindLocalRuntimeFilterDomainTopology(t *testing.T) {
 		want bool
 	}{
 		{name: "complete independent local source", want: true},
+		{name: "local connector to independent merge/build", want: true, edit: func(_ *Compile, _ *plan.Query, s, p *Scope) { localDomainConnectorFixture(t, s, p) }},
+		{name: "connector receiver can wait on probe", edit: func(_ *Compile, _ *plan.Query, s, p *Scope) {
+			r := localDomainConnectorFixture(t, s, p)
+			r.PreScopes = append(r.PreScopes, p)
+		}},
+		{name: "connector receiver partial merge", edit: func(_ *Compile, _ *plan.Query, s, p *Scope) {
+			r := localDomainConnectorFixture(t, s, p)
+			r.RootOp.(*hashbuild.HashBuild).Children[0].(*merge.Merge).Partial = true
+		}},
+		{name: "connector receiver has second input", edit: func(_ *Compile, _ *plan.Query, s, p *Scope) {
+			r := localDomainConnectorFixture(t, s, p)
+			r.Proc.Reg.MergeReceivers = append(r.Proc.Reg.MergeReceivers, &process.WaitRegister{})
+		}},
+		{name: "unmatched connector", edit: func(_ *Compile, _ *plan.Query, s, _ *Scope) {
+			c := connector.NewArgument()
+			c.Reg = &process.WaitRegister{}
+			c.AppendChild(s.RootOp)
+			s.RootOp = c
+			t.Cleanup(c.Release)
+		}},
 		{name: "prepared", edit: func(c *Compile, _ *plan.Query, _, _ *Scope) { c.isPrepare = true }},
 		{name: "multiple CNs", edit: func(c *Compile, _ *plan.Query, _, _ *Scope) { c.cnList = append(c.cnList, engine.Node{Addr: "other"}) }},
 		{name: "remote source", edit: func(_ *Compile, _ *plan.Query, s, _ *Scope) { s.IsRemote = true }},
@@ -104,4 +128,26 @@ func TestBindLocalRuntimeFilterDomainTopology(t *testing.T) {
 			}
 		})
 	}
+}
+
+func localDomainConnectorFixture(t *testing.T, source, probe *Scope) *Scope {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	proc.SetMessageBoard(source.Proc.GetMessageBoard())
+	t.Cleanup(proc.Free)
+	reg := &process.WaitRegister{}
+	proc.Reg.MergeReceivers = []*process.WaitRegister{reg}
+	input := merge.NewArgument()
+	build := hashbuild.NewArgument()
+	build.NeedHashMap = true
+	build.AppendChild(input)
+	sender := connector.NewArgument().WithReg(reg)
+	sender.AppendChild(source.RootOp)
+	source.RootOp = sender
+	receiver := &Scope{Magic: Merge, NodeInfo: source.NodeInfo, Proc: proc, RootOp: build, PreScopes: []*Scope{source}}
+	probe.PreScopes = []*Scope{receiver}
+	t.Cleanup(sender.Release)
+	t.Cleanup(build.Release)
+	t.Cleanup(input.Release)
+	return receiver
 }

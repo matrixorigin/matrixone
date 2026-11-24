@@ -50,16 +50,16 @@ const (
 	dedupJoinAllocationSiteCaptured
 	dedupJoinAllocationSiteCaptureData
 	dedupJoinAllocationSiteCaptureArea
-	dedupJoinAllocationSiteCaptureNulls
-	dedupJoinAllocationSiteCaptureGrouping
+	_ // reserved: was dedupJoinAllocationSiteCaptureNulls
+	_ // reserved: was dedupJoinAllocationSiteCaptureGrouping
 	dedupJoinAllocationSiteFinalizeSelections
 )
 
 const (
 	dedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 110
 	dedupJoinAllocationSiteResultArea
-	dedupJoinAllocationSiteResultNulls
-	dedupJoinAllocationSiteResultGrouping
+	_ // reserved: was dedupJoinAllocationSiteResultNulls
+	_ // reserved: was dedupJoinAllocationSiteResultGrouping
 )
 
 // WorkerJoinMsg carries per-worker state from non-merger workers to the
@@ -218,8 +218,6 @@ func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
 
 func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
 	if msg != nil {
-		colexec.FreeAccountedBitmap(msg.matched, proc.Mp())
-		colexec.FreeAccountedBitmap(msg.captured, proc.Mp())
 		freeCapturedVecs(msg.capturedVecs, proc)
 	}
 }
@@ -299,7 +297,11 @@ type container struct {
 	// source column into capturedVecs[i] at position `sel`. In finalize() the
 	// captured values are emitted into the Result slots that point at the
 	// build-side placeholder columns.
-	capturedVecs     []*vector.Vector
+	capturedVecs []*vector.Vector
+	// resultVecMP is the pool result vectors are created with (resultMP).
+	resultVecMP *mpool.MPool
+	// capturedMP is the pool capturedVecs were created with (the state view).
+	capturedMP       *mpool.MPool
 	captured         *bitmap.Bitmap
 	captureResultIdx []int32
 
@@ -370,8 +372,8 @@ type DedupJoin struct {
 	OldColCapturePlaceholderIdxList []int32
 	OldColCaptureProbeIdxList       []int32
 	allocationAccount               *mpool.AllocationAccount
-	stateAllocation                 *vector.AllocationAccountSelection
-	resultAllocation                *vector.AllocationAccountSelection
+	stateAllocation                 *mpool.AccountBinding
+	resultAllocation                *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -394,24 +396,18 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 	if dedupJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteCaptureData,
-		dedupJoinAllocationSiteCaptureArea,
-		dedupJoinAllocationSiteCaptureNulls,
-		dedupJoinAllocationSiteCaptureGrouping,
 	)
 	if err != nil {
 		return err
 	}
-	resultSelection, err := vector.NewAllocationAccountSelection(
+	resultSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteResultData,
-		dedupJoinAllocationSiteResultArea,
-		dedupJoinAllocationSiteResultNulls,
-		dedupJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -578,10 +574,22 @@ func (ctr *container) cleanStableUpdateVecs(proc *process.Process) {
 	ctr.finalizeCurrentVecs = nil
 }
 
+// cleanResultBatch frees a result batch. Every result vector is created with
+// the result pool (build columns are copied into it, never moved).
+func cleanResultBatch(bat *batch.Batch, mp *mpool.MPool) {
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(mp)
+			bat.Vecs[i] = nil
+		}
+	}
+	bat.Clean(nil)
+}
+
 func (ctr *container) cleanBuf(proc *process.Process) {
 	for _, bat := range ctr.buf {
 		if bat != nil && bat != ctr.rbat {
-			bat.Clean(proc.GetMPool())
+			cleanResultBatch(bat, ctr.resultVecMP)
 		}
 	}
 	ctr.buf = nil
@@ -590,7 +598,7 @@ func (ctr *container) cleanBuf(proc *process.Process) {
 func (ctr *container) cleanResultBatches(proc *process.Process) {
 	ctr.cleanBuf(proc)
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
+		cleanResultBatch(ctr.rbat, ctr.resultVecMP)
 		ctr.rbat = nil
 	}
 }
@@ -598,11 +606,11 @@ func (ctr *container) cleanResultBatches(proc *process.Process) {
 func (ctr *container) cleanCaptured(proc *process.Process) {
 	for _, v := range ctr.capturedVecs {
 		if v != nil {
-			v.Free(proc.GetMPool())
+			v.Free(ctr.capturedMP)
 		}
 	}
+	ctr.capturedMP = nil
 	ctr.capturedVecs = nil
-	colexec.FreeAccountedBitmap(ctr.captured, proc.Mp())
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -611,7 +619,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	ctr.batches = nil
 
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
+		cleanResultBatch(ctr.rbat, ctr.resultVecMP)
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
@@ -636,7 +644,6 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
-	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
 	ctr.matched = nil
 	ctr.resetActionReplayCursors()
 }

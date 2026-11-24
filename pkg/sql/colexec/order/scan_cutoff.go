@@ -104,7 +104,7 @@ func (c *ScanCutoff) Observe(v *vector.Vector, rows int) (objectio.ZoneMap, bool
 		// Empty batches witness nothing and disprove nothing.
 		return nil, false
 	}
-	if v == nil || v.HasGrouping() ||
+	if v == nil ||
 		v.GetType().Oid != c.typ.Oid || v.GetType().Scale != c.typ.Scale {
 		c.mu.Lock()
 		c.done.Store(true)

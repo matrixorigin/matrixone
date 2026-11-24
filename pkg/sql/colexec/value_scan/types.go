@@ -15,6 +15,7 @@
 package value_scan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,11 +33,16 @@ type ValueScan struct {
 	runningCtx container
 
 	ColCount int
-	NodeType plan2.Node_NodeType
+	// ValuesWarningOrdinalColumn is the one-based slot of the existing ordinal vector.
+	ValuesWarningOrdinalColumn int
+	NodeType                   plan2.Node_NodeType
 
 	Batchs        []*batch.Batch
 	RowsetData    *plan2.RowsetData
 	ExprExecLists [][]colexec.ExpressionExecutor
+	// Allocation is the accounted view of the process pool that Batchs'
+	// vectors allocate through, or nil for unaccounted batches.
+	Allocation *mpool.MPool
 }
 
 type container struct {
@@ -44,6 +50,16 @@ type container struct {
 	nowIdx int
 	start  int
 	end    int
+	// window is the sub-batch emitted by the last Call, a read-only window that
+	// is released at the next Call, Reset or Free.
+	window *batch.Batch
+}
+
+func (ctr *container) freeWindow() {
+	if ctr.window != nil {
+		ctr.window.FreeWindow()
+		ctr.window = nil
+	}
 }
 
 func init() {
@@ -70,6 +86,7 @@ func (valueScan *ValueScan) Release() {
 }
 
 func (valueScan *ValueScan) Reset(proc *process.Process, _ bool, _ error) {
+	valueScan.runningCtx.freeWindow()
 	valueScan.runningCtx.nowIdx = 0
 	valueScan.runningCtx.start = 0
 	valueScan.runningCtx.end = 0
@@ -87,6 +104,7 @@ func (valueScan *ValueScan) Reset(proc *process.Process, _ bool, _ error) {
 }
 
 func (valueScan *ValueScan) Free(proc *process.Process, _ bool, _ error) {
+	valueScan.runningCtx.freeWindow()
 	valueScan.FreeProjection(proc)
 	if valueScan.Batchs != nil {
 		valueScan.cleanBatchs(proc)
@@ -116,9 +134,11 @@ func (valueScan *ValueScan) ExecProjection(proc *process.Process, input *batch.B
 }
 
 func (valueScan *ValueScan) cleanBatchs(proc *process.Process) {
+	// Batchs' vectors are created with the operator's pool (Allocation, else
+	// the process pool).
 	for _, bat := range valueScan.Batchs {
 		if bat != nil {
-			bat.Clean(proc.Mp())
+			bat.Clean(valueScan.mp(proc))
 		}
 	}
 	valueScan.Batchs = nil

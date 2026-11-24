@@ -118,7 +118,7 @@ func (st *loadFileChunksState) start(tf *TableFunction, proc *process.Process, n
 	}
 
 	if st.batch == nil {
-		st.batch = tf.createResultBatch()
+		st.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		st.batch.CleanOnlyData()
 	}

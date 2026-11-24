@@ -23,9 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -290,7 +289,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
-			if !assertx.InEpsilonF64(want, get) {
+			if !util.InEpsilonF64(want, get) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
 			}
@@ -442,7 +441,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 			if null2 {
 				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
 			}
-			if !assertx.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
+			if !util.InEpsilonF64Slice(types.BytesToArray[float64](want), types.BytesToArray[float64](get)) {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}
@@ -576,7 +575,7 @@ func compareFixedResult[T types.FixedSizeTExceptStrType](fc *FunctionTestCase, v
 }
 
 func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	owned := vec
 	defer func() {
 		if owned != nil {
@@ -730,22 +729,21 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		assertReleased(t)
 	})
 	t.Run("current vector rollback", func(t *testing.T) {
-		value, err := types.ParseStringToByteJson(`{"v":"01234567890123456789012345678901"}`)
-		require.NoError(t, err)
-		encoded, err := types.EncodeJson(value)
-		require.NoError(t, err)
+		// Not valid UTF-8, so a native Unicode text vector rejects it after
+		// the first, longer-than-inline value has been appended.
+		unicode := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+		invalid := string([]byte{0x30, 0xfb, 0xc1, 0x30, 0xff, 0xff, 0x20})
 		var recovered any
 		func() {
 			defer func() { recovered = recover() }()
 			_ = NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{7}, nil),
-				NewFunctionTestInput(types.T_json.ToType(), []string{string(encoded), ""}, nil),
+				NewFunctionTestInput(unicode, []string{"01234567890123456789012345678901", invalid}, nil),
 			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil), AbsInt64)
 		}()
 		err, ok := recovered.(error)
 		require.True(t, ok)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-		require.Equal(t, "invalid input: invalid JSON vector payload", err.Error())
+		require.Error(t, err)
 		assertReleased(t)
 	})
 	t.Run("borrow and reuse", func(t *testing.T) {
@@ -907,10 +905,9 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 0}, nil),
 		}, NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, nil), Sleep[uint64])
 		defer fc.Free()
-		selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+		selection, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 		require.NoError(t, err)
-		result, err := vector.NewFunctionResultWrapperWithAllocation(types.T_uint8.ToType(), mp, selection)
-		require.NoError(t, err)
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), selection)
 		fc.result.Free()
 		fc.result = result
 		value, debugErr := fc.DebugRun()

@@ -51,7 +51,7 @@ func TestFulltextTopKLimitBounds(t *testing.T) {
 		batch:  batch.NewWithSize(1),
 		resbuf: []*vectorindex.SearchResultAnyKey{{Id: int64(7)}},
 	}
-	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	state.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	result, err := state.returnResultFromBuffer(proc, maxLimit)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Batch.RowCount())
@@ -192,8 +192,8 @@ func TestReturnResultUsesCachedBinaryDocID(t *testing.T) {
 		},
 		batch: batch.NewWithSize(2),
 	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
+	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0), proc.Mp())
+	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0), proc.Mp())
 
 	result, err := st.returnResult(proc, map[any]float32{"doc-key": 1.5})
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func TestReturnResultUsesCachedBinaryDocIDWithOneAttr(t *testing.T) {
 		},
 		batch: batch.NewWithSize(1),
 	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
+	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0), proc.Mp())
 
 	result, err := st.returnResult(proc, map[any]float32{"doc-key": 2.5})
 	require.NoError(t, err)
@@ -234,8 +234,8 @@ func TestEvaluateKeepsBinaryDocIDUntilOutput(t *testing.T) {
 		mpool:     fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0),
 		batch:     batch.NewWithSize(2),
 	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
+	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0), proc.Mp())
+	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0), proc.Mp())
 	st.aggcnt[0] = 1
 
 	addr, docvec, err := st.mpool.NewItem()
@@ -270,8 +270,8 @@ func TestSortTopKPreservesBinaryDocIDUntilOutput(t *testing.T) {
 		mpool:     fulltext.NewFixedBytePool(proc, uint64(s.Nkeywords), 0, 0),
 		batch:     batch.NewWithSize(2),
 	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
+	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0), proc.Mp())
+	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0), proc.Mp())
 	st.aggcnt[0] = 2
 
 	for i, doc := range [][]byte{[]byte("doc-a"), []byte("doc-b")} {
@@ -309,8 +309,8 @@ func TestSortTopKRankingReleasesFilteredDocs(t *testing.T) {
 		batch:     batch.NewWithSize(2),
 		ranking:   true,
 	}
-	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0))
-	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0))
+	st.batch.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 256, 0), proc.Mp())
+	st.batch.Vecs[1] = vector.NewVec(types.New(types.T_float32, 4, 0), proc.Mp())
 	st.aggcnt[0] = 2
 	st.aggcnt[1] = 1
 
@@ -791,8 +791,8 @@ func fake_runSql_streaming(
 // create count (int64)
 func makeCountBatchFT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_float64, 8, 4))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_float64, 8, 4), proc.Mp())
 
 	vector.AppendFixed[int64](bat.Vecs[0], int64(100), false, proc.Mp())
 	vector.AppendFixed[float64](bat.Vecs[1], float64(10.6666), false, proc.Mp())
@@ -803,7 +803,7 @@ func makeCountBatchFT(proc *process.Process) *batch.Batch {
 
 func makeCountOnlyBatchFT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 
 	vector.AppendFixed[int64](bat.Vecs[0], int64(100), false, proc.Mp())
 
@@ -813,9 +813,9 @@ func makeCountOnlyBatchFT(proc *process.Process) *batch.Batch {
 
 func makeSmallTextBatchFT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0))
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp())
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp())
 
 	vector.AppendFixed[int32](bat.Vecs[0], int32(7), false, proc.Mp())
 	vector.AppendFixed[int32](bat.Vecs[1], int32(0), false, proc.Mp())
@@ -831,9 +831,9 @@ func makeSmallTextBatchFT(proc *process.Process) *batch.Batch {
 // create (doc_id, text)
 func makeTextBatchFT(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0)) // doc_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0)) // word index
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp()) // doc_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp()) // word index
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int32, 4, 0), proc.Mp()) // word index
 
 	nitem := 8192*3 + 1
 	for i := 0; i < nitem; i++ {

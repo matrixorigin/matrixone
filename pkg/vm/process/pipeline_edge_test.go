@@ -1123,7 +1123,7 @@ func TestPipelineEdgeDrainReleasesSignalResources(t *testing.T) {
 	mp := mpool.MustNewNoFixed()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < 100; i++ {
 		if err := vector.AppendFixed(bat.Vecs[0], int64(i), false, mp); err != nil {
 			t.Fatal(err)
@@ -1151,7 +1151,7 @@ func TestPipelineEdgeResetForReuseDrainsOldChannel(t *testing.T) {
 	mp := mpool.MustNewNoFixed()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	for i := 0; i < 100; i++ {
 		if err := vector.AppendFixed(bat.Vecs[0], int64(i), false, mp); err != nil {
 			t.Fatal(err)

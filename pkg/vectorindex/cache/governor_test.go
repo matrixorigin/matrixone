@@ -348,8 +348,8 @@ func varRows(t *testing.T, mp *mpool.MPool, nameValue ...string) executor.Result
 	t.Helper()
 	require.Zero(t, len(nameValue)%2, "varRows takes name/value pairs")
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for i := 0; i < len(nameValue); i += 2 {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(nameValue[i]), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(nameValue[i+1]), false, mp))

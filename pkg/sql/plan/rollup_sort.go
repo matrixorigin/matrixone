@@ -466,7 +466,10 @@ func sortRollupAggregateOrderEligibleExpr(expr tree.Expr) bool {
 			return true
 		}
 		switch sortRollupASTFunctionName(fn) {
-		case "group_concat", "json_arrayagg", "json_objectagg":
+		// GROUPING() is folded per grouping set at bind time; sort rollup emits
+		// every level from one operator, so it has no per-row grouping set to
+		// fold against.
+		case "group_concat", "json_arrayagg", "json_objectagg", "grouping":
 			eligible = false
 			return false
 		default:

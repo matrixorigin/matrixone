@@ -17,6 +17,7 @@ package cdc
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -75,7 +76,7 @@ func TestNewInsertBatchCommand(t *testing.T) {
 	// Create a simple batch with 2 rows
 	bat := &batch.Batch{
 		Vecs: []*vector.Vector{
-			vector.NewVec(types.T_int32.ToType()),
+			vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero()),
 		},
 	}
 	fromTs := types.BuildTS(100, 0)
@@ -168,7 +169,7 @@ func TestCommand_String(t *testing.T) {
 		// Create batch without actually appending data to avoid mpool requirement
 		bat := &batch.Batch{
 			Vecs: []*vector.Vector{
-				vector.NewVec(types.T_int32.ToType()),
+				vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero()),
 			},
 		}
 		bat.SetRowCount(2) // Simulate 2 rows
@@ -240,7 +241,7 @@ func TestCommand_Validate(t *testing.T) {
 	t.Run("InvalidInsertBatchCommand_EmptyBatch", func(t *testing.T) {
 		bat := &batch.Batch{
 			Vecs: []*vector.Vector{
-				vector.NewVec(types.T_int32.ToType()),
+				vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero()),
 			},
 		}
 		cmd := &Command{
@@ -255,7 +256,7 @@ func TestCommand_Validate(t *testing.T) {
 	t.Run("ValidInsertBatchCommand", func(t *testing.T) {
 		bat := &batch.Batch{
 			Vecs: []*vector.Vector{
-				vector.NewVec(types.T_int32.ToType()),
+				vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero()),
 			},
 		}
 		bat.SetRowCount(1) // Simulate 1 row
@@ -325,7 +326,7 @@ func TestCommand_Close(t *testing.T) {
 
 	t.Run("InsertBatchWithMp", func(t *testing.T) {
 		bat := &batch.Batch{
-			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType())},
+			Vecs: []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mpool.MustNewZero())},
 		}
 		bat.SetRowCount(1)
 		cmd := NewInsertBatchCommand(bat, nil, types.BuildTS(1, 0), types.BuildTS(2, 0))

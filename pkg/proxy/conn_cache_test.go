@@ -1557,6 +1557,7 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 				resourcesClosed = true
 				_ = clientRemote.Close()
 				_ = tun.Close()
+				tun.workers.Wait()
 				clientCleanup()
 			}
 			defer closeGenerationResources()
@@ -1599,11 +1600,7 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 			go func() {
 				for {
 					select {
-					case event, ok := <-tun.reqC:
-						if !ok {
-							eventDone <- nil
-							return
-						}
+					case event := <-tun.reqC:
 						if err := client.HandleEvent(ctx, event, tun.respC); err != nil {
 							eventDone <- err
 							return
@@ -1611,8 +1608,8 @@ func TestPreparedShortConnectionQuitProductionPath(t *testing.T) {
 						if _, ok := event.(*quitEvent); ok {
 							close(quitHandled)
 						}
-					case <-ctx.Done():
-						eventDone <- ctx.Err()
+					case <-tun.ctx.Done():
+						eventDone <- tun.ctx.Err()
 						return
 					}
 				}

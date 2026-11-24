@@ -182,7 +182,7 @@ func TestMergeTopOrderedStreamsMergesWithoutRetainingLimitRows(t *testing.T) {
 			bat := batch.NewWithSize(1)
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 			defer child.Free(proc, false, nil)
-			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			for _, value := range values {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
 			}
@@ -460,7 +460,7 @@ func sendInt64Stream(
 	t.Helper()
 	for _, values := range batches {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		for _, value := range values {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
 		}
@@ -480,7 +480,7 @@ func sendStringStream(
 	t.Helper()
 	require.Len(t, nulls, len(values))
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	for i, value := range values {
 		require.NoError(t,
 			vector.AppendBytes(bat.Vecs[0], []byte(value), nulls[i], proc.Mp()))
@@ -570,7 +570,7 @@ func TestMergeTopResetStartsNewGeneration(t *testing.T) {
 
 	newValuesBatch := func(values []int64) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, tc.proc.Mp()))
 		bat.SetRowCount(len(values))
 		return bat
@@ -604,8 +604,8 @@ func TestMergeTopFloatNaNLastAndPeerTieBreak(t *testing.T) {
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType(), tc.proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
 		math.Float64frombits(0x7ff8000000000001), 1, math.Inf(-1),
 		math.Float64frombits(0x7ff8000000000002), -1, math.Inf(1),
@@ -625,7 +625,7 @@ func TestMergeTopFloatNaNLastAndPeerTieBreak(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
-func TestMergeTopUniqueOrderPrefixes(t *testing.T) {
+func TestMergeTopRepeatedKeyOrderPrefixes(t *testing.T) {
 	for _, order := range []struct {
 		name string
 		flag plan.OrderBySpec_OrderByFlag
@@ -641,6 +641,7 @@ func TestMergeTopUniqueOrderPrefixes(t *testing.T) {
 					[]*plan.OrderBySpec{
 						{Expr: newExpression(0), Flag: order.flag},
 						{Expr: newExpression(1), Flag: order.flag},
+						{Expr: newExpression(0), Flag: order.flag ^ plan.OrderBySpec_DESC},
 					})
 				t.Cleanup(func() {
 					tc.arg.Free(tc.proc, false, nil)
@@ -657,8 +658,8 @@ func TestMergeTopUniqueOrderPrefixes(t *testing.T) {
 				resetChildren(tc.arg, bats)
 				for i, ids := range [][]int64{{7, 2, 8, 3}, {5, 1, 6, 4}} {
 					bat := bats[i]
-					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-					bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
+					bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), tc.proc.Mp())
 					require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 1, 2, 2}, nil, tc.proc.Mp()))
 					require.NoError(t, vector.AppendFixedList(bat.Vecs[1], ids, nil, tc.proc.Mp()))
 					bat.SetRowCount(len(ids))
@@ -685,7 +686,7 @@ func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {
 	tc := newTestCase(t, []types.Type{types.T_int64.ToType()}, 4,
 		[]*plan.OrderBySpec{{Expr: paramExpr}})
 
-	params := vector.NewVec(types.T_varchar.ToType())
+	params := vector.NewVec(types.T_varchar.ToType(), tc.proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("same-key"), false, tc.proc.Mp()))
 	tc.proc.SetPrepareParams(params)
 	defer func() {

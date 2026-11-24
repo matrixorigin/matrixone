@@ -95,8 +95,6 @@ func TestMergeCTEDistinctFiltersAcrossBatchesAndReset(t *testing.T) {
 		[]string{"a", "", "c"},
 		[]bool{false, true, false},
 	)
-	defer first.Clean(proc.Mp())
-	defer second.Clean(proc.Mp())
 
 	require.NoError(t, arg.Prepare(proc))
 	firstOut, err := arg.ctr.cacheBatch(proc, analyzer, first)
@@ -120,7 +118,10 @@ func TestMergeCTEDistinctFiltersAcrossBatchesAndReset(t *testing.T) {
 	require.Equal(t, 2, replayed.RowCount())
 	require.Equal(t, uint64(2), arg.ctr.hashTable.GroupCount())
 
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	arg.Release()
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -137,8 +138,8 @@ func makeMergeCTEDistinctBatch(
 	require.Len(t, stringNulls, len(intValues))
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	for i := range intValues {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], intValues[i], false, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(
@@ -168,6 +169,7 @@ func TestMergeCTE(t *testing.T) {
 		_, err = vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
+		colexec.FreeMockChildren(tc.arg)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -183,6 +185,7 @@ func TestAuditMergeCTERecursiveErrorThenRetryDoesNotEmitStaleBatch(t *testing.T)
 		}
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 	})
 
@@ -228,7 +231,9 @@ func TestAuditMergeCTERecursiveErrorThenRetryDoesNotEmitStaleBatch(t *testing.T)
 
 	freeMergeCTEChildren(arg, proc, false)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	cleaned = true
 	require.Nil(t, arg.ctr.freeBats)
@@ -247,6 +252,7 @@ func TestMergeCTEResetReusesChangedBatchLayout(t *testing.T) {
 		}
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 	})
 
@@ -288,6 +294,7 @@ func TestMergeCTEResetReusesChangedBatchLayout(t *testing.T) {
 
 	freeMergeCTEChildren(arg, proc, false)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	cleaned = true
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -303,6 +310,7 @@ func TestMergeCTEResetClearsRecursiveFlagOnCompatibleBatch(t *testing.T) {
 		}
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 	})
 
@@ -330,6 +338,7 @@ func TestMergeCTEResetClearsRecursiveFlagOnCompatibleBatch(t *testing.T) {
 
 	freeMergeCTEChildren(arg, proc, false)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	cleaned = true
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -356,6 +365,7 @@ func TestMergeCTEMemoryQuotaInitialAndRecursivePhases(t *testing.T) {
 
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, err)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -385,6 +395,7 @@ func TestMergeCTEMemoryQuotaInitialAndRecursivePhases(t *testing.T) {
 
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, err)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -427,7 +438,9 @@ func TestMergeCTEMarkerReleasesBackingAndNewStatementDropsOversizedCache(t *test
 	require.Zero(t, arg.ctr.memory.Retained())
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	src.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -443,7 +456,7 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 
 		sourcePool := mpool.MustNewZero()
-		src := batch.NewOffHeap([]string{"value"})
+		src := batch.New([]string{"value"})
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 2<<20)}, nil, sourcePool)
 		src.SetRowCount(1)
 		_, err = arg.ctr.cacheBatch(proc, arg.OpAnalyzer, src)
@@ -452,6 +465,7 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 		require.Zero(t, arg.ctr.memory.Retained())
 
 		arg.Free(proc, true, err)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		src.Clean(sourcePool)
 		require.Zero(t, proc.Mp().CurrNB())
@@ -482,6 +496,7 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 		require.Zero(t, arg.ctr.memory.Retained())
 
 		arg.Free(proc, true, err)
+		colexec.FreeMockChildren(arg)
 		initial.Clean(proc.Mp())
 		src.Clean(proc.Mp())
 		proc.Free()
@@ -557,6 +572,7 @@ func TestMergeCTERecursionDepthCountsOnlyProductiveLevels(t *testing.T) {
 			t.Cleanup(func() {
 				freeMergeCTEChildren(arg, proc, true)
 				arg.Free(proc, true, nil)
+				colexec.FreeMockChildren(arg)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
 			})
@@ -585,6 +601,7 @@ func TestMergeCTERecursionDepthAggregatesAllSenders(t *testing.T) {
 	t.Cleanup(func() {
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -618,6 +635,7 @@ func TestMergeCTERecursionDepthDoesNotCountDuplicateOnlyDistinctRound(t *testing
 	t.Cleanup(func() {
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -642,6 +660,7 @@ func TestMergeCTEResetClearsRecursiveDepthProgress(t *testing.T) {
 	t.Cleanup(func() {
 		freeMergeCTEChildren(arg, proc, true)
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -687,7 +706,7 @@ func makeMergeCTEDepthBatches(t *testing.T, proc *process.Process, specs []merge
 func makeMergeCTEDepthBatch(t *testing.T, proc *process.Process, values []int64, last bool) *batch.Batch {
 	t.Helper()
 	bat := batch.New([]string{"n"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	for _, value := range values {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
 	}
@@ -736,11 +755,13 @@ func runMergeCTEDepth(t *testing.T, arg *MergeCTE, proc *process.Process) ([]int
 func freeMergeCTEChildren(arg *MergeCTE, proc *process.Process, pipelineFailed bool) {
 	for _, child := range arg.Children {
 		child.Free(proc, pipelineFailed, nil)
+		colexec.FreeMockChildren(child)
 	}
 	arg.Children = nil
 }
 
 func resetChildren(arg *MergeCTE, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
@@ -768,6 +789,7 @@ func TestMergeCTEAllocationFailureAndReuse(t *testing.T) {
 			defer func() {
 				op.Reset(proc, false, nil)
 				op.Free(proc, false, nil)
+				colexec.FreeMockChildren(op)
 				require.NoError(t, op.ClearAllocationAccount(account))
 				require.Zero(t, account.Snapshot().Used)
 				require.Zero(t, budget.Used())

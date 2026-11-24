@@ -222,7 +222,7 @@ func (s *simpleOneBatchState) startPreamble(tf *TableFunction, proc *process.Pro
 	_ = nthRow
 	s.called = false
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		s.batch.CleanOnlyData()
 	}

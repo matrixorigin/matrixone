@@ -359,7 +359,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			for _, stats := range statsList {
 				bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+				bat.SetVector(0, vector.NewVec(types.T_text.ToType(), proc.Mp()))
 				if err = vector.AppendBytes(
 					bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
 					bat.Clean(proc.GetMPool())
@@ -422,7 +422,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 			var tmpBat *batch.Batch
 			tmpBat = deletion.ctr.pool.get()
 			if tmpBat == nil {
-				tmpBat = makeDelBatch(*destBatch.GetVector(int32(pkIdx)).GetType())
+				tmpBat = makeDelBatch(*destBatch.GetVector(int32(pkIdx)).GetType(), proc.Mp())
 			}
 			blockIdRowIdBatchMap[blkid] = tmpBat
 			deletion.ctr.partitionId_blockId_rowIdBatch[pIdx] = blockIdRowIdBatchMap
@@ -432,7 +432,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 				var bat *batch.Batch
 				bat = deletion.ctr.pool.get()
 				if bat == nil {
-					bat = makeDelBatch(*destBatch.GetVector(int32(pkIdx)).GetType())
+					bat = makeDelBatch(*destBatch.GetVector(int32(pkIdx)).GetType(), proc.Mp())
 				}
 				blockIdRowIdBatchMap[blkid] = bat
 			}
@@ -452,14 +452,14 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 	deletion.ctr.batch_size = uint32(batchSize)
 }
 
-func makeDelBatch(pkType types.Type) *batch.Batch {
+func makeDelBatch(pkType types.Type, mp *mpool.MPool) *batch.Batch {
 	bat := batch.New([]string{catalog.Row_ID, "pk"})
-	bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-	bat.SetVector(1, vector.NewVec(pkType))
+	bat.SetVector(0, vector.NewVec(types.T_Rowid.ToType(), mp))
+	bat.SetVector(1, vector.NewVec(pkType, mp))
 	return bat
 }
 
-func makeDelRemoteBatch() *batch.Batch {
+func makeDelRemoteBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(5)
 	bat.Attrs = []string{
 		catalog.BlockMeta_Delete_ID,
@@ -468,10 +468,10 @@ func makeDelRemoteBatch() *batch.Batch {
 		catalog.BlockMeta_Partition,
 		catalog.BlockMeta_Deletes_Length,
 	}
-	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_text.ToType()))
-	bat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-	bat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_text.ToType(), mp))
+	bat.SetVector(1, vector.NewVec(types.T_text.ToType(), mp))
+	bat.SetVector(2, vector.NewVec(types.T_int8.ToType(), mp))
+	bat.SetVector(3, vector.NewVec(types.T_int32.ToType(), mp))
 	//bat.Vecs[4] is constant
 	return bat
 }

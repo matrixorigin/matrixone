@@ -92,7 +92,7 @@ func TestCSVEnumSetBoundaryMatchesConversion(t *testing.T) {
 					vecTyp = types.T_varchar.ToType()
 				}
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(vecTyp)
+				bat.Vecs[0] = vector.NewVec(vecTyp, proc.Mp())
 				defer bat.Clean(proc.Mp())
 				err := getColData(bat, line, 0, param, proc.Mp(), param.Attrs[0], proc)
 				if tc.invalid {

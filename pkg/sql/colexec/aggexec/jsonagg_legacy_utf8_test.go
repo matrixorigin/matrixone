@@ -71,7 +71,7 @@ func TestJSONAggregatesLegacyInvalidUTF8(t *testing.T) {
 				if results != nil {
 					defer func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					}()
 				}
@@ -96,7 +96,7 @@ func TestJSONAggregateLegacyUTF8ScratchAdmissionFailure(t *testing.T) {
 	account, err := registry.Open(1)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	entries := []jsonAggregateEntry{{key: []byte{0xff}, value: []byte{bytejson.TpCodeString, 1, 0xfe}}}
@@ -146,7 +146,7 @@ func TestJSONObjectAggregateLegacyBinaryKey(t *testing.T) {
 			if results != nil {
 				defer func() {
 					for _, result := range results {
-						result.Free(mp)
+						result.Free(result.MPool())
 					}
 				}()
 			}
@@ -209,7 +209,7 @@ func TestJSONAggregatesLegacyUTF8DistinctAndKeys(t *testing.T) {
 				if results != nil {
 					defer func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					}()
 				}

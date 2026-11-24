@@ -58,9 +58,11 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 					defer func() {
 						if join != nil {
 							join.Free(proc, false, nil)
+							freeTestChildren(join)
 						}
 						if build != nil {
 							build.Free(proc, false, nil)
+							freeTestChildren(build)
 						}
 						if buildBat != nil {
 							buildBat.Clean(proc.Mp())
@@ -81,9 +83,9 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 						keyType = types.T_varbinary.ToType()
 					}
 					buildBat = batch.NewWithSize(1)
-					buildBat.Vecs[0] = vector.NewVec(keyType)
+					buildBat.Vecs[0] = vector.NewVec(keyType, proc.Mp())
 					probeBat = batch.NewWithSize(1)
-					probeBat.Vecs[0] = vector.NewVec(keyType)
+					probeBat.Vecs[0] = vector.NewVec(keyType, proc.Mp())
 					rows, want := 3, "7"
 					switch shape {
 					case "signed_zero":
@@ -93,7 +95,7 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 						require.NoError(t, vector.AppendFixed(probeBat.Vecs[0], float64(0), false, proc.Mp()))
 						want = "-0"
 					case "unicode", "render_error":
-						buildBat.Vecs = append(buildBat.Vecs, vector.NewVec(types.T_varchar.ToType()))
+						buildBat.Vecs = append(buildBat.Vecs, vector.NewVec(types.T_varchar.ToType(), proc.Mp()))
 						for i, value := range []string{"", "Other", "alpha"} {
 							key, err := collation.UTF8MB4UnicodeCI.Key(nil, []byte(value))
 							require.NoError(t, err)
