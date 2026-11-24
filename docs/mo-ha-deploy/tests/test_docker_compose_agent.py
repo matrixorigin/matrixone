@@ -240,9 +240,9 @@ class ResourceAgentTests(unittest.TestCase):
             stub.write_text(script)
             stub.chmod(0o700)
 
-    def add_container(self, name, project="", config="", oneoff="False", container_id="owned", after_up=False):
+    def add_container(self, name, project="", config="", oneoff="False", container_id="owned", after_up=False, service=""):
         path = self.containers / container_id
-        path.write_text(f"{name}\t{project}\t{config}\t{oneoff}\n")
+        path.write_text(f"{name}\t{project}\t{config}\t{oneoff}\t{service}\n")
         if after_up:
             path.with_name(container_id + ".after").write_text("1\n")
 
@@ -756,6 +756,31 @@ class ResourceAgentTests(unittest.TestCase):
         self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
         self.assertTrue((self.root / "trace.current.stopped").exists())
         self.assertTrue((self.root / "trace.former.stopped").exists())
+
+    def test_stop_overlaps_removed_same_project_service(self):
+        self.add_container("matrixone", "my-project", self.yaml, container_id="matrixone", service="app")
+        self.add_container("helper", "my-project", self.yaml, container_id="helper", service="helper")
+        calls = self.action(
+            "stop",
+            0,
+            SERVICES="app",
+            COMPOSE_IDS="matrixone",
+            STOP_BARRIER=str(self.root / "barrier"),
+        )
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertEqual([call.split()[2:] for call in stop_calls], [["helper"]], calls)
+        self.assertIn("down overlapped stop", calls)
+        self.assertIn("compose -f docker-compose.yaml down", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+        for call in stop_calls:
+            arguments = call.split()[2:]
+            self.assertNotIn("matrixone", arguments, call)
+            self.assertFalse(
+                any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments),
+                call,
+            )
+        self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+        self.assertTrue((self.root / "trace.helper.stopped").exists())
 
     def test_stop_owned_oneoff_with_and_without_yaml(self):
         self.add_container("app-task", "my-project", self.yaml, "True", container_id="task")

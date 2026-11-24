@@ -141,7 +141,7 @@ labeled_container_ids()
 	# its project name changes. An empty Compose result alone is inconclusive.
 	project_dir=$(CDPATH= cd "$(dirname "$CONFIG_FILE")" && pwd) || return "$OCF_ERR_GENERIC"
 	config_path=${project_dir%/}/${CONFIG_FILE##*/}
-	format='{{.ID}}{{"\t"}}{{.Names}}{{"\t"}}{{.Label "com.docker.compose.project"}}{{"\t"}}{{.Label "com.docker.compose.project.config_files"}}{{"\t"}}{{.Label "com.docker.compose.oneoff"}}{{"\t"}}{{.State}}'
+	format='{{.ID}}{{"\t"}}{{.Names}}{{"\t"}}{{.Label "com.docker.compose.project"}}{{"\t"}}{{.Label "com.docker.compose.project.config_files"}}{{"\t"}}{{.Label "com.docker.compose.oneoff"}}{{"\t"}}{{.Label "com.docker.compose.service"}}{{"\t"}}{{.State}}'
 	containers=$(docker ps --all --no-trunc --format "$format") || {
 		ocf_log err "failed to enumerate Docker containers for $config_path"
 		return "$OCF_ERR_GENERIC"
@@ -152,7 +152,7 @@ labeled_container_ids()
 	# An exited project left behind by a rename is not a second owner.
 	# Only a project that still has an active container can conflict.
 	if ! ids=$(printf '%s\n' "$containers" |
-		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" OCF_COMPOSE_PROJECT="$compose_project" OCF_CURRENT_IDS="${2:-}" awk -F '\t' -v selection="$1" '
+		OCF_COMPOSE_CONFIG="$config_path" OCF_COMPOSE_DIR="${project_dir##*/}" OCF_COMPOSE_PROJECT="$compose_project" OCF_MODELED_SERVICES="$modeled_services" OCF_CURRENT_IDS="${2:-}" awk -F '\t' -v selection="$1" '
 		BEGIN {
 			prefix = tolower(ENVIRON["OCF_COMPOSE_DIR"])
 			gsub(/[^a-z0-9_-]/, "", prefix)
@@ -161,10 +161,17 @@ labeled_container_ids()
 			n = split(ENVIRON["OCF_CURRENT_IDS"], current, "\n")
 			for (i = 1; i <= n; i++)
 				if (current[i] != "") unverified[current[i]] = 1
+			m = split(ENVIRON["OCF_MODELED_SERVICES"], modeled_names, "\n")
+			for (j = 1; j <= m; j++)
+				if (modeled_names[j] != "") {
+					modeled[modeled_names[j]] = 1
+					modeled_known = 1
+				}
 		}
 		{
 			oneoff = (tolower($5) == "true")
-			active = ($6 != "exited" && $6 != "created")
+			service = $6
+			active = ($7 != "exited" && $7 != "created")
 		}
 		oneoff && !active && selection != "reconcile" { next }
 		$3 != "" && $4 == ENVIRON["OCF_COMPOSE_CONFIG"] {
@@ -174,6 +181,7 @@ labeled_container_ids()
 			cproj[count] = $3
 			coneoff[count] = oneoff
 			cactive[count] = active
+			cservice[count] = service
 			if (selection == "reconcile") {
 				if (active && (oneoff || !($1 in unverified))) ambiguous = 1
 				delete unverified[$1]
@@ -197,15 +205,16 @@ labeled_container_ids()
 			if (!ambiguous && selection != "reconcile") {
 				for (i = 1; i <= count; i++) {
 					# Health follows the one active project. Removal lists
-					# every verified service. Shutdown lists one-offs and
-					# other projects, which compose down does not stop.
+					# every verified service. Shutdown lists containers
+					# compose down will skip: one-offs, other projects, and
+					# same-project services absent from the current model.
 					if (selection != "services" && selection != "shutdown" &&
 						(active_count == 0 || cproj[i] != current_project)) continue
 					if (selection == "monitor") selected = 1
 					else if (selection == "oneoff") selected = (coneoff[i] && cactive[i])
 					else if (selection == "active") selected = cactive[i]
 					else if (selection == "shutdown")
-						selected = cactive[i] && (coneoff[i] || cproj[i] != ENVIRON["OCF_COMPOSE_PROJECT"])
+						selected = cactive[i] && (coneoff[i] || cproj[i] != ENVIRON["OCF_COMPOSE_PROJECT"] || (modeled_known && cservice[i] != "" && !(cservice[i] in modeled)))
 					else selected = !coneoff[i]
 					if (selected) print cid[i]
 				}
@@ -462,16 +471,20 @@ confirm_containers_stopped()
 
 docker_compose_stop()
 {
-	# compose down stops the current project in dependency order and keeps
-	# each service's configured grace period. It does not stop one-offs or
-	# containers that still belong to an earlier project. One docker stop
-	# signals only those skipped containers, overlapped with down, so two
-	# 60s grace periods fit in the 120s Pacemaker budget. No shorter
-	# timeout is passed: Docker uses each container's StopTimeout.
+	# compose down stops the services still in the model, in dependency
+	# order, and keeps each container's configured grace period. It skips
+	# one-offs, other projects, and containers whose service was removed
+	# from that model. One docker stop signals only those skipped
+	# containers, overlapped with down, so two 60s grace periods fit in
+	# the 120s Pacemaker budget. No shorter timeout is passed.
 	stop_pid=
 	compose_project=
+	modeled_services=
 	if [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ]; then
 		compose_project=$(compose_project_name) || compose_project=
+		if service_lines=$(desired_services); then
+			modeled_services=$(printf '%s\n' "$service_lines" | awk 'NF { print $1 }')
+		fi
 		if [ -n "$compose_project" ] && skipped=$(labeled_container_ids shutdown); then
 			if [ -n "$skipped" ]; then
 				docker stop $skipped >/dev/null 2>&1 &
@@ -495,7 +508,7 @@ docker_compose_stop()
 		wait "$stop_pid" || true
 	fi
 
-	# down can miss one-offs and services under an earlier project name.
+	# down can miss one-offs, removed services, and earlier project names.
 	remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
 	if [ -n "$remaining" ]; then
 		docker stop $remaining >/dev/null
