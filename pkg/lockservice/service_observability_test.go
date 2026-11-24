@@ -141,11 +141,10 @@ func TestRemoteWaitingListRequiresConfirmedHolder(t *testing.T) {
 			waiterTxn := source.activeTxnHolder.getActiveTxn(waiterTxnID, false, "")
 			require.NotNil(t, waiterTxn)
 			waiterTxn.Lock()
-			err = waiterTxn.lockAddedForCleanup(
-				remoteTable.getBind().Group,
+			err = waiterTxn.recordRemoteLocks(
 				remoteTable.getBind(),
 				[][]byte{row},
-				source.logger, false,
+				source.logger, false, false,
 			)
 			waiterTxn.Unlock()
 			require.NoError(t, err)

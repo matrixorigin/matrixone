@@ -120,8 +120,8 @@ func TestCleanupOnlyLockStateTransitions(t *testing.T) {
 
 		key1 := []byte("k1")
 		key2 := []byte("k2")
-		require.NoError(t, txn.lockAddedForCleanup(
-			bind.Group, bind, [][]byte{key1}, logger, false))
+		require.NoError(t, txn.recordRemoteLocks(
+			bind, [][]byte{key1}, logger, false, false))
 
 		holder := txn.getHoldLocksLocked(bind.Group)
 		require.Contains(t, holder.tableKeys, bind.Table,
@@ -134,8 +134,8 @@ func TestCleanupOnlyLockStateTransitions(t *testing.T) {
 		require.Nil(t, holder.uncertainLockKeys)
 
 		// A later failed retry must not downgrade a row already confirmed held.
-		require.NoError(t, txn.lockAddedForCleanup(
-			bind.Group, bind, [][]byte{key1, key2}, logger, false))
+		require.NoError(t, txn.recordRemoteLocks(
+			bind, [][]byte{key1, key2}, logger, false, false))
 		require.NotContains(t, holder.uncertainLockKeys[bind.Table], string(key1))
 		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key2))
 
