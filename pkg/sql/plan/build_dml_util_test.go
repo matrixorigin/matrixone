@@ -628,6 +628,26 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 	})
 }
 
+func TestShouldCheckDeleteIndexEntry(t *testing.T) {
+	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
+	partTypes := map[string]plan.Type{"id": enumType}
+
+	spatial := &plan.IndexDef{
+		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+		Parts:     []string{"g", catalog.CreateAlias("id")},
+	}
+	require.True(t, isSpatialIndexDef(spatial))
+	require.False(t, shouldCheckDeleteIndexEntry(spatial, partTypes))
+
+	regular := &plan.IndexDef{
+		IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		Parts:     []string{"e"},
+	}
+	require.True(t, shouldCheckDeleteIndexEntry(regular, map[string]plan.Type{"e": enumType}))
+	intType := plan.Type{Id: int32(types.T_int32)}
+	require.False(t, shouldCheckDeleteIndexEntry(regular, map[string]plan.Type{"e": intType}))
+}
+
 func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	emp := mock.ctxt.tables["emp"]

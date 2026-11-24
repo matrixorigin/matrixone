@@ -27,6 +27,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func shouldCheckDeleteIndexEntry(idxDef *plan.IndexDef, partTypes map[string]plan.Type) bool {
+	if idxDef.Unique || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
+		return false
+	}
+	for _, part := range idxDef.Parts {
+		typ, ok := partTypes[catalog.ResolveAlias(part)]
+		if ok && (typ.Id == int32(types.T_enum) || typ.Enumvalues != "") {
+			return true
+		}
+	}
+	return false
+}
+
 func makeDeleteIndexEntryAssert(builder *QueryBuilder, entryExists, entryRequired *Expr, indexName, tableName string) (*Expr, error) {
 	notRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*Expr{entryRequired})
 	if err != nil {
@@ -392,22 +405,19 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
-			checkIndexEntry := !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef)
-			if checkIndexEntry {
-				checkIndexEntry = false
+			var partTypes map[string]plan.Type
+			if !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+				partTypes = make(map[string]plan.Type, len(idxDef.Parts))
 				for _, part := range idxDef.Parts {
-					part = catalog.ResolveAlias(part)
-					colPos, ok := colName2Idx[i][part]
+					resolvedPart := catalog.ResolveAlias(part)
+					colPos, ok := colName2Idx[i][resolvedPart]
 					if !ok || colPos < 0 || int(colPos) >= len(selectNode.ProjectList) {
-						return 0, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", resolvedPart)
 					}
-					typ := selectNode.ProjectList[colPos].Typ
-					if typ.Id == int32(types.T_enum) || typ.Enumvalues != "" {
-						checkIndexEntry = true
-						break
-					}
+					partTypes[resolvedPart] = selectNode.ProjectList[colPos].Typ
 				}
 			}
+			checkIndexEntry := shouldCheckDeleteIndexEntry(idxDef, partTypes)
 			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
 				return 0, err
