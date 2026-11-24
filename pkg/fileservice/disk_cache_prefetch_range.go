@@ -86,7 +86,7 @@ func (d *DiskCache) prefetchUnit(vector *IOVector) (int64, bool) {
 	}
 	for i := range vector.Entries {
 		e := &vector.Entries[i]
-		if !e.done && (e.Size <= 0 || e.WriterForRead != nil || e.ReadCloserForRead != nil) {
+		if !e.done && (e.Size <= 0 || e.streams()) {
 			return 0, false
 		}
 	}
@@ -209,7 +209,7 @@ func (d *DiskCache) prefetchRead(
 	needed := make([]bool, n)
 	for i := range entries {
 		e := &entries[i]
-		if e.done || e.Size <= 0 {
+		if !e.ranged() {
 			continue
 		}
 		for j := (e.Offset - windowStart) / block; j <= (e.Offset+e.Size-1-windowStart)/block; j++ {
@@ -1098,7 +1098,8 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 	found := false
 	now := time.Now()
 	for i := range vector.Entries {
-		if e := &vector.Entries[i]; !e.done && e.Size > 0 {
+		if e := &vector.Entries[i]; e.ranged() {
+
 			if f.fastestLocked(diskPath, e.Offset, e.Offset+e.Size, now, d.downloadMaxExtraWait, true) != nil {
 				inFlight[i], found = true, true
 			}

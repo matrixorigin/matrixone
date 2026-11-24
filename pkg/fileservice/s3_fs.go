@@ -947,8 +947,7 @@ read_disk_cache:
 			}
 		}
 	}
-	// A read that skips every cache, not only the disk cache, skips the index-file cache.
-	if vector.Policy.Any(IndexFileObject) && vector.Policy&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects() {
+	if s.indexObjectReadable(vector.Policy) {
 		if err := s.readIndexObject(ctx, vector); err != nil {
 			finishFill()
 			return err
@@ -1045,7 +1044,8 @@ read_disk_cache:
 	// flight caches its bytes before it ends, so the entries of one that ended since the
 	// caches were read are cached, in the index-file cache for an index object.
 	if joined || flights {
-		if vector.Policy.Any(IndexFileObject) && vector.Policy&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects() {
+		if s.indexObjectReadable(vector.Policy) {
+
 			if err := s.readIndexObject(ctx, vector); err != nil {
 				return err
 			}
@@ -1243,7 +1243,7 @@ func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) er
 		}
 		vector.Entries[i] = single.Entries[0]
 		entry := &vector.Entries[i]
-		if entry.WriterForRead == nil && entry.ReadCloserForRead == nil {
+		if !entry.streams() {
 			firstValidatedOffset = min(firstValidatedOffset, entry.Offset)
 		}
 	}
@@ -1319,7 +1319,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	// A range read is timed only when this function drains it.
 	timeRangeReads := true
 	for i := range vector.Entries {
-		if vector.Entries[i].WriterForRead != nil || vector.Entries[i].ReadCloserForRead != nil {
+		if vector.Entries[i].streams() {
 			timeRangeReads = false
 			break
 		}
@@ -1454,11 +1454,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	// Any other range read takes its bytes from a prefetch object, which other reads of
 	// them join. A read that streams an entry to its caller opens its own reader.
-	streams := slices.ContainsFunc(vector.Entries, func(e IOEntry) bool {
-		return !e.done && (e.ReadCloserForRead != nil || e.WriterForRead != nil)
-	})
 	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil &&
-		!vector.Policy.Any(SkipDiskCacheReads) && !streams {
+		!vector.Policy.Any(SkipDiskCacheReads) && !vector.streams() {
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return getReader(ctx, &start, &end)
 		}
@@ -1662,7 +1659,7 @@ func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
 		if entry.Size == 0 {
 			return false
 		}
-		if entry.WriterForRead != nil || entry.ReadCloserForRead != nil {
+		if entry.streams() {
 			return false
 		}
 	}
@@ -1688,7 +1685,7 @@ func (s *S3FS) singleEntryRangeMergeKey(vector *IOVector) (IOMergeKey, bool) {
 		}
 		if target != nil || entry.Offset < 0 || entry.Size <= 0 ||
 			entry.Offset > math.MaxInt64-entry.Size ||
-			entry.WriterForRead != nil || entry.ReadCloserForRead != nil {
+			entry.streams() {
 			return IOMergeKey{}, false
 		}
 		target = entry
@@ -1732,7 +1729,7 @@ func (s *S3FS) willCacheFullObject(vector *IOVector) bool {
 		if entry.Size == 0 {
 			return false
 		}
-		if entry.WriterForRead == nil && entry.ReadCloserForRead == nil {
+		if !entry.streams() {
 			willReadFullObject = true
 		}
 	}

@@ -76,6 +76,12 @@ func (s *S3FS) cachesIndexObjects() bool {
 	return s.indexFileCache != nil && s.diskCache != nil
 }
 
+// indexObjectReadable reports whether a read under policy reads the index-file cache: a
+// read that skips every cache, not only the disk cache, skips it.
+func (s *S3FS) indexObjectReadable(policy Policy) bool {
+	return policy.Any(IndexFileObject) && policy&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects()
+}
+
 // fillTarget returns where a whole-object fill of the object at filePath for a read
 // under policy publishes: the index-file cache for an IndexFileObject read of an object it
 // keeps, otherwise the disk cache (nil).
