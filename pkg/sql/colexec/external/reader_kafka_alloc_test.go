@@ -12,12 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !race
-
-// Measurement-only allocation budget: race-runtime bookkeeping invalidates
-// the numbers, so this file is excluded from race builds. The functional
-// parse behavior itself is race-covered by the ordinary reader tests.
-
 package external
 
 import (

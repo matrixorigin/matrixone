@@ -3843,6 +3843,10 @@ func appendParquetVarlenValue(
 			}
 		}
 	}
+	// A native Unicode column admits only valid text in its charset.
+	if err := types.ValidateCollationValue(typ, value); err != nil {
+		return err
+	}
 	return vector.AppendBytes(vec, value, false, pool)
 }
 
