@@ -151,16 +151,62 @@ func (p *filePrefetchObject) readAt(ctx context.Context, off int64, dst []byte) 
 	if o == nil {
 		return errPrefetchMissed
 	}
-	if !readDownload(ctx, o, off-p.start, dst) {
+	if read, written := readDownload(ctx, o, off-p.start, dst); !read {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := o.failure(); err != nil {
+		// A failure that ended the download before it wrote the bytes fails the read.
+		if err := o.failure(); err != nil && !written {
 			return err
 		}
 		return errPrefetchMissed
 	}
 	return nil
+}
+
+// readOwnAt is readAt for the read that started p: it reads through the reader the
+// download holds for it, so a download that ends first is still read, then releases it.
+func (p *filePrefetchObject) readOwnAt(ctx context.Context, off int64, dst []byte) error {
+	defer p.releaseStarter()
+	select {
+	case <-p.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	p.mu.Lock()
+	o, held := p.download, p.starterHeld
+	p.mu.Unlock()
+	if o == nil || !held {
+		return p.readAt(ctx, off, dst)
+	}
+	if _, ok := o.waitFor(ctx, off-p.start, off-p.start+int64(len(dst)), 0); !ok {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// The download ended before it wrote the bytes.
+		if err := o.failure(); err != nil {
+			return err
+		}
+		return errPrefetchMissed
+	}
+	o.mu.Lock()
+	f := o.file
+	o.mu.Unlock()
+	if _, err := f.ReadAt(dst, off-p.start); err != nil {
+		return errPrefetchMissed
+	}
+	return nil
+}
+
+// releaseStarter releases the reader the download holds for the read that started p.
+func (p *filePrefetchObject) releaseStarter() {
+	p.mu.Lock()
+	o, held := p.download, p.starterHeld
+	p.starterHeld, p.starterDone = false, true
+	p.mu.Unlock()
+	if held {
+		o.release()
+	}
 }
 
 func (p *filePrefetchObject) stop() { p.cancelRead() }

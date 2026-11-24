@@ -24,6 +24,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3653,6 +3654,8 @@ func (r sparsePatternReader) Read(p []byte) (int, error) {
 
 type sparseTrackingStorage struct {
 	dummyObjectStorage
+	// mu guards the counters, which a read's prefetch object may update after the read.
+	mu                  sync.Mutex
 	opens, closes       int
 	offsets             []int64
 	setFileEvents       int
@@ -3664,6 +3667,8 @@ type sparseTrackingStorage struct {
 }
 
 func (s *sparseTrackingStorage) Read(ctx context.Context, _ string, min, max *int64) (io.ReadCloser, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.opens == 0 {
 		s.setFileEvents = countLoggedEvents(ctx, str_disk_cache_setfile_begin)
 	}
@@ -3685,6 +3690,8 @@ func (s *sparseTrackingStorage) Read(ctx context.Context, _ string, min, max *in
 		body = readerFunc(func([]byte) (int, error) { return 0, rangeStatusError{} })
 	}
 	return &readCloser{r: body, closeFunc: func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		s.closes++
 		if s.cancel != nil {
 			s.cancel()
@@ -3692,6 +3699,13 @@ func (s *sparseTrackingStorage) Read(ctx context.Context, _ string, min, max *in
 		}
 		return nil
 	}}, nil
+}
+
+// counts returns the opens, closes and opened offsets so far.
+func (s *sparseTrackingStorage) counts() (opens, closes int, offsets []int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.opens, s.closes, slices.Clone(s.offsets)
 }
 
 type sparseReleaseCountingData struct {
@@ -4176,6 +4190,7 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 			sameOffset, bodyError   bool
 			unexpected              bool
 			opens, closes           int
+			offsets                 []int64
 		}{
 			{name: "first 416", first: 9 << 20, second: 25 << 20, firstErr: rangeStatusError{}, opens: 1},
 			{name: "later 416", first: 9 << 20, second: 25 << 20, secondErr: rangeStatusError{}, unexpected: true, opens: 2, closes: 1},
@@ -4269,28 +4284,57 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 					stream = nil
 					require.NoError(t, closeErr)
 				}
-				require.Error(t, err)
-				if tc.cancel {
-					require.ErrorIs(t, err, context.Canceled)
-				} else if tc.unexpected {
+				// A read past disk-prefetch-memory-max reads its ranges through prefetch
+				// objects of its own, which end after the read returns.
+				wantOpens, wantCloses := tc.opens, tc.closes
+				if tc.cancel && err == nil {
+					// The first range's object closed its reader, canceling the read, after
+					// the second range was opened: both ranges were read.
+					wantOpens, wantCloses = 2, 2
+				}
+				require.Eventually(t, func() bool {
+					opens, closes, _ := storage.counts()
+					return opens == wantOpens && closes == wantCloses
+				}, 10*time.Second, time.Millisecond)
+				opens, closes, offsets := storage.counts()
+				unexpected := tc.unexpected
+				if tc.sameOffset && moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
+					// The second entry shared the first's prefetch object, so the next read
+					// of storage is the 416 past it.
+					unexpected, tc.offsets = true, []int64{9 << 20, 25 << 20}
+				}
+				switch {
+				case tc.cancel:
+					if err != nil {
+						require.ErrorIs(t, err, context.Canceled)
+					}
+				case unexpected:
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
-				} else {
+				default:
 					status, ok := objectStorageStatusCode(err)
 					require.True(t, ok, "%v", err)
 					require.Equal(t, 416, status)
 				}
 				require.Equal(t, mode == "download declined", vector.downloadDeclined)
-				require.Equal(t, tc.opens, storage.opens)
-				require.Equal(t, tc.closes, storage.closes)
+				require.Equal(t, wantOpens, opens)
+				require.Equal(t, wantCloses, closes)
 				wantOffsets := []int64{tc.first}
-				if tc.opens == 2 {
+				if wantOpens == 2 {
 					wantOffsets = append(wantOffsets, tc.second)
 				}
-				require.Equal(t, wantOffsets, storage.offsets)
+				if tc.offsets != nil {
+					wantOffsets = tc.offsets
+				}
+				require.Equal(t, wantOffsets, offsets)
 				if mode == "fill admission skipped" {
 					require.Equal(t, 1, storage.setFileEvents)
 				}
-				require.Zero(t, cache.updates.Load())
+				if err == nil {
+					// A read that got all its ranges updates its caller's cache.
+					require.EqualValues(t, 1, cache.updates.Load())
+				} else {
+					require.Zero(t, cache.updates.Load())
+				}
 				require.Zero(t, hitCache.updates.Load())
 				vector.ReleaseReadResultOnError()
 				if tc.firstErr == nil && !tc.stream && !tc.writer {

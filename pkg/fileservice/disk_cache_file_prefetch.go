@@ -43,6 +43,11 @@ type filePrefetchObject struct {
 	// before its download is registered.
 	holds       int
 	readStarted bool
+	// holdStarter is set when the download holds a reader for the read that started p,
+	// which reads it through readOwnAt, so that its file is not closed before that read
+	// copies its bytes: starterHeld while it holds one, starterDone once the read no longer
+	// needs it.
+	holdStarter, starterHeld, starterDone bool
 	// connOnce frees the connection it holds once registered.
 	connOnce sync.Once
 	// whole is set on the download of a whole object; stopOnClose, set once it is
@@ -139,6 +144,9 @@ func fileDownloadStarted(ctx context.Context, o *objectDownload) {
 	if p, ok := ctx.Value(fileDownloadKey{}).(*filePrefetchObject); ok {
 		p.mu.Lock()
 		p.download = o
+		if p.holdStarter && !p.starterDone && o.hold() {
+			p.starterHeld = true
+		}
 		p.mu.Unlock()
 		p.markReady()
 	}

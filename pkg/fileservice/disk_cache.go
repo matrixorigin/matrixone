@@ -784,9 +784,9 @@ func (d *DiskCache) Read(
 		if err := fillEntry(&vector.Entries[i]); err != nil {
 			// A failed read of object storage by a download the read joined fails the read;
 			// an error of the cache itself is ignored.
-			var source *diskCacheSourceError
-			if errors.As(err, &source) {
-				return err
+			var joined *joinedReadError
+			if errors.As(err, &joined) {
+				return joined.err
 			}
 			numError++
 			logutil.Warn(
@@ -1207,7 +1207,8 @@ func sourceFailure(readCtx context.Context, err error) error {
 	if me := (*moerr.Error)(nil); errors.As(err, &me) && me.ErrorCode() == moerr.ErrFileNotFound {
 		return nil
 	}
-	return err
+	// The reads get the error of object storage itself, as a read of their own would.
+	return source.err
 }
 
 // fileWrite is what a write of a cache file holds until it publishes the file or hands it

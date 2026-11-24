@@ -142,6 +142,9 @@ func TestColumnReadPropagatesJoinedPrefetchSourceError(t *testing.T) {
 			r := PrefetchRange{Offset: 40 << 10, Size: 4 << 10}
 			if tc.fileBacked {
 				fs.diskCache.memoryPrefetchMax = r.Size - 1
+				// The read joins the stalled FilePrefetchObject only under a budget that
+				// covers its wait.
+				fs.diskCache.downloadMaxExtraWait = time.Hour
 			}
 			s := &failOnceStorage{ObjectStorage: storage, fail: r.Offset, gate: make(chan struct{})}
 			fs.storage = s

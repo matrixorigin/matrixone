@@ -608,23 +608,25 @@ func (d *DiskCache) rangeParts(start, end, align int64) [][2]int64 {
 	return parts
 }
 
-// readDownload reads the bytes of download o from off into dst, once they are written.
-func readDownload(ctx context.Context, o *objectDownload, off int64, dst []byte) bool {
+// readDownload reads the bytes of download o from off into dst, once they are written. It
+// reports whether it read them, and whether the download wrote them.
+func readDownload(ctx context.Context, o *objectDownload, off int64, dst []byte) (read, written bool) {
 	if _, ok := o.waitFor(ctx, off, off+int64(len(dst)), maxIOWaitDuration); !ok {
-		return false
+		return false, false
 	}
 	f, ok := o.acquire()
 	if !ok {
-		return false
+		return false, true
 	}
 	defer o.release()
 	_, err := f.ReadAt(dst, off)
-	return err == nil
+	return err == nil, true
 }
 
 // fetchRange returns the bytes [start, end) of the object at filePath from a prefetch
-// object holding them: one under way, or a MemoryPrefetchObject of at most
-// disk-prefetch-memory-max bytes it starts and runs itself, which caches nothing. It
+// object holding them: one under way, a MemoryPrefetchObject of at most
+// disk-prefetch-memory-max bytes it starts and runs itself, which caches nothing, or,
+// unless the read skips disk-cache writes, a FilePrefetchObject it starts. It
 // reports whether it returned them, and whether the prefetch object caches them.
 func (d *DiskCache) fetchRange(
 	ctx context.Context,
@@ -641,18 +643,31 @@ func (d *DiskCache) fetchRange(
 	}
 	fl := d.newFlight(filePath, start, end, policy, open, flightNeeds{})
 	var o prefetchObject
-	if end-start > d.memoryPrefetchMax {
-		// Past the bytes of a MemoryPrefetchObject, it only joins one under way.
+	var own *filePrefetchObject
+	if end-start > d.memoryPrefetchMax && policy.Any(SkipDiskCacheWrites) {
+		// Past the bytes of a MemoryPrefetchObject, a read that writes no cache only
+		// joins one under way.
 		f := &d.prefetchObjects
 		f.mu.Lock()
 		if o = fl.joinLocked(time.Now()); o != nil {
 			o.hold()
 		}
 		f.mu.Unlock()
+	} else if end-start > d.memoryPrefetchMax {
+		deletes := d.deletes.now()
+		p := d.newFileObject(context.WithoutCancel(ctx), filePath, start, end, open, flightNeeds{deletes: &deletes})
+		p.readStarted, p.holdStarter = true, true
+		if o, err = admit(ctx, p); o != prefetchObject(p) {
+			p.abandon()
+		} else {
+			own = p
+			defer own.releaseStarter()
+			go p.run()
+		}
 	} else {
 		o, err = admit(ctx, fl)
 	}
-	if errors.Is(err, errPrefetchClosed) {
+	if errors.Is(err, errPrefetchClosed) || errors.Is(err, errPrefetchDeleted) {
 		return nil, false, false, nil
 	}
 	if err != nil {
@@ -668,11 +683,15 @@ func (d *DiskCache) fetchRange(
 	// A prefetch object that failed to read the bytes fails the read; one that ended
 	// without them leaves the read to the caller.
 	out := make([]byte, end-start)
-	if err := o.readAt(ctx, start, out); err != nil {
+	read := o.readAt
+	if own != nil {
+		read = own.readOwnAt
+	}
+	if err := read(ctx, start, out); err != nil {
 		if errors.Is(err, errPrefetchMissed) {
 			return nil, false, false, nil
 		}
-		return nil, false, false, err
+		return nil, false, false, objectReadError(err, filePath)
 	}
 	return out, true, o.caches(), nil
 }

@@ -252,3 +252,93 @@ func TestFlightBudgetDoesNotOverflow(t *testing.T) {
 		})
 	}
 }
+
+// Overlapping exact reads larger than disk-prefetch-memory-max share one file-backed
+// prefetch object (decision 2026-11-23).
+func TestExactReadsShareLargeRange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int64
+	}{
+		{name: "memory_sized_range", size: 64 << 10},
+		{name: "file_sized_range", size: 128<<10 + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
+			fs.diskCache.memoryPrefetchMax = 128 << 10
+			// A read joins a FilePrefetchObject only within the extra wait of a range read;
+			// the stalled download here is joined only under a budget that covers it.
+			fs.diskCache.downloadMaxExtraWait = time.Hour
+			<-fs.diskCache.load.done
+
+			// Exact column reads skip the grid. Use distinct start offsets so the
+			// identical-request I/O merger leaves deduplication to the range owner.
+			started := make(chan struct{}, 2)
+			gate := newBlackBoxStorage(fs.storage, func(string, int64) bool {
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+				return true
+			})
+			fs.storage = gate
+			unblock := sync.OnceFunc(func() { close(gate.gate) })
+			defer unblock()
+			read := func(offset, size int64, result chan<- error) {
+				vec := &IOVector{FilePath: "object", Policy: ExactColumnsRead,
+					Entries: []IOEntry{{Offset: offset, Size: size}}}
+				defer vec.Release()
+				err := fs.Read(ctx, vec)
+				if err == nil && !bytes.Equal(data[offset:offset+size], vec.Entries[0].Data) {
+					err = fmt.Errorf("incorrect bytes at offset %d", offset)
+				}
+				result <- err
+			}
+			results := make(chan error, 2)
+			go read(0, tc.size, results)
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			go read(1, tc.size-1, results)
+			// If the second reader opens its own range we have the counterexample.
+			// Otherwise, observe it waiting for bytes on the registered range.
+			require.Eventually(t, func() bool {
+				if _, _, reads := gate.counts("object"); reads == 2 {
+					return true
+				}
+				objects := &fs.diskCache.prefetchObjects
+				objects.mu.Lock()
+				defer objects.mu.Unlock()
+				for _, object := range objects.m[fs.diskCache.pathForFile("object")] {
+					var waiters int
+					switch flight := object.(type) {
+					case *memoryPrefetchObject:
+						flight.mu.Lock()
+						waiters = len(flight.waiters)
+						flight.mu.Unlock()
+					case *filePrefetchObject:
+						if download := flight.joinableDownload(); download != nil {
+							download.mu.Lock()
+							waiters = len(download.waiters)
+							download.mu.Unlock()
+						}
+					}
+					if waiters == 2 {
+						return true
+					}
+				}
+				return false
+			}, 4*time.Second, time.Millisecond)
+			unblock()
+			for range 2 {
+				require.NoError(t, <-results)
+			}
+			_, _, reads := gate.counts("object")
+			require.Equal(t, 1, reads, "overlapping exact reads should share a registered download")
+		})
+	}
+}

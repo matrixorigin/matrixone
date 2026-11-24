@@ -37,16 +37,58 @@ func prefetchBytes(fs *S3FS) int64 {
 	return f.bytes
 }
 
-// A column read of a range a background file prefetch has not started, as it waits for a
-// download connection, reads its own bytes.
-func TestFlightTransitionForegroundReadNotHeldByWaitingFileConnection(t *testing.T) {
+// A column read past disk-prefetch-memory-max reads through a FilePrefetchObject of its
+// own, which waits for a download connection as a prefetch does (decision 2026-11-23): it
+// waits, without failing, while a stalled prefetch holds the only connection, and gets its
+// bytes once the connection frees.
+func TestFlightTransitionForegroundFileReadWaitsForConnection(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	fs.diskCache.conns.max = 1
 	fs.diskCache.memoryPrefetchMax = 1
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	got, offset, err := foregroundReadOfWaitingRange(t, fs, ranges)
-	require.NoError(t, err)
-	require.Equal(t, data[offset:offset+ranges[0].Size], got)
+	held := make(chan struct{})
+	release := sync.OnceFunc(func() { close(held) })
+	t.Cleanup(release)
+	var heldOffset atomic.Int64
+	heldOffset.Store(-1)
+	g := newBlackBoxStorage(fs.storage, func(string, int64) bool { return false })
+	g.gated = func(_ string, offset int64) chan struct{} {
+		if heldOffset.CompareAndSwap(-1, offset) {
+			return held
+		}
+		return nil
+	}
+	fs.storage = g
+	ctx := context.Background()
+	key := fs.pathToKey("object")
+	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
+	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 1 }, 5*time.Second, time.Millisecond)
+	r := ranges[0]
+	if heldOffset.Load() == r.Offset {
+		r = ranges[1]
+	}
+	type result struct {
+		got []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		got, err := readColumnRange(ctx, fs, r)
+		done <- result{got, err}
+	}()
+	select {
+	case res := <-done:
+		t.Fatalf("the read did not wait for the held connection: %v", res.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	select {
+	case res := <-done:
+		require.NoError(t, res.err)
+		require.Equal(t, data[r.Offset:r.Offset+r.Size], res.got)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read did not get its bytes once the connection freed")
+	}
 }
 
 // A column read of two ranges two flights read holds only the flight of the range it waits

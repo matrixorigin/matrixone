@@ -118,6 +118,12 @@ func (o *objectDownload) acquire() (*os.File, bool) {
 	return o.file, true
 }
 
+// hold holds the download as a reader, as acquire does, without taking its file.
+func (o *objectDownload) hold() bool {
+	_, ok := o.acquire()
+	return ok
+}
+
 func (o *objectDownload) release() {
 	var onReadsDone []func()
 	o.mu.Lock()
@@ -286,6 +292,22 @@ func (o *objectDownload) endWith(complete bool, err error) {
 		}
 	}
 	o.mu.Unlock()
+}
+
+// joinedReadError is the failed read of object storage by a download a read of the disk
+// cache joined: unlike an error of the cache itself, it fails the read, with err.
+type joinedReadError struct{ err error }
+
+func (e *joinedReadError) Error() string { return e.err.Error() }
+func (e *joinedReadError) Unwrap() error { return e.err }
+
+// objectReadError returns err as a read of the object at filePath of its own reports it:
+// a short object is an unexpected end of the file.
+func objectReadError(err error, filePath string) error {
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return moerr.NewUnexpectedEOFNoCtx(filePath)
+	}
+	return err
 }
 
 // failure returns the failed read of object storage that ended the download, or nil.
@@ -876,7 +898,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		// The read waits for the download it chose until its bytes are written or it ends.
 		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, maxIOWaitDuration); !ok {
 			if err := o.failure(); err != nil {
-				return true, false, err
+				return true, false, &joinedReadError{err: objectReadError(err, vector.FilePath)}
 			}
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil
