@@ -531,6 +531,14 @@ func (c *Compile) evaluateQueryPlacement(
 		req.CurrentCNPolicy = schedule.CurrentCNRequired
 		req.CurrentCNOrdinalZero = true
 	}
+	// A remote CN rebuilds its own workspace from the committed snapshot.
+	// AP PREPARE does not retain a physical plan; check the workspace at EXECUTE.
+	if !c.isPrepare && c.proc != nil && c.proc.Base != nil {
+		if txn := c.proc.GetTxnOperator(); txn != nil {
+			ws := txn.GetWorkspace()
+			req.RequireWorkspaceOwner = ws != nil && !ws.Readonly()
+		}
+	}
 	return schedule.DecideQueryPlacement(req), "", nil
 }
 
