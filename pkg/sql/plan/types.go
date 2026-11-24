@@ -1087,7 +1087,13 @@ type BindContext struct {
 	// inherit it, and it restores the released masking behavior for that
 	// binding alone: masked names fall through to the enclosing catalog and
 	// displaced links are never consulted.
-	legacyCTEScope               bool
+	legacyCTEScope bool
+	// releasedTimeWindowPlacement marks a legacy-generation persisted relation whose
+	// ordinary expansion keeps the released TimeWindow ownership: the incoming root
+	// clause stays authoritative and peeled-wrapper TimeWindow clauses are neither
+	// adopted nor duplicate-checked. It mirrors the same per-definition marker as
+	// legacyCTEScope and inherits only through NewBindContext.
+	releasedTimeWindowPlacement  bool
 	sliding                      bool
 	explicitSliding              bool
 	isDistinct                   bool

@@ -96,6 +96,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bc.queryBlockOwner = parent.queryBlockOwner
 		bc.cteOwnerChain = parent.cteOwnerChain
 		bc.legacyCTEScope = parent.legacyCTEScope
+		bc.releasedTimeWindowPlacement = parent.releasedTimeWindowPlacement
 		if parent.bindingCte() {
 			bc.cteByName = parent.cteByName
 			bc.cteState = parent.cteState

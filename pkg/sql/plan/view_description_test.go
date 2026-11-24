@@ -297,3 +297,72 @@ func TestDescribeViewColumnsRejectsInvalidInputAndCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, cols)
 }
+
+// The review #6032620661 marker-free wrapped INTERVAL witness: the release
+// authored this shape with the TimeWindow attached to the inner (wrapped)
+// SELECT and the outer LIMIT on the consuming wrapper. The DIRECT schema
+// derivation path (DescribeViewColumns and the shared authoring inference)
+// must bind that inner interval and derive the window boundary column for a
+// definition of ANY generation - marker-free, current and unknown non-nil -
+// because the per-definition generation gate belongs to the ordinary relation
+// expansion owner, never to the schema-inference caller (the controlling
+// addendum's caller boundary). The ordinary read's legacy behavior for the
+// same marker-free definition is the released skip (captured on the release
+// binary and the true-RESTORE readback); it is distinct from THIS contract.
+func TestDescribeViewColumnsIntervalGenerationContract(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		definition string
+	}{
+		{
+			name: "marker free release definition",
+			definition: `{"Stmt":"create view v_wrapped as with c as (select ts from tw_src) (select _wstart, count(*) as counted from tw_src interval(ts, 1, minute)) limit 5",` +
+				`"DefaultDatabase":"test"}`,
+		},
+		{
+			name: "current generation definition",
+			definition: `{"Stmt":"create view v_wrapped as with c as (select ts from tw_src) (select _wstart, count(*) as counted from tw_src interval(ts, 1, minute)) limit 5",` +
+				`"DefaultDatabase":"test","cte_scope_protocol":1}`,
+		},
+		{
+			name: "unknown non nil marker definition",
+			definition: `{"Stmt":"create view v_wrapped as with c as (select ts from tw_src) (select _wstart, count(*) as counted from tw_src interval(ts, 1, minute)) limit 5",` +
+				`"DefaultDatabase":"test","cte_scope_protocol":99}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+			// The same tw-scale shape the planner interval tests use, named for
+			// the review witness so the derived boundary column is unambiguous.
+			ctx.objects["tw_src"] = &planpb.ObjectRef{DbName: "test", ObjName: "tw_src", Obj: 42}
+			ctx.tables["tw_src"] = &planpb.TableDef{
+				Name: "tw_src",
+				Cols: []*planpb.ColDef{
+					{Name: "ts", Typ: makePlan2Type(&[]types.Type{types.T_datetime.ToType()}[0])},
+					{Name: "v", Typ: planpb.Type{Id: int32(types.T_int32)}},
+				},
+			}
+			cols, err := DescribeViewColumns(ctx, tc.definition)
+			require.NoError(t, err)
+			require.Len(t, cols, 2, "the direct derivation binds the wrapped interval's boundary column")
+			require.Equal(t, "_wstart", cols[0].Name)
+			require.Equal(t, "counted", cols[1].Name)
+			require.Equal(t, int32(types.T_datetime), cols[0].Typ.Id, "the window boundary keeps the source time type")
+			// The generation marker must not change the DIRECT authoring
+			// inference: this is the released creation contract itself.
+			regenerated, err := RegenerateViewDefinition(ctx, tc.definition)
+			require.NoError(t, err)
+			requireEqualColumns(t, cols, regenerated.TableDef.Cols)
+		})
+	}
+}
+
+func requireEqualColumns(t *testing.T, want, got []*planpb.ColDef) {
+	t.Helper()
+	require.Len(t, got, len(want))
+	for i := range want {
+		require.Equal(t, want[i].Name, got[i].Name)
+		require.Equal(t, want[i].Typ.Id, got[i].Typ.Id)
+	}
+}

@@ -7266,11 +7266,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				astRankOption = selectClause.Select.RankOption
 			}
-			if selectClause.Select.TimeWindow != nil {
-				if astTimeWindow != nil {
-					return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple time window clauses not allowed")
+			if !ctx.releasedTimeWindowPlacement {
+				// A legacy-generation persisted relation expansion keeps the released
+				// TimeWindow ownership: the incoming root clause remains authoritative
+				// and this peeled wrapper's TimeWindow is neither adopted nor
+				// duplicate-checked, matching the released ordinary binder.
+				if selectClause.Select.TimeWindow != nil {
+					if astTimeWindow != nil {
+						return 0, moerr.NewSyntaxError(builder.GetContext(), "multiple time window clauses not allowed")
+					}
+					astTimeWindow = selectClause.Select.TimeWindow
 				}
-				astTimeWindow = selectClause.Select.TimeWindow
 			}
 			stmt = selectClause.Select
 			if stmt.SelectLockInfo != nil {
@@ -14047,7 +14053,10 @@ func (builder *QueryBuilder) checkRecursiveTable(stmt tree.TableExpr, name strin
 
 	case *tree.TableName:
 		table := string(tbl.ObjectName)
-		if table == name {
+		// Follow buildTable's CTE resolution: only an unqualified reference can be
+		// this CTE's recursive self-reference; a qualified reference resolves
+		// against the physical catalog and must not count as recursion.
+		if tbl.SchemaName == "" && table == name {
 			return 1, nil
 		}
 		return 0, nil
@@ -14151,6 +14160,11 @@ func (builder *QueryBuilder) bindView(
 	// marker must never leak through this fresh view binding context, so the
 	// explicit assignment below clears it instead of only setting it.
 	viewCtx.legacyCTEScope = viewData.CTEScopeProtocol == nil
+	// The same per-definition marker also selects the released TimeWindow
+	// ownership for this ordinary relation expansion: a release-authored view
+	// keeps its authored root clause while peeled-wrapper TimeWindow clauses
+	// stay inert, exactly as the released ordinary binder behaved.
+	viewCtx.releasedTimeWindowPlacement = viewData.CTEScopeProtocol == nil
 
 	viewData.Stmt, err = builder.metadataViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
 	if err != nil {
