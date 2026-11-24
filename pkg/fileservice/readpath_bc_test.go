@@ -404,3 +404,41 @@ func TestIndexObjectFillSkippingCacheWrites(t *testing.T) {
 	require.Zero(t, fs.diskCache.cache.Used())
 	require.True(t, FullFilePreloadSkipped(ctx, fs, IndexFileObject|SkipCacheWrites, "object"))
 }
+
+// BC14: a read of an index object that skips disk-cache reads joins its download into the
+// index-file cache.
+func TestIndexObjectReadSkippingDiskReadsJoinsIndexDownload(t *testing.T) {
+	fs, _, data := newIndexObjectFS(t, true)
+	d := fs.diskCache
+	d.downloadMaxExtraWait = time.Hour
+	storage := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == 0 })
+	fs.storage = storage
+	release := sync.OnceFunc(func() { close(storage.gate) })
+	t.Cleanup(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	filled := make(chan error, 1)
+	go func() { filled <- fs.PrefetchFile(WithFileServicePolicy(ctx, IndexFileObject), "object") }()
+	var download *objectDownload
+	require.Eventually(t, func() bool {
+		download = d.download(d.pathForFile("object"))
+		return download != nil
+	}, 5*time.Second, time.Millisecond)
+	require.True(t, download.indexFile)
+	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipDiskCacheReads | SkipMemoryCache,
+		Entries: []IOEntry{{Offset: 100, Size: 4096}}}
+	defer vec.Release()
+	result := make(chan error, 1)
+	go func() { result <- fs.Read(ctx, vec) }()
+	require.Eventually(t, func() bool {
+		download.mu.Lock()
+		defer download.mu.Unlock()
+		return len(download.waiters) == 1
+	}, 5*time.Second, time.Millisecond, "the read joins the download")
+	release()
+	require.NoError(t, <-result)
+	require.NoError(t, <-filled)
+	require.Equal(t, data[100:4196], vec.Entries[0].Data)
+	_, _, total := storage.counts(fs.pathToKey("object"))
+	require.Equal(t, 1, total, "the download alone reads the object")
+}

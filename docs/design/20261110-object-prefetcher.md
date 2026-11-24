@@ -213,8 +213,9 @@ not cache its range, so no callback waits for capacity held by callbacks. The wr
 asynchronous updates run in the order the updates were submitted, whichever is
 published first; an update that publishes nothing holds no place in that order. A read
 that skips disk-cache reads reads object storage itself; it does not join a prefetch
-object. A read of an index-file object reads the index-file cache, which a skip of
-disk-cache reads does not apply to; a read that skips every cache read skips it too. A fill
+object. A read of an index-file object reads the index-file cache, and joins a download
+into it under way, which a skip of disk-cache reads does not apply to; a read that skips
+every cache read skips it too. A fill
 of an index-file object fills only the index-file cache, never the disk cache, also when
 the index-file cache cannot be written, and a fill that skips every cache write fills
 neither. A MemoryPrefetchObject

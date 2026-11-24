@@ -182,7 +182,7 @@ func (s *S3FS) indexObjectCached(filePath string) (string, bool) {
 func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 	diskPath, ok := s.indexObjectCached(vector.FilePath)
 	if !ok {
-		return nil
+		return s.readIndexDownload(ctx, vector)
 	}
 	p, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
@@ -248,6 +248,36 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 			counter.FileService.DiskReadSize.Add(read)
 		})
+	}
+	return nil
+}
+
+// readIndexDownload fills the entries of vector not done from the download of the object
+// into the index-file cache under way, as a read of the disk cache does, whatever the
+// read's skip of disk-cache reads.
+func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) error {
+	p, err := parseFilePathAtService(vector.FilePath, s.name)
+	if err != nil || isDownload(ctx) {
+		return nil
+	}
+	d := s.diskCache
+	diskPath := d.pathForFile(p.File)
+	if o := d.download(diskPath); o == nil || !o.indexFile {
+		return nil
+	}
+	for i := range vector.Entries {
+		e := &vector.Entries[i]
+		if !e.ranged() {
+			continue
+		}
+		_, filled, err := d.readFromDownload(ctx, diskPath, e, vector)
+		var failing *failingReadError
+		if errors.As(err, &failing) {
+			return failing.err
+		}
+		if filled {
+			e.done, e.fromCache = true, d
+		}
 	}
 	return nil
 }
