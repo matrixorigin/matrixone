@@ -619,7 +619,6 @@ func (d *DiskCache) Read(
 
 	for i := range vector.Entries {
 		if err := fillEntry(&vector.Entries[i]); err != nil {
-			// ignore error
 			numError++
 			logutil.Warn(
 				"read disk cache error",
@@ -627,6 +626,11 @@ func (d *DiskCache) Read(
 				zap.Any("path", vector.FilePath),
 				zap.Any("entry", vector.Entries[i]),
 			)
+			// A process allocation failure is not a cache miss; falling back
+			// can immediately fail another allocation in the storage path.
+			if errors.Is(err, syscall.ENOMEM) {
+				return err
+			}
 		}
 	}
 
