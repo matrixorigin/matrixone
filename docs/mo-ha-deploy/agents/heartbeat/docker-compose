@@ -487,7 +487,15 @@ docker_compose_stop()
 		if service_lines=$(desired_services); then
 			modeled_services=$(printf '%s\n' "$service_lines" | awk 'NF { print $1 }')
 		fi
-		if [ -n "$compose_project" ] && skipped=$(labeled_container_ids shutdown); then
+		# A single failed listing must not drop the overlapped stop. Retry
+		# once before down so a transient docker ps error still starts the
+		# retired-service grace period together with Compose.
+		skipped=
+		if [ -n "$compose_project" ]; then
+			if ! skipped=$(labeled_container_ids shutdown); then
+				ocf_log warn "Docker listing failed before shutdown; retrying for $CONFIG_FILE"
+				skipped=$(labeled_container_ids shutdown) || skipped=
+			fi
 			if [ -n "$skipped" ]; then
 				docker stop $skipped >/dev/null 2>&1 &
 				stop_pid=$!

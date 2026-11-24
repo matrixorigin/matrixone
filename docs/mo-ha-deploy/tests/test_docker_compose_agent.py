@@ -145,6 +145,11 @@ DOCKER = """\
 printf 'docker %s\\n' "$*" >> "$TRACE"
 case "$1" in
     ps)
+        if [ "${DOCKER_PS_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$DOCKER_PS_ONCE_MARK" ]; then
+            : > "$DOCKER_PS_ONCE_MARK"
+            echo "Error: docker ps failed" >&2
+            exit 1
+        fi
         [ "${DOCKER_PS_ERROR:-0}" = 0 ] || exit "$DOCKER_PS_ERROR"
         for container in "$CONTAINERS"/*; do
             [ -f "$container" ] || continue
@@ -316,6 +321,7 @@ class ResourceAgentTests(unittest.TestCase):
             AFTER_UP_IDS="running",
             VANISHED=str(self.root / "vanished"),
             INSPECT_ONCE_MARK=str(self.root / "inspect-once"),
+            DOCKER_PS_ONCE_MARK=str(self.root / "docker-ps-once"),
         )
         project_name = settings.pop("PROJECT_NAME", None)
         env.update(settings)
@@ -826,6 +832,35 @@ class ResourceAgentTests(unittest.TestCase):
         self.assertEqual([call.split()[2:] for call in stop_calls], [["helper"]], calls)
         self.assertIn("down overlapped stop", calls)
         self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+        for call in stop_calls:
+            arguments = call.split()[2:]
+            self.assertNotIn("matrixone", arguments, call)
+            self.assertFalse(
+                any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments),
+                call,
+            )
+        self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+        self.assertTrue((self.root / "trace.helper.stopped").exists())
+
+    def test_stop_retries_listing_so_removed_service_still_overlaps_down(self):
+        self.add_container("matrixone", "my-project", self.yaml, container_id="matrixone", service="app")
+        self.add_container("helper", "my-project", self.yaml, container_id="helper", service="helper")
+        calls = self.action(
+            "stop",
+            0,
+            SERVICES="app",
+            COMPOSE_IDS="matrixone",
+            DOCKER_PS_FAIL_ONCE="1",
+            STOP_BARRIER=str(self.root / "barrier"),
+        )
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertEqual([call.split()[2:] for call in stop_calls], [["helper"]], calls)
+        stop_at = calls.index(stop_calls[0])
+        self.assertGreaterEqual(sum(call.startswith("docker ps ") for call in calls[:stop_at]), 2, calls)
+        self.assertIn("down overlapped stop", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+        self.assertNotIn("docker stop repeated helper", calls)
         self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
         for call in stop_calls:
             arguments = call.split()[2:]
