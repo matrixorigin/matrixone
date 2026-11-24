@@ -138,8 +138,10 @@ func (d *DiskCache) flightBytes() int64 {
 	if avail, ok := memoryAvailable(); ok {
 		bytes = int64(min(avail/100*flightMemoryPercent, math.MaxInt64))
 	}
-	if d.conns.max > 0 {
-		bytes = min(bytes, flightBufSize(d.memoryPrefetchMax)*d.conns.max)
+	if n := d.conns.max; n > 0 {
+		if per := flightBufSize(d.memoryPrefetchMax); per <= bytes/n {
+			bytes = min(bytes, per*n)
+		}
 	}
 	b.bytes.Store(bytes)
 	b.at.Store(now)
@@ -682,7 +684,7 @@ func (d *DiskCache) fetchRange(
 // the cache keeps.
 func (f *memoryPrefetchObject) run() {
 	d := f.d
-	updateCtx, reserve, written := d.deferWriteCallbacks(context.WithoutCancel(f.ctx))
+	updateCtx, reserve, written := d.deferWriteCallbacks(closingValues{Context: f.closing, values: context.WithoutCancel(f.ctx)})
 	defer written()
 	defer d.prefetchObjects.reads.Done()
 	defer f.cancelRead()
@@ -704,6 +706,14 @@ func (f *memoryPrefetchObject) run() {
 	d.endPrefetch(f.diskPath, f)
 	f.release()
 }
+
+// closingValues is a context with the values of values that ends once Context does.
+type closingValues struct {
+	context.Context
+	values context.Context
+}
+
+func (c closingValues) Value(key any) any { return c.values.Value(key) }
 
 // readHeld reads the range of f through its opener, and frees the download connection
 // f holds, when it holds one.

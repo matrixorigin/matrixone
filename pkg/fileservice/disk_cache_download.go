@@ -605,11 +605,22 @@ func (l *lazyObjectReader) openRange(ctx context.Context, start, end int64) (io.
 	return l.read(ctx, &start, &end)
 }
 
+// leadPart returns the part of bounds starting at the block of splitAt, or 0.
+func leadPart(bounds []int64, splitAt int64) int {
+	at := splitAt / prefetchBlockMax * prefetchBlockMax
+	for i := 1; i < len(bounds)-1; i++ {
+		if bounds[i] == at {
+			return i
+		}
+	}
+	return 0
+}
+
 // copyParts writes the parts of download between bounds into f at once, each read through
-// open, and returns the bytes written. The first part holds the connection the download
-// took, which first frees once the part ends; each other part holds one conn takes,
-// waiting for it holding nothing, until it ends. A failed part fails the copy.
-func copyParts(ctx context.Context, f *os.File, download *objectDownload, open rangeOpener, bounds []int64, conn func(context.Context) (func(), error), first func()) (int64, error) {
+// open, and returns the bytes written. Part lead holds the connection the download took,
+// which first frees once the part ends; each other part holds one conn takes, waiting for
+// it holding nothing, until it ends. A failed part fails the copy.
+func copyParts(ctx context.Context, f *os.File, download *objectDownload, open rangeOpener, bounds []int64, lead int, conn func(context.Context) (func(), error), first func()) (int64, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errs := make([]error, len(bounds)-1)
@@ -618,7 +629,7 @@ func copyParts(ctx context.Context, f *os.File, download *objectDownload, open r
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if i == 0 {
+			if i == lead {
 				defer first()
 			} else {
 				release, err := conn(ctx)
@@ -828,14 +839,16 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 
 // readFromDownload fills entry from the download of the object at diskPath when its bytes
 // are written, or will be no more than the max extra wait later than a range read could
-// fetch them, or are more than an eighth of what the download writes before them. It
+// fetch them, or, for a whole-object download, are more than an eighth of what the
+// download writes before them. It
 // reports whether a download covers the object, and whether it filled entry.
 func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
 	end := entry.Offset + entry.Size
 	// The download of the object, or of a FilePrefetchObject holding the entry's bytes,
 	// whose bytes start at base in the object.
-	o, base := d.download(diskPath), int64(0)
+	o, base, whole := d.download(diskPath), int64(0), true
 	if o == nil {
+		whole = false
 		if o, base = d.fileDownload(diskPath, entry.Offset, end); o == nil {
 			return false, false, nil
 		}
@@ -854,7 +867,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		if wait > budget {
 			// A range read fetches these bytes again; it pays only when they are a small
 			// part of what the download still writes before them.
-			if entry.Size*downloadDuplicateRatio <= behind {
+			if !whole || entry.Size*downloadDuplicateRatio <= behind {
 				metric.FSDiskCacheDownloadReadDeclinedCounter.Inc()
 				metric.FSDiskCacheDownloadDeclinedBytesCounter.Add(float64(entry.Size))
 				return true, false, nil

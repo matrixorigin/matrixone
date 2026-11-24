@@ -172,7 +172,7 @@ func (p *filePrefetchObject) run() {
 	defer d.prefetchObjects.reads.Done()
 	defer context.AfterFunc(p.closing, p.cancelRead)()
 	defer p.releaseConn()
-	_, _ = d.downloadFile(p.ctx, p.filePath, p.start, p.end, p.open, p.releaseConn, d.endFilePrefetch(p.diskPath, p))
+	_, _ = d.downloadFile(p.ctx, p.closing, p.filePath, p.start, p.end, p.open, p.releaseConn, d.endFilePrefetch(p.diskPath, p))
 }
 
 // abandon ends p, never registered.
@@ -217,8 +217,8 @@ func (f *prefetchObjects) holdingLocked(objectPath string, start, end int64, now
 
 // downloadFile downloads under ctx, the context of a FilePrefetchObject, its bytes [start,
 // end) of the object at filePath through open, calls copied once they are read, and ends
-// it through done.
-func (d *DiskCache) downloadFile(ctx context.Context, filePath string, start, end int64, open rangeOpener, copied func(), done func(error)) (bool, error) {
+// it through done. It publishes nothing once closing is done.
+func (d *DiskCache) downloadFile(ctx, closing context.Context, filePath string, start, end int64, open rangeOpener, copied func(), done func(error)) (bool, error) {
 	var written bool
 	var err error
 	defer func() { done(err) }()
@@ -240,7 +240,8 @@ func (d *DiskCache) downloadFile(ctx context.Context, filePath string, start, en
 		}}, nil
 	}
 	layout := func(context.Context) (int64, int64, error) { return end - start, 0, nil }
-	written, err = d.publishUnlessDeleted(filePath, IOEntry{readDeletes: readDeletes}, nil, func(claim func() bool) (bool, error) {
+	live := func() bool { return closing.Err() == nil }
+	written, err = d.publishUnlessDeleted(filePath, IOEntry{readDeletes: readDeletes}, live, func(claim func() bool) (bool, error) {
 		return d.writeFileTo(ctx, diskPath, openReader, false, claim, rangeFill, layout, nil, copied)
 	})
 	if err != nil {
