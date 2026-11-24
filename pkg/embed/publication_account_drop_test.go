@@ -138,7 +138,9 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 		where := fmt.Sprintf(" from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_id=%d", id)
 		require.Zero(t, number(left, "select count(*)"+where))
 		require.Zero(t, number(left, "select count(*) from mo_catalog.mo_account where account_name='race32900a'"))
-		require.Equal(t, 1, number(left, "select count(*) from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_name='race32900b' and status=0"))
+		// Read B on the CN that committed ALTER; the other CN may still be
+		// waiting for its logtail while the DROP checks above already hold.
+		require.Equal(t, 1, number(right, "select count(*) from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_name='race32900b' and status=0"))
 		require.Equal(t, 7, number(keep, "select id from race32900sub.t"))
 		exec(left, "create account race32900a admin_name 'admin' identified by '111'")
 		newID := number(left, findA)
@@ -146,7 +148,7 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 		require.Zero(t, number(left, fmt.Sprintf("select count(*) from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_id in (%d,%d)", id, newID)))
 		var auth string
 		statement, stop = statementContext()
-		err = left.QueryRowContext(statement, "select account_list from mo_catalog.mo_pubs where account_id=0 and pub_name='race32900p'").Scan(&auth)
+		err = right.QueryRowContext(statement, "select account_list from mo_catalog.mo_pubs where account_id=0 and pub_name='race32900p'").Scan(&auth)
 		stop()
 		require.NoError(t, err)
 		require.Equal(t, "race32900b,race32900keep", auth)
