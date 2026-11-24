@@ -581,6 +581,9 @@ func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 	if err := txn.PrepareRollback(); err != nil {
 		logutil.Error("PrepareRollback failed", zap.Error(err), TxnField(txn))
+		if txn.GetError() == nil {
+			txn.SetError(err)
+		}
 	}
 }
 

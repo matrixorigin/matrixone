@@ -32,6 +32,7 @@ import (
 type oversizeWALTestStore struct {
 	NoopTxnStore
 	reject           bool
+	rollbackErr      error
 	preparedRollback bool
 	appliedRollback  bool
 }
@@ -45,7 +46,7 @@ func (s *oversizeWALTestStore) PrepareWAL() error {
 
 func (s *oversizeWALTestStore) PrepareRollback() error {
 	s.preparedRollback = true
-	return nil
+	return s.rollbackErr
 }
 
 func (s *oversizeWALTestStore) ApplyRollback() error {
@@ -80,6 +81,23 @@ func TestOversizeWALRollsBackBeforeAppend(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, second.Commit(context.Background()))
 	require.Equal(t, txnif.TxnStateCommitted, second.GetTxnState(false))
+}
+
+func TestExplicitRollbackReportsPrepareCleanupError(t *testing.T) {
+	cleanupErr := errors.New("cleanup failed")
+	store := &oversizeWALTestStore{rollbackErr: cleanupErr}
+	mgr := NewTxnManager(func() txnif.TxnStore { return store }, nil,
+		types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.ErrorIs(t, txn.Rollback(context.Background()), cleanupErr)
+	require.True(t, store.preparedRollback)
+	require.True(t, store.appliedRollback)
+	require.Equal(t, txnif.TxnStateRollbacked, txn.GetTxnState(false))
 }
 
 func TestTxnWaiterCancelAndReuse(t *testing.T) {
