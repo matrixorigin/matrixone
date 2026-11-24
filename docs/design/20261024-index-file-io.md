@@ -473,8 +473,9 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - cached entries are reused after a restart, and leftover temporary and trash directories
   are removed; files a removal fails to remove count against the capacity, also after
   a restart, until the collector removes them, and while their bytes cannot be known
-  the cache holds no more than it used when they were found; an entry the load cannot
-  list is removed; a read that cannot open an entry's directory keeps
+  the cache holds no more than it used when they were found, publishing nothing until
+  the load has indexed the entries it found; an entry the load cannot list is removed,
+  unless it was replaced; a read that cannot open an entry's directory keeps
   the entry and reads from storage;
 - the index-file cache gets its configured capacity, or the default when unset, and a
   capacity of zero disables it; the table-data cache keeps its own capacity, and a runtime

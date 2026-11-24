@@ -502,6 +502,9 @@ func (c *IndexFileCache) put(ctx context.Context, name string, mark uint64, file
 			return false, nil
 		}
 	}
+	if c.disk.trashHoldsPublications() {
+		return false, nil
+	}
 	written, err := c.disk.putDir(ctx, diskPath, files)
 	if err != nil {
 		return false, c.disk.observeWriteResult(diskPath, err)
@@ -1229,15 +1232,23 @@ func (d *DiskCache) removeCacheDir(path string) error {
 // removeUnlistedDir removes an entry directory the load cannot list, as trash of unknown
 // bytes.
 func (d *DiskCache) removeUnlistedDir(ctx context.Context, path string) {
+	runPathHook(d.hooks.beforeRemoveUnlistedDir, path)
 	owner, err := d.paths.acquire(ctx, path, nil)
 	if err != nil {
 		return
 	}
 	defer owner.release()
+	if d.cache.Contains(path) {
+		return
+	}
+	if _, err := cacheDirSize(path); !os.IsPermission(err) {
+		return
+	}
 	trash, err := trashCacheDir(path, -1)
 	if err != nil {
 		return
 	}
+	d.cache.Delete(ctx, path)
 	if err := d.removeTrash(trash, -1); err != nil {
 		logutil.Error("index file cache: remove entry files", zap.String("path", trash), zap.Error(err))
 	}
@@ -1330,6 +1341,22 @@ func (d *DiskCache) limitTrashLocked() {
 		logutil.Error("index file cache: trash of unknown size holds the cache at its bytes used",
 			zap.String("path", d.path), zap.Int64("used", used))
 	}
+}
+
+// trashHoldsPublications reports whether trash of unknown bytes is kept while the cache
+// loads: nothing is published until the load has indexed the entries it found.
+func (d *DiskCache) trashHoldsPublications() bool {
+	t := &d.trash
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.unknown > 0 && !t.loaded
+}
+
+// startLoading starts the records of a load.
+func (d *DiskCache) startLoading() {
+	d.trash.mu.Lock()
+	defer d.trash.mu.Unlock()
+	d.trash.loaded = false
 }
 
 // loadingDir records the bytes the load measured of entry directory path, or ends the

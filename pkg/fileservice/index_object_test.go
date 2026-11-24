@@ -647,6 +647,9 @@ func TestIndexFileCacheTrashChargedAfterRestart(t *testing.T) {
 func TestIndexFileCacheTrashOfUnknownSize(t *testing.T) {
 	for _, by := range []string{"deleted while loading", "old trash", "unlistable entry", "control"} {
 		t.Run(by, func(t *testing.T) {
+			if by != "control" && !permissionsEnforced(t) {
+				t.Skip("permissions are not enforced")
+			}
 			ctx := context.Background()
 			dir := t.TempDir()
 			data := bytes.Repeat([]byte{7}, 300<<10)
@@ -710,11 +713,6 @@ func TestIndexFileCacheTrashOfUnknownSize(t *testing.T) {
 				require.NoError(t, os.Chmod(diskPath, 0))
 			}
 			c2.Close(ctx)
-			if by != "control" {
-				if _, err := os.ReadDir(append(trashDirs(), diskPath)[0]); err == nil {
-					t.Skip("permissions are not enforced")
-				}
-			}
 			c := restart()
 			defer c.Close(ctx)
 			used := c.disk.cache.Used()
@@ -767,6 +765,111 @@ func TestIndexObjectRepairOutlivesLoadIndexing(t *testing.T) {
 			require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject, 2000, 10))
 			require.Equal(t, data[len(data)-10:], readIndexObjectRange(t, fs, IndexFileObject, int64(len(data)-10), 10))
 			require.Equal(t, int64(1), storage.reads.Load(), "the read filled the entry again")
+		})
+	}
+}
+
+// permissionsEnforced reports whether a directory without permissions cannot be listed.
+func permissionsEnforced(t *testing.T) bool {
+	dir := filepath.Join(t.TempDir(), "probe")
+	require.NoError(t, os.Mkdir(dir, 0))
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+	_, err := os.ReadDir(dir)
+	return err != nil
+}
+
+// The load holds the cache to what it used once it finds trash of unknown bytes: a
+// publication while it loads is not admitted against that space, and the entries it
+// found are indexed. Its removal of an entry it cannot list keeps a replacement published
+// since.
+func TestIndexFileCacheLoadWithUnknownTrash(t *testing.T) {
+	for _, by := range []string{"publication", "publication control", "replacement", "replacement control"} {
+		t.Run(by, func(t *testing.T) {
+			if !permissionsEnforced(t) {
+				t.Skip("permissions are not enforced")
+			}
+			ctx := context.Background()
+			data := bytes.Repeat([]byte{7}, 300<<10)
+			files := func() []IndexCacheFile {
+				return []IndexCacheFile{{Name: "data",
+					Open: func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }}}
+			}
+			earlier, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(64<<20), "", "", 0, 0, 0)
+			require.NoError(t, err)
+			<-earlier.disk.load.done
+			c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(64<<20), "", "", 0, 0, 0)
+			require.NoError(t, err)
+			defer c.Close(ctx)
+			<-c.disk.load.done
+			move := func(name string) string {
+				written, err := earlier.Put(ctx, name, files())
+				require.NoError(t, err)
+				require.True(t, written)
+				from, err := earlier.disk.pathForDir(name)
+				require.NoError(t, err)
+				to, err := c.disk.pathForDir(name)
+				require.NoError(t, err)
+				require.NoError(t, os.MkdirAll(filepath.Dir(to), 0o755))
+				require.NoError(t, os.Rename(from, to))
+				return to
+			}
+			kept := move("kept")
+			var trash string
+			t.Cleanup(func() {
+				m, _ := filepath.Glob(filepath.Join(c.disk.path, "*", "*"))
+				for _, p := range m {
+					_ = os.Chmod(p, 0o755)
+				}
+			})
+			switch by {
+			case "publication", "publication control":
+				entry := move("entry")
+				trash = fmt.Sprintf("%s.%d-%d%s", entry, 1, 1, cacheDirTrashSuffix)
+				require.NoError(t, os.Rename(entry, trash))
+				if by == "publication" {
+					require.NoError(t, os.Chmod(trash, 0))
+				}
+				fresh, err := c.disk.pathForDir("fresh")
+				require.NoError(t, err)
+				c.disk.hooks.beforeIndexLoadedDirs = func() {
+					_, err := c.Put(ctx, "fresh", files())
+					require.NoError(t, err)
+				}
+				c.disk.loadCache(ctx)
+				c.disk.hooks.beforeIndexLoadedDirs = nil
+				require.True(t, c.disk.cache.Contains(kept), "the entry the load found is indexed")
+				require.Equal(t, by == "publication control", c.disk.cache.Contains(fresh))
+				require.LessOrEqual(t, c.disk.cache.Used(), c.disk.capacityFunc())
+				if by == "publication" {
+					keptSize, _ := c.disk.cache.Size(kept)
+					require.Equal(t, keptSize, c.disk.capacityFunc(), "the cache is held at what it used")
+				}
+			case "replacement", "replacement control":
+				entry := move("entry")
+				require.NoError(t, os.Chmod(entry, 0))
+				if by == "replacement" {
+					c.disk.hooks.beforeRemoveUnlistedDir = func(path string) {
+						require.Equal(t, entry, path)
+						require.NoError(t, os.Chmod(entry, 0o755))
+						require.NoError(t, c.Delete(ctx, "entry"))
+						written, err := c.Put(ctx, "entry", files())
+						require.NoError(t, err)
+						require.True(t, written)
+					}
+				}
+				c.disk.loadCache(ctx)
+				c.disk.hooks.beforeRemoveUnlistedDir = nil
+				size, err := cacheDirSize(entry)
+				if by == "replacement" {
+					require.NoError(t, err, "the replacement is kept")
+					require.Positive(t, size)
+					require.True(t, c.disk.cache.Contains(entry))
+				} else {
+					require.True(t, os.IsNotExist(err), "the unlistable entry is removed")
+					require.False(t, c.disk.cache.Contains(entry))
+				}
+				require.True(t, c.disk.cache.Contains(kept))
+			}
 		})
 	}
 }

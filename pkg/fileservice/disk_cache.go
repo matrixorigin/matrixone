@@ -98,9 +98,11 @@ type diskCacheHooks struct {
 	beforeLoadDirectoryCleanup func(path string)
 	beforeCacheTempFileCreate  func()
 	// beforeIndexLoadedDirs runs before the entry directories found by the load are
-	// indexed, beforeLoadFile before a file found by the load is.
-	beforeIndexLoadedDirs func()
-	beforeLoadFile        func(diskPath string)
+	// indexed, beforeLoadFile before a file found by the load is, and
+	// beforeRemoveUnlistedDir before an entry directory the load cannot list is removed.
+	beforeIndexLoadedDirs   func()
+	beforeLoadFile          func(diskPath string)
+	beforeRemoveUnlistedDir func(path string)
 	// beforeFilePublication, afterPublicationClaim and afterFilePublication run before a
 	// file's publication claim, between it and its caching, and after its caching.
 	beforeFilePublication func()
@@ -359,6 +361,7 @@ func (d *DiskCache) reindexRead(
 
 func (d *DiskCache) loadCache(ctx context.Context) {
 	t0 := time.Now()
+	d.startLoading()
 
 	type Info struct {
 		Path  string
