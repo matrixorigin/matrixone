@@ -395,22 +395,85 @@ func TestSkippedRequestDoesNotDrainHealthyBackend(t *testing.T) {
 	)
 }
 
+// manuallyExpiringContext keeps the transport deadline separate from the
+// response timeout, which the test triggers only after the peer accepts it.
+type manuallyExpiringContext struct {
+	context.Context
+	deadline time.Time
+	done     chan struct{}
+	once     sync.Once
+}
+
+func newManuallyExpiringContext() *manuallyExpiringContext {
+	return &manuallyExpiringContext{
+		Context:  context.Background(),
+		deadline: time.Now().Add(time.Hour),
+		done:     make(chan struct{}),
+	}
+}
+
+func (c *manuallyExpiringContext) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c *manuallyExpiringContext) Done() <-chan struct{}       { return c.done }
+func (c *manuallyExpiringContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+func (c *manuallyExpiringContext) expire() { c.once.Do(func() { close(c.done) }) }
+
+// blackholeUserRequests acknowledges peer receipt without sending a response.
+func blackholeUserRequests(accepted chan<- struct{}) func(goetty.IOSession, interface{}, uint64) error {
+	return func(_ goetty.IOSession, value interface{}, _ uint64) error {
+		request := value.(RPCMessage)
+		if request.Cancel != nil {
+			defer request.Cancel()
+		}
+		if !request.internal {
+			accepted <- struct{}{}
+		}
+		return nil
+	}
+}
+
+func sendTimedOutRequestAfterAcceptance(t *testing.T, b *remoteBackend, accepted <-chan struct{}) error {
+	t.Helper()
+	ctx := newManuallyExpiringContext()
+	defer ctx.expire()
+	f, err := b.Send(ctx, newTestMessage(1))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("peer did not accept the user request")
+	}
+	ctx.expire()
+	_, err = f.Get()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	return nil
+}
+
 func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	probed := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
-			// Simulate a request accepted by the peer whose data response path
-			// never makes progress.
-			return nil
-		},
+		blackholeUserRequests(accepted),
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-			defer cancel()
-			f, err := b.Send(ctx, newTestMessage(1))
-			require.NoError(t, err)
-			_, err = f.Get()
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-			f.Close()
+			require.NoError(t, sendTimedOutRequestAfterAcceptance(t, b, accepted))
+			require.Eventually(t, func() bool {
+				b.mu.RLock()
+				futureCount := len(b.mu.futures)
+				b.mu.RUnlock()
+				return futureCount == 0 && b.dataPendingSince() != 0
+			}, time.Second, time.Millisecond)
+			require.True(t, b.admissionAvailable(), "backend must not drain before the read loop starts")
+			b.inactiveReadLoop()
+			b.activeReadLoop(false)
 
 			select {
 			case <-probed:
@@ -422,13 +485,21 @@ func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
 			}, time.Second, time.Millisecond)
 			retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
 			defer retryCancel()
-			_, err = b.Send(retryCtx, newTestMessage(2))
+			retry, err := b.Send(retryCtx, newTestMessage(2))
+			if retry != nil {
+				defer retry.Close()
+			}
 			require.ErrorIs(t, err, backendDraining,
 				"latched user traffic must seal the blackholed data generation")
 		},
+		// Defer the reader until the timed-out Future has left the map.
+		func(b *remoteBackend) { b.stateMu.readLoopActive = true },
 		WithBackendReadTimeout(50*time.Millisecond),
 		WithBackendLivenessProbe(func(context.Context, string) error {
-			probed <- struct{}{}
+			select {
+			case probed <- struct{}{}:
+			default:
+			}
 			return nil
 		}),
 	)
@@ -437,36 +508,38 @@ func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
 func TestContinuousTimedOutRequestsCannotPostponeProbe(t *testing.T) {
 	var probes atomic.Int32
 	probeCalled := make(chan struct{}, 1)
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
-			return nil
-		},
+		blackholeUserRequests(accepted),
 		func(b *remoteBackend) {
-			deadline := time.Now().Add(time.Second)
+			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			// Preserve the original 5ms request cadence without making the
+			// transport deadline depend on writer scheduling.
+			ticker := time.NewTicker(5 * time.Millisecond)
+			defer ticker.Stop()
 			probeObserved := false
-			for !probeObserved && time.Now().Before(deadline) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-				f, err := b.Send(ctx, newTestMessage(1))
-				if err == nil {
-					_, _ = f.Get()
-					f.Close()
-				} else {
-					require.Truef(
-						t,
-						errors.Is(err, context.DeadlineExceeded) || errors.Is(err, backendDraining),
-						"unexpected request error before draining publication: %v",
-						err,
-					)
-				}
-				cancel()
+			for !probeObserved {
 				select {
 				case <-probeCalled:
 					probeObserved = true
-				default:
+					continue
+				case <-waitCtx.Done():
+					t.Fatal("new short requests postponed the liveness probe")
+				case <-ticker.C:
+				}
+				err := sendTimedOutRequestAfterAcceptance(t, b, accepted)
+				if err != nil {
+					require.ErrorIs(t, err, backendDraining,
+						"unexpected request error before draining publication")
+					select {
+					case <-probeCalled:
+						probeObserved = true
+					case <-waitCtx.Done():
+						t.Fatal("draining backend did not run a liveness probe")
+					}
 				}
 			}
-			require.True(t, probeObserved,
-				"new short requests must not move the oldest unprogressed write epoch")
 			require.Positive(t, probes.Load())
 			require.Eventually(t, func() bool {
 				return !b.admissionAvailable()
@@ -474,7 +547,10 @@ func TestContinuousTimedOutRequestsCannotPostponeProbe(t *testing.T) {
 
 			retryCtx, retryCancel := context.WithTimeout(context.Background(), time.Second)
 			defer retryCancel()
-			_, err := b.Send(retryCtx, newTestMessage(2))
+			retry, err := b.Send(retryCtx, newTestMessage(2))
+			if retry != nil {
+				defer retry.Close()
+			}
 			require.ErrorIs(t, err, backendDraining,
 				"durably drained backend must reject new user traffic")
 		},
