@@ -1238,7 +1238,7 @@ func buildDefaultExprWithColumnsForceDomain(
 	}
 
 	// try to calculate default value, return err if fails
-	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
+	newExpr, err := foldBoundConstant(bindCtx, DeepCopyExpr(defaultExpr), proc)
 	// cast_assign remains an executable expression because its behavior depends
 	// on sql_mode, so function.IsConstant rejects the outer function. Validate when
 	// its source value is constant, without eagerly evaluating volatile defaults.
@@ -1250,6 +1250,7 @@ func buildDefaultExprWithColumnsForceDomain(
 	}
 	if constantMediumIntDefault {
 		cast := newExpr.GetF()
+		proc := processForBoundExpr(bindCtx, cast.Args[0], proc)
 		strictExpr, strictErr := forceAssignmentCastExprWithName(
 			bindCtx, cast.Args[0], typ, "cast_strict")
 		if strictErr != nil {
@@ -1738,6 +1739,7 @@ func validateUnsignedDecimalStrictConstantDefault(ctx context.Context, proc *pro
 	if err != nil {
 		return err
 	}
+	proc = processForBoundExpr(ctx, strictExpr, proc)
 	executor, err := colexec.NewExpressionExecutor(proc, strictExpr)
 	if err != nil {
 		return err

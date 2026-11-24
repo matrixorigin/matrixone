@@ -15,14 +15,11 @@
 package plan
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -512,7 +509,6 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 		updateCols      map[string]tree.Expr
 		wantInline      int
 		wantUnsupported bool
-		wantReject      bool
 	}{
 		{
 			name:       "synchronous ivfflat indexed part",
@@ -569,10 +565,16 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			wantInline: 1,
 		},
 		{
-			name:       "synchronous fulltext primary key remains rejected",
+			name:       "synchronous fulltext primary key uses old-key maintenance",
 			tableDef:   newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"id": nil},
-			wantReject: true,
+			wantInline: 1,
+		},
+		{
+			name:       "synchronous ivfflat primary key uses old-key maintenance",
+			tableDef:   newTableDef(newIndex("ivf", catalog.MoIndexIvfFlatAlgo.ToString(), "", "vec")),
+			updateCols: map[string]tree.Expr{"id": nil},
+			wantInline: 1,
 		},
 		{
 			name:       "async primary key stays modern",
@@ -602,16 +604,8 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inline, unsupported, err := classifyIrregularIndexesForUpdate(
-				context.Background(), tt.tableDef, tt.updateCols,
+				tt.tableDef, tt.updateCols,
 			)
-			if tt.wantReject {
-				require.Error(t, err)
-				var routeErr *updatePlannerRouteError
-				require.True(t, errors.As(err, &routeErr))
-				require.Equal(t, updatePlannerRejected, routeErr.route)
-				require.True(t, moerr.IsMoErrCode(routeErr.err, moerr.ErrUnsupportedDML))
-				return
-			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantUnsupported, unsupported)
 			require.Len(t, inline, tt.wantInline)

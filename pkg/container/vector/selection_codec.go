@@ -447,13 +447,8 @@ func (v *Vector) readRawBytesAt(
 	if size <= types.VarlenaInlineSize {
 		*value = types.Varlena{}
 		value[0] = byte(size)
-		if _, err := io.ReadFull(r, value[1:1+size]); err != nil {
-			return err
-		}
-		if err := validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
-			return err
-		}
-		return nil
+		_, err := io.ReadFull(r, value[1:1+size])
+		return err
 	}
 	oldAreaLength := len(v.area)
 	if uint64(oldAreaLength)+uint64(size) > math.MaxUint32 ||
@@ -466,10 +461,6 @@ func (v *Vector) readRawBytesAt(
 		return err
 	}
 	if _, err = io.ReadFull(r, area[oldAreaLength:newAreaLength]); err != nil {
-		v.area = area[:oldAreaLength]
-		return err
-	}
-	if err := validateJSONPayload(v.typ, area[oldAreaLength:newAreaLength]); err != nil {
 		v.area = area[:oldAreaLength]
 		return err
 	}
