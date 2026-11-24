@@ -22,7 +22,6 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -8954,7 +8953,7 @@ func evalRight(str string, length int64) string {
 	return string(runeStr[strLength-rightLength:])
 }
 
-var errNonFinitePowerResult = errors.New("non-finite power result")
+var errNonFinitePowerResult = moerr.NewOutOfRangeNoCtx("float64", "non-finite power result")
 
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
