@@ -1,10 +1,10 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"testing"
@@ -24,6 +25,302 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnionPlainFixedSelectionReuse(t *testing.T) {
+	for _, oid := range []types.T{types.T_uint32, types.T_uint64, types.T_float32, types.T_float64} {
+		for _, backing := range []string{"owned", "window", "external"} {
+			for _, index32 := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/int32=%t", oid, backing, index32), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
+					t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+					require.NoError(t, src.PreExtend(4, mp))
+					src.SetLength(4)
+					width := src.typ.TypeSize()
+					for row := range 4 {
+						if width == 4 {
+							binary.LittleEndian.PutUint32(src.data[row*width:], []uint32{0x80000000, 0x7fc01234, 0xff800000, 0xffffffff}[row])
+						} else {
+							binary.LittleEndian.PutUint64(src.data[row*width:], []uint64{0x8000000000000000, 0x7ff8000000001234, 0xfff0000000000000, 0xffffffffffffffff}[row])
+						}
+					}
+					input := src
+					if backing != "owned" {
+						var err error
+						if backing == "window" {
+							input, err = src.Window(0, 4)
+						} else {
+							data, allocErr := mp.Alloc(4*width, true)
+							require.NoError(t, allocErr)
+							copy(data, src.data[:4*width])
+							input = NewVecWithData(oid.ToType(), 4, data, nil, nil)
+							// A read-only vector over memory the test owns and frees after input.
+							t.Cleanup(func() { mp.Free(data) })
+						}
+						require.NoError(t, err)
+						t.Cleanup(func() { input.Free(mp) })
+					}
+					require.NoError(t, dst.PreExtend(8, mp))
+					for range 2 {
+						dst.CleanOnlyData()
+						before := mp.Stats().NumAlloc.Load()
+						if index32 {
+							require.NoError(t, dst.UnionInt32(input, []int32{3}, mp))
+							require.NoError(t, dst.UnionInt32(input, []int32{2, 0, 1, 1}, mp))
+						} else {
+							require.NoError(t, dst.Union(input, []int64{3}, mp))
+							require.NoError(t, dst.Union(input, []int64{2, 0, 1, 1}, mp))
+						}
+						require.Equal(t, before, mp.Stats().NumAlloc.Load())
+						require.Equal(t, 5, dst.Length())
+						for row, sourceRow := range []int{3, 2, 0, 1, 1} {
+							require.Equal(t, src.data[sourceRow*width:(sourceRow+1)*width], dst.data[row*width:(row+1)*width])
+							require.False(t, dst.IsNull(uint64(row)))
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestUnionFixedSelection(t *testing.T) {
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp, types.T_decimal64,
+		types.T_TS, types.T_decimal128, types.T_uuid, types.T_Blockid, types.T_Rowid, types.T_decimal256} {
+		for _, index32 := range []bool{false, true} {
+			for _, nullable := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/int32=%t/nullable=%t", oid, index32, nullable), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
+					t.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+					require.NoError(t, src.PreExtend(4, mp))
+					src.SetLength(4)
+					width := src.typ.TypeSize()
+					expected := make([][]byte, 4)
+					for row := range expected {
+						expected[row] = make([]byte, width)
+						for column := range width {
+							expected[row][column] = byte(row*32 + column + 1)
+						}
+						// Include signed zero and NaN payloads: selection copies
+						// physical bits, without numeric conversion.
+						if oid == types.T_float32 {
+							binary.LittleEndian.PutUint32(expected[row], []uint32{0x80000000, 0x7fc01234, 0xff800000, 0xffffffff}[row])
+						} else if oid == types.T_float64 {
+							binary.LittleEndian.PutUint64(expected[row], []uint64{0x8000000000000000, 0x7ff8000000001234, 0xfff0000000000000, 0xffffffffffffffff}[row])
+						}
+						copy(src.data[row*width:(row+1)*width], expected[row])
+					}
+					if nullable {
+						src.GetNulls().Add(1)
+					}
+					view, err := src.Window(1, 4)
+					require.NoError(t, err)
+					t.Cleanup(func() { view.Free(mp) })
+					for range 2 {
+						dst.CleanOnlyData()
+						// Preserve an existing prefix, then select from a read-only
+						// source with repetitions, a tail row and reverse order.
+						if index32 {
+							require.NoError(t, dst.UnionInt32(src, []int32{0}, mp))
+							require.NoError(t, dst.UnionInt32(view, nil, mp))
+							require.Equal(t, 1, dst.Length())
+							require.NoError(t, dst.UnionInt32(view, []int32{2, 1, 1, 0}, mp))
+						} else {
+							require.NoError(t, dst.Union(src, []int64{0}, mp))
+							require.NoError(t, dst.Union(view, nil, mp))
+							require.Equal(t, 1, dst.Length())
+							require.NoError(t, dst.Union(view, []int64{2, 1, 1, 0}, mp))
+						}
+						require.Equal(t, 5, dst.Length())
+						for row, sourceRow := range []int{0, 3, 2, 2, 1} {
+							isNull := nullable && sourceRow == 1
+							require.Equal(t, isNull, dst.IsNull(uint64(row)))
+							if !isNull {
+								require.Equal(t, expected[sourceRow], dst.data[row*width:(row+1)*width])
+							}
+						}
+					}
+					// Self-append must read the original prefix after growth has
+					// replaced the backing allocation.
+					oldLength := dst.Length()
+					copies := cap(dst.data)/width + 1
+					if index32 {
+						rows := make([]int32, copies)
+						for i := range rows {
+							rows[i] = 1
+						}
+						require.NoError(t, dst.UnionInt32(dst, rows, mp))
+					} else {
+						rows := make([]int64, copies)
+						for i := range rows {
+							rows[i] = 1
+						}
+						require.NoError(t, dst.Union(dst, rows, mp))
+					}
+					require.Equal(t, oldLength+copies, dst.Length())
+					for row := oldLength; row < dst.Length(); row++ {
+						require.Equal(t, expected[3], dst.data[row*width:(row+1)*width])
+						require.False(t, dst.IsNull(uint64(row)))
+					}
+					// Results own their copied bytes and cannot change with the source.
+					clear(src.data)
+					require.Equal(t, expected[3], dst.data[width:2*width])
+				})
+			}
+		}
+	}
+}
+
+func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_decimal128, types.T_decimal256, types.T_char, types.T_varchar} {
+		varlen := oid == types.T_char || oid == types.T_varchar
+		prefixes := []int{0, 1, 2}
+		if varlen {
+			prefixes = []int{1}
+		}
+		for _, prefix := range prefixes {
+			for _, onlyNulls := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/prefix%d/all_null%t", oid, prefix, onlyNulls), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					a, b, got, want := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
+					t.Cleanup(func() {
+						a.Free(mp)
+						b.Free(mp)
+						got.Free(mp)
+						want.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					})
+					for k, v := range []*Vector{a, b} {
+						if varlen {
+							for row := range 20 {
+								require.NoError(t, AppendBytes(v, []byte(fmt.Sprintf("\xff\x00%d-%d", k, row)), false, mp))
+							}
+						} else {
+							require.NoError(t, v.PreExtend(20, mp))
+							v.SetLength(20)
+							for i := 0; i < 20*oid.TypeLen(); i++ {
+								v.data[i] = byte(i*3 + k*17)
+							}
+						}
+						v.SetNull(2)
+						v.SetNull(4)
+					}
+					if prefix != 0 {
+						if varlen && prefix == 1 {
+							for _, dst := range []*Vector{got, want} {
+								require.NoError(t, AppendBytes(dst, []byte("an existing out-of-line prefix"), false, mp))
+							}
+						} else {
+							sel := int64(0)
+							if prefix == 2 {
+								sel = 2
+							}
+							require.NoError(t, got.UnionOne(a, sel, mp))
+							require.NoError(t, want.UnionOne(a, sel, mp))
+						}
+					}
+					rows := []FixedSourceRow{{a, 8}, {b, 2}, {a, 8}, {b, 0}, {a, 4}, {b, 19}}
+					if onlyNulls {
+						rows = []FixedSourceRow{{a, 2}, {b, 4}, {a, 2}}
+					}
+					used, err := got.TryUnionFlatFixedRows(rows, mp)
+					require.True(t, used)
+					require.NoError(t, err)
+					for _, row := range rows {
+						require.NoError(t, want.UnionOne(row.Vec, row.Row, mp))
+					}
+					require.Equal(t, want.length, got.length)
+					width := oid.TypeLen()
+					for i := 0; i < got.length; i++ {
+						require.Equal(t, want.IsNull(uint64(i)), got.IsNull(uint64(i)))
+						if !want.IsNull(uint64(i)) {
+							if varlen {
+								require.Equal(t, want.GetBytesAt(i), got.GetBytesAt(i))
+							} else {
+								require.Equal(t, want.data[i*width:(i+1)*width], got.data[i*width:(i+1)*width])
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
+	for _, shape := range []string{"const", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
+		t.Run(shape, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.T_int64.ToType()
+			if shape == "unicode" || shape == "out_of_line" {
+				typ = types.New(types.T_varchar, 64, 0)
+				if shape == "unicode" {
+					typ.Charset = types.CharsetUTF8MB4UnicodeCI
+				}
+			}
+			a, b, dst := NewVec(typ, mp), NewVec(typ, mp), NewVec(typ, mp)
+			t.Cleanup(func() { a.Free(mp); b.Free(mp); dst.Free(mp); require.Zero(t, mp.CurrNB()) })
+			for _, v := range []*Vector{a, b} {
+				if typ.IsVarlen() {
+					require.NoError(t, AppendBytes(v, []byte("inline"), false, mp))
+					require.NoError(t, AppendBytes(v, []byte("a string longer than inline storage"), false, mp))
+				} else {
+					require.NoError(t, AppendFixed(v, int64(10), false, mp))
+					require.NoError(t, AppendFixed(v, int64(20), false, mp))
+				}
+			}
+			require.NoError(t, dst.UnionOne(a, 0, mp))
+			rows := []FixedSourceRow{{a, 0}, {b, 1}}
+			switch shape {
+			case "const":
+				b.class = CONSTANT
+			case "alias":
+				rows[1] = FixedSourceRow{dst, 0}
+			case "type":
+				b.typ = types.T_int32.ToType()
+			case "negative":
+				rows[1].Row = -1
+			case "past_end":
+				rows[1].Row = 2
+			case "singleton":
+				rows = rows[:1]
+			}
+			before := append([]byte(nil), dst.data...)
+			used, err := dst.TryUnionFlatFixedRows(rows, mp)
+			require.False(t, used)
+			require.NoError(t, err)
+			require.Equal(t, 1, dst.length)
+			require.Equal(t, before, dst.data)
+		})
+	}
+	for _, nullable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("admission/nullable%t", nullable), func(t *testing.T) {
+			state := newTestVectorAllocationAccount(t, 1, 16)
+			mp := mpool.MustNewZero()
+			src := NewVec(types.T_int64.ToType(), mp)
+			dmp := state.view(t, mp)
+			dst := NewVec(types.T_int64.ToType(), dmp)
+			t.Cleanup(func() {
+				src.Free(mp)
+				dst.Free(dmp)
+				require.Zero(t, mp.CurrNB())
+				finalizeTestVectorAllocationAccount(t, state)
+			})
+			require.NoError(t, AppendFixed(src, int64(10), nullable, mp))
+			require.NoError(t, AppendFixed(src, int64(20), false, mp))
+			used, err := dst.TryUnionFlatFixedRows([]FixedSourceRow{{src, 0}, {src, 1}}, dmp)
+			require.True(t, used)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Zero(t, dst.length)
+			require.Zero(t, state.account.Snapshot().Used)
+		})
+	}
+}
 
 func TestUnionInlineSelection(t *testing.T) {
 	for _, shape := range []string{"inline", "zero-area-noninline", "zero-area-noninline-empty-dest", "nullable", "mixed"} {
@@ -206,7 +503,7 @@ func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
 }
 
 // TestUnionBatchVarlenWindowCopiesOnlyLiveArea is the regression guard for
-// borrowed windows retaining their parent's complete area. UnionBatch receives
+// read-only windows retaining their parent's complete area. UnionBatch receives
 // the window as a whole vector (offset 0, cnt == length), but must copy only the
 // payload referenced by the window's live descriptors.
 func TestUnionBatchVarlenWindowCopiesOnlyLiveArea(t *testing.T) {
@@ -954,4 +1251,97 @@ func TestUnionOneVarlenaAllocationFailureFailsClosed(t *testing.T) {
 	require.True(t, destination.VarlenaAreaIsDisjoint())
 	require.Error(t, destination.UnionOne(source, 0, mp))
 	require.Equal(t, "prefix", destination.GetStringAt(0))
+}
+
+func BenchmarkUnionFixedSelection(b *testing.B) {
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_TS, types.T_decimal128, types.T_Blockid, types.T_Rowid, types.T_decimal256} {
+		for _, rows := range []int{1, 256} {
+			for _, shape := range []string{"flat", "nullable", "constant"} {
+				b.Run(fmt.Sprintf("%s/rows=%d/%s", oid, rows, shape), func(b *testing.B) {
+					mp := mpool.MustNewZero()
+					src, dst := NewVec(oid.ToType(), mp), NewVec(oid.ToType(), mp)
+					b.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+					require.NoError(b, src.PreExtend(1024, mp))
+					src.SetLength(1024)
+					for i := range src.data {
+						src.data[i] = byte(i)
+					}
+					sels := make([]int64, rows)
+					sels32 := make([]int32, rows)
+					for i := range sels {
+						sels[i] = int64((i * 17) % 1024)
+						sels32[i] = int32(sels[i])
+					}
+					if shape == "nullable" {
+						src.GetNulls().Add(17)
+					} else if shape == "constant" {
+						src.SetClass(CONSTANT)
+					}
+					require.NoError(b, dst.Union(src, sels, mp))
+
+					for _, index32 := range []bool{false, true} {
+						b.Run(fmt.Sprintf("int32=%t", index32), func(b *testing.B) {
+							b.ReportAllocs()
+							for range b.N {
+								dst.CleanOnlyData()
+								var err error
+								if index32 {
+									err = dst.UnionInt32(src, sels32, mp)
+								} else {
+									err = dst.Union(src, sels, mp)
+								}
+								if err != nil {
+									b.Fatal(err)
+								}
+							}
+						})
+					}
+				})
+			}
+		}
+	}
+}
+
+func BenchmarkUnionFixedSelectionDensity(b *testing.B) {
+	for _, width := range []int{4, 8} {
+		for _, dense := range []bool{false, true} {
+			shape := "sparse"
+			if dense {
+				shape = "dense"
+			}
+			b.Run(fmt.Sprintf("width%d/%s", width, shape), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				b.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(b, mp.CurrNB()) })
+				typ := types.T_uint32.ToType()
+				if width == 8 {
+					typ = types.T_uint64.ToType()
+				}
+				src, dst := NewVec(typ, mp), NewVec(typ, mp)
+				b.Cleanup(func() { src.Free(mp); dst.Free(mp) })
+				require.NoError(b, src.PreExtend(8192, mp))
+				src.SetLength(8192)
+				for i := range src.data {
+					src.data[i] = byte(i)
+				}
+				rows := make([]int64, 0, 8192)
+				for row := range 8192 {
+					if dense && row%20 != 0 || !dense && row%20 == 0 {
+						rows = append(rows, int64(row))
+					}
+				}
+				require.NoError(b, dst.Union(src, rows, mp))
+				b.SetBytes(int64(len(rows) * width))
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					dst.CleanOnlyData()
+					if err := dst.Union(src, rows, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+			})
+		}
+	}
 }

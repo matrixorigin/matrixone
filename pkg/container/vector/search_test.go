@@ -565,3 +565,150 @@ func TestCollectOffsetsByPrefixInGallopEdgeCases(t *testing.T) {
 		})
 	}
 }
+
+func TestCollectOffsetsByPrefixEqFactory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewVec(types.T_char.ToType(), mp)
+	defer v1.Free(mp)
+
+	AppendBytes(v1, []byte("1111"), false, mp)
+	AppendBytes(v1, []byte("1121"), false, mp)
+	AppendBytes(v1, []byte("1211"), false, mp)
+	AppendBytes(v1, []byte("1221"), false, mp)
+	AppendBytes(v1, []byte("1231"), false, mp)
+	AppendBytes(v1, []byte("1311"), false, mp)
+
+	prefix1 := []byte("01")
+	prefix2 := []byte("12")
+	prefix3 := []byte("14")
+	prefix4 := []byte("113")
+
+	fn1 := CollectOffsetsByPrefixEqFactory(prefix1)
+	fn2 := CollectOffsetsByPrefixEqFactory(prefix2)
+	fn3 := CollectOffsetsByPrefixEqFactory(prefix3)
+	fn4 := CollectOffsetsByPrefixEqFactory(prefix4)
+	off1 := fn1(v1)
+	off2 := fn2(v1)
+	off3 := fn3(v1)
+	off4 := fn4(v1)
+	require.Equal(t, 0, len(off1))
+	require.Equal(t, []int64{2, 3, 4}, off2)
+	require.Equal(t, 0, len(off3))
+	require.Equal(t, 0, len(off4))
+}
+
+func TestCollectOffsetsByPrefixBetweenFactory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewVec(types.T_char.ToType(), mp)
+	defer v1.Free(mp)
+
+	require.NoError(t, AppendStringList(v1, []string{"1111", "1121", "1211", "1221", "1231", "1311"}, nil, mp))
+	cases := []struct {
+		name        string
+		left, right string
+		want        []int64
+	}{
+		{"forward", "11", "12", []int64{0, 1, 2, 3, 4}},
+		{"forward_gap", "113", "124", []int64{2, 3, 4}},
+		{"equal_prefix", "12", "12", []int64{2, 3, 4}},
+		{"equal_key", "1221", "1221", []int64{3}},
+		{"short_upper_prefix", "1221", "12", []int64{3, 4}},
+		{"reversed", "13", "11", nil},
+		{"reversed_gap", "125", "113", nil},
+		{"reversed_to_before_block", "12", "01", nil},
+		{"reversed_within_prefix", "1230", "121", nil},
+		{"empty_gap", "113", "114", nil},
+		{"before_block", "00", "01", nil},
+		{"after_block", "14", "15", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			left, right := []byte(tc.left), []byte(tc.right)
+			got := CollectOffsetsByPrefixBetweenFactory(left, right)(v1)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, LinearCollectOffsetsByPrefixBetweenFactory(left, right)(v1), got)
+		})
+	}
+	t.Run("empty_vector", func(t *testing.T) {
+		v := NewVec(types.T_char.ToType(), mp)
+		defer v.Free(mp)
+		require.Nil(t, CollectOffsetsByPrefixBetweenFactory([]byte("13"), []byte("11"))(v))
+	})
+}
+
+func TestCollectOffsetsByPrefixInRangeFactory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewVec(types.T_char.ToType(), mp)
+	defer v1.Free(mp)
+
+	// Sorted data: keys with prefixes "11", "11", "12", "12", "12", "13"
+	AppendBytes(v1, []byte("1111"), false, mp)
+	AppendBytes(v1, []byte("1121"), false, mp)
+	AppendBytes(v1, []byte("1211"), false, mp)
+	AppendBytes(v1, []byte("1221"), false, mp)
+	AppendBytes(v1, []byte("1231"), false, mp)
+	AppendBytes(v1, []byte("1311"), false, mp)
+
+	lb := []byte("11")
+	ub := []byte("12")
+
+	// hint=0: [lb, ub] — both closed
+	fn0 := CollectOffsetsByPrefixInRangeFactory(lb, ub, 0)
+	require.Equal(t, []int64{0, 1, 2, 3, 4}, fn0(v1))
+
+	// hint=1: (lb, ub] — left open
+	fn1 := CollectOffsetsByPrefixInRangeFactory(lb, ub, 1)
+	require.Equal(t, []int64{2, 3, 4}, fn1(v1))
+
+	// hint=2: [lb, ub) — right open
+	fn2 := CollectOffsetsByPrefixInRangeFactory(lb, ub, 2)
+	require.Equal(t, []int64{0, 1}, fn2(v1))
+
+	// hint=3: (lb, ub) — both open
+	fn3 := CollectOffsetsByPrefixInRangeFactory(lb, ub, 3)
+	require.Nil(t, fn3(v1))
+
+	// Asymmetric bounds: short prefix fence as UB
+	lb2 := []byte("1121")
+	ub2 := []byte("12")
+	fn4 := CollectOffsetsByPrefixInRangeFactory(lb2, ub2, 1) // (lb2, ub2]
+	require.Equal(t, []int64{2, 3, 4}, fn4(v1))
+
+	// Empty vector
+	v2 := NewVec(types.T_char.ToType(), mp)
+	defer v2.Free(mp)
+	fn5 := CollectOffsetsByPrefixInRangeFactory(lb, ub, 0)
+	require.Nil(t, fn5(v2))
+}
+
+func TestLinearCollectOffsetsByPrefixInRangeFactory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewVec(types.T_char.ToType(), mp)
+	defer v1.Free(mp)
+
+	// Unsorted data
+	AppendBytes(v1, []byte("1211"), false, mp)
+	AppendBytes(v1, []byte("1111"), false, mp)
+	AppendBytes(v1, []byte("1311"), false, mp)
+	AppendBytes(v1, []byte("1121"), false, mp)
+	AppendBytes(v1, []byte("1231"), false, mp)
+
+	lb := []byte("11")
+	ub := []byte("12")
+
+	// hint=0: [lb, ub]
+	fn0 := LinearCollectOffsetsByPrefixInRangeFactory(lb, ub, 0)
+	require.Equal(t, []int64{0, 1, 3, 4}, fn0(v1))
+
+	// hint=1: (lb, ub]
+	fn1 := LinearCollectOffsetsByPrefixInRangeFactory(lb, ub, 1)
+	require.Equal(t, []int64{0, 4}, fn1(v1))
+
+	// hint=2: [lb, ub)
+	fn2 := LinearCollectOffsetsByPrefixInRangeFactory(lb, ub, 2)
+	require.Equal(t, []int64{1, 3}, fn2(v1))
+
+	// hint=3: (lb, ub)
+	fn3 := LinearCollectOffsetsByPrefixInRangeFactory(lb, ub, 3)
+	require.Nil(t, fn3(v1))
+}

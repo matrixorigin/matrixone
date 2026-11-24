@@ -3193,71 +3193,6 @@ func TestGetAny(t *testing.T) {
 	}
 }
 
-func BenchmarkUnmarshal(b *testing.B) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int8.ToType(), mp)
-	AppendAny(source, int8(42), false, mp)
-	data, err := source.MarshalBinary()
-	if err != nil {
-		b.Fatal(err)
-	}
-	source.Free(mp)
-	var target Vector
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		err := target.UnmarshalBinary(data)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkToTypedSlice(b *testing.B) {
-	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int8.ToType(), mp)
-	AppendAny(vec, int8(42), false, mp)
-	var slice []int8
-	b.Run("ToSlice", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			ToSlice(vec, &slice)
-		}
-	})
-	if slice[0] != 42 {
-		b.Fatalf("got %v", slice)
-	}
-	b.Run("ToSliceNoTypeCheck", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			ToSliceNoTypeCheck(vec, &slice)
-		}
-	})
-	if slice[0] != 42 {
-		b.Fatalf("got %v", slice)
-	}
-}
-
-func BenchmarkToFixedCol(b *testing.B) {
-	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int8.ToType(), mp)
-	AppendAny(vec, int8(42), false, mp)
-	b.ResetTimer()
-	var slice []int8
-	for i := 0; i < b.N; i++ {
-		ToFixedCol[int8](vec, &slice)
-	}
-}
-
-func BenchmarkMustFixedCol(b *testing.B) {
-	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int8.ToType(), mp)
-	AppendAny(vec, int8(42), false, mp)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		MustFixedColWithTypeCheck[int8](vec)
-	}
-}
-
 func TestRowToString(t *testing.T) {
 	t.Run("low_precision", func(t *testing.T) {
 		testLowPrecisionFloatRowStrings(t, types.T_bf16,
@@ -4102,7 +4037,7 @@ func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 		"read access must not mutate vector metadata")
 	require.NoError(t, SetFixedAtNoTypeCheck(flat, 1, values[0]))
 	require.False(t, flat.VarlenaAreaIsDisjoint(),
-		"installing an arbitrary descriptor must invalidate the proof")
+		"an installed descriptor that shares bytes is not disjoint")
 
 	flat.ResetWithSameType()
 	require.True(t, flat.VarlenaAreaIsDisjoint())
@@ -4114,7 +4049,7 @@ func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 		"a null append must clear a stale descriptor from reused capacity")
 	flat.GetNulls().Del(0)
 	require.True(t, flat.VarlenaAreaIsDisjoint(),
-		"null-bitmap changes cannot invalidate a descriptor-level proof")
+		"the null bitmap does not change descriptor disjointness")
 
 	flat.ResetWithSameType()
 	for range 2 {
@@ -4768,7 +4703,7 @@ func minMaxFixture[T types.FixedSizeT](tb testing.TB, typ types.T, values []T, p
 	})
 	v := NewVec(typ.ToType(), mp)
 	tb.Cleanup(func() { v.Free(mp) })
-	if backing == "borrowed" {
+	if backing == "readonly" {
 		// A read-only reference vector over memory the test keeps alive.
 		v = NewVecWithData(typ.ToType(), len(values), types.EncodeSlice(values), nil, nil)
 	} else {
@@ -4780,14 +4715,14 @@ func minMaxFixture[T types.FixedSizeT](tb testing.TB, typ types.T, values []T, p
 		isNull := pattern == "all" || pattern == "sparse" && i%17 == 0 || pattern == "dense" && i%3 != 0
 		if isNull {
 			nulls++
-			if backing == "borrowed" {
+			if backing == "readonly" {
 				validity[(i+3)/8] &^= 1 << uint((i+3)%8)
 			} else {
 				v.SetNull(uint64(i))
 			}
 		}
 	}
-	if backing == "borrowed" && nulls != 0 {
+	if backing == "readonly" && nulls != 0 {
 		v.GetNulls().GetBitmap().InitWithInvertedBits(validity, 3, len(values))
 	}
 	return v
@@ -4800,7 +4735,7 @@ func TestGetMinMaxValueFixed(t *testing.T) {
 	for _, n := range []int{0, 1, 2, 7, 8, 15, 16, 31, 32, 33, 63, 64, 65, 129} {
 		for _, pattern := range []string{"false", "true", "early", "late", "alternating"} {
 			for _, nulls := range []string{"none", "sparse", "dense", "all"} {
-				for _, backing := range []string{"owned", "borrowed"} {
+				for _, backing := range []string{"owned", "readonly"} {
 					t.Run(fmt.Sprintf("%d/%s/%s/%s", n, pattern, nulls, backing), func(t *testing.T) {
 						bs, ints := minMaxValues(n, pattern)
 						for _, v := range []*Vector{minMaxFixture(t, types.T_bool, bs, nulls, backing), minMaxFixture(t, types.T_int64, ints, nulls, backing)} {
@@ -4840,7 +4775,7 @@ func TestGetMinMaxValueFixed(t *testing.T) {
 							after, err := v.MarshalBinary()
 							require.NoError(t, err)
 							require.Equal(t, before, after)
-							if backing == "borrowed" && n != 0 {
+							if backing == "readonly" && n != 0 {
 								require.True(t, v.IsReadOnly())
 							}
 						}
@@ -4906,7 +4841,7 @@ func TestGetMinMaxValueInt64Windows(t *testing.T) {
 					}
 				}
 			}
-			for _, backing := range []string{"owned", "borrowed"} {
+			for _, backing := range []string{"owned", "readonly"} {
 				v := minMaxFixture(t, types.T_int64, xs, "none", backing)
 				w, err := v.Window(3, n+3)
 				require.NoError(t, err)
@@ -5453,4 +5388,316 @@ func TestVectorDecodersRoundTrip(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Exercise every ordered deletion set, including empty, prefix, suffix, and all rows.
+func TestShrinkNegateOrderedSubsets(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	for n := 0; n <= 7; n++ {
+		for mask := 0; mask < 1<<n; mask++ {
+			func() {
+				v := NewVec(types.T_int64.ToType(), mp)
+				defer v.Free(mp)
+				values := make([]int64, n)
+				sels := make([]int64, 0, n)
+				want := make([]int64, 0, n)
+				for i := range values {
+					values[i] = int64(i + 10)
+					if mask&(1<<i) != 0 {
+						sels = append(sels, int64(i))
+					} else {
+						want = append(want, values[i])
+					}
+				}
+				require.NoError(t, AppendFixedList(v, values, nil, mp), "n=%d mask=%d", n, mask)
+				require.NoError(t, v.Shrink(sels, true, mp), "n=%d mask=%d", n, mask)
+				got := MustFixedColNoTypeCheck[int64](v)
+				require.Equal(t, len(want), len(got), "n=%d mask=%d", n, mask)
+				for i := range want {
+					require.Equal(t, want[i], got[i], "n=%d mask=%d index=%d", n, mask, i)
+				}
+			}()
+		}
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestVarlenaAreaIsDisjointEdgeCases(t *testing.T) {
+	mp := mpool.MustNewZero()
+	long := func(c string) []byte { return []byte(strings.Repeat(c, 40)) }
+
+	build := func(t *testing.T) *Vector {
+		v := NewVec(types.T_varchar.ToType(), mp)
+		for _, c := range []string{"a", "b", "c"} {
+			require.NoError(t, AppendBytes(v, long(c), false, mp))
+		}
+		require.NoError(t, AppendBytes(v, []byte("inline"), false, mp))
+		return v
+	}
+
+	t.Run("append built", func(t *testing.T) {
+		v := build(t)
+		defer v.Free(mp)
+		require.True(t, v.VarlenaAreaIsDisjoint())
+	})
+
+	t.Run("shuffled stays disjoint", func(t *testing.T) {
+		v := build(t)
+		defer v.Free(mp)
+		require.NoError(t, v.Shuffle([]int64{2, 0, 3, 1}, mp))
+		require.True(t, v.VarlenaAreaIsDisjoint())
+		require.Equal(t, long("c"), v.GetBytesAt(0))
+	})
+
+	t.Run("aliased descriptors", func(t *testing.T) {
+		v := build(t)
+		defer v.Free(mp)
+		values := MustFixedColNoTypeCheck[types.Varlena](v)
+		values[2] = values[0]
+		require.False(t, v.VarlenaAreaIsDisjoint())
+		// A NULL row's stale descriptor is not live.
+		v.SetNull(2)
+		require.True(t, v.VarlenaAreaIsDisjoint())
+	})
+
+	t.Run("out of area", func(t *testing.T) {
+		v := build(t)
+		defer v.Free(mp)
+		v.area = v.area[:len(v.area)-1]
+		require.False(t, v.VarlenaAreaIsDisjoint())
+	})
+
+	t.Run("const and fixed never report", func(t *testing.T) {
+		c, err := NewConstBytes(types.T_varchar.ToType(), long("z"), 3, mp)
+		require.NoError(t, err)
+		defer c.Free(mp)
+		require.False(t, c.VarlenaAreaIsDisjoint())
+		f := NewVec(types.T_int64.ToType(), mp)
+		require.False(t, f.VarlenaAreaIsDisjoint())
+	})
+}
+
+func TestTypedReadLogicalBoundsAndConstantRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	flat := NewVec(types.T_int64.ToType(), mp)
+	defer flat.Free(mp)
+	require.NoError(t, flat.PreExtend(32, mp))
+	require.NoError(t, AppendFixedList(flat, []int64{11, 22}, nil, mp))
+	require.Equal(t, int64(11), GetFixedAtNoTypeCheck[int64](flat, 0))
+	require.Equal(t, int64(22), GetFixedAtNoTypeCheck[int64](flat, 1))
+	for _, row := range []int{-1, 2, 31} {
+		require.Panics(t, func() { _ = GetFixedAtNoTypeCheck[int64](flat, row) })
+	}
+	constant, err := NewConstFixed(types.T_int64.ToType(), int64(42), 2, mp)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	for _, row := range []int{-1, 0, 1, 100} {
+		require.Equal(t, int64(42), GetFixedAtNoTypeCheck[int64](constant, row))
+	}
+	flat.ResetWithSameType()
+	require.Panics(t, func() { _ = GetFixedAtNoTypeCheck[int64](flat, 0) })
+	constantNull := NewConstNull(types.T_int64.ToType(), 2, mp)
+	defer constantNull.Free(mp)
+	require.Panics(t, func() { _ = GetFixedAtNoTypeCheck[int64](constantNull, 0) })
+}
+
+func TestTypedReadBytesRetainsAliasesAndBounds(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := NewVec(types.T_varbinary.ToType(), mp)
+	defer vec.Free(mp)
+	require.NoError(t, vec.PreExtend(32, mp))
+	values := [][]byte{[]byte("inline"), bytes.Repeat([]byte("x"), 64), {}}
+	require.NoError(t, AppendBytesList(vec, values, nil, mp))
+	for row, want := range values {
+		require.Equal(t, want, vec.GetBytesAt(row))
+	}
+	for _, row := range []int{0, 1} {
+		value := vec.GetBytesAt(row)
+		value[0] = 'z'
+		require.Equal(t, byte('z'), vec.GetBytesAt(row)[0])
+	}
+	for _, row := range []int{-1, 3, 31} {
+		require.Panics(t, func() { _ = vec.GetBytesAt(row) })
+	}
+	constant, err := NewConstBytes(types.T_varbinary.ToType(), []byte("constant"), 2, mp)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	for _, row := range []int{-1, 0, 1, 100} {
+		require.Equal(t, []byte("constant"), constant.GetBytesAt(row))
+	}
+	vec.ResetWithSameType()
+	require.Panics(t, func() { _ = vec.GetBytesAt(0) })
+}
+
+var typedReadBenchSink int64
+
+func BenchmarkVectorTypedRead(b *testing.B) {
+	const rows = 2048
+	for _, constant := range []bool{false, true} {
+		name := "int64_flat_2048"
+		if constant {
+			name = "int64_const_2048"
+		}
+		b.Run(name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			vec := NewVec(types.T_int64.ToType(), mp)
+			defer func() { vec.Free(mp) }()
+			if constant {
+				vec.Free(mp)
+				var err error
+				vec, err = NewConstFixed(types.T_int64.ToType(), int64(42), rows, mp)
+				require.NoError(b, err)
+			} else {
+				values := make([]int64, rows)
+				for i := range values {
+					values[i] = 42
+				}
+				require.NoError(b, AppendFixedList(vec, values, nil, mp))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				var sum int64
+				for row := 0; row < rows; row++ {
+					sum += GetFixedAtNoTypeCheck[int64](vec, row)
+				}
+				typedReadBenchSink = sum
+			}
+			b.StopTimer()
+			require.Equal(b, int64(rows*42), typedReadBenchSink)
+		})
+	}
+	b.Run("bool_flat_2048", func(b *testing.B) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		vec := NewVec(types.T_bool.ToType(), mp)
+		defer vec.Free(mp)
+		values := make([]bool, rows)
+		for row := range values {
+			values[row] = row%2 == 0
+		}
+		require.NoError(b, AppendFixedList(vec, values, nil, mp))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			var sum int64
+			for row := 0; row < rows; row++ {
+				if GetFixedAtNoTypeCheck[bool](vec, row) {
+					sum++
+				}
+			}
+			typedReadBenchSink = sum
+		}
+		b.StopTimer()
+		require.Equal(b, int64(rows/2), typedReadBenchSink)
+	})
+	for _, size := range []int{6, 64} {
+		name := "bytes_inline_2048"
+		if size == 64 {
+			name = "bytes_area_2048"
+		}
+		b.Run(name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			vec := NewVec(types.T_varbinary.ToType(), mp)
+			defer vec.Free(mp)
+			values := make([][]byte, rows)
+			for row := range values {
+				values[row] = bytes.Repeat([]byte("x"), size)
+			}
+			require.NoError(b, AppendBytesList(vec, values, nil, mp))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				var sum int64
+				for row := 0; row < rows; row++ {
+					value := vec.GetBytesAt(row)
+					sum += int64(len(value)) + int64(value[0])
+				}
+				typedReadBenchSink = sum
+			}
+			b.StopTimer()
+			require.Equal(b, int64(rows*(size+int('x'))), typedReadBenchSink)
+		})
+	}
+}
+
+// exerciseNarrowArray drives the generic narrow-vector (bf16/f16/int8/uint8) array
+// functions added for quantized vector columns: Append*, GetArrayAt, NewConstArray,
+// SetConstArray, and the String()/RowToString() narrow branches.
+func exerciseNarrowArray[T types.ArrayElement](t *testing.T, oid types.T, a, b []T) {
+	mp := mpool.MustNewZero()
+	dim := int32(len(a))
+
+	// AppendArray (value + null) then AppendArrayList
+	vec := NewVec(types.New(oid, dim, 0), mp)
+	require.NoError(t, AppendArray[T](vec, a, false, mp))
+	require.NoError(t, AppendArray[T](vec, nil, true, mp)) // null row
+	require.NoError(t, AppendArrayList[T](vec, [][]T{a, b}, nil, mp))
+	require.Equal(t, a, GetArrayAt[T](vec, 0))
+	require.Equal(t, b, GetArrayAt[T](vec, 3))
+	_ = vec.String()       // String() narrow branch (multi-row + null bitmap)
+	_ = vec.RowToString(0) // RowToString -> implArrayRowToString narrow branch
+	_ = vec.RowToString(2)
+	vec.Free(mp)
+
+	// NewConstArray + GetArrayAt + single-row String()
+	cv, err := NewConstArray[T](types.New(oid, dim, 0), a, 2, mp)
+	require.NoError(t, err)
+	require.Equal(t, a, GetArrayAt[T](cv, 0))
+	_ = cv.String()
+	_ = cv.RowToString(0)
+	cv.Free(mp)
+
+	// SetConstArray
+	sv := NewVec(types.New(oid, dim, 0), mp)
+	require.NoError(t, SetConstArray[T](sv, b, 3, mp))
+	require.Equal(t, b, GetArrayAt[T](sv, 0))
+	sv.Free(mp)
+
+	// single-row String()/RowToString — the len(col)==1 narrow branch
+	one := NewVec(types.New(oid, dim, 0), mp)
+	require.NoError(t, AppendArray[T](one, a, false, mp))
+	_ = one.String()
+	_ = one.RowToString(0)
+	one.Free(mp)
+
+	// InplaceSort narrow branch (unsorted input with a duplicate)
+	srt := NewVec(types.New(oid, dim, 0), mp)
+	require.NoError(t, AppendArrayList[T](srt, [][]T{b, a, a}, nil, mp))
+	require.NoError(t, srt.InplaceSort(mp))
+	srt.Free(mp)
+
+	// InplaceSortAndCompact narrow branch (sort + dedup)
+	cmp := NewVec(types.New(oid, dim, 0), mp)
+	require.NoError(t, AppendArrayList[T](cmp, [][]T{b, a, a}, nil, mp))
+	require.NoError(t, cmp.InplaceSortAndCompact(mp))
+	cmp.Free(mp)
+
+	// GetMinMaxValue narrow branch
+	mm := NewVec(types.New(oid, dim, 0), mp)
+	require.NoError(t, AppendArrayList[T](mm, [][]T{a, b}, nil, mp))
+	_, _, _ = mm.GetMinMaxValue()
+	mm.Free(mp)
+}
+
+func TestNarrowArrayVectorOps(t *testing.T) {
+	t.Run("bf16", func(t *testing.T) {
+		exerciseNarrowArray(t, types.T_array_bf16,
+			types.Float32ToBF16Slice([]float32{1, 2, 3}), types.Float32ToBF16Slice([]float32{4, 5, 6}))
+	})
+	t.Run("f16", func(t *testing.T) {
+		exerciseNarrowArray(t, types.T_array_float16,
+			types.Float32ToFloat16Slice([]float32{1, 2, 3}), types.Float32ToFloat16Slice([]float32{4, 5, 6}))
+	})
+	t.Run("int8", func(t *testing.T) {
+		exerciseNarrowArray(t, types.T_array_int8, []int8{1, 2, 3}, []int8{4, 5, 6})
+	})
+	t.Run("uint8", func(t *testing.T) {
+		exerciseNarrowArray(t, types.T_array_uint8, []uint8{1, 2, 3}, []uint8{4, 5, 6})
+	})
 }
