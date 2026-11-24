@@ -689,6 +689,11 @@ func (d *DiskCache) fetchRange(
 	}
 	if err := read(ctx, start, out); err != nil {
 		if errors.Is(err, errPrefetchMissed) {
+			// An object that caches its bytes and ended without them may have found them
+			// cached in a range.
+			if o.caches() && d.readCachedBytes(ctx, filePath, start, out) {
+				return out, true, true, nil
+			}
 			return nil, false, false, nil
 		}
 		return nil, false, false, objectReadError(err, filePath)
@@ -1120,11 +1125,13 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 			continue
 		}
 		var decodeErr error
-		err := fl.use(ctx, e.Offset, e.Size, func(bs []byte) error {
-			decodeErr = e.readFrom(ctx, bytes.NewReader(bs), d.cacheDataAllocator)
-			return decodeErr
-		})
-		fl.release()
+		err := func() error {
+			defer fl.release()
+			return fl.use(ctx, e.Offset, e.Size, func(bs []byte) error {
+				decodeErr = e.readFrom(ctx, bytes.NewReader(bs), d.cacheDataAllocator)
+				return decodeErr
+			})
+		}()
 		if decodeErr != nil {
 			return decodeErr
 		}
@@ -1146,6 +1153,17 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		return readCache(ctx, d, vector)
 	}
 	return nil
+}
+
+// readCachedBytes reads len(dst) bytes at offset of the object at filePath from the
+// smallest cached range holding them, reporting whether it read them.
+func (d *DiskCache) readCachedBytes(ctx context.Context, filePath string, offset int64, dst []byte) bool {
+	r, ok := smallestContaining(d.ranges.of(d.rangeObjectKey(filePath)), offset, int64(len(dst)), nil)
+	if !ok || !d.cache.Contains(r.diskPath) {
+		return false
+	}
+	var deadline time.Time
+	return d.readCachedRange(ctx, r, offset, dst, &deadline)
 }
 
 // readCachedRange reads len(dst) bytes at offset of the object from the cached range r.
