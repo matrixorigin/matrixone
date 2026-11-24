@@ -100,6 +100,12 @@ func (d *DataCache) Get(_ context.Context, key fscache.CacheKey) (fscache.Data, 
 	return v.Data, ok
 }
 
+// TryGet retains a hit for the caller and treats a busy shard as a miss.
+func (d *DataCache) TryGet(key fscache.CacheKey) (fscache.Data, bool) {
+	v, _, ok, _ := d.c.TryGet(key, nil)
+	return v.Data, ok
+}
+
 func (d *DataCache) GetWithPinAdmission(_ context.Context, key fscache.CacheKey, admit fscache.DataCachePinAdmission) (fscache.Data, func(), bool, error) {
 	var a func(size int64) (func(), error)
 	if admit != nil {

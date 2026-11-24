@@ -35,155 +35,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestObserveNullKeysUsesColumnLevelGroupingSentinel(t *testing.T) {
+func TestObserveNullKeysCountsEveryNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	newVec := func(nullRows, groupingRows []uint64) *vector.Vector {
-		vec := vector.NewVec(types.T_int32.ToType(), mp)
-		require.NoError(t, vector.AppendFixedList(
-			vec,
-			[]int32{1, 2},
-			nil,
-			mp,
-		))
-		for _, row := range nullRows {
-			vec.GetNulls().Add(row)
-		}
-		for _, row := range groupingRows {
-			vec.GetGrouping().Add(row)
-		}
-		return vec
-	}
-
 	tests := []struct {
-		name         string
-		nullRows     []uint64
-		groupingRows []uint64
-		want         bool
+		name     string
+		nullRows []uint64
+		constant bool
+		want     bool
 	}{
-		{
-			name:         "grouping sentinel masks null in same row",
-			nullRows:     []uint64{0},
-			groupingRows: []uint64{0},
-			want:         false,
-		},
-		{
-			name:         "full grouping is sentinel",
-			nullRows:     []uint64{0, 1},
-			groupingRows: []uint64{0, 1},
-			want:         false,
-		},
-		{
-			name:         "partial grouping without null",
-			groupingRows: []uint64{0},
-			want:         false,
-		},
-		{
-			name:         "null outside partial grouping is retained",
-			nullRows:     []uint64{1},
-			groupingRows: []uint64{0},
-			want:         true,
-		},
+		{name: "no null", want: false},
+		{name: "partial null", nullRows: []uint64{1}, want: true},
+		{name: "all null", nullRows: []uint64{0, 1}, want: true},
+		{name: "const null", constant: true, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			vec := newVec(test.nullRows, test.groupingRows)
+			var vec *vector.Vector
+			if test.constant {
+				vec = vector.NewConstNull(types.T_int32.ToType(), 2, mp)
+			} else {
+				vec = vector.NewVec(types.T_int32.ToType(), mp)
+				require.NoError(t, vector.AppendFixedList(vec, []int32{1, 2}, nil, mp))
+				for _, row := range test.nullRows {
+					vec.GetNulls().Add(row)
+				}
+			}
 			defer vec.Free(mp)
 			builder := HashmapBuilder{TrackNullKeys: true}
 			builder.observeNullKeys([]*vector.Vector{vec})
 			require.Equal(t, test.want, builder.HasNullKey)
 		})
 	}
-}
-
-func TestBuildHashmapPreservesRowwiseGroupingAcrossCopiedBatchMerge(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		groupFirst bool
-		columns    int
-	}{
-		{name: "grouping then ordinary", groupFirst: true, columns: 1},
-		{name: "ordinary then grouping", groupFirst: false, columns: 1},
-		{name: "multi-column grouping pattern", groupFirst: true, columns: 2},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-			defer proc.Free()
-			builder := newTestHashmapBuilder(t)
-			defer builder.Free(proc)
-
-			exprs := make([]*plan.Expr, test.columns)
-			for column := range exprs {
-				exprs[column] = newExpr(int32(column), types.T_int32.ToType())
-			}
-			require.NoError(t, builder.Prepare(exprs, -1, -1, nil, proc))
-
-			appendInput := func(grouping bool, groupingColumn int) {
-				input := batch.NewWithSize(test.columns)
-				for column := 0; column < test.columns; column++ {
-					if grouping && column == groupingColumn {
-						input.Vecs[column] = vector.NewRollupConst(
-							types.T_int32.ToType(), 1, proc.Mp(),
-						)
-					} else {
-						input.Vecs[column] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
-						require.NoError(t, vector.AppendFixed(
-							input.Vecs[column], int32(column), false, proc.Mp(),
-						))
-					}
-				}
-				input.SetRowCount(1)
-				require.NoError(t, builder.CopyBuildBatch(input, proc))
-				builder.InputBatchRowCount++
-				input.Clean(proc.Mp())
-			}
-
-			appendInput(test.groupFirst, 0)
-			if test.columns == 2 {
-				// A different grouping column in the later row proves that the
-				// per-column bit pattern survives tail coalescing.
-				appendInput(true, 1)
-			} else {
-				appendInput(!test.groupFirst, 0)
-			}
-
-			require.Len(t, builder.Batches.Buf, 1)
-			require.Equal(t, 2, builder.Batches.Buf[0].RowCount())
-			require.False(t, builder.Batches.Buf[0].Vecs[0].IsGrouping())
-			require.True(t, builder.Batches.Buf[0].Vecs[0].HasGrouping())
-
-			require.NoError(t, builder.BuildHashmap(false, false, false, proc))
-			require.Nil(t, builder.IntHashMap)
-			require.NotNil(t, builder.StrHashMap)
-			require.Equal(t, uint64(2), builder.StrHashMap.GroupCount())
-		})
-	}
-}
-
-func TestBuildHashmapDetectsGroupingForOriginalBuildRelation(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	builder := newTestHashmapBuilder(t)
-	defer builder.Free(proc)
-
-	expr := newExpr(0, types.T_int32.ToType())
-	expr.GetCol().RelPos = 1
-	require.NoError(t, builder.Prepare([]*plan.Expr{expr}, -1, -1, nil, proc))
-
-	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
-	require.NoError(t, vector.AppendFixedList(
-		input.Vecs[0], []int32{0, 0}, nil, proc.Mp(),
-	))
-	input.Vecs[0].GetGrouping().Add(1)
-	input.SetRowCount(2)
-	require.NoError(t, builder.CopyBuildBatch(input, proc))
-	builder.InputBatchRowCount = input.RowCount()
-	input.Clean(proc.Mp())
-
-	require.NoError(t, builder.BuildHashmap(false, false, false, proc))
-	require.Nil(t, builder.IntHashMap)
-	require.NotNil(t, builder.StrHashMap)
-	require.Equal(t, uint64(2), builder.StrHashMap.GroupCount())
 }
 
 func TestBuildHashMap(t *testing.T) {

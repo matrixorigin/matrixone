@@ -257,36 +257,6 @@ func TestDecimal128ValidityPreservesMultiplyOverflow(t *testing.T) {
 	require.Zero(t, root.resultVector.GetResultVector().GetNulls().GetBitmap().CapWords())
 }
 
-func TestDecimal128ValidityMetadataFallback(t *testing.T) {
-	for _, shape := range []string{"cast-grouping"} {
-		t.Run(shape, func(t *testing.T) {
-			proc, allocation, _ := dependentTestAllocation(t)
-			typ := types.New(types.T_decimal64, 15, 2)
-			input := batch.NewWithSize(2)
-			t.Cleanup(func() { input.Clean(proc.Mp()) })
-			for side := range 2 {
-				input.Vecs[side] = vector.NewVec(typ, proc.Mp())
-				appendValidityDecimal(t, proc, input.Vecs[side], 100)
-			}
-			input.SetRowCount(1)
-			col := func(i int32) *plan.Expr {
-				return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: i}}}
-			}
-			expression := bindTestFunction(t, proc, "*", col(0), col(1))
-			if shape == "cast-grouping" {
-				expression = bindTestCast(t, proc, 0, col(0), types.New(types.T_decimal128, 38, 2))
-				input.Vecs[0].GetGrouping().Add(0)
-			}
-			executor, err := NewExpressionExecutorWithAllocation(proc, expression, allocation)
-			require.NoError(t, err)
-			t.Cleanup(executor.Free)
-			out, err := executor.Eval(proc, []*batch.Batch{input}, nil)
-			require.NoError(t, err)
-			require.False(t, out.HasNull())
-		})
-	}
-}
-
 func TestDecimal128ValidityQ17Predicate(t *testing.T) {
 	proc, allocation, _ := dependentTestAllocation(t)
 	quantity := types.New(types.T_decimal64, 15, 2)

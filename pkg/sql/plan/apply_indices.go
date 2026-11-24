@@ -2596,6 +2596,10 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
 	best := regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
+	var sampleGroup [engine.MaxPointSampleCandidates]indexPointAccess
+	var sampleCount int
+	sampleEligible := !ignoreStats && !preferSortedScan && !builder.isReusablePlan() && len(spatialIndexes) == 0 &&
+		len(indexes) >= 2 && len(indexes) <= len(sampleGroup)
 	prefixEvaluationChecked, prefixEvaluationSafe := false, false
 	consider := func(candidate regularIndexAccessCandidate, affectsFallback bool) (bool, error) {
 		prefixCandidate := false
@@ -2672,6 +2676,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
 		}
 		work, skip, valid := scoring.scoreWithEstimateAndKeySet(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape, estimate, candidate.keySetSize)
 		candidate.work = work
+		if sampleEligible {
+			if !valid || !skip && (candidate.observation != nil || candidate.filterType != EqualIndexCondition ||
+				candidate.shape != encodedRegularIndexCostBackfill || idxDef.Unique || sampleCount == len(sampleGroup)) {
+				sampleEligible = false
+			} else if !skip {
+				sampleGroup[sampleCount] = indexPointAccess{candidate.indexPos, candidate.filterIdx}
+				sampleCount++
+			}
+		}
 		if candidate.observation != nil {
 			if valid && !skip && work < candidate.observation.baseWork && (best.indexPos == -1 || work < best.work) {
 				best = candidate
@@ -2825,6 +2838,37 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
 		best = fallback
 	}
 
+	originalBest := best
+	if sampleEligible && best.indexPos != -1 && sampleCount > 1 {
+		group := sampleGroup[:sampleCount]
+		if intervals, ok := builder.observePointIndexMatches(node, indexes, group); ok {
+			var work [engine.MaxPointSampleCandidates]indexPointInterval
+			for i, access := range group {
+				idx := indexes[access.index]
+				lower, _, lo := costCtx.scoreWithPointSample(idx, access.filters, nil, encodedRegularIndexCostBackfill, nil, 0, intervals[i].lower)
+				upper, _, hi := costCtx.scoreWithPointSample(idx, access.filters, nil, encodedRegularIndexCostBackfill, nil, 0, intervals[i].upper)
+				if !lo || !hi {
+					sampleEligible = false
+					break
+				}
+				work[i] = indexPointInterval{lower, upper}
+			}
+			if sampleEligible {
+				winner := separatedPointSampleWinner(work[:sampleCount])
+				// Sampled candidates keep every residual on the base scan.
+				// The sampled key's lower bound also bounds the filter's build rows.
+				if winner >= 0 && group[winner].index != best.indexPos &&
+					!costCtx.backfillCapacityExceeded(node.Stats.TableCnt*intervals[winner].lower) {
+					best.indexPos = group[winner].index
+					best.filterIdx = group[winner].filters
+				}
+			}
+		}
+		if cause := context.Cause(builder.GetContext()); cause != nil {
+			return nodeID, cause
+		}
+	}
+
 	// Optional observations happen only after ordinary matching has finished.
 	// Existing winners and unscorable fallbacks retain priority.
 	if best.indexPos == -1 && fallback.indexPos == -1 && len(necessaryIndexes) > 0 {
@@ -2914,7 +2958,17 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndexAttempt(
 				return retryKeySet(best.indexPos)
 			}
 		}
-		retID, idxTableNodeID := builder.applyIndexJoin(idxDef, node, best.filterType, best.filterIdx, scanSnapshot, reservation)
+		var retID, idxTableNodeID int32
+		if sampleEligible && originalBest.indexPos >= 0 && best.indexPos != originalBest.indexPos {
+			retID, idxTableNodeID = builder.applyIndexJoinWithFallback(idxDef, node, best.filterType, best.filterIdx, scanSnapshot, true)
+			if idxTableNodeID == -1 {
+				best = originalBest
+				idxDef = indexes[best.indexPos]
+				retID, idxTableNodeID = builder.applyIndexJoin(idxDef, node, best.filterType, best.filterIdx, scanSnapshot)
+			}
+		} else {
+			retID, idxTableNodeID = builder.applyIndexJoin(idxDef, node, best.filterType, best.filterIdx, scanSnapshot, reservation)
+		}
 		if idxTableNodeID != -1 {
 			builder.applyExtraFiltersOnIndex(idxDef, node, builder.qry.Nodes[idxTableNodeID], best.filterIdx)
 			return retID, nil
@@ -4542,6 +4596,19 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimateAndKeySet(
 	estimate *encodedRegularIndexEstimate,
 	keySetSize int,
 ) (work float64, shouldReject bool, valid bool) {
+	return ctx.scoreWithPointSample(idxDef, leadingPos, residualLeadingPos, shape, estimate, keySetSize, -1)
+}
+
+// sampleSelectivity overrides only the ranking inputs. Admission always uses
+// the native call above, before any sampled candidate comparisons.
+func (ctx *encodedRegularIndexCostContext) scoreWithPointSample(
+	idxDef *IndexDef,
+	leadingPos, residualLeadingPos []int32,
+	shape encodedRegularIndexCostShape,
+	estimate *encodedRegularIndexEstimate,
+	keySetSize int,
+	sampleSelectivity float64,
+) (work float64, shouldReject bool, valid bool) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || !ctx.valid {
 		return 0, false, false
 	}
@@ -4634,6 +4701,9 @@ func (ctx *encodedRegularIndexCostContext) scoreWithEstimateAndKeySet(
 		ctx.touchedLeading = append(ctx.touchedLeading, pos)
 		candidateSelectivity *= selectivity
 		lowerCandidateSelectivity *= lowerSelectivity
+	}
+	if sampleSelectivity >= 0 {
+		candidateSelectivity = sampleSelectivity
 	}
 	leadingCandidateRows := ctx.node.Stats.TableCnt * candidateSelectivity
 	lowerCandidateRows := ctx.node.Stats.TableCnt * lowerCandidateSelectivity
@@ -6121,6 +6191,10 @@ func (builder *QueryBuilder) replaceCompositeRangeCondition(
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot, keySetReservations ...*indexKeySetReservation) (int32, int32) {
+	return builder.applyIndexJoinWithFallback(idxDef, node, filterType, filterIdx, scanSnapshot, false, keySetReservations...)
+}
+
+func (builder *QueryBuilder) applyIndexJoinWithFallback(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot, sampled bool, keySetReservations ...*indexKeySetReservation) (int32, int32) {
 	if node == nil {
 		return -1, -1
 	}
@@ -6130,10 +6204,13 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot, nil)
 	if err != nil {
-		if filterType == KeySetIndexCondition && keySetPlanningControlError(builder.GetContext(), err) == nil {
+		if (sampled || filterType == KeySetIndexCondition) && keySetPlanningControlError(builder.GetContext(), err) == nil {
 			return node.NodeId, -1
 		}
 		panic(err)
+	}
+	if sampled && (idxObjRef == nil || idxTableDef == nil) {
+		return node.NodeId, -1
 	}
 	if filterType == KeySetIndexCondition {
 		if idxObjRef == nil || idxTableDef == nil || len(keySetReservations) != 1 || keySetReservations[0] == nil {

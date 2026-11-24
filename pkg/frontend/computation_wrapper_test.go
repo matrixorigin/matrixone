@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -418,27 +420,28 @@ func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
 	require.Equal(t, plan2.ParamValue{
 		Value: "AB\x00\x00", IsBin: false, EnableNumericPrefix: true,
 		SourceType: types.NewWithCharset(types.T_varbinary, 0, 0, types.CharsetBinary), HasSourceType: true,
-	}, cw.paramVals[0])
+	}, mustParamValue(cw.paramVals[0]))
 	require.Equal(t, plan2.ParamValue{
 		Value: "text", IsBin: false, EnableNumericPrefix: true,
 		SourceType: types.NewWithCharset(types.T_text, 0, 0, types.CharsetLegacy), HasSourceType: true,
-	}, cw.paramVals[1])
+	}, mustParamValue(cw.paramVals[1]))
 
 	params := cw.proc.GetPrepareParams()
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
-	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
-	require.Nil(t, params.GetData())
+	// The statement owns its parameter storage and every execution rewrites it.
+	require.Same(t, params, cw.proc.GetPrepareParams(), "the statement's parameter storage is reused")
 	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.Equal(t, "now-text", cw.proc.GetPrepareParams().GetStringAt(0))
 	require.Equal(t, types.StringSourceSQLPrepare, cw.proc.GetPrepareParamsStringSource())
 
 	current := cw.proc.GetPrepareParams()
 	cw.proc.SetPrepareParams(vector.NewVec(types.T_text.ToType(), cw.proc.Mp()))
-	require.Zero(t, current.Length())
-	require.Nil(t, current.GetData())
+	// The process only borrowed them: installing other parameters frees nothing
+	// of the statement's, which releases its storage when it is closed.
+	require.Equal(t, "now-text", current.GetStringAt(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(0), "binary metadata must not leak into the next execution")
 	cw.proc.GetPrepareParams().Free(cw.proc.Mp())
 	cw.proc.SetPrepareParams(nil)
@@ -864,7 +867,7 @@ func TestCOMStmtPreparedConversionPreservesBitWireDomain(t *testing.T) {
 				defer executionStmt.Free()
 			}
 			require.Len(t, cw.paramVals, 1)
-			paramValue, ok := cw.paramVals[0].(plan2.ParamValue)
+			paramValue, ok := plan2.AsParamValue(cw.paramVals[0])
 			require.True(t, ok)
 			require.True(t, paramValue.HasRuntimeType)
 			require.Equal(t, tc.wantType, paramValue.RuntimeType.Oid,
@@ -1239,7 +1242,7 @@ func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
 				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "parameter"}}}}, nil, nil)
 			require.NoError(t, err)
 			defer params.Free(cw.proc.Mp())
-			value := values[0].(plan2.ParamValue)
+			value, _ := plan2.AsParamValue(values[0])
 			require.Nil(t, value.Value)
 			require.False(t, value.HasSourceType, "literal NULL has no current conversion type, regardless of history")
 			require.Equal(t, types.StringConversionString, value.PrepareParamKind)
@@ -1441,13 +1444,13 @@ func TestPreparedParamValuesPreservesNullProtocolProvenance(t *testing.T) {
 		params.Free(cw.proc.Mp())
 	}()
 
-	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, []types.StringConversionKind{types.StringConversionDecimal})
+	values, err := preparedParamValues(cw.proc, nil, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, []types.StringConversionKind{types.StringConversionDecimal})
 	require.NoError(t, err)
 	require.Equal(t, []any{plan2.ParamValue{
 		IsBinaryProtocol:    true,
 		PrepareParamKind:    types.StringConversionDecimal,
 		EnableNumericPrefix: true,
-	}}, values)
+	}}, paramValuesOf(values))
 }
 
 func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testing.T) {
@@ -1528,7 +1531,7 @@ func TestIssue27640InitExecuteStmtParamAcceptsODBCIntegerTextPagination(t *testi
 				execCtx, ses, cw, nil, prepareStmt.Name)
 			require.NoError(t, err)
 			require.Nil(t, retComp, "pagination parameters must not reuse a value-filled compile")
-			require.Equal(t, wantParamVals, cw.paramVals)
+			require.Equal(t, wantParamVals, paramValuesOf(cw.paramVals))
 			if owned {
 				executionStmt.Free()
 			}
@@ -1961,7 +1964,7 @@ func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
 	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Len(t, cw.paramVals, 1)
-	param, ok := cw.paramVals[0].(plan2.ParamValue)
+	param, ok := plan2.AsParamValue(cw.paramVals[0])
 	require.True(t, ok)
 	require.Equal(t, types.StringConversionBoolean, param.PrepareParamKind)
 	require.True(t, param.HasRuntimeType)
@@ -2206,10 +2209,10 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 				cw.proc.SetPrepareParams(nil)
 				params.Free(cw.proc.Mp())
 			})
-			values, err := preparedParamValues(cw.proc, []byte{byte(test.mysqlType), 0}, []types.StringConversionKind{types.StringConversionDecimal})
+			values, err := preparedParamValues(cw.proc, nil, []byte{byte(test.mysqlType), 0}, []types.StringConversionKind{types.StringConversionDecimal})
 			require.NoError(t, err)
 			require.Len(t, values, 1)
-			value := values[0].(plan2.ParamValue)
+			value, _ := plan2.AsParamValue(values[0])
 			require.Equal(t, test.value, value.Value)
 			require.Equal(t, test.normalized, value.RuntimeType)
 			require.True(t, value.HasRuntimeType)
@@ -2260,10 +2263,10 @@ func TestPreparedParamValuesPreservesTemporalScale(t *testing.T) {
 				params.Free(cw.proc.Mp())
 			})
 
-			values, err := preparedParamValues(cw.proc, []byte{byte(test.mysqlType), 0}, []types.StringConversionKind{types.StringConversionString}, []int32{0})
+			values, err := preparedParamValues(cw.proc, nil, []byte{byte(test.mysqlType), 0}, []types.StringConversionKind{types.StringConversionString}, []int32{0})
 			require.NoError(t, err)
 			require.Len(t, values, 1)
-			param := values[0].(plan2.ParamValue)
+			param, _ := plan2.AsParamValue(values[0])
 			require.False(t, param.HasRuntimeType,
 				"the temporal source hint must not become a statement-wide runtime type")
 			require.True(t, param.HasInetNtoaSourceType)
@@ -2286,7 +2289,7 @@ func TestPreparedParamValuesScopesTemporalRuntimeToConsumer(t *testing.T) {
 	}()
 
 	values, err := preparedParamValues(
-		cw.proc,
+		cw.proc, nil,
 		[]byte{
 			byte(defines.MYSQL_TYPE_DATE), 0,
 			byte(defines.MYSQL_TYPE_DATE), 0,
@@ -2298,12 +2301,12 @@ func TestPreparedParamValuesScopesTemporalRuntimeToConsumer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, values, 2)
 
-	inetParam := values[0].(plan2.ParamValue)
+	inetParam, _ := plan2.AsParamValue(values[0])
 	require.True(t, inetParam.HasInetNtoaSourceType)
 	require.Equal(t, types.T_date.ToType(), inetParam.InetNtoaSourceType)
 	require.False(t, inetParam.HasRuntimeType)
 
-	numericParam := values[1].(plan2.ParamValue)
+	numericParam, _ := plan2.AsParamValue(values[1])
 	require.False(t, numericParam.HasInetNtoaSourceType)
 	require.True(t, numericParam.HasRuntimeType)
 	require.Equal(t, types.T_date.ToType(), numericParam.RuntimeType)
@@ -2329,7 +2332,7 @@ func TestCOMStmtGenerateSeriesDatePacketKeepsResultDomain(t *testing.T) {
 		defer executionStmt.Free()
 	}
 	require.Len(t, cw.paramVals, 1)
-	param := cw.paramVals[0].(plan2.ParamValue)
+	param, _ := plan2.AsParamValue(cw.paramVals[0])
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_date, param.RuntimeType.Oid)
 	columns := plan2.GetResultColumnsFromPlan(runtimePlan)
@@ -2363,7 +2366,7 @@ func TestCOMStmtGenerateSeriesDatetimePacketKeepsFractionalScale(t *testing.T) {
 		defer executionStmt.Free()
 	}
 	require.Len(t, cw.paramVals, 1)
-	param := cw.paramVals[0].(plan2.ParamValue)
+	param, _ := plan2.AsParamValue(cw.paramVals[0])
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_datetime, param.RuntimeType.Oid)
 	require.Equal(t, int32(6), param.RuntimeType.Scale)
@@ -2405,7 +2408,7 @@ func TestCOMStmtInetNtoaPreservesTemporalScale(t *testing.T) {
 		defer executionStmt.Free()
 	}
 	require.Len(t, cw.paramVals, 1)
-	param, ok := cw.paramVals[0].(plan2.ParamValue)
+	param, ok := plan2.AsParamValue(cw.paramVals[0])
 	require.True(t, ok)
 	require.False(t, param.HasRuntimeType,
 		"COM_STMT must not publish TIME as the runtime type for unrelated consumers")
@@ -2451,8 +2454,8 @@ func TestCOMStmtInetNtoaDomainHintDoesNotLeakIntoConcat(t *testing.T) {
 		defer executionStmt.Free()
 	}
 	require.Len(t, cw.paramVals, 2)
-	inetParam := cw.paramVals[0].(plan2.ParamValue)
-	concatParam := cw.paramVals[1].(plan2.ParamValue)
+	inetParam, _ := plan2.AsParamValue(cw.paramVals[0])
+	concatParam, _ := plan2.AsParamValue(cw.paramVals[1])
 	require.True(t, inetParam.HasInetNtoaSourceType)
 	require.Equal(t, types.T_json.ToType(), inetParam.InetNtoaSourceType)
 	require.False(t, inetParam.HasRuntimeType)
@@ -2498,8 +2501,8 @@ func TestCOMStmtInetNtoaDomainHintDoesNotLeakIntoComparison(t *testing.T) {
 		defer executionStmt.Free()
 	}
 	require.Len(t, cw.paramVals, 2)
-	inetParam := cw.paramVals[0].(plan2.ParamValue)
-	comparisonParam := cw.paramVals[1].(plan2.ParamValue)
+	inetParam, _ := plan2.AsParamValue(cw.paramVals[0])
+	comparisonParam, _ := plan2.AsParamValue(cw.paramVals[1])
 	require.True(t, inetParam.HasInetNtoaSourceType)
 	require.Equal(t, types.T_date.ToType(), inetParam.InetNtoaSourceType)
 	require.False(t, inetParam.HasRuntimeType)
@@ -2551,7 +2554,7 @@ func TestCOMStmtJSONDomainHintDoesNotChangeArithmetic(t *testing.T) {
 		defer executionStmt.Free()
 	}
 	require.Len(t, cw.paramVals, 1)
-	param := cw.paramVals[0].(plan2.ParamValue)
+	param, _ := plan2.AsParamValue(cw.paramVals[0])
 	require.False(t, param.HasRuntimeType,
 		"JSON protocol metadata must not become a statement-wide integer runtime type")
 
@@ -2637,7 +2640,7 @@ func TestCOMStmtInetNtoaRebindsAcrossSourceDomains(t *testing.T) {
 				defer executionStmt.Free()
 			}
 			require.Len(t, cw.paramVals, 1)
-			param := cw.paramVals[0].(plan2.ParamValue)
+			param, _ := plan2.AsParamValue(cw.paramVals[0])
 			if test.wantSource.Oid == types.T_any {
 				require.False(t, param.HasInetNtoaSourceType)
 			} else {
@@ -2674,7 +2677,7 @@ func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
 		params.Free(cw.proc.Mp())
 	}()
 
-	_, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, []types.StringConversionKind{types.StringConversionDecimal})
+	_, err := preparedParamValues(cw.proc, nil, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, []types.StringConversionKind{types.StringConversionDecimal})
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), payload[:128])
 	require.Contains(t, err.Error(), "1048576 bytes")
@@ -2694,10 +2697,10 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	}()
 	cw.proc.SetPrepareParamsWithIsBin(params, []bool{false})
 	paramTypes := []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
-	values, err := preparedParamValues(cw.proc, paramTypes, []types.StringConversionKind{types.StringConversionDecimal})
+	values, err := preparedParamValues(cw.proc, nil, paramTypes, []types.StringConversionKind{types.StringConversionDecimal})
 	require.NoError(t, err)
 	require.Len(t, values, 1)
-	param, ok := values[0].(plan2.ParamValue)
+	param, ok := plan2.AsParamValue(values[0])
 	require.True(t, ok)
 	require.Equal(t, value, param.Value)
 	require.Equal(t, types.StringConversionDecimal, param.PrepareParamKind)
@@ -2977,7 +2980,7 @@ func TestInitExecuteStmtParamSpecializesSQLExecuteCommonTypePlan(t *testing.T) {
 	require.Same(t, sentinel, prepareStmt.compile, "specialization must not replace the cached compile")
 	require.NotSame(t, originalPlan, runtimePlan)
 	require.Len(t, cw.paramVals, 1)
-	paramValue, ok := cw.paramVals[0].(plan2.ParamValue)
+	paramValue, ok := plan2.AsParamValue(cw.paramVals[0])
 	require.True(t, ok)
 	require.False(t, paramValue.IsBinaryProtocol)
 	require.True(t, paramValue.EnableNumericPrefix)
@@ -3268,7 +3271,7 @@ func TestPreparedBitCountNumericRuntimeTypesArePerPosition(t *testing.T) {
 	}
 	require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
 	require.Equal(t, types.T_int64, prepareStmt.bitCountNumericParamTypes[0].Oid)
-	require.Equal(t, types.T_int64, values[0].(plan2.ParamValue).RuntimeType.Oid)
+	require.Equal(t, types.T_int64, mustParamValue(values[0]).RuntimeType.Oid)
 	require.Equal(t, types.T_any, prepareStmt.bitCountNumericParamTypes[1].Oid)
 
 	values = []any{
@@ -3276,7 +3279,7 @@ func TestPreparedBitCountNumericRuntimeTypesArePerPosition(t *testing.T) {
 		plan2.ParamValue{Value: "64.5", SourceType: decimalType, HasSourceType: true},
 	}
 	require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
-	require.Equal(t, types.T_int64, values[0].(plan2.ParamValue).RuntimeType.Oid)
+	require.Equal(t, types.T_int64, mustParamValue(values[0]).RuntimeType.Oid)
 	require.Equal(t, wideDecimalType, prepareStmt.bitCountNumericParamTypes[1])
 
 	values = []any{
@@ -3284,9 +3287,9 @@ func TestPreparedBitCountNumericRuntimeTypesArePerPosition(t *testing.T) {
 		plan2.ParamValue{Value: "64", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
 	}
 	require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
-	require.False(t, values[0].(plan2.ParamValue).HasRuntimeType,
+	require.False(t, mustParamValue(values[0]).HasRuntimeType,
 		"NULL must not need specialization for its current execution")
-	require.Equal(t, wideDecimalType, values[1].(plan2.ParamValue).RuntimeType)
+	require.Equal(t, wideDecimalType, mustParamValue(values[1]).RuntimeType)
 	require.Equal(t, types.T_int64, prepareStmt.bitCountNumericParamTypes[0].Oid,
 		"NULL must not clear the position's remembered numeric type")
 
@@ -3295,7 +3298,7 @@ func TestPreparedBitCountNumericRuntimeTypesArePerPosition(t *testing.T) {
 		plan2.ParamValue{},
 	}
 	require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
-	require.Equal(t, types.T_int64, values[0].(plan2.ParamValue).RuntimeType.Oid)
+	require.Equal(t, types.T_int64, mustParamValue(values[0]).RuntimeType.Oid)
 
 	values = []any{
 		plan2.ParamValue{Value: "8.5", RuntimeType: decimalType, HasRuntimeType: true},
@@ -3306,7 +3309,7 @@ func TestPreparedBitCountNumericRuntimeTypesArePerPosition(t *testing.T) {
 		"a newer numeric domain must replace the preceding one")
 	values[0] = plan2.ParamValue{Value: "8", SourceType: types.T_varbinary.ToType(), HasSourceType: true}
 	require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
-	require.Equal(t, wideDecimalType, values[0].(plan2.ParamValue).RuntimeType)
+	require.Equal(t, wideDecimalType, mustParamValue(values[0]).RuntimeType)
 }
 
 func TestApplyPreparedConversionRuntimeTypes(t *testing.T) {
@@ -3338,7 +3341,7 @@ func TestApplyPreparedConversionRuntimeTypes(t *testing.T) {
 	applyPreparedConversionRuntimeTypes(values, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99})
 
 	assertRuntimeType := func(position int, want types.T) {
-		param, ok := values[position].(plan2.ParamValue)
+		param, ok := plan2.AsParamValue(values[position])
 		require.True(t, ok)
 		require.True(t, param.HasRuntimeType)
 		require.Equal(t, want, param.RuntimeType.Oid)
@@ -3349,13 +3352,13 @@ func TestApplyPreparedConversionRuntimeTypes(t *testing.T) {
 	assertRuntimeType(3, types.T_varbinary)
 	assertRuntimeType(4, types.T_text)
 
-	nullParam := values[5].(plan2.ParamValue)
+	nullParam, _ := plan2.AsParamValue(values[5])
 	require.False(t, nullParam.HasRuntimeType)
-	retainedParam := values[6].(plan2.ParamValue)
+	retainedParam, _ := plan2.AsParamValue(values[6])
 	require.Equal(t, types.T_int8, retainedParam.RuntimeType.Oid)
 	assertRuntimeType(7, types.T_decimal64)
-	require.Equal(t, int32(4), values[7].(plan2.ParamValue).RuntimeType.Width)
-	require.Equal(t, int32(1), values[7].(plan2.ParamValue).RuntimeType.Scale)
+	require.Equal(t, int32(4), mustParamValue(values[7]).RuntimeType.Width)
+	require.Equal(t, int32(1), mustParamValue(values[7]).RuntimeType.Scale)
 	assertRuntimeType(8, types.T_varbinary)
 	assertRuntimeType(9, types.T_uint64)
 	assertRuntimeType(10, types.T_float32)
@@ -3415,13 +3418,13 @@ func TestPreparedBitCountNumericRuntimeTypesUseReprepareCategories(t *testing.T)
 			values := []any{test.first}
 			require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
 			require.Equal(t, test.want, prepareStmt.bitCountNumericParamTypes[0])
-			require.Equal(t, test.want, values[0].(plan2.ParamValue).RuntimeType)
+			require.Equal(t, test.want, mustParamValue(values[0]).RuntimeType)
 
 			values[0] = plan2.ParamValue{
 				Value: test.later, SourceType: types.T_varchar.ToType(), HasSourceType: true,
 			}
 			require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
-			require.Equal(t, test.want, values[0].(plan2.ParamValue).RuntimeType)
+			require.Equal(t, test.want, mustParamValue(values[0]).RuntimeType)
 		})
 	}
 }
@@ -4450,7 +4453,7 @@ func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
 			for _, typ := range []types.Type{binding.Type, binding.NumericType, binding.BitCountType} {
 				fmt.Fprintf(&expected, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
 			}
-			if p, ok := values[i].(plan2.ParamValue); ok {
+			if p, ok := plan2.AsParamValue(values[i]); ok {
 				fmt.Fprintf(&expected, "%d:%t:%t:%t:%d:%t:%t;", p.PrepareParamKind,
 					p.IsBinaryProtocol, p.IsBin, p.IsBinaryString, p.RuntimeStringDomain,
 					p.EnableNumericPrefix, p.Value == nil)
@@ -4661,7 +4664,7 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	second.Free(cw.proc.Mp())
 	require.Same(t, third, prepareStmt.params)
 	require.Len(t, cw.paramVals, 1)
-	param := cw.paramVals[0].(plan2.ParamValue)
+	param, _ := plan2.AsParamValue(cw.paramVals[0])
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
 	require.Equal(t, int32(65), param.RuntimeType.Width)
 
@@ -5021,7 +5024,7 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 			Value: "session-binary", IsBin: true, EnableNumericPrefix: true,
 			SourceType: types.T_varbinary.ToType(), HasSourceType: true,
 		},
-	}, paramVals)
+	}, paramValuesOf(paramVals))
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
 	require.Equal(t, "session-binary", params.GetStringAt(2))
@@ -5086,22 +5089,22 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, "2.500", params.GetStringAt(0))
-	decimalParam, ok := paramVals[0].(plan2.ParamValue)
+	decimalParam, ok := plan2.AsParamValue(paramVals[0])
 	require.True(t, ok)
 	require.True(t, decimalParam.HasSourceType)
 	require.Equal(t, types.New(types.T_decimal128, 12, 3), decimalParam.SourceType)
 	require.Equal(t, types.StringConversionDecimal, decimalParam.PrepareParamKind)
 
-	textParam, ok := paramVals[1].(plan2.ParamValue)
+	textParam, ok := plan2.AsParamValue(paramVals[1])
 	require.True(t, ok)
 	require.True(t, textParam.HasSourceType)
 	require.Equal(t, types.T_text, textParam.SourceType.Oid, "the resolved user variable supplies its source domain")
 
-	binaryParam, ok := paramVals[2].(plan2.ParamValue)
+	binaryParam, ok := plan2.AsParamValue(paramVals[2])
 	require.True(t, ok)
 	require.True(t, binaryParam.HasSourceType)
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
-	boolParam := paramVals[3].(plan2.ParamValue)
+	boolParam, _ := plan2.AsParamValue(paramVals[3])
 	require.Equal(t, "true", params.GetStringAt(3), "do not rewrite the transport value")
 	require.Equal(t, types.StringConversionBoolean, boolParam.PrepareParamKind)
 	require.True(t, boolParam.HasSourceType)
@@ -5118,7 +5121,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 		{name: "json", pos: 6, want: types.T_json.ToType()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			param := paramVals[test.pos].(plan2.ParamValue)
+			param, _ := plan2.AsParamValue(paramVals[test.pos])
 			require.True(t, param.HasInetNtoaSourceType)
 			require.Equal(t, test.want, param.InetNtoaSourceType)
 			require.Equal(t, test.want, param.SourceType,
@@ -6501,7 +6504,7 @@ func preparedParamValueIsBinaryString(cw *TxnComputationWrapper, i int) bool {
 	if i >= len(cw.paramVals) {
 		return false
 	}
-	value, ok := cw.paramVals[i].(plan2.ParamValue)
+	value, ok := plan2.AsParamValue(cw.paramVals[i])
 	return ok && value.IsBinaryString
 }
 
@@ -6675,7 +6678,7 @@ func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 	}()
 	paramTypes := []byte{byte(defines.MYSQL_TYPE_BLOB), 0}
 
-	values, err := preparedParamValues(cw.proc, paramTypes, []types.StringConversionKind{types.StringConversionString})
+	values, err := preparedParamValues(cw.proc, nil, paramTypes, []types.StringConversionKind{types.StringConversionString})
 	require.NoError(t, err)
 	require.Equal(t, []any{plan2.ParamValue{
 		IsBinaryString:      true, // derived from the BLOB wire type
@@ -6683,7 +6686,7 @@ func TestPreparedNullBlobRetainsBinaryProtocolType(t *testing.T) {
 		RuntimeType:         types.T_blob.ToType(),
 		HasRuntimeType:      true,
 		EnableNumericPrefix: true,
-	}}, values)
+	}}, paramValuesOf(values))
 	bindings, err := preparedExecutionBindings(context.Background(), values, paramTypes, nil)
 	require.NoError(t, err)
 	require.Equal(t, types.T_blob, bindings[0].Type.Oid)
@@ -7443,4 +7446,116 @@ func requireTypedParamOid(t *testing.T, proc *process.Process, i int, want types
 	}
 	require.NotNil(t, typed, "parameter %d must carry a typed value", i)
 	require.Equal(t, want, typed.GetType().Oid)
+}
+
+// SQL EXECUTE ... USING binds into storage the statement owns: after the first
+// execution it allocates only when a value needs more room than before.
+func TestBuildExecuteUserParamsReusesStatementStorage(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := map[string]any{}
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) { return values[name], nil })
+	args := []*plan.Expr{
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "n"}}},
+		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "s"}}},
+	}
+	var store executeUserParams
+	t.Cleanup(store.release)
+	bind := func(n int64, s string) *vector.Vector {
+		values["n"], values["s"] = n, s
+		params, vals, _, _, _, _, err := buildExecuteUserParamsInto(&store, proc, nil, args, nil, nil)
+		require.NoError(t, err)
+		require.Len(t, vals, 2)
+		proc.SetPrepareParamsWithIsBin(params, store.isBin)
+		store.lend(proc)
+		return params
+	}
+	long := func(c byte, n int) string { return strings.Repeat(string(c), n) }
+
+	first := bind(1, long('a', 40))
+	allocs := proc.Mp().Stats().NumAlloc.Load()
+	for i, c := range []byte("bcd") {
+		params := bind(int64(i+2), long(c, 40))
+		require.Same(t, first, params)
+		require.Equal(t, strconv.Itoa(i+2), params.GetStringAt(0))
+		require.Equal(t, long(c, 40), params.GetStringAt(1))
+	}
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load(), "re-executing must not allocate")
+
+	// A longer value grows the storage; the same vector is still used.
+	require.Same(t, first, bind(9, long('x', 200)))
+	require.Equal(t, long('x', 200), first.GetStringAt(1))
+
+	// Releasing the statement detaches the process that borrowed it.
+	store.release()
+	require.Nil(t, proc.GetPrepareParams())
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+// mustParamValue unwraps a prepared parameter value held by value or by
+// pointer into the statement's storage.
+func mustParamValue(v any) plan2.ParamValue {
+	param, ok := plan2.AsParamValue(v)
+	if !ok {
+		panic(fmt.Sprintf("not a prepared parameter value: %T", v))
+	}
+	return param
+}
+
+// paramValuesOf unwraps every prepared parameter value of an execution.
+func paramValuesOf(values []any) []any {
+	out := make([]any, len(values))
+	for i, v := range values {
+		if param, ok := plan2.AsParamValue(v); ok {
+			out[i] = param
+		} else {
+			out[i] = v
+		}
+	}
+	return out
+}
+
+// A stored procedure can run the same EXECUTE ... USING many times, each on a
+// fresh process over the same session pool. The statement storage must not
+// retain every process it ever lent to: a finished process is forgotten.
+func TestExecuteUserParamsForgetsFinishedProcesses(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	values := map[string]any{"s": "value"}
+	args := []*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "s"}}}}
+	var store executeUserParams
+	t.Cleanup(store.release)
+
+	var first *vector.Vector
+	for i := range 32 {
+		proc := testutil.NewProcessWithMPool(t, "", mp)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) { return values[name], nil })
+		params, _, _, _, _, _, err := buildExecuteUserParamsInto(&store, proc, nil, args, nil, nil)
+		require.NoError(t, err)
+		if i == 0 {
+			first = params
+		}
+		require.Same(t, first, params, "the storage is reused on the same pool")
+		proc.SetPrepareParamsWithIsBin(params, store.isBin)
+		store.lend(proc)
+		require.Len(t, store.borrowers, 1, "only the current execution's process is retained")
+		require.Same(t, proc, store.borrowers[0])
+		proc.Free()
+		require.Nil(t, proc.GetPrepareParams())
+	}
+
+	// A process that still borrows the storage is kept, and released with it.
+	live := testutil.NewProcessWithMPool(t, "", mp)
+	live.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) { return values[name], nil })
+	params, _, _, _, _, _, err := buildExecuteUserParamsInto(&store, live, nil, args, nil, nil)
+	require.NoError(t, err)
+	live.SetPrepareParamsWithIsBin(params, store.isBin)
+	store.lend(live)
+	other := testutil.NewProcessWithMPool(t, "", mp)
+	other.SetPrepareParamsWithIsBin(params, store.isBin)
+	store.lend(other)
+	require.ElementsMatch(t, []*process.Process{live, other}, store.borrowers)
+	store.release()
+	require.Nil(t, live.GetPrepareParams())
+	require.Nil(t, other.GetPrepareParams())
+	require.Zero(t, mp.CurrNB())
 }

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -48,30 +47,6 @@ import (
 type emptyDispatchChild struct {
 	*value_scan.ValueScan
 	called chan struct{}
-}
-
-func TestMarshalRemoteBatchGroupingProtocolGate(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, proc.Mp())
-	bat.SetRowCount(2)
-	defer bat.Clean(proc.Mp())
-	runtime := moruntime.ServiceRuntime(proc.GetService())
-	original, _ := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	t.Cleanup(func() { runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original) })
-	for _, version := range []any{nil, "unknown", int64(86)} {
-		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
-		require.ErrorContains(t, err, "MORPCVersion87")
-	}
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(87))
-	data, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
-	require.NoError(t, err)
-	decoded := batch.NewWithSize(0)
-	defer decoded.Clean(proc.Mp())
-	require.NoError(t, decoded.UnmarshalBinaryForPipeline(data, proc.Mp()))
-	require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
 }
 
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
@@ -1136,7 +1111,7 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 		sp.ReleaseCurrent(0)
 	} else {
 		d.cleanupSpool = sp
-		sp.ForceCleanupAfterTerminalSignal()
+		sp.ReleaseCache()
 	}
 	d.CleanupDeferredSpool()
 	require.Same(t, sp, d.cleanupSpool)

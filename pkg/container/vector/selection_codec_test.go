@@ -69,12 +69,10 @@ func TestSelectedRowsVarlenaWriterMatchesReference(t *testing.T) {
 	}{
 		{name: "plain", fast: true},
 		{name: "null fallback", modify: func() { source.SetNull(1) }},
-		{name: "grouping fallback", modify: func() { source.GetNulls().Del(1); source.GetGrouping().Add(1) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() {
 				source.GetNulls().Clear()
-				source.GetGrouping().Clear()
 			})
 			if tc.modify != nil {
 				tc.modify()
@@ -87,7 +85,6 @@ func TestSelectedRowsVarlenaWriterMatchesReference(t *testing.T) {
 			require.Equal(t, tc.fast, fast.varlenaCalls == 1)
 		})
 	}
-	source.GetGrouping().Clear()
 	require.ErrorIs(t, source.MarshalSelectedRowsTo(&selectedRowsFastBuffer{short: true}, rows), io.ErrShortWrite)
 }
 
@@ -159,14 +156,13 @@ func TestSelectedRowsCodecPreservesFixedWidthMetadata(t *testing.T) {
 	})
 	require.NoError(t, AppendFixedList(source, []int64{10, 20, 30, 40}, nil, mp))
 	source.SetNull(1)
-	source.GetGrouping().Add(1, 3)
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 1, 0}))
 	expected := []byte{
-		3, 0, 0, 0, 0x03, 8, 0, 0, 0, // count, NULL/group flags, fixed width
-		2, 40, 0, 0, 0, 0, 0, 0, 0, // grouped value 40
-		3,                          // grouped NULL: no value bytes
+		3, 0, 0, 0, 0x01, 8, 0, 0, 0, // count, NULL flag, fixed width
+		0, 40, 0, 0, 0, 0, 0, 0, 0, // ordinary value 40
+		1,                          // NULL: no value bytes
 		0, 10, 0, 0, 0, 0, 0, 0, 0, // ordinary value 10
 	}
 	require.Equal(t, expected, encoded.Bytes())
@@ -180,17 +176,19 @@ func TestSelectedRowsCodecPreservesFixedWidthMetadata(t *testing.T) {
 	require.Equal(t, expected, primitive.Bytes())
 	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 3, mp))
 	require.Equal(t, []int64{40, 0, 10}, MustFixedColWithTypeCheck[int64](destination))
+	require.False(t, destination.IsNull(0))
 	require.True(t, destination.IsNull(1))
-	require.True(t, destination.GetGrouping().Contains(0))
-	require.True(t, destination.GetGrouping().Contains(1))
-	require.False(t, destination.GetGrouping().Contains(2))
+	require.False(t, destination.IsNull(2))
 	require.Zero(t, encoded.Len())
 
-	// An older writer appended one retired parameter-kind byte per row and
-	// set the per-row kind mode (bits 2-3). The reader validates and drops it
-	// while restoring the remaining metadata.
+	// An older writer marked ROLLUP rows with the retired grouping flag
+	// (always together with the NULL flag), appended one retired
+	// parameter-kind byte per row and set the per-row kind mode (bits 2-3).
+	// The reader validates and drops both while restoring the remaining
+	// metadata; the grouping row decodes as an ordinary NULL.
 	legacy := append([]byte(nil), expected...)
-	legacy[4] |= selectedRowsKindRows << selectedRowsKindShift
+	legacy[4] |= selectedRowsLegacyGrouping | selectedRowsKindRows<<selectedRowsKindShift
+	legacy[18] |= selectedRowsLegacyGrouping
 	legacy = append(legacy, 4, 0, 1)
 	legacyDestination := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { legacyDestination.Free(mp) })
@@ -198,10 +196,9 @@ func TestSelectedRowsCodecPreservesFixedWidthMetadata(t *testing.T) {
 	require.NoError(t, legacyDestination.UnmarshalSelectedRowsFrom(legacyReader, 3, mp))
 	require.Zero(t, legacyReader.Len())
 	require.Equal(t, []int64{40, 0, 10}, MustFixedColWithTypeCheck[int64](legacyDestination))
+	require.False(t, legacyDestination.IsNull(0))
 	require.True(t, legacyDestination.IsNull(1))
-	require.True(t, legacyDestination.GetGrouping().Contains(0))
-	require.True(t, legacyDestination.GetGrouping().Contains(1))
-	require.False(t, legacyDestination.GetGrouping().Contains(2))
+	require.False(t, legacyDestination.IsNull(2))
 	legacy[len(legacy)-1] = selectedRowsRetiredKindMax + 1
 	require.ErrorContains(t, legacyDestination.UnmarshalSelectedRowsFrom(
 		bytes.NewReader(legacy), 3, mp), "parameter kind")
@@ -331,7 +328,7 @@ func TestSelectedRowsCodecMatchesFlagSelectionWire(t *testing.T) {
 		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
 	}
 	source.SetNull(4)
-	source.GetGrouping().Add(1, 7)
+	source.SetNull(7)
 
 	flags := make([]uint8, source.Length())
 	rows := []int32{1, 4, 7}
@@ -356,7 +353,6 @@ func TestSelectedRowsCodecDropsLegacyStringSource(t *testing.T) {
 	require.NoError(t, AppendBytesList(source,
 		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")}, nil, mp))
 	source.SetNull(1)
-	source.GetGrouping().Add(2)
 	rows := []int32{0, 1, 2, 3}
 
 	var encoded bytes.Buffer
@@ -378,8 +374,7 @@ func TestSelectedRowsCodecDropsLegacyStringSource(t *testing.T) {
 		require.True(t, destination.IsNull(1))
 		require.Equal(t, "c", string(destination.GetBytesAt(2)))
 		require.Equal(t, "d", string(destination.GetBytesAt(3)))
-		require.True(t, destination.GetGrouping().Contains(2))
-		require.False(t, destination.GetGrouping().Contains(0))
+		require.False(t, destination.IsNull(2))
 	}
 
 	// An older writer emitted a uniform non-expression source as one byte
@@ -728,7 +723,6 @@ func TestSelectedRowsCodecPreservesMetadataAndVarlena(t *testing.T) {
 	require.NoError(t, AppendBytes(source, nil, true, mp))
 	require.NoError(t, AppendBytes(source, bytes.Repeat([]byte("x"), 80), false, mp))
 	require.NoError(t, AppendBytes(source, []byte("three"), false, mp))
-	source.GetGrouping().Add(1, 3)
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 1, 0}))
@@ -739,14 +733,13 @@ func TestSelectedRowsCodecPreservesMetadataAndVarlena(t *testing.T) {
 	require.Equal(t, "three", string(destination.GetBytesAt(0)))
 	require.True(t, destination.IsNull(1))
 	require.Equal(t, "zero", string(destination.GetBytesAt(2)))
-	require.True(t, destination.GetGrouping().Contains(0))
-	require.True(t, destination.GetGrouping().Contains(1))
-	require.False(t, destination.GetGrouping().Contains(2))
+	require.False(t, destination.IsNull(0))
+	require.False(t, destination.IsNull(2))
 	require.Zero(t, encoded.Len())
 }
 
 // legacySelectedRowsBinaryWire rewrites a current varlena selected-rows
-// payload that carries per-row flags (NULL or grouping metadata) as an older
+// payload that carries per-row flags (NULL metadata) as an older
 // writer emitted it with mixed binary/text provenance: the metadata binary
 // field is set to rows mode and rowFlags[row] is OR-ed into each row's flag
 // byte.
@@ -755,7 +748,7 @@ func legacySelectedRowsBinaryWire(t *testing.T, wire []byte, rowFlags map[int]by
 	out := append([]byte(nil), wire...)
 	count := int(int32(binary.LittleEndian.Uint32(out[:4])))
 	metadata := out[4]
-	require.NotZero(t, metadata&(selectedRowsHasNull|selectedRowsHasGrouping))
+	require.NotZero(t, metadata&selectedRowsHasNull)
 	require.Zero(t, metadata&(selectedRowsKindMask|selectedRowsBinaryMask|selectedRowsSourceMask))
 	out[4] |= selectedRowsBinaryRows << selectedRowsBinaryShift
 	pos := 5
@@ -903,7 +896,7 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 				require.NoError(t, types.WriteInt32(buf, 1))
 				require.NoError(t, buf.WriteByte(selectedRowsHasNull))
 				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
-				require.NoError(t, buf.WriteByte(selectedRowsHasGrouping))
+				require.NoError(t, buf.WriteByte(selectedRowsLegacyGrouping))
 			},
 			want: "row metadata",
 		},
@@ -970,10 +963,10 @@ func TestSelectedRowsCodecEveryWireBoundaryIsAtomic(t *testing.T) {
 	}()
 	require.NoError(t, AppendBytes(source, bytes.Repeat([]byte("x"), 80), false, mp))
 	require.NoError(t, AppendBytes(source, []byte("ordinary"), false, mp))
-	source.GetGrouping().Add(0)
+	require.NoError(t, AppendBytes(source, nil, true, mp))
 
 	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1}))
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1, 2}))
 	// Every cut of an older writer's payload with per-row binary flags is
 	// rejected atomically as well.
 	payload := legacySelectedRowsBinaryWire(t, encoded.Bytes(), map[int]byte{0: selectedRowsRowBinary})
@@ -982,18 +975,18 @@ func TestSelectedRowsCodecEveryWireBoundaryIsAtomic(t *testing.T) {
 			destination := NewVec(types.T_varchar.ToType(), mp)
 			defer destination.Free(mp)
 			require.Error(t, destination.UnmarshalSelectedRowsFrom(
-				bytes.NewReader(payload[:cut]), 2, mp), "cut=%d", cut)
+				bytes.NewReader(payload[:cut]), 3, mp), "cut=%d", cut)
 			require.Zero(t, destination.Length(), "cut=%d", cut)
 			// Reuse the same storage after a partially decoded descriptor or area.
-			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(payload), 2, mp))
+			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(payload), 3, mp))
 			require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
 			require.Equal(t, source.GetBytesAt(1), destination.GetBytesAt(1))
-			require.True(t, destination.GetGrouping().Contains(0))
+			require.True(t, destination.IsNull(2))
 		}()
 	}
 	for cut := 0; cut < len(payload); cut++ {
 		require.Error(t, source.MarshalSelectedRowsTo(
-			&failSelectedRowsWriter{remaining: cut}, []int32{0, 1}), "cut=%d", cut)
+			&failSelectedRowsWriter{remaining: cut}, []int32{0, 1, 2}), "cut=%d", cut)
 	}
 }
 

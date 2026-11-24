@@ -145,7 +145,7 @@ Read [references/operator-pipeline.md](references/operator-pipeline.md) before c
 
 - `Call()` processes one batch. It must not send terminal signals (`End`, `Error`, `Abort`).
 - `Reset()` performs cleanup and notifies downstream completion.
-- For typed signals, distinguish graceful completion from failure. After `EventEnd` is delivered, reclaim the spool with `ForceCleanupAfterTerminalSignal()` only after paired receiver cleanup returns.
+- For typed signals, distinguish graceful completion from failure. After `EventEnd` is delivered, reclaim the spool with `ReleaseCache()` only after paired receiver cleanup returns.
 - Use `Abort(cause)` for error/abort/cancel paths or terminal-delivery failure. Reserve `Close()` / `CloseWithTimeout()` for the legacy nil-batch protocol.
 - When sending terminal signals into bounded channels, record terminal state even if the channel send fails.
 

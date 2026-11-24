@@ -312,44 +312,45 @@ func TestBatchAccountedReaderPreservesRowsWhenVectorCountChanges(t *testing.T) {
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
-func TestBatchGroupingCodecRoundTrip(t *testing.T) {
+func TestBatchSpillCodecRoundTrip(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
 	view := state.view(t, mp)
 	source := newBatchAllocationTestSource(t, mp)
-	source.Vecs[0].GetGrouping().Add(1, 7, 31)
-	source.Vecs[1].GetGrouping().Add(2, 9)
 	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
 
 	var encoded bytes.Buffer
-	spillSize, err := source.MarshalBinaryWithGroupingSize()
+	spillSize, err := source.MarshalBinaryForSpillSize()
 	require.NoError(t, err)
 	stableSize, err := source.MarshalBinarySize()
 	require.NoError(t, err)
 	require.Greater(t, stableSize-spillSize, len(source.ExtraBuf)/2)
-	require.NoError(t, source.MarshalBinaryWithGroupingTo(&encoded))
+	require.NoError(t, source.MarshalBinaryForSpillTo(&encoded))
 	decoded := NewWithSize(0)
-	require.NoError(t, decoded.UnmarshalFromReaderWithGrouping(&encoded, view))
+	require.NoError(t, decoded.UnmarshalFromReaderForSpill(&encoded, view))
 	require.Empty(t, decoded.Attrs)
 	require.Empty(t, decoded.ExtraBuf)
-	for i := range source.Vecs {
-		require.True(t, decoded.Vecs[i].GetGrouping().IsSame(source.Vecs[i].GetGrouping()))
-	}
-	withoutGrouping := newBatchAllocationTestSource(t, mp)
-	encoded.Reset()
-	require.NoError(t, withoutGrouping.MarshalBinaryWithGroupingTo(&encoded))
-	require.NoError(t, decoded.UnmarshalFromReaderWithGrouping(&encoded, view))
-	for _, vec := range decoded.Vecs {
-		require.True(t, vec.GetGrouping().IsEmpty())
-	}
+	require.Equal(t, source.RowCount(), decoded.RowCount())
+	require.Len(t, decoded.Vecs, len(source.Vecs))
+	require.Equal(t,
+		vector.MustFixedColWithTypeCheck[int64](source.Vecs[0]),
+		vector.MustFixedColWithTypeCheck[int64](decoded.Vecs[0]))
+	require.Equal(t, source.Vecs[1].GetBytesAt(31), decoded.Vecs[1].GetBytesAt(31))
+	require.Zero(t, encoded.Len(), "spill codec must consume its whole frame")
+
+	// Reusing the decoded batch for a second frame overwrites it in place.
+	second := newBatchAllocationTestSource(t, mp)
+	require.NoError(t, second.MarshalBinaryForSpillTo(&encoded))
+	require.NoError(t, decoded.UnmarshalFromReaderForSpill(&encoded, view))
+	require.Equal(t, second.RowCount(), decoded.RowCount())
 
 	decoded.Clean(view)
-	withoutGrouping.Clean(mp)
+	second.Clean(mp)
 	source.Clean(mp)
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
-func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.T) {
+func TestBatchSpillCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 32)
 	mp := mpool.MustNewZero()
 	view := state.view(t, mp)
@@ -385,7 +386,7 @@ func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testi
 			decoded := NewWithSize(0)
 			require.ErrorContains(
 				t,
-				decoded.UnmarshalFromReaderWithGrouping(&encoded, view),
+				decoded.UnmarshalFromReaderForSpill(&encoded, view),
 				test.want,
 			)
 			require.Zero(t, state.account.Snapshot().Used)
@@ -396,7 +397,7 @@ func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testi
 	finalizeTestBatchAllocationAccount(t, state)
 }
 
-func TestBatchGroupingCodecRejectsMismatchedRowCount(t *testing.T) {
+func TestBatchSpillCodecRejectsMismatchedRowCount(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 32)
 	mp := mpool.MustNewZero()
 	view := state.view(t, mp)
@@ -406,11 +407,11 @@ func TestBatchGroupingCodecRejectsMismatchedRowCount(t *testing.T) {
 	source.SetRowCount(2)
 
 	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalBinaryWithGroupingTo(&encoded))
+	require.NoError(t, source.MarshalBinaryForSpillTo(&encoded))
 	decoded := NewWithSize(0)
 	require.ErrorContains(
 		t,
-		decoded.UnmarshalFromReaderWithGrouping(&encoded, view),
+		decoded.UnmarshalFromReaderForSpill(&encoded, view),
 		"vector length does not match row count",
 	)
 

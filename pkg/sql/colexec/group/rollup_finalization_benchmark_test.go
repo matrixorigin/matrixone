@@ -131,10 +131,7 @@ func checkRollupFinalization(runner *rollupBenchmarkRunner, run func(*rollupBenc
 		for row := 0; row < out.RowCount(); row++ {
 			k := key{prefix: keys}
 			for i := 0; i < keys; i++ {
-				rolled := out.Vecs[i].GetGrouping().Contains(uint64(row))
-				if rolled != out.Vecs[i].GetNulls().Contains(uint64(row)) {
-					return fmt.Errorf("invalid grouping provenance")
-				}
+				rolled := out.Vecs[i].IsNull(uint64(row))
 				if rolled {
 					if k.prefix == keys {
 						k.prefix = i

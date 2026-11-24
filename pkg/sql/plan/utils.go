@@ -1906,6 +1906,41 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false, false)
 }
 
+func foldBoundConstant(ctx context.Context, expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	return ConstantFold(batch.EmptyForConstFoldBatch, expr, processForBoundExpr(ctx, expr, proc), false, true)
+}
+
+func processForBoundExpr(ctx context.Context, expr *plan.Expr, proc *process.Process) *process.Process {
+	if proc != nil && ctx != nil && containsJSONExtraction(expr) {
+		// A binder fold can run after the previous pipeline has stopped.
+		// Use the current request for this expression, including any JSON
+		// extraction the executor still has to evaluate inside a parent call.
+		proc = proc.NewNoContextChildProc(0)
+		proc.Ctx = ctx
+	}
+	return proc
+}
+
+func containsJSONExtraction(expr *plan.Expr) bool {
+	if fn := expr.GetF(); fn != nil {
+		id, _ := function.DecodeOverloadID(fn.GetFunc().GetObj())
+		if id == function.JSON_EXTRACT {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if containsJSONExtraction(arg) {
+				return true
+			}
+		}
+	}
+	for _, item := range expr.GetList().GetList() {
+		if containsJSONExtraction(item) {
+			return true
+		}
+	}
+	return false
+}
+
 func constantFoldWithPreparedExactSource(
 	bat *batch.Batch,
 	expr *plan.Expr,
@@ -4860,7 +4895,7 @@ func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values [
 			if marker.Pos < 0 || int(marker.Pos) >= len(values) {
 				continue
 			}
-			param, ok := values[marker.Pos].(ParamValue)
+			param, ok := AsParamValue(values[marker.Pos])
 			if !ok {
 				continue
 			}
@@ -5480,7 +5515,7 @@ func collectPreparedParamPositions(expr *Expr, positions map[int32]struct{}) {
 func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	kind := types.StringConversionString
 	isBinaryProtocol := false
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		value = param.Value
 		kind = param.PrepareParamKind
 		isBinaryProtocol = param.IsBinaryProtocol
@@ -5548,7 +5583,7 @@ func PreparedParamValueHasNumericRuntime(value any) bool {
 // direct SELECT ? remains TEXT unless the protocol supplied an explicit
 // numeric type; this helper is only used while rebinding a function argument.
 func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		if param.Value == nil {
 			return types.Type{}, false
 		}
@@ -6134,7 +6169,7 @@ func preparedNumericPrefixParamPositions(preparePlan *Plan, paramVals []any) map
 	positions := make(map[int]bool)
 	candidates := make([]any, len(paramVals))
 	for i, value := range paramVals {
-		param, ok := value.(ParamValue)
+		param, ok := AsParamValue(value)
 		if !ok {
 			candidates[i] = value
 			continue
@@ -6160,7 +6195,7 @@ func preparedNumericPrefixParamPositions(preparePlan *Plan, paramVals []any) map
 		return positions
 	}
 	for i, value := range candidates {
-		param, ok := value.(ParamValue)
+		param, ok := AsParamValue(value)
 		if ok && param.EnableNumericPrefix {
 			positions[i] = true
 		}
@@ -6375,7 +6410,7 @@ func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 
 func isPositivePreparedInteger(value any) bool {
 	kind := types.StringConversionString
-	if paramValue, ok := value.(ParamValue); ok {
+	if paramValue, ok := AsParamValue(value); ok {
 		value = paramValue.Value
 		kind = paramValue.PrepareParamKind
 	}
@@ -6658,7 +6693,7 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 
 func isNonNegativePreparedInteger(value any) bool {
 	kind := types.StringConversionString
-	if paramValue, ok := value.(ParamValue); ok {
+	if paramValue, ok := AsParamValue(value); ok {
 		value = paramValue.Value
 		kind = paramValue.PrepareParamKind
 	}
@@ -6738,7 +6773,7 @@ func replaceParamValsWithSelection(
 		numericPrefixSource := false
 		retainParamRef := false
 		runtimeStringDomain := types.RuntimeStringInherit
-		if param, ok := val.(ParamValue); ok {
+		if param, ok := AsParamValue(val); ok {
 			val = param.Value
 			if param.MaterializedValue != "" {
 				val = param.MaterializedValue
@@ -6857,7 +6892,7 @@ func replaceParamValsWithSelection(
 		if selected != nil && (i >= len(selected) || !selected[i]) {
 			continue
 		}
-		param, ok := val.(ParamValue)
+		param, ok := AsParamValue(val)
 		if !ok {
 			continue
 		}
@@ -6888,7 +6923,7 @@ func replaceParamValsWithSelection(
 		if selected != nil && (i >= len(selected) || !selected[i]) {
 			continue
 		}
-		if param, ok := val.(ParamValue); ok {
+		if param, ok := AsParamValue(val); ok {
 			if param.IsBinaryProtocol {
 				paramRule.inferTextParamPositions[i] = true
 			}
@@ -8512,7 +8547,7 @@ func refreshPreparedPlanProjectionTypes(
 }
 
 func runtimeParamHasExplicitType(value any) bool {
-	param, ok := value.(ParamValue)
+	param, ok := AsParamValue(value)
 	return ok && param.HasRuntimeType
 }
 

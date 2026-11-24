@@ -50,30 +50,6 @@ func (s testVectorAllocationAccount) view(t testing.TB, mp *mpool.MPool) *mpool.
 	return view
 }
 
-type rejectNextVectorAllocation struct {
-	calls    int
-	failAt   int
-	rejected bool
-	used     uint64
-}
-
-func (c *rejectNextVectorAllocation) AcquireAllocationCapacity(size uint64) error {
-	c.calls++
-	if c.failAt != 0 && c.calls == c.failAt {
-		c.rejected = true
-		return mpool.ErrAllocationAccountCapacity
-	}
-	c.used += size
-	return nil
-}
-
-func (c *rejectNextVectorAllocation) ReleaseAllocationCapacity(size uint64) {
-	if c.used < size {
-		panic("vector allocation controller release underflow")
-	}
-	c.used -= size
-}
-
 func newTestVectorAllocationAccount(
 	t testing.TB,
 	limit uint64,

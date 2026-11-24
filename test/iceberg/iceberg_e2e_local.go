@@ -36,7 +36,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
@@ -75,7 +75,15 @@ type runSummary struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fatal(err)
+	}
+}
+
+func run() (runErr error) {
 	cfg := localE2EConfig{}
+	var lowBudget bool
+	flag.BoolVar(&lowBudget, "low-budget-regression", false, "run only the 4 MiB append budget regression")
 	flag.StringVar(&cfg.CatalogURI, "catalog-uri", envOr("MO_ICEBERG_E2E_CATALOG_URI", "http://127.0.0.1:19120/iceberg"), "Iceberg REST catalog URI")
 	flag.StringVar(&cfg.Warehouse, "warehouse", envOr("MO_ICEBERG_E2E_WAREHOUSE", "s3://mo-iceberg/warehouse"), "Iceberg warehouse location")
 	flag.StringVar(&cfg.DSN, "dsn", envOr("MO_ICEBERG_E2E_DSN", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false"), "MatrixOne MySQL DSN")
@@ -96,20 +104,20 @@ func main() {
 		cfg.Database = "iceci_" + runID
 	}
 	if err := validateIdentifier(cfg.Namespace, "namespace"); err != nil {
-		fatal(err)
+		return err
 	}
 	if err := validateIdentifier(cfg.Catalog, "catalog"); err != nil {
-		fatal(err)
+		return err
 	}
 	if err := validateIdentifier(cfg.Database, "database"); err != nil {
-		fatal(err)
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	if err := os.MkdirAll(cfg.ReportDir, 0o755); err != nil {
-		fatal(fmt.Errorf("create report dir: %w", err))
+		return fmt.Errorf("create report dir: %w", err)
 	}
 	started := time.Now().UTC()
 	summary := runSummary{
@@ -120,36 +128,65 @@ func main() {
 		StartedAt: started.Format(time.RFC3339),
 	}
 
-	if err := seedRESTTables(ctx, cfg); err != nil {
+	var db *sql.DB
+	runner := &caseRunner{cfg: cfg, lowBudget: lowBudget}
+	var owned *budgetRESTResources
+	if lowBudget {
+		owned = &budgetRESTResources{}
+		// Install recovery before creating the first REST resource. The run context
+		// may already be cancelled when cleanup starts.
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cleanupCancel()
+			if db != nil {
+				defer db.Close()
+			}
+			result := runner.cleanupBudgetCase(cleanupCtx, owned)
+			summary.Cases = append(summary.Cases, result)
+			if result.Status != "passed" {
+				runErr = errors.Join(runErr, fmt.Errorf("fixture cleanup: %s", result.Error))
+			}
+			runErr = errors.Join(runErr, writeCaseReport(cfg.ReportDir, result))
+			summary.EndedAt = time.Now().UTC().Format(time.RFC3339)
+			runErr = errors.Join(runErr, writeRunSummary(cfg.ReportDir, summary))
+		}()
+	}
+	if err := seedRESTTablesOwned(ctx, cfg, owned); err != nil {
 		result := caseResult{ID: "ICE-CI-E2E-000", Name: "rest-seed", Status: "failed", Error: err.Error()}
 		summary.Cases = append(summary.Cases, result)
 		_ = writeCaseReport(cfg.ReportDir, result)
 		_ = writeRunSummary(cfg.ReportDir, summary)
-		fatal(err)
+		return err
 	}
 	// Keep the successful seed in the report as well. The E2E artifact contract
 	// requires one complete report directory for every case, including the setup
 	// phase that supplies the catalog tables for the SQL scenarios below.
 	if err := recordSuccessfulRESTSeed(cfg.ReportDir, &summary); err != nil {
-		fatal(err)
+		return err
 	}
 
-	db, err := sql.Open("mysql", cfg.DSN)
+	var err error
+	db, err = sql.Open("mysql", cfg.DSN)
 	if err != nil {
-		fatal(fmt.Errorf("open MO connection: %w", err))
+		return fmt.Errorf("open MO connection: %w", err)
 	}
-	defer db.Close()
+	// Cleanup runs before this connection is closed.
+	defer func() {
+		if !lowBudget {
+			db.Close()
+		}
+	}()
 	if err := waitForDB(ctx, db); err != nil {
-		fatal(err)
+		return err
 	}
 
-	runner := &caseRunner{cfg: cfg, db: db}
+	runner.db = db
 	if err := runner.setup(ctx); err != nil {
 		result := caseResult{ID: "ICE-CI-E2E-001", Name: "mo-setup", Status: "failed", Error: err.Error()}
 		summary.Cases = append(summary.Cases, result)
 		_ = writeCaseReport(cfg.ReportDir, result)
 		_ = writeRunSummary(cfg.ReportDir, summary)
-		fatal(err)
+		return err
 	}
 
 	cases := []func(context.Context) caseResult{
@@ -162,30 +199,34 @@ func main() {
 		runner.partitionFilterCase,
 		runner.yearPartitionDateCase,
 		runner.mergeOnReadDeleteCase,
+		runner.appendBudgetRowsCase,
 	}
-	failed := false
+	if lowBudget {
+		cases = []func(context.Context) caseResult{runner.appendBudgetRowsCase, runner.appendBudgetRejectionCase}
+	}
+	var caseErr error
 	for _, fn := range cases {
 		result := fn(ctx)
 		if result.Status != "passed" {
-			failed = true
+			caseErr = errors.Join(caseErr, fmt.Errorf("%s: %s", result.ID, result.Error))
 		}
 		summary.Cases = append(summary.Cases, result)
 		if err := writeCaseReport(cfg.ReportDir, result); err != nil {
-			fatal(err)
+			return errors.Join(caseErr, err)
 		}
 	}
 	summary.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeRunSummary(cfg.ReportDir, summary); err != nil {
-		fatal(err)
+		return errors.Join(caseErr, err)
 	}
-	if failed {
-		fatal(fmt.Errorf("one or more Iceberg E2E local cases failed"))
-	}
+	return caseErr
 }
 
 type caseRunner struct {
-	cfg localE2EConfig
-	db  *sql.DB
+	lowBudget     bool
+	ownedDatabase bool
+	cfg           localE2EConfig
+	db            *sql.DB
 }
 
 func (r *caseRunner) setup(ctx context.Context) error {
@@ -232,10 +273,116 @@ func (r *caseRunner) setup(ctx context.Context) error {
 ) ENGINE = ICEBERG WITH ('catalog'=%s,'namespace'=%s,'table'=%s,'ref'='main','read_mode'='append_only','write_mode'='append_only')`,
 			ident(r.cfg.Database), ident(name), sqlString(r.cfg.Catalog), sqlString(r.cfg.Namespace), sqlString(name)))
 	}
+	if r.lowBudget {
+		// CREATE DATABASE is exclusive; never drop a pre-existing database.
+		statements = statements[2:]
+		catalogs, err := queryLines(ctx, r.db, fmt.Sprintf("SELECT name FROM mo_catalog.mo_iceberg_catalogs WHERE name = %s", sqlString(r.cfg.Catalog)))
+		if err != nil {
+			return err
+		}
+		if len(catalogs) == 1 {
+			// The catalog and its audit records belong to the service fixture;
+			// only database mappings are recreated between runs.
+			statements = append([]string{statements[0]}, statements[3:]...)
+		}
+	}
 	for _, stmt := range statements {
 		if _, err := r.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("execute setup statement %q: %w", redactText(stmt), err)
 		}
+		if r.lowBudget && stmt == fmt.Sprintf("CREATE DATABASE %s", ident(r.cfg.Database)) {
+			r.ownedDatabase = true
+		}
+	}
+	return nil
+}
+
+type budgetRESTResources struct {
+	namespace bool
+	tables    []string
+}
+
+// cleanupBudgetCase removes and verifies the test-owned SQL and REST resources.
+func (r *caseRunner) cleanupBudgetCase(ctx context.Context, owned *budgetRESTResources) caseResult {
+	const id, name = "ICE-CI-E2E-028", "append-budget-cleanup"
+	var cleanupErr error
+	fail := func(err error) caseResult {
+		return failedCase(id, name, nil, nil, nil, err.Error())
+	}
+	if r.db != nil && r.ownedDatabase {
+		if _, err := r.db.ExecContext(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", ident(r.cfg.Database))); err != nil {
+			cleanupErr = err
+		} else {
+			for _, stmt := range []string{fmt.Sprintf("SHOW DATABASES LIKE %s", sqlString(r.cfg.Database)), fmt.Sprintf("SELECT table_name FROM mo_catalog.mo_iceberg_tables WHERE namespace = %s", sqlString(r.cfg.Namespace))} {
+				rows, err := queryLines(ctx, r.db, stmt)
+				if err != nil {
+					cleanupErr = errors.Join(cleanupErr, err)
+					continue
+				}
+				if len(rows) != 0 {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("cleanup query %s returned %v", stmt, rows))
+				}
+			}
+		}
+	}
+	if owned == nil || !owned.namespace {
+		if cleanupErr != nil {
+			return fail(cleanupErr)
+		}
+		return passedCase(id, name, nil, nil, nil, nil)
+	}
+	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
+	req := api.CatalogRequest{Catalog: model.Catalog{Name: r.cfg.Catalog, Type: "rest", URI: r.cfg.CatalogURI, Warehouse: r.cfg.Warehouse, AuthMode: "none"}, ExternalPrincipal: "ci-local"}
+	req, err := catalogRequestWithPrefix(ctx, client, req, r.cfg.Warehouse)
+	if err != nil {
+		return fail(errors.Join(cleanupErr, err))
+	}
+	base, err := createNamespaceURL(r.cfg.CatalogURI, req.Prefix)
+	if err != nil {
+		return fail(errors.Join(cleanupErr, err))
+	}
+	ns := base + "/" + url.PathEscape(r.cfg.Namespace)
+	targets := make([]string, 0, len(owned.tables)+1)
+	for _, table := range owned.tables {
+		targets = append(targets, ns+"/tables/"+url.PathEscape(table))
+	}
+	targets = append(targets, ns)
+	for _, target := range targets {
+		if err := cleanupBudgetRESTTarget(ctx, target); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	if cleanupErr != nil {
+		return fail(cleanupErr)
+	}
+	return passedCase(id, name, nil, nil, nil, nil)
+}
+
+// cleanupBudgetRESTTarget deletes one owned resource and verifies its absence.
+func cleanupBudgetRESTTarget(ctx context.Context, target string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		return fmt.Errorf("REST cleanup returned %d for %s", resp.StatusCode, target)
+	}
+	request, err = http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return err
+	}
+	resp, err = http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("REST cleanup verification returned %d for %s", resp.StatusCode, target)
 	}
 	return nil
 }
@@ -1050,6 +1197,83 @@ func (r *caseRunner) emptyStringReadCase(ctx context.Context) caseResult {
 	return passedCase("ICE-CI-E2E-025", "empty-string-read", sqls, expected, actual, nil)
 }
 
+// appendBudgetRowsCase keeps the payload wide enough to exercise file rotation
+// when the service uses a small DML budget. A default-budget run is a control.
+func (r *caseRunner) appendBudgetRowsCase(ctx context.Context) caseResult {
+	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("append_orders"))
+	sqls := []string{
+		fmt.Sprintf("INSERT INTO %s SELECT 1000 + result, 1, result, repeat('x', 32768) FROM generate_series(1, 128) g", table),
+		fmt.Sprintf("SELECT count(*), count(distinct order_id), sum(amount), sum(length(region)), sum(region != repeat('x', 32768)) FROM %s WHERE order_id BETWEEN 1001 AND 1128", table),
+	}
+	expected := []string{"128\t128\t8256\t4194304\t0"}
+	if _, err := r.db.ExecContext(ctx, sqls[0]); err != nil {
+		return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, nil, err.Error())
+	}
+	actual, err := queryLines(ctx, r.db, sqls[1])
+	if err != nil {
+		return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, err.Error())
+	}
+	if !sameLines(expected, actual) {
+		return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, "append rows mismatch")
+	}
+	if r.lowBudget {
+		count, err := currentSnapshotAddedFiles(ctx, r.cfg, "append_orders")
+		if err != nil {
+			return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, err.Error())
+		}
+		if count <= 1 {
+			return failedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, fmt.Sprintf("expected multiple committed data files, got %d", count))
+		}
+	}
+	return passedCase("ICE-CI-E2E-026", "append-budget-rows", sqls, expected, actual, nil)
+}
+
+// appendBudgetRejectionCase requires a service configured with a 4 MiB DML budget.
+func (r *caseRunner) appendBudgetRejectionCase(ctx context.Context) caseResult {
+	const id = "ICE-CI-E2E-027"
+	const name = "append-budget-rejection"
+	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("partition_orders"))
+	sqls := []string{
+		fmt.Sprintf("INSERT INTO %s VALUES (1,1,1,'seed')", table),
+		fmt.Sprintf("INSERT INTO %s SELECT result + 100, result, result, concat('p', cast(result as char)) FROM generate_series(1, 512) g", table),
+		fmt.Sprintf("SELECT count(*), sum(order_id), sum(amount) FROM %s", table),
+	}
+	expected := []string{"1\t1\t1"}
+	fail := func(err error) caseResult { return failedCase(id, name, sqls, expected, nil, err.Error()) }
+	if _, err := r.db.ExecContext(ctx, sqls[0]); err != nil {
+		return fail(err)
+	}
+	before, err := currentSnapshotID(ctx, r.cfg, "partition_orders")
+	if err != nil {
+		return fail(err)
+	}
+	_, err = r.db.ExecContext(ctx, sqls[1])
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) || mysqlErr.Number != 20400 {
+		return fail(fmt.Errorf("expected MySQL error 20400, got %v", err))
+	}
+	for _, pattern := range []string{`ICEBERG_PLANNING_LIMIT_EXCEEDED`, `used_bytes=[0-9]+`, `requested_bytes=[0-9]+`, `limit_bytes=4194304`, `iceberg.write.dml_max_memory`, `dml-max-memory`} {
+		if !regexp.MustCompile(pattern).MatchString(mysqlErr.Message) {
+			return fail(fmt.Errorf("budget error missing %q: %v", pattern, err))
+		}
+	}
+	after, err := currentSnapshotID(ctx, r.cfg, "partition_orders")
+	if err != nil {
+		return fail(err)
+	}
+	if before != after {
+		return fail(fmt.Errorf("snapshot changed: %d -> %d", before, after))
+	}
+	actual, err := queryLines(ctx, r.db, sqls[2])
+	if err != nil {
+		return fail(err)
+	}
+	if !sameLines(expected, actual) {
+		return fail(fmt.Errorf("partial commit: %v", actual))
+	}
+	return passedCase(id, name, sqls, expected, actual, map[string]string{"rejection": mysqlErr.Message, "snapshot_unchanged": "true"})
+}
+
 func (r *caseRunner) partitionFilterCase(ctx context.Context) caseResult {
 	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("partition_orders"))
 	sqls := []string{
@@ -1163,6 +1387,10 @@ func (r *caseRunner) mergeOnReadDeleteCase(ctx context.Context) caseResult {
 }
 
 func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
+	return seedRESTTablesOwned(ctx, cfg, nil)
+}
+
+func seedRESTTablesOwned(ctx context.Context, cfg localE2EConfig, owned *budgetRESTResources) error {
 	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
 	req := api.CatalogRequest{
 		Catalog: model.Catalog{
@@ -1180,8 +1408,11 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := createNamespace(ctx, cfg, reqWithPrefix.Prefix); err != nil {
+	if err := createNamespaceWithOwnership(ctx, cfg, reqWithPrefix.Prefix, owned != nil); err != nil {
 		return err
+	}
+	if owned != nil {
+		owned.namespace = true
 	}
 	for _, spec := range e2eTableSpecs(cfg.Namespace) {
 		properties := map[string]string{
@@ -1201,6 +1432,9 @@ func seedRESTTables(ctx context.Context, cfg localE2EConfig) error {
 		})
 		if err != nil {
 			return fmt.Errorf("create Iceberg table %s.%s: %w", cfg.Namespace, spec.name, err)
+		}
+		if owned != nil {
+			owned.tables = append(owned.tables, spec.name)
 		}
 	}
 	return nil
@@ -1261,6 +1495,10 @@ func catalogRequestWithPrefix(ctx context.Context, client *catalog.RESTClient, r
 }
 
 func createNamespace(ctx context.Context, cfg localE2EConfig, prefix string) error {
+	return createNamespaceWithOwnership(ctx, cfg, prefix, false)
+}
+
+func createNamespaceWithOwnership(ctx context.Context, cfg localE2EConfig, prefix string, exclusive bool) error {
 	body, err := json.Marshal(map[string]any{
 		"namespace":  []string{cfg.Namespace},
 		"properties": map[string]string{"owner": "matrixone-ci"},
@@ -1279,14 +1517,46 @@ func createNamespace(ctx context.Context, cfg localE2EConfig, prefix string) err
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if exclusive {
+			return fmt.Errorf("create namespace request failed; creation outcome unknown, resource was not claimed for cleanup: %w", err)
+		}
 		return fmt.Errorf("create namespace request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusConflict {
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent || (resp.StatusCode == http.StatusConflict && !exclusive) {
 		return nil
 	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	return fmt.Errorf("create namespace %s returned HTTP %d: %s", cfg.Namespace, resp.StatusCode, strings.TrimSpace(string(data)))
+}
+
+func currentSnapshotAddedFiles(ctx context.Context, cfg localE2EConfig, table string) (int, error) {
+	client := catalog.NewRESTClient(catalog.WithAllowPlainHTTP(true))
+	req := api.CatalogRequest{Catalog: model.Catalog{Name: cfg.Catalog, Type: "rest", URI: cfg.CatalogURI, Warehouse: cfg.Warehouse, AuthMode: "none"}, ExternalPrincipal: "ci-local"}
+	req, err := catalogRequestWithPrefix(ctx, client, req, cfg.Warehouse)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := client.LoadTable(ctx, api.LoadTableRequest{CatalogRequest: req, Namespace: api.Namespace{cfg.Namespace}, Table: table})
+	if err != nil {
+		return 0, err
+	}
+	var meta struct {
+		Current   int64 `json:"current-snapshot-id"`
+		Snapshots []struct {
+			ID      int64             `json:"snapshot-id"`
+			Summary map[string]string `json:"summary"`
+		} `json:"snapshots"`
+	}
+	if err := json.Unmarshal(resp.MetadataJSON, &meta); err != nil {
+		return 0, err
+	}
+	for _, snapshot := range meta.Snapshots {
+		if snapshot.ID == meta.Current {
+			return strconv.Atoi(snapshot.Summary["added-data-files"])
+		}
+	}
+	return 0, fmt.Errorf("current snapshot %d missing", meta.Current)
 }
 
 func currentSnapshotID(ctx context.Context, cfg localE2EConfig, table string) (int64, error) {

@@ -47,7 +47,6 @@ func TestUnionInlineSelection(t *testing.T) {
 					MustFixedColNoTypeCheck[types.Varlena](src)[1].SetOffsetLen(0, 0)
 					require.Empty(t, src.area)
 				}
-				src.GetGrouping().Add(2)
 				// Consecutive runs, gaps, repetition and reversal share one
 				// append. The expected rows do not depend on the copy helper.
 				rows := []int64{1, 2, 3, 6, 6, 4, 0, 1, 2}
@@ -72,7 +71,6 @@ func TestUnionInlineSelection(t *testing.T) {
 					for i, row := range rows {
 						isNull := shape == "nullable" && row == 4
 						require.Equal(t, isNull, dst.IsNull(uint64(i+1)))
-						require.Equal(t, row == 2, dst.GetGrouping().Contains(uint64(i+1)))
 						if !isNull {
 							require.Equal(t, values[row], dst.GetStringAt(i+1))
 							if emptyNonInline && row == 1 {
@@ -124,7 +122,7 @@ func TestUnionBatchVarlenFastPath(t *testing.T) {
 		require.NoError(t, AppendBytes(v, []byte(s), false, mp))
 	}
 
-	// full-append fast path: offset=0, cnt=w.length, flags=nil, no nulls/grouping.
+	// full-append fast path: offset=0, cnt=w.length, flags=nil, no nulls.
 	require.NoError(t, v.UnionBatch(w, 0, w.Length(), nil, mp))
 
 	require.Equal(t, len(seed)+n, v.Length())
@@ -177,7 +175,6 @@ func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
 		}
 		require.NoError(t, AppendArray(src, value, isNull, mp))
 	}
-	src.gsp.Add(uint64(start+3), uint64(start+count-1))
 
 	dst := NewVec(types.T_array_float32.ToType(), mp)
 	require.NoError(t, AppendArray(dst, []float32{1, 2, 3}, false, mp))
@@ -193,10 +190,6 @@ func TestUnionBatchVarlenContiguousRangeFastPath(t *testing.T) {
 	for row := 0; row < dst.Length(); row++ {
 		isNull := ref.IsNull(uint64(row))
 		require.Equalf(t, isNull, dst.IsNull(uint64(row)), "null row %d", row)
-		require.Equalf(t,
-			ref.GetGrouping().Contains(uint64(row)),
-			dst.GetGrouping().Contains(uint64(row)),
-			"grouping row %d", row)
 		if !isNull {
 			require.Equalf(t,
 				GetArrayAt[float32](ref, row),
@@ -342,7 +335,6 @@ func newForcedGrowthAliasVector(
 		selectedRows := len(values) - 1
 		if len(vec.area)+payloadBytes > cap(vec.area) &&
 			len(vec.data)+selectedRows*vec.typ.TypeSize() > cap(vec.data) {
-			vec.gsp.Add(2)
 			return vec, values, isNull
 		}
 	}
@@ -386,10 +378,6 @@ func assertUnionBatchAliasResult(
 		targetRow := oldLength + i
 		require.Equalf(t, isNull[sourceRow], vec.IsNull(uint64(targetRow)),
 			"null row %d", targetRow)
-		require.Equalf(t,
-			vec.GetGrouping().Contains(uint64(sourceRow)),
-			vec.GetGrouping().Contains(uint64(targetRow)),
-			"grouping row %d", targetRow)
 		if !isNull[sourceRow] {
 			require.Equalf(t, values[sourceRow], string(vec.GetBytesAt(targetRow)),
 				"value row %d", targetRow)
@@ -566,7 +554,6 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 				defer source.Free(mp)
 				require.NoError(t, AppendFixedList(source, []int64{10, 11, 12, 13, 14, 15, 16}, nil, mp))
 				source.GetNulls().Add(test.nulls...)
-				source.GetGrouping().Add(1, 3, 6)
 				source.SetLength(5) // Retain stale bits outside the logical range.
 				destination := NewVec(types.T_int64.ToType(), mp)
 				defer destination.Free(mp)
@@ -587,23 +574,21 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 				for row := 1; row < 4; row++ {
 					isNull := test.name == "all" || test.name == "sparse" && row == 1
 					require.Equal(t, isNull, destination.IsNull(uint64(row)))
-					require.Equal(t, row == 2, destination.GetGrouping().Contains(uint64(row)))
 					if !isNull {
 						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
 					} else {
 					}
 				}
 				require.False(t, destination.GetNulls().Contains(5))
-				require.False(t, destination.GetGrouping().Contains(5))
 			})
 		}
 	}
 }
 
 // TestUnionBatchNullFastPath exercises the UnionBatch full-append fast path with
-// nulls and grouping bits, appended into a non-empty target (baseOff != 0 so the
+// nulls, appended into a non-empty target (baseOff != 0 so the
 // offset-rebase and null-header-clear interact), cross-checked against per-row
-// UnionOne (which handles nulls/grouping correctly).
+// UnionOne (which handles nulls correctly).
 func TestUnionBatchNullFastPath(t *testing.T) {
 	mp := mpool.MustNewZero()
 	const n = 300
@@ -624,8 +609,6 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 			}
 			require.NoError(t, AppendBytes(w, b, null, mp))
 		}
-		// set a few grouping bits (independent of nulls)
-		w.gsp.Add(3, 7, 100, 299)
 		return w
 	}
 	w := build()
@@ -647,7 +630,6 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 		rn := ref.GetNulls().Contains(uint64(i))
 		vn := v.GetNulls().Contains(uint64(i))
 		require.Equalf(t, rn, vn, "nsp row %d", i)
-		require.Equalf(t, ref.GetGrouping().Contains(uint64(i)), v.GetGrouping().Contains(uint64(i)), "gsp row %d", i)
 		if !rn {
 			require.Equalf(t, string(ref.GetBytesAt(i)), string(v.GetBytesAt(i)), "value row %d", i)
 		}
@@ -674,11 +656,10 @@ func TestUnionBatchNullFastPath(t *testing.T) {
 }
 
 // TestUnionBatchFastPathStaleBitmapBits is the regression guard for the fast-path
-// bug where w carried nsp/gsp bits at index >= w.length — a normal reused state,
+// bug where w carried nsp bits at index >= w.length — a normal reused state,
 // since SetLength shrinks length without clearing the bitmaps. The buggy code
 // propagated bits via Foreach (which walks every set bit), so a stale nsp bit
-// panicked on the header clear (vCol[oldLen+i] out of range) and a stale gsp bit
-// leaked a phantom grouping bit. The fix bounds propagation to [0,cnt), matching
+// panicked on the header clear (vCol[oldLen+i] out of range). The fix bounds propagation to [0,cnt), matching
 // the per-row UnionOne path which only consults [0,cnt). Pre-fix this test panics
 // at UnionBatch; post-fix it matches UnionOne with no phantom bits.
 func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
@@ -691,8 +672,7 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 		// in-range bits (must propagate) plus stale bits >= the shrunk length
 		// (must be ignored, exactly as the per-row path ignores them).
 		w.nsp.Add(3, 15, 18)
-		w.gsp.Add(5, 12, 17)
-		w.SetLength(10) // length 10; bits 12,15,17,18 are now stale (>= length)
+		w.SetLength(10) // length 10; bits 15,18 are now stale (>= length)
 		return w
 	}
 	w := build()
@@ -714,7 +694,6 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 	for i := 0; i < v.Length(); i++ {
 		rn := ref.GetNulls().Contains(uint64(i))
 		require.Equalf(t, rn, v.GetNulls().Contains(uint64(i)), "nsp row %d", i)
-		require.Equalf(t, ref.GetGrouping().Contains(uint64(i)), v.GetGrouping().Contains(uint64(i)), "gsp row %d", i)
 		if !rn {
 			require.Equalf(t, string(ref.GetBytesAt(i)), string(v.GetBytesAt(i)), "value row %d", i)
 		}
@@ -722,9 +701,8 @@ func TestUnionBatchFastPathStaleBitmapBits(t *testing.T) {
 
 	// stale source bits must not leak as phantom bits past the appended range
 	// (oldLen == 1 for the single seed row).
-	for _, stale := range []uint64{12, 15, 17, 18} {
+	for _, stale := range []uint64{15, 18} {
 		require.Falsef(t, v.GetNulls().Contains(1+stale), "phantom nsp bit at %d", 1+stale)
-		require.Falsef(t, v.GetGrouping().Contains(1+stale), "phantom gsp bit at %d", 1+stale)
 	}
 
 	w.Free(mp)
@@ -817,7 +795,6 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				col := MustFixedColNoTypeCheck[types.Varlena](src)
 				col[2], col[4] = col[4], col[2]
 			}
-			src.gsp.Add(3)
 			input := src
 			offset, count := 0, 8
 			if kind == "offset" || kind == "reordered" {
@@ -870,7 +847,6 @@ func TestPreflightedSelectedVarlenRanges(t *testing.T) {
 				}
 				row := offset + i
 				require.Equal(t, input.IsNull(uint64(row)), dst.IsNull(uint64(next)))
-				require.Equal(t, input.GetGrouping().Contains(uint64(row)), dst.GetGrouping().Contains(uint64(next)))
 				if !input.IsNull(uint64(row)) {
 					require.Equal(t, input.GetBytesAt(row), dst.GetBytesAt(next))
 				}

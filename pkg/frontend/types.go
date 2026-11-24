@@ -307,8 +307,18 @@ type PrepareStmt struct {
 
 	// params is owned by the statement; paramsMP is the pool it was created
 	// with (the executing process's pool) and is freed with.
-	params              *vector.Vector
-	paramsMP            *mpool.MPool
+	params   *vector.Vector
+	paramsMP *mpool.MPool
+	// typedParams is the typed form of params, owned by the statement and
+	// rewritten in place by every execution.
+	typedParams typedPrepareParams
+	// userParams holds SQL EXECUTE ... USING parameters, owned by the
+	// statement and rewritten in place by every execution.
+	userParams executeUserParams
+	// paramValues backs the planner's parameter values of an execution.
+	paramValues plan2.ParamValueStore
+	// bindings backs an execution's parameter source bindings.
+	bindings            []plan2.PreparedSourceBinding
 	getFromSendLongData map[int]struct{}
 	// COM_STMT_SEND_LONG_DATA owns its chunks until EXECUTE materializes each
 	// parameter once. The pool must be the one that allocated the buffers,
@@ -910,6 +920,11 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.params.Free(prepareStmt.paramsMP)
 		prepareStmt.params, prepareStmt.paramsMP = nil, nil
 	}
+	prepareStmt.typedParams.release(prepareStmt.proc)
+	prepareStmt.userParams.release()
+	// Drop the last execution's values, which may hold large payloads.
+	prepareStmt.paramValues = plan2.ParamValueStore{}
+	prepareStmt.bindings = nil
 
 	if prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
@@ -969,6 +984,12 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 		return
 	}
 	prepareStmt.clearBinaryParamState(prepareStmt.proc)
+	// An explicit reset also returns the statement's parameter storage, which
+	// every execution otherwise keeps for the next one.
+	if prepareStmt.params != nil {
+		prepareStmt.params.Free(prepareStmt.paramsMP)
+		prepareStmt.params, prepareStmt.paramsMP = nil, nil
+	}
 	prepareStmt.longDataErr = nil
 }
 
@@ -985,15 +1006,17 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	if proc == nil {
 		proc = prepareStmt.proc
 	}
-	if prepareStmt.params != nil && proc != nil {
+	if prepareStmt.params != nil {
 		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
 			prepareStmt.proc.SetPrepareParams(nil)
 		}
-		if proc.GetPrepareParams() == prepareStmt.params {
+		if proc != nil && proc.GetPrepareParams() == prepareStmt.params {
 			proc.SetPrepareParams(nil)
 		}
-		prepareStmt.params.Free(prepareStmt.paramsMP)
-		prepareStmt.params, prepareStmt.paramsMP = nil, nil
+		// The statement keeps its parameter storage for the next execution
+		// (Close frees it): only this execution's values are dropped. An empty
+		// vector reads as "no binary parameters" to every consumer.
+		prepareStmt.params.CleanOnlyData()
 	}
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)

@@ -1126,7 +1126,7 @@ func blockDataReadWithFilter(
 			}
 		}
 
-		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) && !objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(colTypes) {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
 			defer tombstones.Release()
 			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
 		}
@@ -1183,9 +1183,6 @@ func blockDataReadWithFilter(
 					return err
 				}
 			}
-			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deleted, mp); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -1227,7 +1224,7 @@ func blockDataReadWithFilter(
 		// a storage row selection. Then every column can stay a read-only
 		// reference to the cache and the batch carries the selection.
 		publishSelection := applyFilter.PublishSelection != nil && deleteMask.IsEmpty() &&
-			physicalRows == nil && objectio.JSONReadSetFromContext(ctx) == nil
+			physicalRows == nil
 		if !filterResult.All {
 			if publishSelection && len(filterResult.Sels) > 0 {
 				publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter)
@@ -1245,11 +1242,6 @@ func blockDataReadWithFilter(
 			return err
 		}
 		if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
-			return err
-		}
-	}
-	if !filterResult.All {
-		if err := objectio.JSONReadSetFromContext(ctx).SelectRows(filterResult.Sels, mp); err != nil {
 			return err
 		}
 	}
@@ -1697,9 +1689,6 @@ func BlockDataReadInner(
 				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
 					return err
 				}
-			}
-			if err := objectio.JSONReadSetFromContext(ctx).ApplyDeletes(deletedRows, mp); err != nil {
-				return err
 			}
 		}
 		return nil

@@ -81,7 +81,7 @@ const sharedMaterializedSourceMaxInMemoryBatches = 4096
 const spillBatchHeaderSize = int64(8)
 
 const (
-	spillPayloadGrouping byte = iota
+	spillPayloadBatch byte = iota
 	spillPayloadSelectedRange
 )
 
@@ -486,12 +486,12 @@ func (s *Source) appendSpillRecordLocked(
 		serializedBytes,
 		scratchBytes,
 		func(w io.Writer) error {
-			if n, err := w.Write([]byte{spillPayloadGrouping}); err != nil {
+			if n, err := w.Write([]byte{spillPayloadBatch}); err != nil {
 				return err
 			} else if n != 1 {
 				return io.ErrShortWrite
 			}
-			return bat.MarshalBinaryWithGroupingTo(w)
+			return bat.MarshalBinaryForSpillTo(w)
 		},
 	)
 }
@@ -639,9 +639,9 @@ func unmarshalSpillBatch(
 	var decoded *batch.Batch
 	var err error
 	switch data[0] {
-	case spillPayloadGrouping:
+	case spillPayloadBatch:
 		decoded = batch.NewWithSize(0)
-		err = decoded.UnmarshalFromReaderWithGrouping(r, allocation)
+		err = decoded.UnmarshalFromReaderForSpill(r, allocation)
 	case spillPayloadSelectedRange:
 		decoded, err = unmarshalSelectedSpillBatchFrom(r, mp, allocation)
 	default:
@@ -1053,25 +1053,10 @@ func spillBatchSizeWithLimit(
 	if err != nil {
 		return 0, 0, err
 	}
-	// The spill-only wrapper frames the stable batch/parameter payload and then
-	// appends one grouping bitmap per vector. Grouping provenance distinguishes
-	// rollup sentinels from SQL NULL and therefore must survive a source crossing
-	// the in-memory threshold.
-	serialized, err = checkedAdd(serialized, 8, 4)
+	// The spill-only wrapper frames the stable batch payload with its size.
+	serialized, err = checkedAdd(serialized, 8)
 	if err != nil {
 		return 0, 0, err
-	}
-	for _, vec := range bat.Vecs {
-		groupingBytes := vec.GroupingMarshalBinarySize()
-		if groupingBytes < 0 || groupingBytes > math.MaxInt32 {
-			return 0, 0, moerr.NewInternalErrorNoCtx(
-				"materialized sink spill grouping bitmap exceeds encoding limit",
-			)
-		}
-		serialized, err = checkedAdd(serialized, 4, uint64(groupingBytes))
-		if err != nil {
-			return 0, 0, err
-		}
 	}
 	if serialized > limit || serialized > uint64(math.MaxInt) {
 		return 0, 0, errSpillBatchTooLarge

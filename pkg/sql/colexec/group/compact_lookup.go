@@ -57,7 +57,7 @@ func compactGroupColumns(vecs []*vector.Vector, start, count int) bool {
 		}
 		typ := vec.GetType()
 		if typ.Oid != types.T_char || typ.Width != 1 || types.IsUnicodeCollation(typ.Charset) ||
-			vec.IsConst() || vec.HasNull() || vec.HasGrouping() ||
+			vec.IsConst() || vec.HasNull() ||
 			start > vec.Length() || count > vec.Length()-start {
 			return false
 		}

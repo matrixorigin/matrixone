@@ -131,7 +131,7 @@ func preparedExactNumericStringType(ctx context.Context, ordinal int) (types.Typ
 		return types.Type{}, false
 	}
 	value := state.values[ordinal]
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		value = param.Value
 	}
 	spelling, ok := value.(string)
@@ -163,7 +163,7 @@ func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
 	}
 	state.valueDependent = true
 	value := state.values[position]
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		if param.MaterializedValue != "" {
 			return param.MaterializedValue, true
 		}
@@ -397,7 +397,7 @@ func bindPreparedIntegerValue(ctx context.Context, column, source *Expr) (*Expr,
 	// copy to one transport conversion; retain the original full guard above,
 	// source marker, sibling consumers and source-domain cache key.
 	if binding.Type.Oid == types.T(source.Typ.Id) {
-		if value, ok := state.values[source.GetP().Pos].(ParamValue); ok &&
+		if value, ok := AsParamValue(state.values[source.GetP().Pos]); ok &&
 			value.IsBinaryProtocol && !value.IsBin && !value.IsBinaryString &&
 			value.PrepareParamKind == types.StringConversionInteger {
 			narrowed := DeepCopyExpr(source)
@@ -624,7 +624,7 @@ func presentPreparedSQLResults(ctx context.Context, query *plan.Query) {
 		if !direct || pos < 0 || int(pos) >= len(state.values) {
 			continue
 		}
-		param, ok := state.values[pos].(ParamValue)
+		param, ok := AsParamValue(state.values[pos])
 		if !ok || param.IsBinaryProtocol {
 			continue
 		}
@@ -727,7 +727,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) &&
 			args[1-i] != nil && args[1-i].Typ.Id == int32(types.T_float32) &&
 			binding.Type.IsNumeric() && int(source.GetP().Pos) < len(state.values) {
-			if param, ok := state.values[source.GetP().Pos].(ParamValue); ok && !param.IsBinaryProtocol {
+			if param, ok := AsParamValue(state.values[source.GetP().Pos]); ok && !param.IsBinaryProtocol {
 				// A SQL PREPARE marker compared directly with FLOAT inherits
 				// that column's storage precision. Comparing DECIMAL transport
 				// against FLOAT via DOUBLE would miss the stored rounded value.
@@ -933,7 +933,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			}
 		}
 		if int(source.GetP().Pos) < len(state.values) {
-			if param, ok := state.values[source.GetP().Pos].(ParamValue); ok {
+			if param, ok := AsParamValue(state.values[source.GetP().Pos]); ok {
 				if target, ok := preparedSQLExecuteTextConsumerType(name, source, param); ok {
 					var err error
 					args[i], err = preparedSQLExecuteTextConsumerCast(ctx, source, target)
@@ -960,7 +960,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if pos < 0 || pos >= len(state.values) {
 			return false, 0
 		}
-		param, ok := state.values[pos].(ParamValue)
+		param, ok := AsParamValue(state.values[pos])
 		if !ok || !param.EnableNumericPrefix {
 			return false, 0
 		}
