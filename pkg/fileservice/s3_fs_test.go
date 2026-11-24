@@ -4287,10 +4287,18 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 				// A read past disk-prefetch-memory-max reads its ranges through prefetch
 				// objects of its own, which end after the read returns.
 				wantOpens, wantCloses := tc.opens, tc.closes
-				if tc.cancel && err == nil {
-					// The first range's object closed its reader, canceling the read, after
-					// the second range was opened: both ranges were read.
-					wantOpens, wantCloses = 2, 2
+				if tc.cancel {
+					// The first range's object closes its reader, canceling the read, before
+					// or after the second range is opened; every opened reader is closed.
+					require.Eventually(t, func() bool {
+						opens, closes, _ := storage.counts()
+						return opens >= 1 && opens == closes
+					}, 10*time.Second, time.Millisecond)
+					wantOpens, _, _ = storage.counts()
+					wantCloses = wantOpens
+					if err == nil {
+						require.Equal(t, 2, wantOpens, "a read that got all its ranges opened both")
+					}
 				}
 				require.Eventually(t, func() bool {
 					opens, closes, _ := storage.counts()
