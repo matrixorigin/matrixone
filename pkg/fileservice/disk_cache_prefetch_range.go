@@ -74,8 +74,7 @@ func autoPrefetchUnit(bdp int64) int64 {
 }
 
 // prefetchUnit returns the prefetch unit for a read of the vector, or false to read
-// its ranges alone. Only objects whose range files the range index holds, those with
-// no separator in their path, read through prefetch ranges.
+// its ranges alone. Objects with a separator in their path read their ranges alone.
 func (d *DiskCache) prefetchUnit(vector *IOVector) (int64, bool) {
 	unit := d.prefetchRange.unit()
 	if unit <= 0 || vector.Policy.Any(SkipDiskCacheReads, SkipDiskCacheWrites, ColumnPrefetch, ExactRead) || !vector.Policy.CacheIOEntry() {

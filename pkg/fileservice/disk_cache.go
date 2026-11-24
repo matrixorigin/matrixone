@@ -310,12 +310,8 @@ func newDiskCache(
 // counted later finds the file indexed.
 func (d *DiskCache) loadFile(ctx context.Context, diskPath string, info fs.FileInfo) {
 	objectPath := diskPath
-	if !isFullFileCachePath(diskPath) {
-		key, _, _, ok := parseRangeFile(d.path, diskPath, info.Size())
-		if ok {
-			dir, name := filepath.Split(key)
-			objectPath = filepath.Join(dir, "full"+name)
-		}
+	if key, _, _, ok := parseRangeFile(d.path, diskPath, info.Size()); ok {
+		objectPath = fullPathOfRangeKey(d.path, key)
 	}
 	runPathHook(d.hooks.beforeLoadFile, diskPath)
 	stripe := d.deletes.stripe(objectPath)
@@ -1183,13 +1179,31 @@ func (d *DiskCache) writeFileTo(
 		target.noteWritten(n)
 	}
 
+	var deletes *uint64
+	if whole != nil {
+		deletes = whole.needs.deletes
+	}
 	if asyncFinalize {
-		d.scheduleReservedAsyncFileFinalize(diskPath, f, w.owner, target)
+		d.scheduleReservedAsyncFileFinalize(diskPath, f, w.owner, target, deletes)
 		w = fileWrite{releaseConns: w.releaseConns}
 		return true, nil
 	}
 
-	if err = d.finalizeFileTo(ctx, diskPath, f, claimPublication, target); err != nil {
+	if deletes != nil {
+		claim := claimPublication
+		if claim == nil {
+			claim = func() bool { return ctx.Err() == nil }
+		}
+		if written, err = d.publishUnlessDeletedSince(diskPath, *deletes, claim, func(claim func() bool) (bool, error) {
+			err := d.finalizeFileTo(ctx, diskPath, f, claim, target)
+			if err != nil && claimPublication == nil && ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			return err == nil, err
+		}); !written {
+			return false, err
+		}
+	} else if err = d.finalizeFileTo(ctx, diskPath, f, claimPublication, target); err != nil {
 		return false, err
 	}
 	w.file = nil
