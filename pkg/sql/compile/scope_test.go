@@ -1826,7 +1826,10 @@ func TestCompileExternScanParquetLoadDefaultFanoutContextCancellationTerminatesA
 	testCompile.affectRows = &atomic.Uint64{}
 
 	runDone := make(chan error, 1)
-	go func() { runDone <- testCompile.runOnce() }()
+	go func() {
+		_, err := testCompile.runOnce()
+		runDone <- err
+	}()
 	for range scopes {
 		select {
 		case <-started:
@@ -3427,7 +3430,7 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
 		},
 	}
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
 	payload, err := keys.MarshalBinary()
@@ -3490,7 +3493,7 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 		{"corrupt", types.T_int64, false, 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := vector.NewVec(tc.oid.ToType())
+			v := vector.NewVec(tc.oid.ToType(), proc.Mp())
 			defer v.Free(proc.Mp())
 			if tc.oid == types.T_int64 {
 				require.NoError(t, vector.AppendFixed(v, int64(9), tc.null, proc.Mp()))
@@ -3526,7 +3529,7 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 
 func TestRequiredVectorDomainAcceptsNormalizedCharMembership(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	keys := vector.NewVec(types.T_varchar.ToType())
+	keys := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(keys, []byte("c1      "), false, proc.Mp()))
 	data, err := keys.MarshalBinary()

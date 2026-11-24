@@ -154,7 +154,7 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 	ctr.isStrHash = keyWidth > 8 || group.HasVariableLengthKey(partitionExprs)
 	if err = ctr.hash.BuildHashTable(
 		proc.Ctx, proc.Mp(), false, ctr.isStrHash, ctr.keyNullable,
-		false, 1024, nil, nil,
+		1024, nil, nil,
 	); err != nil {
 		return err
 	}
@@ -266,23 +266,18 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 	if ctr.retained == nil {
 		ctr.retained = batch.NewWithSize(len(input.Vecs))
 		for i, vec := range input.Vecs {
-			ctr.retained.Vecs[i] = vector.NewVec(*vec.GetType())
+			ctr.retained.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 		}
 		ctr.retainedKeys = batch.NewWithSize(len(ctr.orderEval.Vec))
 		for i, vec := range ctr.orderEval.Vec {
-			ctr.retainedKeys.Vecs[i] = vector.NewVec(*vec.GetType())
+			ctr.retainedKeys.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 			ctr.compares[i].Set(0, ctr.retainedKeys.Vecs[i])
 		}
 	}
 	for i, cmp := range ctr.compares {
 		cmp.Set(1, ctr.orderEval.Vec[i])
 	}
-	partitionKeys, ownedPartitionKeys, err := normalizeHashPartitionKeys(
-		ctr.partitionEval.Vec, input.RowCount(), proc.Mp())
-	if err != nil {
-		return err
-	}
-	defer freeNormalizedHashPartitionKeys(ownedPartitionKeys, proc.Mp())
+	partitionKeys := ctr.partitionEval.Vec
 
 	reduceSingleRuns := ctr.limit == 1 && !ctr.withTies
 	for start := 0; start < input.RowCount(); start += hashmap.UnitLimit {
@@ -607,9 +602,9 @@ func (ctr *topNContainer) emitRows(proc *process.Process, result *vm.CallResult,
 		return err
 	}
 	if ctr.output == nil {
-		ctr.output = batch.NewOffHeapWithSize(len(ctr.retained.Vecs))
+		ctr.output = batch.NewWithSize(len(ctr.retained.Vecs))
 		for i, vec := range ctr.retained.Vecs {
-			ctr.output.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
+			ctr.output.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
 		}
 	} else {
 		ctr.output.CleanOnlyData()

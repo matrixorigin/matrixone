@@ -197,7 +197,7 @@ func TestNestedScopeFailureAfterPartialInput(t *testing.T) {
 }
 func partialInputBatch(proc *process.Process, values []int64) *batch.Batch {
 	b := batch.NewWithSize(1)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	if err := vector.AppendFixedList(b.Vecs[0], values, nil, proc.Mp()); err != nil {
 		panic(err)
 	}

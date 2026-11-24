@@ -38,7 +38,7 @@ func BenchmarkHashBuildRuntimeKeys(b *testing.B) {
 					defer tc.proc.Free()
 					defer tc.arg.Free(tc.proc, false, nil)
 					input := batch.NewWithSize(1)
-					input.Vecs[0] = vector.NewVec(typ)
+					input.Vecs[0] = vector.NewVec(typ, tc.proc.Mp())
 					defer input.Clean(tc.proc.Mp())
 					for _, key := range rand.New(rand.NewSource(42)).Perm(rows) {
 						if oid == types.T_int64 {

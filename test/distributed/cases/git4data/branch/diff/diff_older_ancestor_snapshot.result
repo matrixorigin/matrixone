@@ -106,6 +106,12 @@ r1  ¦  DELETE  ¦  1  ¦  10
 data branch diff r2 against r0{snapshot='diff_older_ancestor_sp'};
 ➤ diff r2 against r0[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  w[4,32,0]  𝄀
 r2  ¦  DELETE  ¦  1  ¦  10
+data branch diff r2 against r0{snapshot='diff_older_ancestor_sp'} output as renamed_history_diff;
+➤ TABLE CREATED[12,0,0]  𝄀
+`test_diff_older_ancestor`.`renamed_history_diff`
+select __mo_diff_source, __mo_diff_flag, id, w from renamed_history_diff order by id;
+➤ __mo_diff_source[12,255,0]  ¦  __mo_diff_flag[12,16,0]  ¦  id[4,32,0]  ¦  w[4,32,0]  𝄀
+r2  ¦  DELETE  ¦  1  ¦  10
 data branch diff r0{snapshot='diff_older_ancestor_sp'} against r2;
 ➤ diff r0 against r2[12,0,0]  ¦  flag[12,0,0]  ¦  id[4,32,0]  ¦  v[4,32,0]  𝄀
 r2  ¦  DELETE  ¦  1  ¦  10

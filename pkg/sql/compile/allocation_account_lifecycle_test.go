@@ -557,7 +557,7 @@ func TestCompileClearClosesMaterializedSourceBeforeAccountTerminal(t *testing.T)
 		AllocationAccount: attempt.account,
 	}))
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, proc.Mp()))
 	input.SetRowCount(1)
 	require.NoError(t, source.Append(input))

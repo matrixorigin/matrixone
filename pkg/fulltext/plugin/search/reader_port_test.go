@@ -118,9 +118,9 @@ func classicReader(t *testing.T, mp *mpool.MPool, algo fulltext.FullTextScoreAlg
 	return r.(*reader)
 }
 
-func docOnlyBatch() *batch.Batch {
+func docOnlyBatch(mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	return bat
 }
 
@@ -130,7 +130,7 @@ func TestClassicReadBatches(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		algo fulltext.FullTextScoreAlgo
-		out  func() *batch.Batch
+		out  func(*mpool.MPool) *batch.Batch
 	}{
 		{"tfidf", fulltext.ALGO_TFIDF, docScoreBatch},
 		{"tfidf-doc-id-only", fulltext.ALGO_TFIDF, docOnlyBatch},
@@ -141,7 +141,7 @@ func TestClassicReadBatches(t *testing.T) {
 			mp := mpool.MustNewZero()
 			stubClassicSql(t)
 			r := classicReader(t, mp, tc.algo, 0, searchplugin.Request{QueryPayload: []byte("pattern")})
-			require.Equal(t, []int{8192, 8192, 8192, 1}, readCounts(t, r, mp, tc.out()))
+			require.Equal(t, []int{8192, 8192, 8192, 1}, readCounts(t, r, mp, tc.out(mp)))
 			requireCloseReturns(t, r.Close)
 		})
 	}
@@ -170,8 +170,8 @@ func TestClassicUnlimitedCompleteUniqueScores(t *testing.T) {
 						bat.Clean(mp)
 					}
 				}()
-				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-				bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+				bat.Vecs[1] = vector.NewVec(types.T_float64.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(3), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(5)/3, false, mp))
 				bat.SetRowCount(1)
@@ -191,7 +191,7 @@ func TestClassicUnlimitedCompleteUniqueScores(t *testing.T) {
 						}
 					}()
 					for i := range bat.Vecs {
-						bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+						bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 					}
 					for _, row := range rows {
 						for i, value := range row {
@@ -222,7 +222,7 @@ func TestClassicUnlimitedCompleteUniqueScores(t *testing.T) {
 
 			r := classicReader(t, mp, tc.algo, int64(tree.FULLTEXT_BOOLEAN), searchplugin.Request{QueryPayload: []byte("+common ~rare")})
 			t.Cleanup(func() { require.NoError(t, r.Close()) })
-			out := docScoreBatch()
+			out := docScoreBatch(mp)
 			t.Cleanup(func() { out.Clean(mp) })
 			got := make(map[int32]float32)
 			for {
@@ -267,7 +267,7 @@ func TestClassicScanLimitByRank(t *testing.T) {
 	scan.ResetRowState(proc)
 	scan.SetRanking(true)
 	require.NoError(t, scan.Match(proc, "src_table", "index_table", "pattern", 0, "{}", fulltext.ALGO_TFIDF))
-	out := docScoreBatch()
+	out := docScoreBatch(mp)
 	for i := 0; i < 192; i++ {
 		result, err := scan.Call(proc, out)
 		require.NoError(t, err)
@@ -293,7 +293,7 @@ func TestClassicCloseEarly(t *testing.T) {
 	requireCloseReturns(t, unread.Close)
 
 	partial := classicReader(t, mp, fulltext.ALGO_TFIDF, 0, searchplugin.Request{QueryPayload: []byte("pattern")})
-	end, err := partial.Read(context.Background(), nil, nil, mp, docOnlyBatch())
+	end, err := partial.Read(context.Background(), nil, nil, mp, docOnlyBatch(mp))
 	require.NoError(t, err)
 	require.False(t, end)
 	requireCloseReturns(t, partial.Close)
@@ -320,7 +320,7 @@ func TestClassicLimitFallsBackToStreaming(t *testing.T) {
 			mp := mpool.MustNewZero()
 			stub := newStubLimitSql(t)
 			r := classicReader(t, mp, tc.algo, tc.mode, searchplugin.Request{QueryPayload: []byte(tc.pattern), ResultLimit: 2})
-			require.Equal(t, []int{2}, readCounts(t, r, mp, docScoreBatch()))
+			require.Equal(t, []int{2}, readCounts(t, r, mp, docScoreBatch(mp)))
 			require.True(t, stub.streamed)
 			require.NotContains(t, stub.streamingSQL, "COUNT(*) OVER()")
 			requireCloseReturns(t, r.Close)
@@ -334,7 +334,7 @@ func TestClassicLimitZeroMatchStreams(t *testing.T) {
 	stub := newStubLimitSql(t)
 	stub.streamingResults = func(*sqlexec.SqlProcess) []*batch.Batch { return nil }
 	r := classicReader(t, mp, fulltext.ALGO_TFIDF, int64(tree.FULLTEXT_NL), searchplugin.Request{QueryPayload: []byte("Matrix"), ResultLimit: 2})
-	require.Empty(t, readCounts(t, r, mp, docScoreBatch()))
+	require.Empty(t, readCounts(t, r, mp, docScoreBatch(mp)))
 	require.True(t, stub.streamed)
 	requireCloseReturns(t, r.Close)
 }
@@ -344,7 +344,7 @@ func TestClassicLimitPropagatesMembershipFilterToStreamingSQL(t *testing.T) {
 	mp := mpool.MustNewZero()
 	stub := newStubLimitSql(t)
 
-	keys := vector.NewVec(types.T_int32.ToType())
+	keys := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int32](keys, 7, false, mp))
 	data, err := keys.MarshalBinary()
 	require.NoError(t, err)
@@ -352,7 +352,7 @@ func TestClassicLimitPropagatesMembershipFilterToStreamingSQL(t *testing.T) {
 	r := classicReader(t, mp, fulltext.ALGO_TFIDF, 0, searchplugin.Request{
 		QueryPayload: []byte("pattern"), ResultLimit: 2, HasMembershipFilter: true, MembershipFilter: testutil.RuntimeKeyPayload(t, data),
 	})
-	require.Equal(t, []int{2}, readCounts(t, r, mp, docScoreBatch()))
+	require.Equal(t, []int{2}, readCounts(t, r, mp, docScoreBatch(mp)))
 	require.NotEmpty(t, stub.streamingFilter)
 	require.Equal(t, r.scan.MembershipFilter(), stub.streamingFilter)
 	requireCloseReturns(t, r.Close)
@@ -368,7 +368,7 @@ func TestClassicNonMembershipFilterLeavesScanUnfiltered(t *testing.T) {
 		mp := mpool.MustNewZero()
 		stubClassicSql(t)
 		r := classicReader(t, mp, fulltext.ALGO_TFIDF, int64(tree.FULLTEXT_NL), req)
-		_, err := r.Read(context.Background(), nil, nil, mp, docScoreBatch())
+		_, err := r.Read(context.Background(), nil, nil, mp, docScoreBatch(mp))
 		require.NoError(t, err)
 		require.Nil(t, r.scan.MembershipFilter())
 		requireCloseReturns(t, r.Close)
@@ -382,7 +382,7 @@ func TestClassicScanResetsStateForLaterSearch(t *testing.T) {
 	stub := newStubLimitSql(t)
 
 	scan := NewScan(0)
-	out := docScoreBatch()
+	out := docScoreBatch(mp)
 	for _, idx := range []string{"idx0", "idx1"} {
 		scan.ResetRowState(proc)
 		require.NoError(t, scan.Match(proc, "src", idx, "Matrix", int64(tree.FULLTEXT_NL), "{}", fulltext.ALGO_TFIDF))
@@ -423,7 +423,7 @@ func TestClassicRejectsInvalidPattern(t *testing.T) {
 			bad := classicReader(t, mp, fulltext.ALGO_TFIDF, tc.mode, tc.req)
 			var err error
 			require.NotPanics(t, func() {
-				_, err = bad.Read(context.Background(), nil, nil, mp, docScoreBatch())
+				_, err = bad.Read(context.Background(), nil, nil, mp, docScoreBatch(mp))
 			})
 			require.ErrorContains(t, err, tc.wantErr)
 			require.True(t, bad.scan.Idle())
@@ -431,7 +431,7 @@ func TestClassicRejectsInvalidPattern(t *testing.T) {
 			requireCloseReturns(t, bad.Close)
 
 			good := classicReader(t, mp, fulltext.ALGO_TFIDF, tc.mode, searchplugin.Request{QueryPayload: []byte(tc.valid)})
-			require.Equal(t, []int{2}, readCounts(t, good, mp, docScoreBatch()))
+			require.Equal(t, []int{2}, readCounts(t, good, mp, docScoreBatch(mp)))
 			require.Len(t, stub.sqls, 2)
 			requireCloseReturns(t, good.Close)
 		})
@@ -446,7 +446,7 @@ func TestClassicReadGuardPrecedesNullPattern(t *testing.T) {
 	r := classicReader(t, mp, fulltext.ALGO_TFIDF, 0, searchplugin.Request{
 		QueryIsNull: true, AlgoValues: []searchplugin.AlgoValue{boolGuard(true)},
 	})
-	_, err := r.Read(context.Background(), nil, nil, mp, docScoreBatch())
+	_, err := r.Read(context.Background(), nil, nil, mp, docScoreBatch(mp))
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "got %v", err)
 	require.Empty(t, stub.sqls)
 	requireCloseReturns(t, r.Close)

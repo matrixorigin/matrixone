@@ -17,6 +17,8 @@ package function
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -301,7 +303,7 @@ func appendUnsignedDecimalOutOfRangeWarning(proc *process.Process, column string
 	}
 	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 		appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
-			fmt.Sprintf("Out of range value for column '%s' at row %d", column, row+1))
+			fmt.Sprintf("Out of range value for column '%s' at row %d", column, proc.WarningRowOffset+row+1))
 	}
 }
 
@@ -379,22 +381,34 @@ func unsignedDecimalAdmissionJSON(
 	return nil
 }
 
-// unsignedDecimalBinaryOutcome decodes one IsBin source row and renders it as
-// canonical fixed-point text for the outer cast's text grammar.
-type unsignedDecimalBinaryOutcome struct {
+// decimalBinaryOutcome carries the decoded sign and decimal text that the
+// assignment parser will consume.
+type decimalBinaryOutcome struct {
 	text     string
 	negative bool
 }
 
-// renderUnsignedDecimalBinarySource decodes a MySQL binary decimal payload
-// through the exact entry the outer assignment cast dispatches to when its
-// source vector is IsBin (strToDecimal64/128/256), then renders the canonical
-// fixed-point text. Re-parsing that text through the outer cast yields the
-// identical value, so the plan-composed identity wrapper preserves the binary
-// conversion contract without depending on the IsBin flag surviving the
-// function-executor result reset (which clears it). Decode errors propagate
-// unchanged, exactly as the cast propagates them.
-func renderUnsignedDecimalBinarySource(v []byte, targetType types.Type) (outcome unsignedDecimalBinaryOutcome, err error) {
+// renderDecimalBinarySource preserves the destination-scale interpretation of
+// the legacy binary coefficient. The assignment parser then applies its own
+// precision and warning policy. An unsigned admission result carries text,
+// so the outer cast parses the coefficient without decoding its bytes again.
+func renderDecimalBinarySource(v []byte, targetType types.Type, radixCoefficient bool) (outcome decimalBinaryOutcome, err error) {
+	if radixCoefficient && len(v) != 0 {
+		for len(v) > 0 && v[0] == 0 {
+			v = v[1:]
+		}
+		// More than 32 significant bytes exceed every declared DECIMAL
+		// coefficient. Feed the assignment parser a bounded overflow token.
+		if len(v) > 32 {
+			return decimalBinaryOutcome{text: "1e77"}, nil
+		}
+		var coefficient big.Int
+		text := coefficient.SetBytes(v).String()
+		if targetType.Scale > 0 {
+			text += "e-" + strconv.FormatInt(int64(targetType.Scale), 10)
+		}
+		return decimalBinaryOutcome{text: text}, nil
+	}
 	s := convertByteSliceToString(v)
 	switch targetType.Oid {
 	case types.T_decimal64:
@@ -402,28 +416,25 @@ func renderUnsignedDecimalBinarySource(v []byte, targetType types.Type) (outcome
 		if e != nil {
 			return outcome, e
 		}
-		return unsignedDecimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
+		return decimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
 	case types.T_decimal128:
 		d, e := types.ParseDecimal128FromByte(s, targetType.Width, targetType.Scale)
 		if e != nil {
 			return outcome, e
 		}
-		return unsignedDecimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
+		return decimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
 	default:
 		d, e := types.ParseDecimal256FromByte(s, targetType.Width, targetType.Scale)
 		if e != nil {
 			return outcome, e
 		}
-		return unsignedDecimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
+		return decimalBinaryOutcome{text: d.Format(targetType.Scale), negative: d.Sign()}, nil
 	}
 }
 
-// unsignedDecimalAdmissionBinary evaluates admission over IsBin varlena
-// sources: byte payloads decoded as MySQL binary decimals (the outer cast's
-// ParseDecimal*FromByte branch). The byte-level magnitude cannot be reused
-// for classification because the flag does not reach the outer cast after
-// the executor reset; classifying the decoded decimal and re-rendering it as
-// text keeps admission and conversion on one numeric fact.
+// unsignedDecimalAdmissionBinary checks the sign of the decoded coefficient.
+// Opaque binary inputs can decode to a negative value. The text result
+// preserves that interpretation through the outer cast.
 func unsignedDecimalAdmissionBinary(
 	proc *process.Process,
 	from *vector.Vector,
@@ -436,6 +447,7 @@ func unsignedDecimalAdmissionBinary(
 ) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	src := vector.GenerateFunctionStrParameter(from)
+	radixCoefficient := IsBinaryCharacterType(*from.GetType())
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -450,7 +462,7 @@ func unsignedDecimalAdmissionBinary(
 			}
 			continue
 		}
-		outcome, err := renderUnsignedDecimalBinarySource(v, targetType)
+		outcome, err := renderDecimalBinarySource(v, targetType, radixCoefficient)
 		if err != nil {
 			return err
 		}
@@ -481,25 +493,25 @@ const (
 	// unsignedDecimalStringViolate: the value the cast stores is negative
 	// nonzero before target-scale rounding.
 	unsignedDecimalStringViolate
-	// unsignedDecimalStringViolateRetained: under the IGNORE policy the cast
+	// unsignedDecimalStringViolateRetained: under a lenient assignment policy the cast
 	// retains a negative nonzero numeric prefix after a conversion failure at
 	// either stage; admission owns the truncation diagnostic first and the
 	// 1264 clip second.
 	unsignedDecimalStringViolateRetained
 	// unsignedDecimalStringAbstain: a conversion failure whose diagnostics
 	// stay with the cast (lexical errors, no-prefix invalid input, special
-	// syntax, retained-prefix overflow). Admission must not run.
+	// syntax, an invalid destination). Admission must not run.
 	unsignedDecimalStringAbstain
 )
 
 // classifyUnsignedDecimalStringSource derives the value the assignment cast
 // will store from a text varlena source, before target-scale quantization,
-// following the strToDecimal64/128/256 sub-paths exactly:
+// following the strToDecimal paths:
 //   - token accepted and complete consumption validated: the effective sign is
 //     the cast's own combine rule over the radix expansion (stored negative
 //     iff the scanned sign differs from the token sign), nonzero iff the
 //     scanned mantissa contains a nonzero digit;
-//   - failure at tokenization or after tokenization: under the IGNORE policy
+//   - failure at tokenization or after tokenization: under a lenient assignment policy
 //     the cast retains the numeric prefix when it re-parses at the target;
 //     that retained prefix classifies with the pure decimal grammar (sign
 //     plus nonzero digit). A retained prefix whose own re-parse fails keeps
@@ -507,7 +519,7 @@ const (
 //
 // targetType supplies the destination width/scale for the retained-prefix
 // re-parse decision.
-func classifyUnsignedDecimalStringSource(s string, ignorePolicy bool, targetType types.Type) unsignedDecimalStringOutcome {
+func classifyUnsignedDecimalStringSource(s string, retainPrefix bool, targetType types.Type) unsignedDecimalStringOutcome {
 	token, tokenErr := parseCastNumericToken(s)
 	if tokenErr == nil {
 		expanded, expandErr := prefixedDigitsToDecimalString(token.digits, token.base)
@@ -524,8 +536,8 @@ func classifyUnsignedDecimalStringSource(s string, ignorePolicy bool, targetType
 	}
 	// Conversion failure at either stage: the cast keeps its own diagnostics
 	// for special syntax under every policy, and for every failure under the
-	// non-IGNORE policies.
-	if !ignorePolicy || isAssignmentSpecialNumericSyntax(s) {
+	// strict policies.
+	if !retainPrefix || isAssignmentSpecialNumericSyntax(s) {
 		return unsignedDecimalStringAbstain
 	}
 	prefix, ok := assignmentDecimalPrefix(s)
@@ -534,33 +546,32 @@ func classifyUnsignedDecimalStringSource(s string, ignorePolicy bool, targetType
 		// invalid-input warning; that value is non-negative by construction.
 		return unsignedDecimalStringAbstain
 	}
-	if !unsignedDecimalPrefixReparses(prefix, targetType) {
-		// A retained prefix whose conversion overflows keeps the cast's
-		// original error; nothing is stored and admission abstains.
+	clipped, err := unsignedDecimalPrefixRange(prefix, targetType)
+	if err != nil {
 		return unsignedDecimalStringAbstain
 	}
 	var prefixFacts decimalPrefixFacts
 	_, prefixNegative, _ := scanDecimalPrefix(prefix, &prefixFacts)
 	if prefixNegative && prefixFacts.first >= 0 {
+		if clipped {
+			return unsignedDecimalStringViolate
+		}
 		return unsignedDecimalStringViolateRetained
 	}
 	return unsignedDecimalStringPass
 }
 
-// unsignedDecimalPrefixReparses mirrors the IGNORE retention re-parse of the
-// strToDecimal* assignment casts: converting the retained prefix at the
-// destination width/scale must succeed for retention to happen at all.
-func unsignedDecimalPrefixReparses(prefix string, targetType types.Type) bool {
-	var err error
+// unsignedDecimalPrefixRange mirrors the assignment cast's retained-prefix policy.
+func unsignedDecimalPrefixRange(prefix string, targetType types.Type) (clipped bool, err error) {
 	switch targetType.Oid {
 	case types.T_decimal64:
-		_, err = parseDecimal64CastString(prefix, targetType.Width, targetType.Scale)
+		_, clipped, err = parseDecimal64CastStringWithOverflow(prefix, targetType.Width, targetType.Scale, true)
 	case types.T_decimal128:
-		_, err = parseDecimal128CastString(prefix, targetType.Width, targetType.Scale)
+		_, clipped, err = parseDecimal128CastStringWithOverflow(prefix, targetType.Width, targetType.Scale, true)
 	default:
-		_, err = parseDecimal256CastString(prefix, targetType.Width, targetType.Scale)
+		_, clipped, err = parseDecimal256CastStringWithOverflow(prefix, targetType.Width, targetType.Scale, true)
 	}
-	return err == nil
+	return clipped, err
 }
 
 // classifyMySQLDecimalPrefixSource classifies the charset-255 prefix branch of
@@ -585,17 +596,20 @@ func unsignedDecimalAdmissionVarlena(
 	entry unsignedDecimalAdmissionEntry,
 	column string,
 ) error {
-	// Mirror the cast branch predicate: the private numeric marker charset
-	// selects the prefix grammar (matching strToDecimal64 & friends) even for
-	// a const IsBin source, and every other IsBin source converts through the
-	// binary decimal decoder.
-	isBin := from.GetIsBin()
+	// The private numeric marker uses the text-prefix grammar, including for
+	// constant opaque binary arguments. Binary CHAR/VARCHAR carries a
+	// coefficient even when projection removes the literal argument flag.
+	isBin := result.ArgumentIsBin(0)
 	mysqlPrefix := targetType.Charset == 255 && (!isBin || from.IsConst())
-	if isBin && !mysqlPrefix {
+	if IsBinaryCharacterType(*from.GetType()) || (isBin && !mysqlPrefix) {
 		return unsignedDecimalAdmissionBinary(proc, from, targetType, result, length, selectList, entry, column)
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	src := vector.GenerateFunctionStrParameter(from)
+	byteString := types.StaticStringDomain(*from.GetType()) == types.StringDomainBinary &&
+		CompatibilityModeFromProcess(proc) == SQLCompatibilityMySQL
+	retainPrefix := entry == unsignedDecimalAdmissionIgnore ||
+		(entry == unsignedDecimalAdmissionMode && !StrictSqlModeForAssignment(proc))
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -612,10 +626,15 @@ func unsignedDecimalAdmissionVarlena(
 		}
 		s := convertByteSliceToString(v)
 		var outcome unsignedDecimalStringOutcome
-		if mysqlPrefix {
+		switch {
+		case mysqlPrefix:
 			outcome = classifyMySQLDecimalPrefixSource(s)
-		} else {
-			outcome = classifyUnsignedDecimalStringSource(s, entry == unsignedDecimalAdmissionIgnore, targetType)
+		case byteString && decimalByteStringHasRadixPrefix(s):
+			// The leading decimal token is zero. Let the assignment cast
+			// diagnose trailing text before any unsigned range decision.
+			outcome = unsignedDecimalStringAbstain
+		default:
+			outcome = classifyUnsignedDecimalStringSource(s, retainPrefix, targetType)
 		}
 		switch outcome {
 		case unsignedDecimalStringViolate, unsignedDecimalStringViolateRetained:

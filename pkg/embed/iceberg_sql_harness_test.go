@@ -238,6 +238,7 @@ func TestIcebergSQLEngineEmbeddedHarness(t *testing.T) {
 			run  func(*testing.T, Cluster, *embeddedSQLSession, *embeddedIcebergFixture)
 		}{
 			{name: "read pruning explain and time travel", run: runIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel},
+			{name: "frontend select authorization", run: runIcebergSQLEngineEmbeddedFrontendSelectAuthorization},
 			{name: "security errors", run: runIcebergSQLEngineEmbeddedSecurityErrors},
 			{name: "delete apply", run: runIcebergSQLEngineEmbeddedDeleteApply},
 			{name: "import native pins snapshot", run: runIcebergSQLEngineEmbeddedImportNativePinsSnapshot},
@@ -267,6 +268,85 @@ func TestIcebergSQLEngineEmbeddedHarness(t *testing.T) {
 			})
 		}
 	})
+}
+
+func runIcebergSQLEngineEmbeddedFrontendSelectAuthorization(
+	t *testing.T,
+	c Cluster,
+	tenantSQL *embeddedSQLSession,
+	fixture *embeddedIcebergFixture,
+) {
+	readTable := createEmbeddedIcebergTable(t, tenantSQL, fixture, "orders_auth", "orders", model.ReadModeAppendOnly)
+	controlTable := fixture.databaseName + ".iceberg_auth_control"
+	insertTarget := fixture.databaseName + ".iceberg_auth_insert_target"
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s (id bigint)", controlTable))
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("insert into %s values (1)", controlTable))
+	mustExecSQL(t, tenantSQL, fmt.Sprintf("create table %s (id bigint)", insertTarget))
+	adminDB := openIcebergTenantFrontendDB(t, c, tenantSQL.accountName)
+	defer adminDB.Close()
+	mustExec(t, adminDB, fmt.Sprintf("grant select on table %s to public", controlTable))
+	mustExec(t, adminDB, fmt.Sprintf("grant insert on table %s to public", insertTarget))
+	viewName := fixture.databaseName + ".orders_auth_view"
+	mustExec(t, adminDB, fmt.Sprintf("create view %s as select id, amount from %s", viewName, readTable))
+	mustExec(t, adminDB, fmt.Sprintf("grant select on view %s to public", viewName))
+
+	publicDB := openIcebergTenantFrontendDB(t, c, tenantSQL.accountName)
+	defer publicDB.Close()
+	publicConn, err := publicDB.Conn(t.Context())
+	require.NoError(t, err)
+	defer publicConn.Close()
+	_, err = publicConn.ExecContext(t.Context(), "set role public")
+	require.NoError(t, err)
+	var roleID, userID int64
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select current_role_id(), current_user_id()").Scan(&roleID, &userID))
+	execEmbeddedIcebergSystemSQL(t, c, fixture, fmt.Sprintf(
+		"insert into mo_catalog.mo_iceberg_principal_map(account_id,catalog_id,mo_role_id,mo_user_id,external_principal,scope_json,created_by,version) values (%d,%d,%d,%d,'embedded-principal','{}',%d,1)",
+		fixture.accountID, fixture.catalogID, roleID, userID, userID))
+
+	var count int64
+	err = publicConn.QueryRowContext(t.Context(), "select count(*) from "+readTable).Scan(&count)
+	require.ErrorContains(t, err, "do not have privilege")
+	err = publicConn.QueryRowContext(t.Context(), "select sum(amount) over w from "+readTable+" window w as ()").Scan(&count)
+	require.ErrorContains(t, err, "do not have privilege")
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select count(*) from "+viewName).Scan(&count))
+	require.Equal(t, int64(4), count)
+
+	var controlID int64
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select id from "+controlTable).Scan(&controlID))
+	require.Equal(t, int64(1), controlID)
+	_, err = publicConn.ExecContext(t.Context(), "insert into "+insertTarget+" select id from "+readTable)
+	require.ErrorContains(t, err, "do not have privilege")
+	var inserted int64
+	require.NoError(t, adminDB.QueryRow("select count(*) from "+insertTarget).Scan(&inserted))
+	require.Zero(t, inserted)
+
+	mustExec(t, adminDB, fmt.Sprintf("grant select on table %s to public", readTable))
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select count(*) from "+readTable).Scan(&count))
+	require.Equal(t, int64(4), count)
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select sum(amount) over w from "+readTable+" window w as ()").Scan(&count))
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select count(*) from "+viewName).Scan(&count))
+	require.Equal(t, int64(4), count)
+	_, err = publicConn.ExecContext(t.Context(), "insert into "+insertTarget+" select id from "+readTable)
+	require.NoError(t, err)
+	require.NoError(t, adminDB.QueryRow("select count(*) from "+insertTarget).Scan(&inserted))
+	require.Equal(t, int64(4), inserted)
+
+	mustExec(t, adminDB, fmt.Sprintf("revoke select on table %s from public", readTable))
+	err = publicConn.QueryRowContext(t.Context(), "select count(*) from "+readTable).Scan(&count)
+	require.ErrorContains(t, err, "do not have privilege")
+	err = publicConn.QueryRowContext(t.Context(), "select sum(amount) over w from "+readTable+" window w as ()").Scan(&count)
+	require.ErrorContains(t, err, "do not have privilege")
+	_, err = publicConn.ExecContext(t.Context(), "insert into "+insertTarget+" select id from "+readTable)
+	require.ErrorContains(t, err, "do not have privilege")
+	require.NoError(t, adminDB.QueryRow("select count(*) from "+insertTarget).Scan(&inserted))
+	require.Equal(t, int64(4), inserted)
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select count(*) from "+viewName).Scan(&count))
+	require.Equal(t, int64(4), count)
+	mustExec(t, adminDB, fmt.Sprintf("revoke select on view %s from public", viewName))
+	err = publicConn.QueryRowContext(t.Context(), "select count(*) from "+viewName).Scan(&count)
+	require.ErrorContains(t, err, "do not have privilege")
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select id from "+controlTable).Scan(&controlID))
+	require.Equal(t, int64(1), controlID)
 }
 
 func runIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(
@@ -506,7 +586,24 @@ func runIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL(
 	require.Equal(t, embeddedIcebergSnapshotCurrent, deleteCall.Request.DMLScan.BaseSnapshotID)
 	require.Len(t, deleteCall.Request.DMLScan.DataFiles, 2)
 
-	mustExecSQL(t, tenantSQL, fmt.Sprintf("update %s set amount = amount + 100 where id = 2", dmlTable))
+	publicDB := openIcebergTenantFrontendDB(t, c, tenantSQL.accountName)
+	defer publicDB.Close()
+	publicConn, err := publicDB.Conn(t.Context())
+	require.NoError(t, err)
+	defer publicConn.Close()
+	_, err = publicConn.ExecContext(t.Context(), "set role public")
+	require.NoError(t, err)
+	var roleID, userID int64
+	require.NoError(t, publicConn.QueryRowContext(t.Context(), "select current_role_id(), current_user_id()").Scan(&roleID, &userID))
+	execEmbeddedIcebergSystemSQL(t, c, fixture, fmt.Sprintf(
+		"insert into mo_catalog.mo_iceberg_principal_map(account_id,catalog_id,mo_role_id,mo_user_id,external_principal,scope_json,created_by,version) values (%d,%d,%d,%d,'embedded-principal','{}',%d,1)",
+		fixture.accountID, fixture.catalogID, roleID, userID, userID))
+	var count int64
+	err = publicConn.QueryRowContext(t.Context(), "select count(*) from "+dmlTable).Scan(&count)
+	require.ErrorContains(t, err, "do not have privilege")
+	mustExec(t, maintenanceDB, fmt.Sprintf("grant update on table %s to public", dmlTable))
+	_, err = publicConn.ExecContext(t.Context(), fmt.Sprintf("update %s set amount = amount + 100 where id = 2", dmlTable))
+	require.NoError(t, err)
 	updateCall := writeRecorder.lastOperation(t, icebergwrite.OperationUpdate)
 	require.Equal(t, []int{1}, updateCall.AppendRows)
 	require.Equal(t, embeddedIcebergSnapshotCurrent, updateCall.Request.DMLScan.BaseSnapshotID)
@@ -532,7 +629,7 @@ func runIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL(
 	require.Equal(t, "partition", partitionOverwriteCall.Request.DMLScan.OverwriteScope)
 	require.Equal(t, int64(2), partitionOverwriteCall.Request.DMLScan.OverwritePartition["bucket"])
 
-	err := tenantSQL.Exec(fmt.Sprintf("insert overwrite %s partition(p0) select id, hidden_key, bucket, amount from %s.merge_stage", dmlTable, fixture.databaseName))
+	err = tenantSQL.Exec(fmt.Sprintf("insert overwrite %s partition(p0) select id, hidden_key, bucket, amount from %s.merge_stage", dmlTable, fixture.databaseName))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "PARTITION name syntax")
 

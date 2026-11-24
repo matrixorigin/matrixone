@@ -30,7 +30,7 @@ func TestVarlenBinarySearchOffsetByValFactorySmallSet(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 
 	input := []string{"aa", "aa", "ab", "ac", "ac", "ad"}
@@ -50,7 +50,7 @@ func TestVarlenBinarySearchOffsetByValFactoryLargeSet(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 
 	values := make([]string, 0, 400)
@@ -90,7 +90,7 @@ func TestVarlenBinarySearchOffsetByValFactoryEmptyInputs(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 
 	fn := VarlenBinarySearchOffsetByValFactory(nil)
@@ -106,7 +106,7 @@ func TestVarlenBinarySearchOffsetByValFactoryEmptyInputs(t *testing.T) {
 
 func BenchmarkVarlenBinarySearchOffsetByValFactory(b *testing.B) {
 	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 
 	zeroPadded := func(i int) []byte { return []byte(fmt.Sprintf("%05d", i)) }
 	for i := 0; i < 8192; i++ {
@@ -181,7 +181,7 @@ func TestOrderedBinarySearchOffsetByValFactoryWithDuplicates(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	vec := NewVec(types.T_int64.ToType())
+	vec := NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 
 	base := []int64{1, 1, 2, 33, 34, 41, 55, 55, 279, 299, 301, 301}
@@ -218,7 +218,7 @@ func TestFixedSizedBinarySearchOffsetByValFactoryWithDuplicates(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	vec := NewVec(types.T_int64.ToType())
+	vec := NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 
 	base := []int64{1, 1, 2, 33, 34, 41, 55, 55, 279, 299, 301, 301}
@@ -265,7 +265,7 @@ func TestVarlenBinarySearchOffsetByValFactoryWithDuplicateNumbers(t *testing.T) 
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 
 	base := []int{1, 1, 2, 33, 34, 41, 55, 55, 279, 299, 301, 301}
@@ -309,7 +309,7 @@ func TestVarlenBinarySearchOffsetByValFactoryWithDuplicateNumbers(t *testing.T) 
 func TestOrderedLinearSearchEqualityAndComparator(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	vec := NewVec(types.T_float64.ToType())
+	vec := NewVec(types.T_float64.ToType(), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	for _, value := range []float64{-2, math.Copysign(0, -1), 0, math.NaN(), 2, 9} {
 		require.NoError(t, AppendFixed(vec, value, false, mp))
@@ -326,7 +326,7 @@ func TestOrderedLinearSearchEqualityAndComparator(t *testing.T) {
 	require.Equal(t, []int64{0, 1, 2}, OrderedLinearSearchOffsetByValFactory(values, compare)(vec))
 	require.Nil(t, OrderedLinearSearchOffsetByValFactory[float64](nil, nil)(vec))
 	require.Nil(t, OrderedLinearSearchOffsetByValFactory[float64](nil, compare)(vec))
-	empty := NewVec(types.T_float64.ToType())
+	empty := NewVec(types.T_float64.ToType(), mp)
 	t.Cleanup(func() { empty.Free(mp) })
 	require.Nil(t, OrderedLinearSearchOffsetByValFactory(values, nil)(empty))
 	require.Nil(t, OrderedLinearSearchOffsetByValFactory(values, compare)(empty))

@@ -35,14 +35,11 @@ func scanFixture[T types.FixedSizeT](tb testing.TB, typ types.T, values []T, pat
 		require.Zero(tb, mp.CurrNB())
 		require.Zero(tb, mp.OnHeapCurrNB())
 	})
-	v := NewVec(typ.ToType())
+	v := NewVec(typ.ToType(), mp)
 	tb.Cleanup(func() { v.Free(mp) })
 	if backing == "borrowed" {
-		lease, err := NewRefCountedBufferLease(nil, 0, nil)
-		require.NoError(tb, err)
-		tb.Cleanup(lease.Release)
-		require.NoError(tb, v.InstallBorrowedData(types.EncodeSlice(values), lease))
-		v.SetLength(len(values))
+		// A read-only reference vector over memory the test keeps alive.
+		v = NewVecWithData(typ.ToType(), len(values), types.EncodeSlice(values), nil, nil)
 	} else {
 		require.NoError(tb, AppendFixedList(v, values, nil, mp))
 	}
@@ -60,10 +57,7 @@ func scanFixture[T types.FixedSizeT](tb testing.TB, typ types.T, values []T, pat
 		}
 	}
 	if backing == "borrowed" && nulls != 0 {
-		lease, err := NewRefCountedBufferLease(nil, 0, nil)
-		require.NoError(tb, err)
-		tb.Cleanup(lease.Release)
-		require.NoError(tb, v.GetNulls().InstallBorrowedValidity(validity, 3, len(values), nulls, lease))
+		v.GetNulls().GetBitmap().InitWithInvertedBits(validity, 3, len(values))
 	}
 	return v
 }
@@ -113,10 +107,7 @@ func TestScanFollowupMinMax(t *testing.T) {
 							require.NoError(t, err)
 							require.Equal(t, before, after)
 							if backing == "borrowed" && n != 0 {
-								require.NotNil(t, v.dataLease)
-								if v.HasNull() {
-									require.True(t, v.GetNulls().HasBorrowedValidity())
-								}
+								require.True(t, v.IsReadOnly())
 							}
 						}
 					})
@@ -184,7 +175,7 @@ func TestScanFollowupInt64OrderAndWindows(t *testing.T) {
 				v := scanFixture(t, types.T_int64, xs, "none", backing)
 				w, err := v.Window(3, n+3)
 				require.NoError(t, err)
-				t.Cleanup(func() { w.Free(nil) })
+				t.Cleanup(func() { w.Free(w.MPool()) })
 				want := slices.Clone(xs[3 : n+3])
 				slices.Sort(want)
 				ok, lo, hi := w.GetMinMaxValue()
@@ -351,7 +342,7 @@ func BenchmarkScanFollowup(b *testing.B) {
 				b.Run(fmt.Sprintf("utf8-vector/%s/%d/%d", mode, width, n), func(b *testing.B) {
 					mp := mpool.MustNewZero()
 					b.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(b, mp.CurrNB()) })
-					v := NewVec(types.T_varbinary.ToType())
+					v := NewVec(types.T_varbinary.ToType(), mp)
 					b.Cleanup(func() { v.Free(mp) })
 					values := make([][]byte, n)
 					for i := range values {

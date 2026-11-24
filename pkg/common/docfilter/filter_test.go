@@ -25,7 +25,7 @@ import (
 
 // buildVarcharVec builds a varchar vector (non-integer PK -> bloom fallback).
 func buildVarcharVec(t *testing.T, mp *mpool.MPool, vals []string) *vector.Vector {
-	v := vector.NewVec(types.T_varchar.ToType())
+	v := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, s := range vals {
 		require.NoError(t, vector.AppendBytes(v, []byte(s), false, mp))
 	}

@@ -59,9 +59,9 @@ func stubIgnoredCountPk(t *testing.T, n int64, pk []byte) *[]string {
 	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
 		if n > 0 {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], n, false, mp))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[1], pk, false, mp))
@@ -253,7 +253,7 @@ func TestSqlStringRepr(t *testing.T) {
 
 func TestSqlLiteral(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte("it's"), false, mp))
 	lit, err := SqlLiteral(context.Background(), vec, 0)
 	require.NoError(t, err)

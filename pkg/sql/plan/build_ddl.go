@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -288,14 +287,14 @@ func inferViewColumns(
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1654,6 +1653,7 @@ func genAsSelectCols(
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -2013,8 +2013,7 @@ func buildCTASDefaultFromOrigin(
 	if err = validateUnsignedDecimalStrictConstantDefault(ctx.GetContext(), ctx.GetProcess(), typ, srcExpr, colNameOrigin); err != nil {
 		return nil, err
 	}
-	defaultExpr, err = ConstantFold(
-		batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), ctx.GetProcess(), false, true)
+	defaultExpr, err = foldBoundConstant(bindCtx, DeepCopyExpr(defaultExpr), ctx.GetProcess())
 	if err != nil {
 		return nil, err
 	}
@@ -4064,7 +4063,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 							}
 							defaultDef = &copy
 						}
-						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(replay, colName))
+						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetContext()), defaultDef, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(replay, colName))
 					}
 				}
 				if err != nil {

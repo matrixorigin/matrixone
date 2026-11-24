@@ -801,11 +801,11 @@ func readClusterTaeRange(
 	for i := range attrs {
 		switch attrs[i] {
 		case "tenant_id", "device_id", "metric_id":
-			out.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+			out.Vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
 		case "event_ts":
-			out.Vecs[i] = vector.NewVec(types.T_datetime.ToType())
+			out.Vecs[i] = vector.NewVec(types.T_datetime.ToType(), mp)
 		default:
-			out.Vecs[i] = vector.NewVec(types.T_float64.ToType())
+			out.Vecs[i] = vector.NewVec(types.T_float64.ToType(), mp)
 		}
 	}
 	defer out.Clean(mp)

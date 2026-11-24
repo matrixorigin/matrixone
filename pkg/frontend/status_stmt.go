@@ -120,7 +120,11 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if execCtx.selectInto == nil {
 				return moerr.NewInternalError(execCtx.reqCtx, "SELECT INTO user-variable collector is not initialized")
 			}
-			if err = execCtx.selectInto.apply(execCtx.reqCtx, ses, execCtx.sqlOfStmt); err != nil {
+			var resultIsBin []bool
+			if resultIsBin, err = selectIntoResultIsBin(execCtx.proc, execCtx.cw.Plan()); err != nil {
+				return
+			}
+			if err = execCtx.selectInto.apply(execCtx.reqCtx, ses, execCtx.sqlOfStmt, resultIsBin); err != nil {
 				return
 			}
 			appendSelectIntoDeprecatedWarning(ses, st.DeprecatedInto)
@@ -283,7 +287,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				}()
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(uploadCtx, ses, execCtx, st.Param, writer, reader)
+					return processLoadLocal(uploadCtx, ses, execCtx, st.Param, writer)
 				})
 			}
 		}

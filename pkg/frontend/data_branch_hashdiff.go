@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -57,7 +56,7 @@ func sortDataBranchBatchByPrimaryKey(bat *batch.Batch, pkColIdx int, mp *mpool.M
 		return mergeutil.SortColumnsByIndex(bat.Vecs, pkColIdx, mp)
 	}
 
-	identityVec := vector.NewVec(types.T_uint64.ToType())
+	identityVec := vector.NewVec(types.T_uint64.ToType(), mp)
 	defer identityVec.Free(mp)
 	for row := range pkVec.Length() {
 		identity, isNull, err := dataBranchFloatPKIdentityAt(pkVec, row)
@@ -544,7 +543,7 @@ func handleDelsOnLCA(
 		return !exist
 	}
 
-	dBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	dBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 	defer func() {
 		if err != nil && dBat != nil {
 			tblStuff.retPool.releaseRetBatch(dBat, false)
@@ -756,9 +755,9 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	rowCount := tBat.RowCount()
 	if rowCount == 0 {
 		bat := batch.NewWithSize(len(tblStuff.def.colNames) + 1)
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), ses.proc.Mp())
 		for i, typ := range tblStuff.def.colTypes {
-			bat.Vecs[i+1] = vector.NewVec(typ)
+			bat.Vecs[i+1] = vector.NewVec(typ, ses.proc.Mp())
 		}
 		bat.SetRowCount(0)
 		sqlRet.Batches = []*batch.Batch{bat}
@@ -804,7 +803,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	// Build a sorted IN vector for reader-side PK filtering.
 	// The sorted-search path uses binary search over the IN value array and
 	// assumes the array is ordered; an unsorted IN vector can drop valid hits.
-	filterVec := vector.NewVec(*pkVec.GetType())
+	filterVec := vector.NewVec(*pkVec.GetType(), mp)
 	defer filterVec.Free(mp)
 	if err = filterVec.UnionBatch(pkVec, 0, rowCount, nil, mp); err != nil {
 		return executor.Result{}, err
@@ -820,7 +819,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 
 	tmp := batch.NewWithSize(len(lcaLayout.attrs))
 	for i, typ := range lcaLayout.types {
-		tmp.Vecs[i] = vector.NewVec(typ)
+		tmp.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	defer tmp.Clean(mp)
 	tmpRowByKey := make(map[string]int, rowCount)
@@ -948,9 +947,9 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	)
 
 	out := batch.NewWithSize(len(tblStuff.def.colNames) + 1)
-	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	for i, typ := range tblStuff.def.colTypes {
-		out.Vecs[i+1] = vector.NewVec(typ)
+		out.Vecs[i+1] = vector.NewVec(typ, mp)
 	}
 	defer func() {
 		if err != nil {
@@ -993,21 +992,6 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 				return executor.Result{}, err
 			}
 		}
-	} else if len(missedRows) == 0 {
-		for targetIdx, sourceIdx := range sourceIdxByTarget {
-			if sourceIdx < 0 {
-				nullConst := vector.NewConstNull(tblStuff.def.colTypes[targetIdx], rowCount, mp)
-				err = out.Vecs[targetIdx+1].UnionBatch(nullConst, 0, rowCount, nil, mp)
-				nullConst.Free(mp)
-				if err != nil {
-					return executor.Result{}, err
-				}
-				continue
-			}
-			if err = out.Vecs[targetIdx+1].UnionBatch(tmp.Vecs[sourceIdx], 0, rowCount, nil, mp); err != nil {
-				return executor.Result{}, err
-			}
-		}
 	} else {
 		for targetIdx, sourceIdx := range sourceIdxByTarget {
 			if sourceIdx < 0 {
@@ -1019,11 +1003,12 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 				}
 				continue
 			}
+			// Even an all-hit scan may return rows in a different order than orderedIdx.
 			if err = out.Vecs[targetIdx+1].Union(tmp.Vecs[sourceIdx], sels, mp); err != nil {
 				return executor.Result{}, err
 			}
 			for _, rowIdx := range missedRows {
-				nulls.Add(out.Vecs[targetIdx+1].GetNulls(), rowIdx)
+				out.Vecs[targetIdx+1].GetNulls().Add(rowIdx)
 			}
 		}
 	}
@@ -1249,7 +1234,7 @@ func hashDiffIfHasLCA(
 		var pickConflictBat *batch.Batch
 		if wrapped.kind == diffInsert && wrapped.fromUpdate && len(restoreMissingKeys) > 0 {
 			var keep []int64
-			restoreBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+			restoreBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 			for rowIdx := range wrapped.batch.RowCount() {
 				key, keyErr := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
 				if keyErr != nil {
@@ -1329,7 +1314,7 @@ func hashDiffIfHasLCA(
 				return nil
 			}
 			if pickConflictBat == nil {
-				pickConflictBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+				pickConflictBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 			}
 			return pickConflictBat.UnionOne(baseWrapped.batch, int64(rowIdx), ses.proc.Mp())
 		}
@@ -1852,7 +1837,7 @@ func splitDataBranchBatchForNativeUpdate(
 		return nil, nil
 	}
 
-	nativeBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	nativeBat := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 	nativeRowIdxes := make([]int64, 0, len(nativeUpdateKeys))
 	for rowIdx := range bat.RowCount() {
 		key, err := extractPKAsString(ses, tblStuff, bat, rowIdx)
@@ -1920,7 +1905,7 @@ func findDeleteAndUpdateBat(
 		var (
 			err2  error
 			tuple types.Tuple
-			tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true)
+			tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true, ses.proc.Mp())
 		)
 
 		processBatch := func(tombBat *batch.Batch) error {
@@ -1999,7 +1984,7 @@ func findDeleteAndUpdateBat(
 						zap.Int("vec-count", dBat.VectorCount()),
 					)
 				}
-				tBat2 := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+				tBat2 := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 				seen := make([]bool, dBat.RowCount())
 				var stagedUpdateBat *batch.Batch
 				var nativeUpdateBat *batch.Batch
@@ -2040,7 +2025,7 @@ func findDeleteAndUpdateBat(
 							updateBat = nativeUpdateBat
 						}
 						if updateBat == nil {
-							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 							if requiresNativeUpdate {
 								nativeUpdateBat = updateBat
 							} else {
@@ -2048,7 +2033,7 @@ func findDeleteAndUpdateBat(
 							}
 						}
 						if expandUpdate && updateDeleteBat == nil {
-							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 						}
 						if expandUpdate {
 							if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
@@ -2204,7 +2189,7 @@ func findDeleteAndUpdateBat(
 				if err2 = processBatch(tombBat); err2 != nil {
 					return err2
 				}
-				tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true)
+				tBat1 = tblStuff.retPool.acquireRetBatch(tblStuff, true, ses.proc.Mp())
 			}
 			return nil
 		}); err2 != nil {
@@ -2519,8 +2504,8 @@ func diffDataHelper(
 			checkRet           databranchutils.GetResult
 		)
 
-		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-		baseBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		tarBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+		baseBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 		defer func() {
 			if tarUpdateBat != nil {
 				tblStuff.retPool.releaseRetBatch(tarUpdateBat, false)
@@ -2602,7 +2587,7 @@ func diffDataHelper(
 							copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
 							copt.expandUpdate {
 							if baseDeleteBat == nil {
-								baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+								baseDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 							}
 							requiresNativeUpdate, updateErr := dataBranchUpdateRequiresNativeUpdateFromTuples(
 								tblStuff, tarTuple, baseTuple,
@@ -2615,7 +2600,7 @@ func diffDataHelper(
 								updateBat = tarNativeUpdateBat
 							}
 							if updateBat == nil {
-								updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+								updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 								if requiresNativeUpdate {
 									tarNativeUpdateBat = updateBat
 								} else {
@@ -2738,7 +2723,7 @@ func diffDataHelper(
 			bat   *batch.Batch
 		)
 
-		bat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+		bat = tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
 
 		if err2 = cursor.ForEach(func(_ []byte, row []byte) error {
 			select {
@@ -3241,6 +3226,7 @@ func dataBranchSourceColToTargetIdx(
 	sourceDef, targetDef *plan2.TableDef,
 	targetColNames []string,
 	targetOnlyIdxes []int,
+	excludeTargetOnly bool,
 ) ([]int, error) {
 	if sourceDef == nil || targetDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
@@ -3297,6 +3283,11 @@ func dataBranchSourceColToTargetIdx(
 		if targetCol != nil {
 			targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
 		}
+		_, isTargetOnly := targetOnly[targetIdx]
+		if excludeTargetOnly && isTargetOnly {
+			// A historical base value is absent from the current base schema.
+			targetIdx = -1
+		}
 		mapping = append(mapping, targetIdx)
 		if targetIdx < 0 {
 			continue
@@ -3306,7 +3297,7 @@ func dataBranchSourceColToTargetIdx(
 		sameType := col.Typ.Id == targetCol.Typ.Id &&
 			(dataBranchColumnTypeAttributesEqual(col.Typ, targetCol.Typ) || derivedCompositePK)
 		if !sameType {
-			if _, isTargetOnly := targetOnly[targetIdx]; isTargetOnly {
+			if isTargetOnly {
 				// This column does not exist on the base endpoint and is excluded
 				// from comparison and MERGE apply. Its old physical representation
 				// cannot be moved into the endpoint-typed batch; project it as NULL
@@ -3435,7 +3426,7 @@ func overlayDataBranchProbeResult(
 				if !dst.IsConst() {
 					continue
 				}
-				flat := vector.NewVec(*dst.GetType())
+				flat := vector.NewVec(*dst.GetType(), mp)
 				if err = flat.UnionBatch(dst, 0, projected.RowCount(), nil, mp); err != nil {
 					flat.Free(mp)
 					return false
@@ -3517,7 +3508,7 @@ func hydrateHistoricalDataBranchBatch(
 		)
 	}
 	tBat := batch.NewWithSize(1)
-	tBat.Vecs[0] = vector.NewVec(*projected.Vecs[pkVecIdx].GetType())
+	tBat.Vecs[0] = vector.NewVec(*projected.Vecs[pkVecIdx].GetType(), ses.proc.Mp())
 	defer tBat.Clean(ses.proc.Mp())
 	if err = tBat.Vecs[0].UnionBatch(
 		projected.Vecs[pkVecIdx], 0, projected.RowCount(), nil, ses.proc.Mp(),

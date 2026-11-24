@@ -396,8 +396,7 @@ const (
 		`)`
 	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_state = %d,` +
-		`watermark = '%s',` +
-		`job_status = JSON_SET('%s', '$.Stage', ` +
+		`%sjob_status = JSON_SET('%s', '$.Stage', ` +
 		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), %d), ` +
 		`'$.LifecycleVersion', ` +
 		`GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LifecycleVersion')), '0') AS UNSIGNED), %d))` +
@@ -409,7 +408,7 @@ const (
 		`AND job_state != 4 ` +
 		`AND JSON_EXTRACT(job_status, '$.LSN') = '%d' ` +
 		`AND (%d = 4 OR ` +
-		`CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= %d)`
+		`CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= %d)%s`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
 		`WHERE` +
@@ -1106,10 +1105,28 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 	jobState int8,
 	expectPrevLSN uint64,
 ) string {
+	return b.ISCPLogUpdateIterationSQL(accountID, tableID, jobName, jobID, &newWatermark,
+		jobStatus, jobStage, jobLifecycleVersion, jobState, expectPrevLSN, false)
+}
+
+// ISCPLogUpdateIterationSQL preserves the durable watermark when no progress
+// is supplied. A terminal writer may also require a still-active catalog row.
+func (b cdcSQLBuilder) ISCPLogUpdateIterationSQL(
+	accountID uint32, tableID uint64, jobName string, jobID uint64,
+	watermark *types.TS, jobStatus string, jobStage int8, jobLifecycleVersion uint64,
+	jobState int8, expectPrevLSN uint64, requireActive bool,
+) string {
+	var watermarkAssignment, activePredicate string
+	if watermark != nil {
+		watermarkAssignment = "watermark = '" + watermark.ToString() + "',"
+	}
+	if requireActive {
+		activePredicate = " AND drop_at IS NULL"
+	}
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateMOISCPLogSqlTemplate_Idx].SQL,
 		jobState,
-		newWatermark.ToString(),
+		watermarkAssignment,
 		escapeSQLString(jobStatus),
 		jobStage,
 		jobLifecycleVersion,
@@ -1120,6 +1137,7 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		expectPrevLSN,
 		jobState,
 		jobStage,
+		activePredicate,
 	)
 }
 

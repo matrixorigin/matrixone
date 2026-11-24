@@ -41,7 +41,7 @@ func TestPreparedCommonValueAggregatesPeerDomains(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/binary=%t", expression, binary), func(t *testing.T) {
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				proc := mock.ctxt.GetProcess()
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 				for i := 0; i < 2; i++ {
 					require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
@@ -93,7 +93,7 @@ func TestPreparedCommonValueRootStringBoundary(t *testing.T) {
 					proc := mock.ctxt.GetProcess()
 					expression := name + "(cast(1 as decimal(38,0)),?," + child + ")"
 					count := strings.Count(expression, "?")
-					params := vector.NewVec(types.T_text.ToType())
+					params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 					bindings := make([]PreparedSourceBinding, count)
 					for i := range bindings {
@@ -172,7 +172,7 @@ func TestPreparedCommonValueJointMarkerDomains(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/binary=%t/reversed=%t", tc.name, binary, reversed), func(t *testing.T) {
 					mock := NewMockOptimizer(false, newPlanTestProcess(t))
 					proc := mock.ctxt.GetProcess()
-					params := vector.NewVec(types.T_text.ToType())
+					params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 					count := strings.Count(tc.expression, "?")
 					bindings := make([]PreparedSourceBinding, count)
@@ -269,7 +269,7 @@ func TestIssue26879PreparedExecutionCommonValue(t *testing.T) {
 						t.Run(fmt.Sprintf("row_%d", row), func(t *testing.T) {
 							mock := NewMockOptimizer(false, newPlanTestProcess(t))
 							proc := mock.ctxt.GetProcess()
-							params := vector.NewVec(types.T_text.ToType())
+							params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 							defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 							count := strings.Count(tc.expression, "?")
 							bindings := make([]PreparedSourceBinding, count)

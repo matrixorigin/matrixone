@@ -30,9 +30,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1451,7 +1451,7 @@ func (tcc *TxnCompilerContext) ResolveVariableBinaryString(
 func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	varName string,
 	isSystemVar, isGlobalVar bool,
-) (vector.PrepareParamKind, error) {
+) (types.StringConversionKind, error) {
 	if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(
 		tcc.execCtx.reqCtx, varName,
 	); ok {
@@ -1463,7 +1463,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if isSystemVar {
 		value, err := tcc.ResolveVariable(varName, true, isGlobalVar)
 		if err != nil {
-			return vector.PrepareParamNone, err
+			return types.StringConversionString, err
 		}
 		return prepareParamKindFromValue(value), nil
 	}
@@ -1471,7 +1471,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 	if err != nil {
 		// See ResolveVariable: an unassigned user variable is NULL and has no
 		// prepared-parameter conversion category.
-		return vector.PrepareParamNone, nil
+		return types.StringConversionString, nil
 	}
 	return udVar.PrepareParamKind, nil
 }
@@ -2008,4 +2008,26 @@ func (tcc *TxnCompilerContext) ResolveSnapshotWithSnapshotName(snapshotName stri
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 	return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
+}
+
+// SamplePointIndexMatches is optional for compiler contexts that own a local
+// transaction and its file service. The plan may discard the observation.
+func (tcc *TxnCompilerContext) SamplePointIndexMatches(db, table uint64, rows int, candidates [][]engine.IndexPointKey) ([engine.MaxPointSampleCandidates]int, bool) {
+	var empty [engine.MaxPointSampleCandidates]int
+	proc := tcc.GetProcess()
+	if proc == nil || proc.Base == nil || proc.Mp() == nil {
+		return empty, false
+	}
+	th := tcc.GetTxnHandler()
+	storage := th.GetStorage()
+	if wrapped, ok := storage.(*engine.EntireEngine); ok {
+		storage = wrapped.Engine
+	}
+	observer, ok := storage.(interface {
+		SamplePointIndexMatches(context.Context, TxnOperator, uint64, uint64, int, [][]engine.IndexPointKey, *mpool.MPool) ([engine.MaxPointSampleCandidates]int, bool)
+	})
+	if !ok {
+		return empty, false
+	}
+	return observer.SamplePointIndexMatches(tcc.GetContext(), th.GetTxn(), db, table, rows, candidates, proc.Mp())
 }

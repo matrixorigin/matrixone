@@ -116,7 +116,7 @@ func TestNewServerImmediatelyRevokedReleasesListener(t *testing.T) {
 	}, WithRuntime(runtime.ServiceRuntime(t.Name())), WithHAKeeperClient(client))
 	require.NoError(t, err)
 	<-client.responded
-	<-s.viewMetadataAdmissionContext.Done()
+	<-s.lifecycleCtx.Done()
 	require.NoError(t, s.Close())
 
 	rebound, err := net.Listen("tcp4", address)

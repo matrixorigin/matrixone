@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -161,7 +160,6 @@ func (p *viewSchemaProvider) OpenViewSchemaBinding(ctx context.Context) (result 
 	childProc.SetResolveVariableTypeFunc(frozen.ResolveVariableType)
 	childProc.SetResolveVariableIsBinFunc(frozen.ResolveVariableIsBin)
 	childProc.SetResolveVariableStringDomainFunc(frozen.ResolveVariableStringDomain)
-	childProc.SetResolveVariablePrepareParamKindFunc(frozen.ResolveVariablePrepareParamKind)
 	check := func() error {
 		if cause := context.Cause(ctx); cause != nil {
 			return cause
@@ -316,7 +314,7 @@ func (c *viewSchemaCompilerContext) ResolveVariableIsBin(name string, system, gl
 func (c *viewSchemaCompilerContext) ResolveVariableStringDomain(name string, system, global bool) (types.RuntimeStringDomain, error) {
 	return c.variables.ResolveVariableStringDomain(name, system, global)
 }
-func (c *viewSchemaCompilerContext) ResolveVariablePrepareParamKind(name string, system, global bool) (vector.PrepareParamKind, error) {
+func (c *viewSchemaCompilerContext) ResolveVariablePrepareParamKind(name string, system, global bool) (types.StringConversionKind, error) {
 	return c.variables.ResolveVariablePrepareParamKind(name, system, global)
 }
 func (c *viewSchemaCompilerContext) GetStatsCache() *plan.StatsCache { return c.stats }

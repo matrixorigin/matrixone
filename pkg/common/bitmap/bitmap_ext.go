@@ -17,10 +17,12 @@ package bitmap
 import (
 	"bytes"
 	"encoding"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
 	"math/bits"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,13 +35,26 @@ import (
 
 const MarshalHeaderSize = 24
 
-func (n *Bitmap) InitWith(m *Bitmap) {
-	if n == m {
-		return
+// InitWithInvertedBits sets n to length bits read LSB-first from src
+// starting at bit offset, each bit inverted. It turns an Arrow validity
+// bitmap (1 = valid) into a null bitmap (1 = null). src must hold at least
+// offset+length bits.
+func (n *Bitmap) InitWithInvertedBits(src []byte, offset, length int) {
+	n.InitWithSize(int64(length))
+	var count int64
+	for w := range n.data {
+		bit := offset + w*64
+		var buf [9]byte
+		copy(buf[:], src[bit>>3:])
+		shift := uint(bit & 7)
+		word := ^(binary.LittleEndian.Uint64(buf[:8])>>shift | uint64(buf[8])<<(64-shift))
+		if rem := length - w*64; rem < 64 {
+			word &= uint64(1)<<uint(rem) - 1
+		}
+		n.data[w] = word
+		count += int64(bits.OnesCount64(word))
 	}
-	n.numBits = m.numBits
-	n.popCount = m.popCount
-	n.data = append([]uint64(nil), m.data...)
+	n.popCount = count
 }
 
 func (n *Bitmap) Clone() *Bitmap {
@@ -63,6 +78,24 @@ func (n *Bitmap) Ptr() *uint64 {
 	return &n.data[0]
 }
 
+// WordsCovering returns the bitmap's words, padded with zero words when they
+// cover fewer than nbits bits. A bitmap ends at its highest set bit, so it
+// can be shorter than the vector it describes; C code that tests the bit of
+// every row must get words covering every row, or it reads past the bitmap.
+// It returns nil for a bitmap without words.
+func (n *Bitmap) WordsCovering(nbits int) []uint64 {
+	if n == nil || len(n.data) == 0 {
+		return nil
+	}
+	need := (nbits + 63) / 64
+	if len(n.data) >= need {
+		return n.data
+	}
+	words := make([]uint64, need)
+	copy(words, n.data)
+	return words
+}
+
 func (n *Bitmap) ToArray() []uint64 {
 	rows := make([]uint64, 0, n.Count())
 	ToArray(n, &rows)
@@ -74,17 +107,122 @@ func (n *Bitmap) ToI64Array(out *[]int64) []int64 {
 	if out != nil {
 		res = (*out)[:0]
 	}
+	return AppendRows(n, res)
+}
 
-	if n.EmptyByFlag() {
-		return res
+// liveWords returns the words that hold bits below numBits, and a mask for
+// the last of them (all ones when numBits is a multiple of 64). Words
+// missing from data read as zero, so they are simply not returned.
+func (n *Bitmap) liveWords() ([]uint64, uint64) {
+	nwords := int((n.numBits + 63) / 64)
+	tail := ^uint64(0)
+	if len(n.data) < nwords {
+		return n.data, tail
 	}
+	if r := n.numBits % 64; r != 0 {
+		tail = uint64(1)<<uint(r) - 1
+	}
+	return n.data[:nwords], tail
+}
 
-	itr := n.Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		res = append(res, int64(r))
+// AppendRows appends the positions of n's set bits, ascending, to dst. It
+// grows dst once, by the bit count, and visits each word once, spending one
+// step per set bit.
+func AppendRows[T int64 | uint64 | int | int32 | uint32](n *Bitmap, dst []T) []T {
+	if n == nil || n.popCount == 0 {
+		return dst
 	}
-	return res
+	dst = slices.Grow(dst, int(n.popCount))
+	words, tail := n.liveWords()
+	last := (n.numBits+63)/64 - 1
+	for i, w := range words {
+		if int64(i) == last {
+			w &= tail
+		}
+		base := T(i * 64)
+		if w == ^uint64(0) {
+			for k := T(0); k < 64; k++ {
+				dst = append(dst, base+k)
+			}
+			continue
+		}
+		for w != 0 {
+			dst = append(dst, base+T(bits.TrailingZeros64(w)))
+			w &= w - 1
+		}
+	}
+	return dst
+}
+
+// ExpandBools sets mask to length entries, mask[i] reporting whether bit i is
+// set, and returns it (reusing its capacity). Bits at or beyond n's length
+// read as unset.
+func (n *Bitmap) ExpandBools(mask []bool, length int) []bool {
+	if cap(mask) < length {
+		mask = make([]bool, length)
+	} else {
+		mask = mask[:length]
+		clear(mask) // one bulk clear beats per-word clears for sparse bitmaps
+	}
+	words, tail := n.liveWords()
+	last := (n.numBits+63)/64 - 1
+	for i, w := range words {
+		if w == 0 {
+			continue
+		}
+		if int64(i) == last {
+			w &= tail
+		}
+		base := i * 64
+		if base >= length {
+			break
+		}
+		chunk := mask[base:min(base+64, length)]
+		switch {
+		case w == ^uint64(0):
+			for k := range chunk {
+				chunk[k] = true
+			}
+		case bits.OnesCount64(w) <= 16:
+			for w != 0 {
+				if k := bits.TrailingZeros64(w); k < len(chunk) {
+					chunk[k] = true
+				}
+				w &= w - 1
+			}
+		default:
+			for k := range chunk {
+				chunk[k] = w>>uint(k)&1 != 0
+			}
+		}
+	}
+	return mask
+}
+
+// InitWithRows sets n to length bits with exactly rows set. It reuses n's
+// word storage when it is large enough. Every row must be below length;
+// duplicates are allowed.
+func (n *Bitmap) InitWithRows(length int64, rows []int64) {
+	if length < 0 {
+		panic("negative bitmap length")
+	}
+	nwords := int((length + 63) / 64)
+	if cap(n.data) >= nwords {
+		n.data = n.data[:nwords]
+		clear(n.data)
+	} else {
+		n.data = make([]uint64, nwords)
+	}
+	n.numBits = length
+	data := n.data
+	for _, row := range rows {
+		data[uint64(row)>>6] |= 1 << (uint64(row) & 63)
+	}
+	var count int64
+	for _, w := range data {
+		count += int64(bits.OnesCount64(w))
+	}
+	n.popCount = count
 }
 
 func (n *Bitmap) Marshal() []byte {
@@ -202,13 +340,14 @@ func (n *Bitmap) MarshalTo(w io.Writer) error {
 	return types.WriteFull(w, types.EncodeSlice(n.data))
 }
 
-// MarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.popCount replace it
+// MarshalV1 encodes the legacy version-1 layout: a 4-byte reserved word
+// (written as zero), the bit length, the byte length, then the words.
 func (n *Bitmap) MarshalV1() []byte {
 	var buf bytes.Buffer
-	empty := int32(0)
+	reserved := int32(0)
 	u1 := uint64(n.numBits)
 	u2 := uint64(len(n.data) * 8)
-	buf.Write(types.EncodeInt32(&empty))
+	buf.Write(types.EncodeInt32(&reserved))
 	buf.Write(types.EncodeUint64(&u1))
 	buf.Write(types.EncodeUint64(&u2))
 	buf.Write(types.EncodeSlice(n.data))
@@ -243,7 +382,8 @@ func (n *Bitmap) UnmarshalNoCopy(data []byte) {
 	}
 }
 
-// UnmarshalV1 in version 1, Bitmap.emptyFlag is type int32, now we use Bitmap.popCount replace it
+// UnmarshalV1 decodes the legacy version-1 layout written by MarshalV1. The
+// leading 4-byte reserved word is skipped and popCount is recomputed.
 func (n *Bitmap) UnmarshalV1(data []byte) {
 	data = data[4:]
 	n.numBits = int64(types.DecodeUint64(data[:8]))
@@ -296,11 +436,5 @@ func (n *Bitmap) UnmarshalBinary(data []byte) error {
 }
 
 func ToArray[T int64 | uint64 | int | int32 | uint32](bm *Bitmap, rows *[]T) {
-	if bm.IsEmpty() {
-		return
-	}
-	it := bm.Iterator()
-	for it.HasNext() {
-		*rows = append(*rows, T(it.Next()))
-	}
+	*rows = AppendRows(bm, *rows)
 }

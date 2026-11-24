@@ -129,7 +129,7 @@ func descKeptByFilterPattern(t *testing.T, proc *process.Process, p *Plan, patte
 	require.Len(t, replacements, 1, "the DESCRIBE LIKE predicate filters a single authoritative name column")
 	bound = replaceColumnsForExpr(bound, replacements)
 	in := batch.NewWithSize(1)
-	in.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	in.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer in.Vecs[0].Free(proc.Mp())
 	for _, f := range fields {
 		require.NoError(t, vector.AppendBytes(in.Vecs[0], []byte(f), false, proc.Mp()))

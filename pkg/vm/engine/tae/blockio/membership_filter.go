@@ -41,7 +41,7 @@ func canReadMembership(ctx context.Context, info *objectio.BlockInfo,
 	if member.Bypass || !member.PredicatesTotal || request.Exact != nil || storageRows != nil ||
 		member.Select == nil || request.Select == nil || request.OutputAllocation == nil ||
 		len(member.Columns) == 0 || info.IsAppendable() ||
-		info.MetaLocation().Rows() > objectio.BlockMaxRows || objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(typs) {
+		info.MetaLocation().Rows() > objectio.BlockMaxRows {
 		return false
 	}
 	for i, column := range member.Columns {
@@ -98,7 +98,7 @@ func blockDataReadMembership(ctx context.Context, info *objectio.BlockInfo,
 		output.SetRowCount(0)
 		return true, nil
 	}
-	s, err := request.MembershipScratch(len(columns))
+	s, err := request.MembershipScratch(len(columns), mp)
 	if err != nil {
 		return false, err
 	}
@@ -124,7 +124,7 @@ func loadMembershipColumns(ctx context.Context, info *objectio.BlockInfo, column
 		scratch.Sources = append(scratch.Sources, output.Vecs[position])
 	}
 	_, err := ioutil.LoadColumnsDataIntoBorrowed(ctx, scratch.Seqnums, scratch.Types, fs, info.MetaLocation(), scratch.Sources,
-		mp, policy, request.BorrowColumns(positions, len(output.Vecs)))
+		mp, policy, request.BorrowColumns(positions, len(output.Vecs)), output)
 	if err != nil {
 		return err
 	}
@@ -166,11 +166,7 @@ func (p *scopedMembershipPredicates) gather(output *batch.Batch, rows []int64, a
 		if err != nil {
 			return err
 		}
-		source.CopyExpressionMetadataTo(destination)
 		output.Vecs[column] = destination
-	}
-	if request.ObserveSelection != nil {
-		request.ObserveSelection(output.RowCount(), 0, 0)
 	}
 	return nil
 }

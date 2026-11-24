@@ -29,7 +29,7 @@ func TestShrinkNegateOrderedSubsets(t *testing.T) {
 	for n := 0; n <= 7; n++ {
 		for mask := 0; mask < 1<<n; mask++ {
 			func() {
-				v := NewVec(types.T_int64.ToType())
+				v := NewVec(types.T_int64.ToType(), mp)
 				defer v.Free(mp)
 				values := make([]int64, n)
 				sels := make([]int64, 0, n)

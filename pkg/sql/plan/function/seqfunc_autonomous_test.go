@@ -1527,7 +1527,7 @@ func TestNextvalBatchFlushesCommittedRowsBeforeResolutionError(t *testing.T) {
 	f.callerDB.EXPECT().Relation(gomock.Any(), "other", nil).
 		Return(nil, moerr.NewNoSuchTable(f.proc.Ctx, "db", "other")).AnyTimes()
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), f.proc.Mp())
 	defer input.Free(f.proc.Mp())
 	for _, name := range []string{"seq", "seq", "other"} {
 		require.NoError(t, vector.AppendBytes(input, []byte(name), false, f.proc.Mp()))

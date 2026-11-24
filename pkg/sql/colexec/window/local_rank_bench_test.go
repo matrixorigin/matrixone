@@ -71,9 +71,11 @@ func BenchmarkLocalRank(b *testing.B) {
 						b.StopTimer()
 						if arg != nil {
 							arg.Free(proc, false, nil)
+							colexec.FreeMockChildren(arg)
 						}
 						if op != nil {
 							op.Free(proc, false, nil)
+							colexec.FreeMockChildren(op)
 						} else if input != nil {
 							input.Free(mp)
 						}
@@ -87,7 +89,7 @@ func BenchmarkLocalRank(b *testing.B) {
 					if tc.constNull {
 						input = vector.NewConstNull(types.T_int32.ToType(), tc.size, mp)
 					} else {
-						input = vector.NewVec(types.T_int32.ToType())
+						input = vector.NewVec(types.T_int32.ToType(), mp)
 						values := make([]int32, tc.size)
 						for i := range values {
 							if tc.cardinality != 0 {

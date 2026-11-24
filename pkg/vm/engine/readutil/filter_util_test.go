@@ -29,7 +29,7 @@ func TestEncodePrimaryKeyVectorOwnershipAndConstants(t *testing.T) {
 	packer := types.NewPacker()
 	t.Cleanup(packer.Close)
 
-	fixed := vector.NewVec(types.T_int64.ToType())
+	fixed := vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { fixed.Free(mp) })
 	values := []int64{-1, 42, 42, 1000}
 	for _, value := range values {
@@ -61,11 +61,11 @@ func TestEncodePrimaryKeyVectorOwnershipAndConstants(t *testing.T) {
 	constNull := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
 	t.Cleanup(func() { constNull.Free(mp) })
 	require.Equal(t, [][]byte{nil, nil, nil}, EncodePrimaryKeyVector(constNull, packer))
-	empty := vector.NewVec(types.T_int64.ToType())
+	empty := vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { empty.Free(mp) })
 	require.Nil(t, EncodePrimaryKeyVector(empty, packer))
 
-	variable := vector.NewVec(types.T_varbinary.ToType())
+	variable := vector.NewVec(types.T_varbinary.ToType(), mp)
 	t.Cleanup(func() { variable.Free(mp) })
 	valuesBytes := [][]byte{[]byte("long retained value"), {0, 1, 0}, []byte("other")}
 	for _, value := range valuesBytes {
@@ -131,7 +131,7 @@ func TestEncodePrimaryKeyVectorTypeFamilies(t *testing.T) {
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
 			p := types.NewPacker()
 			t.Cleanup(p.Close)
-			v := vector.NewVec(tc.oid.ToType())
+			v := vector.NewVec(tc.oid.ToType(), mp)
 			t.Cleanup(func() { v.Free(mp) })
 			require.NoError(t, vector.AppendAny(v, tc.value, false, mp))
 			require.NoError(t, vector.AppendAny(v, tc.value, false, mp))
@@ -153,7 +153,7 @@ func TestEncodePrimaryKeyVectorTypeFamilies(t *testing.T) {
 	got := EncodePrimaryKeyVector(null, p)
 	require.NotNil(t, got)
 	require.Empty(t, got)
-	unsupported := vector.NewVec(types.T_any.ToType())
+	unsupported := vector.NewVec(types.T_any.ToType(), mp)
 	t.Cleanup(func() { unsupported.Free(mp) })
 	require.Panics(t, func() { EncodePrimaryKeyVector(unsupported, p) })
 }

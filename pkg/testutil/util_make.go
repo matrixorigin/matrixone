@@ -131,7 +131,7 @@ var (
 )
 
 func makeVector[T types.FixedSizeT](values []T, nsp []uint64, typ types.Type, mp *mpool.MPool) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	err := vector.AppendFixedList(vec, values, nil, mp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 
@@ -144,7 +144,7 @@ func makeVector[T types.FixedSizeT](values []T, nsp []uint64, typ types.Type, mp
 func makeStringVector(values []string, nsp []uint64, typ types.Type, mp *mpool.MPool) *vector.Vector {
 	var err error
 
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	if nsp == nil {
 		err = vector.AppendStringList(vec, values, nil, mp)
 	} else {
@@ -173,7 +173,7 @@ func makeJsonVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.Vect
 		}
 	}
 
-	vec := vector.NewVec(jsonType)
+	vec := vector.NewVec(jsonType, mp)
 	if nsp == nil {
 		err = vector.AppendBytesList(vec, newVals, nil, mp)
 	} else {
@@ -199,7 +199,7 @@ func makeDateVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.Vect
 		newVals[i] = dt.ToDate()
 	}
 
-	vec := vector.NewVec(dateType)
+	vec := vector.NewVec(dateType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	if err != nil {
@@ -221,7 +221,7 @@ func makeTimeVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.Vect
 		newVals[i] = dt.ToTime(6)
 	}
 
-	vec := vector.NewVec(timeType)
+	vec := vector.NewVec(timeType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	if err != nil {
@@ -243,7 +243,7 @@ func makeDatetimeVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.
 		newVals[i] = dt
 	}
 
-	vec := vector.NewVec(datetimeType)
+	vec := vector.NewVec(datetimeType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	if err != nil {
@@ -265,7 +265,7 @@ func makeTimestampVector(values []string, nsp []uint64, mp *mpool.MPool) *vector
 		newVals[i] = dt.ToTimestamp(time.UTC)
 	}
 
-	vec := vector.NewVec(timestampType)
+	vec := vector.NewVec(timestampType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
 	vec.SetNulls(nulls.Build(len(values), nsp...))
 	if err != nil {
@@ -292,7 +292,7 @@ func makeScalarString(value string, length int, typ types.Type, mp *mpool.MPool)
 }
 
 func MakeVarlenaVector(data [][]byte, nulls []uint64, typ types.Type, mp *mpool.MPool) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for _, d := range data {
 		if d != nil {
 			vector.AppendBytes(vec, d, false, mp)

@@ -554,7 +554,7 @@ func TestExtractDataBranchSQLRowValueDecimal256(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	typ := types.New(types.T_decimal256, 39, 4)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	defer vec.Free(mp)
 
 	val, err := types.ParseDecimal256("12345678901234567890123456789012345.6789", typ.Width, typ.Scale)
@@ -573,7 +573,7 @@ func TestExtractDataBranchSQLRowValueDecimal256(t *testing.T) {
 func TestExtractDataBranchSQLRowValueUint8Array(t *testing.T) {
 	for _, values := range [][]uint8{{}, {0, 1, 255}} {
 		mp := mpool.MustNewZero()
-		vec := vector.NewVec(types.T_array_uint8.ToType())
+		vec := vector.NewVec(types.T_array_uint8.ToType(), mp)
 		require.NoError(t, vector.AppendArrayList(vec, [][]uint8{values}, nil, mp))
 
 		genericRow := make([]any, 1)
@@ -598,7 +598,7 @@ func TestExtractDataBranchSQLRowValueUint8Array(t *testing.T) {
 	}
 
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_array_uint8.ToType())
+	vec := vector.NewVec(types.T_array_uint8.ToType(), mp)
 	require.NoError(t, vector.AppendArrayList(vec, [][]uint8{nil}, []bool{true}, mp))
 
 	row := make([]any, 1)
@@ -631,7 +631,7 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	varcharVec := vector.NewVec(types.New(types.T_varchar, 64, 0))
+	varcharVec := vector.NewVec(types.New(types.T_varchar, 64, 0), mp)
 	defer varcharVec.Free(mp)
 	require.NoError(t, appendTupleValueToVector(varcharVec, []byte("hello"), mp))
 	require.Equal(t, 1, varcharVec.Length())
@@ -641,21 +641,21 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.Equal(t, 2, varcharVec.Length())
 	require.True(t, varcharVec.GetNulls().Contains(1))
 
-	decimalVec := vector.NewVec(types.New(types.T_decimal256, 65, 30))
+	decimalVec := vector.NewVec(types.New(types.T_decimal256, 65, 30), mp)
 	defer decimalVec.Free(mp)
 	decimalValue, err := types.ParseDecimal256("42.000000000000000000000000000000", 65, 30)
 	require.NoError(t, err)
 	require.NoError(t, appendTupleValueToVector(decimalVec, types.EncodeDecimal256(&decimalValue), mp))
 	require.Equal(t, decimalValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](decimalVec, 0))
 
-	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6))
+	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 6), mp)
 	defer datetimeVec.Free(mp)
 	err = appendTupleValueToVector(datetimeVec, []byte("not-raw-fixed"), mp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected byte slice for fixed-width column")
 
 	decimalTyp := types.New(types.T_decimal256, 39, 4)
-	wideDecimalVec := vector.NewVec(decimalTyp)
+	wideDecimalVec := vector.NewVec(decimalTyp, mp)
 	defer wideDecimalVec.Free(mp)
 	decimalVal, err := types.ParseDecimal256("12345678901234567890123456789012344.1234", decimalTyp.Width, decimalTyp.Scale)
 	require.NoError(t, err)
@@ -663,7 +663,7 @@ func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	require.Equal(t, 1, wideDecimalVec.Length())
 	require.Equal(t, decimalVal, vector.GetFixedAtNoTypeCheck[types.Decimal256](wideDecimalVec, 0))
 
-	yearVec := vector.NewVec(types.T_year.ToType())
+	yearVec := vector.NewVec(types.T_year.ToType(), mp)
 	defer yearVec.Free(mp)
 	yearVal := types.MoYear(2024)
 	require.NoError(t, appendTupleValueToVector(yearVec, types.EncodeValue(yearVal, types.T_year), mp))
@@ -675,7 +675,7 @@ func TestAppendTupleValueToVector_BranchHashmapYear(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
-	src := vector.NewVec(types.T_year.ToType())
+	src := vector.NewVec(types.T_year.ToType(), mp)
 	defer src.Free(mp)
 
 	yearVal := types.MoYear(2024)
@@ -696,7 +696,7 @@ func TestAppendTupleValueToVector_BranchHashmapYear(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, yearVal, tuple[0])
 
-	dst := vector.NewVec(types.T_year.ToType())
+	dst := vector.NewVec(types.T_year.ToType(), mp)
 	defer dst.Free(mp)
 
 	require.NoError(t, appendTupleValueToVector(dst, tuple[0], mp))
@@ -718,8 +718,8 @@ func TestCompareSingleValInVector_AllTypes(t *testing.T) {
 			name: "json",
 			build: func(t *testing.T, mp *mpool.MPool) (*vector.Vector, *vector.Vector, int) {
 				typ := types.T_json.ToType()
-				leftVec := vector.NewVec(typ)
-				rightVec := vector.NewVec(typ)
+				leftVec := vector.NewVec(typ, mp)
+				rightVec := vector.NewVec(typ, mp)
 				leftVal, err := types.ParseStringToByteJson(`{"k":1}`)
 				require.NoError(t, err)
 				rightVal, err := types.ParseStringToByteJson(`{"k":2}`)
@@ -1240,7 +1240,7 @@ func TestCompareTupleValueWithVectorDecimal256(t *testing.T) {
 }
 
 func buildFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, vals ...T) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -1248,7 +1248,7 @@ func buildFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, vals
 }
 
 func buildBytesVector(t *testing.T, mp *mpool.MPool, typ types.Type, vals ...[]byte) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendBytes(vec, v, false, mp))
 	}
@@ -1256,7 +1256,7 @@ func buildBytesVector(t *testing.T, mp *mpool.MPool, typ types.Type, vals ...[]b
 }
 
 func buildArrayVector[T types.RealNumbers](t *testing.T, mp *mpool.MPool, typ types.Type, vals [][]T) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	require.NoError(t, vector.AppendArrayList(vec, vals, nil, mp))
 	return vec
 }
@@ -2899,7 +2899,7 @@ func TestDataBranchDiffRejectsSnapshotBeforeLCACreation(t *testing.T) {
 		readBatch := batch.NewWithSize(len(attrs))
 		defer readBatch.Clean(mp)
 		for i, typ := range colTypes {
-			readBatch.Vecs[i] = vector.NewVec(typ)
+			readBatch.Vecs[i] = vector.NewVec(typ, mp)
 		}
 		switch relID {
 		case catalog.MO_DATABASE_ID:
@@ -2927,7 +2927,8 @@ func TestDataBranchDiffRejectsSnapshotBeforeLCACreation(t *testing.T) {
 	wg.Add(1)
 	err := diffOnBase(ctx, ses, nil, &wg, info, tables, compositeOption{}, nil, nil, nil, nil, nil)
 	require.ErrorContains(t, err, "LCA table 1 was created after an endpoint snapshot")
-	require.Equal(t, []types.TS{old, now}, tableScans)
+	// Both the compound-key lookup and the ID fallback miss at the old snapshot.
+	require.Equal(t, []types.TS{old, old, now}, tableScans)
 }
 
 func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T) {
@@ -2948,7 +2949,7 @@ func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T
 	probeTxn.EXPECT().SnapshotTS().Return(snapshotTS)
 	storage := mock_frontend.NewMockEngine(ctrl)
 	storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(catalog.MO_TABLES_ID)).
-		Return("", "", nil, errors.New("use catalog snapshot reader for creation time")).Times(3)
+		Return("", "", nil, errors.New("use catalog snapshot reader for creation time")).Times(1)
 	storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID).
 		Return("", "", nil, errors.New("cannot reopen historical relation")).Times(2)
 	ses.txnHandler = &TxnHandler{txnOp: txnOp, storage: storage}
@@ -2999,6 +3000,11 @@ func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T
 		case catalog.MO_DATABASE_ID:
 			row = []any{databaseID, types.UnixToTimestamp(1)}
 		case catalog.MO_TABLES_ID:
+			if len(attrs) == 3 {
+				require.Equal(t, []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr, catalog.SystemRelAttr_Version}, attrs)
+				return nil // Miss the compound-key lookup to exercise historical ID recovery.
+			}
+			require.Equal(t, []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}, attrs)
 			row = []any{tableID, creation}
 		case tableID:
 			require.Equal(t, "lca-reader-fallback", caller)

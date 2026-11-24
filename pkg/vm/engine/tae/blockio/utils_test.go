@@ -45,8 +45,8 @@ func TestCoarseFilterTombstoneObject(t *testing.T) {
 		assert.NotNil(t, writer)
 
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 
 		for i := 0; i < rowCnt; i++ {
 			row := types.RandomRowid()

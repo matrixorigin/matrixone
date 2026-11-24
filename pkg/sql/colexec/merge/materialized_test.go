@@ -42,7 +42,7 @@ func TestMaterializedSinkScanConsumersAdvanceIndependently(t *testing.T) {
 	inputs := make([]*batch.Batch, 4)
 	for i := range inputs {
 		inputs[i] = batch.NewWithSize(1)
-		inputs[i].Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		inputs[i].Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(inputs[i].Vecs[0], int64(i), false, proc.Mp()))
 		inputs[i].SetRowCount(1)
 	}
@@ -101,7 +101,7 @@ func TestMaterializedSinkScanResetCleansUnreleasedReaderBatches(t *testing.T) {
 	require.NoError(t, source.Begin(proc.Mp()))
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
 	input.SetRowCount(1)
 	inputMemory := proc.Mp().CurrNB()
@@ -135,7 +135,7 @@ func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 	inputs := make([]*batch.Batch, 32)
 	for i := range inputs {
 		inputs[i] = batch.NewWithSize(1)
-		inputs[i].Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		inputs[i].Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(inputs[i].Vecs[0], int64(i), false, proc.Mp()))
 		inputs[i].SetRowCount(1)
 	}
@@ -217,7 +217,7 @@ func TestMaterializedSinkScanReadersObserveProducerErrorAfterBufferedData(t *tes
 	require.NoError(t, source.Begin(proc.Mp()))
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
 	input.SetRowCount(1)
 	inputMemory := proc.Mp().CurrNB()
@@ -266,7 +266,7 @@ func TestMaterializedSinkScanOwnsBatchesThroughMergeOrderSpill(t *testing.T) {
 	inputs := make([]*batch.Batch, 3)
 	for i, value := range []int64{3, 1, 2} {
 		inputs[i] = batch.NewWithSize(1)
-		inputs[i].Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		inputs[i].Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(inputs[i].Vecs[0], value, false, proc.Mp()))
 		inputs[i].SetRowCount(1)
 	}

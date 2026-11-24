@@ -180,6 +180,7 @@ func TestLoopJoinCancellationReleasesConditionWindow(t *testing.T) {
 	join.Reset(proc, true, err)
 	join.Reset(proc, true, err)
 	join.Free(proc, true, err)
+	freeTestChildren(join)
 	require.Zero(t, account.Snapshot().Used)
 }
 
@@ -244,6 +245,7 @@ func TestLoopJoinCancellationResetReuse(t *testing.T) {
 	require.Equal(t, 1, canceledExpression.evals, "the old executor must not run in the new generation")
 	join.Reset(proc, false, nil)
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	require.Zero(t, account.Snapshot().Used)
 }
 

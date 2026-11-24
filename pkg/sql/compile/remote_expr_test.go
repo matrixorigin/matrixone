@@ -105,7 +105,7 @@ func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	require.Empty(t, session.warnings)
 
 	input := batch.NewWithSize(1)
-	dummy := vector.NewVec(types.T_int64.ToType())
+	dummy := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(dummy, int64(1), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(dummy, int64(2), false, proc.Mp()))
 	defer dummy.Free(proc.Mp())
@@ -157,7 +157,7 @@ func TestMixedTemporalConditionalPreservesFractionalValues(t *testing.T) {
 	require.NoError(t, err)
 	defer executor.Free()
 	input := batch.NewWithSize(1)
-	conditions := vector.NewVec(types.T_bool.ToType())
+	conditions := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(conditions, true, false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(conditions, false, false, proc.Mp()))
 	input.Vecs[0] = conditions
@@ -1573,7 +1573,6 @@ func TestFoldRemoteJSONVariablePreservesTypeAndBinding(t *testing.T) {
 			require.Equal(t, types.T_json, vec.GetType().Oid)
 			require.True(t, vec.IsConst())
 			require.Equal(t, 3, vec.Length())
-			require.Equal(t, types.StringSourceUserVariable, vec.GetStringSourceAt(0))
 			if tc.value == nil {
 				require.True(t, vec.IsConstNull())
 			} else {

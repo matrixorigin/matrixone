@@ -17,6 +17,7 @@ package dependent
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -45,14 +46,14 @@ type JoinKernel struct {
 	updateBudget   *process.ExecutionResourceGeneration
 	updateCharged  uint64
 	factory        colexec.DependentProgramFactory
-	allocation     *vector.AllocationAccountSelection
+	allocation     *mpool.MPool
 	frame          *colexec.DependentExpressionFrame
 	pending        vm.Continuation
 	built          bool
 	consumed       bool
 }
 
-func (j *JoinKernel) BindDependent(factory colexec.DependentProgramFactory, allocation *vector.AllocationAccountSelection) {
+func (j *JoinKernel) BindDependent(factory colexec.DependentProgramFactory, allocation *mpool.MPool) {
 	j.factory, j.allocation = factory, allocation
 	if j.Condition != nil {
 		j.Join.(*loopjoin.LoopJoin).PairCondition = j.pair

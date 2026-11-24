@@ -41,7 +41,7 @@ func (a *recordingAdmission) Release(bytes int64) int64 {
 
 func membershipOf(t *testing.T, keys []int64) docfilter.MembershipFilter {
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_int64.ToType())
+	v := vector.NewVec(types.T_int64.ToType(), mp)
 	defer v.Free(mp)
 	for _, k := range keys {
 		require.NoError(t, vector.AppendFixed(v, k, false, mp))

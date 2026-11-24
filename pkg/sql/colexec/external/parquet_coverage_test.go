@@ -193,7 +193,7 @@ func TestParquetProcessHelpersCoverageHack(t *testing.T) {
 		require.Equal(t, [3]int64{}, [3]int64{proc.Mp().CurrNB(), bytes, objects})
 	})
 	newVec := func(typ types.Type) *vector.Vector {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, proc.Mp())
 		t.Cleanup(func() { vec.Free(proc.Mp()) })
 		return vec
 	}

@@ -25,7 +25,7 @@ import (
 func TestCheckedFixedColumnPreservesBackedEmptyView(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	v := NewVec(types.T_int32.ToType())
+	v := NewVec(types.T_int32.ToType(), mp)
 	t.Cleanup(func() { v.Free(mp) })
 	require.NoError(t, AppendFixed(v, int32(7), false, mp))
 	v.SetLength(0)

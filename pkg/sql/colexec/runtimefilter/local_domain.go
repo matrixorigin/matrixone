@@ -223,7 +223,7 @@ func (p *LocalDomainSource) AddVector(ctx context.Context, vec *vector.Vector, r
 	if d.pass {
 		return nil
 	}
-	if vec == nil || vec.GetType().Oid != d.typ || vec.HasGrouping() || rows < 0 || rows > LocalDomainBatchRows ||
+	if vec == nil || vec.GetType().Oid != d.typ || rows < 0 || rows > LocalDomainBatchRows ||
 		(!vec.IsConst() && vec.Length() != rows) || (vec.IsConst() && rows > 0 && vec.Length() == 0) {
 		d.disableLocked(LocalDomainUnsupported)
 		return nil

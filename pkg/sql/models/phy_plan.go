@@ -27,6 +27,17 @@ type PhyPlan struct {
 	LocalScope  []PhyScope                         `json:"scope,omitempty"`
 	RemoteScope []PhyScope                         `json:"RemoteScope,omitempty"`
 	Resource    *resource.StatementResourceSummary `json:"resource,omitempty"`
+	Partial     PartialExecutionCapture            `json:"partial_execution,omitzero"`
+}
+
+// PartialExecutionCapture describes the generation represented by the plan.
+// Remote plan receipts are independent of terminal resource receipts.
+type PartialExecutionCapture struct {
+	Interrupted    bool   `json:"interrupted"`
+	Attempt        uint64 `json:"attempt"`
+	RemoteExpected uint64 `json:"remote_expected"`
+	RemoteObserved uint64 `json:"remote_observed"`
+	RemoteMissing  bool   `json:"remote_missing,omitempty"`
 }
 
 type PhyScope struct {

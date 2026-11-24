@@ -301,7 +301,7 @@ func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					input := batch.NewWithSize(1)
 					defer input.Clean(proc.Mp())
-					input.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
+					input.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 					value := types.Decimal64(300)
 					if name == "direct_decimal" {
 						value = 150

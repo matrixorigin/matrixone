@@ -40,7 +40,7 @@ func BenchmarkTemporalStringExpressions(b *testing.B) {
 				proc := testutil.NewProcess(b, testutil.WithFileService(nil))
 				bat := batch.NewWithSize(1)
 				defer bat.Clean(proc.Mp())
-				bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				const rows = 1024
 				for i := 0; i < rows; i++ {
 					require.NoError(b, vector.AppendBytes(bat.Vecs[0], []byte(input.value), false, proc.Mp()))

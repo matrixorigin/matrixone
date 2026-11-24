@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +43,7 @@ func TestConvertedParameterReuse(t *testing.T) {
 				if tc.oid == types.T_decimal64 || tc.oid == types.T_decimal128 {
 					typ.Scale = 2
 				}
-				input := NewVec(typ)
+				input := NewVec(typ, mp)
 				defer input.Free(mp)
 				for i := 0; i < 2; i++ {
 					switch tc.oid {
@@ -115,7 +114,7 @@ func TestConvertedParameterReuse(t *testing.T) {
 					MustFixedColWithTypeCheck[types.Decimal128](input)[0] = types.Decimal128{B0_63: 250}
 				}
 				if !constant {
-					nulls.Add(input.GetNulls(), 1)
+					input.GetNulls().Add(1)
 				}
 				check(tc.changed, !constant)
 				nullToValue()

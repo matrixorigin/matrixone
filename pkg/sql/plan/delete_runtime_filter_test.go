@@ -78,9 +78,21 @@ func TestBoundedDeleteIndexRuntimeFilter(t *testing.T) {
 		{name: "original rejection survives a lower late estimate", want: true, mutate: func(b *QueryBuilder) {
 			b.qry.Nodes[4].Stats.HashmapStats.HashmapSize = 1
 		}},
-		{name: "bound itself must pass despite a low late estimate", mutate: func(b *QueryBuilder) {
+		{name: "bound at ten percent is rejected within the runtime budget", mutate: func(b *QueryBuilder) {
 			b.qry.Nodes[4].Stats.HashmapStats.HashmapSize = 1
-			b.qry.Nodes[1].Limit = makePlan2Uint64ConstExprWithType(100_000)
+			b.qry.Nodes[3].Stats.TableCnt = 10_000
+			stats := NewStatsInfo()
+			stats.NdvMap["id"] = 1000
+			b.compCtx.(*statsCacheCompilerContext).statsCache.Set(3, stats)
+			b.qry.Nodes[1].Limit = makePlan2Uint64ConstExprWithType(1000)
+			require.GreaterOrEqual(t, GetInFilterCardLimitOnPK(b.compCtx.GetProcess().GetService(), 10_000), int32(1000))
+		}},
+		{name: "default scan cardinality cannot compensate for low NDV", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[3].Stats = DefaultStats()
+			stats := NewStatsInfo()
+			stats.NdvMap["id"] = 100
+			b.compCtx.(*statsCacheCompilerContext).statsCache.Set(3, stats)
+			b.qry.Nodes[1].Limit = makePlan2Uint64ConstExprWithType(10)
 		}},
 		{name: "no original cost rejection", mutate: func(b *QueryBuilder) {
 			identity := b.deleteIndexScanTables[3]

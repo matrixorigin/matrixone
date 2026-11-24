@@ -73,6 +73,8 @@ delete from r1 where id = 1;
 delete from r2 where id = 1;
 data branch diff r1 against r0;
 data branch diff r2 against r0{snapshot='diff_older_ancestor_sp'};
+data branch diff r2 against r0{snapshot='diff_older_ancestor_sp'} output as renamed_history_diff;
+select __mo_diff_source, __mo_diff_flag, id, w from renamed_history_diff order by id;
 data branch diff r0{snapshot='diff_older_ancestor_sp'} against r2;
 
 -- The ancestor's current name belonged to another table at the fork.

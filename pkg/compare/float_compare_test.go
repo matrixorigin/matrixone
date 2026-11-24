@@ -57,7 +57,7 @@ func TestFloatOrderCompareOrdersNaNAndNull(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			defer vec.Free(mp)
 			require.NoError(t, tc.append(vec, mp))
 

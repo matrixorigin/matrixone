@@ -65,6 +65,7 @@ func jsonDepthCheckFn(_ []overload, inputs []types.Type) checkResult {
 // accepted and is handled by the ordinary strict-function NULL path.
 func jsonDepthCheckPreparedInput(
 	input *vector.Vector,
+	inputIsBin bool,
 	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
@@ -73,7 +74,6 @@ func jsonDepthCheckPreparedInput(
 		return nil
 	}
 
-	preparedType := input.GetPrepareParamType()
 	for row := 0; row < length; row++ {
 		if selectList != nil && selectList.Contains(uint64(row)) {
 			continue
@@ -86,19 +86,10 @@ func jsonDepthCheckPreparedInput(
 			continue
 		}
 
-		if input.GetIsBinaryStringAt(physicalRow) {
+		if isBinaryStringVector(input, inputIsBin) {
 			return jsonDepthInvalidBinary(proc)
 		}
 		if !jsonDepthTypeSupported(*input.GetType()) {
-			return jsonDepthInvalidType(proc)
-		}
-		if preparedType != types.T_any {
-			if !jsonDepthTypeSupported(preparedType.ToType()) {
-				return jsonDepthInvalidType(proc)
-			}
-			continue
-		}
-		if input.GetPrepareParamKindAt(physicalRow) != vector.PrepareParamNone {
 			return jsonDepthInvalidType(proc)
 		}
 	}
@@ -112,7 +103,7 @@ func JsonDepth(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	if err := jsonDepthCheckPreparedInput(ivecs[0], proc, length, selectList); err != nil {
+	if err := jsonDepthCheckPreparedInput(ivecs[0], result.ArgumentIsBin(0), proc, length, selectList); err != nil {
 		return err
 	}
 	checkCancelled := func() error {

@@ -231,9 +231,9 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	} else {
-		ctr.buf = batch.NewOffHeapWithSize(ctr.batchList[0].VectorCount())
+		ctr.buf = batch.NewWithSize(ctr.batchList[0].VectorCount())
 		for i := range ctr.buf.Vecs {
-			ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.batchList[0].Vecs[i].GetType())
+			ctr.buf.Vecs[i] = vector.NewVec(*ctr.batchList[0].Vecs[i].GetType(), proc.Mp())
 		}
 	}
 	mp := proc.Mp()
@@ -397,9 +397,9 @@ func (ctr *container) pickAndSendHeap(proc *process.Process, result *vm.CallResu
 	}
 	if ctr.buf == nil {
 		first := ctr.batchList[ctr.mergeHeap[0]]
-		ctr.buf = batch.NewOffHeapWithSize(first.VectorCount())
+		ctr.buf = batch.NewWithSize(first.VectorCount())
 		for i := range ctr.buf.Vecs {
-			ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*first.Vecs[i].GetType())
+			ctr.buf.Vecs[i] = vector.NewVec(*first.Vecs[i].GetType(), proc.Mp())
 		}
 	} else {
 		ctr.buf.CleanOnlyData()

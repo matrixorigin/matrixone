@@ -193,8 +193,8 @@ func (filter *bloomFilter) MayContainsAny(keys *vector.Vector, lowerBound int, u
 	return found
 }
 
-func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error) {
-	var positive *nulls.Bitmap
+func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Nulls, error) {
+	var positive *nulls.Nulls
 
 	row := uint32(0)
 	op := func(v []byte, _ bool, _ int) error {
@@ -281,7 +281,7 @@ func (filter *bloomFilter) PrefixMayContainsKey(key []byte, prefixFnId uint8, le
 	panic("not supported")
 }
 
-func (filter *bloomFilter) PrefixMayContainsAnyKeys(keys containers.Vector, prefixFnId uint8, level uint8) (bool, *nulls.Bitmap, error) {
+func (filter *bloomFilter) PrefixMayContainsAnyKeys(keys containers.Vector, prefixFnId uint8, level uint8) (bool, *nulls.Nulls, error) {
 	panic("not supported")
 }
 

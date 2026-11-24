@@ -127,15 +127,6 @@ func TestJsonDepthRejectsMalformedTypeAndBinaryDomain(t *testing.T) {
 		JsonDepth)
 	succeed, info := fc.RunAndFree()
 	require.True(t, succeed, info)
-
-	input := vector.NewVec(types.T_varchar.ToType())
-	defer input.Free(proc.Mp())
-	require.NoError(t, vector.AppendBytes(input, []byte(`1`), false, proc.Mp()))
-	input.SetIsBinaryString(true)
-	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
-	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(1))
-	require.Error(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
 }
 
 func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {
@@ -143,7 +134,7 @@ func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {
 	// Public T_json append paths reject malformed payloads. Build the
 	// representation as text, then change only the test vector metadata so the
 	// executor's fail-closed boundary is exercised directly.
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte{}, false, proc.Mp()))
 	input.SetType(types.T_json.ToType())
@@ -162,20 +153,11 @@ func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {
 func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte(`1`), false, proc.Mp()))
-	input.SetPrepareParamKind(vector.PrepareParamInteger)
-	input.SetPrepareParamType(types.T_int64)
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(1))
-	require.Error(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
-
-	input.ResetWithSameType()
-	require.NoError(t, vector.AppendBytes(input, []byte(`1`), false, proc.Mp()))
-	input.SetPrepareParamKind(vector.PrepareParamNone)
-	input.SetPrepareParamType(types.T_varchar)
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
 	value, isNull := vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector()).GetValue(0)
@@ -184,8 +166,6 @@ func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 
 	input.ResetWithSameType()
 	require.NoError(t, vector.AppendBytes(input, []byte(`{"a":[1]}`), false, proc.Mp()))
-	input.SetPrepareParamKind(vector.PrepareParamNone)
-	input.SetPrepareParamType(types.T_any)
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
 	value, isNull = vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector()).GetValue(0)
@@ -194,8 +174,6 @@ func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 
 	input.ResetWithSameType()
 	require.NoError(t, vector.AppendBytes(input, []byte(`1`), true, proc.Mp()))
-	input.SetPrepareParamKind(vector.PrepareParamInteger)
-	input.SetPrepareParamType(types.T_int64)
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.NoError(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
 	_, isNull = vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector()).GetValue(0)
@@ -232,7 +210,7 @@ func TestJsonDepthLimitAndErrorRecovery(t *testing.T) {
 	succeed, info = fc.RunAndFree()
 	require.True(t, succeed, info)
 
-	input := vector.NewVec(types.T_varchar.ToType())
+	input := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer input.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	defer result.Free()

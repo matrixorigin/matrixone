@@ -15,7 +15,9 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -41,8 +43,6 @@ var (
 // column names (Attrs), column data (Vecs), the number of rows (rowCount),
 // aggregation intermediate data (Aggs),
 // and some specific flags like Recursive, ShuffleIDX.
-//
-// offHeap is true means this batch was allocated outside mpool.
 type Batch struct {
 	// For recursive CTE, 1 is last batch, 2 is end of batch
 	Recursive  int32
@@ -54,15 +54,23 @@ type Batch struct {
 
 	ExtraBuf []byte
 
-	// row count of batch, to instead of old len(Zs).
+	// row count of batch, to instead of old len(Zs). For a selected batch it
+	// is the logical (selected) row count.
 	rowCount int
-	offHeap  bool
 
-	// allocationAccount is the destination selection for owned off-heap
-	// vectors created or reused by this batch. Alias vectors do not copy it.
-	allocationAccount *vector.AllocationAccountSelection
+	// selection, when non-nil, marks the physical rows that are the batch's
+	// logical rows (see selection.go); physicalRows is the vectors' row count.
+	selection    *bitmap.Bitmap
+	physicalRows int
 
 	// extraBufMP owns ExtraBuf only when it was detached from an accounted
 	// off-heap buffer. Ordinary Go-heap ExtraBuf values leave this nil.
 	extraBufMP *mpool.MPool
+
+	// leases keeps alive the lent backings (for example pinned FileService
+	// cache entries) that this batch's vectors alias. The batch is the lender:
+	// it releases them whenever it drops or reuses its column data (Clean,
+	// CleanOnlyData, FreeColumns, decoding into the batch). A vector moved out of
+	// the batch must be copied (MaterializeOwned) if it outlives that point.
+	leases bufferlease.Holder
 }

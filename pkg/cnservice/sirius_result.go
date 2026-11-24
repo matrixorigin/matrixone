@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -51,7 +52,7 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 	if uint64(len(result.Backing)) > accounted {
 		accounted = uint64(len(result.Backing))
 	}
-	lease, err := vector.NewRefCountedBufferLease(result.Backing, int64(accounted), nil)
+	lease, err := bufferlease.NewRefCounted(result.Backing, int64(accounted), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -65,31 +66,29 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 	}()
 	bat.Attrs = request.Headings
 	bat.SetRowCount(int(result.Rows))
+	// The batch is the lender of the native window its vectors alias; the
+	// window stays valid for the callback that consumes and cleans the batch.
+	if err = bat.HoldLease(lease); err != nil {
+		return bat, err
+	}
 	for i, v := range result.Vectors {
 		t := request.OutputTypes[i]
 		typ := types.New(types.T(t.Id), t.Width, t.Scale)
-		vec, createErr := vector.NewOffHeapVecWithTypeAndAllocation(typ, nil)
-		if createErr != nil {
-			return bat, createErr
-		}
-		bat.Vecs[i] = vec
-		if err = vec.InstallBorrowedData(v.Data, lease); err != nil {
-			return bat, err
-		}
+		// A read-only reference to the native window the batch holds.
+		var area []byte
 		if len(v.Area) > 0 {
-			if err = vec.InstallBorrowedArea(v.Area, lease); err != nil {
-				return bat, err
-			}
+			area = v.Area
 		}
-		vec.SetLength(int(result.Rows))
-		// Reserve bitmap allocation while errors can still unwind this batch.
+		vec := vector.NewVecWithData(typ, int(result.Rows), v.Data, area, nil)
+		bat.Vecs[i] = vec
 		if len(v.Nulls) != 0 {
-			if err = vec.PrepareBorrowedValidity(int(result.Rows), mp); err != nil {
-				return bat, err
-			}
+			// The null bitmap is the read-only vector's own (Go heap), built
+			// here; only its data and area reference the native window.
+			nsp := vec.GetNulls()
+			nsp.InitWithSize(int(result.Rows))
 			for row := uint32(0); row < result.Rows; row++ {
 				if v.Nulls[row/8]&(1<<(row%8)) != 0 {
-					vec.SetNull(uint64(row))
+					nsp.Add(uint64(row))
 				}
 			}
 		}

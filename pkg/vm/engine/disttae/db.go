@@ -895,17 +895,25 @@ func (e *Engine) GetOrCreateLatestPart(
 	databaseId,
 	tableId uint64,
 ) *logtailreplay.Partition {
-
+	key := [2]uint64{databaseId, tableId}
+	e.RLock()
+	partition, ok := e.partitions[key]
+	e.RUnlock()
+	// A present nil is still an existing entry, as on the creation path.
+	if ok {
+		return partition
+	}
 	e.Lock()
 	defer e.Unlock()
-	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
+	// Another caller may have populated the entry after the read lock was released.
+	partition, ok = e.partitions[key]
 	if !ok { // create a new table
 		partition = logtailreplay.NewPartition(
 			e.service, e.GetLatestCatalogCache(),
 			accId, databaseId, tableId,
 			e.getPrefetchOnSubscribed(),
 		)
-		e.partitions[[2]uint64{databaseId, tableId}] = partition
+		e.partitions[key] = partition
 	}
 	return partition
 }

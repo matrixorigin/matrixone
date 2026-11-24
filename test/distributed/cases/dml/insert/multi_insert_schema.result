@@ -12,6 +12,8 @@ create table narrow (id int primary key, name varchar(30));
 create table wide (id bigint primary key, name varchar(100), amount double, ts date, flag tinyint, note varchar(500), extra int default 42, created timestamp default current_timestamp);
 create table reordered (note text, amount decimal(20,6), id smallint primary key);
 create table typed (id int primary key, name char(10), amount int, ts_text varchar(30), amount_text varchar(30), when_day int);
+set @mi_schema_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
 insert all
 into narrow (id, name) values (id, name)
 into wide (id, name, amount, ts, flag, note) values (id, name, amount, ts, flag, note)
@@ -26,7 +28,7 @@ select * from narrow order by id;
 4  ¦  delta  𝄀
 5  ¦  epsilon
 select id, name, amount, ts, flag, note, extra, created is not null as has_created from wide order by id;
-➤ id[-5,64,0]  ¦  name[12,100,0]  ¦  amount[8,53,31]  ¦  ts[91,10,0]  ¦  flag[-6,8,0]  ¦  note[12,500,0]  ¦  extra[4,32,0]  ¦  has_created[-7,1,0]  𝄀
+➤ id[-5,64,0]  ¦  name[12,100,0]  ¦  amount[8,53,31]  ¦  ts[91,10,0]  ¦  flag[-6,8,0]  ¦  note[12,500,0]  ¦  extra[4,32,0]  ¦  has_created[-6,8,0]  𝄀
 1  ¦  alpha  ¦  10.5  ¦  2024-01-01  ¦  1  ¦  first row  ¦  42  ¦  1  𝄀
 2  ¦  beta  ¦  20.25  ¦  2024-02-02  ¦  0  ¦  second row  ¦  42  ¦  1  𝄀
 3  ¦  gamma  ¦  -30.125  ¦  2024-03-03  ¦  1  ¦  null  ¦  42  ¦  1  𝄀
@@ -46,6 +48,7 @@ select * from typed order by id;
 3  ¦  gamma  ¦  -30  ¦  2024-03-03 12:45:00  ¦  -30.125  ¦  3  𝄀
 4  ¦  delta  ¦  0  ¦  2024-04-04 00:00:00  ¦  0.000  ¦  4  𝄀
 5  ¦  epsilon  ¦  100000  ¦  2024-05-05 23:59:59  ¦  99999.999  ¦  5
+set session sql_mode = @mi_schema_saved_sql_mode;
 create table with_uk (id int primary key, name varchar(30), unique key uk_name(name), key ik_id(id));
 create table with_cpk (id int, name varchar(30), amount decimal(12,3), primary key (id, name));
 create table no_pk (id int, name varchar(30));
@@ -146,6 +149,7 @@ select count(*) from with_nn;
 insert all into with_gen (id, amount, doubled) values (id + 10, amount, amount) select id, amount from src;
 invalid input: the value specified for generated column 'doubled' in table 'with_gen' is not allowed
 create table conv (id int primary key, j json, e enum('alpha','beta','gamma','other'), b varbinary(20), d date, t time, f float);
+set session sql_mode = '';
 insert first
 when name in ('alpha', 'beta', 'gamma') then into conv (id, j, e, b, d, t, f) values (id, json_object('name', name, 'amount', amount), name, name, ts, ts, amount)
 else                                          into conv (id, j, e, b, d, t, f) values (id, json_array(id, name), 'other', 'x', ts, ts, amount)
@@ -157,7 +161,7 @@ select id, j, e, hex(b), d, t, f from conv order by id;
 3  ¦  {"amount": -30.125, "name": "gamma"}  ¦  gamma  ¦  67616D6D61  ¦  2024-03-03  ¦  12:45:00  ¦  -30.125  𝄀
 4  ¦  [4, "delta"]  ¦  other  ¦  78  ¦  2024-04-04  ¦  00:00:00  ¦  0.0  𝄀
 5  ¦  [5, "epsilon"]  ¦  other  ¦  78  ¦  2024-05-05  ¦  23:59:59  ¦  100000.0
-set @mi_schema_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = @mi_schema_saved_sql_mode;
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert all into conv (id, e) values (id + 10, name) select id, name from src where name = 'delta';
 Data truncated for ENUM value: 'delta'

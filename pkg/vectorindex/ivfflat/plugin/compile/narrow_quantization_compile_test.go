@@ -133,7 +133,7 @@ func (c *cacheSkipCtx) RunWithSourceReadCacheSkip(fn func() error) error {
 func doubleResult(t *testing.T, vals ...float64) executor.Result {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_float64.ToType())
+	vec := vector.NewVec(types.T_float64.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}

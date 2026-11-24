@@ -28,9 +28,8 @@ import (
 // alternative required before local split can be enabled for that ingestion.
 func TestAvgNumericContractMergeOrder(t *testing.T) {
 	mp := mpool.MustNewZero()
-	floatInput := vector.NewVec(types.T_float64.ToType())
+	floatInput := vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(floatInput, []float64{1e16, -1e16, 1}, nil, mp))
-	defer floatInput.Free(mp)
 
 	runFloat := func(rightAssociated bool) float64 {
 		states := make([]AggFuncExec, 3)
@@ -49,7 +48,7 @@ func TestAvgNumericContractMergeOrder(t *testing.T) {
 		result, err := states[0].Flush()
 		require.NoError(t, err)
 		value := vector.GetFixedAtNoTypeCheck[float64](result[0], 0)
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		for _, state := range states {
 			state.Free()
 		}
@@ -62,13 +61,12 @@ func TestAvgNumericContractMergeOrder(t *testing.T) {
 	require.Equal(t, 0.0, rightFloat)
 
 	decimalType := types.New(types.T_decimal64, 18, 2)
-	decimalInput := vector.NewVec(decimalType)
+	decimalInput := vector.NewVec(decimalType, mp)
 	for _, text := range []string{"9000000000000000.00", "-9000000000000000.00", "1.00"} {
 		value, err := types.ParseDecimal64(text, decimalType.Width, decimalType.Scale)
 		require.NoError(t, err)
 		require.NoError(t, vector.AppendFixed(decimalInput, value, false, mp))
 	}
-	defer decimalInput.Free(mp)
 
 	runDecimal := func(rightAssociated bool) (types.Decimal128, int32) {
 		states := make([]AggFuncExec, 3)
@@ -88,7 +86,7 @@ func TestAvgNumericContractMergeOrder(t *testing.T) {
 		require.NoError(t, err)
 		value := vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0)
 		scale := result[0].GetType().Scale
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		for _, state := range states {
 			state.Free()
 		}
@@ -101,5 +99,7 @@ func TestAvgNumericContractMergeOrder(t *testing.T) {
 	require.Equal(t, leftScale, rightScale)
 	require.Equal(t, int32(6), leftScale)
 	require.Equal(t, "0.333333", leftDecimal.Format(leftScale))
+	decimalInput.Free(mp)
+	floatInput.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }

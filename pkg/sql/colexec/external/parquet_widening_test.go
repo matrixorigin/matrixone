@@ -51,7 +51,7 @@ func TestParquet_WideningConversion_Int32ToInt64(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp, "INT32 → INT64 widening conversion should be supported")
@@ -77,7 +77,7 @@ func TestParquet_WideningConversion_Int32ToInt64(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp, "INT32 → INT64 with dictionary encoding should be supported")
@@ -105,7 +105,7 @@ func TestParquet_WideningConversion_Int32ToInt64(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp, "INT64 → INT64 direct mapping should still work")
@@ -141,7 +141,7 @@ func TestParquet_WideningConversion_UInt32ToUInt64(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_uint64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp, "UINT32 → UINT64 widening conversion should be supported")
@@ -167,7 +167,7 @@ func TestParquet_WideningConversion_UInt32ToUInt64(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_uint64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp, "UINT32 → UINT64 with dictionary encoding should be supported")
@@ -196,7 +196,7 @@ func TestParquet_WideningConversion_UInt32ToUInt64(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_uint64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp, "UINT64 → UINT64 direct mapping should still work")
@@ -234,7 +234,7 @@ func TestParquet_WideningConversion_WithNulls(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_int64) /* nullable */})
 		require.NotNil(t, mp, "INT32 → INT64 with NULL values should be supported")
@@ -276,7 +276,7 @@ func TestParquet_WideningConversion_ExtremeValues(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_int64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -317,7 +317,7 @@ func TestParquet_WideningConversion_ExtremeValues(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_uint64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint64), NotNullable: true})
 		require.NotNil(t, mp)
@@ -356,7 +356,7 @@ func TestParquet_WideningConversion_BackwardCompatibility(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+		vec := vector.NewVec(types.New(types.T_int32, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
 		require.NotNil(t, mp, "INT32 → INT32 direct mapping should still work")
@@ -386,7 +386,7 @@ func TestParquet_WideningConversion_BackwardCompatibility(t *testing.T) {
 		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_uint32, 0, 0))
+		vec := vector.NewVec(types.New(types.T_uint32, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uint32), NotNullable: true})
 		require.NotNil(t, mp, "UINT32 → UINT32 direct mapping should still work")
@@ -423,7 +423,7 @@ func TestParquet_WideningConversion_Float32ToFloat64(t *testing.T) {
 		page2, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
 		require.NotNil(t, mp, "FLOAT32 → FLOAT64 should be supported")
@@ -448,7 +448,7 @@ func TestParquet_WideningConversion_Float32ToFloat64(t *testing.T) {
 		}
 		f, page := writeDictAndGetPage(t, node, vals)
 
-		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_float64), NotNullable: true})
 		require.NotNil(t, mp, "FLOAT32 → FLOAT64 with dictionary encoding should be supported")
@@ -487,7 +487,7 @@ func TestParquet_WideningConversion_Float32ToFloat64(t *testing.T) {
 		page2, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(types.T_float64, 0, 0))
+		vec := vector.NewVec(types.New(types.T_float64, 0, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(types.T_float64), NotNullable: true})
 		require.NotNil(t, mp)

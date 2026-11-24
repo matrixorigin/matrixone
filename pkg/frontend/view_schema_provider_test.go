@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -46,7 +45,7 @@ func TestViewSchemaFrozenVariablesPreserveAttributesAndOwnBytes(t *testing.T) {
 		},
 		userDefinedVars: map[string]*UserDefinedVar{
 			"payload": {Value: bytes, Sql: "set @payload = 0x00ff41", IsBin: true, Type: wantType, RuntimeStringDomain: types.RuntimeStringBinary},
-			"amount":  {Value: "12.34", Type: pb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2}, PrepareParamKind: vector.PrepareParamDecimal},
+			"amount":  {Value: "12.34", Type: pb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2}, PrepareParamKind: types.StringConversionDecimal},
 		},
 	}
 	source := &ExecCtx{reqCtx: t.Context(), ses: ses}
@@ -57,7 +56,7 @@ func TestViewSchemaFrozenVariablesPreserveAttributesAndOwnBytes(t *testing.T) {
 	// 修改原有值和整个变量槽位，不能改变已冻结的值或附带类型。
 	bytes[1] = 0
 	ses.userDefinedVars["payload"] = &UserDefinedVar{Value: "replacement", Type: pb.Type{Id: int32(types.T_varchar)}}
-	ses.userDefinedVars["amount"] = &UserDefinedVar{Value: int64(9), PrepareParamKind: vector.PrepareParamInteger}
+	ses.userDefinedVars["amount"] = &UserDefinedVar{Value: int64(9), PrepareParamKind: types.StringConversionInteger}
 	ses.sesSysVars.Set("lower_case_table_names", int64(1))
 	ses.sesSysVars.Set("sql_mode", "")
 	value, err := c.ResolveVariable("PAYLOAD", false, false)
@@ -77,7 +76,7 @@ func TestViewSchemaFrozenVariablesPreserveAttributesAndOwnBytes(t *testing.T) {
 	require.Equal(t, pb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2}, amountType)
 	kind, err := c.ResolveVariablePrepareParamKind("amount", false, false)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamDecimal, kind)
+	require.Equal(t, types.StringConversionDecimal, kind)
 	require.Zero(t, c.GetLowerCaseTableNames())
 	value, err = c.ResolveVariable("SQL_MODE", true, false)
 	require.NoError(t, err)
@@ -142,7 +141,7 @@ func TestViewSchemaFrozenVariablesKeepMissingAndDefaultSemantics(t *testing.T) {
 	require.Equal(t, types.RuntimeStringInherit, domain)
 	kind, err := c.ResolveVariablePrepareParamKind("unassigned", false, false)
 	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamNone, kind)
+	require.Equal(t, types.StringConversionString, kind)
 	value, err = c.ResolveVariable("lower_case_table_names", true, false)
 	require.NoError(t, err)
 	require.Equal(t, gSysVarsDefs["lower_case_table_names"].Default, value)

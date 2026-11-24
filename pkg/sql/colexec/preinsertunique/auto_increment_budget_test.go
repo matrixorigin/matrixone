@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,7 +44,7 @@ func TestInsertIgnoreFinalKeysRespectMemoryBudgetAndReuse(t *testing.T) {
 	defer input.Clean(mp)
 	// NULL UKs are distinct. Only the final-PK set grows between batches.
 	input.Vecs[1].Free(mp)
-	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for range rows {
 		require.NoError(t, vector.AppendFixed(input.Vecs[1], int32(0), true, mp))
 	}
@@ -75,6 +77,7 @@ func TestInsertIgnoreFinalKeysRespectMemoryBudgetAndReuse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, rows, result.Batch.RowCount())
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -88,7 +91,7 @@ func TestInsertIgnoreAllocationFailureDoesNotPublishAndCanReset(t *testing.T) {
 			proc.SetStatementLastInsertID(700)
 			input := makeInsertIgnoreAutoIncrementBatch(t, proc,
 				[]int32{1}, []int32{10}, []bool{false}, []bool{false}, []bool{true})
-			payload := vector.NewVec(types.T_varchar.ToType())
+			payload := vector.NewVec(types.T_varchar.ToType(), mp)
 			require.NoError(t, vector.AppendBytes(payload, []byte(strings.Repeat("x", 16384)), false, mp))
 			input.Vecs = append(input.Vecs[:2:2], payload, input.Vecs[2], input.Vecs[3], input.Vecs[4])
 			defer input.Clean(mp)
@@ -130,6 +133,7 @@ func TestInsertIgnoreAllocationFailureDoesNotPublishAndCanReset(t *testing.T) {
 			require.Equal(t, uint64(1), proc.GetStatementLastInsertID())
 			require.Equal(t, strings.Repeat("x", 16384), result.Batch.Vecs[2].GetStringAt(0))
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			input.Clean(mp)
 			require.Zero(t, mp.CurrNB())
 		})
@@ -154,6 +158,7 @@ func TestInsertIgnoreResetAfterCancellationClearsFinalKeysAndFence(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0]))
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -202,6 +207,7 @@ func TestInsertIgnoreRejectedCandidateRunsRespectMemoryBudget(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0]))
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }

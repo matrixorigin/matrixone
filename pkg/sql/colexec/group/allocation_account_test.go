@@ -61,7 +61,7 @@ func runAccountedCountGroup(
 		}
 		input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	case types.T_varchar:
-		input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		for pass := 0; pass < 2; pass++ {
 			for i := range groups {
 				value := []byte("key-" + strconv.Itoa(i) + "-varlen-payload")
@@ -757,7 +757,7 @@ func TestAccountedEmptyGroupingSetRowsReleaseAtOperatorFree(t *testing.T) {
 	})
 }
 
-func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
+func TestResetForSpillReleasesGroupingRollupConst(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	g := newGroupOp(proc, nil, nil)
@@ -765,13 +765,11 @@ func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 
 	before := allocation.account.Snapshot().Used
-	rollup, err := vector.NewRollupConstWithAllocation(
+	rollup := vector.NewConstNull(
 		types.T_int32.ToType(),
 		hashmap.UnitLimit,
-		g.ctr.mp,
-		g.ctr.expressionAllocation,
+		g.ctr.rollupMP(),
 	)
-	require.NoError(t, err)
 	g.ctr.groupingRollup = []*vector.Vector{rollup}
 
 	g.ctr.resetForSpill()
@@ -811,11 +809,8 @@ func TestAccountedGroupProjectionClosesBeforePreparedAttemptTerminal(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
 	require.Len(t, result.Batch.Vecs, 1)
-	require.Same(
-		t,
-		g.ctr.expressionAllocation,
-		result.Batch.Vecs[0].AllocationAccountSelection(),
-	)
+	require.NotNil(t, g.ctr.expressionAllocation)
+	require.Same(t, allocation.account, g.ctr.expressionAllocation.ViewAccount())
 
 	// Prepared execution performs Reset without Free before the statement
 	// allocation attempt reaches its terminal boundary.
@@ -883,20 +878,19 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 		require.NoError(t, err)
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
-		selection, err := vector.NewAllocationAccountSelection(
+		view, err := mp.WithAccount(
 			account,
 			mpool.AllocationOwnerGroup,
 			GroupAllocationSiteKeyData,
-			GroupAllocationSiteKeyArea,
+			mpool.AllocationCapacityClassDefault,
 		)
 		require.NoError(t, err)
 		source, err := vector.NewConstBytes(
 			types.T_text.ToType(), payload, rows, mp)
 		require.NoError(t, err)
-		destination := vector.NewOffHeapVecWithType(types.T_text.ToType())
-		require.NoError(t, destination.SetAllocationAccount(selection))
+		destination := vector.NewVec(types.T_text.ToType(), view)
 		defer func() {
-			destination.Free(mp)
+			destination.Free(view)
 			source.Free(mp)
 			snapshot := account.Seal()
 			require.Zero(t, snapshot.Used)
@@ -905,11 +899,12 @@ func TestConstVarlenaGroupKeyPreflightCopiesPayloadOnce(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		}()
 
-		err = destination.PreExtendSelectedBatch(
-			source, 0, rows, flags, rows, mp)
+		var preflight vector.SelectedBatchPreflight
+		preflight, err = destination.PreExtendSelectedBatch(
+			source, 0, rows, flags, rows, view)
 		admitted := account.Snapshot().Used
 		if err == nil {
-			err = destination.UnionBatchPreflighted(source, 0, rows, flags, mp)
+			err = destination.UnionBatchPreflighted(source, 0, rows, flags, &preflight, view)
 			if err == nil {
 				require.Equal(t, admitted, account.Snapshot().Used)
 				require.Equal(t, len(payload), len(destination.GetArea()))
@@ -1000,7 +995,7 @@ func TestAccountedMergeGroupVectorDistinctSpillConsumer(t *testing.T) {
 			t.Cleanup(generation.Close)
 			require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
 			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(keyType.ToType())
+			input.Vecs[0] = vector.NewVec(keyType.ToType(), proc.Mp())
 			var child *colexec.MockOperator
 			t.Cleanup(func() {
 				if child == nil {
@@ -1106,7 +1101,6 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
 	input.Vecs[0].GetNulls().Add(1)
-	input.Vecs[0].GetGrouping().Add(2)
 	input.SetRowCount(rows)
 
 	g := newGroupOp(
@@ -1127,16 +1121,11 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 		destination.GetNulls().GetBitmap().CapWords(),
 		requiredWords,
 	)
-	require.GreaterOrEqual(t,
-		destination.GetGrouping().GetBitmap().CapWords(),
-		requiredWords,
-	)
 
 	before := allocation.account.Snapshot().Used
-	require.NoError(t, destination.UnionBatch(input.Vecs[0], 0, rows, nil, g.ctr.mp))
+	require.NoError(t, destination.UnionBatch(input.Vecs[0], 0, rows, nil, g.ctr.groupByMP()))
 	require.Equal(t, before, allocation.account.Snapshot().Used)
 	require.True(t, destination.GetNulls().Contains(1))
-	require.True(t, destination.GetGrouping().Contains(2))
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -1144,18 +1133,16 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	input.Clean(proc.Mp())
 }
 
-func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.T) {
+func TestGroupSelectedPreflightAllocatesNothingAfterHashCommit(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t,
 		vector.AppendBytes(input.Vecs[0], []byte("binary"), false, proc.Mp()))
 	require.NoError(t,
 		vector.AppendBytes(input.Vecs[0], []byte("text"), false, proc.Mp()))
-	require.NoError(t, input.Vecs[0].SetBinaryStringRowsWithMP(
-		[]bool{true, false}, proc.Mp()))
 	input.SetRowCount(2)
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
@@ -1206,8 +1193,8 @@ func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.
 	require.Equal(t, uint64(2), g.ctr.hr.Hash.GroupCount())
 	require.Len(t, g.ctr.groupByBatches, 1)
 	keys := g.ctr.groupByBatches[0].Vecs[0]
-	require.True(t, keys.GetBinaryStringMetadataAt(0))
-	require.False(t, keys.GetBinaryStringMetadataAt(1))
+	require.Equal(t, "binary", keys.GetStringAt(0))
+	require.Equal(t, "text", keys.GetStringAt(1))
 
 	g.Free(proc, false, nil)
 	require.Zero(t, account.Snapshot().Used)
@@ -1232,262 +1219,21 @@ func TestCommitGroupByChunkClassifiesCommitPreviewErrorBeforePublication(t *test
 	g.Free(proc, false, nil)
 }
 
-func TestGroupKeySourceReservationSurvivesCompletePublication(t *testing.T) {
-	tests := []struct {
-		name               string
-		initialGroups      int
-		secondValues       []int64
-		secondSources      []types.StringSource
-		allowedAllocations int
-	}{
-		{
-			name: "all-existing-reverse-order", initialGroups: 2,
-			secondValues: []int64{0, 1},
-			secondSources: []types.StringSource{
-				types.StringSourceLiteral, types.StringSourceCOMStmt,
-			},
-			allowedAllocations: 1,
-		},
-		{
-			name: "current-full-with-standby-new-group", initialGroups: aggBatchSize,
-			secondValues: []int64{0, 1, aggBatchSize},
-			secondSources: []types.StringSource{
-				types.StringSourceLiteral,
-				types.StringSourceCOMStmt,
-				types.StringSourceLiteral,
-			},
-			allowedAllocations: 2,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
-			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int64)}, nil)
-			generation := installGroupTestResourceBudget(t, proc)
-			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<14)
-			require.NoError(t, err)
-			controller := &rejectNextGroupAllocationController{}
-			account, err := registry.OpenWithController(128<<20, controller)
-			require.NoError(t, err)
-			require.NoError(t, g.ctr.setAllocationAccount(account))
-			allocation := groupTestAllocation{
-				generation: generation, registry: registry, account: account,
-			}
-			require.NoError(t, g.Prepare(proc))
-			require.NoError(t, g.ctr.buildHashTable(proc.Ctx, 0))
-
-			commit := func(input *batch.Batch) ([]uint64, int, error) {
-				require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
-					0, input.RowCount(), g.ctr.hashKeyVectors(input.Vecs),
-					g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
-				preview := groupInsertPreview{
-					values:    g.ctr.hr.insertPlan.Values(),
-					inserted:  g.ctr.hr.insertPlan.Inserted(),
-					newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
-				}
-				if !g.ctr.recoveryCapacityCovers(preview.newGroups) {
-					require.NoError(t,
-						g.ctr.ensureRecoveryCapacity(preview.newGroups, g.OpAnalyzer))
-				}
-				require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
-				require.NoError(t, g.ctr.preflightBuildChunk(
-					input.Vecs, 0, input.RowCount(), preview.inserted, preview.newGroups))
-				return g.ctr.commitGroupByChunk(input.Vecs, 0, input.RowCount(), preview)
-			}
-
-			initialBatches := make([]*batch.Batch, 0,
-				(test.initialGroups+hashmap.UnitLimit-1)/hashmap.UnitLimit)
-			initialAdded := 0
-			for start := 0; start < test.initialGroups; start += hashmap.UnitLimit {
-				count := min(hashmap.UnitLimit, test.initialGroups-start)
-				initialValues := make([]int64, count)
-				for i := range initialValues {
-					initialValues[i] = int64(start + i)
-				}
-				initial := batch.NewWithSize(1)
-				initial.Vecs[0] = testutil.MakeInt64Vector(initialValues, nil, proc.Mp())
-				require.NoError(t,
-					initial.Vecs[0].SetStringSource(types.StringSourceLiteral))
-				initial.SetRowCount(len(initialValues))
-				initialBatches = append(initialBatches, initial)
-				_, added, err := commit(initial)
-				require.NoError(t, err)
-				initialAdded += added
-			}
-			require.Equal(t, test.initialGroups, initialAdded)
-
-			second := batch.NewWithSize(1)
-			second.Vecs[0] = testutil.MakeInt64Vector(test.secondValues, nil, proc.Mp())
-			require.NoError(t,
-				second.Vecs[0].SetStringSourcesWithMP(test.secondSources, proc.Mp()))
-			second.SetRowCount(len(test.secondValues))
-			require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
-				0, second.RowCount(), g.ctr.hashKeyVectors(second.Vecs),
-				g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
-			preview := groupInsertPreview{
-				values:    g.ctr.hr.insertPlan.Values(),
-				inserted:  g.ctr.hr.insertPlan.Inserted(),
-				newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
-			}
-			if !g.ctr.recoveryCapacityCovers(preview.newGroups) {
-				require.NoError(t,
-					g.ctr.ensureRecoveryCapacity(preview.newGroups, g.OpAnalyzer))
-			}
-			require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
-			require.NoError(t, g.ctr.preflightBuildChunk(
-				second.Vecs, 0, second.RowCount(), preview.inserted, preview.newGroups))
-			remaining := test.allowedAllocations
-			controller.rejectWhen = func() bool {
-				if remaining > 0 {
-					remaining--
-					return false
-				}
-				return true
-			}
-			values, added, err := g.ctr.commitGroupByChunk(
-				second.Vecs, 0, second.RowCount(), preview)
-			require.NoError(t, err)
-			require.Zero(t, remaining, "test must observe current/standby preflight allocations")
-			_, rejected := controller.snapshot()
-			require.False(t, rejected,
-				"group-key publication must not allocate after retained preflight")
-			require.Equal(t, test.initialGroups+preview.newGroups,
-				int(g.ctr.hr.Hash.GroupCount()))
-			require.Equal(t, preview.newGroups, added)
-			require.Equal(t, preview.values, values)
-			if test.initialGroups == aggBatchSize {
-				require.Len(t, g.ctr.groupByBatches, 2)
-			}
-			keys := g.ctr.groupByBatches[0].Vecs[0]
-			require.Equal(t, types.StringSourceLiteral, keys.GetStringSourceAt(0))
-			require.Equal(t, types.StringSourceExpression, keys.GetStringSourceAt(1))
-
-			controller.rejectWhen = nil
-			g.Free(proc, false, nil)
-			require.Zero(t, account.Snapshot().Used)
-			finalizeGroupTestAllocation(t, g, allocation)
-			for _, initial := range initialBatches {
-				initial.Clean(proc.Mp())
-			}
-			second.Clean(proc.Mp())
-		})
-	}
-}
-
-func TestGroupSamePreviewDuplicateSourcePreflightsBeforeHashCommit(t *testing.T) {
-	for _, rejectPreflight := range []bool{true, false} {
-		t.Run(fmt.Sprintf("reject-preflight=%v", rejectPreflight), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
-			input := batch.NewWithSize(1)
-			input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-			for _, value := range []string{"same", "same", "other"} {
-				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), false, proc.Mp()))
-			}
-			require.NoError(t, input.Vecs[0].SetStringSourcesWithMP([]types.StringSource{
-				types.StringSourceLiteral,
-				types.StringSourceExpression,
-				types.StringSourceLiteral,
-			}, proc.Mp()))
-			input.SetRowCount(3)
-			inputSources := input.Vecs[0].GetStringSources()
-			require.Len(t, inputSources, 3)
-			inputSourceBacking := &inputSources[0]
-
-			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
-			generation := installGroupTestResourceBudget(t, proc)
-			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
-			require.NoError(t, err)
-			controller := &rejectNextGroupAllocationController{}
-			account, err := registry.OpenWithController(64<<20, controller)
-			require.NoError(t, err)
-			require.NoError(t, g.ctr.setAllocationAccount(account))
-			allocation := groupTestAllocation{
-				generation: generation,
-				registry:   registry,
-				account:    account,
-			}
-			require.NoError(t, g.Prepare(proc))
-			require.NoError(t, g.ctr.buildHashTable(proc.Ctx, 0))
-			require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
-				0, input.RowCount(), g.ctr.hashKeyVectors(input.Vecs),
-				g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
-			preview := groupInsertPreview{
-				values:    g.ctr.hr.insertPlan.Values(),
-				inserted:  g.ctr.hr.insertPlan.Inserted(),
-				newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
-			}
-			require.Equal(t, []uint8{1, 0, 1}, preview.inserted)
-			require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
-			require.NoError(t, g.ctr.preflightBuildChunk(
-				input.Vecs, 0, input.RowCount(), preview.inserted, preview.newGroups))
-
-			if rejectPreflight {
-				controller.arm()
-			} else {
-				controller.rejectWhen = func() bool {
-					return g.ctr.hr.Hash.GroupCount() != 0
-				}
-			}
-			values, added, commitErr := g.ctr.commitGroupByChunk(
-				input.Vecs, 0, input.RowCount(), preview)
-			require.Equal(t, []types.StringSource{
-				types.StringSourceLiteral,
-				types.StringSourceExpression,
-				types.StringSourceLiteral,
-			}, input.Vecs[0].GetStringSources())
-			require.Same(t, inputSourceBacking, &input.Vecs[0].GetStringSources()[0],
-				"group preview must not replace borrowed input sidecar ownership")
-			if rejectPreflight {
-				require.True(t, isGroupPrePublicationError(commitErr))
-				require.Contains(t, commitErr.Error(), "allocation account capacity exceeded")
-				require.ErrorIs(t, commitErr, mpool.ErrAllocationAccountCapacity)
-				require.Zero(t, g.ctr.hr.Hash.GroupCount(),
-					"source allocation rejection must precede hash publication")
-				_, rejected := controller.snapshot()
-				require.True(t, rejected)
-				g.ctr.cancelGroupByPreflights()
-			} else {
-				require.NoError(t, commitErr)
-				require.Equal(t, 2, added)
-				require.Equal(t, []uint64{1, 1, 2}, values[:3])
-				_, rejected := controller.snapshot()
-				require.False(t, rejected,
-					"hash commit and publication must use preflighted source capacity")
-				controller.rejectWhen = nil
-				require.Equal(t, types.StringSourceExpression,
-					g.ctr.groupByBatches[0].Vecs[0].GetStringSourceAt(0))
-				require.Equal(t, types.StringSourceLiteral,
-					g.ctr.groupByBatches[0].Vecs[0].GetStringSourceAt(1))
-			}
-
-			g.Free(proc, false, nil)
-			require.Zero(t, account.Snapshot().Used)
-			finalizeGroupTestAllocation(t, g, allocation)
-			input.Clean(proc.Mp())
-		})
-	}
-}
-
-func TestGroupExistingAndNewSourcesStayPreflightedThroughPublication(t *testing.T) {
+func TestGroupExistingAndNewKeysStayPreflightedThroughPublication(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	makeInput := func(values []string, sources []types.StringSource) *batch.Batch {
+	makeInput := func(values []string) *batch.Batch {
 		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		for _, value := range values {
 			require.NoError(t, vector.AppendBytes(
 				input.Vecs[0], []byte(value), false, proc.Mp()))
 		}
-		require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, proc.Mp()))
 		input.SetRowCount(len(values))
 		return input
 	}
-	first := makeInput([]string{"a"}, []types.StringSource{types.StringSourceLiteral})
-	second := makeInput(
-		[]string{"a", "b"},
-		[]types.StringSource{types.StringSourceExpression, types.StringSourceLiteral})
+	first := makeInput([]string{"a"})
+	second := makeInput([]string{"a", "b"})
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
 	generation := installGroupTestResourceBudget(t, proc)
@@ -1526,11 +1272,10 @@ func TestGroupExistingAndNewSourcesStayPreflightedThroughPublication(t *testing.
 	require.NoError(t, commit(second))
 	_, rejected := controller.snapshot()
 	require.False(t, rejected,
-		"existing and new source publication must not allocate after hash commit")
+		"existing and new key publication must not allocate after hash commit")
 	require.Equal(t, uint64(2), g.ctr.hr.Hash.GroupCount())
-	require.Equal(t, []types.StringSource{
-		types.StringSourceExpression, types.StringSourceLiteral,
-	}, g.ctr.groupByBatches[0].Vecs[0].GetStringSources())
+	require.Equal(t, "a", g.ctr.groupByBatches[0].Vecs[0].GetStringAt(0))
+	require.Equal(t, "b", g.ctr.groupByBatches[0].Vecs[0].GetStringAt(1))
 
 	controller.rejectWhen = nil
 	g.Free(proc, false, nil)
@@ -1546,7 +1291,7 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 
 	input := batch.NewWithSize(1)
 	defer input.Clean(proc.Mp())
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	values := []string{
 		strings.Repeat("a", 100),
 		strings.Repeat("b", 200),
@@ -1556,12 +1301,6 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(
 			input.Vecs[0], []byte(value), false, proc.Mp()))
 	}
-	inputSources := []types.StringSource{
-		types.StringSourceLiteral,
-		types.StringSourceCOMStmt,
-		types.StringSourceUserVariable,
-	}
-	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(inputSources, proc.Mp()))
 	input.SetRowCount(len(values))
 
 	g := newGroupOp(
@@ -1589,8 +1328,8 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		input.Vecs, 0, input.RowCount(), insertedFlags, len(insertedFlags)))
 	require.NotNil(t, g.ctr.groupByStandby)
 	before := allocation.account.Snapshot().Used
-	require.NoError(t, g.ctr.appendGroupByBatchWithStringSources(
-		input.Vecs, 0, insertedFlags, 3, [][]types.StringSource{inputSources}, 0))
+	require.NoError(t, g.ctr.appendGroupByBatch(
+		input.Vecs, 0, insertedFlags, 3))
 	require.Equal(t, aggBatchSize, g.ctr.groupByBatches[0].RowCount())
 	require.Equal(t, 2, g.ctr.groupByBatches[1].RowCount())
 	require.Equal(t, before, allocation.account.Snapshot().Used)
@@ -1601,12 +1340,6 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		g.ctr.groupByBatches[1].Vecs[0].GetBytesAt(0)))
 	require.Equal(t, values[2], string(
 		g.ctr.groupByBatches[1].Vecs[0].GetBytesAt(1)))
-	require.Equal(t, types.StringSourceLiteral,
-		g.ctr.groupByBatches[0].Vecs[0].GetStringSourceAt(aggBatchSize-1))
-	require.Equal(t, []types.StringSource{
-		types.StringSourceCOMStmt,
-		types.StringSourceUserVariable,
-	}, g.ctr.groupByBatches[1].Vecs[0].GetStringSources())
 }
 
 func TestAppendDuplicateOnlyChunkDoesNotAllocateAfterHashCommit(t *testing.T) {
@@ -1633,8 +1366,8 @@ func TestAppendDuplicateOnlyChunkDoesNotAllocateAfterHashCommit(t *testing.T) {
 	g.ctr.groupByBatches = append(g.ctr.groupByBatches, current)
 	before := allocation.account.Snapshot().Used
 
-	require.NoError(t, g.ctr.appendGroupByBatchWithStringSources(
-		input.Vecs, 0, []uint8{0}, 0, nil, 0))
+	require.NoError(t, g.ctr.appendGroupByBatch(
+		input.Vecs, 0, []uint8{0}, 0))
 	require.Equal(t, aggBatchSize, current.RowCount())
 	require.Equal(t, before, allocation.account.Snapshot().Used)
 	require.Len(t, g.ctr.groupByBatches, 1)
@@ -1809,27 +1542,22 @@ func TestAccountedGroupResidentAndSpillMatchForH8AndHStr(t *testing.T) {
 	}
 }
 
-func TestAccountedGroupSpillPreservesBinaryStringProvenance(t *testing.T) {
+func TestAccountedGroupSpillPreservesStringKeys(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
 	const groups = 1024
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	binaryRows := make([]bool, 0, groups*2)
-	wantBinary := make(map[string]bool, groups)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
+	wantKeys := make(map[string]bool, groups)
 	for pass := 0; pass < 2; pass++ {
 		for group := 0; group < groups; group++ {
 			key := "key-" + strconv.Itoa(group) + "-binary-provenance"
 			require.NoError(t,
 				vector.AppendBytes(input.Vecs[0], []byte(key), false, proc.Mp()))
-			binary := group%2 == 0
-			binaryRows = append(binaryRows, binary)
-			wantBinary[key] = binary
+			wantKeys[key] = true
 		}
 	}
-	require.NoError(t,
-		input.Vecs[0].SetBinaryStringRowsWithMP(binaryRows, proc.Mp()))
 	input.SetRowCount(groups * 2)
 
 	g := newGroupOp(
@@ -1853,8 +1581,8 @@ func TestAccountedGroupSpillPreservesBinaryStringProvenance(t *testing.T) {
 		for row, count := range counts {
 			key := string(result.Batch.Vecs[0].GetBytesAt(row))
 			require.Equal(t, int64(2), count)
-			require.Equal(t, wantBinary[key],
-				result.Batch.Vecs[0].GetBinaryStringMetadataAt(row), "key=%s", key)
+			require.True(t, wantKeys[key], "key=%s", key)
+			delete(wantKeys, key)
 			seen++
 		}
 	}
@@ -1922,18 +1650,18 @@ func makeSupportedAggregateSpillInput(
 
 	input := batch.NewWithSize(len(columnTypes))
 	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, mp)
-	input.Vecs[1] = vector.NewVec(columnTypes[1])
+	input.Vecs[1] = vector.NewVec(columnTypes[1], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[1], integers, nil, mp))
 	input.Vecs[2] = testutil.MakeVarcharVector(texts, nil, mp)
-	input.Vecs[3] = vector.NewVec(columnTypes[3])
+	input.Vecs[3] = vector.NewVec(columnTypes[3], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[3], floats, nil, mp))
-	input.Vecs[4] = vector.NewVec(decimalType)
+	input.Vecs[4] = vector.NewVec(decimalType, mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[4], decimals, nil, mp))
-	input.Vecs[5] = vector.NewVec(columnTypes[5])
+	input.Vecs[5] = vector.NewVec(columnTypes[5], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[5], orders, nil, mp))
-	input.Vecs[6] = vector.NewVec(columnTypes[6])
+	input.Vecs[6] = vector.NewVec(columnTypes[6], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[6], ties, nil, mp))
-	input.Vecs[7] = vector.NewVec(columnTypes[7])
+	input.Vecs[7] = vector.NewVec(columnTypes[7], mp)
 	for row, value := range integers {
 		count := int64(row%3 + 1)
 		sum := float64(value) * float64(count)
@@ -1942,7 +1670,7 @@ func makeSupportedAggregateSpillInput(
 		copy(payload[8:], types.EncodeInt64(&count))
 		require.NoError(t, vector.AppendBytes(input.Vecs[7], payload, false, mp))
 	}
-	input.Vecs[8] = vector.NewVec(columnTypes[8])
+	input.Vecs[8] = vector.NewVec(columnTypes[8], mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[8], uint64s, nil, mp))
 	input.SetRowCount(rows)
 	return input, columnTypes
@@ -2299,13 +2027,13 @@ func TestAccountedGroupMaxSpillDepthPreservesCapacityError(t *testing.T) {
 	input.Clean(proc.Mp())
 }
 
-func TestAccountedGroupSpillPreservesVarlenaNullAndPrepareKinds(t *testing.T) {
+func TestAccountedGroupSpillPreservesVarlenaNullKeys(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	const groups = 128
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	for pass := 0; pass < 2; pass++ {
 		for group := range groups {
 			key := []byte("prepared-key-" + strconv.Itoa(group))
@@ -2315,8 +2043,6 @@ func TestAccountedGroupSpillPreservesVarlenaNullAndPrepareKinds(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(input.Vecs[0], nil, true, proc.Mp()))
 		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("5"), false, proc.Mp()))
 	}
-	input.Vecs[0].SetPrepareParamKind(vector.PrepareParamDecimal)
-	input.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
 	input.SetRowCount(input.Vecs[0].Length())
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)},
@@ -2337,14 +2063,8 @@ func TestAccountedGroupSpillPreservesVarlenaNullAndPrepareKinds(t *testing.T) {
 			rows++
 			if result.Batch.Vecs[0].IsNull(uint64(row)) {
 				nulls++
-				require.Equal(t, vector.PrepareParamNone,
-					result.Batch.Vecs[0].GetPrepareParamKindAt(row))
-			} else {
-				require.Equal(t, vector.PrepareParamDecimal,
-					result.Batch.Vecs[0].GetPrepareParamKindAt(row))
 			}
-			require.Equal(t, vector.PrepareParamFloat,
-				result.Batch.Vecs[1].GetPrepareParamKindAt(row))
+			require.Equal(t, "5", result.Batch.Vecs[1].GetStringAt(row))
 		}
 	}
 	require.Equal(t, groups+1, rows)
@@ -2397,7 +2117,7 @@ func TestAccountedGroupingSetSpillPreservesSentinelDomain(t *testing.T) {
 		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])
 		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
 		for row := range result.Batch.RowCount() {
-			require.True(t, result.Batch.Vecs[1].GetGrouping().Contains(uint64(row)))
+			require.True(t, result.Batch.Vecs[1].IsNull(uint64(row)))
 			require.Equal(t, int64(2), counts[row])
 			seen[keys[row]] = struct{}{}
 		}
@@ -2744,81 +2464,18 @@ func TestAccountedGroupCorruptSpillRecordCleans(t *testing.T) {
 	input.Clean(proc.Mp())
 }
 
-func TestAccountedGroupRetriesResidentStringSourcePreflight(t *testing.T) {
+func TestAccountedGroupRetriesAnyValuePreflight(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	makeInput := func(source types.StringSource) *batch.Batch {
-		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a"), false, proc.Mp()))
-		require.NoError(t, input.Vecs[0].SetStringSource(source))
-		input.SetRowCount(1)
-		return input
-	}
-	first := makeInput(types.StringSourceLiteral)
-	second := makeInput(types.StringSourceExpression)
-
-	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)},
-		[]aggexec.AggFuncExecExpression{countStarAgg()})
-	g.SpillMem = 1 << 30
-	generation := installGroupTestResourceBudget(t, proc)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
-	require.NoError(t, err)
-	controller := &rejectNextGroupAllocationController{}
-	account, err := registry.OpenWithController(64<<20, controller)
-	require.NoError(t, err)
-	require.NoError(t, g.ctr.setAllocationAccount(account))
-	allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
-	g.AppendChild(colexec.NewMockOperator().
-		WithBatchs([]*batch.Batch{first, second, batch.EmptyBatch}).
-		WithBatchCallback(func(index int) {
-			if index == 1 {
-				require.Equal(t, uint64(1), g.ctr.hr.Hash.GroupCount())
-				controller.arm()
-			}
-		}))
-	require.NoError(t, g.Prepare(proc))
-
-	var output *batch.Batch
-	for {
-		result, execErr := vm.Exec(g, proc)
-		require.NoError(t, execErr)
-		if result.Status == vm.ExecStop || result.Batch == nil {
-			break
-		}
-		output = cloneBatch(t, proc, result.Batch)
-	}
-	require.NotNil(t, output)
-	require.Equal(t, 1, output.RowCount())
-	require.Equal(t, types.StringSourceExpression, output.Vecs[0].GetStringSourceAt(0))
-	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](output.Vecs[1], 0))
-	_, rejected := controller.snapshot()
-	require.True(t, rejected)
-	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
-
-	output.Clean(proc.Mp())
-	g.Free(proc, false, nil)
-	require.Zero(t, account.Snapshot().Used)
-	finalizeGroupTestAllocation(t, g, allocation)
-	first.Clean(proc.Mp())
-	second.Clean(proc.Mp())
-}
-
-func TestAccountedGroupRetriesAnyValueSourcePreflight(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	makeInput := func(keys []string, values []string, nulls []uint64, sources []types.StringSource) *batch.Batch {
+	makeInput := func(keys []string, values []string, nulls []uint64) *batch.Batch {
 		input := batch.NewWithSize(2)
 		input.Vecs[0] = testutil.MakeVarcharVector(keys, nil, proc.Mp())
 		input.Vecs[1] = testutil.MakeVarcharVector(values, nulls, proc.Mp())
-		require.NoError(t, input.Vecs[1].SetStringSourcesWithMP(sources, proc.Mp()))
 		input.SetRowCount(len(keys))
 		return input
 	}
-	first := makeInput([]string{"a"}, []string{""}, []uint64{0},
-		[]types.StringSource{types.StringSourceLiteral})
-	second := makeInput([]string{"a", "b"}, []string{"winner-a", "winner-b"}, nil,
-		[]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt})
+	first := makeInput([]string{"a"}, []string{""}, []uint64{0})
+	second := makeInput([]string{"a", "b"}, []string{"winner-a", "winner-b"}, nil)
 	anyValue := aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfAny, false, []*plan.Expr{colExpr(1, types.T_varchar)}, nil)
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)},
@@ -2841,7 +2498,7 @@ func TestAccountedGroupRetriesAnyValueSourcePreflight(t *testing.T) {
 			}
 		}))
 	require.NoError(t, g.Prepare(proc))
-	seen := make(map[string]types.StringSource)
+	seen := make(map[string]string)
 	for {
 		result, execErr := vm.Exec(g, proc)
 		require.NoError(t, execErr)
@@ -2850,11 +2507,11 @@ func TestAccountedGroupRetriesAnyValueSourcePreflight(t *testing.T) {
 		}
 		for row := range result.Batch.RowCount() {
 			seen[string(result.Batch.Vecs[0].GetBytesAt(row))] =
-				result.Batch.Vecs[1].GetStringSourceAt(row)
+				string(result.Batch.Vecs[1].GetBytesAt(row))
 		}
 	}
-	require.Equal(t, map[string]types.StringSource{
-		"a": types.StringSourceLiteral, "b": types.StringSourceCOMStmt,
+	require.Equal(t, map[string]string{
+		"a": "winner-a", "b": "winner-b",
 	}, seen)
 	_, rejected := controller.snapshot()
 	require.True(t, rejected)
@@ -3085,84 +2742,14 @@ func TestAccountedMergeGroupMaxSpillDepthFinishesAdmittedLeaves(t *testing.T) {
 		runAccountedMergeGroupSpill(t, 4, 1))
 }
 
-func TestAccountedMergeGroupRetriesResidentStringSourcePreflight(t *testing.T) {
+func TestAccountedMergeGroupRetriesMinPreflight(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	generation := installGroupTestResourceBudget(t, proc)
-	makePartial := func(source types.StringSource) *batch.Batch {
-		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
-		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a"), false, proc.Mp()))
-		require.NoError(t, input.Vecs[0].SetStringSource(source))
-		input.SetRowCount(1)
-		partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)},
-			[]aggexec.AggFuncExecExpression{countStarAgg()})
-		partial.NeedEval = false
-		partial.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
-		require.NoError(t, partial.Prepare(proc))
-		raw := collectBatches(t, partial, proc)
-		require.Len(t, raw, 1)
-		result := cloneBatch(t, proc, raw[0])
-		partial.Free(proc, false, nil)
-		input.Clean(proc.Mp())
-		return result
-	}
-	first := makePartial(types.StringSourceLiteral)
-	second := makePartial(types.StringSourceExpression)
-
-	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
-	merge.SpillMem = 1 << 30
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
-	require.NoError(t, err)
-	controller := &rejectNextGroupAllocationController{}
-	account, err := registry.OpenWithController(64<<20, controller)
-	require.NoError(t, err)
-	require.NoError(t, merge.ctr.setAllocationAccount(account))
-	allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
-	merge.AppendChild(colexec.NewMockOperator().
-		WithBatchs([]*batch.Batch{first, second, batch.EmptyBatch}).
-		WithBatchCallback(func(index int) {
-			if index == 1 {
-				require.Equal(t, uint64(1), merge.ctr.hr.Hash.GroupCount())
-				controller.arm()
-			}
-		}))
-	require.NoError(t, merge.Prepare(proc))
-
-	var output *batch.Batch
-	for {
-		result, execErr := vm.Exec(merge, proc)
-		require.NoError(t, execErr)
-		if result.Status == vm.ExecStop || result.Batch == nil {
-			break
-		}
-		output = cloneBatch(t, proc, result.Batch)
-	}
-	require.NotNil(t, output)
-	require.Equal(t, 1, output.RowCount())
-	require.Equal(t, types.StringSourceExpression, output.Vecs[0].GetStringSourceAt(0))
-	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](output.Vecs[1], 0))
-	_, rejected := controller.snapshot()
-	require.True(t, rejected)
-	require.Positive(t, merge.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
-
-	output.Clean(proc.Mp())
-	merge.Free(proc, false, nil)
-	require.Zero(t, account.Snapshot().Used)
-	finalizeGroupTestAllocation(t, merge, allocation)
-	first.Clean(proc.Mp())
-	second.Clean(proc.Mp())
-}
-
-func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	generation := installGroupTestResourceBudget(t, proc)
-	makePartial := func(keys, values []string, sources []types.StringSource) *batch.Batch {
+	makePartial := func(keys, values []string) *batch.Batch {
 		input := batch.NewWithSize(2)
 		input.Vecs[0] = testutil.MakeVarcharVector(keys, nil, proc.Mp())
 		input.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
-		require.NoError(t, input.Vecs[1].SetStringSourcesWithMP(sources, proc.Mp()))
 		input.SetRowCount(len(keys))
 		minValue := aggexec.MakeAggFunctionExpression(
 			aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_varchar)}, nil)
@@ -3178,10 +2765,8 @@ func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
 		input.Clean(proc.Mp())
 		return result
 	}
-	first := makePartial([]string{"a"}, []string{"5"},
-		[]types.StringSource{types.StringSourceLiteral})
-	second := makePartial([]string{"a", "b"}, []string{"5", "5"},
-		[]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt})
+	first := makePartial([]string{"a"}, []string{"5"})
+	second := makePartial([]string{"a", "b"}, []string{"4", "6"})
 	minValue := aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_varchar)}, nil)
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minValue})
@@ -3202,7 +2787,7 @@ func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
 			}
 		}))
 	require.NoError(t, merge.Prepare(proc))
-	seen := make(map[string]types.StringSource)
+	seen := make(map[string]string)
 	for {
 		result, execErr := vm.Exec(merge, proc)
 		require.NoError(t, execErr)
@@ -3211,12 +2796,10 @@ func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
 		}
 		for row := range result.Batch.RowCount() {
 			seen[string(result.Batch.Vecs[0].GetBytesAt(row))] =
-				result.Batch.Vecs[1].GetStringSourceAt(row)
+				string(result.Batch.Vecs[1].GetBytesAt(row))
 		}
 	}
-	require.Equal(t, map[string]types.StringSource{
-		"a": types.StringSourceLiteral, "b": types.StringSourceCOMStmt,
-	}, seen)
+	require.Equal(t, map[string]string{"a": "4", "b": "6"}, seen)
 	_, rejected := controller.snapshot()
 	require.True(t, rejected)
 	require.Positive(t, merge.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
@@ -3370,7 +2953,7 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			inputs := make([]*batch.Batch, 2)
 			for pass := range inputs {
 				input := batch.NewWithSize(1)
-				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				for row := range 512 {
 					key := strings.Repeat("shared prefix ", 6) + strconv.Itoa(row+pass*256)
 					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(key), false, proc.Mp()))
@@ -3466,8 +3049,8 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 			for pass := range inputs {
 				input := batch.NewWithSize(2)
 				defer input.Clean(proc.Mp())
-				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-				input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+				input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				for row := range 512 {
 					id := row + pass*256
 					key := strings.Repeat("shared prefix ", 6) + strconv.Itoa(id)
@@ -3558,7 +3141,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 							break
 						}
 						// The transport copy outlives this producer's allocation account.
-						cloned, err := result.Batch.DupWithoutAllocationAccount(proc.Mp())
+						cloned, err := result.Batch.Dup(proc.Mp())
 						require.NoError(t, err)
 						cloned.ExtraBuf = append([]byte(nil), result.Batch.ExtraBuf...)
 						partials = append(partials, cloned)
@@ -3589,7 +3172,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 					require.Equal(t, int64(len(want[key].distinct)), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], row), key)
 					require.Equal(t, len(want[key].distinct) == 0, result.Batch.Vecs[2].IsNull(uint64(row)), key)
 					if len(want[key].distinct) != 0 {
-						require.Equal(t, want[key].sum, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[2], row), key)
+						require.Equal(t, types.Decimal128FromInt64(want[key].sum), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[2], row), key)
 					}
 				}
 			}

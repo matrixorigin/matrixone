@@ -137,3 +137,137 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 		require.Same(t, prior, ses.proc.Ctx)
 	})
 }
+
+// A prepared SET evaluates its bound expression directly, so its
+// binary-literal flag comes from that expression: a bare binary literal,
+// binary prepared parameter or binary user variable, never a function result.
+func TestPreparedSetExprValueIsBin(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	ec := &ExecCtx{reqCtx: context.Background(), ses: ses, proc: ses.proc}
+	ses.txnCompileCtx.execCtx = ec
+	hex := func(v string, isBin bool) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: v}, IsBin: isBin}}}
+	}
+	concat, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "concat", []*plan2.Expr{hex("A", true)})
+	require.NoError(t, err)
+	binVar := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_V{V: &plan.VarRef{Name: "bin_src"}}}
+	prior := ses.proc.GetResolveVariableIsBinFunc()
+	ses.proc.SetResolveVariableIsBinFunc(func(name string, _, _ bool) (bool, error) { return name == "bin_src", nil })
+	defer ses.proc.SetResolveVariableIsBinFunc(prior)
+	priorValue := ses.proc.GetResolveVariableFunc()
+	ses.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "A", nil })
+	defer ses.proc.SetResolveVariableFunc(priorValue)
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{"hex literal", hex("A", true), true},
+		{"text literal", hex("A", false), false},
+		{"function of hex literal", concat, false},
+		{"binary user variable", binVar, true},
+	} {
+		isBin := !tc.want
+		_, _, err := getPreparedPlanExprValueWithMeta(tc.expr, ses, ec, nil, nil, &isBin)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, isBin, tc.name)
+	}
+}
+
+func TestFrontendPlanningUsesCurrentRequestContext(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	proc := ses.proc
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	defer cancelPrevious()
+	proc.ReplaceTopCtx(previous)
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(previous)
+	_, queryCancel := process.GetQueryCtxFromProc(proc)
+	defer queryCancel()
+	prior := proc.BuildPipelineContext(queryCtx)
+	defer proc.Cancel(nil)
+	cancelPrevious()
+	proc.NextGroupConcatInputRowBase(73, 7)
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`select json_extract('{"age":35}', '$.age') between 30 and 39`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	expr := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	compiler := ses.GetTxnCompileCtx()
+	for _, test := range []struct {
+		name     string
+		canceled bool
+	}{
+		{name: "live request"},
+		{name: "canceled request", canceled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current, cancel := context.WithCancel(defines.AttachAccountId(t.Context(), 0))
+			defer cancel()
+			if test.canceled {
+				cancel()
+			}
+			proc.ReplaceTopCtx(current)
+			compiler.SetExecCtx(&ExecCtx{reqCtx: current, ses: ses, proc: proc})
+			var bound *plan.Expr
+			_, err := buildPlanWithStats(current, nil, compiler, func() (*plan.Plan, error) {
+				builder := plan2.NewQueryBuilder(plan.Query_SELECT, compiler, false, false)
+				bindCtx := plan2.NewBindContext(builder, nil)
+				binder := plan2.NewProjectionBinder(builder, bindCtx, plan2.NewHavingBinder(builder, bindCtx))
+				var bindErr error
+				bound, bindErr = binder.BindExpr(expr, 0, false)
+				return nil, bindErr
+			})
+			value, simpleErr := GetSimpleExprValue(current, expr, ses)
+			if test.canceled {
+				require.ErrorIs(t, err, context.Canceled)
+				require.ErrorIs(t, simpleErr, context.Canceled)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, bound.GetLit())
+				require.True(t, bound.GetLit().GetBval())
+				require.NoError(t, simpleErr)
+				require.Equal(t, true, value)
+			}
+			require.Same(t, prior, proc.Ctx)
+			require.Same(t, current, proc.GetTopContext())
+			after, _ := process.GetQueryCtxFromProc(proc)
+			require.Same(t, queryCtx, after)
+			require.Equal(t, uint64(7), proc.NextGroupConcatInputRowBase(73, 0))
+		})
+	}
+}
+
+func TestCloneSnapshotBindingUsesCurrentRequestContext(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	defer ses.Close()
+	proc := ses.proc
+	previous, cancelPrevious := context.WithCancel(t.Context())
+	defer cancelPrevious()
+	proc.Ctx = previous
+	cancelPrevious()
+	current, cancelCurrent := context.WithCancel(defines.AttachAccountId(t.Context(), 0))
+	defer cancelCurrent()
+	proc.ReplaceTopCtx(current)
+	ses.GetTxnCompileCtx().SetExecCtx(&ExecCtx{reqCtx: current, ses: ses, proc: proc})
+
+	stmt, err := parsers.ParseOne(current, dialect.MYSQL, `create table dst clone src {mo_ts =
+		9223372036854775806 + cast((json_extract('{"age":35}', '$.age') between 30 and 39) as signed)}`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	snapshot, err := resolveSnapshot(ses, stmt.(*tree.CloneTable).SrcTable.AtTsExpr)
+	require.Same(t, previous, proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot)
+	require.Equal(t, int64(9223372036854775807), snapshot.TS.GetPhysicalTime())
+
+	cancelCurrent()
+	snapshot, err = resolveSnapshot(ses, stmt.(*tree.CloneTable).SrcTable.AtTsExpr)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, snapshot)
+	require.Same(t, previous, proc.Ctx)
+	require.Same(t, current, proc.GetTopContext())
+}

@@ -142,3 +142,21 @@ func TestTerminalBudgetErrorForOperator(t *testing.T) {
 	require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 	require.NotContains(t, err.Error(), "hash build")
 }
+
+func TestTerminalBudgetErrorPreservesPhysicalHeadroom(t *testing.T) {
+	err := TerminalBudgetError(context.Background(), &process.ExecutionResourceError{
+		Kind:      process.ExecutionResourceErrorAdmission,
+		Component: process.ExecutionResourceComponentMemory,
+		Requested: 8,
+		PhysicalMemory: &process.ExecutionPhysicalMemoryPressure{
+			SampledAvailable:      1 << 28,
+			SafetyReserve:         1 << 30,
+			ConfirmationAttempted: true,
+		},
+	})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.ErrorContains(t, err, "hash build memory budget exceeded (requested=8, used=0, limit=0)")
+	require.ErrorContains(t, err, "physical memory headroom: sampled_available=268435456 safety_reserve=1073741824")
+	require.ErrorContains(t, err, "growth_headroom=0 confirmation_attempted=true")
+	require.NotContains(t, err.Error(), "processLimitationSize")
+}

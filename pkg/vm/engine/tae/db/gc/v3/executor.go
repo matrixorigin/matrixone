@@ -58,7 +58,7 @@ func BuildBloomfilter(
 	}
 	nbf := bloomfilter.New(int64(rowCount), probability)
 	bf = &nbf
-	bat := buffer.Fetch()
+	bat := buffer.Fetch(mp)
 	defer buffer.Putback(bat, mp)
 	var done bool
 	for {
@@ -257,7 +257,7 @@ func (exec *GCExecutor) Run(
 }
 
 func (exec *GCExecutor) getBuffer() *batch.Batch {
-	return exec.buffer.impl.Fetch()
+	return exec.buffer.impl.Fetch(exec.mp)
 }
 func (exec *GCExecutor) putBuffer(bat *batch.Batch) {
 	exec.buffer.impl.Putback(bat, exec.mp)

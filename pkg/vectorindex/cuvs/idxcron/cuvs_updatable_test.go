@@ -88,7 +88,7 @@ func chunkBytesWithRecords(t *testing.T, nIns, nDel int) []byte {
 func stubSelect(t *testing.T, mp *mpool.MPool, framed [][]byte) func(*sqlexec.SqlProcess, string) (executor.Result, error) {
 	return func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 0, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 0, 0), mp)
 		for _, b := range framed {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], b, false, mp))
 		}

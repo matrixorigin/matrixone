@@ -45,7 +45,7 @@ func preservePhysicalRows(ctx context.Context) bool {
 	return preserve
 }
 
-func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitmap) {
+func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Nulls) {
 	if bat == nil || invisibleRows.IsEmpty() {
 		return
 	}
@@ -89,7 +89,7 @@ func HybridScanByBlock(
 	}
 	_, offset := blkID.Offsets()
 	deleteStartOffset := 0
-	var deletesBeforeScan *nulls.Bitmap
+	var deletesBeforeScan *nulls.Nulls
 	filterInvisibleAppendRows := dataObject.IsAppendable() && !preservePhysicalRows(ctx)
 	if *bat != nil {
 		deleteStartOffset = (*bat).Length()
@@ -105,7 +105,7 @@ func HybridScanByBlock(
 	if *bat == nil {
 		return nil
 	}
-	var invisibleAppendRows *nulls.Bitmap
+	var invisibleAppendRows *nulls.Nulls
 	if filterInvisibleAppendRows {
 		invisibleAppendRows = (*bat).Deletes.Clone()
 		if deletesBeforeScan != nil {
@@ -256,20 +256,13 @@ func RangeScanInMemoryByObject(
 	return
 }
 
-// TODO: ensure bat does not exceed the 1G limit
-func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {
+// ScanSysTable visits snapshot-visible rows one block at a time. The callback
+// must copy anything it retains; the batch is released before the next block.
+func ScanSysTable(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn, visit func(*containers.Batch, int) error) error {
 	if entry.ID > 3 {
 		panic(fmt.Sprintf("unsupported sys table id %v", entry))
 	}
 	schema := entry.GetLastestSchema(false)
-	prefetchIt := entry.MakeDataVisibleObjectIt(readTxn)
-	defer prefetchIt.Release()
-	for prefetchIt.Next() {
-		obj := prefetchIt.Item()
-		for blkOffset := range obj.BlockCnt() {
-			obj.GetObjectData().Prefetch(uint16(blkOffset))
-		}
-	}
 	it := entry.MakeDataVisibleObjectIt(readTxn)
 	defer it.Release()
 	colIdxes := make([]int, 0, len(schema.ColDefs))
@@ -279,22 +272,47 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 		}
 		colIdxes = append(colIdxes, col.Idx)
 	}
-	var bat *containers.Batch
-	prevLen := 0
 	for it.Next() {
 		obj := it.Item()
 		for blkOffset := range obj.BlockCnt() {
+			if err := ctx.Err(); err != nil {
+				return context.Cause(ctx)
+			}
 			blkid := objectio.NewBlockidWithObjectID(obj.ID(), uint16(blkOffset))
+			var bat *containers.Batch
 			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, &blkid, common.CheckpointAllocator)
-			if err != nil || bat == nil || bat.Length() == prevLen {
-				panic(fmt.Sprintf("blkbat is nil, obj %v, blkid %v, err %v", obj.ID().String(), blkOffset, err))
+			if err != nil {
+				if bat != nil {
+					bat.Close()
+				}
+				return err
+			}
+			if bat == nil {
+				continue
+			}
+			err = func() error {
+				defer bat.Close()
+				for row := 0; row < bat.Length(); row++ {
+					if row%1024 == 0 {
+						if err := ctx.Err(); err != nil {
+							return context.Cause(ctx)
+						}
+					}
+					if bat.IsDeleted(row) {
+						continue
+					}
+					if err := visit(bat, row); err != nil {
+						return err
+					}
+				}
+				return nil
+			}()
+			if err != nil {
+				return err
 			}
 		}
 	}
-	if bat != nil {
-		bat.Compact()
-	}
-	return bat
+	return context.Cause(ctx)
 }
 
 func ReadMergeSettingsBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {

@@ -19,6 +19,8 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -72,6 +74,7 @@ func TestInsertIgnoreFinalKeySetMatchesExactIntegerIdentity(t *testing.T) {
 		require.False(t, arg.hasAcceptedAutoIncrementValue(value), "reset key=%d", value)
 	}
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
@@ -83,7 +86,7 @@ func testFinalKeyType[T constraints.Integer](t *testing.T, oid types.T, upper, m
 		make([]bool, 4), make([]bool, 4), []bool{true, true, false, false})
 	defer input.Clean(proc.Mp())
 	input.Vecs[0].Free(proc.Mp())
-	input.Vecs[0] = vector.NewVec(oid.ToType())
+	input.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 	want := []T{1, upper, 0, manual}
 	for _, value := range want {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
@@ -105,6 +108,7 @@ func testFinalKeyType[T constraints.Integer](t *testing.T, oid types.T, upper, m
 	require.True(t, result.Batch.IsEmpty())
 	require.Equal(t, want, vector.MustFixedColNoTypeCheck[T](input.Vecs[0]), "input is borrowed, never rewritten")
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Clean(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -143,6 +147,7 @@ func TestAutoIncrementCandidateCompactionKeepsOwnedBase(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(10253), value.value)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
@@ -152,7 +157,7 @@ func TestAutoIncrementCandidateRejectsInvalidValueBeforePublication(t *testing.T
 	defer arg.Free(proc, false, nil)
 	require.NoError(t, arg.Prepare(proc))
 	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64} {
-		source := vector.NewVec(oid.ToType())
+		source := vector.NewVec(oid.ToType(), proc.Mp())
 		switch oid {
 		case types.T_int8:
 			require.NoError(t, vector.AppendFixed(source, int8(-1), false, proc.Mp()))
@@ -168,7 +173,7 @@ func TestAutoIncrementCandidateRejectsInvalidValueBeforePublication(t *testing.T
 		require.ErrorContains(t, err, "negative auto-increment candidate")
 	}
 	require.Empty(t, arg.ctr.autoIncrementCandidates.runs)
-	output := vector.NewVec(types.T_int8.ToType())
+	output := vector.NewVec(types.T_int8.ToType(), proc.Mp())
 	defer output.Free(proc.Mp())
 	require.Error(t, appendAutoIncrementValue(proc, output, types.T_int8.ToType(), 128))
 	require.Zero(t, output.Length())
@@ -177,5 +182,6 @@ func TestAutoIncrementCandidateRejectsInvalidValueBeforePublication(t *testing.T
 	_, err = arg.ctr.autoIncrementCandidates.valueAt(autoIncrementCandidateRun{start: math.MaxUint64, step: 1, count: 2}, 1)
 	require.Error(t, err)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	require.Zero(t, proc.Mp().CurrNB())
 }

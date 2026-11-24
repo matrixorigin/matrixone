@@ -38,7 +38,7 @@ func TestReadFilterExactUnsortedMembership(t *testing.T) {
 	for _, oid := range []types.T{types.T_varchar, types.T_varbinary} {
 		for _, count := range []int{0, 1, 2, 8, 9, 64} {
 			t.Run(fmt.Sprintf("%s/keys=%d", oid, count), func(t *testing.T) {
-				vec := vector.NewVec(oid.ToType())
+				vec := vector.NewVec(oid.ToType(), mp)
 				defer vec.Free(mp)
 				needles := make([][]byte, count)
 				for i := range needles {
@@ -92,7 +92,7 @@ func TestReadFilterExactLengthOrdering(t *testing.T) {
 				prefix := bytes.Repeat([]byte{'a'}, 32)
 				needles := make([][]byte, count)
 				members := make(map[string]struct{}, count)
-				vec := vector.NewVec(oid.ToType())
+				vec := vector.NewVec(oid.ToType(), mp)
 				defer vec.Free(mp)
 				for i := range needles {
 					suffixLen := 0
@@ -194,7 +194,7 @@ func BenchmarkReadFilterExactSearch(b *testing.B) {
 					require.NoError(b, err)
 					want = rows
 				} else {
-					vec = vector.NewVec(types.T_varchar.ToType())
+					vec = vector.NewVec(types.T_varchar.ToType(), mp)
 					for row := 0; row < rows; row++ {
 						value := 2*((row*31)%count) + 1
 						if shape == "first-hit" {
@@ -246,7 +246,7 @@ func BenchmarkReadFilterExactKeyLengths(b *testing.B) {
 				b.Run(fmt.Sprintf("keys=%d/prefix=%d/%s", count, prefixLen, shape), func(b *testing.B) {
 					mp := mpool.MustNewZero()
 					defer mpool.DeleteMPool(mp)
-					vec := vector.NewVec(types.T_varchar.ToType())
+					vec := vector.NewVec(types.T_varchar.ToType(), mp)
 					defer vec.Free(mp)
 					prefix := string(bytes.Repeat([]byte{'a'}, prefixLen))
 					needles := make([][]byte, count)
@@ -348,7 +348,7 @@ func BenchmarkReadFilterExactHotRanks(b *testing.B) {
 					needles[i] = append(bytes.Clone(prefix), []byte(fmt.Sprintf("%08d", i))...)
 				}
 				search := NewReadFilterSearch(types.T_varchar, needles)
-				vec := vector.NewVec(types.T_varchar.ToType())
+				vec := vector.NewVec(types.T_varchar.ToType(), mp)
 				defer vec.Free(mp)
 				want := make([]int64, 1024)
 				for i := range want {
@@ -385,7 +385,7 @@ func TestReadFilterExactMembershipDispatch(t *testing.T) {
 			t.Run(fmt.Sprintf("bytes=%d/keys=%d", size, count), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
-				vec := vector.NewVec(types.T_varbinary.ToType())
+				vec := vector.NewVec(types.T_varbinary.ToType(), mp)
 				defer vec.Free(mp)
 				needles := make([][]byte, count)
 				var want []int64
@@ -425,7 +425,7 @@ func TestReadFilterExactConcurrentReuse(t *testing.T) {
 			t.Parallel()
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer vec.Free(mp)
 			want := make([]int64, 32)
 			for i := range want {

@@ -34,7 +34,7 @@ func TestBuildMembershipFilter(t *testing.T) {
 
 	testutil.AssertInvalidRuntimeKeys(t, []byte{1, 2, 3})
 
-	keys := vector.NewVec(types.T_int64.ToType())
+	keys := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer keys.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed[int64](keys, 7, false, proc.Mp()))
 	data, err := keys.MarshalBinary()

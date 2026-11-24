@@ -351,6 +351,7 @@ func TestSortBatchWithPrecomputedOrderAndReleaseTransfersSourceOwnership(t *test
 		[]*vector.Vector{key},
 		[]*vector.Vector{extra},
 		release,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, callbackCount)
@@ -374,9 +375,9 @@ func TestSortBatchWithPrecomputedOrderAndReleaseBoundsWidePartitionPeak(t *testi
 		proc.Base.Lim.SpillSize = 64 << 20
 		epoch := proc.Mp().StartResourcePeakEpoch()
 		require.NotNil(t, epoch)
-		input := batch.NewOffHeapWithSize(dataCols)
+		input := batch.NewWithSize(dataCols)
 		makeInt64Vector := func(values []int64) *vector.Vector {
-			vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			vec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendFixedList(vec, values, nil, proc.Mp()))
 			return vec
 		}
@@ -447,6 +448,7 @@ func TestSortBatchWithPrecomputedOrderAndReleaseBoundsWidePartitionPeak(t *testi
 					extra = nil
 					releaseAfter = proc.Mp().CurrNB()
 				},
+				nil,
 			)
 		} else {
 			sorted, sortedKeys, sortedExtra, err = SortBatchWithPrecomputedOrder(

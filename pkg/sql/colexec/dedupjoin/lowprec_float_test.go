@@ -26,7 +26,7 @@ import (
 // lpVec builds a vector of oid (bf16, float16, float8 or float4) from vals.
 func lpVec(t *testing.T, oid types.T, mp *mpool.MPool, vals ...float32) *vector.Vector {
 	t.Helper()
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	for _, v := range vals {
 		var err error
 		switch oid {
@@ -55,7 +55,7 @@ func TestODKULowPrecisionFloatEqual(t *testing.T) {
 		require.True(t, odkuValuesEqual(a, b), oid.String())
 		require.False(t, odkuValuesEqual(a, c), oid.String())
 		z := lpVec(t, oid, mp, 0)
-		n := vector.NewVec(oid.ToType())
+		n := vector.NewVec(oid.ToType(), mp)
 		switch oid {
 		case types.T_bf16:
 			require.NoError(t, vector.AppendFixed(n, types.BF16(0x8000), false, mp))

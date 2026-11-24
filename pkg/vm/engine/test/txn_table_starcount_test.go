@@ -310,7 +310,7 @@ func TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	proc := rel.GetProcess().(*process.Process)
-	insertBat := colexec.AllocCNS3ResultBat(false)
+	insertBat := colexec.AllocCNS3ResultBat(false, proc.Mp())
 	defer insertBat.Clean(proc.Mp())
 
 	// One batch with 3 ObjectStats (10 + 20 + 30 = 60 rows total)
@@ -725,7 +725,7 @@ func TestStarCountWithInMemoryTombstones(t *testing.T) {
 	require.Equal(t, uint64(100), count, "Initial count should be 100")
 
 	// Build delete batch with rowids
-	vec1 := vector.NewVec(types.T_Rowid.ToType())
+	vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
 	for _, rowid := range deleteRowIDs {
 		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
 	}
@@ -733,7 +733,7 @@ func TestStarCountWithInMemoryTombstones(t *testing.T) {
 	// Get PK type from schema and create dummy PK values
 	// MockSchemaAll(3, 0) creates column 0 as int8 type PK
 	pkCol := schema.GetPrimaryKey()
-	vec2 := vector.NewVec(pkCol.Type)
+	vec2 := vector.NewVec(pkCol.Type, p.Mp)
 	for i := 0; i < len(deleteRowIDs); i++ {
 		require.NoError(t, vector.AppendFixed(vec2, int8(i), false, p.Mp))
 	}
@@ -841,14 +841,14 @@ func TestStarCountWithMixedInsertsAndTombstones(t *testing.T) {
 	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
 
 	// Delete 20 rows
-	vec1 := vector.NewVec(types.T_Rowid.ToType())
+	vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
 	for _, rowid := range deleteRowIDs {
 		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
 	}
 
 	// Use fake PK column (uint64 type)
 	pkCol := schema.GetPrimaryKey()
-	vec2 := vector.NewVec(pkCol.Type)
+	vec2 := vector.NewVec(pkCol.Type, p.Mp)
 	for i := 0; i < len(deleteRowIDs); i++ {
 		require.NoError(t, vector.AppendFixed(vec2, uint64(i), false, p.Mp))
 	}
@@ -950,8 +950,8 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 
 	// Build tombstone batch (rowids + pk) and write to S3 via CNS3TombstoneWriter
 	tombstoneBat := batch.NewWithSize(2)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType(), p.Mp)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	for _, rowid := range deleteRowIDs {
 		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[0], rowid, false, p.Mp))
@@ -974,7 +974,7 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 	// Add persisted DELETE entry via object-level delete (ObjectMeta_ObjectStats)
 	tbat := batch.NewWithSize(1)
 	tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp))
 	tbat.SetRowCount(1)
 	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
@@ -1080,13 +1080,13 @@ func TestStarCountDeleteUncommittedInserts(t *testing.T) {
 	require.Equal(t, 30, len(deleteRowIDs))
 
 	// Delete 30 committed rows
-	vec1 := vector.NewVec(types.T_Rowid.ToType())
+	vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
 	for _, rowid := range deleteRowIDs {
 		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
 	}
 
 	pkCol := schema.GetPrimaryKey()
-	vec2 := vector.NewVec(pkCol.Type)
+	vec2 := vector.NewVec(pkCol.Type, p.Mp)
 	for i := 0; i < len(deleteRowIDs); i++ {
 		require.NoError(t, vector.AppendFixed(vec2, uint64(i), false, p.Mp))
 	}
@@ -1213,8 +1213,8 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	rel, _ = db.Relation(p.Ctx, schema.Name, nil)
 
 	// Delete first batch (in-memory)
-	vec1 := vector.NewVec(types.T_Rowid.ToType())
-	vec2 := vector.NewVec(types.T_int8.ToType())
+	vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+	vec2 := vector.NewVec(types.T_int8.ToType(), p.Mp)
 	for _, rowID := range firstBatchRowIDs {
 		require.NoError(t, vector.AppendFixed(vec1, rowID, false, p.Mp))
 		require.NoError(t, vector.AppendFixed(vec2, int8(0), false, p.Mp))
@@ -1228,8 +1228,8 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 
 	// Create tombstone object for second batch and add as persisted DELETE (object-level delete)
 	tombstoneBat := batch.NewWithSize(2)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType(), p.Mp)
 	tombstoneBat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	for _, rowid := range secondBatchRowIDs {
 		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[0], rowid, false, p.Mp))
@@ -1251,7 +1251,7 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 
 	tbat := batch.NewWithSize(1)
 	tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
+	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp))
 	tbat.SetRowCount(1)
 	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
@@ -1347,8 +1347,8 @@ func TestStarCountEmptyTableWithTombstones(t *testing.T) {
 	rel, err = db.Relation(p.Ctx, schema.Name, nil)
 	require.NoError(t, err)
 
-	vec1 := vector.NewVec(types.T_Rowid.ToType())
-	vec2 := vector.NewVec(types.T_int64.ToType())
+	vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+	vec2 := vector.NewVec(types.T_int64.ToType(), p.Mp)
 	for _, rowID := range deleteRowIDs {
 		vector.AppendFixed(vec1, rowID, false, p.Mp)
 		vector.AppendFixed(vec2, int64(0), false, p.Mp)
@@ -1472,8 +1472,8 @@ func TestStarCountMultipleDeletes(t *testing.T) {
 
 	// First DELETE: 20 rows
 	{
-		vec1 := vector.NewVec(types.T_Rowid.ToType())
-		vec2 := vector.NewVec(types.T_int64.ToType())
+		vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+		vec2 := vector.NewVec(types.T_int64.ToType(), p.Mp)
 		for _, rowID := range batch1RowIDs {
 			vector.AppendFixed(vec1, rowID, false, p.Mp)
 			vector.AppendFixed(vec2, int64(0), false, p.Mp)
@@ -1497,8 +1497,8 @@ func TestStarCountMultipleDeletes(t *testing.T) {
 
 	// Second DELETE: 15 rows
 	{
-		vec1 := vector.NewVec(types.T_Rowid.ToType())
-		vec2 := vector.NewVec(types.T_int64.ToType())
+		vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+		vec2 := vector.NewVec(types.T_int64.ToType(), p.Mp)
 		for _, rowID := range batch2RowIDs {
 			vector.AppendFixed(vec1, rowID, false, p.Mp)
 			vector.AppendFixed(vec2, int64(0), false, p.Mp)
@@ -1522,8 +1522,8 @@ func TestStarCountMultipleDeletes(t *testing.T) {
 
 	// Third DELETE: 10 rows
 	{
-		vec1 := vector.NewVec(types.T_Rowid.ToType())
-		vec2 := vector.NewVec(types.T_int64.ToType())
+		vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+		vec2 := vector.NewVec(types.T_int64.ToType(), p.Mp)
 		for _, rowID := range batch3RowIDs {
 			vector.AppendFixed(vec1, rowID, false, p.Mp)
 			vector.AppendFixed(vec2, int64(0), false, p.Mp)
@@ -1642,12 +1642,12 @@ func TestStarCountWithTransferredTombstones(t *testing.T) {
 
 	// Read rowids and PKs for tombstones
 	tombstoneBat := batch.NewWithSize(2)
-	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), p.Mp)
 	{
 		txn, _, reader, err := testutil.GetTableTxnReader(p.Ctx, p.D, "db", schema.Name, nil, p.Mp, t)
 		require.NoError(t, err)
-		ret := testutil.EmptyBatchFromSchema(schema)
+		ret := testutil.EmptyBatchFromSchema(schema, p.Mp)
 		for {
 			done, err := reader.Read(p.Ctx, []string{schema.GetPrimaryKey().Name, catalog.Row_ID}, nil, p.Mp, ret)
 			if done {
@@ -1686,7 +1686,7 @@ func TestStarCountWithTransferredTombstones(t *testing.T) {
 
 		tbat := batch.NewWithSize(1)
 		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
-		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp)
 		tbat.SetRowCount(1)
 
@@ -1754,10 +1754,10 @@ func TestStarCountWithTransferredInMemoryTombstones(t *testing.T) {
 	{
 		txn, _, reader, err := testutil.GetTableTxnReader(p.Ctx, p.D, "db", schema.Name, nil, p.Mp, t)
 		require.NoError(t, err)
-		ret := testutil.EmptyBatchFromSchema(schema)
+		ret := testutil.EmptyBatchFromSchema(schema, p.Mp)
 
-		vec1 := vector.NewVec(types.T_Rowid.ToType())
-		vec2 := vector.NewVec(types.T_int32.ToType())
+		vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
+		vec2 := vector.NewVec(types.T_int32.ToType(), p.Mp)
 		for {
 			done, err := reader.Read(p.Ctx, []string{schema.GetPrimaryKey().Name, catalog.Row_ID}, nil, p.Mp, ret)
 			if done {

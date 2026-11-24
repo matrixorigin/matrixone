@@ -2703,7 +2703,7 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 			if len(c.preparedParamValues) > 0 {
 				semantic := make([]executor.ParamValue, len(values))
 				for i, value := range c.preparedParamValues {
-					param, ok := value.(plan2.ParamValue)
+					param, ok := plan2.AsParamValue(value)
 					if !ok {
 						return moerr.NewInternalErrorf(c.proc.Ctx,
 							"CTAS prepared parameter %d has no semantic value", i)
@@ -6800,7 +6800,7 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 	}()
 
 	// append account_id
-	accountIdVec := vector.NewVec(types.T_uint32.ToType())
+	accountIdVec := vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 	vecs[0] = accountIdVec
 	err := vector.AppendFixed(accountIdVec, accountId, false, proc.GetMPool())
 	if err != nil {
@@ -6808,7 +6808,7 @@ func getLockBatch(proc *process.Process, accountId uint32, names []string) (*bat
 	}
 	// append names
 	for i, name := range names {
-		nameVec := vector.NewVec(types.T_varchar.ToType())
+		nameVec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		vecs[i+1] = nameVec
 		err := vector.AppendBytes(nameVec, []byte(name), false, proc.GetMPool())
 		if err != nil {

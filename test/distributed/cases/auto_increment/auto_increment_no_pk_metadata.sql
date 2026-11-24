@@ -7,7 +7,7 @@ create table no_pk(a int, b varchar(10));
 insert into no_pk values (1, 'x'), (2, 'y'), (3, 'z');
 create table with_pk(a int primary key, b int);
 insert into with_pk values (1, 1);
-create table with_ai(id int auto_increment primary key, b int);
+create table with_ai(ID int auto_increment primary key, b int);
 insert into with_ai(b) values (1), (2);
 create table no_pk_ai(id int auto_increment, b int, unique key(id));
 insert into no_pk_ai(b) values (1), (2), (3);
@@ -22,4 +22,6 @@ create table visible_fake_pk(a int primary key, `__mo_fake_pk_col` bigint unsign
 insert into visible_fake_pk(a) values (1), (2);
 select table_name, auto_increment from information_schema.tables where table_schema = 'ai_no_pk_meta' and table_name = 'visible_fake_pk';
 select internal_auto_increment('ai_no_pk_meta', 'visible_fake_pk');
+create view ai_view as select ID from with_ai;
+select internal_auto_increment('ai_no_pk_meta', 'ai_view') is null;
 drop database ai_no_pk_meta;

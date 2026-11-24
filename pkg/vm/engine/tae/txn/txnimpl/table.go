@@ -1577,9 +1577,9 @@ func (tbl *txnTable) findDeletesForCandidates(
 	copyBack := func() {
 		for i, ref := range refs {
 			if combined.IsNull(i) {
-				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, common.WorkspaceAllocator)
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, ref.rows.GetAllocator())
 			} else {
-				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, common.WorkspaceAllocator)
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, ref.rows.GetAllocator())
 			}
 		}
 	}
@@ -1610,7 +1610,7 @@ func (tbl *txnTable) findDeletes(
 	if err = index.BatchUpdateZM(keysZM, rowIDs.GetDownstreamVector()); err != nil {
 		return
 	}
-	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
+	tbl.contains(ctx, rowIDs, keysZM, rowIDs.GetAllocator())
 
 	// Dedup uses a PrepareTS-based upper fence. A delete that is still
 	// committing conflicts with the writer regardless of whether it prepared
@@ -1654,7 +1654,7 @@ retryScan:
 				tbl.store.txn,
 				rowIDs,
 				keysZM,
-				common.WorkspaceAllocator,
+				rowIDs.GetAllocator(),
 			)
 		})
 		if err != nil {

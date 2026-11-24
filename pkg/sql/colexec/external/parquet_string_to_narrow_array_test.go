@@ -64,7 +64,7 @@ func TestParquet_StringToNarrowArray(t *testing.T) {
 			page, err := col.Pages().ReadPage()
 			require.NoError(t, err)
 
-			vec := vector.NewVec(types.New(tc.dt, tc.width, 0))
+			vec := vector.NewVec(types.New(tc.dt, tc.width, 0), proc.Mp())
 			var h ParquetHandler
 			mp := h.getMapper(col, plan.Type{Id: int32(tc.dt), Width: tc.width, NotNullable: true})
 			require.NotNil(t, mp, "STRING → %s conversion should be supported", tc.dt)
@@ -115,7 +115,7 @@ func TestParquet_StringToNarrowArray_DimMismatch(t *testing.T) {
 	page, err := col.Pages().ReadPage()
 	require.NoError(t, err)
 
-	vec := vector.NewVec(types.New(types.T_array_int8, 3, 0))
+	vec := vector.NewVec(types.New(types.T_array_int8, 3, 0), proc.Mp())
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{Id: int32(types.T_array_int8), Width: 3, NotNullable: true})
 	require.NotNil(t, mp)
@@ -147,7 +147,7 @@ func TestParquet_StringToNarrowArray_Branches(t *testing.T) {
 		page, err := col.Pages().ReadPage()
 		require.NoError(t, err)
 
-		vec := vector.NewVec(types.New(dt, 3, 0))
+		vec := vector.NewVec(types.New(dt, 3, 0), proc.Mp())
 		var h ParquetHandler
 		mp := h.getMapper(col, plan.Type{Id: int32(dt) /* Width: 0 */, NotNullable: true})
 		require.NotNil(t, mp, "%s with width 0 should still map", dt)

@@ -84,7 +84,7 @@ func benchmarkWindowFullPartitionSum(b *testing.B, singleton, reference bool) {
 		// but uses the general evaluator rather than full-partition reuse.
 		arg.WinSpecList[0].GetW().Frame.Start = makeFiniteCumulativeFrame(rows).Start
 	}
-	defer ctr.freeFullPartitionResults(proc.Mp())
+	defer ctr.freeFullPartitionResults(proc)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -92,7 +92,7 @@ func benchmarkWindowFullPartitionSum(b *testing.B, singleton, reference bool) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		result.Free(proc.Mp())
+		result.Free(result.MPool())
 	}
 	b.StopTimer()
 }

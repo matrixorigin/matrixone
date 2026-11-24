@@ -33,7 +33,7 @@ import (
 // the shape `SELECT count(*) FROM ...` produces.
 func makeCountBatch(proc *process.Process, n int64) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 	vector.AppendFixed[int64](bat.Vecs[0], n, false, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
@@ -100,7 +100,7 @@ func TestFetchSrcTableRowCount(t *testing.T) {
 	t.Run("wrong row count returns error", func(t *testing.T) {
 		runSql := func(sp *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 			bat.SetRowCount(0)
 			return executor.Result{Mp: sp.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
 		}

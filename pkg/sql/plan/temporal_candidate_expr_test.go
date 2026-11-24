@@ -42,7 +42,7 @@ func TestDirectTemporalCandidateCoversScalarMatches(t *testing.T) {
 	defer executor.Free()
 	bat := batch.NewWithSize(1)
 	defer bat.Clean(proc.Mp())
-	bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 	center := types.DatetimeFromClock(2026, 6, 1, 12, 0, 0, 0)
 	rows := []types.Datetime{-1, center - 1000000, center, center + 1000000}
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], rows, nil, proc.Mp()))
@@ -73,7 +73,7 @@ func TestTemporalRowCandidateRefreshesClockAfterExecutorReset(t *testing.T) {
 	defer executor.Free()
 	bat := batch.NewWithSize(1)
 	defer bat.Clean(proc.Mp())
-	bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.DatetimeFromClock(2026, 6, 1, 13, 0, 0, 0), false, proc.Mp()))
 	bat.SetRowCount(1)
 	first, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
@@ -104,7 +104,7 @@ func TestEncodedTemporalCandidateCoversScalarMatches(t *testing.T) {
 	defer encoder.Free()
 	bat := batch.NewWithSize(1)
 	defer bat.Clean(proc.Mp())
-	bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 	center := types.DatetimeFromClock(2026, 6, 1, 12, 0, 0, 0)
 	rows := []types.Datetime{-1, center - 1000000, center, center + 1000000}
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], rows, nil, proc.Mp()))

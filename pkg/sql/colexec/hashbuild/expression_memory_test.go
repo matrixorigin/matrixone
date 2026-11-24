@@ -74,7 +74,7 @@ func TestRecoveryProjectionTreatsBroadcastConstNullAsZeroPayload(t *testing.T) {
 	require.Equal(t, uint64(2*types.VarlenaSize), projection.maxSelected)
 	require.Equal(t, projection.maxSelected, projection.nextTailSelected)
 
-	window.Clean(nil)
+	window.FreeWindow()
 	source.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
@@ -126,7 +126,7 @@ func TestRecoveryProjectionRejectsMissingPhysicalRows(t *testing.T) {
 			rows: 2,
 			vec: func(t *testing.T, mp *mpool.MPool) *vector.Vector {
 				t.Helper()
-				vec := vector.NewVec(types.T_varchar.ToType())
+				vec := vector.NewVec(types.T_varchar.ToType(), mp)
 				require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
 				return vec
 			},
@@ -220,7 +220,7 @@ func TestExpressionRecoveryStringCastBound(t *testing.T) {
 			// an out-of-line four-byte UTF-8 value; no further admission is allowed.
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(h.proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(types.New(tc.source, 10, 0))
+			input.Vecs[0] = vector.NewVec(types.New(tc.source, 10, 0), h.proc.Mp())
 			values := []string{"12345", strings.Repeat("\U0001f600", 10), ""}
 			for i := 0; i < 8192; i++ {
 				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(values[i%len(values)]), i%len(values) == 2, h.proc.Mp()))

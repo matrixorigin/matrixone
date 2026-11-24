@@ -29,6 +29,8 @@ var _ vm.Operator = new(Projection)
 type Projection struct {
 	ctr         container
 	ProjectList []*plan.Expr
+	// ValuesWarningRow is the statement row for a singleton VALUES projection.
+	ValuesWarningRow uint64
 
 	// GroupingSetCount and GroupingFlags turn this projection into a
 	// vector-level grouping-set expander. The first len(flags)/count columns are
@@ -47,29 +49,15 @@ func (projection *Projection) GetOperatorBase() *vm.OperatorBase {
 
 func init() {
 	reuse.CreatePool[Projection](
-		newProjectionArgument,
-		resetProjectionArgument,
+		func() *Projection {
+			return &Projection{}
+		},
+		func(a *Projection) {
+			*a = Projection{}
+		},
 		reuse.DefaultOptions[Projection]().
 			WithEnableChecker(),
 	)
-}
-
-// Keep the frame in the same allocation, outside the operator's reset range.
-type projectionArgument struct {
-	operator Projection
-	frame    colexec.DictionaryInputFrame
-}
-
-func newProjectionArgument() *Projection {
-	a := new(projectionArgument)
-	a.operator.ctr.dictionaryInputs = &a.frame
-	return &a.operator
-}
-
-func resetProjectionArgument(a *Projection) {
-	frame := a.ctr.dictionaryInputs
-	*a = Projection{}
-	a.ctr.dictionaryInputs = frame
 }
 
 func (projection Projection) TypeName() string {
@@ -87,21 +75,19 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
-	dictionaryInputs   *colexec.DictionaryInputFrame
-	dictionaryBoundary vm.DictionaryOutputState
-	outputAllocation   *vector.AllocationAccountSelection
-	buf                *batch.Batch
-	expandBuf          *batch.Batch
-	projExecutors      []colexec.ExpressionExecutor
-	expandOwned        []*vector.Vector
-	nextSet            int
-	hasInput           bool
-	inputSeen          bool
-	childDone          bool
+	jsonFrame     *colexec.ProjectionJSONFrame
+	buf           *batch.Batch
+	expandBuf     *batch.Batch
+	projExecutors []colexec.ExpressionExecutor
+	expandOwned   []*vector.Vector
+	nextSet       int
+	hasInput      bool
+	inputSeen     bool
+	childDone     bool
+	selection     selectionState
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	projection.ctr.dictionaryInputs.Free(proc.Mp())
 	projection.freeExpandOwned(proc)
 	projection.ctr.nextSet = 0
 	projection.ctr.hasInput = false
@@ -117,13 +103,9 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 		projection.OpAnalyzer.Alloc(int64(projection.maxAllocSize))
 	}
 	projection.maxAllocSize = 0
-	if projection.ctr.outputAllocation != nil {
-		projection.Free(proc, pipelineFailed, err)
-	}
 }
 
 func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, err error) {
-	projection.ctr.dictionaryInputs.Free(proc.Mp())
 	projection.freeExpandOwned(proc)
 	for i := range projection.ctr.projExecutors {
 		if projection.ctr.projExecutors[i] != nil {
@@ -131,6 +113,8 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		}
 	}
 	projection.ctr.projExecutors = nil
+	projection.ctr.selection.free(proc.Mp())
+	projection.ctr.jsonFrame = nil
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }

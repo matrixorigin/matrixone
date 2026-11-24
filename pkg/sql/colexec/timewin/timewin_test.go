@@ -157,6 +157,7 @@ func TestTimeWin(t *testing.T) {
 		require.NoError(t, err)
 		_, _ = vm.Exec(tc.arg, tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
+		colexec.FreeMockChildren(tc.arg)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -168,13 +169,13 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, 1, 1, 2)
+	view, err := mp.WithAccount(
+		account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	value := vector.NewOffHeapVecWithType(types.T_int64.ToType())
-	require.NoError(t, value.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(value, int64(42), false, mp))
+	value := vector.NewVec(types.T_int64.ToType(), view)
+	require.NoError(t, vector.AppendFixed(value, int64(42), false, view))
+	require.Positive(t, account.Snapshot().Used)
 	ctr := container{
 		colCnt: 1,
 		i:      1,
@@ -187,7 +188,7 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 
 	// The interval buffer, not the forwarding batch, owns the vector.
 	ctr.bat = nil
-	value.Free(mp)
+	value.Free(view)
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	_, err = registry.Finalize(account)
@@ -195,28 +196,29 @@ func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
+func TestTimeWinResetReleasesAccountedInputCaches(t *testing.T) {
 	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	shared := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	budget, err := shared.OpenGeneration(1)
+	require.NoError(t, err)
+	defer shared.Close()
+	defer budget.Close()
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(budget))
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerOrder, 1, 2)
+	account, err := registry.OpenWithController(1<<20, budget)
 	require.NoError(t, err)
 
-	ts := vector.NewOffHeapVecWithType(types.T_datetime.ToType())
-	require.NoError(t, ts.SetAllocationAccount(selection))
+	ts := vector.NewVec(types.T_datetime.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(ts, types.Datetime(1), false, mp))
-	value := vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	require.NoError(t, value.SetAllocationAccount(selection))
+	value := vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(value, int32(42), false, mp))
-	input := batch.NewOffHeapWithSize(2)
+	input := batch.NewWithSize(2)
 	input.SetVector(0, ts)
 	input.SetVector(1, value)
 	input.SetRowCount(1)
 
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &TimeWin{
 		Types:    []types.Type{types.T_int32.ToType()},
 		Aggs:     []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil)},
@@ -225,13 +227,14 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 		EndExpr:  newExpression(0),
 		Interval: makeInterval(),
 	}
+	require.NoError(t, arg.SetAllocationAccount(account))
 	require.NoError(t, arg.Prepare(proc))
 	ok, err := arg.ctr.evalVector(input, proc)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// Pipeline cleanup resets children before parents. Once the input owner is
-	// gone, only TimeWin's inherited duplicate capacity remains in the attempt.
+	// The input owner is unaccounted; the buffered duplicates are charged to
+	// TimeWin's own account through its view.
 	input.Clean(mp)
 	require.Positive(t, account.Snapshot().Used)
 	arg.Reset(proc, false, nil)
@@ -239,6 +242,8 @@ func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
 
 	require.NoError(t, arg.Prepare(proc))
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
+	require.NoError(t, arg.ClearAllocationAccount(account))
 	snapshot := account.Seal()
 	require.Zero(t, snapshot.Used)
 	_, err = registry.Finalize(account)
@@ -281,6 +286,7 @@ func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
 
 	bat.Clean(proc.Mp())
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -328,7 +334,7 @@ func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
-	require.Equal(t, []int64{10, 20}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{10, 20}, decimalSumValues(t, result.Batch.Vecs[0]))
 	first, err := types.ParseDatetime("2026-01-01 00:01:00", 6)
 	require.NoError(t, err)
 	second, err := types.ParseDatetime("2026-01-01 00:02:00", 6)
@@ -339,6 +345,7 @@ func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
 	}, vector.MustFixedColWithTypeCheck[types.Datetime](result.Batch.Vecs[1]))
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -440,7 +447,7 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Empty(t, arg.ctr.wStart)
 	require.Empty(t, arg.ctr.wEnd)
-	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+	resultValues := decimalSumValues(t, result.Batch.Vecs[0])
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
 		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
@@ -460,11 +467,12 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	secondResult, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, secondResult.Batch)
-	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0]))
+	require.Equal(t, []int64{1}, decimalSumValues(t, secondResult.Batch.Vecs[0]))
 	require.Empty(t, arg.ctr.wStart)
 	require.Empty(t, arg.ctr.wEnd)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	input.Free(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -497,12 +505,14 @@ func TestTimeWinReplacementFailurePreservesOwnership(t *testing.T) {
 	require.Same(t, agg, arg.ctr.aggs[0], "failed replacement must not overwrite the owned executor")
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	input.Free(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func resetChildren(arg *TimeWin, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat := colexec.MakeMockTimeWinBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
@@ -527,7 +537,7 @@ func makeInterval() types.Datetime {
 
 func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	ts := vector.NewVec(types.T_datetime.ToType())
+	ts := vector.NewVec(types.T_datetime.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(ts, []types.Datetime{types.ZeroDatetime}, nil, proc.Mp()))
 	ts.SetLength(1)
 	defer ts.Free(proc.Mp())
@@ -598,7 +608,7 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 	}
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	// The planner's mo_win_truncate expression supplies pre-aligned TIMESTAMP
 	// keys. This operator-level test verifies that their distinct instants pass
 	// through unchanged across DST gaps and folds.
@@ -625,7 +635,7 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -650,6 +660,7 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 	require.Equal(t, wantEnds, ends)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -678,7 +689,7 @@ func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
 	secondFoldHalfHour := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{firstFoldLast, secondFold}, nil, proc.Mp()))
 	bat.Vecs[0].SetLength(2)
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -695,7 +706,7 @@ func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -708,6 +719,7 @@ func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
 	require.Equal(t, []types.Timestamp{secondFold, secondFoldHalfHour}, ends)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -736,7 +748,7 @@ func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
 	afterSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC).UnixMicro())
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{first, second}, nil, proc.Mp()))
 	bat.Vecs[0].SetLength(2)
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -753,7 +765,7 @@ func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -766,6 +778,7 @@ func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
 	require.Equal(t, []types.Timestamp{second, afterSecond}, ends)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -804,7 +817,7 @@ func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
 	require.Equal(t, wantStarts, keys)
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], keys, nil, proc.Mp()))
 	bat.Vecs[0].SetLength(len(keys))
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -813,6 +826,7 @@ func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 	defer func() {
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		bat.Clean(proc.Mp())
 		proc.Free()
 	}()
@@ -826,7 +840,7 @@ func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -865,7 +879,7 @@ func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
 	firstAfterNext := types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 40, 0, 0, time.UTC).UnixMicro())
 
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{first, firstNext}, nil, proc.Mp()))
 	bat.Vecs[0].SetLength(2)
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -882,7 +896,7 @@ func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -895,6 +909,7 @@ func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
 	require.Equal(t, []types.Timestamp{firstNext, firstAfterNext}, ends)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
@@ -924,12 +939,12 @@ func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
 		return value
 	}
 	first := batch.NewWithSize(2)
-	first.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	first.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixed(first.Vecs[0], parse("2026-03-08 03:00:00"), false, proc.Mp()))
 	first.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	first.SetRowCount(1)
 	second := batch.NewWithSize(2)
-	second.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	second.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixed(second.Vecs[0], parse("2026-03-08 04:00:00"), false, proc.Mp()))
 	second.Vecs[1] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
 	second.SetRowCount(1)
@@ -945,7 +960,7 @@ func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
 			break
 		}
 		n := res.Batch.Vecs[0].Length()
-		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		sums = append(sums, decimalSumValues(t, res.Batch.Vecs[0])[:n]...)
 		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
 		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
 		if res.Status == vm.ExecStop {
@@ -957,6 +972,7 @@ func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
 	require.Equal(t, []types.Timestamp{parse("2026-03-08 04:00:00"), parse("2026-03-08 06:00:00")}, ends)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	proc.Free()
@@ -969,7 +985,7 @@ func TestTimestampIntervalBoundaryVectorPreservesZeroTimestamp(t *testing.T) {
 	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
 	normalStart := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
 
-	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(starts, []types.Timestamp{
 		types.ZeroTimestamp,
 		normalStart,
@@ -1017,7 +1033,7 @@ func TestTimestampIntervalBoundaryVectorUsesCivilDayGrid(t *testing.T) {
 			require.NoError(t, parseErr)
 			end, parseErr := types.ParseTimestamp(zone, tc.end, 6)
 			require.NoError(t, parseErr)
-			starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+			starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 			require.NoError(t, vector.AppendFixed(starts, start, false, proc.Mp()))
 
 			ends, callErr := appendTimestampIntervalBoundaryVector(starts, day, true, typ, proc)
@@ -1040,7 +1056,7 @@ func TestTimestampIntervalBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.
 	beforeMin := types.Timestamp(int64(types.TimestampMinValue) - int64(types.MicroSecsPerSec))
 	maxHourStart := types.FromClockUTC(9999, 12, 31, 23, 0, 0, 0)
 
-	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(starts, []types.Timestamp{
 		types.ZeroTimestamp,
 		beforeMin,
@@ -1133,7 +1149,7 @@ func TestTimestampBoundaryVectorsFreeOnAppendFailure(t *testing.T) {
 	mpool.DeleteMPool(limited)
 
 	startsMP := mpool.MustNewZero()
-	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6), startsMP)
 	startValues := make([]types.Timestamp, rows)
 	for i := range startValues {
 		startValues[i] = types.TimestampMinValue
@@ -1180,7 +1196,7 @@ func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *tes
 
 	makeInput := func(values []types.Timestamp, measures []int32) *batch.Batch {
 		bat := batch.NewWithSize(2)
-		bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+		bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
 		bat.Vecs[1] = testutil.MakeInt32Vector(measures, nil, proc.Mp())
 		bat.SetRowCount(len(values))
@@ -1242,6 +1258,7 @@ func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *tes
 	}, ends)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	third.Clean(proc.Mp())
@@ -1261,14 +1278,14 @@ func TestAvgTwCache(t *testing.T) {
 		// prepare the input data.
 		var err error
 
-		vec := vector.NewVec(inputType)
+		vec := vector.NewVec(inputType, mg)
 		require.NoError(t, vector.AppendFixedList[int32](vec, []int32{3, 0, 4, 5}, []bool{false, true, false, false}, mg))
 		inputs[0] = vec
 		inputs[1] = vec
 		inputs[2] = vector.NewConstNull(inputType, 2, mg)
 		inputs[3], err = vector.NewConstFixed[int32](inputType, 1, 3, mg)
 		require.NoError(t, err)
-		inputs[4] = vector.NewVec(inputType)
+		inputs[4] = vector.NewVec(inputType, mg)
 		require.NoError(t, vector.AppendFixedList[int32](inputs[4], []int32{1, 2, 3, 4}, nil, mg))
 	}
 	{
@@ -1309,7 +1326,7 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 	inputs := make([]*vector.Vector, 3)
 	{
 		vs := make([]types.Decimal64, 4)
-		vec := vector.NewVec(types.T_decimal64.ToType())
+		vec := vector.NewVec(types.T_decimal64.ToType(), mg)
 		require.NoError(t, vector.AppendFixedList(vec, vs, nil, mg))
 		inputs[0] = vec
 		inputs[1] = vec
@@ -1351,7 +1368,7 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 	inputs := make([]*vector.Vector, 3)
 	{
 		vs := make([]types.Decimal128, 4)
-		vec := vector.NewVec(types.T_decimal128.ToType())
+		vec := vector.NewVec(types.T_decimal128.ToType(), mg)
 		require.NoError(t, vector.AppendFixedList(vec, vs, nil, mg))
 		inputs[0] = vec
 		inputs[1] = vec
@@ -1395,14 +1412,14 @@ func TestAvgTwResult(t *testing.T) {
 		// prepare the input data.
 		var err error
 
-		vec := vector.NewVec(inputType)
+		vec := vector.NewVec(inputType, mg)
 		require.NoError(t, vector.AppendStringList(vec, []string{"sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf"}, []bool{false, true, false, false}, mg))
 		inputs[0] = vec
 		inputs[1] = vec
 		inputs[2] = vector.NewConstNull(inputType, 2, mg)
 		inputs[3], err = vector.NewConstBytes(inputType, []byte("sdfasdfsadfasdfadf"), 3, mg)
 		require.NoError(t, err)
-		inputs[4] = vector.NewVec(inputType)
+		inputs[4] = vector.NewVec(inputType, mg)
 		require.NoError(t, vector.AppendStringList(inputs[4], []string{"sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf", "sdfasdfsadfasdfadf"}, nil, mg))
 	}
 	{
@@ -1459,6 +1476,7 @@ func TestTimeWinGroupConcatTruncationDiagnostic(t *testing.T) {
 	aggexec.ReportGroupConcatWarnings(agg, sink)
 	require.Equal(t, uint64(1), sink.total)
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 }
 
 func TestTimeWindowBoundsBudgetFailureAndReuse(t *testing.T) {
@@ -1482,6 +1500,7 @@ func TestTimeWindowBoundsBudgetFailureAndReuse(t *testing.T) {
 			defer func() {
 				op.Reset(proc, false, nil)
 				op.Free(proc, false, nil)
+				colexec.FreeMockChildren(op)
 				require.NoError(t, op.ClearAllocationAccount(account))
 				require.Zero(t, budget.Used())
 				require.Zero(t, account.Snapshot().Used)

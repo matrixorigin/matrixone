@@ -53,9 +53,11 @@ func TestPriorityIsOrderWithinOneRowID(t *testing.T) {
 				defer func() {
 					if w != nil {
 						w.Free(proc, false, nil)
+						colexec.FreeMockChildren(w)
 					}
 					if p != nil {
 						p.Free(proc, false, nil)
+						colexec.FreeMockChildren(p)
 					}
 					for _, b := range batches {
 						b.Clean(proc.Mp())
@@ -72,7 +74,7 @@ func TestPriorityIsOrderWithinOneRowID(t *testing.T) {
 					b := batch.NewWithSize(len(columnTypes))
 					batches = append(batches, b)
 					for i, typ := range columnTypes {
-						b.Vecs[i] = vector.NewVec(typ)
+						b.Vecs[i] = vector.NewVec(typ, proc.Mp())
 					}
 					require.NoError(t, vector.AppendFixed(b.Vecs[0], rid, false, proc.Mp()))
 					require.NoError(t, vector.AppendFixed(b.Vecs[1], input.active, input.priorityNull, proc.Mp()))

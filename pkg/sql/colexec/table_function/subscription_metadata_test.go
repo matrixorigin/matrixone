@@ -67,7 +67,7 @@ func makeSubscriptionCandidateResult(
 	}
 	bat := batch.NewWithSize(len(columnTypes))
 	for i := range columnTypes {
-		bat.Vecs[i] = vector.NewVec(columnTypes[i])
+		bat.Vecs[i] = vector.NewVec(columnTypes[i], mp)
 	}
 	for i := 0; i < count; i++ {
 		databaseID := startDatabaseID + uint64(i)
@@ -106,7 +106,7 @@ func makeSubscriptionTableSourceResult(
 	require.Len(t, owners, len(accounts))
 	bat := batch.NewWithSize(len(subscriptionTablesConfig.columnTypes))
 	for i, typ := range subscriptionTablesConfig.columnTypes {
-		bat.Vecs[i] = vector.NewVec(typ)
+		bat.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	for row := range accounts {
 		for column := range bat.Vecs {
@@ -249,7 +249,7 @@ func TestSubscriptionMetadataAliasVisibility(t *testing.T) {
 					if mode == "bad type" {
 						typ = types.T_varchar
 					}
-					bat.Vecs[0] = vector.NewVec(typ.ToType())
+					bat.Vecs[0] = vector.NewVec(typ.ToType(), mp)
 					if mode == "bad type" {
 						require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("12"), false, mp))
 					} else if mode == "null identity" {
@@ -670,7 +670,7 @@ func TestDecodeSubscriptionCandidatesAndAuthorization(t *testing.T) {
 			if mode == "type" {
 				typ = types.T_varchar
 			}
-			bat.Vecs[9] = vector.NewVec(typ.ToType())
+			bat.Vecs[9] = vector.NewVec(typ.ToType(), mp)
 			if mode == "null" {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[9], uint32(0), true, mp))
 			} else if mode == "type" {
@@ -782,8 +782,8 @@ func TestSubscriptionMetadataStateProjectionAndLimit(t *testing.T) {
 	newState := func(result executor.Result, limited bool) *subscriptionMetadataState {
 		output := batch.NewWithSize(2)
 		output.Attrs = []string{"owner", "account_id"}
-		output.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
-		output.Vecs[1] = vector.NewVec(types.T_uint32.ToType())
+		output.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
+		output.Vecs[1] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 		streamCh := make(chan executor.Result, 1)
 		streamCh <- result
 		close(streamCh)
@@ -848,14 +848,14 @@ func TestSubscriptionMetadataStateMalformedResultClosesResources(t *testing.T) {
 	internalMP := mpool.MustNewZero()
 	defer mpool.DeleteMPool(internalMP)
 	malformed := batch.NewWithSize(1)
-	malformed.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	malformed.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), internalMP)
 	require.NoError(t, vector.AppendFixed(malformed.Vecs[0], uint32(7), false, internalMP))
 	malformed.SetRowCount(1)
 	result := executor.Result{Mp: internalMP, Batches: []*batch.Batch{malformed}}
 
 	output := batch.NewWithSize(1)
 	output.Attrs = []string{"account_id"}
-	output.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	output.Vecs[0] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 	streamCh := make(chan executor.Result, 1)
 	streamCh <- result
 	close(streamCh)

@@ -292,7 +292,7 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, err
 	vecs := make([]*vector.Vector, 0, 2)
 
 	{
-		vec := vector.NewVec(types.T_Rowid.ToType())
+		vec := vector.NewVec(types.T_Rowid.ToType(), m)
 		for i := 0; i < bat.RowCount(); i++ {
 			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
@@ -306,7 +306,7 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, m *mpool.MPool) (*api.Batch, err
 	{
 		var val types.TS
 
-		vec := vector.NewVec(types.T_TS.ToType())
+		vec := vector.NewVec(types.T_TS.ToType(), m)
 		for i := 0; i < bat.RowCount(); i++ {
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				vecs[0].Free(m)
