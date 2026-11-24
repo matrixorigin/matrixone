@@ -58,6 +58,12 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator C
 
 // readFrom fills i with the next i.Size bytes of from.
 func (i *IOEntry) readFrom(ctx context.Context, from io.Reader, allocator CacheDataAllocator) (err error) {
+	return i.readFromThen(ctx, from, allocator, nil)
+}
+
+// readFromThen is readFrom calling copied, when set, once the bytes of from are copied into
+// i.Data.
+func (i *IOEntry) readFromThen(ctx context.Context, from io.Reader, allocator CacheDataAllocator, copied func()) (err error) {
 	LogEvent(ctx, str_ReadFromOSFile_begin)
 	defer LogEvent(ctx, str_ReadFromOSFile_end)
 
@@ -76,6 +82,9 @@ func (i *IOEntry) readFrom(ctx context.Context, from io.Reader, allocator CacheD
 	}
 	if n != int(i.Size) {
 		return io.ErrUnexpectedEOF
+	}
+	if copied != nil {
+		copied()
 	}
 
 	if i.WriterForRead != nil {
