@@ -274,6 +274,20 @@ func (p *pathOwners) takeKept(path string) *openCacheFile {
 	return p.openFiles.takeLocked(path)
 }
 
+// dropKept forgets kept, the file kept open for path a read took, which path no longer
+// holds, and ends the read's hold of it.
+func (p *pathOwners) dropKept(path string, kept *openCacheFile) {
+	p.L.Lock()
+	if p.openFiles.m[path] == kept {
+		p.openFiles.dropLocked(path)
+	}
+	f := p.openFiles.releaseLocked(kept)
+	p.L.Unlock()
+	if f != nil {
+		_ = f.Close()
+	}
+}
+
 // keep keeps file open for later reads, held for the read of generation gen of path,
 // while path has not changed since; it returns the kept file, or nil.
 func (p *pathOwners) keep(path string, gen uint64, file *os.File) *openCacheFile {

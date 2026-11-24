@@ -561,6 +561,12 @@ func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file st
 	}
 	read = &entryRead{gen: generation}
 	kept := d.paths.takeKept(diskPath)
+	// A file kept open that another cache instance on the directory removed or replaced
+	// is no longer the entry's file.
+	if kept != nil && !sameFile(kept.file, filepath.Join(diskPath, file)) {
+		d.paths.dropKept(diskPath, kept)
+		kept = nil
+	}
 	opened := openedDiskCacheFile{generation: generation, kept: kept}
 	if kept != nil {
 		d.cache.Get(ctx, diskPath)
@@ -589,6 +595,16 @@ func (c *IndexFileCache) openEntryFile(ctx context.Context, name string, file st
 	}
 	read.done = func() { d.paths.close(diskPath, opened) }
 	return opened.file, read, nil
+}
+
+// sameFile reports whether f is the file at path.
+func sameFile(f *os.File, path string) bool {
+	a, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	b, err := os.Stat(path)
+	return err == nil && os.SameFile(a, b)
 }
 
 // IndexFileHold keeps a cache entry on disk until it is released. Only the first release
