@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"io"
 	"os"
 	"path/filepath"
@@ -341,7 +342,13 @@ func TestLegacyColumnDecoderBoundaryCases(t *testing.T) {
 		{name: "negative size", payload: nil, expected: -1, wantErr: "invalid legacy object column size"},
 		{name: "zero size with trailing input", payload: []byte{0}, expected: 0, wantErr: "trailing bytes"},
 		{name: "zero offset", payload: []byte{0x00, 0x00, 0x00}, expected: 4, wantErr: "invalid legacy LZ4 match offset"},
+		{name: "offset beyond output", payload: []byte{0x10, 'a', 0x02, 0x00}, expected: 5, wantErr: "invalid legacy LZ4 match offset"},
 		{name: "truncated literal", payload: []byte{0x10}, expected: 1, wantErr: "EOF"},
+		{name: "truncated literal length", payload: []byte{0xf0}, expected: 16, wantErr: "EOF"},
+		{name: "literal exceeds size", payload: append([]byte{0x20}, []byte("ab")...), expected: 1, wantErr: "exceeds declared size"},
+		{name: "truncated match offset", payload: []byte{0x10, 'a', 0x01}, expected: 5, wantErr: "EOF"},
+		{name: "truncated match length", payload: []byte{0x1f, 'a', 0x01, 0x00}, expected: 20, wantErr: "EOF"},
+		{name: "match exceeds size", payload: []byte{0x10, 'a', 0x01, 0x00}, expected: 4, wantErr: "exceeds declared size"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -352,7 +359,20 @@ func TestLegacyColumnDecoderBoundaryCases(t *testing.T) {
 			}
 		})
 	}
+	var output bytes.Buffer
+	// A long literal and an overlapping match exercise both LZ4 extension forms.
+	encoded := append([]byte{0xff, 0x00}, bytes.Repeat([]byte{'a'}, 15)...)
+	encoded = append(encoded, 0x01, 0x00, 0x00)
+	require.NoError(t, decodeLegacyLZ4Block(context.Background(), bufioReader(encoded), &output, 34))
+	require.Equal(t, bytes.Repeat([]byte{'a'}, 34), output.Bytes())
+
+	err := decodeLegacyLZ4Block(context.Background(), bufioReader([]byte{0x10, 'a'}), failingWriter{}, 1)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
 }
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func TestReservedSpillWriterErrorPaths(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -394,6 +414,40 @@ func TestMaterializeLegacyColumnWindowRange(t *testing.T) {
 	require.Error(t, err)
 	_, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), originSize, 4, 1, mp)
 	require.Error(t, err)
+}
+
+func TestLegacyColumnWindowRejectsCorruptLayout(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	require.NoError(t, vector.AppendFixed(source, int64(17), false, mp))
+	valid := marshalLegacyTestColumn(t, source)
+	baseline := mp.CurrNB()
+	dataLengthAt := IOEntryHeaderSize + 1 + types.TSize + 4
+	areaLengthAt := dataLengthAt + 4 + source.GetType().TypeSize()
+	cases := []struct {
+		name   string
+		mutate func([]byte)
+		size   int64
+	}{
+		{"header", func(data []byte) { data[0] = 0 }, int64(len(valid))},
+		{"class", func(data []byte) { data[IOEntryHeaderSize] = 255 }, int64(len(valid))},
+		{"data length", func(data []byte) { binary.LittleEndian.PutUint32(data[dataLengthAt:], 1<<20) }, int64(len(valid))},
+		{"area length", func(data []byte) { binary.LittleEndian.PutUint32(data[areaLengthAt:], 1<<20) }, int64(len(valid))},
+		{"declared size", func([]byte) {}, int64(len(valid) + 1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := bytes.Clone(valid)
+			tc.mutate(data)
+			_, err := materializeLegacyColumnWindow(bytes.NewReader(data), tc.size, 0, 1, mp)
+			require.Error(t, err)
+			costs := make([]uint64, 1)
+			require.Error(t, addLegacyColumnWindowCosts(bytes.NewReader(data), tc.size, 0, costs))
+		})
+	}
+	require.Equal(t, baseline, mp.CurrNB())
 }
 
 func TestLegacyColumnStreamRejectsUnsupportedAndInvalidSpill(t *testing.T) {
