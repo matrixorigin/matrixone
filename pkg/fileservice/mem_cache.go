@@ -659,6 +659,48 @@ func (m *MemCache) scheduleAllocatorMetricsRefresh(delay time.Duration) {
 	})
 }
 
+// TryReadMemoryCache looks up the extents in a fresh vector for an optional
+// observation. It only uses the backend's memory cache and bypasses read
+// callbacks. A missing extent or a busy shard ends the observation. The caller
+// must release any acquired results even when this returns false.
+func TryReadMemoryCache(ctx context.Context, fs FileService, vector *IOVector) bool {
+	var mem *MemCache
+	var serviceName string
+	switch fs := fs.(type) {
+	case *LocalFS:
+		mem, serviceName = fs.memCache, fs.name
+	case *S3FS:
+		mem, serviceName = fs.memCache, fs.name
+	default:
+		return false
+	}
+	if mem == nil || len(vector.Entries) == 0 || vector.Policy.Any(SkipMemoryCacheReads) {
+		return false
+	}
+	cache, ok := mem.cache.(*s3fifo.DataCache)
+	if !ok {
+		return false
+	}
+	path, err := parseFilePathAtService(vector.FilePath, serviceName)
+	if err != nil {
+		return false
+	}
+	for i := range vector.Entries {
+		if ctx.Err() != nil {
+			return false
+		}
+		entry := &vector.Entries[i]
+		data, ok := cache.TryGet(fscache.CacheKey{Path: path.File, Offset: entry.Offset, Sz: entry.Size})
+		if !ok {
+			return false
+		}
+		entry.CachedData = data
+		entry.done = true
+		entry.fromCache = mem
+	}
+	return ctx.Err() == nil
+}
+
 func (m *MemCache) Read(
 	ctx context.Context,
 	vector *IOVector,
