@@ -500,6 +500,11 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
   interval, when object-storage requests wait long for an HTTP connection.
 - The HTTP pool allows 128 connections per host, up from 100, which TPC-H reads
   exceeded.
+- **`max-conns-per-host` below 64 is rejected at startup (decision 2026-11-24, won't
+  change).** An object-storage client with fewer connections per host is a
+  misconfiguration for a database: every table read, write, listing, delete and
+  download waits on the same few connections. 0 keeps the default pool. A released
+  configuration that sets 1–63 must be changed to 0 or to at least 64 before upgrading.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
 - **Fallback:** there is no runtime switch for the prefetcher itself. Splitting can be
   turned off by configuration.
