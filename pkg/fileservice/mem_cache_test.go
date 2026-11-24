@@ -40,6 +40,70 @@ func requireDataCacheSet(t *testing.T, cache fscache.DataCache, ctx context.Cont
 	require.NoError(t, err)
 }
 
+func TestTryReadMemoryCacheDeclinesBusyShard(t *testing.T) {
+	ctx := t.Context()
+	mem := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	t.Cleanup(func() { mem.Close(ctx) })
+	fs := &LocalFS{name: "local", memCache: mem}
+	cache := mem.cache.(*s3fifo.DataCache)
+	key := fscache.CacheKey{Path: "sample", Offset: 0, Sz: 1}
+	data := mem.CopyToCacheData(ctx, []byte{42})
+	defer data.Release()
+	requireDataCacheSet(t, cache, ctx, key, data)
+
+	read := func() (bool, byte) {
+		vec := IOVector{FilePath: "local:sample", Entries: []IOEntry{{Size: 1}}}
+		defer vec.ReleaseReadResultOnError()
+		if !TryReadMemoryCache(ctx, fs, &vec) {
+			return false, 0
+		}
+		return true, vec.Entries[0].CachedData.Bytes()[0]
+	}
+	hit, value := read()
+	require.True(t, hit)
+	require.Equal(t, byte(42), value)
+
+	locked, unlock, holderDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	attemptDone := make(chan struct{})
+	attemptStarted := false
+	go func() {
+		defer close(holderDone)
+		held, _, ok, _ := cache.GetWithPinAdmission(ctx, key, func(int64) (func(), error) {
+			close(locked)
+			<-unlock
+			return nil, nil
+		})
+		if ok {
+			held.Release()
+		}
+	}()
+	defer func() {
+		close(unlock)
+		<-holderDone
+		if attemptStarted {
+			<-attemptDone
+		}
+	}()
+	select {
+	case <-locked:
+	case <-holderDone:
+		t.Fatal("the fixture did not acquire the cached key's shard")
+	}
+
+	var contendedHit bool
+	attemptStarted = true
+	go func() {
+		defer close(attemptDone)
+		contendedHit, _ = read()
+	}()
+	select {
+	case <-attemptDone:
+		require.False(t, contendedHit)
+	case <-time.After(5 * time.Second):
+		t.Fatal("optional cache read waited for the shard holder")
+	}
+}
+
 type reclaimTrackingAllocator struct {
 	malloc.MemoryCacheAllocator
 	reclaims atomic.Int64
