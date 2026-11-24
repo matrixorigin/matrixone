@@ -567,7 +567,11 @@ func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector) bool {
 	if vector.Policy.Any(SkipDiskCacheReads) || !columns && vector.Policy.Any(SkipFullFilePreloads) || isDownload(ctx) {
 		return false
 	}
-	started, leave, ok := s.prefetcher.join(vector.FilePath, func(req ObjectPrefetch) bool {
+	path, err := parseFilePathAtService(vector.FilePath, s.name)
+	if err != nil {
+		return false
+	}
+	started, leave, ok := s.prefetcher.join(path.File, func(req ObjectPrefetch) bool {
 		return len(req.Ranges) == 0 || columns && rangesHoldNeeded(req.Ranges, vector)
 	})
 	if !ok {
@@ -1365,7 +1369,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	if readFullObject && s.shouldStreamFullObjectToDiskCache(vector) {
-		if s.prefetcher != nil && s.prefetcher.isRunning(vector.FilePath) {
+		if s.prefetcher != nil && s.prefetcher.isRunning(path.File) {
 			metric.FSPrefetchReadOwnRunningCounter.Inc()
 		} else {
 			metric.FSPrefetchReadOwnDownloadCounter.Inc()
@@ -2033,7 +2037,7 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		}
 		keys = append(keys, s.pathToKey(path.File))
 		if s.prefetcher != nil {
-			s.prefetcher.remove(filePath)
+			s.prefetcher.remove(path.File)
 		}
 	}
 

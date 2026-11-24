@@ -419,6 +419,21 @@ func (p *prefetcher) roomLocked(need int64, keep *prefetchEntry) bool {
 	if p.queuedBytesLocked()+need <= limit {
 		return true
 	}
+	// Nothing is dropped unless dropping makes room.
+	free := int64(0)
+	for e := range p.deferredOf {
+		if e.next != nil && !slices.ContainsFunc(e.nextScans, (*PrefetchScan).live) {
+			free += e.next.Size
+		}
+	}
+	for _, o := range p.prefetch.queue {
+		if o != keep && !o.live() {
+			free += o.req.Size
+		}
+	}
+	if p.queuedBytesLocked()-free+need > limit {
+		return false
+	}
 	p.reclaimEndedDeferredLocked()
 	for p.queuedBytesLocked()+need > limit {
 		i := slices.IndexFunc(p.prefetch.queue, func(o *prefetchEntry) bool { return o != keep && !o.live() })
@@ -509,11 +524,10 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 			defer func() {
 				p.mu.Lock()
 				p.forgetLocked(e)
-				q.running--
 				e.start()
 				next, scans := p.takeDeferredLocked(e)
-				p.startLocked()
 				p.mu.Unlock()
+				// The deferred request is queued before the worker takes its next download.
 				if next != nil {
 					for _, s := range scans {
 						req := *next
@@ -521,6 +535,10 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 						p.add(req)
 					}
 				}
+				p.mu.Lock()
+				q.running--
+				p.startLocked()
+				p.mu.Unlock()
 				p.wg.Done()
 			}()
 			p.run(withDownloadStarted(p.ctx, e.start), e.req)
@@ -645,6 +663,12 @@ func downloadStarted(ctx context.Context) {
 }
 
 func (s *S3FS) PrefetchObject(ctx context.Context, req ObjectPrefetch) error {
+	// The prefetcher keys an object by its path at the service, whatever its spelling.
+	path, err := parseFilePathAtService(req.FilePath, s.name)
+	if err != nil {
+		return nil
+	}
+	req.FilePath = path.File
 	// An object the index-file cache holds is not downloaded into the disk cache.
 	if GetFileServicePolicy(ctx).Any(IndexFileObject) && s.cachesIndexObjects() {
 		if _, ok := s.indexObjectCached(req.FilePath); ok {
@@ -672,10 +696,10 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	if err != nil {
 		return true
 	}
+	// A download into the index-file cache is had only once that cache holds the object.
 	if req.indexObject && s.cachesIndexObjects() {
-		if _, ok := s.indexObjectCached(req.FilePath); ok {
-			return true
-		}
+		_, ok := s.indexObjectCached(req.FilePath)
+		return ok
 	}
 	diskPath := s.diskCache.pathForFile(path.File)
 	if s.diskCache.download(diskPath) != nil {
@@ -794,8 +818,16 @@ func (s *S3FS) rangesToDownload(req ObjectPrefetch) []PrefetchRange {
 	if path, err := parseFilePathAtService(req.FilePath, s.name); err == nil {
 		key = s.diskCache.rangeObjectKey(path.File)
 	}
+	size, sized := int64(0), false
+	if key != "" {
+		size, sized = s.diskCache.prefetched.size(s.diskCache.pathForFile(req.FilePath))
+	}
 	out := make([]PrefetchRange, 0, len(req.Ranges))
 	for _, r := range req.Ranges {
+		if sized && r.Offset < size && size < r.Offset+r.Size {
+			// A range ends at the object's known end, not past it.
+			r.Size = size - r.Offset
+		}
 		if key != "" {
 			if _, ok := s.diskCache.ranges.covering(key, r.Offset, r.Size); ok {
 				continue
