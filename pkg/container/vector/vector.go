@@ -6608,52 +6608,47 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeBool(&maxVal)
 
 	case types.T_bit:
-		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint64](v)
 		minv = types.EncodeUint64(&minVal)
 		maxv = types.EncodeUint64(&maxVal)
 
 	case types.T_int8:
-		minVal, maxVal := OrderedGetMinAndMax[int8](v)
+		minVal, maxVal := IntegerGetMinAndMax[int8](v)
 		minv = types.EncodeInt8(&minVal)
 		maxv = types.EncodeInt8(&maxVal)
 
 	case types.T_int16:
-		minVal, maxVal := OrderedGetMinAndMax[int16](v)
+		minVal, maxVal := IntegerGetMinAndMax[int16](v)
 		minv = types.EncodeInt16(&minVal)
 		maxv = types.EncodeInt16(&maxVal)
 
 	case types.T_int32:
-		minVal, maxVal := OrderedGetMinAndMax[int32](v)
+		minVal, maxVal := IntegerGetMinAndMax[int32](v)
 		minv = types.EncodeInt32(&minVal)
 		maxv = types.EncodeInt32(&maxVal)
 
 	case types.T_int64:
-		var minVal, maxVal int64
-		if v.class == FLAT && v.length >= 32 && !v.HasNull() {
-			minVal, maxVal = int64MinMaxNoNull(MustFixedColNoTypeCheck[int64](v))
-		} else {
-			minVal, maxVal = OrderedGetMinAndMax[int64](v)
-		}
+		minVal, maxVal := IntegerGetMinAndMax[int64](v)
 		minv = types.EncodeInt64(&minVal)
 		maxv = types.EncodeInt64(&maxVal)
 
 	case types.T_uint8:
-		minVal, maxVal := OrderedGetMinAndMax[uint8](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint8](v)
 		minv = types.EncodeUint8(&minVal)
 		maxv = types.EncodeUint8(&maxVal)
 
 	case types.T_uint16:
-		minVal, maxVal := OrderedGetMinAndMax[uint16](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint16](v)
 		minv = types.EncodeUint16(&minVal)
 		maxv = types.EncodeUint16(&maxVal)
 
 	case types.T_uint32:
-		minVal, maxVal := OrderedGetMinAndMax[uint32](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint32](v)
 		minv = types.EncodeUint32(&minVal)
 		maxv = types.EncodeUint32(&maxVal)
 
 	case types.T_uint64:
-		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint64](v)
 		minv = types.EncodeUint64(&minVal)
 		maxv = types.EncodeUint64(&maxVal)
 
@@ -6712,32 +6707,32 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_date:
-		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Date](v)
 		minv = types.EncodeDate(&minVal)
 		maxv = types.EncodeDate(&maxVal)
 
 	case types.T_year:
-		minVal, maxVal := OrderedGetMinAndMax[types.MoYear](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.MoYear](v)
 		minv = types.EncodeMoYear(&minVal)
 		maxv = types.EncodeMoYear(&maxVal)
 
 	case types.T_datetime:
-		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Datetime](v)
 		minv = types.EncodeDatetime(&minVal)
 		maxv = types.EncodeDatetime(&maxVal)
 
 	case types.T_time:
-		minVal, maxVal := OrderedGetMinAndMax[types.Time](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Time](v)
 		minv = types.EncodeTime(&minVal)
 		maxv = types.EncodeTime(&maxVal)
 
 	case types.T_timestamp:
-		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Timestamp](v)
 		minv = types.EncodeTimestamp(&minVal)
 		maxv = types.EncodeTimestamp(&maxVal)
 
 	case types.T_enum:
-		minVal, maxVal := OrderedGetMinAndMax[types.Enum](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Enum](v)
 		minv = types.EncodeEnum(&minVal)
 		maxv = types.EncodeEnum(&maxVal)
 

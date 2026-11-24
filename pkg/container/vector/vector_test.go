@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -4921,6 +4922,143 @@ func TestGetMinMaxValueInt64Windows(t *testing.T) {
 	}
 }
 
+// The unrolled kernels agree with a plain loop for every integer-backed type
+// and for float32/float64 (NaN skipped), at sizes around the unroll threshold
+// and width, through GetMinMaxValue.
+func TestGetMinMaxValueUnrolledKernels(t *testing.T) {
+	sizes := []int{1, 4, 5, 31, 32, 33, 34, 35, 64, 65, 129}
+	t.Run("integer", func(t *testing.T) {
+		checkIntegerMinMax[int8](t, types.T_int8, sizes)
+		checkIntegerMinMax[int16](t, types.T_int16, sizes)
+		checkIntegerMinMax[int32](t, types.T_int32, sizes)
+		checkIntegerMinMax[int64](t, types.T_int64, sizes)
+		checkIntegerMinMax[uint8](t, types.T_uint8, sizes)
+		checkIntegerMinMax[uint16](t, types.T_uint16, sizes)
+		checkIntegerMinMax[uint32](t, types.T_uint32, sizes)
+		checkIntegerMinMax[uint64](t, types.T_uint64, sizes)
+		checkIntegerMinMax[uint64](t, types.T_bit, sizes)
+		checkIntegerMinMax[types.Date](t, types.T_date, sizes)
+		checkIntegerMinMax[types.MoYear](t, types.T_year, sizes)
+		checkIntegerMinMax[types.Datetime](t, types.T_datetime, sizes)
+		checkIntegerMinMax[types.Time](t, types.T_time, sizes)
+		checkIntegerMinMax[types.Timestamp](t, types.T_timestamp, sizes)
+		checkIntegerMinMax[types.Enum](t, types.T_enum, sizes)
+	})
+	t.Run("float", func(t *testing.T) {
+		checkFloatMinMax[float32](t, types.T_float32, sizes)
+		checkFloatMinMax[float64](t, types.T_float64, sizes)
+	})
+}
+
+func checkIntegerMinMax[T integerT](t *testing.T, oid types.T, sizes []int) {
+	t.Helper()
+	r := rand.New(rand.NewSource(uint64(oid)))
+	var zero T
+	minT, maxT := zero, ^zero
+	if maxT < minT { // signed: ^0 is -1, so shift it to the most negative value
+		minT = maxT << (uint(unsafe.Sizeof(zero))*8 - 1)
+		maxT = ^minT
+	}
+	for _, n := range sizes {
+		for _, order := range []string{"ascending", "descending", "constant", "random", "extremes"} {
+			t.Run(fmt.Sprintf("%s/%d/%s", oid, n, order), func(t *testing.T) {
+				xs := make([]T, n)
+				for i := range xs {
+					switch order {
+					case "ascending":
+						xs[i] = T(i)
+					case "descending":
+						xs[i] = T(n - i)
+					case "constant":
+						xs[i] = minT
+					case "random":
+						xs[i] = T(r.Uint64())
+					case "extremes":
+						xs[i] = T(r.Uint64())
+						if i == n/3 {
+							xs[i] = minT
+						}
+						if i == n-1 {
+							xs[i] = maxT
+						}
+					}
+				}
+				wantLo, wantHi := xs[0], xs[0]
+				for _, x := range xs {
+					wantLo, wantHi = min(wantLo, x), max(wantHi, x)
+				}
+				mp := mpool.MustNewZero()
+				v := NewVec(oid.ToType(), mp)
+				defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()) }()
+				require.NoError(t, AppendFixedList(v, xs, nil, mp))
+				ok, lo, hi := v.GetMinMaxValue()
+				require.True(t, ok)
+				require.Equal(t, wantLo, types.DecodeFixed[T](lo))
+				require.Equal(t, wantHi, types.DecodeFixed[T](hi))
+			})
+		}
+	}
+}
+
+func checkFloatMinMax[T ~float32 | ~float64](t *testing.T, oid types.T, sizes []int) {
+	t.Helper()
+	r := rand.New(rand.NewSource(uint64(oid)))
+	nan, inf := T(math.NaN()), T(math.Inf(1))
+	for _, n := range sizes {
+		for _, shape := range []string{"random", "sparse-nan", "nan-first", "all-nan", "infinities", "signed-zero"} {
+			t.Run(fmt.Sprintf("%s/%d/%s", oid, n, shape), func(t *testing.T) {
+				xs := make([]T, n)
+				for i := range xs {
+					xs[i] = T(r.NormFloat64() * 1e6)
+					switch shape {
+					case "sparse-nan":
+						if i%5 == 2 {
+							xs[i] = nan
+						}
+					case "nan-first":
+						if i < 4 {
+							xs[i] = nan
+						}
+					case "all-nan":
+						xs[i] = nan
+					case "infinities":
+						if i == n/2 {
+							xs[i] = -inf
+						}
+						if i == n-1 {
+							xs[i] = inf
+						}
+					case "signed-zero":
+						xs[i] = T(math.Copysign(0, float64(1-2*(i%2))))
+					}
+				}
+				var wantLo, wantHi T
+				found := false
+				for _, x := range xs {
+					if x != x {
+						continue
+					}
+					if !found {
+						wantLo, wantHi, found = x, x, true
+					}
+					wantLo, wantHi = min(wantLo, x), max(wantHi, x)
+				}
+				mp := mpool.MustNewZero()
+				v := NewVec(oid.ToType(), mp)
+				defer func() { v.Free(mp); require.Zero(t, mp.CurrNB()) }()
+				require.NoError(t, AppendFixedList(v, xs, nil, mp))
+				ok, lo, hi := v.GetMinMaxValue()
+				require.Equal(t, found, ok)
+				if found {
+					// compare as values: +0 and -0 are equal bounds
+					require.True(t, wantLo == types.DecodeFixed[T](lo), "min %v, want %v", types.DecodeFixed[T](lo), wantLo)
+					require.True(t, wantHi == types.DecodeFixed[T](hi), "max %v, want %v", types.DecodeFixed[T](hi), wantHi)
+				}
+			})
+		}
+	}
+}
+
 func minMaxValues(n int, pattern string) ([]bool, []int64) {
 	bs, ints := make([]bool, n), make([]int64, n)
 	for i := range bs {
@@ -4973,6 +5111,38 @@ func BenchmarkGetMinMaxValue(b *testing.B) {
 			})
 		}
 	}
+}
+
+// BenchmarkGetMinMaxValueByType covers the unrolled kernels for each integer
+// and float width on null-free random columns.
+func BenchmarkGetMinMaxValueByType(b *testing.B) {
+	for _, n := range []int{128, 2048, 65536} {
+		benchMinMaxType[int8](b, types.T_int8, n)
+		benchMinMaxType[int16](b, types.T_int16, n)
+		benchMinMaxType[int32](b, types.T_int32, n)
+		benchMinMaxType[int64](b, types.T_int64, n)
+		benchMinMaxType[float32](b, types.T_float32, n)
+		benchMinMaxType[float64](b, types.T_float64, n)
+	}
+}
+
+func benchMinMaxType[T integerT | ~float32 | ~float64](b *testing.B, oid types.T, n int) {
+	b.Run(fmt.Sprintf("%s/%d", oid, n), func(b *testing.B) {
+		r := rand.New(rand.NewSource(1))
+		xs := make([]T, n)
+		for i := range xs {
+			xs[i] = T(r.Int63n(1 << 20))
+		}
+		mp := mpool.MustNewZero()
+		v := NewVec(oid.ToType(), mp)
+		b.Cleanup(func() { v.Free(mp) })
+		require.NoError(b, AppendFixedList(v, xs, nil, mp))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			minMaxOK, minMaxLo, minMaxHi = v.GetMinMaxValue()
+		}
+	})
 }
 
 func BenchmarkGetMinMaxValueInt64Distributions(b *testing.B) {
