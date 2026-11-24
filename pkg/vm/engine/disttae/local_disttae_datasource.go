@@ -70,7 +70,7 @@ func NewLocalDataSource(
 		}
 
 		source.rangeSlice = rangesSlice
-		source.rc.prefetchDisabled = rangesSlice.Len() < 4
+		source.rc.fewBlocks = rangesSlice.Len() < 4
 	} else {
 		source.rc.prefetchDisabled = true
 	}
@@ -116,7 +116,9 @@ type LocalDisttaeDataSource struct {
 
 	// runtime config
 	rc struct {
-		prefetchDisabled    bool
+		prefetchDisabled bool
+		// fewBlocks disables the whole-object prefetch of a scan of fewer than 4 blocks.
+		fewBlocks           bool
 		batchPrefetchCursor int
 		prefetch            readutil.ScanPrefetch
 		WorkspaceLocked     bool
@@ -194,7 +196,8 @@ func (ls *LocalDisttaeDataSource) SetOrderBy(orderby []*plan.OrderBySpec) {
 	ls.nullsLead = len(orderby) > 0 && orderby[0] != nil && readutil.OrderHeadNullsLead(orderby[0].Flag)
 	// Ordered scans prune blocks after reading their zone maps. Prefetching the
 	// original block order can read whole objects that the scan will skip.
-	ls.rc.prefetchDisabled = ls.rangeSlice.Len() < 4 || (len(orderby) > 0 && ls.Limit == 0)
+	ls.rc.fewBlocks = ls.rangeSlice.Len() < 4
+	ls.rc.prefetchDisabled = len(orderby) > 0 && ls.Limit == 0
 }
 
 func (ls *LocalDisttaeDataSource) GetOrderBy() []*plan.OrderBySpec {
@@ -1760,7 +1763,8 @@ func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
 }
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
-	if ls.rc.prefetchDisabled {
+	policy := fileservice.GetFileServicePolicy(ctx)
+	if ls.rc.prefetchDisabled || ls.rc.fewBlocks && !policy.Any(fileservice.ColumnPrefetch) {
 		return
 	}
 	n := ls.rangeSlice.Len()
@@ -1775,7 +1779,6 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []u
 	now := time.Now()
 	pace := ls.rc.prefetch.Pace(now, ls.rangesCursor)
 
-	policy := fileservice.GetFileServicePolicy(ctx)
 	for idx := begin; idx < end; {
 		due := now.Add(time.Duration(float64(idx-ls.rangesCursor) / pace * float64(time.Second))).UnixNano()
 		blk := ls.rangeSlice.Get(idx)

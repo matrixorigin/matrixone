@@ -1263,7 +1263,7 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 				}
 				fs := &filteredPrefetchFS{done: make(chan struct{}, 4), evicted: tc.evicted}
 				ls := &LocalDisttaeDataSource{table: table, fs: fs, rangeSlice: data.GetBlockInfoSlice(), iteratePhase: engine.Persisted, memPKFilter: &readutil.MemPKFilter{}}
-				ls.rc.prefetchDisabled = count < 4
+				ls.rc.fewBlocks = count < 4
 				ctx := proc.Ctx
 				if tc.skip {
 					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)

@@ -1123,7 +1123,7 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 		err := func() error {
 			defer release()
 			return fl.use(ctx, e.Offset, e.Size, func(bs []byte) error {
-				decodeErr = e.readFrom(ctx, bytes.NewReader(bs), d.cacheDataAllocator)
+				decodeErr = e.readFromThen(ctx, bytes.NewReader(bs), d.cacheDataAllocator, release)
 				return decodeErr
 			})
 		}()
