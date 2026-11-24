@@ -54,6 +54,10 @@ func newIndexObjectFS(t *testing.T, indexCache bool) (*S3FS, *readCountingStorag
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: defines.SharedFileServiceName, Endpoint: "disk", Bucket: t.TempDir()}, config, nil, false, false)
 	require.NoError(t, err)
 	fs.SetAsyncUpdate(false)
+	<-fs.diskCache.load.done
+	if fs.indexFileCache != nil {
+		<-fs.indexFileCache.disk.load.done
+	}
 	// The disk cache caches exactly the entries read, so a read it serves is told apart.
 	fs.diskCache.prefetchRange = prefetchRangeConfig{}
 	t.Cleanup(func() { fs.Close(ctx) })
@@ -733,6 +737,36 @@ func TestIndexFileCacheTrashOfUnknownSize(t *testing.T) {
 			require.Empty(t, trashDirs())
 			require.Zero(t, c.disk.trash.bytes.Load())
 			require.Equal(t, capacity, c.disk.capacityFunc())
+		})
+	}
+}
+
+// A read that finds its entry missing a file repairs it although the load indexed the
+// entry meanwhile: indexing changes no file of it.
+func TestIndexObjectRepairOutlivesLoadIndexing(t *testing.T) {
+	for _, indexed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "indexed", false: "control"}[indexed], func(t *testing.T) {
+			ctx := context.Background()
+			fs, storage, data := newIndexObjectFS(t, true)
+			<-fs.indexFileCache.disk.load.done
+			cacheIndexObject(t, fs, "object", data)
+			diskPath, ok := fs.indexObjectCached("object")
+			require.True(t, ok)
+			require.NoError(t, os.Remove(filepath.Join(diskPath, IndexObjectFile)))
+			name := IndexObjectEntry("object")
+			_, read, err := fs.indexFileCache.openEntryFile(ctx, name, IndexObjectFile)
+			require.Error(t, err)
+			if indexed {
+				fs.indexFileCache.disk.indexLoadedDirs(ctx, []loadedDir{{path: diskPath}})
+			}
+			fs.indexFileCache.dropUnopened(ctx, name, IndexObjectFile, read)
+			read.done()
+			_, cached := fs.indexObjectCached("object")
+			require.False(t, cached, "the broken entry is dropped")
+			storage.reads.Store(0)
+			require.Equal(t, data[2000:2010], readIndexObjectRange(t, fs, IndexFileObject, 2000, 10))
+			require.Equal(t, data[len(data)-10:], readIndexObjectRange(t, fs, IndexFileObject, int64(len(data)-10), 10))
+			require.Equal(t, int64(1), storage.reads.Load(), "the read filled the entry again")
 		})
 	}
 }

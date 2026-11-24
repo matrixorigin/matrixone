@@ -745,7 +745,7 @@ func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
 	slices.SortFunc(dirs, func(a, b loadedDir) int { return b.lastUse.Compare(a.lastUse) })
 	runHook(d.hooks.beforeIndexLoadedDirs)
 	for _, e := range dirs {
-		owner, _ := d.paths.acquire(context.Background(), e.path, nil)
+		owner, _ := d.paths.acquireKeeping(context.Background(), e.path)
 		if _, err := os.Stat(e.path); err == nil {
 			lru.SetOldest(ctx, e.path, struct{}{}, e.size)
 		}

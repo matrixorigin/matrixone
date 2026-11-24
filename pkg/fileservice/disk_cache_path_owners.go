@@ -103,6 +103,17 @@ func (p *pathOwners) acquire(ctx context.Context, path string, cleanup func() er
 	return p.ownLocked(path, cleanup), nil
 }
 
+// acquireKeeping is acquire for an owner that changes no file of path: it keeps the
+// generation of path.
+func (p *pathOwners) acquireKeeping(ctx context.Context, path string) (*pathOwner, error) {
+	p.L.Lock()
+	defer p.L.Unlock()
+	if err := p.waitFreeLocked(ctx, path); err != nil {
+		return nil, err
+	}
+	return p.ownLocked(path, nil), nil
+}
+
 // tryAcquire owns path when it has no owner.
 func (p *pathOwners) tryAcquire(path string, cleanup func() error) (*pathOwner, bool) {
 	p.L.Lock()
