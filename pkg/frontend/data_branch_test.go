@@ -2889,9 +2889,9 @@ func TestDataBranchDiffRejectsSnapshotBeforeLCACreation(t *testing.T) {
 	}
 
 	var tableScans []types.TS
-	original := scanSnapshotRelationByIDWithFallback
-	t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
-	scanSnapshotRelationByIDWithFallback = func(
+	original := scanSnapshotRelationWithPreopened
+	t.Cleanup(func() { scanSnapshotRelationWithPreopened = original })
+	scanSnapshotRelationWithPreopened = func(
 		_ context.Context, _ string, _ *Session, relID uint64, snap types.TS, _ engine.Relation,
 		attrs []string, colTypes []types.Type, _ *plan.Expr, _ int, onBatch func(*batch.Batch) error,
 	) error {
@@ -2945,13 +2945,12 @@ func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	probeTxn := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().SnapshotTS().Return(now.ToTimestamp()).AnyTimes()
-	txnOp.EXPECT().CloneSnapshotOp(snapshotTS).Return(probeTxn).Times(2)
-	probeTxn.EXPECT().SnapshotTS().Return(snapshotTS)
+	txnOp.EXPECT().CloneSnapshotOp(snapshotTS).Return(probeTxn)
 	storage := mock_frontend.NewMockEngine(ctrl)
 	storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(catalog.MO_TABLES_ID)).
 		Return("", "", nil, errors.New("use catalog snapshot reader for creation time")).Times(1)
 	storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID).
-		Return("", "", nil, errors.New("cannot reopen historical relation")).Times(2)
+		Return("", "", nil, errors.New("cannot reopen historical relation"))
 	ses.txnHandler = &TxnHandler{txnOp: txnOp, storage: storage}
 
 	tables := newTestBranchTableStuff(ctrl)
@@ -2989,9 +2988,9 @@ func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T
 		})
 	rangesReached := errors.New("historical ranges reached")
 	baseRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, rangesReached)
-	original := scanSnapshotRelationByIDWithFallback
-	t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
-	scanSnapshotRelationByIDWithFallback = func(
+	original := scanSnapshotRelationWithPreopened
+	t.Cleanup(func() { scanSnapshotRelationWithPreopened = original })
+	scanSnapshotRelationWithPreopened = func(
 		ctx context.Context, caller string, ses *Session, id uint64, snap types.TS, fallback engine.Relation,
 		attrs []string, colTypes []types.Type, filter *plan.Expr, parallelism int, onBatch func(*batch.Batch) error,
 	) error {

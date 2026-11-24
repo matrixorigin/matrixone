@@ -315,19 +315,12 @@ func TestDataBranchScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 
-	t.Run("uses historical fallback when current relation is gone", func(t *testing.T) {
+	t.Run("uses preopened historical relation without a lookup", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
-		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
-
-		currentLookupErr := moerr.NewInternalErrorNoCtx("can not find table by id 7")
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(7)).
-			Return("", "", nil, currentLookupErr).
-			Times(1)
 
 		historicalRel := mock_frontend.NewMockRelation(ctrl)
 		historicalRel.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{
@@ -343,7 +336,7 @@ func TestDataBranchScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 			txnOp:   txnOp,
 		}
 
-		err := scanSnapshotRelationByIDWithFallback(
+		err := scanSnapshotRelationWithPreopened(
 			context.Background(),
 			"unit-test",
 			ses,

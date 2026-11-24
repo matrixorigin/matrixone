@@ -1034,7 +1034,7 @@ func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
-	txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(2)
+	txnOp.EXPECT().CloneSnapshotOp(types.BuildTS(10, 0).ToTimestamp()).Return(txnOp)
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	rangeRel := mock_frontend.NewMockRelation(ctrl)
@@ -1044,8 +1044,7 @@ func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing
 		Return(readutil.NewBlockListRelationData(0), nil).
 		Times(1)
 	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(77)).
-		Return("db1", "lca_tbl", rangeRel, nil).
-		Times(2)
+		Return("db1", "lca_tbl", rangeRel, nil)
 
 	ses.txnHandler = &TxnHandler{
 		storage: eng,
@@ -1085,7 +1084,7 @@ func TestLCAProbeReaderFallbackRequiresSnapshotMatchedRange(t *testing.T) {
 	}{
 		{name: "live ancestor endpoint", openedAt: types.BuildTS(20, 0)},
 		{name: "earlier sibling fork", openedAt: types.BuildTS(10, 1)},
-		{name: "reuse snapshot relation when the range lookup fails", openedAt: types.BuildTS(20, 0), definitionLookupHits: true},
+		{name: "reuse relation opened at the fork", openedAt: types.BuildTS(20, 0), definitionLookupHits: true},
 		{name: "matching historical relation", openedAt: fork},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1109,16 +1108,12 @@ func TestLCAProbeReaderFallbackRequiresSnapshotMatchedRange(t *testing.T) {
 			switch {
 			case tc.definitionLookupHits:
 				snapshotRel := mock_frontend.NewMockRelation(ctrl)
-				gomock.InOrder(
-					eng.EXPECT().GetRelationById(gomock.Any(), probeTxn, uint64(77)).
-						Return("db1", "lca_tbl", snapshotRel, nil),
-					eng.EXPECT().GetRelationById(gomock.Any(), probeTxn, uint64(77)).
-						Return("", "", nil, lookupErr),
-				)
+				eng.EXPECT().GetRelationById(gomock.Any(), probeTxn, uint64(77)).
+					Return("db1", "lca_tbl", snapshotRel, nil)
 				rangeRel = snapshotRel
 			case tc.openedAt == fork:
 				eng.EXPECT().GetRelationById(gomock.Any(), probeTxn, uint64(77)).
-					Return("", "", nil, lookupErr).Times(2)
+					Return("", "", nil, lookupErr)
 				rangeRel = lcaRel
 			default:
 				eng.EXPECT().GetRelationById(gomock.Any(), probeTxn, uint64(77)).
@@ -1127,8 +1122,6 @@ func TestLCAProbeReaderFallbackRequiresSnapshotMatchedRange(t *testing.T) {
 			ses.txnHandler = &TxnHandler{storage: eng, txnOp: txnOp}
 
 			if rangeRel != nil {
-				txnOp.EXPECT().CloneSnapshotOp(fork.ToTimestamp()).Return(probeTxn)
-				probeTxn.EXPECT().SnapshotTS().Return(fork.ToTimestamp())
 				rangeRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).Times(2)
 				wantErr = moerr.NewInternalErrorNoCtx("historical ranges reached")
 				rangeRel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, wantErr)
@@ -1161,7 +1154,7 @@ func TestRunLCAProbeWithReaderFallback_AllHitsPreserveInputOrder(t *testing.T) {
 	require.NoError(t, vector.AppendFixedList(keys.Vecs[0], []int64{20, 10}, nil, mp))
 	keys.SetRowCount(2)
 
-	stub := gostub.Stub(&scanSnapshotRelationByIDWithFallback, func(
+	stub := gostub.Stub(&scanSnapshotRelationWithPreopened, func(
 		_ context.Context, _ string, _ *Session, _ uint64, _ types.TS, _ engine.Relation,
 		attrs []string, typs []types.Type, _ *plan.Expr, _ int, onBatch func(*batch.Batch) error,
 	) error {
@@ -1284,9 +1277,7 @@ func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
 			if tc.lookupSucceeds {
 				historical := mock_frontend.NewMockRelation(ctrl)
 				def := newTestBranchTableDef("original_name", "name")
-				txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
 				historical.EXPECT().GetTableDef(gomock.Any()).Return(def).Times(2)
-				probeTxn.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
 				stubDataBranchSnapshotRowsAfterRanges(t, historical, []string{"id", "name", "hidden"},
 					[]any{int64(1), "historical", "h1"})
 				gomock.InOrder(
@@ -1296,7 +1287,6 @@ func TestHandleDelsOnLCA_SQLFallbackKeepsSnapshotRelation(t *testing.T) {
 						require.NotContains(t, sql, "`reused_name`")
 						return moerr.NewBadDBNoCtx("db1")
 					}),
-					storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, tableID).Return("", "", nil, lookupErr),
 				)
 			} else {
 				// The background executor has no SQL expectations on this path.
@@ -1373,11 +1363,7 @@ func TestHandleDelsOnLCA_ProbeGenerationTableID(t *testing.T) {
 					return nil
 				})
 				if tc.sqlFallback {
-					txnOp.EXPECT().CloneSnapshotOp(snapshot.ToTimestamp()).Return(probeTxn)
-					storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, newID).
-						Return(def.DbName, def.Name, newParent, nil).After(lookup)
 					newParent.EXPECT().GetTableDef(gomock.Any()).Return(def)
-					probeTxn.EXPECT().SnapshotTS().Return(snapshot.ToTimestamp())
 					stubDataBranchSnapshotRowsAfterRanges(t, newParent, probeCols, wantRow)
 				} else {
 					bh.EXPECT().GetExecResultSet().Return([]interface{}{buildLCAProbeResultSetWithRows(
@@ -1410,9 +1396,9 @@ func stubDataBranchSnapshotRowsAfterRanges(
 	t.Helper()
 	rangesReached := moerr.NewInternalErrorNoCtx("historical ranges reached")
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, rangesReached)
-	original := scanSnapshotRelationByIDWithFallback
-	t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
-	scanSnapshotRelationByIDWithFallback = func(
+	original := scanSnapshotRelationWithPreopened
+	t.Cleanup(func() { scanSnapshotRelationWithPreopened = original })
+	scanSnapshotRelationWithPreopened = func(
 		ctx context.Context, caller string, ses *Session, id uint64, snap types.TS, fallback engine.Relation,
 		attrs []string, colTypes []types.Type, filter *plan.Expr, parallelism int, onBatch func(*batch.Batch) error,
 	) error {
@@ -1635,10 +1621,10 @@ func TestLCAProbeRenamedSnapshotSQLAndReaderParity(t *testing.T) {
 				tables.lcaReaderProbeMode.Store(true)
 			}
 			if tc.reader || tc.matchingFallback {
-				original := scanSnapshotRelationByIDWithFallback
-				t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
+				original := scanSnapshotRelationWithPreopened
+				t.Cleanup(func() { scanSnapshotRelationWithPreopened = original })
 				read := false
-				scanSnapshotRelationByIDWithFallback = func(
+				scanSnapshotRelationWithPreopened = func(
 					_ context.Context, caller string, _ *Session, id uint64, ts types.TS, fallback engine.Relation,
 					attrs []string, colTypes []types.Type, _ *plan.Expr, _ int, onBatch func(*batch.Batch) error,
 				) error {
@@ -1818,9 +1804,9 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 
 			storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(catalog.MO_TABLES_ID)).
 				Return("", "", nil, moerr.NewInternalErrorNoCtx("use catalog snapshot reader for creation time")).Times(5)
-			original := scanSnapshotRelationByIDWithFallback
-			t.Cleanup(func() { scanSnapshotRelationByIDWithFallback = original })
-			scanSnapshotRelationByIDWithFallback = func(
+			original := scanSnapshotRelationWithPreopened
+			t.Cleanup(func() { scanSnapshotRelationWithPreopened = original })
+			scanSnapshotRelationWithPreopened = func(
 				_ context.Context, _ string, _ *Session, id uint64, snap types.TS, _ engine.Relation,
 				attrs []string, colTypes []types.Type, _ *plan.Expr, _ int, onBatch func(*batch.Batch) error,
 			) error {
@@ -1871,10 +1857,7 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 			txnOp.EXPECT().CloneSnapshotOp(tc.betweenTo.ToTimestamp()).Return(probeTxn)
 			storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, hydrationID).Return("", "", nil, lookupErr)
 			if tc.wantRanges {
-				txnOp.EXPECT().CloneSnapshotOp(tc.betweenTo.ToTimestamp()).Return(probeTxn)
-				probeTxn.EXPECT().SnapshotTS().Return(tc.betweenTo.ToTimestamp())
-				storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, hydrationID).Return("", "", nil, lookupErr)
-				scanSnapshotRelationByIDWithFallback = original
+				scanSnapshotRelationWithPreopened = original
 				stubDataBranchSnapshotRowsAfterRanges(t, segments[2], []string{"id", "name_at_bound", "hidden"},
 					[]any{int64(1), "renamed", "added by alter"})
 			}
@@ -2640,8 +2623,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
-		// The SQL definition lookup and the range scan each open the snapshot.
-		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(2)
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp)
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		rangeRel := mock_frontend.NewMockRelation(ctrl)
@@ -2651,8 +2633,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 			Return(readutil.NewBlockListRelationData(0), nil).
 			Times(1)
 		eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(781)).
-			Return("db1", "lca_tbl", rangeRel, nil).
-			Times(2)
+			Return("db1", "lca_tbl", rangeRel, nil)
 
 		ses.txnHandler = &TxnHandler{
 			storage: eng,

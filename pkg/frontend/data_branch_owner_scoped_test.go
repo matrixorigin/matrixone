@@ -196,7 +196,7 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 		scannerRecovers
 	)
 	var mode scannerMode
-	stub := gostub.Stub(&scanSnapshotRelationByIDWithFallback,
+	stub := gostub.Stub(&scanSnapshotRelationWithPreopened,
 		func(
 			scanCtx context.Context,
 			_ string,

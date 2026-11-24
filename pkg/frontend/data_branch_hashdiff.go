@@ -876,7 +876,7 @@ func runLCAProbeWithReaderFallbackWithPreopened(
 	// every in-flight catalog and storage read here (identityCtx keeps the
 	// live context when accounts already match).
 	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
-	err = scanSnapshotRelationByIDWithFallback(
+	err = scanSnapshotRelationWithPreopened(
 		scanCtx,
 		"lca-reader-fallback",
 		ses,
