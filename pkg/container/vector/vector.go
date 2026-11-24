@@ -42,9 +42,6 @@ import (
 const (
 	FLAT     = iota // flat vector represent a uncompressed vector
 	CONSTANT        // const vector
-	// LegacyRowBufferClass is the retired class 2. Old encoded values are
-	// already materialized and decode as FLAT; vectors never carry it.
-	LegacyRowBufferClass
 )
 
 // Vector represent a column
@@ -80,7 +77,6 @@ func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
 	if length == 0 {
 		return nil
 	}
-	checkTypeIfRaceDetectorEnabled[T](vec)
 	return util.UnsafeSliceCastToLength[T](vec.data, length)
 }
 
@@ -265,8 +261,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
-	// A failed varlen append may already have exposed shared or partial area
-	// layout. Roll back logical lengths, but keep this proof fail-closed.
 	v.sorted = checkpoint.sorted
 	return nil
 }
@@ -723,9 +717,6 @@ func (v *Vector) IsConst() bool {
 }
 
 func (v *Vector) SetClass(class int) {
-	if class == LegacyRowBufferClass {
-		panic(moerr.NewInvalidStateNoCtx("class 2 is a retired legacy encoding"))
-	}
 	v.class = class
 }
 
@@ -1377,16 +1368,6 @@ type vectorBinaryLayout struct {
 	sorted bool
 }
 
-// decodedPhysicalClass preserves the legacy row-buffer class 2. Its encoded
-// values are already materialized; the format contains no dictionary base or
-// selection. Decode it as FLAT without rewriting the caller's input bytes.
-func decodedPhysicalClass(class byte) byte {
-	if class == LegacyRowBufferClass {
-		return FLAT
-	}
-	return class
-}
-
 type vectorBinaryCursor struct {
 	data   []byte
 	offset int
@@ -1474,9 +1455,8 @@ func decodeVectorBinaryLayout(
 	if err != nil {
 		return vectorBinaryLayout{}, err
 	}
-	physicalClass := decodedPhysicalClass(class[0])
 	if err = validateVectorBinary(
-		physicalClass,
+		class[0],
 		typ,
 		length,
 		vectorData,
@@ -1487,7 +1467,7 @@ func decodeVectorBinaryLayout(
 		return vectorBinaryLayout{}, err
 	}
 	return vectorBinaryLayout{
-		class:  physicalClass,
+		class:  class[0],
 		typ:    typ,
 		length: int(length),
 		data:   vectorData,
@@ -1738,7 +1718,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	if err != nil {
 		return err
 	}
-	v.class = int(decodedPhysicalClass(byte(encodedClass)))
+	v.class = encodedClass
 
 	if v.typ, err = types.ReadType(r); err != nil {
 		return err
@@ -2242,7 +2222,6 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		}
 		return nil
 	}
-	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	if err := v.checkMP(mp); err != nil {
 		return err
 	}
@@ -3923,15 +3902,12 @@ type FixedSourceRow struct {
 }
 
 // TryUnionFlatFixedRows copies fixed-size payloads across source vectors without
-// changing their order, including legacy inline CHAR/VARCHAR descriptors. A
+// changing their order, including inline CHAR/VARCHAR descriptors. A
 // false result leaves v untouched, allowing the caller to use UnionOne.
 // A true result transfers no source ownership; v owns every copied payload.
 func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
 	inlineStrings := v.typ.Oid == types.T_char || v.typ.Oid == types.T_varchar
 	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() && !inlineStrings {
-		return false, nil
-	}
-	if inlineStrings && types.IsUnicodeCollation(v.typ.Charset) {
 		return false, nil
 	}
 	size := v.typ.TypeSize()
@@ -4216,8 +4192,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		// With both areas empty, valid non-NULL descriptors are either inline
 		// or empty non-inline values at offset zero. Neither needs area growth
 		// or rebasing, so copy them directly without a separate sizing pass.
-		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0 &&
-			!types.IsUnicodeCollation(v.typ.Charset)
+		emptyAreas := !hasNull && len(w.area) == 0 && len(v.area) == 0
 		if !emptyAreas {
 			for _, sel := range sels {
 				if hasNull && w.nsp.Contains(uint64(sel)) {
@@ -4234,13 +4209,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		}
 		// Reuse the area sizing pass to select an inline-copy batch. The small
 		// check still handles non-inline zero-length descriptors correctly.
-		// Mixed/area payloads and Unicode admission keep the original loops.
+		// Mixed/area payloads keep the original loops.
 		if emptyAreas {
 			target := vCol[oldLen : oldLen+len(sels)]
 			for i, sel := range sels {
 				target[i] = wCol[sel]
 			}
-		} else if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+		} else if total == 0 {
 			if hasNull {
 				for i, sel := range sels {
 					if w.nsp.Contains(uint64(sel)) {
@@ -5531,9 +5506,6 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 		}
 		value.SetOffsetLen(uint32(offset), uint32(size))
 	}
-	if err = types.ValidateCollationValue(vec.typ, value.GetByteSlice(vec.area)); err != nil {
-		return err
-	}
 	return appendOneOwnedVarlena(vec, value, mp)
 }
 
@@ -6097,7 +6069,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 
 // A fresh, empty destination cannot own any input bytes, so reserving its
 // area cannot invalidate a caller's source slices. These types also have no
-// per-value JSON or Unicode admission that could change error precedence.
+// per-value admission that could change error precedence.
 func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 	if cap(vec.data) != 0 || cap(vec.area) != 0 || len(isNulls) != 0 ||
 		vec.length != 0 {
@@ -6107,7 +6079,7 @@ func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 	case types.T_varbinary:
 		return true
 	case types.T_varchar:
-		return !types.IsUnicodeCollation(vec.typ.Charset)
+		return true
 	default:
 		return false
 	}
@@ -6636,52 +6608,47 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeBool(&maxVal)
 
 	case types.T_bit:
-		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint64](v)
 		minv = types.EncodeUint64(&minVal)
 		maxv = types.EncodeUint64(&maxVal)
 
 	case types.T_int8:
-		minVal, maxVal := OrderedGetMinAndMax[int8](v)
+		minVal, maxVal := IntegerGetMinAndMax[int8](v)
 		minv = types.EncodeInt8(&minVal)
 		maxv = types.EncodeInt8(&maxVal)
 
 	case types.T_int16:
-		minVal, maxVal := OrderedGetMinAndMax[int16](v)
+		minVal, maxVal := IntegerGetMinAndMax[int16](v)
 		minv = types.EncodeInt16(&minVal)
 		maxv = types.EncodeInt16(&maxVal)
 
 	case types.T_int32:
-		minVal, maxVal := OrderedGetMinAndMax[int32](v)
+		minVal, maxVal := IntegerGetMinAndMax[int32](v)
 		minv = types.EncodeInt32(&minVal)
 		maxv = types.EncodeInt32(&maxVal)
 
 	case types.T_int64:
-		var minVal, maxVal int64
-		if v.class == FLAT && v.length >= 32 && !v.HasNull() {
-			minVal, maxVal = int64MinMaxNoNull(MustFixedColNoTypeCheck[int64](v))
-		} else {
-			minVal, maxVal = OrderedGetMinAndMax[int64](v)
-		}
+		minVal, maxVal := IntegerGetMinAndMax[int64](v)
 		minv = types.EncodeInt64(&minVal)
 		maxv = types.EncodeInt64(&maxVal)
 
 	case types.T_uint8:
-		minVal, maxVal := OrderedGetMinAndMax[uint8](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint8](v)
 		minv = types.EncodeUint8(&minVal)
 		maxv = types.EncodeUint8(&maxVal)
 
 	case types.T_uint16:
-		minVal, maxVal := OrderedGetMinAndMax[uint16](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint16](v)
 		minv = types.EncodeUint16(&minVal)
 		maxv = types.EncodeUint16(&maxVal)
 
 	case types.T_uint32:
-		minVal, maxVal := OrderedGetMinAndMax[uint32](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint32](v)
 		minv = types.EncodeUint32(&minVal)
 		maxv = types.EncodeUint32(&maxVal)
 
 	case types.T_uint64:
-		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minVal, maxVal := IntegerGetMinAndMax[uint64](v)
 		minv = types.EncodeUint64(&minVal)
 		maxv = types.EncodeUint64(&maxVal)
 
@@ -6740,32 +6707,32 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_date:
-		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Date](v)
 		minv = types.EncodeDate(&minVal)
 		maxv = types.EncodeDate(&maxVal)
 
 	case types.T_year:
-		minVal, maxVal := OrderedGetMinAndMax[types.MoYear](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.MoYear](v)
 		minv = types.EncodeMoYear(&minVal)
 		maxv = types.EncodeMoYear(&maxVal)
 
 	case types.T_datetime:
-		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Datetime](v)
 		minv = types.EncodeDatetime(&minVal)
 		maxv = types.EncodeDatetime(&maxVal)
 
 	case types.T_time:
-		minVal, maxVal := OrderedGetMinAndMax[types.Time](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Time](v)
 		minv = types.EncodeTime(&minVal)
 		maxv = types.EncodeTime(&maxVal)
 
 	case types.T_timestamp:
-		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Timestamp](v)
 		minv = types.EncodeTimestamp(&minVal)
 		maxv = types.EncodeTimestamp(&maxVal)
 
 	case types.T_enum:
-		minVal, maxVal := OrderedGetMinAndMax[types.Enum](v)
+		minVal, maxVal := IntegerGetMinAndMax[types.Enum](v)
 		minv = types.EncodeEnum(&minVal)
 		maxv = types.EncodeEnum(&maxVal)
 
@@ -7994,13 +7961,6 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 	if err := vec.checkMP(m); err != nil {
 		return err
 	}
-	// Legacy domains need no collation admission. Check the domain before
-	// extracting bytes, especially for inline values copied in merge loops.
-	if types.IsUnicodeCollation(vec.typ.Charset) {
-		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-			return err
-		}
-	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)
 		return nil
@@ -8012,9 +7972,6 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 
 func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
 	if err := vec.checkMP(m); err != nil {
-		return err
-	}
-	if err := types.ValidateCollationValue(vec.typ, *bs); err != nil {
 		return err
 	}
 	vlen := len(*bs)
