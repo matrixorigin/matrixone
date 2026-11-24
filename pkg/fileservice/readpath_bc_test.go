@@ -304,3 +304,35 @@ func TestIndexObjectServesEntriesAfterReadToEnd(t *testing.T) {
 	require.True(t, vec.Entries[1].done)
 	require.Equal(t, data[100:110], vec.Entries[1].Data)
 }
+
+// BC8: the bytes a read finds cached once a prefetch object it joined ended are read from
+// cached ranges that hold them together, or from the cached whole object.
+func TestCachedBytesAcrossRangesAndWholeObject(t *testing.T) {
+	const part = 64 << 10
+	ctx := context.Background()
+	t.Run("ranges", func(t *testing.T) {
+		fs, _, data := newPrefetchRangeFS(t, 0, 4*part)
+		d := fs.diskCache
+		<-d.load.done
+		require.NoError(t, d.Update(ctx, &IOVector{FilePath: "object", Entries: []IOEntry{
+			{Size: part, Data: data[:part]},
+			{Offset: part, Size: part, Data: data[part : 2*part]},
+		}}, false))
+		dst := make([]byte, 32)
+		var deadline time.Time
+		require.True(t, d.readCachedBytes(ctx, "object", part-16, dst, &deadline))
+		require.Equal(t, data[part-16:part+16], dst)
+	})
+	t.Run("whole", func(t *testing.T) {
+		fs, _, data := newPrefetchRangeFS(t, 0, 4*part)
+		d := fs.diskCache
+		<-d.load.done
+		require.NoError(t, d.setFileContent(ctx, "object", data, false))
+		dst := make([]byte, 32)
+		var deadline time.Time
+		require.True(t, d.readCachedBytes(ctx, "object", part-16, dst, &deadline))
+		require.Equal(t, data[part-16:part+16], dst)
+		require.False(t, d.readCachedBytes(ctx, "object", int64(len(data))-16, dst, &deadline), "bytes past the object's end")
+		require.True(t, d.cache.Contains(d.pathForFile("object")), "a read past its end keeps the whole object")
+	})
+}
