@@ -85,7 +85,6 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 					width := oid.TypeLen()
 					for i := 0; i < got.length; i++ {
 						require.Equal(t, want.IsNull(uint64(i)), got.IsNull(uint64(i)))
-						require.Equal(t, want.gsp.Contains(uint64(i)), got.gsp.Contains(uint64(i)))
 						if !want.IsNull(uint64(i)) {
 							if varlen {
 								require.Equal(t, want.GetBytesAt(i), got.GetBytesAt(i))
@@ -101,7 +100,7 @@ func TestFixedSourceRowsMatchUnionOne(t *testing.T) {
 }
 
 func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
-	for _, shape := range []string{"const", "grouping", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
+	for _, shape := range []string{"const", "alias", "type", "negative", "past_end", "singleton", "unicode", "out_of_line"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_int64.ToType()
@@ -127,8 +126,6 @@ func TestFixedSourceRowsFallbackAndAdmission(t *testing.T) {
 			switch shape {
 			case "const":
 				b.class = CONSTANT
-			case "grouping":
-				b.gsp.Add(1)
 			case "alias":
 				rows[1] = FixedSourceRow{dst, 0}
 			case "type":

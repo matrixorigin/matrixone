@@ -157,10 +157,10 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 		"adoption derives the tombstone object's own name from the append tail, every insert tail object, and excludes row-only deletes")
 
 	// The wire shape: the production server encodes batches with
-	// MarshalBinaryForPipeline and the client decodes them with
+	// MarshalBinaryWithBuffer and the client decodes them with
 	// UnmarshalBinaryForPipeline before this recognizer runs.
 	var transport bytes.Buffer
-	data, err := bat.MarshalBinaryForPipeline(&transport, false)
+	data, err := bat.MarshalBinaryWithBuffer(&transport, false)
 	require.NoError(t, err)
 	wire := batch.NewWithSize(0)
 	require.NoError(t, wire.UnmarshalBinaryForPipeline(data, mp))

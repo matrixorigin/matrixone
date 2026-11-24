@@ -70,7 +70,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					values, _ := vector.MustVarlenaRawData(v)
 					values[2].SetOffsetLen(1<<30, 65536) // Never read NULL payload.
 				}
-				v.GetGrouping().Add(2)
 				bat.SetRowCount(4)
 			}
 			// Resolved build ordinals use DefaultBatchSize stride; only the
@@ -100,7 +99,6 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 					for row := range want.Length() {
 						require.True(t, result.Batch.Vecs[0].IsNull(uint64(row)))
 						require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
-						require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
 						if !want.IsNull(uint64(row)) {
 							require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 						}

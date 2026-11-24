@@ -74,7 +74,7 @@ func decimalSub128Exact(x, y types.Decimal128) types.Decimal256 {
 // unsupported runtime shapes leave output untouched for generic evaluation.
 func TryDecimal64Binary(op int32, x, y, out *vector.Vector) bool {
 	n := out.Length()
-	if x.IsConst() || y.IsConst() || x.HasNull() || y.HasNull() || x.HasGrouping() || y.HasGrouping() || x.Length() != n || y.Length() != n || x.GetType().Oid != types.T_decimal64 || y.GetType().Oid != types.T_decimal64 {
+	if x.IsConst() || y.IsConst() || x.HasNull() || y.HasNull() || x.Length() != n || y.Length() != n || x.GetType().Oid != types.T_decimal64 || y.GetType().Oid != types.T_decimal64 {
 		return false
 	}
 	if op != PLUS && op != MINUS && op != MULTI {

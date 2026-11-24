@@ -114,7 +114,7 @@ func (s *sortRollupState) init(group *Group) error {
 				"sort rollup has no equality fast path for type %s", typ.String())
 		}
 		s.equalers[i] = equaler
-		rollup := vector.NewRollupConst(
+		rollup := vector.NewConstNull(
 			typ,
 			1,
 			group.ctr.rollupMP(),
@@ -271,7 +271,6 @@ type sortRollupFixedEqualer[T comparable] struct {
 	left, right []T
 
 	leftNulls, rightNulls         *nulls.Nulls
-	leftGrouping, rightGrouping   *nulls.Nulls
 	leftConst, rightConst         bool
 	leftConstNull, rightConstNull bool
 	leftHasNull, rightHasNull     bool
@@ -283,9 +282,8 @@ func (e *sortRollupFixedEqualer[T]) Set(left, right *vector.Vector) {
 	e.leftConst, e.rightConst = left.IsConst(), right.IsConst()
 	e.leftConstNull, e.rightConstNull = left.IsConstNull(), right.IsConstNull()
 	e.leftNulls, e.rightNulls = left.GetNulls(), right.GetNulls()
-	e.leftGrouping, e.rightGrouping = left.GetGrouping(), right.GetGrouping()
-	e.leftHasNull = e.leftConstNull || !e.leftNulls.IsEmpty() || !e.leftGrouping.IsEmpty()
-	e.rightHasNull = e.rightConstNull || !e.rightNulls.IsEmpty() || !e.rightGrouping.IsEmpty()
+	e.leftHasNull = e.leftConstNull || !e.leftNulls.IsEmpty()
+	e.rightHasNull = e.rightConstNull || !e.rightNulls.IsEmpty()
 }
 
 func (e *sortRollupFixedEqualer[T]) Equal(left, right int) bool {
@@ -297,11 +295,11 @@ func (e *sortRollupFixedEqualer[T]) Equal(left, right int) bool {
 	}
 	leftNull := e.leftConstNull
 	if !leftNull && e.leftHasNull {
-		leftNull = e.leftNulls.Contains(uint64(left)) || e.leftGrouping.Contains(uint64(left))
+		leftNull = e.leftNulls.Contains(uint64(left))
 	}
 	rightNull := e.rightConstNull
 	if !rightNull && e.rightHasNull {
-		rightNull = e.rightNulls.Contains(uint64(right)) || e.rightGrouping.Contains(uint64(right))
+		rightNull = e.rightNulls.Contains(uint64(right))
 	}
 	if leftNull || rightNull {
 		return leftNull && rightNull

@@ -38,14 +38,17 @@ func writeSelectedRowsByte(w io.Writer, value byte, encoded *[4]byte) error {
 }
 
 const (
-	selectedRowsHasNull     = byte(1 << 0)
-	selectedRowsHasGrouping = byte(1 << 1)
-	selectedRowsKindShift   = 2
-	selectedRowsKindMask    = byte(3 << selectedRowsKindShift)
-	selectedRowsBinaryShift = 4
-	selectedRowsBinaryMask  = byte(3 << selectedRowsBinaryShift)
-	selectedRowsSourceShift = 6
-	selectedRowsSourceMask  = byte(3 << selectedRowsSourceShift)
+	selectedRowsHasNull = byte(1 << 0)
+	// selectedRowsLegacyGrouping marked ROLLUP sentinel rows from older
+	// writers. Such rows always carry selectedRowsHasNull too, so readers
+	// accept and ignore it; writers never set it.
+	selectedRowsLegacyGrouping = byte(1 << 1)
+	selectedRowsKindShift      = 2
+	selectedRowsKindMask       = byte(3 << selectedRowsKindShift)
+	selectedRowsBinaryShift    = 4
+	selectedRowsBinaryMask     = byte(3 << selectedRowsBinaryShift)
+	selectedRowsSourceShift    = 6
+	selectedRowsSourceMask     = byte(3 << selectedRowsSourceShift)
 
 	selectedRowsRowBinary = byte(1 << 2)
 	selectedRowsRowText   = byte(1 << 3)
@@ -147,8 +150,7 @@ func (v *Vector) marshalSelectedRowsTo(
 	}
 
 	metadata := byte(0)
-	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.IsEmpty() &&
-		v.gsp.IsEmpty() {
+	if rows != nil && count == len(rows) && !v.IsConst() && v.nsp.IsEmpty() {
 		// Every selected row has uniform metadata, but selection bounds still
 		// need validation before passing rows to a specialized writer.
 		for _, row := range rows {
@@ -165,9 +167,6 @@ func (v *Vector) marshalSelectedRowsTo(
 			if v.IsNull(uint64(row)) {
 				metadata |= selectedRowsHasNull
 			}
-			if v.gsp.Contains(uint64(row)) {
-				metadata |= selectedRowsHasGrouping
-			}
 		}
 	}
 	if err := writeSelectedRowsByte(w, metadata, &encoded); err != nil {
@@ -183,7 +182,7 @@ func (v *Vector) marshalSelectedRowsTo(
 		}
 	}
 
-	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0
+	withRowFlags := metadata&selectedRowsHasNull != 0
 	if !v.IsConst() && isVarlen && !withRowFlags && rows != nil {
 		if fastWriter, ok := w.(selectedVarlenaRowsWriter); ok {
 			values := MustFixedColNoTypeCheck[types.Varlena](v)
@@ -234,9 +233,6 @@ func (v *Vector) marshalSelectedRowsTo(
 			rowFlags := byte(0)
 			if nullValue {
 				rowFlags |= selectedRowsHasNull
-			}
-			if v.gsp.Contains(uint64(row)) {
-				rowFlags |= selectedRowsHasGrouping
 			}
 			if err := writeSelectedRowsByte(w, rowFlags, &encoded); err != nil {
 				return err
@@ -350,15 +346,10 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			return err
 		}
 	}
-	if metadata&selectedRowsHasGrouping != 0 {
-		if err := v.PreExtendGrouping(count, mp); err != nil {
-			return err
-		}
-	}
 	v.SetLength(count)
 	// Per-row binary/text flags come only from older writers; they are
 	// validated and dropped.
-	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsHasGrouping) != 0 ||
+	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsLegacyGrouping) != 0 ||
 		binaryMode == selectedRowsBinaryRows
 	if !isVarlen && !withRowFlags {
 		// Fixed-width, non-null data is encoded as one dense byte stream. Decode
@@ -380,19 +371,16 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 					return err
 				}
 				rowFlags = encoded[0]
-				if rowFlags&^(selectedRowsHasNull|selectedRowsHasGrouping|
+				if rowFlags&^(selectedRowsHasNull|selectedRowsLegacyGrouping|
 					selectedRowsRowBinary|selectedRowsRowText) != 0 ||
 					rowFlags&selectedRowsHasNull != 0 && metadata&selectedRowsHasNull == 0 ||
-					rowFlags&selectedRowsHasGrouping != 0 && metadata&selectedRowsHasGrouping == 0 ||
+					rowFlags&selectedRowsLegacyGrouping != 0 && metadata&selectedRowsLegacyGrouping == 0 ||
 					rowFlags&selectedRowsRowBinary != 0 && binaryMode != selectedRowsBinaryRows ||
 					rowFlags&selectedRowsRowText != 0 && binaryMode != selectedRowsBinaryRows ||
 					rowFlags&selectedRowsRowBinary != 0 && rowFlags&selectedRowsRowText != 0 ||
 					rowFlags&selectedRowsHasNull != 0 && rowFlags&(selectedRowsRowBinary|selectedRowsRowText) != 0 {
 					return moerr.NewInvalidInputNoCtx("invalid selected vector row metadata")
 				}
-			}
-			if rowFlags&selectedRowsHasGrouping != 0 {
-				v.gsp.Set(uint64(row))
 			}
 			if rowFlags&selectedRowsHasNull != 0 {
 				v.SetNull(uint64(row))
@@ -459,13 +447,8 @@ func (v *Vector) readRawBytesAt(
 	if size <= types.VarlenaInlineSize {
 		*value = types.Varlena{}
 		value[0] = byte(size)
-		if _, err := io.ReadFull(r, value[1:1+size]); err != nil {
-			return err
-		}
-		if err := validateJSONPayload(v.typ, value.GetByteSlice(nil)); err != nil {
-			return err
-		}
-		return nil
+		_, err := io.ReadFull(r, value[1:1+size])
+		return err
 	}
 	oldAreaLength := len(v.area)
 	if uint64(oldAreaLength)+uint64(size) > math.MaxUint32 ||
@@ -478,10 +461,6 @@ func (v *Vector) readRawBytesAt(
 		return err
 	}
 	if _, err = io.ReadFull(r, area[oldAreaLength:newAreaLength]); err != nil {
-		v.area = area[:oldAreaLength]
-		return err
-	}
-	if err := validateJSONPayload(v.typ, area[oldAreaLength:newAreaLength]); err != nil {
 		v.area = area[:oldAreaLength]
 		return err
 	}

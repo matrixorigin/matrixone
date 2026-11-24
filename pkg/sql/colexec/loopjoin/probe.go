@@ -243,9 +243,6 @@ func conditionWindowRowLimit(buildBat *batch.Batch) int {
 		if vec.HasNull() {
 			eighthBytesPerRow++
 		}
-		if vec.HasGrouping() {
-			eighthBytesPerRow++
-		}
 	}
 	byBytes := loopJoinConditionWindowByteLimit * 8 / eighthBytesPerRow
 	return max(1, min(loopJoinConditionMaxWindowRows, byBytes))

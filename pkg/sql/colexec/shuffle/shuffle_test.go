@@ -58,8 +58,8 @@ func TestCompleteKeyShufflePreservesEqualityAndReuse(t *testing.T) {
 			want := make(map[string]int)
 			tuple := func(b *batch.Batch, row int) string {
 				first := "null"
-				if b.Vecs[0].GetGrouping().Contains(uint64(row)) {
-					first = "grouping"
+				if !b.Vecs[0].IsNull(uint64(row)) {
+					first = fmt.Sprintf("v%d", vector.GetFixedAtNoTypeCheck[int64](b.Vecs[0], row))
 				}
 				return fmt.Sprintf("%s/%d", first, vector.GetFixedAtNoTypeCheck[int64](b.Vecs[1], row))
 			}
@@ -67,13 +67,11 @@ func TestCompleteKeyShufflePreservesEqualityAndReuse(t *testing.T) {
 				b := batch.NewWithSize(2)
 				inputs[i] = b
 				defer b.Clean(mp)
-				b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 32, mp)
+				b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 				b.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 				for row := 0; row < 32; row++ {
+					require.NoError(t, vector.AppendFixed(b.Vecs[0], int64(7), row%8 != 0, mp))
 					require.NoError(t, vector.AppendFixed(b.Vecs[1], int64(row%16), false, mp))
-					if row%8 == 0 {
-						b.Vecs[0].GetGrouping().Add(uint64(row))
-					}
 				}
 				b.SetRowCount(32)
 				for row := 0; row < 32; row++ {

@@ -1230,7 +1230,7 @@ func (ctr *container) scanAsofEligible(
 }
 
 func asofTemporalValue(vec *vector.Vector, row int64) (int64, bool) {
-	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) || vec.GetGrouping().Contains(uint64(row)) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
 		return 0, false
 	}
 	dataRow := row

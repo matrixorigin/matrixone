@@ -478,7 +478,7 @@ func AlterColumn(
 				defer func() {
 					tmpColumnDef.Free()
 				}()
-				defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx),
+				defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetContext()),
 					tmpColumnDef, colDef.Typ, ctx.GetProcess(), tableDef.Cols,
 				)
 				if err != nil {
