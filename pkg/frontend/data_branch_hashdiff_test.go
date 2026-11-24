@@ -1829,6 +1829,11 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 				case catalog.MO_DATABASE_ID:
 					rows = [][]any{{databaseID, types.UnixToTimestamp(1)}}
 				case catalog.MO_TABLES_ID:
+					if len(attrs) == 3 {
+						require.Equal(t, []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr, catalog.SystemRelAttr_Version}, attrs)
+						return nil // Exercise the ID fallback when the compound-key lookup misses.
+					}
+					require.Equal(t, []string{catalog.SystemRelAttr_ID, objectio.DefaultCommitTS_Attr}, attrs)
 					switch snap {
 					case openedAt[0]:
 						rows = [][]any{{generationIDs[0], creation[0]}}
