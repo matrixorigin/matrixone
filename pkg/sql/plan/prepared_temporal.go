@@ -67,9 +67,6 @@ func temporalParamValue(value any) any {
 		if param.Value == nil {
 			return nil
 		}
-		if param.MaterializedValue != "" {
-			return param.MaterializedValue
-		}
 		value = param.Value
 	}
 	if bytes, ok := value.([]byte); ok {

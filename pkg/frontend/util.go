@@ -199,7 +199,7 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	if len(isBin) > 0 {
 		*isBin[0] = false
 	}
-	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, false, nil, nil, nil)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, false, nil, nil)
 	return value, err
 }
 
@@ -223,7 +223,6 @@ func getExprValueWithPrepareMeta(
 	ses *Session,
 	execCtx *ExecCtx,
 	preparedExpression bool,
-	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	leafIsBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -236,9 +235,6 @@ func getExprValueWithPrepareMeta(
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		if prepareParamKind != nil {
-			*prepareParamKind = types.StringConversionString
-		}
 		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
 
@@ -349,15 +345,6 @@ func getExprValueWithPrepareMeta(
 	if runtimeDomain != nil {
 		*runtimeDomain = types.RuntimeStringInherit
 	}
-	if prepareParamKind != nil {
-		*prepareParamKind, err = transparentPrepareParamKind(e, ses)
-		if err != nil {
-			return nil, plan.Type{}, err
-		}
-		if *prepareParamKind == types.StringConversionString {
-			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
-		}
-	}
 	resultType := plan2.MakePlan2Type(resultVec.GetType())
 	if planExpr != nil &&
 		(oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256) {
@@ -390,11 +377,68 @@ func getExprValueWithPrepareMeta(
 	return value, resultType, err
 }
 
+// systemVariableNumericCopy gives a user variable assigned directly from a
+// system variable (SET @v = @@x, parentheses allowed) the variable's numeric
+// value and type. A Boolean or DOUBLE system variable is projected as TEXT
+// (see systemVariableDeclaredType), but its value is numeric, and in MySQL the
+// copy is too: SET @lim = @@autocommit makes @lim the integer 1, which a
+// prepared LIMIT accepts. Every other assignment is returned unchanged.
+func systemVariableNumericCopy(
+	ses *Session, e tree.Expr, value any, valueType plan.Type,
+) (any, plan.Type, error) {
+	for {
+		paren, ok := e.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		e = paren.Expr
+	}
+	source, ok := e.(*tree.VarExpr)
+	if !ok || !source.System || value == nil || !types.T(valueType.Id).IsMySQLString() {
+		return value, valueType, nil
+	}
+	native, err := ses.GetTxnCompileCtx().ResolveVariable(source.Name, true, source.Global)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	switch v := native.(type) {
+	case int:
+		native = int64(v)
+	case int8:
+		native = int64(v)
+	case int16:
+		native = int64(v)
+	case int32:
+		native = int64(v)
+	case int64:
+	case uint:
+		native = uint64(v)
+	case uint8:
+		native = uint64(v)
+	case uint16:
+		native = uint64(v)
+	case uint32:
+		native = uint64(v)
+	case uint64:
+	case float32:
+		native = float64(v)
+	case float64:
+	case bool:
+		// A Boolean system variable is TINYINT(1) in MySQL.
+		native = int64(0)
+		if v {
+			native = int64(1)
+		}
+	default:
+		return value, valueType, nil
+	}
+	return native, inferUserDefinedVarType(native), nil
+}
+
 func getPreparedPlanExprValueWithMeta(
 	expr *plan.Expr,
 	ses *Session,
 	execCtx *ExecCtx,
-	prepareParamKind *types.StringConversionKind,
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
@@ -420,43 +464,8 @@ func getPreparedPlanExprValueWithMeta(
 	if runtimeDomain != nil {
 		*runtimeDomain = types.RuntimeStringInherit
 	}
-	if prepareParamKind != nil {
-		*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
-	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
 	return value, plan2.MakePlan2Type(result.GetType()), err
-}
-
-// transparentPrepareParamKind closes the metadata boundary introduced by SET's
-// synthetic SELECT evaluation. A direct parameter or variable retains its
-// source conversion category even if projection materialization drops vector-
-// local metadata. Parentheses are transparent; casts and other expressions are
-// intentionally not, because their result type defines the conversion category.
-func transparentPrepareParamKind(e tree.Expr, ses *Session) (types.StringConversionKind, error) {
-	for {
-		switch expr := e.(type) {
-		case *tree.ParenExpr:
-			e = expr.Expr
-		case *tree.ParamExpr:
-			proc := ses.GetProc()
-			// Parser ordinals are one-based; the normalized plan/process positions
-			// are zero-based (see decrementParamOrdinalRule).
-			if proc == nil || expr.Offset <= 0 {
-				return types.StringConversionString, nil
-			}
-			typed := proc.GetTypedPrepareParam(expr.Offset - 1)
-			if typed == nil {
-				return types.StringConversionString, nil
-			}
-			kind, _ := types.StringConversionKindForType(typed.GetType().Oid)
-			return kind, nil
-		case *tree.VarExpr:
-			return ses.GetTxnCompileCtx().ResolveVariablePrepareParamKind(
-				expr.Name, expr.System, expr.Global)
-		default:
-			return types.StringConversionString, nil
-		}
-	}
 }
 
 // bindFrontendExpressionContext borrows only the pipeline context field for
