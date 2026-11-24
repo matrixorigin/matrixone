@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergref "github.com/matrixorigin/matrixone/pkg/iceberg/ref"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -1605,7 +1606,13 @@ func sameRewriteTableSource(ctx context.Context, a, b *tree.AliasedTableExpr) bo
 }
 
 func sameRewriteIcebergRef(ctx context.Context, left, right *tree.IcebergRefSpec) bool {
-	if left == nil || right == nil || left.Type != tree.IcebergRefSnapshot || right.Type != tree.IcebergRefSnapshot {
+	if left == nil || right == nil || left.Type != right.Type {
+		return left == right
+	}
+	if left.Type == tree.IcebergRefNamedRef {
+		return icebergref.EquivalentReadRefs(string(left.RefName), string(right.RefName))
+	}
+	if left.Type != tree.IcebergRefSnapshot {
 		return reflect.DeepEqual(left, right)
 	}
 	leftID, err := plan2.ParseIcebergSnapshotID(ctx, left.Snapshot)

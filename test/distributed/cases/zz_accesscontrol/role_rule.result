@@ -383,6 +383,14 @@ select character_set_name from information_schema.character_sets where character
 ➤ character_set_name[12,64,0]  𝄀
 binary  𝄀
 utf8mb4
+select (select ChArAcTeR_SeTs.maxlen from (select 1 as marker) as n) as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+➤ maxlen[-5,64,0]  𝄀
+73
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets where character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+➤ maxlen[4,32,0]  𝄀
+1
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets cross join INFORMATION_SCHEMA.CHARACTER_SETS where character_sets.character_set_name = 'binary' and CHARACTER_SETS.character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+invalid input: ambiguous table reference 'ChArAcTeR_SeTs'
 set global lower_case_table_names = 2;
 select @@lower_case_table_names;
 ➤ @@lower_case_table_names[-5,64,0]  𝄀

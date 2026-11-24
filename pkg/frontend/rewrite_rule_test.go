@@ -2242,6 +2242,15 @@ func TestMergeRewriteRulesIcebergSource(t *testing.T) {
 		{"ref `Audit`", "ref 'Audit'", true},
 		{"ref Audit", "ref 'Audit'", true},
 		{"ref `Audit`", "ref `audit`", false},
+		{"ref 'BRANCH:Audit'", "ref 'branch:Audit'", true},
+		{"ref 'BRANCH:Audit'", "ref 'branch:audit'", false},
+		{"ref 'TAG:Audit'", "ref 'tag:Audit'", true},
+		{"ref 'tag:Audit'", "ref 'branch:Audit'", false},
+		{"ref 'branch:Audit'", "ref 'Audit'", false},
+		{"ref 'SNAPSHOT:101'", "ref 'snapshot:101'", true},
+		{"ref 'SNAPSHOT:101'", "ref 'snapshot:202'", false},
+		{"ref 'HASH:abc'", "ref 'hash:abc'", false},
+		{"ref 'BRANCH:'", "ref 'branch:'", false},
 	} {
 		t.Run(tc.left+" / "+tc.right, func(t *testing.T) {
 			left := "select id from db.t for iceberg " + tc.left + " where id = 1"

@@ -94,10 +94,12 @@ func TestQualifiedTableBindingNamespaces(t *testing.T) {
 			ctx.lower = tc.lower
 			binding := &Binding{db: tc.bindingDB, table: "r"}
 			ctx.bindingByTable["r"] = binding
+			resolved, ambiguous := ctx.resolveTableBinding(tc.refDB, "r")
+			require.False(t, ambiguous)
 			if tc.match {
-				require.Same(t, binding, ctx.resolveTableBinding(tc.refDB, "r"))
+				require.Same(t, binding, resolved)
 			} else {
-				require.Nil(t, ctx.resolveTableBinding(tc.refDB, "r"))
+				require.Nil(t, resolved)
 			}
 		})
 	}
@@ -175,15 +177,56 @@ func TestSystemTableQualifierBinding(t *testing.T) {
 	for _, binding := range ctx.bindings {
 		ctx.bindingByTable[binding.table] = binding
 	}
-	require.Same(t, system, ctx.resolveTableBinding("INFORMATION_SCHEMA", "CHARACTER_SETS"))
-	require.Same(t, system, ctx.resolveTableBinding("", "Character_Sets"))
-	require.Same(t, ordinary, ctx.resolveTableBinding("", "CHARACTER_SETS"))
-	require.Same(t, alias, ctx.resolveTableBinding("information_schema", "Stats"))
-	require.Nil(t, ctx.resolveTableBinding("information_schema", "stats"))
-	require.Nil(t, ctx.resolveTableBinding("db", "character_sets"))
-	require.Nil(t, ctx.resolveTableBinding("mysql", "CHARACTER_SETS"))
+	lookup := func(db, table string) *Binding {
+		binding, ambiguous := ctx.resolveTableBinding(db, table)
+		require.False(t, ambiguous)
+		return binding
+	}
+	require.Same(t, system, lookup("INFORMATION_SCHEMA", "CHARACTER_SETS"))
+	require.Same(t, system, lookup("", "Character_Sets"))
+	require.Same(t, ordinary, lookup("", "CHARACTER_SETS"))
+	require.Same(t, alias, lookup("information_schema", "Stats"))
+	require.Nil(t, lookup("information_schema", "stats"))
+	require.Nil(t, lookup("db", "character_sets"))
+	require.Nil(t, lookup("mysql", "CHARACTER_SETS"))
 
 	ctx.bindings = append(ctx.bindings, &Binding{db: "mysql", table: "character_sets", caseInsensitiveTable: true})
-	require.Nil(t, ctx.resolveTableBinding("", "Character_Sets"))
-	require.Same(t, system, ctx.resolveTableBinding("information_schema", "Character_Sets"))
+	binding, ambiguous := ctx.resolveTableBinding("", "Character_Sets")
+	require.Nil(t, binding)
+	require.True(t, ambiguous)
+	require.Same(t, system, lookup("information_schema", "Character_Sets"))
+}
+
+func TestSystemTableQualifierCorrelation(t *testing.T) {
+	name := tree.NewUnresolvedName(tree.NewCStr("ChArAcTeR_SeTs", 0), tree.NewCStr("maxlen", 1))
+	outer := NewBindContext(nil, nil)
+	outer.bindingByTable[name.TblName()] = &Binding{
+		tag: 11, table: name.TblName(), types: []*pb.Type{{Id: int32(types.T_float64)}},
+		colIdByName: map[string]int32{"maxlen": 0},
+	}
+	outer.binder = NewWhereBinder(nil, outer)
+	inner := NewBindContext(nil, outer)
+	inner.lower = 0
+	binder := NewWhereBinder(nil, inner)
+	inner.binder = binder
+
+	expr, err := binder.BindColRef(name, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(11), expr.GetCorr().RelPos)
+
+	inner.bindings = []*Binding{{
+		tag: 22, db: "information_schema", table: "character_sets", caseInsensitiveTable: true,
+		types: []*pb.Type{{Id: int32(types.T_int32)}}, colIdByName: map[string]int32{"maxlen": 0},
+	}}
+	expr, err = binder.BindColRef(name, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(22), expr.GetCol().RelPos)
+
+	inner.bindings = append(inner.bindings, &Binding{db: "information_schema", table: "CHARACTER_SETS", caseInsensitiveTable: true})
+	expr, err = binder.BindColRef(name, 0, false)
+	require.ErrorContains(t, err, "ambiguous table reference 'ChArAcTeR_SeTs'")
+	require.Nil(t, expr)
+	_, found := binder.numericColumnType(name)
+	require.False(t, found)
+	require.False(t, sameHavingColumnReference(inner, name, name))
 }

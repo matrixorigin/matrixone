@@ -372,6 +372,12 @@ set global lower_case_table_names = 0;
 select @@lower_case_table_names;
 select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
 -- @session
+-- Only a missing inner qualifier may resolve in the outer scope.
+-- @session:id=31&user=sys:dump&password=111
+select (select ChArAcTeR_SeTs.maxlen from (select 1 as marker) as n) as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets where character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+select (select ChArAcTeR_SeTs.maxlen from information_schema.character_sets cross join INFORMATION_SCHEMA.CHARACTER_SETS where character_sets.character_set_name = 'binary' and CHARACTER_SETS.character_set_name = 'binary') as maxlen from (select 73 as maxlen) as ChArAcTeR_SeTs;
+-- @session
 set global lower_case_table_names = 2;
 -- @session:id=30&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
 select @@lower_case_table_names;
