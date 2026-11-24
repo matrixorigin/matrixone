@@ -1198,6 +1198,13 @@ import pathlib, sys
 report = pathlib.Path(sys.argv[1])
 terminal = report.read_bytes()
 line = b'{"Action":"run","Package":"example/noise","Test":"TestNoise"}\n'
+# Other tests can emit output between an assertion and its terminal event.
+terminal = terminal.replace(
+    b'{"Action":"fail","Package":"example/issues","Test":"TestShardFailure"',
+    line * 100 + b'{"Action":"output","Package":"example/noise","n":' + b'9' * 5000 + b'}\n' +
+    b'{"Action":"fail","Package":"example/issues","Test":"TestShardFailure"',
+    1,
+)
 block = line * ((1024 * 1024 + len(line) - 1) // len(line))
 with report.open("wb") as stream:
     for group in range(2):
@@ -1230,7 +1237,8 @@ else
  fi
 fi
 [[ $(grep -c 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt") == 1 ]] || exit 95
-grep -q 'shard assertion' "$UT_DIAGNOSTIC_DIR/top.txt" || exit 96
+grep -A 1 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt" |
+ grep -q '^\[failed_ut_output\] shard assertion' || exit 96
 if [[ "$MODE" != joined ]]; then
  ! grep -q TestIncomplete "$UT_DIAGNOSTIC_DIR/top.txt" || exit 97
 fi

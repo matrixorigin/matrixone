@@ -44,6 +44,7 @@ class IncrementalReaderTest(unittest.TestCase):
         first.write_bytes(line("output", "first assertion") + line("fail") +
                           b'{"Action":"fail","Package":"example/pkg","Test":"TestPartial","Elapsed":1}')
         second.write_bytes(line("output", "second assertion") + line("fail"))
+        original_first = first.read_bytes()
         script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
         output = subprocess.check_output([sys.executable, str(script), str(self.report), "--failures",
                                           "--live-source", str(first), "--live-source", str(second),
@@ -52,6 +53,7 @@ class IncrementalReaderTest(unittest.TestCase):
         self.assertEqual(1, output.count("first assertion"))
         self.assertEqual(1, output.count("second assertion"))
         self.assertNotIn("TestPartial", output)
+        self.assertEqual(original_first, first.read_bytes())
 
     def test_snapshot_does_not_follow_new_appends(self):
         self.report.write_bytes(self.event("run"))
@@ -167,151 +169,133 @@ class IncrementalReaderTest(unittest.TestCase):
         self.assertIn("ignored malformed JSON lines=1", output)
         self.assertIn("report unavailable", output)
 
-    def test_live_byte_budget_shares_tails_and_discloses_partial_result(self):
-        main = self.report
-        main.write_bytes(b"")
-        args = ["summary", str(main), "--failures"]
-        for suffix in ("First", "Second"):
-            shard = main.with_suffix("." + suffix)
-            shard.write_bytes(
-                self.event("fail", "TestOutside" + suffix)
-                + 100 * self.event("run", "TestNoise")
-                + self.event("fail", "TestLate" + suffix)
-                + self.event("fail", "TestTorn" + suffix).rstrip(b"\n")
-            )
-            args += ["--live-source", str(shard)]
-        output = io.StringIO()
-        with mock.patch.multiple(slow, AUX_INPUT_BYTES=640, AUX_TERMINAL_BYTES=0), mock.patch("sys.stdout", output):
-            self.assertEqual(slow.main(args), 0)
-        self.assertIn("supplemental scan partial", output.getvalue())
-        self.assertIn("TestLateFirst", output.getvalue())
-        self.assertIn("TestLateSecond", output.getvalue())
-        self.assertNotIn("TestOutside", output.getvalue())
-        self.assertNotIn("TestTorn", output.getvalue())
+    def test_failures_keep_interleaved_context_and_ignore_live_torn_record(self):
+        self.report.touch()
+        shard = self.report.with_suffix(".00")
+        def output(text):
+            return json.dumps({"Action": "output", "Package": "example/test",
+                               "Test": "TestDistant", "Output": text}).encode() + b"\n"
 
-        output = io.StringIO()
-        with mock.patch.multiple(slow, AUX_INPUT_BYTES=2, AUX_TERMINAL_BYTES=0), mock.patch("sys.stdout", output):
-            self.assertEqual(slow.main(args), 0)
+        shard.write_bytes(self.event("run", "TestDistant") + output("distant assertion") +
+                          self.event("run", "TestNoise") * 100 + self.event("fail", "TestDistant") +
+                          self.event("run", "TestDistant") + output("second assertion") +
+                          self.event("fail", "TestDistant") +
+                          self.event("fail", "TestTorn").rstrip(b"\n"))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        result = subprocess.check_output([sys.executable, str(script), str(self.report),
+                                          "--failures", "--live-source", str(shard)], text=True)
+        header = 'action=fail package="example/test" test="TestDistant"\n[failed_ut_output] '
+        self.assertIn(header + "distant assertion", result)
+        self.assertIn(header + "second assertion", result)
+        self.assertEqual(2, result.count(header))
+        self.assertNotIn("TestTorn", result)
+
+    def test_failure_and_context_limits_are_shared_across_sources(self):
+        def output(package, test):
+            return json.dumps({"Action": "output", "Package": package,
+                               "Test": test, "Output": test}).encode() + b"\n"
+
+        self.report.write_bytes(self.event("fail", "TestMain") + output("example/main", "PendingMain") +
+                                self.event("fail", "", "example/main"))
+        first = self.report.with_suffix(".00")
+        first.write_bytes(b"".join(output("example/first", f"Pending{i}") for i in range(8)) +
+                          self.event("fail", "", "example/first"))
+        second = self.report.with_suffix(".01")
+        second.write_bytes(b"".join(self.event("fail", f"Test{i}") for i in range(30)))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        result = subprocess.check_output([sys.executable, str(script), str(self.report), "--failures",
+                                          "--live-source", str(first), "--live-source", str(second)], text=True)
+        self.assertEqual(32, result.count('[failed_ut_cases] action=fail '))
+        self.assertEqual(8, result.count('[failed_ut_cases] action=unresolved-output '))
+        self.assertIn('test="Test28"', result)
+        self.assertNotIn('test="Test29"', result)
+        self.assertIn("additional failure or context events omitted=2 (at least)", result)
+
+    def test_failed_source_read_does_not_claim_complete_scan(self):
+        self.report.touch()
+        shard = self.report.with_suffix(".00")
+        shard.write_bytes(self.event("run") + self.event("fail"))
+        open_report = slow.open_report
+        def faulty_open(path):
+            stream = open_report(path)
+            if path != shard:
+                return stream
+            class FaultReader:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    stream.close()
+                def fileno(self):
+                    return stream.fileno()
+                def readline(self, size):
+                    if stream.tell():
+                        raise OSError("injected read failure")
+                    return stream.readline(size)
+            return FaultReader()
+
+        with mock.patch.object(slow, "open_report", faulty_open), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(0, slow.main(["summary", str(self.report), "--failures", "--live-source", str(shard)]))
+        self.assertIn("injected read failure", output.getvalue())
         self.assertIn("none found in scanned records", output.getvalue())
 
-    def test_live_byte_budget_reclaims_small_shard_shares(self):
-        self.report.write_bytes(b"")
-        args = ["summary", str(self.report), "--failures"]
-        sizes = []
-        for index in range(8):
-            shard = self.report.with_suffix(f".{index}")
-            data = self.event("fail", "TestOld" if index == 0 else f"TestSmall{index}")
-            if index == 0:
-                data += 20 * self.event("output", "TestSpam")
-            sizes.append(len(data))
-            shard.write_bytes(data)
-            args += ["--live-source", str(shard)]
+    def test_invalid_deep_json_does_not_hide_later_failure(self):
+        self.report.write_bytes(b"[" * 10000 + b"]" * 10000 + b"\n" + self.event("fail"))
+        _, _, malformed, failures, _ = summarize(self.report, capture_failures=True)
+        self.assertEqual(1, malformed)
+        self.assertEqual("TestOne", failures[0][1])
 
-        output = io.StringIO()
-        with mock.patch.object(slow, "AUX_INPUT_BYTES", sum(sizes)), mock.patch("sys.stdout", output):
-            self.assertEqual(slow.main(args), 0)
-        result = output.getvalue()
-        self.assertIn('test="TestOld"', result)
-        self.assertEqual(result.count('[failed_ut_cases] action=fail '), 8)
-        self.assertNotIn("supplemental scan partial", result)
+    def test_invalid_json_number_keeps_other_failures_in_each_source(self):
+        invalid = b'{"Action":"output","Package":"example/test","n":' + b"9" * 5000 + b"}\n"
+        data = self.event("fail", "TestBefore") + invalid + self.event("fail", "TestAfter")
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        for live in (False, True):
+            with self.subTest(live=live):
+                source = self.report.with_suffix(".00") if live else self.report
+                self.report.write_bytes(b"")
+                source.write_bytes(data)
+                args = [sys.executable, str(script), str(self.report), "--failures"]
+                if live:
+                    args += ["--live-source", str(source)]
+                result = subprocess.check_output(args, text=True)
+                self.assertIn('test="TestBefore"', result)
+                self.assertIn('test="TestAfter"', result)
 
-    def test_live_tail_accepts_first_record_only_after_newline(self):
-        self.report.write_bytes(b"")
-        shard = self.report.with_suffix(".00")
-        first = self.event("fail", "TestAtBoundary")
-        last = self.event("fail", "TestLast")
-        args = ["summary", str(self.report), "--failures", "--live-source", str(shard)]
-        for preceding in (b"\n", b"x"):
-            with self.subTest(preceding=preceding):
-                shard.write_bytes(b"omitted-prefix" + preceding + first + last)
-                output = io.StringIO()
-                # The prefix check must fit inside the budget.
-                with mock.patch.multiple(slow, AUX_INPUT_BYTES=len(first) + len(last) + 1, AUX_TERMINAL_BYTES=0), mock.patch("sys.stdout", output):
-                    self.assertEqual(slow.main(args), 0)
-                result = output.getvalue()
-                self.assertEqual('test="TestAtBoundary"' in result, preceding == b"\n")
-                self.assertIn('test="TestLast"', result)
-                self.assertIn("supplemental scan partial", result)
+    def test_invalid_elapsed_or_mixed_timestamps_do_not_hide_failure(self):
+        clock_end = {"Time": "2026-09-19T00:00:01", "Action": "fail",
+                     "Package": "example/test", "Test": "TestClock"}
+        huge = {"Action": "fail", "Package": "example/test", "Test": "TestHuge", "Elapsed": 10**400}
+        data = self.event("run", "TestClock") + json.dumps(clock_end).encode() + b"\n"
+        data += json.dumps(huge).encode() + b"\n" + self.event("fail", "TestAfter")
+        self.report.write_bytes(data)
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        result = subprocess.check_output([sys.executable, str(script), str(self.report), "--failures"], text=True)
+        for name in ("TestClock", "TestHuge", "TestAfter"):
+            self.assertIn(f'test="{name}"', result)
 
-
-    def test_prefix_recovers_boundary_and_nearby_but_not_distant_output(self):
-        self.report.touch()
-        shard = self.report.with_suffix(".00")
-
-        def context(test, output):
-            return json.dumps({"Action": "output", "Package": "example/test",
-                               "Test": test, "Output": output}).encode() + b"\n"
-
-        spam = self.event("run", "TestSpam") * 100
-        repeat = self.event("fail", "TestNear")
-        tail = repeat + self.event("fail", "TestTorn").rstrip(b"\n")
-        shard.write_bytes(context("TestDistant", "distant assertion") + spam +
-                          self.event("fail", "TestDistant") + spam +
-                          context("TestNear", "nearby assertion") + repeat + tail)
-        output = io.StringIO()
-        # The auxiliary cut is inside the first TestNear row. The second
-        # has identical bytes, but is an independent real terminal.
-        with mock.patch.object(slow, "AUX_INPUT_BYTES", len(tail) + 17), mock.patch("sys.stdout", output):
-            self.assertEqual(0, slow.main(["summary", str(self.report), "--failures",
-                                           "--live-source", str(shard)]))
-        result = output.getvalue()
-        self.assertEqual(2, result.count('action=fail package="example/test" test="TestNear"'))
-        self.assertIn('action=fail package="example/test" test="TestDistant"', result)
-        self.assertIn('action=unresolved-output package="example/test" test="TestNear"\n'
-                      '[failed_ut_output] nearby assertion', result)
-        self.assertIn("assertion context can be missing", result)
-        self.assertNotIn("distant assertion", result)
-        self.assertNotIn("TestTorn", result)
-        self.assertNotIn("supplemental scan partial", result)
-
-    def test_prefix_context_accepts_aligned_window_start_only(self):
-        def context(text):
-            event = {"Action": "output", "Package": "example/test",
-                     "Test": "TestOne", "Output": text}
-            return json.dumps(event).encode() + b"\n"
-
-        first, last = context("edge"), context("later")
-        budget = len(first) + len(last)
-        for predecessor in (b"\n", b"x"):
-            with self.subTest(predecessor=predecessor):
-                self.report.write_bytes(b"prefix" + predecessor + first + last)
-                with slow.open_report(self.report) as stream, \
-                        mock.patch.object(slow, "PREFIX_CONTEXT_BYTES", budget), \
-                        mock.patch.object(slow.os, "pread", wraps=os.pread) as pread:
-                    value = slow.prefix_context(stream, self.report.stat().st_size,
-                                                "example/test", "TestOne")
-                    self.assertEqual("edgelater" if predecessor == b"\n" else "later", value)
-                    pread.assert_called_once_with(stream.fileno(), budget + 1, len(b"prefix"))
-
-    def test_prefix_read_error_keeps_complete_prior_failure(self):
-        terminal = self.event("fail", "TestBeforeReadError")
-        stream = mock.Mock()
-        stream.name = "shard.00"
-        stream.raw.read.side_effect = [terminal, OSError("injected read error")]
-        diagnostics = []
-        found, partial = slow.prefix_failures(
-            stream, len(terminal) + 5, float("inf"), 32, 0, diagnostics,
-        )
-        self.assertTrue(partial)
-        self.assertEqual([("example/test", "TestBeforeReadError", "fail")],
-                         [row[:3] for row in found])
-        self.assertEqual(["report read failed: shard.00: injected read error"], diagnostics)
-
-    def test_prefix_shares_absolute_deadline_and_reports_partial(self):
-        self.report.touch()
-        args = ["summary", str(self.report), "--failures"]
-        for suffix in (".00", ".01"):
-            shard = self.report.with_suffix(suffix)
-            shard.write_bytes(self.event("fail", "TestTooLate") + self.event("run") * 8)
-            args += ["--live-source", str(shard)]
-        # Model one slow underlying read. The next source doesn't get a
-        # fresh time budget (and is never read by the prefix pass).
-        with mock.patch.object(slow, "AUX_INPUT_BYTES", 128), \
-                mock.patch.object(slow.time, "monotonic", side_effect=[1, 1, 4, 4]), \
-                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
-            self.assertEqual(0, slow.main(args))
-            self.assertIn("supplemental scan partial", output.getvalue())
-            self.assertNotIn("TestTooLate", output.getvalue())
+    def test_surrogate_output_is_escaped_in_each_source(self):
+        surrogate = chr(0xd800)
+        event = {"Action": "output", "Package": "example/test", "Test": "TestOne", "Output": "bad" + surrogate + "text"}
+        completed = {"Action": "fail", "Package": "example/test", "Test": "TestCompleted" + surrogate, "Elapsed": 1}
+        pending = {"Action": "run", "Package": "example/test", "Test": "TestPending" + surrogate}
+        data = (json.dumps(event).encode() + b"\n" + self.event("fail") + json.dumps(completed).encode() +
+                b"\n" + json.dumps(pending).encode() + b"\n")
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        for live in (False, True):
+            with self.subTest(live=live):
+                source = self.report.with_suffix(".00") if live else self.report
+                self.report.write_bytes(b"")
+                source.write_bytes(data)
+                active = self.report.with_suffix(".active")
+                args = [sys.executable, str(script), str(self.report), "--failures", "--active-out", str(active)]
+                if live:
+                    args += ["--live-source", str(source)]
+                result = subprocess.check_output(args, text=True)
+                self.assertIn('test="TestOne"', result)
+                self.assertIn(r"bad\ud800text", result)
+                self.assertIn(r"TestCompleted\ud800", result)
+                if not live:
+                    self.assertIn(r"TestPending\ud800", active.read_text())
 
     def test_aux_overlap_tracking_cap_keeps_terminal_and_labels_output_context(self):
         self.report.write_bytes(b"")

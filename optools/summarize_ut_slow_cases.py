@@ -18,15 +18,12 @@
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
-import re
 import stat
 import sys
-import time
 from collections import OrderedDict
-from contextlib import ExitStack, nullcontext
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -37,11 +34,6 @@ from active_ut_incremental import (
     apply_event, atomic_write, fresh, render,
 )
 
-AUX_INPUT_BYTES = 8 * 1024 * 1024
-AUX_TERMINAL_BYTES = 512 * 1024 * 1024
-AUX_TERMINAL_SECONDS = 2
-PREFIX_CONTEXT_BYTES = 4096
-TERMINAL_NEEDLE = re.compile(rb'"Action"[ \t\r]*:[ \t\r]*"(?:build-)?fail"')
 MAX_AUX_LIFECYCLE_KEYS = 4096
 MAX_FAILURES = 32
 MAX_UNRESOLVED_OUTPUTS = 8
@@ -64,13 +56,16 @@ def event_elapsed(
     started: Optional[datetime],
     ended: Optional[datetime],
 ) -> Optional[float]:
-    elapsed = event.get("Elapsed")
-    if isinstance(elapsed, (int, float)) and elapsed >= 0:
-        return float(elapsed)
-    if started is not None and ended is not None:
-        seconds = (ended - started).total_seconds()
-        if seconds >= 0:
-            return seconds
+    try:
+        elapsed = event.get("Elapsed")
+        if isinstance(elapsed, (int, float)) and elapsed >= 0:
+            return float(elapsed)
+        if started is not None and ended is not None:
+            seconds = (ended - started).total_seconds()
+            if seconds >= 0:
+                return seconds
+    except (OverflowError, TypeError):
+        pass  # Invalid timing must not discard otherwise complete failure events.
     return None
 
 
@@ -98,21 +93,13 @@ def open_report(path: Path):
         raise
 
 
-def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None, window=None):
+def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None):
     """Read only the regular-file prefix present when this descriptor opens."""
+    info = os.fstat(report.fileno())
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("report is not a regular file")
     name = source_name if source_name is not None else report.name
-    discard_first = False
-    if window is None:
-        info = os.fstat(report.fileno())
-        if not stat.S_ISREG(info.st_mode):
-            raise OSError("report is not a regular file")
-        remaining = info.st_size
-    else:
-        remaining, clipped = window
-        if clipped and remaining:
-            # The first budgeted byte is the predecessor of the payload.
-            discard_first = report.read(1) != b"\n"
-            remaining -= 1
+    remaining = info.st_size
     try:
         while remaining:
             line = report.readline(min(remaining, MAX_LIFECYCLE_LINE_BYTES + 1))
@@ -132,15 +119,11 @@ def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None,
                             diagnostics.append(f"report truncated while reading: {name}")
                         break
                     remaining -= len(line)
-                if not discard_first:
-                    yield b"!"  # Count the discarded oversized or torn record.
-                discard_first = False
+                yield b"!"  # Count the discarded oversized or torn record.
                 continue
             if not line.endswith(b"\n") and (require_lf or remaining):
                 break
-            if not discard_first:
-                yield line
-            discard_first = False
+            yield line
     except OSError as error:
         if diagnostics is not None:
             diagnostics.append(f"report read failed: {name}: {error}")
@@ -148,111 +131,10 @@ def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None,
             raise
 
 
-def auxiliary_budgets(sizes: List[int], remaining: int) -> List[int]:
-    """Reclaim spare bytes from small sources before sharing the rest."""
-    budgets = [0] * len(sizes)
-    for done, index in enumerate(sorted(range(len(sizes)), key=sizes.__getitem__)):
-        budget = min(sizes[index], remaining // (len(sizes) - done))
-        budgets[index] = budget
-        remaining -= budget
-    return budgets
-
-
-def prefix_context(stream, end, package, test):
-    """Nearby matching text is context only: an invocation may overlap."""
-    start = max(0, end - PREFIX_CONTEXT_BYTES)
-    read_start = max(0, start - 1)
-    data = os.pread(stream.fileno(), end - read_start, read_start)
-    if len(data) != end - read_start:
-        raise OSError("report truncated while reading context")
-    if start:
-        # Reserve the first byte for the predecessor, as in the tail window.
-        data = data[1:] if data.startswith(b"\n") else data.partition(b"\n")[2]
-    chunks = []
-    for line in data.split(b"\n"):
-        try:
-            event = json.loads(line)
-        except (ValueError, RecursionError):
-            continue
-        if (isinstance(event, dict) and event.get("Action") in ("output", "build-output")
-                and (event.get("Package") or event.get("ImportPath")) == package
-                and (event.get("Test") or "") == test and isinstance(event.get("Output"), str)):
-            chunks.append(event["Output"])
-    return "".join(chunks)
-
-
-def prefix_failures(stream, budget, deadline, limit, context_limit, diagnostics):
-    """Scan LF-framed Go events; do not parse nonterminal lines or track lifecycle."""
-    stream.seek(0)
-    pending = b""
-    discard = False
-    failures, contexts = [], []
-    position = 0
-    partial = False
-    while budget and time.monotonic() < deadline:
-        try:
-            data = stream.raw.read(min(budget, 256 * 1024))
-        except OSError as error:
-            diagnostics.append(f"report read failed: {stream.name}: {error}")
-            return failures + contexts, True
-        if not data:
-            break
-        budget -= len(data)
-        position += len(data)
-        if discard:
-            end = data.find(b"\n")
-            if end == -1:
-                continue
-            data = data[end + 1:]
-            discard = False
-        data = pending + data
-        last = data.rfind(b"\n") + 1
-        pending = data[last:]
-        if len(pending) >= MAX_LIFECYCLE_LINE_BYTES:
-            pending = b""
-            discard = True
-            partial = True
-
-        offset = 0
-        while match := TERMINAL_NEEDLE.search(data, offset, last):
-            if time.monotonic() >= deadline:
-                return failures + contexts, True
-            first = max(offset, data.rfind(b"\n", offset, match.start()) + 1)
-            end = data.find(b"\n", match.end()) + 1
-            offset = end
-            if end - first > MAX_LIFECYCLE_LINE_BYTES:
-                partial = True
-                continue
-            try:
-                event = json.loads(data[first:end])
-            except (ValueError, RecursionError):
-                continue
-            if not isinstance(event, dict) or event.get("Action") not in ("fail", "build-fail"):
-                continue
-            package = event.get("Package") or event.get("ImportPath")
-            if not isinstance(package, str) or not package:
-                continue
-            if len(failures) >= limit:
-                return failures + contexts, True
-            test = event.get("Test")
-            test = test if isinstance(test, str) else ""
-            failures.append((package[:4096], test[:4096], event["Action"], "", "", 0, False))
-            if context_limit:
-                context_limit -= 1
-                try:
-                    context = prefix_context(stream, position - len(data) + first, package, test)
-                except OSError:
-                    partial = True
-                    continue
-                if context:
-                    contexts.append((package[:4096], test[:4096], "unresolved-output",
-                                     context, "", len(context), False))
-    return failures + contexts, partial or budget != 0
-
 def summarize(
     report_path: Path, limit: int = 20, active_out: Optional[Path] = None,
     *, require_lifecycle_lf: bool = False, capture_failures: bool = False,
-    failure_only: bool = False, stream=None, diagnostics=None, window=None,
+    failure_only: bool = False, stream=None, diagnostics=None,
     failure_limits: Tuple[int, int] = (MAX_FAILURES, MAX_UNRESOLVED_OUTPUTS),
 ) -> Tuple[
     List[Tuple[float, str, str, str, str]],
@@ -271,17 +153,13 @@ def summarize(
     omitted_failures = 0
     outputs = OrderedDict()
     output_evicted = False
-    # A clipped prefix can conceal concurrent invocations. Keep their
-    # snippets as context, not as output attributed to a specific failure.
-    lifecycle = fresh(None) if (active_out is not None or capture_failures) and not (
-        window and window[1]
-    ) else None
+    lifecycle = fresh(None) if active_out is not None or capture_failures else None
     lifecycle_updates = 0
     failure_limit, context_limit = failure_limits
     unfinished = []
 
     with (nullcontext(stream) if stream is not None else open_report(report_path)) as report:
-        for raw_line in snapshot_lines(report, require_lifecycle_lf, diagnostics, report_path, window):
+        for raw_line in snapshot_lines(report, require_lifecycle_lf, diagnostics, report_path):
             try:
                 line = raw_line.decode("utf-8")
             except UnicodeDecodeError:
@@ -291,7 +169,7 @@ def summarize(
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 malformed += 1
                 continue
             if not isinstance(event, dict):
@@ -433,7 +311,9 @@ def summarize(
 
     if active_out is not None:
         try:
-            atomic_write(active_out, "\n".join(render({"report": lifecycle}, unfinished)) + "\n",
+            active = "\n".join(render({"report": lifecycle}, unfinished)) + "\n"
+            active = active.encode("utf-8", "backslashreplace").decode("utf-8")
+            atomic_write(active_out, active,
                          prefix=active_out.name + ".tmp.")
         except OSError as error:
             print(f"failed to publish UT lifecycle summary: {error}", file=sys.stderr)
@@ -463,7 +343,7 @@ def print_failure_details(failures: List[Tuple[str, str, str, str, str, int, boo
         print("[failed_ut_cases] none found in scanned records" if partial else "[failed_ut_cases] none")
     if omitted:
         suffix = " (scanned records only)" if partial else ""
-        print(f"[failed_ut_cases] additional failure or context events omitted={omitted}{suffix}")
+        print(f"[failed_ut_cases] additional failure or context events omitted={omitted} (at least){suffix}")
 
 
 def main(argv: List[str]) -> int:
@@ -482,6 +362,7 @@ def main(argv: List[str]) -> int:
     tests, packages, malformed, failures, omitted = [], [], 0, [], 0
     seen = set()
     diagnostics = []
+    partial = False
     try:
         with open_report(args.report) as stream:
             info = os.fstat(stream.fileno())
@@ -490,95 +371,39 @@ def main(argv: List[str]) -> int:
                 args.report, limit, args.active_out, require_lifecycle_lf=args.require_lifecycle_lf,
                 capture_failures=args.failures, stream=stream, diagnostics=diagnostics,
             )
+            partial = bool(diagnostics)
     except OSError as error:
         if not (args.live_source or args.stopped_source):
             print(f"slow UT case report unavailable: {args.report}: {error}", file=sys.stderr)
             return 1
         diagnostics.append(f"main report unavailable: {args.report}: {error}")
-    partial = False
+        partial = True
     if args.failures:
-        with ExitStack() as opened:
-            sources = []
-            for path, live in [(p, True) for p in args.live_source] + [(p, False) for p in args.stopped_source]:
-                try:
-                    stream = opened.enter_context(open_report(path))
+        for path, live in [(p, True) for p in args.live_source] + [(p, False) for p in args.stopped_source]:
+            source_diagnostics = []
+            try:
+                with open_report(path) as stream:
                     info = os.fstat(stream.fileno())
                     identity = (info.st_dev, info.st_ino)
                     if identity in seen:
-                        stream.close()
                         continue
                     seen.add(identity)
-                    sources.append((path, live, stream, info.st_size))
-                except OSError as error:
-                    partial = True
-                    diagnostics.append(f"report unavailable: {path}: {error}")
-            budgets = auxiliary_budgets([size for _, _, _, size in sources], AUX_INPUT_BYTES)
-            prefixes = []
-            deadline = time.monotonic() + AUX_TERMINAL_SECONDS
-            for (path, live, stream, size), budget in zip(sources, budgets):
-                start = size - budget
-                if not budget:
-                    if size:
-                        prefixes.append((stream, size))
-                    continue
-                try:
-                    # Read the exact window without buffered read-ahead. Keep
-                    # the chosen descriptor even if its path rotates.
-                    stream.seek(start)
-                    data = stream.raw.read(budget)
-                    if len(data) != budget:
-                        partial = True
-                        diagnostics.append(f"report truncated while reading: {path}")
-                    if start:
-                        # The tail skips its leading frame (which may be just
-                        # the predecessor LF). Include it in the prefix only.
-                        boundary = data.find(b"\n") + 1
-                        prefixes.append((stream, start + (boundary or len(data))))
                     context_count = sum(item[2] == "unresolved-output" for item in failures)
                     _, _, source_malformed, source_failures, source_omitted = summarize(
-                        path, require_lifecycle_lf=live or len(data) != budget, capture_failures=True,
-                        failure_only=True, stream=io.BytesIO(data), diagnostics=diagnostics,
-                        window=(len(data), start != 0),
+                        path, require_lifecycle_lf=live, capture_failures=True, failure_only=True,
+                        stream=stream, diagnostics=source_diagnostics,
                         failure_limits=(MAX_FAILURES - len(failures) + context_count,
                                         MAX_UNRESOLVED_OUTPUTS - context_count),
                     )
-                except OSError as error:
-                    partial = True
-                    diagnostics.append(f"report unavailable: {path}: {error}")
-                    continue
-                malformed += source_malformed
-                omitted += source_omitted
-                failures.extend(source_failures)
-            # Charge the full context allowance up front so the two reads
-            # together still respect the shared terminal-byte cap.
-            retained_context = sum(item[2] == "unresolved-output" for item in failures)
-            context_left = MAX_UNRESOLVED_OUTPUTS - retained_context
-            prefix_budgets = auxiliary_budgets(
-                [end for _, end in prefixes], max(0, AUX_TERMINAL_BYTES - context_left * (PREFIX_CONTEXT_BYTES + 1)),
-            )
-            prefix_found = 0
-            retained = len(failures) - retained_context
-            for (stream, end), budget in zip(prefixes, prefix_budgets):
-                partial |= budget < end
-                try:
-                    context_quota = min(context_left, MAX_FAILURES - retained - prefix_found)
-                    found, incomplete = prefix_failures(
-                        stream, budget, deadline, MAX_FAILURES - retained - prefix_found, context_quota, diagnostics,
-                    )
-                except OSError as error:
-                    diagnostics.append(f"report unavailable: {stream.name}: {error}")
-                    partial = True
-                    continue
-                partial |= incomplete
-                terminals = sum(item[2] != "unresolved-output" for item in found)
-                context_left -= min(context_quota, terminals)
-                prefix_found += terminals
-                failures.extend(found)
-            if prefix_found:
-                diagnostics.append("additional complete terminal events from earlier ranges; nearby text is context only;"
-                                   " assertion context can be missing outside the 4 KiB window or context budget")
-        if partial:
-            diagnostics.append("supplemental scan partial; byte, time or evidence limit; failure counts may be incomplete")
+            except OSError as error:
+                partial = True
+                diagnostics.append(f"report unavailable: {path}: {error}")
+                continue
+            diagnostics.extend(source_diagnostics)
+            partial |= bool(source_diagnostics)
+            malformed += source_malformed
+            omitted += source_omitted
+            failures.extend(source_failures)
     for diagnostic in diagnostics:
         print(f"[failed_ut_cases] {diagnostic}")
     print(f"[slow_ut_cases] completed test cases (top {limit}):")
@@ -612,4 +437,7 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
+    # A valid JSON escape can decode to an unpaired surrogate. Keep the rest
+    # of the report printable instead of losing all diagnostics at stdout.
+    sys.stdout.reconfigure(errors="backslashreplace")
     raise SystemExit(main(sys.argv))
