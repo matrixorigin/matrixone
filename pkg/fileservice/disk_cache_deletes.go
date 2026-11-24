@@ -127,7 +127,18 @@ func (d *DiskCache) publishUnlessDeleted(
 	if err != nil {
 		return write(claim)
 	}
-	objectPath := d.pathForFile(path.File)
+	return d.publishUnlessDeletedSince(d.pathForFile(path.File), entry.readDeletes-1, claim, write)
+}
+
+// publishUnlessDeletedSince runs write with a claim that also fails when the object at
+// objectPath was deleted after the delete count was mark; it reports false without the
+// error of write when it was.
+func (d *DiskCache) publishUnlessDeletedSince(
+	objectPath string,
+	mark uint64,
+	claim func() bool,
+	write func(claim func() bool) (bool, error),
+) (bool, error) {
 	stripe := d.deletes.stripe(objectPath)
 	locked, deleted := false, false
 	written, err := write(func() bool {
@@ -136,7 +147,7 @@ func (d *DiskCache) publishUnlessDeleted(
 		}
 		stripe.RLock()
 		locked = true
-		deleted = d.deletes.since(objectPath, entry.readDeletes-1)
+		deleted = d.deletes.since(objectPath, mark)
 		return !deleted
 	})
 	if locked {

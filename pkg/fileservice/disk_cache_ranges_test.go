@@ -30,8 +30,8 @@ import (
 )
 
 // The size of a range file is the prefix of the digits after its offset that equals the
-// file's length, also when the object name starts with digits. Only files in the shard
-// directory of their object are range files.
+// file's length, also when the object name starts with digits. Only files under the shard
+// directory of their object are range files, also those of objects with nested paths.
 func TestParseRangeFile(t *testing.T) {
 	root := "cache"
 	in := func(object, name string) string {
@@ -50,6 +50,13 @@ func TestParseRangeFile(t *testing.T) {
 	require.Equal(t, filepath.Join(root, diskCacheShard("23obj"), "23obj"+cacheFileSuffix), key)
 	require.Equal(t, int64(1001), size)
 
+	key, offset, size, ok = parseRangeFile(root, filepath.Join(root, diskCacheShard("dir/obj"), "10-7dir", "obj"+cacheFileSuffix), 7)
+	require.True(t, ok)
+	require.Equal(t, filepath.Join(root, diskCacheShard("dir/obj"), "dir", "obj"+cacheFileSuffix), key)
+	require.Equal(t, int64(10), offset)
+	require.Equal(t, int64(7), size)
+	require.Equal(t, filepath.Join(root, diskCacheShard("dir/obj"), "fulldir", "obj"+cacheFileSuffix), fullPathOfRangeKey(root, key))
+
 	for name, path := range map[string]string{
 		"no size prefix equals the length": in("123obj", "10-100123obj"),
 		"another object's shard":           in("23obj", "10-7obj"),
@@ -57,7 +64,8 @@ func TestParseRangeFile(t *testing.T) {
 		"no object name":                   in("", "10-7"),
 		"no offset":                        in("obj", "x-7obj"),
 		"temporary file":                   filepath.Join(root, diskCacheShard("obj"), "10-7obj.tmp"),
-		"object path with a separator":     filepath.Join(root, diskCacheShard("dir/obj"), "10-7dir", "obj"+cacheFileSuffix),
+		"nested path in another shard":     filepath.Join(root, diskCacheShard("obj"), "10-7dir", "obj"+cacheFileSuffix),
+		"nested whole file":                filepath.Join(root, diskCacheShard("dir/obj"), "fulldir", "obj"+cacheFileSuffix),
 		"outside a shard":                  filepath.Join(root, "10-7obj"+cacheFileSuffix),
 	} {
 		_, _, _, ok := parseRangeFile(root, path, 7)

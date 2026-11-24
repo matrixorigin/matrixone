@@ -74,9 +74,11 @@ type asyncCallbackTurn struct {
 }
 
 type diskCacheAsyncFileFinalize struct {
-	file      *os.File
-	target    fillTarget
-	owner     *pathOwner
+	file   *os.File
+	target fillTarget
+	owner  *pathOwner
+	// deletes, when set, is the delete count a whole-object download started at.
+	deletes   *uint64
 	attempted bool
 	err       error
 }
@@ -406,6 +408,7 @@ func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 	file *os.File,
 	owner *pathOwner,
 	target fillTarget,
+	deletes *uint64,
 ) {
 	a := &d.async
 	a.startOnce.Do(func() {
@@ -415,9 +418,10 @@ func (d *DiskCache) scheduleReservedAsyncFileFinalize(
 	job := &diskCacheAsyncUpdate{
 		diskPath: diskPath,
 		finalize: &diskCacheAsyncFileFinalize{
-			file:   file,
-			target: target,
-			owner:  owner,
+			file:    file,
+			target:  target,
+			owner:   owner,
+			deletes: deletes,
 		},
 	}
 	select {
@@ -443,19 +447,25 @@ func (d *DiskCache) claimAsyncPublication() bool {
 }
 
 // finalizeQueuedFile publishes a file the async workers finalize. The file of an entry is
-// not published when the entry's object was deleted after the entry was read.
-func (d *DiskCache) finalizeQueuedFile(diskPath string, f *os.File, target fillTarget) error {
-	t, ok := target.(entryFillTarget)
-	if !ok {
-		return d.finalizeFileTo(d.async.ctx, diskPath, f, d.claimAsyncPublication, target)
-	}
+// not published when the entry's object was deleted after the entry was read, nor the
+// file of a whole-object download when its object was deleted after the download started.
+func (d *DiskCache) finalizeQueuedFile(diskPath string, finalize *diskCacheAsyncFileFinalize) error {
+	f, target := finalize.file, finalize.target
 	var err error
-	published, _ := d.publishUnlessDeleted(t.filePath, IOEntry{readDeletes: t.readDeletes}, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
+	write := func(claim func() bool) (bool, error) {
 		err = d.finalizeFileTo(d.async.ctx, diskPath, f, claim, target)
 		return err == nil, err
-	})
+	}
+	var published bool
+	if t, ok := target.(entryFillTarget); ok {
+		published, _ = d.publishUnlessDeleted(t.filePath, IOEntry{readDeletes: t.readDeletes}, d.claimAsyncPublication, write)
+	} else if finalize.deletes != nil {
+		published, _ = d.publishUnlessDeletedSince(diskPath, *finalize.deletes, d.claimAsyncPublication, write)
+	} else {
+		return d.finalizeFileTo(d.async.ctx, diskPath, f, d.claimAsyncPublication, target)
+	}
 	if !published && errors.Is(err, context.Canceled) && d.async.ctx.Err() == nil {
-		// The entry's object was deleted after the entry was read.
+		// The object was deleted.
 		return nil
 	}
 	return err
@@ -498,7 +508,7 @@ func (d *DiskCache) runAsyncUpdates() {
 			if d.async.ctx.Err() == nil {
 				if job.finalize != nil {
 					job.finalize.attempted = true
-					job.finalize.err = d.finalizeQueuedFile(job.diskPath, job.finalize.file, job.finalize.target)
+					job.finalize.err = d.finalizeQueuedFile(job.diskPath, job.finalize)
 					d.evictForDiskFull(d.async.ctx, job.finalize.err)
 				} else {
 					written, _ := d.publishUnlessDeleted(job.filePath, job.entry, d.claimAsyncPublication, func(claim func() bool) (bool, error) {
@@ -632,7 +642,7 @@ func (d *DiskCache) runAsyncCallbacks() {
 		for job.nextCallback < len(job.callbacks) {
 			i := job.nextCallback
 			job.nextCallback++
-			d.runAsyncUpdateCallback(job, i, job.callbacks[i])
+			runWrittenCallback(job.filePath, job.diskPath, i, job.callbacks[i], job.entry)
 		}
 		d.releaseAsyncUpdateResources(job)
 		a.callbackMu.Lock()
@@ -641,13 +651,14 @@ func (d *DiskCache) runAsyncCallbacks() {
 	}
 }
 
-// runAsyncUpdateCallback is the panic boundary for callbacks moved from the
-// Update caller onto a DiskCache-owned goroutine. One broken observer must not
-// terminate the CN or skip later callbacks in the ordered chain.
-func (d *DiskCache) runAsyncUpdateCallback(
-	job *diskCacheAsyncUpdate,
+// runWrittenCallback runs fn on filePath and entry on a DiskCache-owned goroutine,
+// and logs and counts a panic of fn instead of propagating it.
+func runWrittenCallback(
+	filePath string,
+	diskPath string,
 	index int,
 	fn OnDiskCacheWrittenFunc,
+	entry IOEntry,
 ) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -656,8 +667,8 @@ func (d *DiskCache) runAsyncUpdateCallback(
 				fields := []zap.Field{
 					zap.String("panic-type", fmt.Sprintf("%T", recovered)),
 					zap.ByteString("stack", debug.Stack()),
-					zap.String("file-path", job.filePath),
-					zap.String("disk-path", job.diskPath),
+					zap.String("file-path", filePath),
+					zap.String("disk-path", diskPath),
 					zap.Int("callback-index", index),
 				}
 				// Do not call Error, String, MarshalJSON, or any other method on
@@ -669,7 +680,7 @@ func (d *DiskCache) runAsyncUpdateCallback(
 			})
 		}
 	}()
-	fn(job.filePath, job.entry)
+	fn(filePath, entry)
 }
 
 func (d *DiskCache) releaseAsyncUpdateResources(job *diskCacheAsyncUpdate) {
