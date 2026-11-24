@@ -364,6 +364,51 @@ test('receipt and listing identify the same child only once', async () => {
   assert.equal(h.calls.filter(([action, id]) => action === 'cancel' && id === 701).length, 1);
 });
 
+test('an unreadable old receipt does not strand an admitted current worker', async () => {
+  const h = coverageHarness({ listed: () => false,
+    receipts: ['coverage-admit-800', 'coverage-admit-701'] });
+  const actions = h.options.github.rest.actions;
+  const get = actions.getWorkflowRun;
+  actions.getWorkflowRun = async args => {
+    if (args.run_id === 800) throw Object.assign(new Error('old receipt unavailable'), { status: 502 });
+    return get(args);
+  };
+  await assert.rejects(h.run(), /800: old receipt unavailable/);
+  assert.deepEqual(h.calls, [['cancel', 701, 10000], ['force', 701, 130000]]);
+});
+
+test('a worker API failure during cancellation, grace or escalation does not block its sibling', async () => {
+  for (const stage of ['cancel', 'poll', 'force']) {
+    const h = coverageHarness();
+    const actions = h.options.github.rest.actions;
+    const api = stage === 'force' ? h.options.github : actions;
+    const method = { cancel: 'cancelWorkflowRun', poll: 'getWorkflowRun', force: 'request' }[stage];
+    const original = api[method];
+    api[method] = async (...args) => {
+      if (args.at(-1).run_id === 700 && (stage !== 'poll' || h.calls.length > 0)) {
+        throw new Error('worker API unavailable');
+      }
+      return original(...args);
+    };
+    await assert.rejects(h.run(), /worker API unavailable/);
+    assert.deepEqual(h.calls.filter(([, id]) => id === 701),
+      [['cancel', 701, 10000], ['force', 701, 130000]], stage);
+    assert.ok(!h.calls.some(([kind, id]) => kind === 'force' && id === 700), stage);
+  }
+});
+
+test('failure to verify the common parent stops all further cancellation', async () => {
+  const h = coverageHarness();
+  const actions = h.options.github.rest.actions;
+  const parent = actions.getWorkflowRunAttempt;
+  actions.getWorkflowRunAttempt = async args => {
+    if (h.calls.length) throw new Error('cannot verify parent');
+    return parent(args);
+  };
+  await assert.rejects(h.run(), /cannot verify parent/);
+  assert.deepEqual(h.calls, [['cancel', 700, 10000]]);
+});
+
 test('failed discovery does not strand a verified child, or report successful cleanup', async () => {
   for (const api of ['listWorkflowRuns', 'listWorkflowRunArtifacts']) {
     const h = coverageHarness({ receipts: ['coverage-admit-701'] });

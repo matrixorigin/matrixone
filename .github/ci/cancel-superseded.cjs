@@ -183,9 +183,9 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
   }
   // Query receipts last, after the late-index grace period. If one discovery
   // API fails, clean up verified candidates from the other, then surface it.
-  let discoveryError;
+  const failures = new Map();
   for (const discover of [scanReservations, scanGrants]) {
-    try { await discover(); } catch (err) { discoveryError ??= err; }
+    try { await discover(); } catch (err) { failures.set(discover.name, err); }
   }
   const get = async id => {
     try {
@@ -204,12 +204,26 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
     return current.id === parent.id && current.run_attempt === parent.run_attempt &&
       current.status === 'completed' && current.head_sha === parent.head_sha;
   };
-  await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait });
-  if (discoveryError) throw discoveryError;
+  await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait,
+    onRunError(id, err) {
+      if (!failures.has(id)) failures.set(id, err);
+    } });
+  if (failures.size) {
+    throw new Error('Incomplete coverage cleanup: ' +
+      [...failures].map(([source, err]) => `${source}: ${err.message}`).join('; '));
+  }
 }
 
-async function cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait }) {
+async function cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait, onRunError }) {
   const pending = new Map();
+  // Coverage receipts can span attempts. Isolate only per-run operations;
+  // errors checking the shared parent must still stop the entire cleanup.
+  const forRun = async (id, operation) => {
+    try { await operation(); } catch (err) {
+      if (!onRunError) throw err;
+      onRunError(id, err);
+    }
+  };
   const requestCancel = async (run, force) => {
     try {
       if (force) {
@@ -234,10 +248,12 @@ async function cancelMatchingRuns({ github, repo, core, get, candidates, matches
   };
   for (const candidate of candidates.values()) {
     if (!await stillCurrent()) return;
-    const run = await get(candidate.id);
-    if (!matches(run) || run.run_attempt !== candidate.run_attempt) continue;
-    await requestCancel(run, false);
-    pending.set(run.id, run);
+    await forRun(candidate.id, async () => {
+      const run = await get(candidate.id);
+      if (!matches(run) || run.run_attempt !== candidate.run_attempt) return;
+      await requestCancel(run, false);
+      pending.set(run.id, run);
+    });
   }
   // Give ordinary cancellation two minutes for process teardown and bounded
   // diagnostics. Poll all candidates together, so cost is not N grace periods.
@@ -245,15 +261,19 @@ async function cancelMatchingRuns({ github, repo, core, get, candidates, matches
     await wait(10_000);
     if (!await stillCurrent()) return;
     for (const [id, initial] of pending) {
-      const run = await get(id);
-      if (!matches(run) || run.run_attempt !== initial.run_attempt) pending.delete(id);
+      await forRun(id, async () => {
+        const run = await get(id);
+        if (!matches(run) || run.run_attempt !== initial.run_attempt) pending.delete(id);
+      });
     }
   }
   for (const [id, initial] of pending) {
     if (!await stillCurrent()) return;
-    const run = await get(id);
-    if (!matches(run) || run.run_attempt !== initial.run_attempt) continue;
-    await requestCancel(run, true);
+    await forRun(id, async () => {
+      const run = await get(id);
+      if (!matches(run) || run.run_attempt !== initial.run_attempt) return;
+      await requestCancel(run, true);
+    });
   }
   await core.summary.addHeading('CI cancellation')
     .addRaw(`Matched obsolete runs: ${candidates.size}; escalation candidates after grace: ${pending.size}. Cancellation acceptance is not proof that runner cleanup has finished.`)
