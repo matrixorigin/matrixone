@@ -236,6 +236,10 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 		return nil
 	}
 	name := IndexObjectEntry(p.File)
+	// The read holds the entry, so it is not evicted while the read uses it.
+	d := s.indexFileCache.disk
+	d.holdDir(diskPath)
+	defer d.releaseDir(diskPath, false)
 	file, entry, err := s.indexFileCache.openEntryFile(ctx, name, IndexObjectFile)
 	if err != nil {
 		if entry != nil {
