@@ -152,7 +152,8 @@ func TestMySQLWireMalformedExecuteKeepsPreparedTypesAndConnection(t *testing.T) 
 		variable, err := ses.GetUserDefinedVar("binary_value")
 		require.NoError(t, err)
 		require.EqualValues(t, want, variable.Value)
-		require.Nil(t, stmt.params, "execute must release its parameter vector")
+		require.Zero(t, stmt.params.Length(), "execute must drop its parameter values")
+		require.NotSame(t, stmt.params, ses.GetProc().GetPrepareParams(), "and detach them")
 	}
 
 	// Zero-parameter execute still needs all five fixed bytes after the ID.
@@ -172,12 +173,12 @@ func TestMySQLWireMalformedExecuteKeepsPreparedTypesAndConnection(t *testing.T) 
 	writeWirePacket(t, clientConn, 0, longData)
 	assertError(execute(2, []byte{0, 1, 0, 0, 0, 0, 2}))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_TINY), 0}, stmt.ParamTypes)
-	require.Nil(t, stmt.params)
+	requireNoBinaryParamValues(t, stmt)
 	require.Empty(t, stmt.getFromSendLongData)
 	assertValue(9)
 	assertError(execute(2, bind(255, defines.MYSQL_TYPE_SHORT, 0x34)))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_TINY), 0}, stmt.ParamTypes)
-	require.Nil(t, stmt.params)
+	requireNoBinaryParamValues(t, stmt)
 	assertValue(9)
 	require.Equal(t, byte(defines.OKHeader), execute(2, bind(0, 0, 7))[0])
 	assertValue(7)
@@ -325,4 +326,54 @@ func TestParseExecuteDataReusesStringParamStorage(t *testing.T) {
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, packet("z"), 0))
 	require.False(t, stmt.params.GetNulls().Contains(0))
 	require.Equal(t, "z", stmt.params.GetStringAt(0))
+}
+
+// requireNoBinaryParamValues checks that a command left no parameter values
+// behind; the statement may keep the emptied storage for its next execution.
+func requireNoBinaryParamValues(t *testing.T, stmt *PrepareStmt) {
+	t.Helper()
+	if stmt.params != nil {
+		require.Zero(t, stmt.params.Length())
+		require.Empty(t, stmt.params.GetArea())
+	}
+}
+
+// Every COM_STMT_EXECUTE ends with clearBinaryParamState. The next execute of
+// the statement must still find, and reuse, its parameter storage.
+func TestExecuteParamStorageSurvivesCommandCleanup(t *testing.T) {
+	ctx := context.Background()
+	proto, proc, stmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer stmt.Close()
+	packet := func(value string) []byte {
+		data := []byte{0, 1, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+		data = append(data, byte(len(value)))
+		return append(data, value...)
+	}
+	execute := func(value string) {
+		require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, packet(value), 0))
+		proc.SetPrepareParams(stmt.params)
+		require.Equal(t, value, stmt.params.GetStringAt(0))
+		stmt.clearBinaryParamState(proc)
+		require.Nil(t, proc.GetPrepareParams(), "no process reads the storage after the command")
+		require.Zero(t, stmt.params.Length(), "the command's values are gone")
+	}
+
+	execute(strings.Repeat("a", 40))
+	// A NULL after a value reads as NULL with no leftover value.
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt, []byte{0, 1, 0, 0, 0, 1, 0}, 0))
+	require.True(t, stmt.params.GetNulls().Contains(0))
+	require.Empty(t, stmt.params.GetStringAt(0))
+	stmt.clearBinaryParamState(proc)
+	execute(strings.Repeat("a", 40))
+	params := stmt.params
+	allocs := proc.Mp().Stats().NumAlloc.Load()
+	for _, c := range "bcdef" {
+		execute(strings.Repeat(string(c), 40))
+		require.Same(t, params, stmt.params)
+	}
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load(), "re-executing must not allocate")
+
+	stmt.Close()
+	require.Nil(t, stmt.params, "Close frees the storage")
+	require.Zero(t, proc.Mp().CurrNB())
 }

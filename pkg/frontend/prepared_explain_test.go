@@ -53,7 +53,7 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	require.IsType(t, &tree.ExplainStmt{}, savedStmt)
 	require.Equal(t, []any{plan2.ParamValue{
 		Value: "42", IsBin: false, IsBinaryProtocol: true, EnableNumericPrefix: true,
-	}}, cw.ParamVals())
+	}}, paramValuesOf(cw.ParamVals()))
 
 	cw.plan = queryPlan
 	cw.ifIsExeccute = true

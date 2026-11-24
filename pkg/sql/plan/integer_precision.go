@@ -410,7 +410,7 @@ func refreshIntegerPrecisionParameters(q *pb.Query, values []any, selected []boo
 		if n.Kind != pb.IntegerPrecisionNode_PARAMETER || int(n.ParamPos) >= len(values) || selected != nil && !selected[n.ParamPos] {
 			continue
 		}
-		param, ok := values[n.ParamPos].(ParamValue)
+		param, ok := AsParamValue(values[n.ParamPos])
 		if !ok {
 			unknown[uint32(i+1)] = true
 			continue

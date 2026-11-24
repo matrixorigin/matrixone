@@ -229,7 +229,7 @@ func preparedFieldActualType(state *preparedSourceBindingState, pos int32) (type
 		return types.Type{}, false
 	}
 	value := state.values[pos]
-	param, wrapped := value.(ParamValue)
+	param, wrapped := AsParamValue(value)
 	if wrapped {
 		value = param.Value
 	}
@@ -471,7 +471,7 @@ func fieldReprepareActualType(state *preparedSourceBindingState, pos int32, reso
 		return actual, ok
 	}
 	value := state.values[pos]
-	if param, wrapped := value.(ParamValue); wrapped {
+	if param, wrapped := AsParamValue(value); wrapped {
 		value = param.Value
 	}
 	var spelling string
