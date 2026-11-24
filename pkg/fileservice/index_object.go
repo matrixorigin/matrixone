@@ -204,15 +204,8 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 			return moerr.NewEmptyRangeNoCtx(p.File)
 		}
 		if e.Size < 0 {
-			// A read to the end reads the rest of the object the entry holds.
-			info, err := file.Stat()
-			if err != nil {
-				return nil
-			}
-			if e.Offset >= info.Size() {
-				return moerr.NewEmptyRangeNoCtx(p.File)
-			}
-			e.Size = info.Size() - e.Offset
+			// The entry's file cannot tell its end from the object's: storage reads it.
+			return nil
 		}
 		from := &sourceErrReader{Reader: io.NewSectionReader(file, e.Offset, e.Size)}
 		if err := e.readFrom(ctx, from, s); err != nil {

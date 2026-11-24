@@ -495,18 +495,13 @@ func (c *IndexFileCache) put(ctx context.Context, name string, mark uint64, file
 	if err := checkCacheDirFiles(files); err != nil {
 		return false, err
 	}
-	if mark > 0 {
-		stripe := c.disk.deletes.stripe(diskPath)
-		stripe.RLock()
-		defer stripe.RUnlock()
-		if c.disk.deletes.since(diskPath, mark-1) {
-			return false, nil
-		}
+	if mark > 0 && c.disk.deletes.since(diskPath, mark-1) {
+		return false, nil
 	}
 	if c.disk.trashHoldsPublications() {
 		return false, nil
 	}
-	written, err := c.disk.putDir(ctx, diskPath, files)
+	written, err := c.disk.putDir(ctx, diskPath, mark, files)
 	if err != nil {
 		return false, c.disk.observeWriteResult(diskPath, err)
 	}
@@ -950,7 +945,7 @@ func checkCacheDirFiles(files []IndexCacheFile) error {
 	return nil
 }
 
-func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCacheFile) (written bool, err error) {
+func (d *DiskCache) putDir(ctx context.Context, diskPath string, mark uint64, files []IndexCacheFile) (written bool, err error) {
 	defer func() {
 		d.evictForDiskFull(ctx, err)
 	}()
@@ -1015,14 +1010,23 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	if err := syncDir(tmp); err != nil {
 		return false, err
 	}
-	// The hold is checked under the lock that sets it, so no publication starts once it is set.
+	// The hold and a delete counted since mark are checked under the locks that set them,
+	// so no publication starts once either is set; a delete waits only for this rename.
+	var stripe *sync.RWMutex
+	if mark > 0 {
+		stripe = d.deletes.stripe(diskPath)
+		stripe.RLock()
+	}
 	d.trash.mu.Lock()
-	held := d.trashHoldsPublicationsLocked()
+	held := d.trashHoldsPublicationsLocked() || mark > 0 && d.deletes.since(diskPath, mark-1)
 	var renameErr error
 	if !held {
 		renameErr = os.Rename(tmp, diskPath)
 	}
 	d.trash.mu.Unlock()
+	if stripe != nil {
+		stripe.RUnlock()
+	}
 	if held {
 		return false, nil
 	}

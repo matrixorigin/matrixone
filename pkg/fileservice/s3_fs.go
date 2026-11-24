@@ -1037,10 +1037,18 @@ read_disk_cache:
 		}
 	}
 
-	// A read that joined a download, or read the flights, reads the disk cache again: a
+	// A read that joined a download, or read the flights, reads the caches again: a
 	// flight caches its bytes before it ends, so the entries of one that ended since the
-	// disk cache was read are cached.
+	// caches were read are cached, in the index-file cache for an index object.
 	if joined || flights {
+		if vector.Policy.Any(IndexFileObject) && vector.Policy&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects() {
+			if err := s.readIndexObject(ctx, vector); err != nil {
+				return err
+			}
+			if vector.allDone() {
+				return finishCacheUpdates()
+			}
+		}
 		if err := readCache(ctx, s.diskCache, vector); err != nil {
 			return err
 		}
@@ -1441,9 +1449,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	// Any other range read takes its bytes from a prefetch object, which other reads of
-	// them join.
+	// them join. A read that streams an entry to its caller opens its own reader.
+	streams := slices.ContainsFunc(vector.Entries, func(e IOEntry) bool { return !e.done && e.ReadCloserForRead != nil })
 	if prefetchContent == nil && !readFullObject && s.diskCache != nil && min != nil && max != nil &&
-		!vector.Policy.Any(SkipDiskCacheReads) {
+		!vector.Policy.Any(SkipDiskCacheReads) && !streams {
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return getReader(ctx, &start, &end)
 		}

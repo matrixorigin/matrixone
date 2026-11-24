@@ -37,7 +37,7 @@ func readColumnRanges(node *plan.Node) {
 // readsSubsetOfColumns reports whether a scan of a table with columns all reads only some
 // of its visible columns, so it reads column ranges instead of whole objects. Hidden
 // columns, as the row id or a composite primary key, do not count: a scan of every visible
-// column reads whole objects.
+// column, or of a table with one visible column, reads whole objects.
 func readsSubsetOfColumns(all, read []*plan.ColDef) bool {
 	visible := func(cols []*plan.ColDef) int {
 		n := 0
@@ -48,5 +48,6 @@ func readsSubsetOfColumns(all, read []*plan.ColDef) bool {
 		}
 		return n
 	}
-	return visible(read) < visible(all)
+	n := visible(all)
+	return n > 1 && visible(read) < n
 }

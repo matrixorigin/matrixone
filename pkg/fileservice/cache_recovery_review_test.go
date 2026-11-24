@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -271,25 +272,36 @@ func TestRangeIndexSurvivesOlderEviction(t *testing.T) {
 	}
 }
 
-func TestIndexObjectReadToEndUsesWarmCache(t *testing.T) {
+// A read of a known size is served from a warm index-file entry. A read to the end is read
+// from storage, so a truncated entry file cannot shorten it.
+func TestIndexObjectReadToEndReadsWholeTail(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		readToEnd bool
+		truncate  bool
 	}{
 		{name: "known_size"},
 		{name: "read_to_end", readToEnd: true},
+		{name: "read_to_end_truncated_entry", readToEnd: true, truncate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs, storage, data := newIndexObjectFS(t, true)
 			cacheIndexObject(t, fs, "object", data)
-			offset := int64(len(data) - 32)
+			if tc.truncate {
+				diskPath, ok := fs.indexObjectCached("object")
+				require.True(t, ok)
+				require.NoError(t, os.Truncate(filepath.Join(diskPath, IndexObjectFile), 1024))
+			}
+			offset := int64(1000)
 			size := int64(len(data)) - offset
 			if tc.readToEnd {
 				size = -1
 			}
 			got := readIndexObjectRange(t, fs, IndexFileObject|SkipFullFilePreloads, offset, size)
-			require.Equal(t, data[offset:], got)
-			require.Zero(t, storage.reads.Load(), "a warm index-file entry should serve the read")
+			require.Equal(t, data[offset:], got, "the read returns the whole object tail")
+			if !tc.readToEnd {
+				require.Zero(t, storage.reads.Load(), "a warm index-file entry serves the read")
+			}
 		})
 	}
 }
@@ -372,6 +384,169 @@ func TestReadStartedSplitDownloadWaitsForItsPart(t *testing.T) {
 				require.True(t, got.captured, "the initiating read should take its bytes while the other part is still pending")
 				require.Equal(t, source[partSize:partSize+8], reader.captures[0].data.Bytes())
 			})
+		})
+	}
+}
+
+// A read that streams an entry gets its reader before the body is read.
+func TestReadCloserReturnsBeforeReadingBody(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+	}{
+		{name: "bypass_disk_reads", policy: SkipDiskCacheReads},
+		{name: "eligible_for_range_sharing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			fs, _, data := newPrefetchRangeFS(t, 0, 1024)
+			<-fs.diskCache.load.done
+			storage := &stallingStorage{ObjectStorage: fs.storage, stalled: make(chan struct{}), release: make(chan struct{})}
+			fs.storage = storage
+			unblock := sync.OnceFunc(func() { close(storage.release) })
+			readDone := make(chan struct{})
+			defer func() {
+				unblock()
+				<-readDone
+			}()
+			type result struct {
+				reader io.ReadCloser
+				err    error
+			}
+			results := make(chan result, 1)
+			go func() {
+				defer close(readDone)
+				var reader io.ReadCloser
+				vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | tc.policy,
+					Entries: []IOEntry{{Size: 64, ReadCloserForRead: &reader}}}
+				defer vec.Release()
+				err := fs.Read(ctx, vec)
+				results <- result{reader: reader, err: err}
+			}()
+
+			var got result
+			select {
+			case got = <-results:
+			case <-storage.stalled:
+				unblock()
+				got = <-results
+				if got.reader != nil {
+					_ = got.reader.Close()
+				}
+				t.Fatal("Read consumed the remote body before handing the ReadCloser to the caller")
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			require.NoError(t, got.err)
+			require.NotNil(t, got.reader)
+			defer got.reader.Close()
+			unblock()
+			content, err := io.ReadAll(got.reader)
+			require.NoError(t, err)
+			require.Equal(t, data[:64], content)
+		})
+	}
+}
+
+// A Delete waits for no publication I/O of a put, only for its publishing rename.
+func TestIndexFileCacheDeleteReturnsWhilePutIsStalled(t *testing.T) {
+	for _, protectedPut := range []bool{false, true} {
+		name := "ordinary_put"
+		if protectedPut {
+			name = "put_with_delete_mark"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fs, _, data := newIndexObjectFS(t, true)
+			cache := fs.indexFileCache
+			blocked := make(chan struct{})
+			resume := make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(resume) })
+			defer unblock()
+			cache.disk.hooks.beforeFilePublication = func() {
+				close(blocked)
+				<-resume
+			}
+			putDone := make(chan error, 1)
+			go func() {
+				var err error
+				if protectedPut {
+					_, err = cache.PutUnlessDeleted(ctx, "entry", cache.DeleteMark(), recoveryFiles(data[:64]))
+				} else {
+					_, err = cache.Put(ctx, "entry", recoveryFiles(data[:64]))
+				}
+				putDone <- err
+			}()
+			defer func() {
+				unblock()
+				require.NoError(t, <-putDone)
+			}()
+			select {
+			case <-blocked:
+			case <-time.After(5 * time.Second):
+				t.Fatal("put never reached publication")
+			}
+
+			deleteCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			defer cancel()
+			deleted := make(chan error, 1)
+			go func() { deleted <- cache.Delete(deleteCtx, "entry") }()
+			select {
+			case err := <-deleted:
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			case <-time.After(time.Second):
+				unblock()
+				require.ErrorIs(t, <-deleted, context.DeadlineExceeded)
+				t.Fatal("Delete stayed blocked past its deadline until the put resumed")
+			}
+		})
+	}
+}
+
+// A read that waited for a queued prefetch reads the cache the prefetch published to.
+func TestReadRechecksCachesAfterQueuedPublication(t *testing.T) {
+	for _, index := range []bool{false, true} {
+		name := "table_disk_cache"
+		if index {
+			name = "index_file_cache"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			fs, storage, data := newIndexObjectFS(t, index)
+			fs.prefetcher.close(ctx)
+			gate := newGatedRun("blocker")
+			fs.prefetcher = newPrefetcher(1, fs.prefetchQueueLimit(), fs.haveObject, func(ctx context.Context, req ObjectPrefetch) {
+				if req.FilePath == "blocker" {
+					gate.run(ctx, req)
+					return
+				}
+				// Force the legal scheduling order where the queued read resumes
+				// only after the real publisher installed and unregistered the fill.
+				fs.prefetchObject(withDownloadStarted(ctx, func() {}), req)
+			})
+			defer gate.releaseAll()
+			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "blocker", Size: 1}))
+			select {
+			case path := <-gate.started:
+				require.Equal(t, "blocker", path)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+
+			policy := Policy(SkipMemoryCache)
+			if index {
+				policy |= IndexFileObject
+			}
+			ctx = WithFileServicePolicy(ctx, policy)
+			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
+			require.True(t, fs.prefetcher.isQueued("object"))
+			vec := &IOVector{FilePath: "object", Policy: policy, Entries: []IOEntry{{Offset: 32, Size: 16}}}
+			defer vec.Release()
+			require.NoError(t, fs.Read(ctx, vec))
+			require.Equal(t, data[32:48], vec.Entries[0].Data)
+			require.EqualValues(t, 1, storage.reads.Load(), "the read should use the just-published object")
 		})
 	}
 }
