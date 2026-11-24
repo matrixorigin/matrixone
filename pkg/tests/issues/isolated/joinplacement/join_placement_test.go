@@ -36,10 +36,17 @@ import (
 func TestSingleRemoteWorkerJoinPlacement(t *testing.T) {
 	// Separate process: the embedded cluster and forced AP planner flag are
 	// private to these placement tests. Ports use the embed package's lease.
+	var ingressID string
 	cluster, err := embed.StartTestCluster(embed.WithDataPath(t.TempDir()), embed.WithCNCount(2),
 		embed.WithPreStart(func(s embed.ServiceOperator) {
 			if s.ServiceType() == metadata.ServiceType_CN {
 				s.Adjust(func(cfg *embed.ServiceConfig) {
+					// The first CN accepts direct SQL connections but is not an AP
+					// worker. Keep that topology for this private cluster's lifetime.
+					if ingressID == "" {
+						ingressID = s.ServiceID()
+						cfg.CN.InitWorkState = metadata.WorkState_Draining.String()
+					}
 					cfg.CN.SQLAddress = fmt.Sprintf("127.0.0.1:%d", cfg.CN.Frontend.Port)
 					// The private cluster is not testing authorization. Do
 					// not subject its internal privilege queries to forced AP.
@@ -55,6 +62,7 @@ func TestSingleRemoteWorkerJoinPlacement(t *testing.T) {
 	defer cancel()
 	coordinator, err := cluster.GetCNService(0)
 	require.NoError(t, err)
+	require.Equal(t, ingressID, coordinator.ServiceID())
 	peer, err := cluster.GetCNService(1)
 	require.NoError(t, err)
 	open := func(cn embed.ServiceOperator) *sql.DB {
@@ -167,26 +175,18 @@ func TestSingleRemoteWorkerJoinPlacement(t *testing.T) {
 	inv := clusterservice.GetMOCluster(coordinator.ServiceID())
 	refresher, ok := inv.(clusterservice.AuthoritativeRefresher)
 	require.True(t, ok)
-	waitWorkers := func(want int) {
-		t.Helper()
-		require.Eventually(t, func() bool {
-			if refresher.Refresh(ctx) != nil {
-				return false
-			}
-			var ids []string
-			inv.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
-				ids = append(ids, s.ServiceID)
-				return true
-			})
-			return len(ids) == want && (want != 1 || ids[0] == peer.ServiceID())
-		}, 20*time.Second, 100*time.Millisecond)
-	}
-	waitWorkers(2)
-	require.NoError(t, inv.DebugUpdateCNWorkState(coordinator.ServiceID(), int(metadata.WorkState_Draining)))
-	t.Cleanup(func() {
-		require.NoError(t, inv.DebugUpdateCNWorkState(coordinator.ServiceID(), int(metadata.WorkState_Working)))
-	})
-	waitWorkers(1)
+	require.Eventually(t, func() bool {
+		if refresher.Refresh(ctx) != nil {
+			return false
+		}
+		states := make(map[string]metadata.WorkState)
+		inv.GetCNServiceWithoutWorkingState(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+			states[s.ServiceID] = s.WorkState
+			return true
+		})
+		return len(states) == 2 && states[ingressID] == metadata.WorkState_Draining &&
+			states[peer.ServiceID()] == metadata.WorkState_Working
+	}, 20*time.Second, 100*time.Millisecond, "expected draining SQL ingress and one working peer")
 	t.Run("remote_appendable_range", func(t *testing.T) {
 		conn := connections[2]
 		const q = "select k,row_number() over(order by k) rn from append_only"
