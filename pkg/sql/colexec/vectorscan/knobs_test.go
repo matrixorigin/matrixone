@@ -174,4 +174,7 @@ func TestRequiredProtocolVersion(t *testing.T) {
 		require.Equal(t, SearchKnobsProtocolVersion, RequiredProtocolVersion(spec))
 	}
 	require.Greater(t, SearchKnobsProtocolVersion, IndexSearchScanProtocolVersion)
+	require.Equal(t, StablePartitionOwnershipProtocolVersion, RequiredProtocolVersion(&plan.IndexSearchScan{
+		StablePartitionOwnership: true, InternalTopk: 1,
+	}))
 }

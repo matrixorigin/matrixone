@@ -125,8 +125,8 @@ func validateVectorPartitionDestinationWithResult(proc *process.Process, p *pipe
 
 // Required PRE can only use workers that can receive the complete local domain
 // and honor a CPU centroid route. A GPU route, a non-coordinator ingress or a
-// write transaction falls back as a whole query; a worker without
-// vectorscan.IndexSearchScanProtocolVersion is an error.
+// write transaction falls back as a whole query. The subsequent shared
+// ownership gate negotiates protocol for every eligible partitioned scan.
 func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
@@ -162,18 +162,6 @@ func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 		device = brute_force.DispatchesToDevice[float32](gpu)
 	}
 	if coordinator && readonly && !device {
-		requiredVersion, err := c.indexSearchScanProtocolVersion(spec)
-		if err != nil {
-			return err
-		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, requiredVersion)
-		if err != nil {
-			return err
-		}
-		if !supported {
-			return moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
-		}
 		return nil
 	}
 	var err error
@@ -182,12 +170,27 @@ func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 	return err
 }
 
-// indexSearchScanProtocolVersion returns the MORPC protocol version every CN needs to run
-// spec once its unset knobs are filled from the session variables.
-func (c *Compile) indexSearchScanProtocolVersion(spec *plan.IndexSearchScan) (int64, error) {
-	stamped := plan2.DeepCopyIndexSearchScan(spec)
-	if err := vectorscan.StampSessionKnobs(stamped, c.proc.GetResolveVariableFunc()); err != nil {
-		return 0, err
+// Object ownership is a query-wide decision made before DOP/fragment
+// construction: localizing one scan later would leave a distributed exact
+// PRE source targeting an incompatible set of receivers. Unmarked requests
+// from older coordinators retain the legacy policy on every remote worker.
+func (c *Compile) constrainPartitionOwnershipWorkers(qry *plan.Query) error {
+	if c.execType != plan2.ExecTypeAP_MULTICN || len(c.cnList) <= 1 {
+		return nil
 	}
-	return vectorscan.RequiredProtocolVersion(stamped), nil
+	for _, node := range qry.GetNodes() {
+		if node.GetNodeType() != plan.Node_INDEX_SEARCH_SCAN ||
+			!c.canPartitionIndexSearchScan(qry, node) {
+			continue
+		}
+		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList,
+			vectorscan.StablePartitionOwnershipProtocolVersion)
+		if err != nil || supported {
+			return err
+		}
+		c.execType = plan2.ExecTypeAP_ONECN
+		c.cnList, err = c.scheduleQueryWorkers()
+		return err
+	}
+	return nil
 }

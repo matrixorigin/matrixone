@@ -48,8 +48,8 @@ func vectorPlacementCompile(t *testing.T, workers engine.Nodes) (*Compile, *expr
 			ServiceID: worker.Id, PipelineServiceAddress: worker.Addr, QueryAddress: worker.Addr,
 		})
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
-	client.version = vectorscan.IndexSearchScanProtocolVersion
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.StablePartitionOwnershipProtocolVersion)
+	client.version = vectorscan.StablePartitionOwnershipProtocolVersion
 	return c, client
 }
 
@@ -70,7 +70,7 @@ func TestVectorScanPlacementKeepsObjectOwnersAcrossIngress(t *testing.T) {
 		{Id: "c", Addr: "x:6001", Mcpu: 4},
 	}
 	for _, count := range []int{2, 3} {
-		var reference map[types.Objectid]string
+		var legacyReference map[types.Objectid]string
 		for ingress := 0; ingress < count; ingress++ {
 			selected := slices.Clone(workers[:count])
 			selected[0], selected[ingress] = selected[ingress], selected[0]
@@ -79,7 +79,7 @@ func TestVectorScanPlacementKeepsObjectOwnersAcrossIngress(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { ReleaseScopes(scopes) })
 			require.Equal(t, selected, c.cnList, "scan numbering must not mutate query placement")
-			owners := make(map[types.Objectid]string)
+			legacyOwners := make(map[types.Objectid]string)
 			buckets := make(map[int32]bool)
 			for _, scope := range scopes {
 				require.False(t, buckets[scope.NodeInfo.CNIDX])
@@ -87,24 +87,42 @@ func TestVectorScanPlacementKeepsObjectOwnersAcrossIngress(t *testing.T) {
 				require.Equal(t, int32(count), scope.NodeInfo.CNCNT)
 			}
 			require.Len(t, buckets, count)
-			// Fixed, complete ObjectIDs exercise the real storage ownership predicate.
+			// The reader owns memory based on the actual execution route,
+			// not on the stable sort ordinal used for object/cache partitions.
 			for object := byte(0); object < 32; object++ {
 				id := types.Objectid{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, object, 0}
-				stats := objectio.NewObjectStatsWithObjectID(&id, object%2 == 0, false, true)
+				appendable := object%2 == 0
+				stats := objectio.NewObjectStatsWithObjectID(&id, appendable, false, true)
+				var owner string
 				for _, scope := range scopes {
-					rsp := &engine.RangesShuffleParam{Node: vectorPlacementNode(),
-						CNCNT: int32(count), CNIDX: scope.NodeInfo.CNIDX, ShuffleByObjectID: true}
+					node := scope.DataSource.node
+					rsp := &engine.RangesShuffleParam{
+						Node: node, CNCNT: scope.NodeInfo.CNCNT, CNIDX: scope.NodeInfo.CNIDX,
+						IsLocalCN: scope.ipAddrMatch(c.addr), ShuffleByObjectID: true,
+						AppendableOnMemoryOwner: node.IndexSearchScan.GetStablePartitionOwnership(),
+					}
+					require.True(t, rsp.AppendableOnMemoryOwner)
 					if !plan2.ShouldSkipObjByShuffle(rsp, stats) {
-						require.Empty(t, owners[id], "object must have exactly one owner")
-						owners[id] = scope.NodeInfo.Id
+						require.Empty(t, owner, "object must have exactly one owner")
+						owner = scope.NodeInfo.Id
+					}
+					rsp.AppendableOnMemoryOwner = false
+					if !plan2.ShouldSkipObjByShuffle(rsp, stats) {
+						require.Empty(t, legacyOwners[id])
+						legacyOwners[id] = scope.NodeInfo.Id
 					}
 				}
-				require.NotEmpty(t, owners[id])
+				require.NotEmpty(t, legacyOwners[id])
+				if appendable {
+					require.Equal(t, selected[0].Id, owner, "flushed aobj follows the actual ingress")
+				} else {
+					require.Equal(t, legacyOwners[id], owner, "immutable object/cache locality is unchanged")
+				}
 			}
-			if reference == nil {
-				reference = owners
+			if legacyReference == nil {
+				legacyReference = legacyOwners
 			} else {
-				require.Equal(t, reference, owners, "changing ingress must preserve physical object owners")
+				require.Equal(t, legacyReference, legacyOwners, "unmarked old plans retain object-ID ownership")
 			}
 		}
 	}

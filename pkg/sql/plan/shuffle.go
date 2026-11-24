@@ -195,6 +195,9 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 		return false
 	}
 	if rsp.ShuffleByObjectID {
+		if rsp.AppendableOnMemoryOwner && objstats.GetAppendable() {
+			return !rsp.IsLocalCN
+		}
 		objID := objstats.ObjectLocation().ObjectId()
 		return IVFObjectIDHashToRange(objID, uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
 	}
