@@ -9,9 +9,7 @@ SELECT POWER(2, 3) AS result4;
 SELECT POWER(2, 0) AS result5;
 SELECT POWER(4, 0.5) AS result6;
 
-#SELECT - #28375 keeps overflow/NaN-input results as row-local NULL;
-# #31155's finite negative base with a finite non-integer exponent now
-# rejects with the DOUBLE out-of-range error (MySQL 1690, SQLSTATE 22003).
+# Constant POW and POWER yield NULL for results outside the finite real domain.
 SELECT POW(-2, 0.5);
 SELECT POWER(-8, 0.5);
 SELECT POWER(-2, 0.5), POWER(2, 1024);
@@ -78,10 +76,9 @@ SELECT t1.a, t2.a FROM t1 JOIN t2 ON (power(t1.a, t1.b) <> power(t2.a, t2.b));
 drop table t1;
 drop table t2;
 
-# Issue #28137: row-local NULLs must survive folding, vectors, aggregates and DML.
-# Issue #31155: the negative-base fractional-exponent domain rejects instead;
-# a mixed domain statement fails as a whole, so the domain stays separate.
+# Row-local NULLs survive folding, vector evaluation, aggregation and writes.
 SELECT POWER(-1, 0.5);
+SELECT POWER(-8, 1/3);
 SELECT POWER(0, -1), EXP(1000), COT(0);
 SELECT POWER(2, 1024) IS NULL, POWER(2, 1023) IS NOT NULL,
        POWER(2, -1075) = 0, EXP(710) IS NULL, EXP(709) IS NOT NULL, EXP(-1000) = 0;
@@ -91,17 +88,16 @@ DROP TABLE IF EXISTS math_null_src;
 DROP TABLE IF EXISTS math_null_dst;
 DROP TABLE IF EXISTS math_null_required;
 CREATE TABLE math_null_src(id INT PRIMARY KEY, b DOUBLE, e DOUBLE, x DOUBLE, c DOUBLE);
-INSERT INTO math_null_src VALUES (1,2,3,0,1), (2,2,1024,710,0), (3,4,0.5,-1000,-1), (4,NULL,NULL,NULL,NULL);
+INSERT INTO math_null_src VALUES (1,2,3,0,1), (2,2,1024,710,0), (3,4,0.5,-1000,-1), (4,NULL,NULL,NULL,NULL), (5,-2,0.5,NULL,NULL);
 SELECT id, POWER(b,e), EXP(x), COT(c) IS NULL FROM math_null_src ORDER BY id;
 SELECT id, POWER(b,1024) IS NULL, POWER(b,0.5) IS NOT NULL FROM math_null_src ORDER BY id;
 SELECT COUNT(*), COUNT(POWER(b,e)), SUM(POWER(b,e)), COUNT(EXP(x)), SUM(EXP(x)), COUNT(COT(c)) FROM math_null_src;
 SELECT id FROM math_null_src WHERE POWER(b,e) > 0 ORDER BY id;
 SELECT id, IF(id=2, 7, POWER(b,e)), CASE WHEN id=2 THEN 7 ELSE EXP(x) END FROM math_null_src ORDER BY id;
-# Issue #31155: row-dependent IF/CASE masks still suppress the new domain
-# error for masked rows, and both public vector shapes reject as a whole.
-SELECT id, IF(id>2, POWER(b-3, 0.5), 7) FROM math_null_src ORDER BY id;
-SELECT id, CASE WHEN id>2 THEN POWER(b-3, 0.5) ELSE 7 END FROM math_null_src ORDER BY id;
-SELECT id, POWER(-b, 0.5) FROM math_null_src ORDER BY id;
+# IF and CASE return the fallback on masked rows and NULL on selected rows outside the domain.
+SELECT id, IF(id BETWEEN 2 AND 4, POWER(b-3, 0.5), 7) FROM math_null_src ORDER BY id;
+SELECT id, CASE WHEN id BETWEEN 2 AND 4 THEN POWER(b-3, 0.5) ELSE 7 END FROM math_null_src ORDER BY id;
+SELECT id, POW(b-3, 0.5) FROM math_null_src ORDER BY id;
 SELECT id, POWER(-2, e/4) FROM math_null_src ORDER BY id;
 CREATE TABLE math_null_dst(id INT, p DOUBLE, x DOUBLE, c DOUBLE);
 INSERT INTO math_null_dst SELECT id, POWER(b,e), EXP(x), COT(c) FROM math_null_src;
@@ -110,6 +106,7 @@ UPDATE math_null_dst SET p=POWER(0,-1), x=EXP(710), c=COT(0) WHERE id=1;
 SELECT id, p IS NULL, x IS NULL, c IS NULL FROM math_null_dst ORDER BY id;
 CREATE TABLE math_null_required(v DOUBLE NOT NULL);
 INSERT INTO math_null_required SELECT POWER(0,-1);
+INSERT INTO math_null_required SELECT POWER(-2,0.5);
 INSERT INTO math_null_required SELECT EXP(710);
 INSERT INTO math_null_required SELECT COT(0);
 INSERT INTO math_null_required SELECT POWER(b,e) FROM math_null_src;
@@ -130,7 +127,7 @@ DROP TABLE math_null_src;
 DROP TABLE IF EXISTS math_null_inputs;
 DROP TABLE IF EXISTS math_null_ctas;
 CREATE TABLE math_null_inputs(id INT PRIMARY KEY, b DOUBLE NOT NULL, e DOUBLE NOT NULL, x DOUBLE NOT NULL, c DOUBLE NOT NULL);
-INSERT INTO math_null_inputs VALUES (1,2,3,0,1), (2,2,1024,710,0);
+INSERT INTO math_null_inputs VALUES (1,2,3,0,1), (2,2,1024,710,0), (3,-2,0.5,0,1);
 SELECT id FROM math_null_inputs WHERE POWER(b,e) IS NULL ORDER BY id;
 SELECT id FROM math_null_inputs WHERE EXP(x) IS NULL ORDER BY id;
 SELECT id FROM math_null_inputs WHERE COT(c) IS NULL ORDER BY id;

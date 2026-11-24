@@ -5550,11 +5550,7 @@ func TestPower(t *testing.T) {
 	}
 }
 
-// TestPowerNonDomainFailuresReturnNull pins the #28375 row-local NULL
-// contract for everything outside the negative-fractional POW domain:
-// overflow and NaN/Inf input results stay NULL, finite underflow stays a
-// value-0 and input NULLs propagate. The finite negative base / finite
-// non-integer exponent domain is covered separately below.
+// Overflow and non-finite results produce NULL. Finite underflow produces zero.
 func TestPowerNonDomainFailuresReturnNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCases := []struct {
@@ -5609,72 +5605,66 @@ func TestPowerNonDomainFailuresReturnNull(t *testing.T) {
 	}
 }
 
-// TestPowerNegativeFractionalExponentReturnsOutOfRange pins the #31155
-// Expected: a finite negative base with a finite non-integer exponent
-// rejects the statement with moerr.ErrOutOfRange (MySQL 1690, SQLSTATE
-// 22003) across every input shape of the fixed/fixed binary template.
-// This is a proposed compatibility change over merged #28375's row-local
-// NULL decision, not yet an accepted product decision.
-func TestPowerNegativeFractionalExponentReturnsOutOfRange(t *testing.T) {
+func TestPowerNegativeFractionalExponentReturnsNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
-
-	expectOutOfRange := func(t *testing.T, bases, exponents FunctionTestInput) {
-		t.Helper()
-		tcc := NewFunctionTestCase(
-			proc,
-			[]FunctionTestInput{bases, exponents},
-			NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
-			Power,
-		)
-		defer tcc.Free()
-		require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
-		err := Power(tcc.parameters, tcc.result, proc, tcc.fnLength, nil)
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange),
-			"expected ErrOutOfRange, got %v", err)
+	floatType := types.T_float64.ToType()
+	testCases := []struct {
+		name      string
+		bases     FunctionTestInput
+		exponents FunctionTestInput
+		values    []float64
+		nulls     []bool
+	}{
+		{
+			name:      "constant base with constant exponent",
+			bases:     NewFunctionTestConstInput(floatType, []float64{-2, -2}, nil),
+			exponents: NewFunctionTestConstInput(floatType, []float64{0.5, 0.5}, nil),
+			values:    []float64{0, 0},
+			nulls:     []bool{true, true},
+		},
+		{
+			name:      "negative base with one-third exponent",
+			bases:     NewFunctionTestConstInput(floatType, []float64{-8, -8}, nil),
+			exponents: NewFunctionTestConstInput(floatType, []float64{1.0 / 3.0, 1.0 / 3.0}, nil),
+			values:    []float64{0, 0},
+			nulls:     []bool{true, true},
+		},
+		{
+			name:      "constant base with vector exponent",
+			bases:     NewFunctionTestConstInput(floatType, []float64{-2, -2, -2}, nil),
+			exponents: NewFunctionTestInput(floatType, []float64{2, 0.5, 3}, nil),
+			values:    []float64{4, 0, -8},
+			nulls:     []bool{false, true, false},
+		},
+		{
+			name:      "vector base with constant exponent",
+			bases:     NewFunctionTestInput(floatType, []float64{1, -2, 4}, nil),
+			exponents: NewFunctionTestConstInput(floatType, []float64{0.5, 0.5, 0.5}, nil),
+			values:    []float64{1, 0, 2},
+			nulls:     []bool{false, true, false},
+		},
+		{
+			name:      "vector base with vector exponent and input null",
+			bases:     NewFunctionTestInput(floatType, []float64{2, -2, -2, -2}, nil),
+			exponents: NewFunctionTestInput(floatType, []float64{3, -0.5, 3, 2}, []bool{false, false, false, true}),
+			values:    []float64{8, 0, -8, 0},
+			nulls:     []bool{false, true, false, true},
+		},
 	}
-
-	t.Run("constant base with constant exponent", func(t *testing.T) {
-		expectOutOfRange(t,
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
-		)
-	})
-
-	t.Run("historical pow witness pow(-8, 1/3)", func(t *testing.T) {
-		expectOutOfRange(t,
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-8, -8}, nil),
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{1.0 / 3.0, 1.0 / 3.0}, nil),
-		)
-	})
-
-	t.Run("constant base with vector exponent", func(t *testing.T) {
-		expectOutOfRange(t,
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{2, 0.5}, nil),
-		)
-	})
-
-	t.Run("vector base with constant exponent", func(t *testing.T) {
-		expectOutOfRange(t,
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{1, -2}, nil),
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
-		)
-	})
-
-	t.Run("vector base with vector exponent", func(t *testing.T) {
-		expectOutOfRange(t,
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{2, -2, 4}, nil),
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{3, 0.5, 0.5}, nil),
-		)
-	})
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{tc.bases, tc.exponents},
+				NewFunctionTestResult(floatType, false, tc.values, tc.nulls),
+				Power,
+			)
+			succeed, info := tcc.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
-// TestPowerEmptyBatchEvaluatesNoRows pins the zero-row contract of the
-// domain rejection: colexec passes the batch's row count to scalar
-// functions, and a constant/constant helper evaluates its callback even
-// when the batch is empty, so a domain-shaped constant input must not
-// reject a zero-length statement evaluation.
 func TestPowerEmptyBatchEvaluatesNoRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tcc := NewFunctionTestCase(
@@ -5694,71 +5684,54 @@ func TestPowerEmptyBatchEvaluatesNoRows(t *testing.T) {
 	require.Equal(t, 0, tcc.result.GetResultVector().Length())
 }
 
-// TestPowerRespectsSelectList pins the selectList boundary of the domain
-// rejection: rows masked off by the select list are never evaluated, so a
-// masked domain row stays NULL without raising an error, a selected domain
-// row surfaces the typed out-of-range error, and an all-masked constant
-// batch short-circuits to NULL. Every case binds its own cleanup at
-// creation, so assertion failures and completion both release the
-// case-owned vectors (no cross-case pointer rebinding).
 func TestPowerRespectsSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
-
-	masked := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
+	floatType := types.T_float64.ToType()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(floatType, []float64{-2, 2, 4}, nil),
+		NewFunctionTestInput(floatType, []float64{0.5, 3, 0.5}, nil),
+	}
+	testCases := []struct {
+		name       string
+		inputs     []FunctionTestInput
+		selectList FunctionSelectList
+		values     []float64
+		nulls      []bool
+	}{
+		{
+			name:       "mask domain row",
+			inputs:     inputs,
+			selectList: FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}},
+			values:     []float64{0, 8, 2},
+			nulls:      []bool{true, false, false},
 		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 8}, []bool{true, false}),
-		Power,
-	)
-	defer masked.Free()
-	require.NoError(t, masked.result.PreExtendAndReset(masked.fnLength))
-	err := Power(masked.parameters, masked.result, proc, masked.fnLength, &FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{false, true},
-	})
-	require.NoError(t, err)
-	resultVec := masked.result.GetResultVector()
-	require.True(t, resultVec.GetNulls().Contains(0))
-	resultParam := vector.GenerateFunctionFixedTypeParameter[float64](resultVec)
-	value, isNull := resultParam.GetValue(1)
-	require.False(t, isNull)
-	require.Equal(t, float64(8), value)
-
-	selected := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{-2, 2}, nil),
-			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5, 3}, nil),
+		{
+			name:       "select domain and valid rows",
+			inputs:     inputs,
+			selectList: FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+			values:     []float64{0, 0, 2},
+			nulls:      []bool{true, true, false},
 		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
-		Power,
-	)
-	defer selected.Free()
-	require.NoError(t, selected.result.PreExtendAndReset(selected.fnLength))
-	err = Power(selected.parameters, selected.result, proc, selected.fnLength, &FunctionSelectList{
-		AnyNull:    true,
-		SelectList: []bool{true, false},
-	})
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange),
-		"expected ErrOutOfRange, got %v", err)
-
-	allMasked := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{-2, -2}, nil),
-			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0.5, 0.5}, nil),
+		{
+			name: "all constant rows masked",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(floatType, []float64{2, 2}, nil),
+				NewFunctionTestConstInput(floatType, []float64{3, 3}, nil),
+			},
+			selectList: FunctionSelectList{AllNull: true},
+			values:     []float64{0, 0},
+			nulls:      []bool{true, true},
 		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0}, []bool{true, true}),
-		Power,
-	)
-	defer allMasked.Free()
-	allMasked = allMasked.WithSelectList(&FunctionSelectList{AllNull: true})
-	succeed, info := allMasked.Run()
-	require.True(t, succeed, info)
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc, tc.inputs, NewFunctionTestResult(floatType, false, tc.values, tc.nulls), Power,
+			).WithSelectList(&tc.selectList)
+			succeed, info := tcc.RunAndFree()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 // TRUNCATE

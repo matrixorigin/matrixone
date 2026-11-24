@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -319,12 +320,7 @@ func TestTPReusablePipelineQueries(t *testing.T) {
 	}
 }
 
-// TestTPReusePowerProjectionDomainErrorRecovery binds a real Power projection
-// consumer (power(v-2, 0.5)) onto the reused prepared-TP pipeline: the same
-// compiled f.c/f.root must serve repeated executions, surface the typed
-// out-of-range rejection for domain rows WITHOUT publishing the failed batch
-// to the consumer, and recover valid results on the next execution.
-func TestTPReusePowerProjectionDomainErrorRecovery(t *testing.T) {
+func TestTPReusePowerProjectionNullRows(t *testing.T) {
 	f := newTPReusePipeline(t, plan2.ExecTypeTP, false)
 	keyType := types.T_varchar.ToType()
 	valueType := types.T_int32.ToType()
@@ -337,40 +333,40 @@ func TestTPReusePowerProjectionDomainErrorRecovery(t *testing.T) {
 		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
 	}
 	project := f.root.(*projection.Projection)
-	// One-shot real consumer binding: keep the key column and project
-	// power(v-2, 0.5). The reader rows are k=A/B/B with v=1/2/3, so the bases
-	// are -1/0/1 and only the v=1 row is inside the rejected real domain.
+	// For the reader's A/B/B rows with v=1/2/3, the bases are -1/0/1.
 	two := &plan.Expr{Typ: valueType.PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2}}}}
 	half := &plan.Expr{Typ: types.T_float64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0.5}}}}
 	project.ProjectList = []*plan.Expr{col(0, keyType), bind("power", bind("-", col(1, valueType), two), half)}
 
-	runSelected := func() ([]string, error) {
-		var got []string
-		err := f.execute("A", false, nil, func(b *batch.Batch) {
+	type projectedRow struct {
+		key   string
+		value float64
+		null  bool
+	}
+	run := func(param string, want []projectedRow) {
+		t.Helper()
+		var got []projectedRow
+		err := f.execute(param, false, nil, func(b *batch.Batch) {
+			power := vector.GenerateFunctionFixedTypeParameter[float64](b.Vecs[1])
 			for row := range b.RowCount() {
-				got = append(got, fmt.Sprintf("%s:%v", b.Vecs[0].GetStringAt(row), vector.GetFixedAtNoTypeCheck[float64](b.Vecs[1], row)))
+				value, isNull := power.GetValue(uint64(row))
+				result := projectedRow{key: b.Vecs[0].GetStringAt(row), null: isNull}
+				if !isNull {
+					result.value = value
+				}
+				got = append(got, result)
 			}
 		})
-		return got, err
+		require.NoError(t, err)
+		require.Equal(t, want, got)
 	}
+	valid := []projectedRow{{key: "B", value: 0}, {key: "B", value: 1}}
+	mixed := []projectedRow{{key: "A", null: true}, {key: "B", value: 0}, {key: "B", value: 1}}
 	var warmBytes int64
 	for cycle := range 2 {
-		got, err := runSelected()
-		require.NoError(t, err)
-		require.Equal(t, []string{"B:0", "B:1"}, got)
-		var failedBatchRows []string
-		err = f.execute("", false, nil, func(b *batch.Batch) {
-			for row := range b.RowCount() {
-				failedBatchRows = append(failedBatchRows, b.Vecs[0].GetStringAt(row))
-			}
-		})
-		var moErr *moerr.Error
-		require.True(t, errors.As(err, &moErr) && moerr.IsMoErrCode(moErr, moerr.ErrOutOfRange),
-			"empty-param selection must surface the typed domain rejection, got %v", err)
-		require.Empty(t, failedBatchRows, "the failed batch must not be published to the consumer")
-		got, err = runSelected()
-		require.NoError(t, err)
-		require.Equal(t, []string{"B:0", "B:1"}, got)
+		run("A", valid)
+		run("", mixed)
+		run("A", valid)
 		if cycle == 0 {
 			warmBytes = f.proc.Mp().CurrNB()
 		} else {
@@ -378,6 +374,45 @@ func TestTPReusePowerProjectionDomainErrorRecovery(t *testing.T) {
 				"prepared TP executor reuse must not retain capacity")
 		}
 	}
+}
+
+func TestTPReuseProjectionErrorRecovery(t *testing.T) {
+	f := newTPReusePipeline(t, plan2.ExecTypeTP, false)
+	int64Type := types.T_int64.ToType().PlanType()
+	lit := func(n int64) *plan.Expr {
+		return &plan.Expr{Typ: int64Type, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: n}}}}
+	}
+	value := &plan.Expr{Typ: types.T_int32.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	// Only v=1 overflows BIGINT in maxInt64 + (2 - v).
+	delta, err := plan2.BindFuncExprImplByPlanExpr(f.proc.Ctx, "-", []*plan.Expr{lit(2), value})
+	require.NoError(t, err)
+	overflow, err := plan2.BindFuncExprImplByPlanExpr(f.proc.Ctx, "+", []*plan.Expr{lit(math.MaxInt64), delta})
+	require.NoError(t, err)
+	project := f.root.(*projection.Projection)
+	project.ProjectList[1] = overflow
+
+	checkValid := func() {
+		t.Helper()
+		var values []int64
+		err := f.execute("A", false, nil, func(b *batch.Batch) {
+			got := vector.GenerateFunctionFixedTypeParameter[int64](b.Vecs[1])
+			for row := range b.RowCount() {
+				value, isNull := got.GetValue(uint64(row))
+				require.False(t, isNull)
+				values = append(values, value)
+			}
+		})
+		require.NoError(t, err)
+		require.Equal(t, []int64{math.MaxInt64, math.MaxInt64 - 1}, values)
+	}
+	checkValid()
+	err = f.execute("", false, nil, func(*batch.Batch) {
+		t.Error("the failed batch was published to the consumer")
+	})
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.True(t, moerr.IsMoErrCode(moErr, moerr.ErrOutOfRange), "expected overflow, got %v", err)
+	checkValid()
 }
 
 func BenchmarkTPReusablePipelineQueries(b *testing.B) {
