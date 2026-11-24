@@ -518,11 +518,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOMergerTimeConsumption(time.Since(startLock))
 	}()
 
-	done, _ := s.ioMerger.Merge(IOMergeKey{
-		Path:       filePath,
-		FullObject: true,
-		CacheFill:  true,
-	}, maxIOWaitDuration)
+	done, _ := s.ioMerger.Merge(s.fullObjectMergeKey(filePath, GetFileServicePolicy(ctx), true), maxIOWaitDuration)
 	if done != nil {
 		defer done()
 	} else {
@@ -1726,16 +1722,20 @@ func (s *S3FS) shouldStreamFullObjectToDiskCache(vector *IOVector) bool {
 }
 
 func (s *S3FS) readMergeKey(vector *IOVector) IOMergeKey {
-	key := IOMergeKey{Path: vector.FilePath, Policy: vector.Policy}
-	if min, max, full := s.readRange(vector); full {
-		key.FullObject = true
-	} else {
-		key = vector.ioMergeKeyWithRange(key, min, max)
+	min, max, full := s.readRange(vector)
+	if full {
+		return s.fullObjectMergeKey(vector.FilePath, vector.Policy, s.willCacheFullObject(vector))
 	}
-	if key.FullObject {
-		// A full-object read and a prefetch of the object download the same bytes.
-		key.Policy = 0
-		key.CacheFill = s.willCacheFullObject(vector)
+	return vector.ioMergeKeyWithRange(IOMergeKey{Path: vector.FilePath, Policy: vector.Policy}, min, max)
+}
+
+// fullObjectMergeKey returns the IO-merge key of a whole-object read or fill of filePath
+// under policy: a full-object read and a prefetch of the object download the same bytes
+// into the same tier, and a fill of each tier has its own key.
+func (s *S3FS) fullObjectMergeKey(filePath string, policy Policy, cacheFill bool) IOMergeKey {
+	key := IOMergeKey{Path: filePath, FullObject: true, CacheFill: cacheFill}
+	if s.tierOf(policy) == indexTier {
+		key.Policy = IndexFileObject
 	}
 	return key
 }

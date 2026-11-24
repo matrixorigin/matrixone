@@ -22,8 +22,8 @@ as index files beside HNSW and fulltext ones, apart from the shared disk cache.
   index object are cached on disk only in the index-file cache. A read or prefetch that
   skips disk-cache writes still loads it there; one that skips every cache write loads it
   into neither cache. A download of the object into the disk cache does not load it into
-  the index-file cache: a prefetch of it with `IndexFileObject` that comes during one
-  downloads it again once that one ends. A write of the index-file cache that finds the
+  the index-file cache, nor the reverse: a prefetch or fill of it into one cache that comes
+  during a download into the other downloads it again once that one ends. A write of the index-file cache that finds the
   disk full frees room in the index-file cache, never in the disk cache. A scan preloads an object the cache does not
   hold whatever its read policy, as for a filtered search, so a CN without a disk cache
   does not keep index objects. An object deleted after its download started

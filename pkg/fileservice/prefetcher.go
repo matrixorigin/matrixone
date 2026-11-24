@@ -725,8 +725,9 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 	if req.indexObject && s.cachesIndexObjects() {
 		return s.indexObjectHeld(req.FilePath)
 	}
+	// A download into the index-file cache does not fill the disk cache.
 	diskPath := s.diskCache.pathForFile(path.File)
-	if s.diskCache.download(diskPath) != nil {
+	if o := s.diskCache.download(diskPath); o != nil && !o.indexFile {
 		return true
 	}
 	ctx := context.Background()
