@@ -6586,7 +6586,7 @@ func (builder *QueryBuilder) registerSyntheticPages(pages []*tree.Select) func()
 	}
 }
 
-func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tree.Select) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
+func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tree.Select, enclosing ...*tree.Select) (*tree.Select, []*tree.Select, map[*tree.SelectClause]*tree.SelectClause, bool) {
 	if s == nil {
 		return nil, nil, nil, false
 	}
@@ -6617,6 +6617,20 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 		withLevel = cur
 		withStopped = true
 	}
+	// The enclosing wrappers the caller peeled before the WITH-bearing
+	// region are the outermost authored pages. They are recorded outermost
+	// first, so the reverse synthesis pass applies the nearest enclosing
+	// page before the outermost one; the WITH itself is hosted lower down,
+	// inside the composition, at the boundary this function computes. A
+	// wrapper reaching this helper with
+	// any non-page clause set - a window, a rank, a lock, a different export action
+	// or a perform marker - was never recorded and still declines here.
+	for _, node := range enclosing {
+		if node == nil || node.RankOption != nil || node.TimeWindow != nil || node.SelectLockInfo != nil || node.IntoVars != nil || (exportOwner == nil || exportOwner.Ep == nil || node.Ep != exportOwner.Ep) && node.Ep != nil || node.DeprecatedInto || node.IsPerform {
+			return nil, nil, nil, false
+		}
+		stages = append(stages, pageStage{limit: node.Limit, orderBy: node.OrderBy})
+	}
 	cur := s
 	for {
 		paren, ok := cur.Select.(*tree.ParenSelect)
@@ -6624,7 +6638,7 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 			break
 		}
 		if cur.RankOption != nil || cur.TimeWindow != nil ||
-			cur.SelectLockInfo != nil || (exportOwner == nil || cur != exportOwner) && cur.Ep != nil || cur.IntoVars != nil {
+			cur.SelectLockInfo != nil || (exportOwner == nil || exportOwner.Ep == nil || cur.Ep != exportOwner.Ep) && cur.Ep != nil || cur.IntoVars != nil {
 			// A wrapper carrying BY RANK or an interval window keeps the whole
 			// expression on the normal binder: its single-clause semantics and
 			// typed error behavior are already correct there. A wrapper whose
@@ -6682,7 +6696,35 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 		cur = content
 	}
 	inner := cur
+	withHosted := false
+	enclosingBoundary := len(enclosing)
 	for i := len(stages) - 1; i >= 0; i-- {
+		if len(enclosing) > 0 && i < enclosingBoundary && s.With != nil && !withHosted {
+			// The WITH stays on its terminal region: a clause-free carrier
+			// hosted here, where the WITH-bearing composition ends and just
+			// before the first enclosing page applies, keeps the CTE scope
+			// inside. The enclosing pages wrap around the carrier in their
+			// authored order, so their ORDER BY and LIMIT expressions keep
+			// resolving in the outer scope and never acquire inner CTE
+			// visibility.
+			carrier := &tree.Select{
+				Select: &tree.SelectClause{
+					Exprs: tree.SelectExprs{tree.SelectExpr{Expr: tree.UnqualifiedStar{}}},
+					From: &tree.From{
+						Tables: tree.TableExprs{
+							&tree.AliasedTableExpr{
+								Expr: &tree.ParenTableExpr{Expr: inner},
+								As:   tree.AliasClause{Alias: tree.Identifier("ordinary_cte_page_withregion")},
+							},
+						},
+					},
+				},
+				With: s.With,
+			}
+			inner = carrier
+			pages = append(pages, carrier)
+			withHosted = true
+		}
 		limit, orderBy := stages[i].limit, stages[i].orderBy
 		if limit == nil && len(orderBy) == 0 {
 			// A pure grouping wrapper without its own clauses is already the
@@ -6716,13 +6758,16 @@ func ordinaryPaginationWrap(s *tree.Select, captureOrigins bool, exportOwner *tr
 		inner = wrapped
 		pages = append(pages, wrapped)
 	}
-	// The body's own WITH declares the fragments the whole expression
-	// reads: it lands on the outermost wrapped select, keeping the lexical
-	// scope identical. When the inner page that now owns its level's WITH
-	// is itself the outermost node, a distinct clause-free outer owner
-	// carries the consuming root's WITH: it introduces no pagination stage
-	// of its own and passes the child's projection through by ordinal.
-	if s.With != nil {
+	// Without enclosing pages the body's own WITH declares the fragments
+	// the whole expression reads and lands on the outermost wrapped
+	// select, keeping the lexical scope identical. When the inner page
+	// that now owns its level's WITH is itself the outermost node, a
+	// distinct clause-free outer owner carries the consuming root's WITH:
+	// it introduces no pagination stage of its own and passes the child's
+	// projection through by ordinal. With enclosing pages applied, the
+	// carrier in the loop above already hosted the WITH inside them, so
+	// this tail leaves it where the authored region put it.
+	if s.With != nil && !withHosted {
 		if inner.With != nil {
 			outer := &tree.Select{
 				Select: &tree.SelectClause{
@@ -7119,7 +7164,14 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 	return nil
 }
 
-func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool, execOwner ...*tree.Select) (nodeID int32, err error) {
+	// The executable export owner enters ONLY at this initial bind of the
+	// statement the frontend actually routed; every recursive or nested
+	// call below omits the optional argument and stays ownership-neutral.
+	owner := (*tree.Select)(nil)
+	if len(execOwner) > 0 {
+		owner = execOwner[0]
+	}
 	withStmt := stmt
 	if stmt != nil && !ctx.legacyCTEScope {
 		// The consuming WITH-bearing query expression owns the composed
@@ -7134,16 +7186,23 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		// sets stay the documented syntax error. A marker-free persisted
 		// definition keeps the released bindSelect unwrap instead: its
 		// legacy route never reaches the generated pagination tree.
+		var enclosing []*tree.Select
 		for withStmt.With == nil {
 			paren, ok := withStmt.Select.(*tree.ParenSelect)
-			if !ok || paren.Select == nil || withStmt.Ep != nil || withStmt.OrderBy != nil || withStmt.Limit != nil || withStmt.TimeWindow != nil || withStmt.RankOption != nil || withStmt.RewriteOption != nil || withStmt.SelectLockInfo != nil || withStmt.IntoVars != nil || withStmt.DeprecatedInto || withStmt.IsPerform {
+			// A wrapper owning only pagination (ORDER BY / LIMIT) keeps the
+			// WITH descent alive. Every enclosing wrapper this peel passes
+			// through is recorded here, outermost first, together with its
+			// authored clause set, so the composition below replays those
+			// pages instead of silently dropping them.
+			if !ok || paren.Select == nil || (owner == nil || owner.Ep == nil || withStmt.Ep != owner.Ep) && withStmt.Ep != nil || withStmt.TimeWindow != nil || withStmt.RankOption != nil || withStmt.RewriteOption != nil || withStmt.SelectLockInfo != nil || withStmt.IntoVars != nil || withStmt.DeprecatedInto || withStmt.IsPerform {
 				withStmt = nil
 				break
 			}
+			enclosing = append(enclosing, withStmt)
 			withStmt = paren.Select
 		}
 		if withStmt != nil {
-			if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(withStmt, ctx.captureViewStarExpansion, builder.rootExecutableSelect); rewritten {
+			if wrapped, pages, clauseMemo, rewritten := ordinaryPaginationWrap(withStmt, ctx.captureViewStarExpansion, owner, enclosing...); rewritten {
 				unregisterSyntheticPages := builder.registerSyntheticPages(pages)
 				defer unregisterSyntheticPages()
 				if len(clauseMemo) > 0 {

@@ -135,8 +135,14 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	// createQuery parses the same setting again for the optimizer passes.
 	builder.parseOptimizeHints()
 
-	builder.rootExecutableSelect = rootExecutableSelect
-	rootId, err := builder.bindSelect(stmt, bindCtx, true)
+	// The executable export owner enters ONLY here, at the initial bind of
+	// the statement the frontend actually routed; every nested bindSelect
+	// recursion below threads the neutral nil. A threaded identity that is
+	// not this very statement carries no authority at all.
+	if rootExecutableSelect != nil && rootExecutableSelect != stmt {
+		rootExecutableSelect = nil
+	}
+	rootId, err := builder.bindSelect(stmt, bindCtx, true, rootExecutableSelect)
 	if err != nil {
 		return nil, err
 	}

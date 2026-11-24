@@ -101,13 +101,16 @@ func restoredLegacyInnerWindow(ctx CompilerContext, database, name string, stmt 
 	// a parenthesized body whose inner select owns its own window and no
 	// LIMIT (the release witness decorates the outer level with both the
 	// window and the LIMIT). Any other authored field at either level - an
-	// outer ORDER BY or BY RANK, lock/export/INTO/rewrite state, a WITH, or
-	// a competing inner LIMIT - keeps the previous complete binding, so its
-	// duplicate-clause and typed denials stay enforced.
+	// BY RANK, lock/export/INTO/rewrite state, a WITH, or a competing inner
+	// LIMIT - keeps the previous complete binding, so its duplicate-clause
+	// and typed denials stay enforced. A directly-authored outer ORDER BY is
+	// projection ordering over the inner window: the released schema
+	// inference binds paren.Select only, so the guard admits it and the
+	// inference handoff below still passes the inner Select unchanged.
 	if stmt.Select == nil || stmt.TimeWindow == nil || stmt.With != nil {
 		return nil, false
 	}
-	if stmt.OrderBy != nil || stmt.RankOption != nil || stmt.Ep != nil || stmt.IntoVars != nil || stmt.DeprecatedInto || stmt.SelectLockInfo != nil || stmt.RewriteOption != nil || stmt.IsPerform {
+	if stmt.RankOption != nil || stmt.Ep != nil || stmt.IntoVars != nil || stmt.DeprecatedInto || stmt.SelectLockInfo != nil || stmt.RewriteOption != nil || stmt.IsPerform {
 		return nil, false
 	}
 	paren, ok := stmt.Select.(*tree.ParenSelect)

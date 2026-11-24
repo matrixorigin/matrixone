@@ -600,3 +600,98 @@ func TestInnerWithPositionsConsumerAndReleasePages(t *testing.T) {
 		})
 	})
 }
+
+// The lazy-broadcast composition regression for review6040251798's D1 class:
+// a non-hash LEFT LoopJoin whose single probe scope is a lazily admitted
+// composed page (a UNION ALL body under a LIMIT) must keep the union
+// starter's sequential-branch space intact while the join build attaches
+// beside the stream. On the original compiler the build shared the lazy
+// row-branch array, was never claimed, and the exact witness hung until the
+// client cancelled; every value below is the reviewer's SQL or its named
+// deterministic control.
+func TestLazyBroadcastProbeKeepsAdmissionSpaceIntact(t *testing.T) {
+	runSQLIntegration(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		const probeDB = "patrol170_lazy_broadcast"
+		_, e := conn.ExecContext(ctx, "drop database if exists "+probeDB)
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "create database "+probeDB)
+		require.NoError(t, e)
+		// The fixture owns the lease through the callback scope: a plain
+		// defer registers the checked fresh-context cleanup immediately
+		// after the successful CREATE and before USE, so it runs inside
+		// the callback (where the fixture still decides failures) and is
+		// never missed if a later setup step errors.
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+probeDB)
+		_, e = conn.ExecContext(ctx, "use "+probeDB)
+		require.NoError(t, e)
+
+		_, e = conn.ExecContext(ctx, "create table k147x(v int)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "insert into k147x values (-1)")
+		require.NoError(t, e)
+		_, e = conn.ExecContext(ctx, "create table empty147(v int)")
+		require.NoError(t, e)
+
+		rowsOf := func(t *testing.T, sqlText string) []int {
+			t.Helper()
+			// A per-query bound keeps the deterministically hanging original
+			// witness red without consuming the whole scenario deadline.
+			qctx, qcancel := context.WithTimeout(ctx, 30*time.Second)
+			defer qcancel()
+			rows, qerr := conn.QueryContext(qctx, sqlText)
+			require.NoError(t, qerr)
+			defer func() { require.NoError(t, rows.Close()) }()
+			headings, herr := rows.Columns()
+			require.NoError(t, herr)
+			require.Equal(t, []string{"a"}, headings)
+			var got []int
+			for rows.Next() {
+				var v int
+				require.NoError(t, rows.Scan(&v))
+				got = append(got, v)
+			}
+			require.NoError(t, rows.Err())
+			return got
+		}
+		sortedCopy := func(in []int) []int {
+			out := append([]int(nil), in...)
+			sort.Ints(out)
+			return out
+		}
+
+		t.Run("exact_d1_row2", func(t *testing.T) {
+			got := rowsOf(t, "(with k147x as (select 1 as a union all select 2 as a) (select a from k147x limit 5)) order by a * (select max(v) from k147x) limit 1")
+			require.Equal(t, []int{2}, got,
+				"the physical max=-1 orders the composed rows 2,1 by ascending key; the join build must be admitted beside the lazy stream instead of hanging on it")
+		})
+		t.Run("no_outer_limit_orders_desc", func(t *testing.T) {
+			got := rowsOf(t, "(with k147x as (select 1 as a union all select 2 as a) (select a from k147x limit 5)) order by a * (select max(v) from k147x)")
+			require.Equal(t, []int{2, 1}, got,
+				"without the outer LIMIT both composed rows return in ascending key order (-2 then -1)")
+		})
+		t.Run("null_key_left_join_control", func(t *testing.T) {
+			got := rowsOf(t, "(with k147x as (select 1 as a union all select 2 as a) (select a from k147x limit 5)) order by a * (select max(v) from empty147)")
+			require.Equal(t, []int{1, 2}, sortedCopy(got),
+				"an empty physical makes every scalar key NULL: the LEFT join null-extends and the composed rows still return instead of hanging")
+		})
+		t.Run("d0_plain_twin_row2", func(t *testing.T) {
+			got := rowsOf(t, "select a from (select 1 as a union all select 2 as a) t order by a * (select max(v) from k147x) limit 1")
+			require.Equal(t, []int{2}, got, "the ordinary non-lazy probe path is unchanged")
+		})
+		t.Run("lazy_page_early_stop_control", func(t *testing.T) {
+			got := rowsOf(t, "(with q147 as (select 1 as a union all select 2 as a) (select a from q147 limit 1))")
+			require.Equal(t, []int{1}, got, "the composed page without a join keeps its lazy early-stop and row result")
+		})
+	})
+}

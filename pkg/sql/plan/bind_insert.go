@@ -5523,7 +5523,11 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		// whose clause set the old call never applied - discarded.
 		if rowsForInsert.With != nil {
 			astSelect = rowsForInsert
-		} else if body := selectImpl.Select; body != nil && body.With == nil {
+		} else if body := selectImpl.Select; body != nil {
+			// The immediate parenthesized child owns the WITH here or owns no
+			// WITH at all: either way the child is the whole DML source, and the
+			// bare enclosing wrapper's trailing pagination - the limit the old
+			// call never applied - is historically ignored, never a second page.
 			astSelect = body
 		} else {
 			astSelect = rowsForInsert

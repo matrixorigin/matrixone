@@ -60,13 +60,18 @@ func (node *Select) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	node.Select.Format(ctx)
-	if len(node.OrderBy) > 0 {
-		ctx.WriteByte(' ')
-		node.OrderBy.Format(ctx)
-	}
+	// A select suffix prints its interval window before ORDER BY and LIMIT:
+	// that is the only order the mysql select suffix grammar accepts, so every
+	// rendered definition - most importantly a restored ViewDef definition,
+	// which the metadata consumers prefer over the authored Stmt - is
+	// reparseable by the production parser.
 	if node.TimeWindow != nil {
 		ctx.WriteByte(' ')
 		node.TimeWindow.Format(ctx)
+	}
+	if len(node.OrderBy) > 0 {
+		ctx.WriteByte(' ')
+		node.OrderBy.Format(ctx)
 	}
 	if node.Limit != nil {
 		ctx.WriteByte(' ')

@@ -155,8 +155,11 @@ func TestRestoredLegacyInnerWindowInferenceShapeIsExact(t *testing.T) {
 	}
 	markerFree := `{"Stmt":"shape","DefaultDatabase":"pg","sql_mode":""}`
 
-	// The exact witnessed shape: outer window + outer LIMIT, inner window, no other state.
-	shape := "(select count(*) as a from tw_src interval(ts, 1, minute)) interval(ts, 2, minute) limit 5"
+	// The exact reviewed shape: outer window + authored outer ORDER BY and
+	// LIMIT (both pagination carriers), inner window, no other authored state.
+	// The outer ORDER BY is projection ordering over the inner window: the
+	// released schema inference binds paren.Select only, so it is eligible.
+	shape := "(select count(*) as a from tw_src interval(ts, 1, minute)) interval(ts, 2, minute) order by a limit 5"
 	bindDefinition(markerFree)
 	stmt := stmtOf(shape)
 	innerGood := stmt.Select.(*tree.ParenSelect).Select
@@ -173,7 +176,6 @@ func TestRestoredLegacyInnerWindowInferenceShapeIsExact(t *testing.T) {
 
 	// Excluded shapes keep the previous complete binding.
 	excluded := []string{
-		"(select count(*) as a from tw_src interval(ts, 1, minute)) interval(ts, 2, minute) order by a limit 5",
 		"(select count(*) as a from tw_src interval(ts, 1, minute) limit 3) interval(ts, 2, minute) limit 5",
 		"(select count(*) as a from tw_src) interval(ts, 2, minute) limit 5",
 	}
@@ -224,5 +226,174 @@ func TestBuildPlanExecutionOwnerBoundaryDiscriminator(t *testing.T) {
 	}
 	if _, err := BuildPlanWithExecutionOwner(ctx, sel, false, nil, sel); err != nil {
 		t.Fatalf("the execution-owner route must compose the statement's pages: %v", err)
+	}
+}
+
+func TestEnclosingAuthoredPagesComposeAtTheWithTerminal(t *testing.T) {
+	// The genuine reviewed shape: the enclosing outer LIMIT/OFFSET sits
+	// OUTSIDE the closing parentheses, so its stage is peeled with the
+	// wrapper and must still compose as the outermost authored page.
+	const sql = "(with q as (select 1 as a union all select 2 as a union all select 3 as a union all select 4 as a) ((select a from q limit 4) order by a limit 3 offset 1)) limit 1 offset 2"
+	sel := p132ParseOne(t, sql).(*tree.Select)
+
+	var enclosing []*tree.Select
+	withStmt := sel
+	for withStmt.With == nil {
+		paren, ok := withStmt.Select.(*tree.ParenSelect)
+		if !ok || paren.Select == nil {
+			t.Fatalf("the witness must peel onto its WITH-bearing stage")
+		}
+		enclosing = append(enclosing, withStmt)
+		withStmt = paren.Select
+	}
+	innerAuthored := withStmt.Select.(*tree.ParenSelect).Select
+	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, nil, enclosing...)
+	if !rewritten || wrapped == nil {
+		t.Fatalf("the enclosing authored pages must compose at the WITH terminal")
+	}
+	if len(pages) != 3 {
+		t.Fatalf("the composition must be the inner page, the WITH-hosting carrier and the enclosing page, got %d pages", len(pages))
+	}
+	if pages[1].Limit != nil || len(pages[1].OrderBy) > 0 || pages[1].With != withStmt.With {
+		t.Fatalf("the middle page must be the clause-free WITH-hosting carrier carrying the authored WITH pointer")
+	}
+	// AST-owner assertions: the syntheses carry the authored clause
+	// pointers unchanged, so the enclosing root's Limit must land on the
+	// outermost composed page and the inner authored page must keep its own.
+	if pages[len(pages)-1].Limit != sel.Limit {
+		t.Fatalf("the outermost composed page must carry the enclosing root's authored Limit pointer")
+	}
+	if pages[0].Limit != innerAuthored.Limit {
+		t.Fatalf("the inner authored page must keep its own authored Limit pointer")
+	}
+	// Without the recorded enclosing stages the composition loses the
+	// genuine outer page: this is the discriminating pre-fix behavior, so
+	// the assertion keeps the test honest about which input owns the stage.
+	_, pagesWithout, _, withoutRewritten := ordinaryPaginationWrap(withStmt, false, nil)
+	if withoutRewritten && len(pagesWithout) > 0 && pagesWithout[len(pagesWithout)-1].Limit == sel.Limit {
+		t.Fatalf("the peeled enclosing stage must not appear without the recorded enclosing input")
+	}
+}
+
+func TestWrapDeclinesANestedExportWithADifferentAction(t *testing.T) {
+	const sql = "with q as (select 1 as a union all select 2 as a) ((select a from q limit 2) order by a limit 1 offset 1 into outfile '/tmp/patrol147-should-not-exist.csv')"
+	sel := p132ParseOne(t, sql).(*tree.Select)
+	if sel.Ep == nil {
+		t.Fatalf("the parser copies the one authored export onto the root")
+	}
+	// The production anchor: the WITH sits on the root itself, so the
+	// caller binds s = the rooted statement and threads the same statement
+	// as the export owner.
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); !rewritten {
+		t.Fatalf("the one shared action must stay exempt as the root's own export")
+	}
+	paren, ok := sel.Select.(*tree.ParenSelect)
+	if !ok || paren.Select == nil {
+		t.Fatalf("the witness body must descend to the walk's first inner level")
+	}
+	walked := paren.Select
+	// A genuinely different second action on a level the walk visits must
+	// decline: pointer identity is the only authority here.
+	walked.Ep = &tree.ExportParam{}
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); rewritten {
+		t.Fatalf("a distinct nested export action must not gain the root's exemption")
+	}
+	// The same pointer copied onto the walked level stays the one action.
+	walked.Ep = sel.Ep
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); !rewritten {
+		t.Fatalf("the same shared pointer must stay exempt on the walked level")
+	}
+	walked.Ep = nil
+	if _, _, _, rewritten := ordinaryPaginationWrap(sel, false, sel); !rewritten {
+		t.Fatalf("the neutral no-export level must compose as before")
+	}
+}
+
+func TestEnclosingStagesStayOutsideTheWithRegion(t *testing.T) {
+	// An enclosing stage is authored outside the WITH's region, so it must
+	// not acquire inner CTE visibility: the outermost composed page carries
+	// the enclosing authored clauses, and a clause-free carrier inside the
+	// composition hosts the WITH.
+	const sql = "(with k147 as (select 9 as a) (select a from k147 limit 5)) order by a limit 1"
+	sel := p132ParseOne(t, sql).(*tree.Select)
+	var enclosing []*tree.Select
+	withStmt := sel
+	for withStmt.With == nil {
+		paren, ok := withStmt.Select.(*tree.ParenSelect)
+		if !ok || paren.Select == nil {
+			t.Fatalf("the witness must peel onto its WITH-bearing stage")
+		}
+		enclosing = append(enclosing, withStmt)
+		withStmt = paren.Select
+	}
+	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, nil, enclosing...)
+	if !rewritten || wrapped == nil {
+		t.Fatalf("the enclosing authored stages must compose at the WITH terminal")
+	}
+	if wrapped.With != nil {
+		t.Fatalf("the outermost composed page is an enclosing stage: it must not own the WITH")
+	}
+	if len(wrapped.OrderBy) != len(sel.OrderBy) || wrapped.Limit != sel.Limit {
+		t.Fatalf("the enclosing stage's authored ORDER BY and LIMIT pointers must land on the outermost page")
+	}
+	hosted := false
+	for _, page := range pages {
+		if page.With == withStmt.With {
+			hosted = true
+		}
+	}
+	if !hosted {
+		t.Fatalf("the authored WITH pointer must stay hosted inside the composition")
+	}
+	if wrapped.With == withStmt.With {
+		t.Fatalf("no enclosing page may re-home the WITH onto the outermost stage")
+	}
+}
+
+func TestSameActionEnclosingChainComposesOneAction(t *testing.T) {
+	// The parser distributes the one authored export action as an identical
+	// Ep pointer onto the executable root, the WITH-bearing node and the
+	// inner page. The enclosing chain of exactly that action composes like
+	// its clause-free siblings; any different action still declines.
+	const sql = "(with q as (select 1 as a union all select 2 as a) ((select a from q limit 2) order by a limit 1 offset 1 into outfile '/tmp/patrol147-guard-none.csv') ) limit 1"
+	sel := p132ParseOne(t, sql).(*tree.Select)
+	if sel.Ep == nil {
+		t.Fatalf("the parser copies the authored action onto the initial root")
+	}
+	var enclosing []*tree.Select
+	withStmt := sel
+	for withStmt.With == nil {
+		paren, ok := withStmt.Select.(*tree.ParenSelect)
+		if !ok || paren.Select == nil {
+			t.Fatalf("the witness must peel onto its WITH-bearing stage")
+		}
+		enclosing = append(enclosing, withStmt)
+		withStmt = paren.Select
+	}
+	wrapped, pages, _, rewritten := ordinaryPaginationWrap(withStmt, false, sel, enclosing...)
+	if !rewritten || wrapped == nil {
+		t.Fatalf("the one shared action's contiguous enclosing chain must compose")
+	}
+	if len(pages) != 3 {
+		t.Fatalf("the composition must record the inner page, the WITH-hosting carrier and the enclosing page, got %d", len(pages))
+	}
+	innerAuthored := withStmt.Select.(*tree.ParenSelect).Select
+	if pages[0].Limit != innerAuthored.Limit {
+		t.Fatalf("the inner authored page must keep its own Limit pointer")
+	}
+	if pages[1].Limit != nil || len(pages[1].OrderBy) > 0 || pages[1].With != withStmt.With || pages[1].Ep != nil {
+		t.Fatalf("the middle page must be the clause-free WITH-hosting carrier with no action")
+	}
+	if wrapped.Limit != sel.Limit || wrapped.Ep != nil {
+		t.Fatalf("the outermost composed page must carry the enclosing root's Limit and no action")
+	}
+	for _, p := range pages {
+		if p.Ep != nil {
+			t.Fatalf("the composed pages must carry no export action: the frontend keeps the one authored writer")
+		}
+	}
+	enclosing[0].Ep = &tree.ExportParam{}
+	if _, _, _, declined := ordinaryPaginationWrap(withStmt, false, sel, enclosing...); declined {
+		t.Fatalf("a different action on the enclosing chain must still decline")
 	}
 }

@@ -7315,6 +7315,16 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 	case plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, broadcastJoinForcesOneCN(node, isEq))
 		currentFirstFlag := c.anal.isFirst
+		// A lazy row-stream probe scope must not own the join build:
+		// compileBuildSideForBroadcastJoin attaches the required HashBuild
+		// beside the stream as an ordinary sibling, outside the union
+		// starter's sequential-branch admission space. Keep the lazy child
+		// intact (starter, branch order, count, receivers) and install the
+		// join on one ordinary local wrapper scope on the coordinator.
+		if !isEq && node.JoinType == plan.Node_LEFT && len(rs) == 1 &&
+			rs[0].LazyPreScopes && c.scopesRunOnCoordinator(rs) {
+			rs[0] = c.newMergeScope([]*Scope{rs[0]})
+		}
 		if isEq {
 			for i := range rs {
 				op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
