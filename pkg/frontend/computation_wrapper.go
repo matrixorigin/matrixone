@@ -2433,6 +2433,7 @@ func binaryProtocolNativeParamValue(param plan2.ParamValue) (any, bool) {
 	if !isText || !param.HasRuntimeType {
 		return nil, false
 	}
+	// typeswitch:partial COM_STMT runtime types come from MySQL wire types, which map FLOAT/DOUBLE only to T_float32/T_float64; other types keep their text
 	switch oid := param.RuntimeType.Oid; {
 	case oid == types.T_bool:
 		v, err := strconv.ParseBool(text)
@@ -2443,6 +2444,7 @@ func binaryProtocolNativeParamValue(param plan2.ParamValue) (any, bool) {
 	case oid.IsUnsignedInt():
 		v, err := strconv.ParseUint(text, 10, 64)
 		return v, err == nil
+	// typeswitch:partial the MySQL wire has only FLOAT and DOUBLE; no COM_STMT parameter has a low-precision float type
 	case oid == types.T_float32 || oid == types.T_float64:
 		v, err := strconv.ParseFloat(text, 64)
 		return v, err == nil
