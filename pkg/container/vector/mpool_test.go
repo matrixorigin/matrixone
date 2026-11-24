@@ -195,3 +195,58 @@ func TestReadOnlyDecodeSharesNullBitmap(t *testing.T) {
 	clear(encoded[len(encoded)-1-8 : len(encoded)-1])
 	require.False(t, ro.IsNull(1))
 }
+
+// Fixtures for tests that allocate vectors through an accounted MPool view.
+// Accounting belongs to mpool; a vector only knows the pool it was created
+// with, so an accounted vector is NewVec(typ, state.view(t, mp)).
+
+const (
+	testVectorAllocationOwner    mpool.AllocationOwner = 1
+	testVectorDataAllocationSite mpool.AllocationSite  = 1
+)
+
+type testVectorAllocationAccount struct {
+	registry *mpool.AllocationAccountRegistry
+	account  *mpool.AllocationAccount
+}
+
+// view returns an accounted view of mp that charges the test account.
+func (s testVectorAllocationAccount) view(t testing.TB, mp *mpool.MPool) *mpool.MPool {
+	t.Helper()
+	view, err := mp.WithAccount(
+		s.account,
+		testVectorAllocationOwner,
+		testVectorDataAllocationSite,
+		mpool.AllocationCapacityClassDefault,
+	)
+	require.NoError(t, err)
+	return view
+}
+
+func newTestVectorAllocationAccount(
+	t testing.TB,
+	limit uint64,
+	allocationSlots uint64,
+) testVectorAllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, allocationSlots)
+	require.NoError(t, err)
+	account, err := registry.Open(limit)
+	require.NoError(t, err)
+	return testVectorAllocationAccount{
+		registry: registry,
+		account:  account,
+	}
+}
+
+func finalizeTestVectorAllocationAccount(
+	t testing.TB,
+	state testVectorAllocationAccount,
+) {
+	t.Helper()
+	snapshot := state.account.Seal()
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, state.registry.LiveAllocationMetadata())
+	_, err := state.registry.Finalize(state.account)
+	require.NoError(t, err)
+}

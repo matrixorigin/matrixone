@@ -2260,7 +2260,8 @@ func TestVectorMatmulParseBoundVecblockText(t *testing.T) {
 	b2, err := vectorMatmulParseBound(large, typ)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, b2, 64*uint64(len(long)))
-	require.Less(t, b1, uint64(64<<10))
+	// beyond the fixed decoder parser, a small text's bound stays small
+	require.Less(t, b1-vectorMatmulJSONDecoderScratch, uint64(64<<10))
 	_, err = parseVectorMatmulConfig(large, typ)
 	require.Error(t, err)
 }

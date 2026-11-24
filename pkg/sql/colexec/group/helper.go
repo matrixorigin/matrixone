@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2015,17 +2014,4 @@ func freeAggListPartial(aggList []aggexec.GroupAggFuncExec, n int) {
 // freeAggList frees all aggregators in the list.
 func freeAggList(aggList []aggexec.GroupAggFuncExec) {
 	freeAggListPartial(aggList, len(aggList))
-}
-
-func (ctr *container) sanityCheck() {
-	if util.Debug {
-		originGroupCount := ctr.hr.Hash.GroupCount()
-		batchRowCount := 0
-		for _, batch := range ctr.groupByBatches {
-			batchRowCount += batch.RowCount()
-		}
-		if batchRowCount != int(originGroupCount) {
-			panic(moerr.NewInternalErrorNoCtx("group count mismatch"))
-		}
-	}
 }

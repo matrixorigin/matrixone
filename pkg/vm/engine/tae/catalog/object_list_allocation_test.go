@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !race
-
 package catalog
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -125,13 +124,40 @@ func runObjectListDirectGroupScans(list *ObjectList, from, to types.TS) {
 	snapshot.AscendGroup(ObjectListGroupNonAppendableDrop, to, stopObjectEntryScan)
 }
 
+// allocsExcludingSeekKeyRefills is testing.AllocsPerRun without the
+// allocations objectListSeekKeyPool makes to refill itself. Refills are pool
+// upkeep, not allocations of the measured operation, and they vary under
+// -race because the race runtime drops some sync.Pool puts on purpose.
+func allocsExcludingSeekKeyRefills(runs int, f func()) float64 {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	refills, counting := uint64(0), false
+	oldNew := objectListSeekKeyPool.New
+	objectListSeekKeyPool.New = func() any {
+		if counting {
+			refills++
+		}
+		return oldNew()
+	}
+	defer func() { objectListSeekKeyPool.New = oldNew }()
+
+	f() // warm up, as testing.AllocsPerRun does
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	counting = true
+	for range runs {
+		f()
+	}
+	runtime.ReadMemStats(&after)
+	return float64(after.Mallocs-before.Mallocs-refills) / float64(runs)
+}
+
 func TestObjectListDynamicGroupSeekAllocations(t *testing.T) {
 	list, from, to := makeObjectListDynamicSeekBenchmark()
-	allocs := testing.AllocsPerRun(100, func() {
+	allocs := allocsExcludingSeekKeyRefills(100, func() {
 		runObjectListDynamicGroupSeeks(list, from, to)
 	})
 	require.LessOrEqual(t, allocs, float64(1))
-	directAllocs := testing.AllocsPerRun(100, func() {
+	directAllocs := allocsExcludingSeekKeyRefills(100, func() {
 		runObjectListDirectGroupScans(list, from, to)
 	})
 	require.LessOrEqual(t, directAllocs, float64(4))

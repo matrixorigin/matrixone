@@ -68,12 +68,13 @@ const (
 // populates captured and capturedVecs.
 //
 // Ownership: once a non-merger successfully publishes this message to the
-// mailbox, it must relinquish captured / capturedVecs. The merger then becomes
-// the sole owner and is responsible for Free'ing capturedVecs.
+// mailbox, it must relinquish captured / capturedVecs / capturedMP. The merger
+// then becomes the sole owner and frees capturedVecs with capturedMP.
 type WorkerJoinMsg struct {
 	matched      *bitmap.Bitmap
 	captured     *bitmap.Bitmap
 	capturedVecs []*vector.Vector
+	capturedMP   *mpool.MPool // exact pool used to create capturedVecs
 	aborted      bool
 	err          error
 }
@@ -149,7 +150,7 @@ func (m *WorkerJoinMailbox) completeRound() {
 	m.roundDone = make(chan struct{})
 }
 
-func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
+func (m *WorkerJoinMailbox) stopAndDrain() {
 	if m == nil {
 		return
 	}
@@ -160,26 +161,26 @@ func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
 		close(m.roundDone)
 		m.roundDone = nil
 	}
-	m.drainLocked(proc)
+	m.drainLocked()
 }
 
-func (m *WorkerJoinMailbox) drain(proc *process.Process) {
+func (m *WorkerJoinMailbox) drain() {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.drainLocked(proc)
+	m.drainLocked()
 }
 
-func (m *WorkerJoinMailbox) drainLocked(proc *process.Process) {
+func (m *WorkerJoinMailbox) drainLocked() {
 	for {
 		select {
 		case msg, ok := <-m.ch:
 			if !ok {
 				return
 			}
-			freeWorkerJoinMsg(msg, proc)
+			freeWorkerJoinMsg(msg)
 		default:
 			return
 		}
@@ -189,7 +190,7 @@ func (m *WorkerJoinMailbox) drainLocked(proc *process.Process) {
 // resetParticipant closes one participant's use of the current generation.
 // The last Reset drains any residual status and reopens a clean mailbox for a
 // prepared pipeline's next execution.
-func (m *WorkerJoinMailbox) resetParticipant(proc *process.Process) {
+func (m *WorkerJoinMailbox) resetParticipant() {
 	if m == nil {
 		return
 	}
@@ -199,26 +200,32 @@ func (m *WorkerJoinMailbox) resetParticipant(proc *process.Process) {
 	if m.resetCount < m.participants {
 		return
 	}
-	m.drainLocked(proc)
+	m.drainLocked()
 	m.resetCount = 0
 	m.stopped = false
 	m.roundDone = make(chan struct{})
 }
 
-// freeCapturedVecs releases vectors owned by a WorkerJoinMsg. Intended to be
-// called by the merger after it has finished merging captures out of the
-// message (ownership was transferred from the sender).
-func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
-	for _, v := range vecs {
+// freeCapturedVecs releases vectors owned by a WorkerJoinMsg using the pool
+// transferred with them. It clears each released slot so cleanup can safely
+// resume if a later vector violates the pool invariant.
+func freeCapturedVecs(vecs []*vector.Vector, mp *mpool.MPool) {
+	for i, v := range vecs {
 		if v != nil {
-			v.Free(proc.GetMPool())
+			if mp == nil {
+				panic(moerr.NewInternalErrorNoCtx("dedup join captured vectors have no owning memory pool"))
+			}
+			v.Free(mp)
+			vecs[i] = nil
 		}
 	}
 }
 
-func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
+func freeWorkerJoinMsg(msg *WorkerJoinMsg) {
 	if msg != nil {
-		freeCapturedVecs(msg.capturedVecs, proc)
+		freeCapturedVecs(msg.capturedVecs, msg.capturedMP)
+		msg.capturedVecs = nil
+		msg.capturedMP = nil
 		msg.matched.Free()
 		msg.captured.Free()
 		msg.matched = nil
@@ -490,7 +497,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 			// Reset follows process cancellation. Stop before cleaning merger
 			// state so no late worker can transfer capture ownership to an
 			// execution that no longer has a consumer.
-			dedupJoin.Mailbox.stopAndDrain(proc)
+			dedupJoin.Mailbox.stopAndDrain()
 		} else if !ctr.roundStatusPublished {
 			if pipelineFailed && err == nil {
 				err = context.Cause(proc.Ctx)
@@ -505,7 +512,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 				err:     err,
 			})
 		}
-		dedupJoin.Mailbox.resetParticipant(proc)
+		dedupJoin.Mailbox.resetParticipant()
 	}
 	if dedupJoin.OpAnalyzer != nil {
 		dedupJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -534,7 +541,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	if dedupJoin.IsMerger && dedupJoin.needsFinalizeMerge() {
 		// Pipeline cleanup always calls Reset first. Do not leave a newly
 		// reopened prepared-pipeline generation stopped from Free.
-		dedupJoin.Mailbox.drain(proc)
+		dedupJoin.Mailbox.drain()
 	}
 	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
