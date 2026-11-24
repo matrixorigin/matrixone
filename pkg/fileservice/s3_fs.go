@@ -576,7 +576,7 @@ type readSources struct {
 func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
 	p := vector.Policy
 	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads)
-	columns := p.Any(ColumnPrefetch)
+	columns := p.Any(ColumnPrefetch, ExactRead)
 	return readSources{
 		indexRead: s.indexObjectReadable(p),
 		// A read that skips the disk cache cannot read what a download puts there. The

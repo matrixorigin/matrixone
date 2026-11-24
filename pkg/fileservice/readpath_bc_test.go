@@ -351,3 +351,19 @@ func TestSkippedWholeFillReadsCacheAgain(t *testing.T) {
 	require.Equal(t, data[1000:1100], vec.Entries[0].Data)
 	require.Zero(t, storage.reads.Load(), "the cached object serves the read")
 }
+
+// BC16: an exact read joins a queued prefetch of ranges holding its bytes, as a column
+// read does.
+func TestExactReadJoinsQueuedRanges(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
+	<-fs.diskCache.load.done
+	storage := newBlackBoxStorage(fs.storage, func(string, int64) bool { return true })
+	fs.storage = storage
+	t.Cleanup(func() { close(storage.gate) })
+	r := PrefetchRange{Offset: 4096, Size: 4096}
+	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 300 << 10, Ranges: []PrefetchRange{r}}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	vec := &IOVector{FilePath: "object", Policy: ExactColumnsRead, Entries: []IOEntry{{Offset: r.Offset, Size: r.Size}}}
+	require.True(t, fs.joinQueued(ctx, vec, fs.sourcesFor(ctx, vec)))
+}
