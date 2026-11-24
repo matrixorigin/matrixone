@@ -21,6 +21,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
@@ -57,7 +58,13 @@ func scanFixture[T types.FixedSizeT](tb testing.TB, typ types.T, values []T, pat
 		}
 	}
 	if backing == "borrowed" && nulls != 0 {
-		v.GetNulls().GetBitmap().InitWithInvertedBits(validity, 3, len(values))
+		// A read-only vector's NULLs reference an encoded bitmap, as a
+		// cached block's do.
+		var owned bitmap.Bitmap
+		require.NoError(tb, owned.InitWithInvertedBits(validity, 3, len(values), mpool.MustNewZero()))
+		encoded := owned.Marshal()
+		owned.Free()
+		require.NoError(tb, v.GetNulls().ReadNoCopy(encoded))
 	}
 	return v
 }

@@ -400,7 +400,8 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 								if dedupJoin.OnDuplicateAction == plan.Node_UPDATE {
 									rows = int64(jm.GetGroupCount())
 								}
-								ctr.matched, allocationErr = colexec.NewRowBitmap(rows)
+								ctr.matched.Free()
+								ctr.matched, allocationErr = colexec.NewRowBitmap(rows, proc.Mp())
 							}
 						})
 					if bktErr != nil {
@@ -526,7 +527,8 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 		if dedupJoin.OnDuplicateAction == plan.Node_UPDATE {
 			rows = int64(ctr.mp.GetGroupCount())
 		}
-		ctr.matched, err = colexec.NewRowBitmap(rows)
+		ctr.matched.Free()
+		ctr.matched, err = colexec.NewRowBitmap(rows, proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -568,7 +570,8 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 		}
 		ctr.capturedVecs[i] = vec
 	}
-	ctr.captured, err = colexec.NewRowBitmap(ctr.batchRowCount)
+	ctr.captured.Free()
+	ctr.captured, err = colexec.NewRowBitmap(ctr.batchRowCount, proc.Mp())
 	if err != nil {
 		ctr.cleanCaptured(proc)
 		return err

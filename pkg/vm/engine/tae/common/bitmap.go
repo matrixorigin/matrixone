@@ -16,6 +16,7 @@ package common
 
 import (
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
@@ -36,14 +37,19 @@ func BitmapEqual(v1, v2 *nulls.Nulls) bool {
 	return true
 }
 
-func RoaringToMOBitmap(bm *roaring.Bitmap) *nulls.Nulls {
+// RoaringToMOBitmap converts bm into a bitmap allocated from mp, which the
+// caller frees.
+func RoaringToMOBitmap(bm *roaring.Bitmap, mp *mpool.MPool) (*nulls.Nulls, error) {
 	if bm == nil {
-		return nil
+		return nil, nil
 	}
-	nbm := nulls.NewWithSize(int(bm.Maximum()) + 1)
+	nbm, err := nulls.NewWithSize(int(bm.Maximum())+1, mp)
+	if err != nil {
+		return nil, err
+	}
 	iterator := bm.Iterator()
 	for iterator.HasNext() {
 		nbm.Add(uint64(iterator.Next()))
 	}
-	return nbm
+	return nbm, nil
 }

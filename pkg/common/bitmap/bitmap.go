@@ -18,6 +18,8 @@ package bitmap
 
 import (
 	"math/bits"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 // This file is the Gobra-verified core of Bitmap; run gobra/verify.sh. The
@@ -245,16 +247,22 @@ type bitmask = uint64
 // @ ensures n.Inv() && n.Len() == length
 // @ ensures forall r int :: {n.Has(r)} !n.Has(r)
 // @ decreases
-func (n *Bitmap) InitWithSize(length int64) {
+func (n *Bitmap) InitWithSize(length int64, mp *mpool.MPool) (err error) {
 	if length < 0 {
 		panic("negative bitmap length")
 	}
+	if err = n.prepareInit(mp); err != nil {
+		return err
+	}
+	if err = n.resetWords(int((length + 63) / 64)); err != nil {
+		return err
+	}
 	n.numBits = length
 	n.popCount = 0
-	n.data = make([]uint64, int((length+63)/64))
 	// @ sumZero(seq(n.data), len(n.data))
 	// @ fold n.Mem()
 	// @ fold n.Inv()
+	return nil
 }
 
 // IteratorValue returns a bitmap iterator by value for allocation-sensitive
@@ -285,6 +293,9 @@ func (n *Bitmap) IteratorValue() (itr BitmapIterator) {
 // @ ensures n.Len() == old(n.Len()) && n.ISeq() == old(n.ISeq()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
 // @ decreases
 func (n *Bitmap) nextSet(i uint64) (res uint64) {
+	if n.shift != 0 {
+		return n.shiftedNextSet(i)
+	}
 	end := uint64(n.Len())
 	if i >= end {
 		return end
@@ -369,25 +380,33 @@ func (itr *BitmapIterator) Next() (res uint64) {
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == old(m.Has(r))
 // @ ensures forall r int :: {m.Has(r)} m.Has(r) == old(m.Has(r))
 // @ decreases
-func (n *Bitmap) InitWith(m *Bitmap) {
+func (n *Bitmap) InitWith(m *Bitmap, mp *mpool.MPool) (err error) {
 	// @ assert unfolding acc(m.Inv(), 1/2) in unfolding acc(m.Mem(), 1/2) in n != m
 	if n == m {
-		return
+		return nil
+	}
+	if m.mp == nil {
+		return n.initWithReadOnly(m, mp)
+	}
+	if err = n.prepareInit(mp); err != nil {
+		return err
 	}
 	// @ ghost s1 := m.ISeq()
 	// @ assert forall r int :: {m.Has(r)} m.Has(r) == HasS(s1, m.Len(), r)
 	// @ unfold acc(m.Inv(), 1/2)
 	// @ unfold acc(m.Mem(), 1/2)
-	data := make([]uint64, len(m.data))
-	copy(data, m.data /*@, perm(1/4) @*/)
+	if err = n.resetWords(len(m.data)); err != nil {
+		return err
+	}
+	copy(n.data, m.data /*@, perm(1/4) @*/)
 	n.numBits = m.numBits
 	n.popCount = m.popCount
-	n.data = data
 	// @ assert seq(n.data) == s1
 	// @ fold n.Mem()
 	// @ fold n.Inv()
 	// @ fold acc(m.Mem(), 1/2)
 	// @ fold acc(m.Inv(), 1/2)
+	return nil
 }
 
 // Swap exchanges the contents of n and m without copying any words.
@@ -410,6 +429,8 @@ func (n *Bitmap) Swap(m *Bitmap) {
 	n.numBits, m.numBits = m.numBits, n.numBits
 	n.popCount, m.popCount = m.popCount, n.popCount
 	n.data, m.data = m.data, n.data
+	n.mp, m.mp = m.mp, n.mp
+	n.shift, m.shift = m.shift, n.shift
 	// @ fold n.Mem()
 	// @ fold n.Inv()
 	// @ fold m.Mem()
@@ -433,9 +454,7 @@ func (n *Bitmap) Swap(m *Bitmap) {
 // @ ensures forall r int :: {n.Has(r)} !n.Has(r)
 // @ decreases
 func (n *Bitmap) Reset() {
-	n.numBits = 0
-	n.popCount = 0
-	n.data = nil
+	n.Free()
 	// @ fold n.Mem()
 	// @ fold n.Inv()
 }
@@ -484,6 +503,7 @@ func (n *Bitmap) IsEmpty() bool {
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == (old(n.Has(r)) || r == int(row))
 // @ decreases
 func (n *Bitmap) Add(row uint64) {
+	n.mustWrite()
 	// @ unfold n.Inv()
 	// @ unfold n.Mem()
 	// @ ghost s0 := seq(n.data)
@@ -532,6 +552,7 @@ func (n *Bitmap) Remove(row uint64) {
 	if row >= uint64(n.Len()) {
 		return
 	}
+	n.mustWrite()
 	// @ unfold n.Inv()
 	// @ unfold n.Mem()
 	// @ ghost s0 := seq(n.data)
@@ -556,6 +577,9 @@ func (n *Bitmap) Remove(row uint64) {
 // @ decreases
 // @ pure
 func (n *Bitmap) Contains(row uint64) (res bool) {
+	if n.mp == nil {
+		return n.shiftedContains(row)
+	}
 	return row < uint64(n.Len()) &&
 		/*@ unfolding acc(n.Inv(), _) in unfolding acc(n.Mem(), _) in @*/ n.data[row/64]&(uint64(1)<<(row%64)) != 0
 }
@@ -570,6 +594,7 @@ func (n *Bitmap) AddRange(start, end uint64) {
 	if start >= end {
 		return
 	}
+	n.mustWrite()
 	i, j := start/64, (end-1)/64
 	tail := (64 - end%64) % 64
 	if i == j {
@@ -663,9 +688,10 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	if end > uint64(n.Len()) {
 		end = uint64(n.Len())
 	}
-	if start >= end {
+	if start >= end || n.popCount == 0 {
 		return
 	}
+	n.mustWrite()
 	i, j := start/64, (end-1)/64
 	tail := (64 - end%64) % 64
 	if i == j {
@@ -716,7 +742,9 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 func (n *Bitmap) Or(b *Bitmap) {
 	// @ assert unfolding n.Inv() in unfolding n.Mem() in n != nil
 	// @ assert unfolding acc(b.Inv(), 1/2) in unfolding acc(b.Mem(), 1/2) in b != nil
-	n.TryExpand(b)
+	if err := n.TryExpand(b); err != nil {
+		panic(err)
+	}
 	n.OrBounded(b, b.Len())
 }
 
@@ -741,6 +769,11 @@ func (n *Bitmap) OrBounded(b *Bitmap, limit int64) {
 		lim = b.Len()
 	}
 	if lim <= 0 {
+		return
+	}
+	n.mustWrite()
+	if b.mp == nil {
+		n.orBoundedWords(b, lim)
 		return
 	}
 
@@ -774,7 +807,14 @@ func (n *Bitmap) OrBounded(b *Bitmap, limit int64) {
 // @ ensures forall r int :: {b.Has(r)} b.Has(r) == old(b.Has(r))
 // @ decreases
 func (n *Bitmap) And(b *Bitmap) {
-	n.TryExpand(b)
+	if err := n.TryExpand(b); err != nil {
+		panic(err)
+	}
+	n.mustWrite()
+	if b.mp == nil {
+		n.andWords(b)
+		return
+	}
 	size := (int(b.Len()) + 63) / 64
 	words := n.Size() / 8
 	// @ ghost s1 := unfolding n.Inv() in n.Seq()
@@ -835,6 +875,7 @@ func (n *Bitmap) And(b *Bitmap) {
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == (0 <= r && r < int(n.Len()) && !old(n.Has(r)))
 // @ decreases
 func (n *Bitmap) Negate() {
+	n.mustWrite()
 	nBlock, nTail := int(n.Len())/64, int(n.Len())%64
 	// @ unfold n.Inv()
 	// @ unfold n.Mem()
@@ -886,20 +927,8 @@ func (n *Bitmap) Negate() {
 // @ ensures n.Inv() && n.Len() == old(n.Len())
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
 // @ decreases
-func (n *Bitmap) Reserve(nbits int) {
-	words := (nbits + 63) / 64
-	if words <= n.CapWords() {
-		return
-	}
-	// @ unfold n.Inv()
-	// @ unfold n.Mem()
-	// @ ghost s0 := seq(n.data)
-	data := make([]uint64, len(n.data), words)
-	copy(data, n.data /*@, perm(1/2) @*/)
-	n.data = data
-	// @ assert seq(n.data) == s0
-	// @ fold n.Mem()
-	// @ fold n.Inv()
+func (n *Bitmap) Reserve(nbits int) error {
+	return n.growWords((nbits + 63) / 64)
 }
 
 // @ requires n.Inv() && acc(m.Inv(), 1/2)
@@ -908,8 +937,8 @@ func (n *Bitmap) Reserve(nbits int) {
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
 // @ ensures forall r int :: {m.Has(r)} m.Has(r) == old(m.Has(r))
 // @ decreases
-func (n *Bitmap) TryExpand(m *Bitmap) {
-	n.TryExpandWithSize(int(m.Len()))
+func (n *Bitmap) TryExpand(m *Bitmap) error {
+	return n.TryExpandWithSize(int(m.Len()))
 }
 
 // TryExpandWithSize grows the logical length to size bits; new bits are
@@ -918,16 +947,18 @@ func (n *Bitmap) TryExpand(m *Bitmap) {
 // @ ensures n.Inv() && n.Len() == (old(n.Len()) >= int64(size) ? old(n.Len()) : int64(size))
 // @ ensures forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
 // @ decreases
-func (n *Bitmap) TryExpandWithSize(size int) {
+func (n *Bitmap) TryExpandWithSize(size int) error {
 	if int(n.Len()) >= size {
-		return
+		return nil
+	}
+	if n.mp == nil {
+		return errNoPool()
 	}
 	requiredCap := (size + 63) / 64
 	// @ unfold n.Inv()
 	// @ unfold n.Mem()
 	// @ ghost s0 := seq(n.data)
 	// @ ghost nb0 := n.numBits
-	n.numBits = int64(size)
 	if requiredCap > cap(n.data) {
 		newCap := requiredCap
 		currentCap := cap(n.data)
@@ -940,17 +971,22 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 				newCap = grown
 			}
 		}
-		data := make([]uint64, newCap)
+		data, err := n.allocWords(requiredCap, newCap)
+		if err != nil {
+			return err
+		}
 		copy(data, n.data /*@, perm(1/2) @*/)
-		n.data = data[:requiredCap]
+		n.replaceWords(data)
+		n.numBits = int64(size)
 		// @ assert forall x int :: {&n.data[x]} 0 <= x && x < len(n.data) ==> &n.data[x] == &data[x]
 		// @ assert forall x int :: {&n.data[:cap(n.data)][x]} len(n.data) <= x && x < cap(n.data) ==> &n.data[:cap(n.data)][x] == &data[x]
 		// @ sumPrefix(seq(n.data), s0, len(s0))
 		// @ sumZeroTail(seq(n.data), len(s0), len(n.data))
 		// @ fold n.Mem()
 		// @ fold n.Inv()
-		return
+		return nil
 	}
+	n.numBits = int64(size)
 	if prevLen := len(n.data); prevLen < requiredCap {
 		// @ ghost prev := n.data
 		n.data = n.data[:requiredCap]
@@ -972,10 +1008,11 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 		// @ sumZeroTail(seq(n.data), len(s0), len(n.data))
 		// @ fold n.Mem()
 		// @ fold n.Inv()
-		return
+		return nil
 	}
 	// @ fold n.Mem()
 	// @ fold n.Inv()
+	return nil
 }
 
 const maxInt = int(^uint(0) >> 1)
@@ -994,6 +1031,10 @@ func (n *Bitmap) Count() int {
 // @ ensures forall r int :: {n.Has(r)} !n.Has(r)
 // @ decreases
 func (n *Bitmap) Clear() {
+	if n.popCount == 0 {
+		return
+	}
+	n.mustWrite()
 	words := n.Size() / 8
 	// @ unfold n.Inv()
 	// @ unfold n.Mem()
@@ -1531,6 +1572,7 @@ func (n *Bitmap) removeOrdered(sels []int64) {
 // @ ensures negate ==> forall i int :: {n.Has(i)} int(old(n.Len()))-Rank(seq(sels), old(n.Len())) <= i ==> !n.Has(i)
 // @ decreases
 func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
+	n.mustWrite()
 	// Reject an invalid selection before changing anything.
 	previous := int64(-1)
 	// @ ghost ss := seq(sels)
@@ -1560,6 +1602,9 @@ func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
 // @ ensures negate ==> forall i int :: {n.Has(i)} int(old(n.Len()))-Rank(seq(sels), old(n.Len())) <= i ==> !n.Has(i)
 // @ decreases
 func (n *Bitmap) RemapOrderedUnchecked(sels []int64, negate bool) {
+	if n != nil {
+		n.mustWrite()
+	}
 	// @ assert unfolding n.Inv() in unfolding n.Mem() in n != nil
 	if n == nil {
 		return
@@ -1669,6 +1714,9 @@ func (n *Bitmap) finishOrderedRemap(written, logicalLength int64) {
 // @ ensures res ==> forall r int :: {n.Has(r)} {b.Has(r)} n.Has(r) == b.Has(r)
 // @ decreases
 func (n *Bitmap) IsSame(b *Bitmap) (res bool) {
+	if n.mp == nil || b.mp == nil {
+		return isSameWords(n, b)
+	}
 	if b.Size() != n.Size() {
 		return false
 	}
@@ -1699,9 +1747,11 @@ func (n *Bitmap) IsSame(b *Bitmap) (res bool) {
 // @ ensures forall i int :: {res.Has(i)} 0 <= i && i < len(sels) ==> res.Has(i) == (sels[i] >= 0 && n.Has(int(sels[i])))
 // @ ensures forall i int :: {res.Has(i)} len(sels) <= i ==> !res.Has(i)
 // @ decreases
-func (n *Bitmap) Filter(sels []int64) (res *Bitmap) {
+func (n *Bitmap) Filter(sels []int64, mp *mpool.MPool) (res *Bitmap, err error) {
 	res = &Bitmap{}
-	res.InitWithSize(int64(len(sels)))
+	if err = res.InitWithSize(int64(len(sels)), mp); err != nil {
+		return nil, err
+	}
 	// @ ghost ss := seq(sels)
 	// @ invariant acc(n.Inv(), 1/2) && acc(sels, 1/2) && seq(sels) == ss && res.Inv()
 	// @ invariant n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
@@ -1714,7 +1764,7 @@ func (n *Bitmap) Filter(sels []int64) (res *Bitmap) {
 			res.Add(uint64(i))
 		}
 	}
-	return res
+	return res, nil
 }
 
 // CountRange returns the number of set bits in [start, end). It never scans
@@ -1724,6 +1774,9 @@ func (n *Bitmap) Filter(sels []int64) (res *Bitmap) {
 // @ ensures res == (start < end ? n.rowCnt(int(end))-n.rowCnt(int(start)) : 0)
 // @ decreases
 func (n *Bitmap) CountRange(start, end uint64) (res int) {
+	if n != nil && n.mp == nil {
+		return n.shiftedCountRange(start, end)
+	}
 	// @ assert unfolding acc(n.Inv(), 1/2) in unfolding acc(n.Mem(), 1/2) in n != nil
 	if n == nil || start >= end || start >= uint64(n.Len()) {
 		return 0
@@ -1783,6 +1836,9 @@ func (n *Bitmap) CountRange(start, end uint64) (res int) {
 // @ ensures res == (exists r int :: {n.Has(r)} int(start) <= r && r < int(end) && n.Has(r) && !(other != nil && other.Has(r)))
 // @ decreases
 func (n *Bitmap) AnySetNotIn(other *Bitmap, start, end uint64) (res bool) {
+	if n != nil && (n.mp == nil || other != nil && other.mp == nil) {
+		return anySetNotInWords(n, other, start, end)
+	}
 	// @ assert unfolding acc(n.Inv(), 1/4) in unfolding acc(n.Mem(), 1/4) in n != nil
 	if n == nil || start >= end || start >= uint64(n.Len()) {
 		return false
@@ -1875,6 +1931,9 @@ func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
 // @ ensures sels != nil && negate ==> forall i int :: {n.Has(i)} int(old(n.Len()))-RankOff(sels.ISeq(), sels.Len(), int(offset), int(old(n.Len()))) <= i ==> !n.Has(i)
 // @ decreases
 func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset uint64) {
+	if n != nil {
+		n.mustWrite()
+	}
 	// @ assert unfolding n.Inv() in unfolding n.Mem() in n != nil
 	if n == nil || sels == nil {
 		return
@@ -1893,6 +1952,9 @@ func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset ui
 // @ ensures forall b int :: {bits.Bit(res, b)} 0 <= b && b < 64 ==> bits.Bit(res, b) == HasS(n.ISeq(), n.Len(), int(pos)+b)
 // @ decreases
 func (n *Bitmap) bitsFrom(pos int64) (res uint64) {
+	if n.mp == nil {
+		return n.lbitsFrom(pos)
+	}
 	// @ ghost sq := n.ISeq()
 	// @ ghost nb := n.Len()
 	// @ n.tailFact()
@@ -1917,6 +1979,9 @@ func (n *Bitmap) bitsFrom(pos int64) (res uint64) {
 // @ decreases
 // @ pure
 func (n *Bitmap) word(i int) (res uint64) {
+	if n.mp == nil {
+		return n.lword(i)
+	}
 	return /*@ unfolding acc(n.Inv(), _) in unfolding acc(n.Mem(), _) in @*/ n.data[i]
 }
 

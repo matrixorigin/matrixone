@@ -1292,8 +1292,8 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 		if err != nil {
 			return err
 		}
-	} else {
-		hb.DelRows.InitWithSize(int64(newRows))
+	} else if err = hb.DelRows.InitWithSize(int64(newRows), hb.DelRows.MPool()); err != nil {
+		return err
 	}
 	for i := range discardedWithDeletes {
 		hb.DelRows.Add(uint64(activeCount + i))

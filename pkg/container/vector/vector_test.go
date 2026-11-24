@@ -748,10 +748,10 @@ func TestShrink(t *testing.T) {
 func TestShrinkByMask(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var bm bitmap.Bitmap
-	bm.InitWithSize(2)
+	require.NoError(t, bm.InitWithSize(2, mpool.MustNewZero()))
 	bm.AddMany([]uint64{0, 1})
 	var bmask bitmap.Bitmap
-	bmask.InitWith(&bm)
+	require.NoError(t, bmask.InitWith(&bm, bm.MPool()))
 
 	//{ // Array Float32
 	//	v := NewVec(types.T_array_float32.ToType())
@@ -1231,7 +1231,7 @@ func TestShrinkByMask(t *testing.T) {
 func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var mask bitmap.Bitmap
-	mask.InitWithSize(3)
+	require.NoError(t, mask.InitWithSize(3, mpool.MustNewZero()))
 	mask.AddMany([]uint64{0, 2})
 
 	t.Run("negate", func(t *testing.T) {
@@ -2595,7 +2595,7 @@ func TestGeometryVarlenPlumbing(t *testing.T) {
 	}, InefficientMustBytesCol(minmax))
 
 	var bm bitmap.Bitmap
-	bm.InitWithSize(2)
+	require.NoError(t, bm.InitWithSize(2, mpool.MustNewZero()))
 	bm.AddMany([]uint64{0, 1})
 	maskVec := NewVec(types.T_geometry.ToType(), mp)
 	err = AppendBytesList(maskVec, [][]byte{
@@ -4658,7 +4658,7 @@ func TestLowPrecFloatAccessMovement(t *testing.T) {
 				require.NoError(t, AppendAny(v4, c.mk(f), false, mp))
 			}
 			var bm bitmap.Bitmap
-			bm.InitWithSize(4)
+			require.NoError(t, bm.InitWithSize(4, mpool.MustNewZero()))
 			bm.Add(1)
 			bm.Add(3)
 			require.NoError(t, v4.ShrinkByMask(&bm, false, 0, mp))

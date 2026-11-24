@@ -22,6 +22,7 @@ import (
 	"github.com/FastFilter/xorfilter"
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -193,7 +194,7 @@ func (filter *bloomFilter) MayContainsAny(keys *vector.Vector, lowerBound int, u
 	return found
 }
 
-func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Nulls, error) {
+func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector, mp *mpool.MPool) (bool, *nulls.Nulls, error) {
 	var positive *nulls.Nulls
 
 	row := uint32(0)
@@ -201,7 +202,10 @@ func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nu
 		hash := hashV1(v)
 		if filter.Contains(hash) {
 			if positive == nil {
-				positive = nulls.NewWithSize(int(row) + 1)
+				var err error
+				if positive, err = nulls.NewWithSize(keys.Length(), mp); err != nil {
+					return err
+				}
 			}
 			positive.Add(uint64(row))
 		}
@@ -210,6 +214,7 @@ func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nu
 	}
 
 	if err := containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil); err != nil {
+		positive.Free()
 		return false, nil, err
 	}
 	return !positive.IsEmpty(), positive, nil

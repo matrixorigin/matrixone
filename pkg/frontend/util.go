@@ -1373,9 +1373,17 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 	//2. make batch
 	cnt := len(rows)
 	bat.SetRowCount(cnt)
+	// nsp collects one column's NULL rows before they are copied into the
+	// vector; the last one is freed on return, the others as they are
+	// replaced.
+	var nsp *nulls.Nulls
+	defer func() { nsp.Free() }()
 	for colIndex, typ := range colTyps {
 		bat.Vecs[colIndex] = vector.NewVec(typ, pool)
-		nsp := nulls.NewWithSize(cnt)
+		nsp.Free()
+		if nsp, err = nulls.NewWithSize(cnt, pool); err != nil {
+			return nil, nil, err
+		}
 
 		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {

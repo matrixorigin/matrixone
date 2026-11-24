@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -36,11 +37,17 @@ func BitmapPoolReport() string {
 	)
 }
 
+// bitmapMP backs objectio's bitmap handles: the pooled reusable bitmaps,
+// which live as long as the process, and the bitmaps Release frees.
+var bitmapMP = mpool.MustNew("objectio_bitmap")
+
 var BitmapPool = fileservice.NewPool(
 	BitmapPoolSize,
 	func() *bitmap.Bitmap {
 		var bm bitmap.Bitmap
-		bm.InitWithSize(BitmapBitsInPool)
+		if err := bm.InitWithSize(BitmapBitsInPool, bitmapMP); err != nil {
+			panic(err)
+		}
 		return &bm
 	},
 	func(bm *bitmap.Bitmap) {
@@ -61,14 +68,16 @@ func (r *Bitmap) Idx() int {
 	return r.idx
 }
 
+// Release returns a reusable bitmap to BitmapPool and frees any other. Every
+// handle from GetReusableBitmap or GetNoReuseBitmap is released exactly once.
 func (r *Bitmap) Release() {
-	if r.bm != nil {
-		r.bm = nil
-	}
 	if r.put != nil {
 		r.put()
 		r.put = nil
+	} else if r.bm != nil {
+		r.bm.Free()
 	}
+	r.bm = nil
 	r.idx = 0
 }
 
@@ -119,15 +128,19 @@ func (r *Bitmap) PreExtend(nbits int) {
 			"Bitmap-COW",
 			zap.Int("nbits", nbits),
 		)
-		var nbm bitmap.Bitmap
-		nbm.TryExpandWithSize(nbits)
+		nbm := new(bitmap.Bitmap)
+		if err := nbm.InitWithSize(int64(nbits), bitmapMP); err != nil {
+			panic(err)
+		}
 		nbm.Or(r.bm)
 		r.Release()
-		r.bm = &nbm
+		r.bm = nbm
 		return
 	}
 
-	r.bm.TryExpandWithSize(nbits)
+	if err := r.bm.TryExpandWithSize(nbits); err != nil {
+		panic(err)
+	}
 }
 
 func (r *Bitmap) ToI64Array(out *[]int64) []int64 {
@@ -182,8 +195,9 @@ func GetReusableBitmap() Bitmap {
 	}
 }
 
+// GetNoReuseBitmap returns an empty bitmap that Release frees.
 func GetNoReuseBitmap() Bitmap {
-	return Bitmap{
-		bm: &bitmap.Bitmap{},
-	}
+	bm := new(bitmap.Bitmap)
+	bm.Init(bitmapMP)
+	return Bitmap{bm: bm}
 }

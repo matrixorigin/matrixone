@@ -523,12 +523,15 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 			obj.rt,
 			obj.meta.Load().IsTombstone,
 			uint32(i),
+			mp,
 		)
 		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			sels.Free()
 			continue
 		}
 		err = obj.getDuplicateRowsWithLoad(
 			ctx, txn, keys, sels, rowIDs, uint16(i), filterByCommitTS, from, to, mp)
+		sels.Free()
 		if err != nil {
 			return err
 		}
@@ -561,12 +564,15 @@ func (obj *baseObject) persistedContains(
 			obj.rt,
 			true,
 			uint32(i),
+			mp,
 		)
 		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			sels.Free()
 			continue
 		}
 		err = obj.containsWithLoad(
 			ctx, txn, keys, sels, uint16(i), isAblk, mp)
+		sels.Free()
 		if err != nil {
 			return err
 		}

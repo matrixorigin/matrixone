@@ -118,7 +118,9 @@ func (v *Vector) copyDecoded(decoded *Vector) (err error) {
 		}
 		copy(w.area, decoded.area)
 	}
-	w.nsp.InitWith(&decoded.nsp)
+	if err = w.nsp.InitWith(&decoded.nsp, v.mp); err != nil {
+		return err
+	}
 	*v = *w
 	return nil
 }

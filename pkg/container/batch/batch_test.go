@@ -1841,7 +1841,8 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 			bat.SetRowCount(3)
 			if mask {
 				var sels bitmap.Bitmap
-				sels.InitWithSize(3)
+				sels.Init(bitmapTestMP)
+				mustBitmapOK(sels.InitWithSize(3, bitmapTestMP))
 				sels.AddMany([]uint64{1, 2})
 				require.Error(t, bat.ShrinkByMask(&sels, false, 0, mp))
 			} else {
@@ -1874,7 +1875,8 @@ func TestBatchShrinkByMaskRowCount(t *testing.T) {
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
 			bat.SetRowCount(3)
 			var sels bitmap.Bitmap
-			sels.InitWithSize(3)
+			sels.Init(bitmapTestMP)
+			mustBitmapOK(sels.InitWithSize(3, bitmapTestMP))
 			sels.AddMany(tc.sels)
 			require.NoError(t, bat.ShrinkByMask(&sels, tc.negate, 0, mp))
 			require.Equal(t, len(tc.want), bat.RowCount())

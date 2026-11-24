@@ -699,8 +699,15 @@ func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) er
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
-	// The null bitmap is allocated on the first NULL write, so a result that
-	// never holds NULL does not allocate one.
+	// A nullable result reserves its null bitmap here, where an admission
+	// failure is an error: kernels then set NULL rows in place (Add, AddRange,
+	// Or), which cannot fail within the reserved rows. A result proven to emit
+	// no NULLs reserves nothing.
+	if nullable && targetSize > 0 {
+		if err := fr.vec.ensureNullCapacity(targetSize); err != nil {
+			return err
+		}
+	}
 
 	if !fr.isVarlena {
 		fr.length = 0

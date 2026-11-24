@@ -6933,6 +6933,8 @@ func TestAlterFakePk(t *testing.T) {
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema(false)
 		sels := &nulls.Nulls{}
+		sels.Init(common.DefaultAllocator)
+		defer sels.Free()
 		sels.Add(1)
 		sels.Add(3)
 		rows := make([]int, 0, 4)
@@ -13573,6 +13575,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 
 	txn, _ = tae.GetRelation()
 	deletes := &nulls.Nulls{}
+	deletes.Init(common.DebugAllocator)
 	nbid := types.NewBlockidWithObjectID(dataObj.ID(), 0)
 	atombstone.GetObjectData().FillBlockTombstones(
 		ctx,
@@ -13583,6 +13586,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())
+	deletes.Free()
 	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 }
 

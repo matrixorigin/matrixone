@@ -160,14 +160,19 @@ func (node *persistedNode) Scan(
 			(*bat).AddVector(attr, vecs[i])
 		}
 	} else {
-		if (*bat).Deletes == nil {
-			(*bat).Deletes = nulls.NewWithSize(1024)
+		if (*bat).Deletes == nil && !deletes.IsEmpty() {
+			if (*bat).Deletes, err = nulls.NewWithSize(1024, mp); err != nil {
+				deletes.Free()
+				return err
+			}
 		}
 		len := (*bat).Length()
 		deletes.Foreach(func(i uint64) bool {
 			(*bat).Deletes.Add(i + uint64(len))
 			return true
 		})
+		// The rows are merged into the batch's own bitmap.
+		deletes.Free()
 
 		// RelLogicalID COMPAT
 		var tidvec containers.Vector
@@ -416,11 +421,13 @@ func (node *persistedNode) FillBlockTombstones(
 			if types.PrefixCompare(rowID[:], blkID[:]) == 0 {
 				if *deletes == nil {
 					*deletes = &nulls.Nulls{}
+					(*deletes).Init(mp)
 				}
 				offset := rowID.GetRowOffset()
 				(*deletes).Add(uint64(offset) + deleteStartOffset)
 			}
 		}
+		visibilityDeletes.Free()
 		for i := range vecs {
 			vecs[i].Close()
 		}
