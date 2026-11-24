@@ -825,7 +825,7 @@ func (d *DiskCache) Update(
 	if err != nil {
 		return err
 	}
-	if d.download(d.pathForFile(path.File)) != nil {
+	if o := d.download(d.pathForFile(path.File)); o != nil && !o.indexFile {
 		// The download caches the whole object.
 		return nil
 	}
@@ -1119,7 +1119,8 @@ func (d *DiskCache) writeFileTo(
 	var download *objectDownload
 	var dst io.Writer = f
 	if fill != notWholeFill {
-		download = d.startDownload(diskPath, f.Name(), fill != contentFill, bounds)
+		_, indexFile := target.(indexFillTarget)
+		download = d.startDownload(diskPath, f.Name(), fill != contentFill, indexFile, bounds)
 		// Its lead part holds the connection the download took.
 		download.begin(lead)
 		fileDownloadStarted(ctx, download)
