@@ -40,6 +40,55 @@ func TestFuncCastForEnumTypeKeepsMatchingErrorMember(t *testing.T) {
 	require.Equal(t, uint32(0), got.GetLit().GetEnumVal())
 }
 
+func TestIndexSerialUsesStoredMySQLSpecialValues(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		typ  plan.Type
+	}{
+		{"enum ordinal zero", plan.Type{Id: int32(types.T_enum), Enumvalues: ",a"}},
+		{"set empty member bitmap", plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := &plan.Expr{
+				Typ: tc.typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 2,
+					ColPos: 3,
+				}},
+			}
+			display, err := makeEnumOrSetDisplayValue(ctx, stored)
+			require.NoError(t, err)
+
+			for _, name := range []string{"serial", "serial_full"} {
+				got := useStoredMySQLSpecialTypesForIndexSerial(name, []*plan.Expr{display})
+				require.Len(t, got, 1)
+				require.Equal(t, stored, got[0])
+			}
+
+			got := useStoredMySQLSpecialTypesForIndexSerial("lower", []*plan.Expr{display})
+			require.Same(t, display, got[0])
+		})
+	}
+}
+
+func TestNormalizeDeleteOldSetValueReusesStoredBitmap(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}
+	stored := &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 2,
+			ColPos: 3,
+		}},
+	}
+	display, err := makeEnumOrSetDisplayValue(context.Background(), stored)
+	require.NoError(t, err)
+
+	got, err := normalizeDeleteOldValueExpr(context.Background(), display, typ)
+	require.NoError(t, err)
+	require.Equal(t, stored, got)
+}
+
 func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	ctx := context.Background()
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -69,32 +70,63 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return c.runSql(insertSQL)
 }
 
-func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, error) {
+func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, int, error) {
 	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(indexDef.IndexAlgoParams)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
+	resultColCount := len(indexDef.Parts)
+	hasSpecialType := indexContainsMySQLSpecialType(tableDef, indexDef)
+	selectExpr := groupExpr
+	if hasSpecialType {
+		// Display strings are not injective for ENUM ordinal zero or SET bitmaps.
+		// Group rebuild candidates by the same stored-value serialization used
+		// by a composite unique index.
+		groupExpr = fmt.Sprintf("serial(%s)", groupExpr)
+		selectExpr = fmt.Sprintf("hex(%s)", groupExpr)
+		resultColCount = 1
+	}
 	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
-	if len(indexDef.Parts) > 1 {
-		nullChecks := make([]string, 0, len(indexDef.Parts))
-		for _, part := range indexDef.Parts {
-			part = catalog.ResolveAlias(part)
-			partExpr := quoteMySQLQualifiedIdent(part)
-			if length := prefixLengths[part]; length > 0 {
-				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
-			}
-			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", partExpr))
-		}
-		nullCheckExpr = strings.Join(nullChecks, " AND ")
+	if len(indexDef.Parts) > 1 || hasSpecialType {
+		nullCheckExpr = strings.Join(uniqueIndexPartNullChecks(indexDef.Parts, prefixLengths), " AND ")
 	}
 	return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
-		groupExpr,
+		selectExpr,
 		quoteMySQLIdent(dbName),
 		quoteMySQLIdent(tableDef.Name),
 		nullCheckExpr,
 		groupExpr,
-	), nil
+	), resultColCount, nil
+}
+
+func indexContainsMySQLSpecialType(tableDef *plan.TableDef, indexDef *plan.IndexDef) bool {
+	if tableDef == nil || indexDef == nil {
+		return false
+	}
+	for _, part := range indexDef.Parts {
+		name := catalog.ResolveAlias(part)
+		for _, col := range tableDef.Cols {
+			if col.Name == name && (col.Typ.Id == int32(types.T_enum) ||
+				(col.Typ.Id == int32(types.T_uint64) && col.Typ.Enumvalues != "")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func uniqueIndexPartNullChecks(parts []string, prefixLengths map[string]int) []string {
+	checks := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = catalog.ResolveAlias(part)
+		partExpr := quoteMySQLQualifiedIdent(part)
+		if length := prefixLengths[part]; length > 0 {
+			partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+		}
+		checks = append(checks, fmt.Sprintf("%s IS NOT NULL", partExpr))
+	}
+	return checks
 }
 
 func (c *Compile) precheckAndInsertUniqueIndexTable(
@@ -105,7 +137,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 ) error {
 	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
 	// backfill filter and only groups non-NULL keys.
-	duplicateCheckSQL, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
+	duplicateCheckSQL, resultColCount, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
 	if err != nil {
 		return err
 	}
@@ -116,7 +148,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 	}
 	defer duplicateCheckRes.Close()
 
-	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, len(indexDef.Parts)); ok {
+	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, resultColCount); ok {
 		return moerr.NewDuplicateEntry(c.proc.Ctx, formatAlterCopyPkValue(values), catalog.IndexTableIndexColName)
 	}
 

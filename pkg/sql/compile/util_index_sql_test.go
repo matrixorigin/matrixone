@@ -113,8 +113,9 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 			Unique:         true,
 		}
 
-		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		sql, resultCols, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
 		require.NoError(t, err)
+		require.Equal(t, 1, resultCols)
 
 		require.Equal(t, "SELECT `order` FROM `test`.`orders` WHERE `order` IS NOT NULL GROUP BY `order` HAVING count(*) > 1 LIMIT 1", sql)
 	})
@@ -127,8 +128,9 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 			Unique:         true,
 		}
 
-		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		sql, resultCols, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
 		require.NoError(t, err)
+		require.Equal(t, 2, resultCols)
 
 		require.Equal(t, "SELECT `order`,`id` FROM `test`.`orders` WHERE `order` IS NOT NULL AND `id` IS NOT NULL GROUP BY `order`,`id` HAVING count(*) > 1 LIMIT 1", sql)
 	})
@@ -142,8 +144,9 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 			IndexAlgoParams: `{"prefix_lengths":"order:5"}`,
 		}
 
-		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		sql, resultCols, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
 		require.NoError(t, err)
+		require.Equal(t, 1, resultCols)
 
 		require.Equal(t, "SELECT substring(`order`, 1, 5) FROM `test`.`orders` WHERE substring(`order`, 1, 5) IS NOT NULL GROUP BY substring(`order`, 1, 5) HAVING count(*) > 1 LIMIT 1", sql)
 	})
@@ -157,8 +160,40 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 			IndexAlgoParams: `{"prefix_lengths":"order:bad"}`,
 		}
 
-		_, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		_, _, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
 		require.Error(t, err)
+	})
+
+	t.Run("enum key uses stored serialization", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Name: "orders",
+			Cols: []*planpb.ColDef{{
+				Name: "status",
+				Typ:  planpb.Type{Id: int32(types.T_enum), Enumvalues: ",a"},
+			}},
+		}
+		indexDef := &planpb.IndexDef{Parts: []string{"status"}, Unique: true}
+
+		sql, resultCols, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, 1, resultCols)
+		require.Equal(t, "SELECT hex(serial(`status`)) FROM `test`.`orders` WHERE `status` IS NOT NULL GROUP BY serial(`status`) HAVING count(*) > 1 LIMIT 1", sql)
+	})
+
+	t.Run("composite enum key uses stored serialization", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Name: "orders",
+			Cols: []*planpb.ColDef{{
+				Name: "status",
+				Typ:  planpb.Type{Id: int32(types.T_enum), Enumvalues: ",a"},
+			}},
+		}
+		indexDef := &planpb.IndexDef{Parts: []string{"order", "status"}, Unique: true}
+
+		sql, resultCols, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Equal(t, 1, resultCols)
+		require.Equal(t, "SELECT hex(serial(`order`,`status`)) FROM `test`.`orders` WHERE `order` IS NOT NULL AND `status` IS NOT NULL GROUP BY serial(`order`,`status`) HAVING count(*) > 1 LIMIT 1", sql)
 	})
 }
 
