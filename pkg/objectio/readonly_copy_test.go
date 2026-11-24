@@ -246,7 +246,7 @@ func TestRetainedCachedVectorPinRefusal(t *testing.T) {
 			var transientBytes uint64
 			if transient {
 				var err error
-				allocMP, err = vector.JSONReaderAllocationMP(mp, func(size uint64) (func(), error) {
+				allocMP, err = mp.WithAdmission(func(size uint64) (func(), error) {
 					transientBytes += size
 					return func() { transientBytes -= size }, nil
 				})

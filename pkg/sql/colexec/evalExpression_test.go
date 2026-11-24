@@ -596,7 +596,6 @@ func TestLiteralMaterialization(t *testing.T) {
 			{"nonliteral", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}, moerr.ErrInternal},
 			{"timestamp precision", &plan.Expr{Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 7}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: 1}}}}, moerr.ErrTooBigPrecision},
 			{"unsupported payload", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}, moerr.ErrNYI},
-			{"payload write", &plan.Expr{Typ: plan.Type{Id: int32(types.T_json)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: ""}}}}, moerr.ErrInvalidInput},
 			{"invalid source", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "b"}, StringSource: 257}}}, moerr.ErrInvalidInput},
 		} {
 			t.Run(test.name, func(t *testing.T) {
@@ -605,9 +604,6 @@ func TestLiteralMaterialization(t *testing.T) {
 				if test.later.Typ.Id == int32(types.T_timestamp) {
 					first.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: 1}}}
 					first.Typ.Scale = 6
-				}
-				if test.later.Typ.Id == int32(types.T_json) {
-					first.Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
 				}
 				before := proc.Mp().CurrNB()
 				bytes, objects := proc.Mp().OnHeapOutstanding()

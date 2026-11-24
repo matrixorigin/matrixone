@@ -23,7 +23,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -730,22 +729,21 @@ func TestFunctionTestCaseOwnership(t *testing.T) {
 		assertReleased(t)
 	})
 	t.Run("current vector rollback", func(t *testing.T) {
-		value, err := types.ParseStringToByteJson(`{"v":"01234567890123456789012345678901"}`)
-		require.NoError(t, err)
-		encoded, err := types.EncodeJson(value)
-		require.NoError(t, err)
+		// Not valid UTF-8, so a native Unicode text vector rejects it after
+		// the first, longer-than-inline value has been appended.
+		unicode := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+		invalid := string([]byte{0x30, 0xfb, 0xc1, 0x30, 0xff, 0xff, 0x20})
 		var recovered any
 		func() {
 			defer func() { recovered = recover() }()
 			_ = NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{7}, nil),
-				NewFunctionTestInput(types.T_json.ToType(), []string{string(encoded), ""}, nil),
+				NewFunctionTestInput(unicode, []string{"01234567890123456789012345678901", invalid}, nil),
 			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7}, nil), AbsInt64)
 		}()
 		err, ok := recovered.(error)
 		require.True(t, ok)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-		require.Equal(t, "invalid input: invalid JSON vector payload", err.Error())
+		require.Error(t, err)
 		assertReleased(t)
 	})
 	t.Run("borrow and reuse", func(t *testing.T) {

@@ -177,7 +177,7 @@ func buildColumnAndConstraint(
 			return nil, err
 		}
 		return buildDefaultExprWithColumns(
-			ddlExpressionContext(ctx, ctx.GetProcess().Ctx),
+			ddlExpressionContext(ctx, ctx.GetContext()),
 			specNewColumn,
 			colType,
 			ctx.GetProcess(),

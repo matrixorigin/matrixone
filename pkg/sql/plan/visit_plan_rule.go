@@ -544,7 +544,7 @@ func PreparedPlanNeedsNumericPrefixSpecialization(preparePlan *Plan, paramVals [
 	}
 	positions := make(map[int]types.StringConversionKind)
 	for i, value := range paramVals {
-		param, ok := value.(ParamValue)
+		param, ok := AsParamValue(value)
 		if !ok || !param.EnableNumericPrefix {
 			continue
 		}
@@ -679,7 +679,7 @@ func hasRuntimeDecimalPrefixFilter(preparePlan *Plan, paramVals []any) bool {
 	}
 	positions := make(map[int]types.StringConversionKind)
 	for i, value := range paramVals {
-		param, ok := value.(ParamValue)
+		param, ok := AsParamValue(value)
 		if ok && param.EnableNumericPrefix && param.PrepareParamKind == types.StringConversionDecimal {
 			positions[i] = param.PrepareParamKind
 		}
@@ -919,7 +919,7 @@ func preparedConcreteStringCommonValueBoundary(pos int, values []any) bool {
 	if pos < 0 || pos >= len(values) {
 		return false
 	}
-	param, ok := values[pos].(ParamValue)
+	param, ok := AsParamValue(values[pos])
 	if !ok || param.IsBinaryProtocol || !param.HasSourceType || !param.SourceType.Oid.IsMySQLString() {
 		return false
 	}
@@ -1143,7 +1143,7 @@ func (rule *ResetParamRefRule) SetParamValues(values []any) {
 		if i >= len(rule.paramKinds) {
 			break
 		}
-		if param, ok := value.(ParamValue); ok {
+		if param, ok := AsParamValue(value); ok {
 			rule.paramKinds[i] = param.PrepareParamKind
 		}
 	}
@@ -1155,7 +1155,7 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, types.StringConv
 	}
 	if pos < len(rule.paramValues) {
 		value := rule.paramValues[pos]
-		if param, ok := value.(ParamValue); ok {
+		if param, ok := AsParamValue(value); ok {
 			return param.Value, param.PrepareParamKind, true
 		}
 		if value != nil {
@@ -1234,7 +1234,7 @@ func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNu
 		}, true, nil
 	}
 	if pos >= 0 && pos < len(rule.paramValues) {
-		if param, isParam := rule.paramValues[pos].(ParamValue); isParam &&
+		if param, isParam := AsParamValue(rule.paramValues[pos]); isParam &&
 			value == nil && param.MaterializedValue != "" {
 			value = param.MaterializedValue
 		}
@@ -1261,7 +1261,7 @@ func (rule *ResetParamRefRule) preparedBitCountUsesIntegerRuntime(expr *plan.Exp
 			if PreparedParamValueHasNumericRuntime(value) {
 				return true
 			}
-			if param, ok := value.(ParamValue); ok && param.HasRuntimeType &&
+			if param, ok := AsParamValue(value); ok && param.HasRuntimeType &&
 				planfunction.IntegerArgumentUsesTemporalIntegerCast("bit_count", 0, param.RuntimeType.Oid) {
 				return true
 			}
@@ -1276,7 +1276,7 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	if pos < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+		if param, ok := AsParamValue(rule.paramValues[pos]); ok {
 			// SQL EXECUTE values are transported through a text vector, so their
 			// logical source type must drive overload rebinding without becoming
 			// the visible type of a bare result marker.  An explicit RuntimeType
@@ -1329,7 +1329,7 @@ func (rule *ResetParamRefRule) hasNumericRuntimeParam(pos int) bool {
 	if pos < 0 || pos >= len(rule.paramValues) {
 		return false
 	}
-	param, ok := rule.paramValues[pos].(ParamValue)
+	param, ok := AsParamValue(rule.paramValues[pos])
 	if !ok {
 		return false
 	}
@@ -1358,7 +1358,7 @@ func (rule *ResetParamRefRule) typedIntegerParamExpr(pos int32) (*Expr, bool) {
 	}
 	isBin := false
 	if int(pos) < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+		if param, ok := AsParamValue(rule.paramValues[pos]); ok {
 			isBin = param.IsBin
 		}
 	}
@@ -1381,7 +1381,7 @@ func (rule *ResetParamRefRule) typedDecimalParamExpr(pos int32) (*Expr, bool, er
 	}
 	isBin := false
 	if int(pos) < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+		if param, ok := AsParamValue(rule.paramValues[pos]); ok {
 			isBin = param.IsBin
 		}
 	}
@@ -1420,7 +1420,7 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 		}
 		raw := fmt.Sprint(value)
 		if pos < len(rule.paramValues) {
-			if param, ok := rule.paramValues[pos].(ParamValue); ok {
+			if param, ok := AsParamValue(rule.paramValues[pos]); ok {
 				raw = preparedParamValueText(param)
 			}
 		}
@@ -1430,7 +1430,7 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 		}
 		isBin := false
 		if pos < len(rule.paramValues) {
-			if param, ok := rule.paramValues[pos].(ParamValue); ok {
+			if param, ok := AsParamValue(rule.paramValues[pos]); ok {
 				isBin = param.IsBin
 			}
 		}
@@ -1443,7 +1443,7 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 	}
 	isBin := false
 	if pos < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+		if param, ok := AsParamValue(rule.paramValues[pos]); ok {
 			isBin = param.IsBin
 		}
 	}
@@ -1465,7 +1465,7 @@ func (rule *ResetParamRefRule) retainRuntimeParamRef(pos int, expr *Expr) {
 	if expr == nil || pos < 0 || pos >= len(rule.paramValues) {
 		return
 	}
-	param, ok := rule.paramValues[pos].(ParamValue)
+	param, ok := AsParamValue(rule.paramValues[pos])
 	if !ok || !param.RetainParamRef {
 		return
 	}
@@ -2114,7 +2114,7 @@ func (rule *ResetParamRefRule) preparedRuntimeParamIsNull(pos int) bool {
 		return false
 	}
 	if pos < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+		if param, ok := AsParamValue(rule.paramValues[pos]); ok {
 			return preparedParamValueIsNull(param)
 		}
 	}
@@ -2538,7 +2538,7 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 	// Do not reinterpret string parameters or descend through user expressions.
 	if pos, ok := directIntegerAssignmentParam(e); ok {
 		if pos < len(rule.paramValues) {
-			if param, ok := rule.paramValues[pos].(ParamValue); ok &&
+			if param, ok := AsParamValue(rule.paramValues[pos]); ok &&
 				((param.IsBinaryProtocol && (!param.HasRuntimeType || param.RuntimeType.Oid.IsMySQLString())) ||
 					(param.HasSourceType && param.SourceType.Oid.IsMySQLString())) {
 				return e, nil
@@ -2565,7 +2565,7 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 			if param := fn.Args[0].GetP(); param != nil {
 				position := int(param.Pos)
 				if position >= 0 && position < len(rule.paramValues) {
-					if value, ok := rule.paramValues[position].(ParamValue); ok &&
+					if value, ok := AsParamValue(rule.paramValues[position]); ok &&
 						(value.PrepareParamKind != types.StringConversionString ||
 							(value.HasSourceType && value.SourceType.IsNumeric()) ||
 							(value.HasRuntimeType && value.RuntimeType.IsNumeric())) {
@@ -2743,7 +2743,7 @@ func preparedExecutionParamType(
 		markerType = types.T_text.ToType()
 	}
 
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		if param.Value == nil {
 			// A NULL execution does not erase the marker's PREPARE-time type.
 			// This differs from a bare NULL literal, which has no domain. MySQL
@@ -2844,7 +2844,7 @@ func preparedExecutionExprType(
 			}
 			if pos, direct := preparedParamPosition(arg); direct {
 				if value, _, found := lookup(pos); found {
-					if param, ok := value.(ParamValue); ok {
+					if param, ok := AsParamValue(value); ok {
 						if target, ok := preparedSQLExecuteTextConsumerType(functionName, arg, param); ok {
 							currentType, childDomainless = target, false
 						}
@@ -3119,7 +3119,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				(implicitParamCast || types.T(arg.Typ.Id).IsMySQLString() || types.T(arg.Typ.Id) == types.T_any) &&
 				(functionName == "field" || functionName == "greatest" || functionName == "least") &&
 				paramPos < len(rule.paramValues) {
-				if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
+				if param, ok := AsParamValue(rule.paramValues[paramPos]); ok &&
 					((param.Value == nil && (param.IsBinaryProtocol || param.HasSourceType || param.HasRuntimeType)) ||
 						(!param.IsBinaryProtocol && param.HasSourceType && param.SourceType.Oid != types.T_any) ||
 						(functionName == "field" && param.IsBinaryProtocol && param.HasRuntimeType &&
@@ -3179,7 +3179,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// Common results preserve concrete SQL strings, including typed NULL.
 			// Prefix eligibility belongs to transport-only text and numeric consumers.
 			if hasParamPos && isPreparedCommonValueFunction(functionName) && !fixedDecimalCommonValue && paramPos < len(rule.paramValues) {
-				if param, ok := rule.paramValues[paramPos].(ParamValue); ok && !param.IsBinaryProtocol &&
+				if param, ok := AsParamValue(rule.paramValues[paramPos]); ok && !param.IsBinaryProtocol &&
 					param.HasSourceType && param.SourceType.Oid.IsMySQLString() {
 					prefixEligibleOccurrence = false
 				}
@@ -3222,7 +3222,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			numericTemporalSource := false
 			if numericTemporalArg && hasParamPos && !isExplicitPreparedCast(arg) &&
 				paramPos < len(rule.paramValues) {
-				if param, ok := rule.paramValues[paramPos].(ParamValue); ok {
+				if param, ok := AsParamValue(rule.paramValues[paramPos]); ok {
 					numericTemporalSource = !param.IsBinaryProtocol && param.HasSourceType &&
 						(param.SourceType.IsDecimal() || param.SourceType.Oid == types.T_float32 ||
 							param.SourceType.Oid == types.T_float64)
@@ -3475,7 +3475,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					// preserving the original string payload.
 					stringType := types.T_varchar.ToType()
 					rewrittenArg.Typ = makePlan2Type(&stringType)
-				} else if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
+				} else if param, ok := AsParamValue(rule.paramValues[paramPos]); ok &&
 					param.Value != nil && param.PrepareParamKind != types.StringConversionString {
 					// SQL EXECUTE still materializes the value through a text
 					// transport literal. Recreate the assignment-time numeric
@@ -4125,7 +4125,7 @@ func isPreparedSpatialUnitFunction(name string, argIndex int) bool {
 }
 
 func preparedParamValueUsesStringDomain(value any) bool {
-	param, ok := value.(ParamValue)
+	param, ok := AsParamValue(value)
 	if !ok || param.Value == nil {
 		return false
 	}
@@ -5039,7 +5039,7 @@ func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int
 }
 
 func preparedRuntimeResultOccurrenceType(value any, fallback plan.Type) plan.Type {
-	param, ok := value.(ParamValue)
+	param, ok := AsParamValue(value)
 	if !ok {
 		return fallback
 	}
@@ -5111,7 +5111,7 @@ func (rule *ResetParamRefRule) preparedInetNtoaSourceExpr(pos int) (*Expr, bool,
 	if pos < 0 || pos >= len(rule.paramValues) {
 		return nil, false, nil
 	}
-	param, ok := rule.paramValues[pos].(ParamValue)
+	param, ok := AsParamValue(rule.paramValues[pos])
 	if !ok || param.Value == nil {
 		return nil, false, nil
 	}
@@ -5148,7 +5148,7 @@ func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool
 	if pos < 0 || pos >= len(rule.paramValues) || pos >= len(rule.params) {
 		return nil, false, nil
 	}
-	param, ok := rule.paramValues[pos].(ParamValue)
+	param, ok := AsParamValue(rule.paramValues[pos])
 	if !ok || param.Value == nil {
 		return nil, false, nil
 	}
@@ -5174,7 +5174,7 @@ func (rule *ResetParamRefRule) preparedRuntimeSourceExpr(pos int, preserveProtoc
 	if pos < 0 || pos >= len(rule.paramValues) || pos >= len(rule.params) {
 		return nil, false, nil
 	}
-	param, ok := rule.paramValues[pos].(ParamValue)
+	param, ok := AsParamValue(rule.paramValues[pos])
 	if !ok {
 		return nil, false, nil
 	}
@@ -5270,7 +5270,7 @@ func (rule *ResetParamRefRule) preparedSQLExecuteTextFunctionParamType(functionN
 	if !ok || pos < 0 || pos >= len(rule.paramValues) {
 		return types.Type{}, false
 	}
-	param, ok := rule.paramValues[pos].(ParamValue)
+	param, ok := AsParamValue(rule.paramValues[pos])
 	if !ok {
 		return types.Type{}, false
 	}

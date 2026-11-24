@@ -41,7 +41,7 @@ func canReadMembership(ctx context.Context, info *objectio.BlockInfo,
 	if member.Bypass || !member.PredicatesTotal || request.Exact != nil || storageRows != nil ||
 		member.Select == nil || request.Select == nil || request.OutputAllocation == nil ||
 		len(member.Columns) == 0 || info.IsAppendable() ||
-		info.MetaLocation().Rows() > objectio.BlockMaxRows || objectio.JSONReadSetFromContext(ctx).MatchesJSONColumns(typs) {
+		info.MetaLocation().Rows() > objectio.BlockMaxRows {
 		return false
 	}
 	for i, column := range member.Columns {

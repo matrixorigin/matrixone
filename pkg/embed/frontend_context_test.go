@@ -50,6 +50,9 @@ func TestFrontendExpressionContextAcrossRequests(t *testing.T) {
 				{"utf8mb4_bin", "utf8mb4", "46", "", "Yes", "1", "PAD SPACE"},
 			}}},
 			{"empty result", "show variables where variable_name like 'system%' and variable_name != 'system_time_zone'", [][][]string{nil}},
+			{"JSON NTH_VALUE", `select nth_value(v, json_length(json_extract('{"n":[1]}', '$.n'))) over (order by v) from (select 7 as v) as input`, [][][]string{{{"7"}}}},
+			{"JSON EMA", `select ema(v, json_length(json_extract('{"n":[1]}', '$.n'))) over (order by v) from (select 7 as v) as input`, [][][]string{{{"7"}}}},
+			{"JSON RANGE frame", `select count(*) over (order by d range between interval json_length(json_extract('{"n":[1]}', '$.n')) day preceding and current row) from (select cast('2024-01-01' as date) as d) as input`, [][][]string{{{"1"}}}},
 			{"multi statement", "select 1; show variables where variable_name like 'version_comm%'; select 2; show variables where variable_name like 'version_comm%'", [][][]string{{{"1"}}, {{"version_comment", "MatrixOne"}}, {{"2"}}, {{"version_comment", "MatrixOne"}}}},
 			{"nested SET", "set @context_probe = (select 'ok'); show variables where variable_name like 'version_comm%'", [][][]string{{{"version_comment", "MatrixOne"}}}},
 			{"staged sql_mode", "set sql_mode=''; show variables where variable_name like 'version_comm%'; set sql_mode=default; show variables where variable_name like 'version_comm%'", [][][]string{{{"version_comment", "MatrixOne"}}, {{"version_comment", "MatrixOne"}}}},
@@ -107,6 +110,60 @@ func TestFrontendExpressionContextAcrossRequests(t *testing.T) {
 				require.Equal(t, len(tc.want), resultSet)
 			})
 		}
+
+		t.Run("JSON defaults", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "create database frontend_context_defaults")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "drop database frontend_context_defaults")
+				require.NoError(t, err)
+			})
+
+			const defaultExpr = ` default (json_length(json_extract('{"n":[1]}', '$.n')))`
+			for _, ddl := range []string{
+				"create table frontend_context_defaults.t (id int, v int" + defaultExpr + ")",
+				"alter table frontend_context_defaults.t add column w int" + defaultExpr,
+				"alter table frontend_context_defaults.t modify column w mediumint" + defaultExpr,
+			} {
+				var one int
+				require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
+				_, err := conn.ExecContext(ctx, ddl)
+				require.NoError(t, err, ddl)
+			}
+
+			_, err = conn.ExecContext(ctx, "insert into frontend_context_defaults.t(id) values (7)")
+			require.NoError(t, err)
+			var v, w int
+			require.NoError(t, conn.QueryRowContext(ctx, "select v, w from frontend_context_defaults.t").Scan(&v, &w))
+			require.Equal(t, 1, v)
+			require.Equal(t, 1, w)
+		})
+
+		t.Run("JSON partition bounds", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "create database frontend_context_partitions")
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "drop database frontend_context_partitions")
+				require.NoError(t, err)
+			})
+			for _, ddl := range []string{
+				`create table frontend_context_partitions.r (a int) partition by range (a)
+					(partition p0 values less than (1), partition p1 values less than (json_length(json_extract('{"n":[1,2]}', '$.n'))))`,
+				`alter table frontend_context_partitions.r add partition
+					(partition p2 values less than (json_length(json_extract('{"n":[1,2,3]}', '$.n'))))`,
+				`create table frontend_context_partitions.l (a int) partition by list (a)
+					(partition p0 values in (1), partition p1 values in (json_length(json_extract('{"n":[1,2]}', '$.n'))))`,
+			} {
+				var one int
+				require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&one))
+				_, err := conn.ExecContext(ctx, ddl)
+				require.NoError(t, err, ddl)
+			}
+		})
 
 		t.Run("compiler ownership", func(t *testing.T) {
 			_, err := conn.ExecContext(ctx, "create database frontend_context_compile")

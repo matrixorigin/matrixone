@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func copySpoolBatchAtPeak(t *testing.T, cache *cachedBatch, source *batch.Batch) (copied *batch.Batch, peak uint64) {
+func copySpoolBatchAtPeak(t *testing.T, cache *batchCache, source *batch.Batch) (copied *batch.Batch, peak uint64) {
 	t.Helper()
 	epoch := cache.mp.StartResourcePeakEpoch()
 	require.NotNil(t, epoch)
@@ -35,9 +35,9 @@ func copySpoolBatchAtPeak(t *testing.T, cache *cachedBatch, source *batch.Batch)
 		peak, ok = cache.mp.EndResourcePeakEpoch(epoch)
 		require.True(t, ok)
 	}()
-	copied, use, id, err := cache.GetCopiedBatch(source)
+	copied, _, id, err := cache.copyBatch(source)
 	if err == nil {
-		t.Cleanup(func() { cache.CacheBatch(use, id, copied) })
+		t.Cleanup(func() { cache.put(copied, id) })
 	}
 	require.NoError(t, err)
 	return copied, 0
@@ -59,11 +59,11 @@ func TestCachedBatchGrowthReleasesEarlierBacking(t *testing.T) {
 	seed, source := makeSource(1024, 0), makeSource(2048, 4096)
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
-	cache := initCachedBatch(mp, 1)
+	cache := newBatchCache(mp, 1)
 	t.Cleanup(cache.free)
-	copied, use, id, err := cache.GetCopiedBatch(seed)
+	copied, _, id, err := cache.copyBatch(seed)
 	require.NoError(t, err)
-	cache.CacheBatch(use, id, copied)
+	cache.put(copied, id)
 	copied, peak := copySpoolBatchAtPeak(t, cache, source)
 	for i, vec := range source.Vecs {
 		require.Equal(t, vec.GetBytesAt(0), copied.Vecs[i].GetBytesAt(0))
