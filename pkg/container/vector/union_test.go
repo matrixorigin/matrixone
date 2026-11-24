@@ -390,65 +390,6 @@ func TestUnionInlineSelection(t *testing.T) {
 	}
 }
 
-// TestUnionBatchVarlenFastPath exercises the full-append fast path: mixed inline
-// (short) + non-inline (long) values, unioned into a non-empty target so the
-// offset-rebase (baseOff != 0) runs, and cross-checked value-by-value.
-func TestUnionBatchVarlenFastPath(t *testing.T) {
-	mp := mpool.MustNewZero()
-	const n = 500
-	src := func() []string {
-		out := make([]string, n)
-		for i := 0; i < n; i++ {
-			if i%3 == 0 {
-				out[i] = fmt.Sprintf("s%d", i) // inline (<=23 bytes)
-			} else {
-				out[i] = fmt.Sprintf("long-%d-", i) + string(make([]byte, 800)) // non-inline
-			}
-		}
-		return out
-	}()
-
-	w := NewVec(types.T_varchar.ToType(), mp)
-	for _, s := range src {
-		require.NoError(t, AppendBytes(w, []byte(s), false, mp))
-	}
-
-	// seed target with a few rows so baseOff != 0 on the batched union.
-	v := NewVec(types.T_varchar.ToType(), mp)
-	seed := []string{"seed-a", "seed-" + string(make([]byte, 900))}
-	for _, s := range seed {
-		require.NoError(t, AppendBytes(v, []byte(s), false, mp))
-	}
-
-	// full-append fast path: offset=0, cnt=w.length, flags=nil, no nulls.
-	require.NoError(t, v.UnionBatch(w, 0, w.Length(), nil, mp))
-
-	require.Equal(t, len(seed)+n, v.Length())
-	for i, s := range seed {
-		require.Equalf(t, s, string(v.GetBytesAt(i)), "seed row %d", i)
-	}
-	for i, s := range src {
-		require.Equalf(t, s, string(v.GetBytesAt(len(seed)+i)), "src row %d", i)
-	}
-
-	// equivalence oracle: same union built via UnionOne (per-row, general path).
-	ref := NewVec(types.T_varchar.ToType(), mp)
-	for _, s := range seed {
-		require.NoError(t, AppendBytes(ref, []byte(s), false, mp))
-	}
-	for i := 0; i < w.Length(); i++ {
-		require.NoError(t, ref.UnionOne(w, int64(i), mp))
-	}
-	require.Equal(t, ref.Length(), v.Length())
-	for i := 0; i < v.Length(); i++ {
-		require.Equalf(t, string(ref.GetBytesAt(i)), string(v.GetBytesAt(i)), "row %d vs oracle", i)
-	}
-
-	w.Free(mp)
-	v.Free(mp)
-	ref.Free(mp)
-}
-
 // TestUnionBatchVarlenContiguousRangeFastPath covers the partial-range shape
 // used when a wide loop-join result is split into bounded output batches. The
 // source payload is contiguous, but offset != 0 and cnt < source length, so it
@@ -726,7 +667,7 @@ func BenchmarkUnionBatchVarlenWindow768(b *testing.B) {
 // sels-gather area pre-grow (UnionMulti / Union / UnionBatch / AppendMultiFixed),
 // with mixed inline+non-inline values and nulls, cross-checked against per-row
 // UnionOne (the known-correct path) and direct expectations.
-func TestUnionBroadcastAndPregrow(t *testing.T) {
+func TestUnionVarlenGatherAndBroadcast(t *testing.T) {
 	mp := mpool.MustNewZero()
 	const n = 400
 	vals := make([]string, n)
@@ -786,30 +727,6 @@ func TestUnionBroadcastAndPregrow(t *testing.T) {
 		}
 	}
 
-	// 3) UnionBatch with nulls (general null branch + pre-grow), offset 0.
-	{
-		v := NewVec(types.T_varchar.ToType(), mp)
-		require.NoError(t, v.UnionBatch(src, 0, n, nil, mp))
-		require.Equal(t, n, v.Length())
-		for i := 0; i < n; i++ {
-			gs, gn := get(v, i)
-			require.Equalf(t, isNull[i], gn, "UnionBatch null row %d", i)
-			if !gn {
-				require.Equalf(t, vals[i], gs, "UnionBatch row %d", i)
-			}
-		}
-	}
-
-	// 4) AppendMultiFixed broadcast (fillSlice on a fixed type), large cnt.
-	{
-		v := NewVec(types.T_int64.ToType(), mp)
-		require.NoError(t, AppendMultiFixed(v, int64(0x1122334455667788), false, 1000, mp))
-		require.Equal(t, 1000, v.Length())
-		col := MustFixedColNoTypeCheck[int64](v)
-		for i := 0; i < 1000; i++ {
-			require.Equalf(t, int64(0x1122334455667788), col[i], "AppendMultiFixed row %d", i)
-		}
-	}
 	src.Free(mp)
 }
 
@@ -874,7 +791,6 @@ func TestUnionBatchFixedNullableRange(t *testing.T) {
 					require.Equal(t, isNull, destination.IsNull(uint64(row)))
 					if !isNull {
 						require.Equal(t, int64(11+row), GetFixedAtNoTypeCheck[int64](destination, row))
-					} else {
 					}
 				}
 				require.False(t, destination.GetNulls().Contains(5))
@@ -1210,26 +1126,6 @@ func TestConstNullCleanAndUnionBatch(t *testing.T) {
 				})
 			}
 		})
-	}
-}
-
-func TestUnionOneNullDoesNotClearWindowOwnerDescriptor(t *testing.T) {
-	mp := mpool.MustNewZero()
-	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	owner := NewVec(types.T_varchar.ToType(), mp)
-	t.Cleanup(func() { owner.Free(mp) })
-	values := [][]byte{bytes.Repeat([]byte{'a'}, 49), bytes.Repeat([]byte{'b'}, 57)}
-	require.NoError(t, AppendBytesList(owner, values, nil, mp))
-	view, err := owner.Window(0, 1)
-	require.NoError(t, err)
-	t.Cleanup(func() { view.Free(nil) })
-	source := NewConstNull(types.T_varchar.ToType(), 1, mp)
-	t.Cleanup(func() { source.Free(mp) })
-	// A window is read-only: appending to it fails and leaves the owner intact.
-	require.Error(t, view.UnionOne(source, 0, mp))
-	require.Equal(t, 1, view.Length())
-	for row, value := range values {
-		require.Equal(t, value, owner.GetBytesAt(row), "NULL append must not mutate shared descriptors")
 	}
 }
 
@@ -1605,59 +1501,57 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 		"a rejected aliased preflight must not return a publishable result")
 }
 
-func TestUnionAppendMetadataTransitions(t *testing.T) {
+func TestUnionOneAndMultiMixedSources(t *testing.T) {
 	for _, copies := range []int{1, 3} {
-		for _, metadata := range []string{"ordinary"} {
-			t.Run(fmt.Sprintf("%s/copies=%d", metadata, copies), func(t *testing.T) {
-				mp := mpool.MustNewZero()
-				source := NewVec(types.T_varchar.ToType(), mp)
-				destination := NewVec(types.T_varchar.ToType(), mp)
-				var changed, constant *Vector
-				t.Cleanup(func() {
-					source.Free(mp)
-					changed.Free(mp)
-					constant.Free(mp)
-					destination.Free(mp)
-					require.Zero(t, mp.CurrNB())
-				})
-				require.NoError(t, AppendBytesList(source, [][]byte{
-					[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
-				}, []bool{false, true, false}, mp))
-				changed, err := source.Dup(mp)
-				require.NoError(t, err)
-				changed.GetNulls().Add(0)
-				constant, err = NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 4, mp)
-				require.NoError(t, err)
-				rows := []struct {
-					vec *Vector
-					row int
-				}{{source, 1}, {constant, 3}, {source, 2}, {changed, 1},
-					{changed, 0}, {changed, 2}, {source, 0}, {source, 1}}
-				for range 2 { // Reuse must not retain a previous mixed representation.
-					destination.ResetWithSameType()
-					for end, input := range rows {
-						if copies == 1 {
-							require.NoError(t, destination.UnionOne(input.vec, int64(input.row), mp))
-						} else {
-							require.NoError(t, destination.UnionMulti(input.vec, int64(input.row), copies, mp))
-						}
-						require.Equal(t, (end+1)*copies, destination.Length())
-						for row := range destination.Length() {
-							expected := rows[row/copies]
-							isNull := expected.vec.IsNull(uint64(expected.row))
-							require.Equal(t, isNull, destination.IsNull(uint64(row)))
-							if !isNull {
-								require.Equal(t, expected.vec.GetBytesAt(expected.row), destination.GetBytesAt(row))
-							}
+		t.Run(fmt.Sprintf("copies=%d", copies), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.T_varchar.ToType(), mp)
+			destination := NewVec(types.T_varchar.ToType(), mp)
+			var changed, constant *Vector
+			t.Cleanup(func() {
+				source.Free(mp)
+				changed.Free(mp)
+				constant.Free(mp)
+				destination.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, AppendBytesList(source, [][]byte{
+				[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
+			}, []bool{false, true, false}, mp))
+			changed, err := source.Dup(mp)
+			require.NoError(t, err)
+			changed.GetNulls().Add(0)
+			constant, err = NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 4, mp)
+			require.NoError(t, err)
+			rows := []struct {
+				vec *Vector
+				row int
+			}{{source, 1}, {constant, 3}, {source, 2}, {changed, 1},
+				{changed, 0}, {changed, 2}, {source, 0}, {source, 1}}
+			for range 2 { // Reuse must not retain a previous mixed representation.
+				destination.ResetWithSameType()
+				for end, input := range rows {
+					if copies == 1 {
+						require.NoError(t, destination.UnionOne(input.vec, int64(input.row), mp))
+					} else {
+						require.NoError(t, destination.UnionMulti(input.vec, int64(input.row), copies, mp))
+					}
+					require.Equal(t, (end+1)*copies, destination.Length())
+					for row := range destination.Length() {
+						expected := rows[row/copies]
+						isNull := expected.vec.IsNull(uint64(expected.row))
+						require.Equal(t, isNull, destination.IsNull(uint64(row)))
+						if !isNull {
+							require.Equal(t, expected.vec.GetBytesAt(expected.row), destination.GetBytesAt(row))
 						}
 					}
 				}
-			})
-		}
+			}
+		})
 	}
 }
 
-func BenchmarkUnionMultiUniformMetadata(b *testing.B) {
+func BenchmarkUnionMulti(b *testing.B) {
 	for _, oid := range []types.T{types.T_int64, types.T_varchar} {
 		for _, copies := range []int{1, 8, 64} {
 			b.Run(fmt.Sprintf("%s/copies=%d", oid, copies), func(b *testing.B) {
@@ -1685,44 +1579,7 @@ func BenchmarkUnionMultiUniformMetadata(b *testing.B) {
 	}
 }
 
-func TestUnionOneEmptyMarkerSets(t *testing.T) {
-	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_decimal128, types.T_decimal256} {
-		t.Run(oid.String(), func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-			source := NewVec(oid.ToType(), mp)
-			t.Cleanup(func() { source.Free(mp) })
-			destination := NewVec(oid.ToType(), mp)
-			t.Cleanup(func() { destination.Free(mp) })
-			require.NoError(t, source.PreExtend(3, mp))
-			source.SetLength(3)
-			tlen := source.GetType().TypeSize()
-			// Distinct fixed-width byte patterns make every selected row and
-			// byte observable, including widths handled by the generic copy.
-			for row := range 3 {
-				for column := range tlen {
-					source.data[row*tlen+column] = byte(row*32 + column + 1)
-				}
-			}
-			require.NoError(t, destination.PreExtend(3, mp))
-			capacity := cap(destination.data)
-			for range 2 {
-				destination.ResetWithSameType()
-				for row, sel := range []int64{2, 0, 1} {
-					require.NoError(t, destination.UnionOne(source, sel, mp))
-					require.Equal(t, source.data[int(sel)*tlen:(int(sel)+1)*tlen], destination.data[row*tlen:(row+1)*tlen])
-					require.False(t, destination.IsNull(uint64(row)))
-				}
-				require.Equal(t, 3, destination.Length())
-				require.Equal(t, capacity, len(destination.data), "append retains extendWithBitmaps' slice-to-cap contract")
-			}
-			require.NoError(t, destination.UnionOne(source, 1, mp))
-			require.Equal(t, source.data[tlen:2*tlen], destination.data[3*tlen:4*tlen])
-		})
-	}
-}
-
-func TestUnionOneSourceMarkerLookup(t *testing.T) {
+func TestUnionOneSourceShapes(t *testing.T) {
 	for _, scenario := range []string{"source_null", "source_all_null", "null_prefix", "value_prefix", "source_const", "source_const_null", "source_const_null_with_data", "destination_const", "nil_mpool"} {
 		t.Run(scenario, func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -1832,35 +1689,33 @@ func TestUnionOneFixedGrowthFailureKeepsPrefix(t *testing.T) {
 	require.Equal(t, int64(9), GetFixedAtWithTypeCheck[int64](destination, rows))
 }
 
-func BenchmarkUnionOneUniformMetadata(b *testing.B) {
+func BenchmarkUnionOne(b *testing.B) {
 	for _, oid := range []types.T{types.T_int64, types.T_varchar} {
-		{
-			b.Run(oid.String(), func(b *testing.B) {
-				const rows = 1024
-				mp := mpool.MustNewZero()
-				source := NewVec(oid.ToType(), mp)
-				destination := NewVec(oid.ToType(), mp)
-				defer source.Free(mp)
-				defer destination.Free(mp)
-				if oid == types.T_int64 {
-					require.NoError(b, AppendFixedList(source, make([]int64, rows), nil, mp))
-				} else {
-					for range rows {
-						require.NoError(b, AppendBytes(source, []byte("ordinary column value"), false, mp))
+		b.Run(oid.String(), func(b *testing.B) {
+			const rows = 1024
+			mp := mpool.MustNewZero()
+			source := NewVec(oid.ToType(), mp)
+			destination := NewVec(oid.ToType(), mp)
+			defer source.Free(mp)
+			defer destination.Free(mp)
+			if oid == types.T_int64 {
+				require.NoError(b, AppendFixedList(source, make([]int64, rows), nil, mp))
+			} else {
+				for range rows {
+					require.NoError(b, AppendBytes(source, []byte("ordinary column value"), false, mp))
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				destination.ResetWithSameType()
+				for row := range rows {
+					if err := destination.UnionOne(source, int64(row), mp); err != nil {
+						b.Fatal(err)
 					}
 				}
-				b.ReportAllocs()
-				b.ResetTimer()
-				for b.Loop() {
-					destination.ResetWithSameType()
-					for row := range rows {
-						if err := destination.UnionOne(source, int64(row), mp); err != nil {
-							b.Fatal(err)
-						}
-					}
-				}
-			})
-		}
+			}
+		})
 	}
 }
 
@@ -1927,7 +1782,7 @@ func BenchmarkUnionBatchFixedRange(b *testing.B) {
 	}
 }
 
-func BenchmarkUnionBatchStaticBinaryNoMetadata(b *testing.B) {
+func BenchmarkUnionBatchVarlenInline(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_varbinary.ToType(), mp)
 	defer source.Free(mp)

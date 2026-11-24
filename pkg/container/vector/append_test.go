@@ -272,6 +272,19 @@ func TestAppendVarlenListPregrowFailureRollsBack(t *testing.T) {
 // object block; metadata controls retain the same value and row-count oracles.
 // Performance acceptance compares matched binaries, without a timing threshold
 // in ordinary unit tests.
+func TestAppendMultiFixedBroadcast(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, AppendMultiFixed(v, int64(0x1122334455667788), false, 1000, mp))
+	require.Equal(t, 1000, v.Length())
+	col := MustFixedColNoTypeCheck[int64](v)
+	for i := 0; i < 1000; i++ {
+		require.Equalf(t, int64(0x1122334455667788), col[i], "AppendMultiFixed row %d", i)
+	}
+	v.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func BenchmarkAppendValueRows(b *testing.B) {
 	const rows = 8192
 	for _, test := range []struct {
