@@ -1233,6 +1233,11 @@ func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNu
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
 		}, true, nil
 	}
+	if pos < len(rule.paramValues) {
+		if _, isParam := AsParamValue(rule.paramValues[pos]); isParam {
+			value = preparedProtocolTextValue(rule.paramValues[pos])
+		}
+	}
 	srid, isNull, err := geometrySRIDRuntimeValue(value)
 	if err != nil {
 		return nil, false, err

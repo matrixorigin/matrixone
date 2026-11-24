@@ -105,6 +105,23 @@ func TestParamValueStoreCopyFromReusesStorage(t *testing.T) {
 	require.Nil(t, snapshot.CopyFrom(nil))
 }
 
+func TestParamValueStoreClearDropsPayloads(t *testing.T) {
+	var store ParamValueStore
+	values := store.Reset(3)
+	for i := range values {
+		*store.Ref(i) = ParamValue{Value: "payload"}
+	}
+	refs := []*ParamValue{store.Ref(0), store.Ref(1), store.Ref(2)}
+	store.Reset(1) // a shorter execution leaves the tail in the backing array
+	store.Clear()
+	for i, ref := range refs {
+		require.Equal(t, ParamValue{}, *ref, "no payload stays reachable")
+		require.Nil(t, values[i], "nor does the view")
+	}
+	again := store.Reset(3)
+	require.Same(t, refs[0], again[0], "the memory is kept for the next execution")
+}
+
 func TestParamValueKind(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

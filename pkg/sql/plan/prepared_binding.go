@@ -153,6 +153,16 @@ func preparedSourceBindings(ctx context.Context) []PreparedSourceBinding {
 }
 
 func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
+	value, ok := preparedConfigurationStoredValue(ctx, expr)
+	if param, isParam := AsParamValue(value); isParam {
+		return param.Value, ok
+	}
+	return value, ok
+}
+
+// preparedConfigurationStoredValue is preparedConfigurationValue without
+// unwrapping the stored ParamValue, for consumers that need its provenance.
+func preparedConfigurationStoredValue(ctx context.Context, expr *Expr) (any, bool) {
 	state := preparedBindingState(ctx)
 	if state == nil || expr == nil || expr.GetP() == nil {
 		return nil, false
@@ -162,11 +172,26 @@ func preparedConfigurationValue(ctx context.Context, expr *Expr) (any, bool) {
 		return nil, false
 	}
 	state.valueDependent = true
-	value := state.values[position]
-	if param, ok := AsParamValue(value); ok {
-		return param.Value, true
+	return state.values[position], true
+}
+
+// preparedProtocolTextValue returns the value a validator written for the
+// COM_STMT text transport reads. A COM_STMT TINY 0/1 is decoded to a Boolean
+// and a FLOAT/DOUBLE to a float; such a validator reads them as the text the
+// wire carried (1, 0, 1.5, ...). SQL EXECUTE values and every other type are
+// returned unchanged.
+func preparedProtocolTextValue(stored any) any {
+	param, ok := AsParamValue(stored)
+	if !ok {
+		return stored
 	}
-	return value, true
+	if param.IsBinaryProtocol {
+		switch param.Value.(type) {
+		case bool, float32, float64:
+			return preparedNumericValueSpelling(param.Value)
+		}
+	}
+	return param.Value
 }
 
 func preparedBoundDoubleValue(ctx context.Context, expr *Expr) (float64, bool) {
@@ -185,9 +210,18 @@ func preparedBoundDoubleValue(ctx context.Context, expr *Expr) (float64, bool) {
 	}
 }
 
+// preparedNumericValueSpelling spells a parameter value as the numeric text
+// a witness or proof parses. A Boolean is TINYINT(1) in MySQL, so it spells as
+// 1 or 0, the text a COM_STMT TINY 0/1 carries on the wire.
 func preparedNumericValueSpelling(value any) string {
-	if bytes, ok := value.([]byte); ok {
-		return string(bytes)
+	switch value := value.(type) {
+	case []byte:
+		return string(value)
+	case bool:
+		if value {
+			return "1"
+		}
+		return "0"
 	}
 	return fmt.Sprint(value)
 }
@@ -990,7 +1024,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		if value == nil {
 			return &Expr{Typ: source.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
 		}
-		return makePlan2StringConstExprWithType(fmt.Sprint(value))
+		return makePlan2StringConstExprWithType(preparedNumericValueSpelling(value))
 	}
 	for i, source := range args {
 		if list := source.GetList(); list != nil {

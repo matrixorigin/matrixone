@@ -72,6 +72,14 @@ func (s *ParamValueStore) Reset(n int) []any {
 	return s.values
 }
 
+// Clear drops every stored value, including those past the current length,
+// and keeps the memory for the next Reset.
+func (s *ParamValueStore) Clear() {
+	clear(s.params[:cap(s.params)])
+	clear(s.values[:cap(s.values)])
+	s.params, s.values = s.params[:0], s.values[:0]
+}
+
 // Ref returns parameter i's storage.
 func (s *ParamValueStore) Ref(i int) *ParamValue {
 	return &s.params[i]

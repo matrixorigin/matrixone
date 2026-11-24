@@ -2425,9 +2425,11 @@ func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, pa
 }
 
 // binaryProtocolNativeParamValue parses the canonical text of a COM_STMT
-// parameter whose runtime type is a fixed-width integer, float or Boolean into
-// the Go value SQL EXECUTE user variables use for that type (int64, uint64,
-// float64, bool). ok is false for every other type, which keeps its text.
+// parameter whose runtime type is a fixed-width integer, BIT, YEAR, float or
+// Boolean into the Go value SQL EXECUTE user variables use for that type
+// (int64, uint64, float64, bool). The runtime type keeps the SQL domain, so a
+// BIT stays BIT and a YEAR stays YEAR. ok is false for every other type, which
+// keeps its text.
 func binaryProtocolNativeParamValue(param plan2.ParamValue) (any, bool) {
 	text, isText := param.Value.(string)
 	if !isText || !param.HasRuntimeType {
@@ -2441,8 +2443,11 @@ func binaryProtocolNativeParamValue(param plan2.ParamValue) (any, bool) {
 	case oid.IsSignedInt():
 		v, err := strconv.ParseInt(text, 10, 64)
 		return v, err == nil
-	case oid.IsUnsignedInt():
+	case oid.IsUnsignedInt() || oid == types.T_bit:
 		v, err := strconv.ParseUint(text, 10, 64)
+		return v, err == nil
+	case oid == types.T_year:
+		v, err := strconv.ParseInt(text, 10, 64)
 		return v, err == nil
 	// typeswitch:partial the MySQL wire has only FLOAT and DOUBLE; no COM_STMT parameter has a low-precision float type
 	case oid == types.T_float32 || oid == types.T_float64:

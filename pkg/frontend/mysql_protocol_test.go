@@ -6897,3 +6897,69 @@ func installTestTypedPrepareParams(t *testing.T, proc *process.Process, typs ...
 		require.NotNil(t, proc.GetTypedPrepareParam(i), "parameter %d must carry a typed value", i)
 	}
 }
+
+// buildFixedExecutePacket builds a one-parameter COM_STMT_EXECUTE packet whose
+// value is the little-endian fixed-width encoding of tp.
+func buildFixedExecutePacket(tp defines.MysqlType, unsigned bool, value []byte) []byte {
+	data := []byte{0, 1, 0, 0, 0, 0, 1, byte(tp), 0}
+	if unsigned {
+		data[8] = 0x80
+	}
+	return append(data, value...)
+}
+
+// Integer-domain wire types that are not plain integers (BIT, YEAR) and the
+// TINY 0/1 and DOUBLE packets that reach the planner as a Boolean or a float
+// keep the validation their wire text had: pagination and window offsets
+// (checked before planning, as EXECUTE does) and SRID (checked while the plan
+// is filled) accept them.
+func TestParseExecuteDataNativeValuesKeepValidation(t *testing.T) {
+	le64 := func(v uint64) []byte { return binary.LittleEndian.AppendUint64(nil, v) }
+	le16 := func(v uint16) []byte { return binary.LittleEndian.AppendUint16(nil, v) }
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		packet []byte
+		fill   bool
+	}{
+		{"BIT LIMIT", "select 1 limit ?", buildFixedExecutePacket(defines.MYSQL_TYPE_BIT, true, le64(1)), false},
+		{"YEAR OFFSET", "select 1 limit 1 offset ?", buildFixedExecutePacket(defines.MYSQL_TYPE_YEAR, true, le16(0)), false},
+		{"BIT LAG", "select lag(a, ?) over (order by a) from (select 1 as a) t", buildFixedExecutePacket(defines.MYSQL_TYPE_BIT, true, le64(1)), false},
+		{"YEAR NTH_VALUE", "select nth_value(a, ?) over (order by a) from (select 1 as a) t", buildFixedExecutePacket(defines.MYSQL_TYPE_YEAR, true, le16(1)), false},
+		{"TINY 1 SRID", "select st_srid(st_geomfromtext('POINT(1 1)'), ?)", buildTinyExecutePacket(1, false), true},
+		{"DOUBLE 1.0 SRID", "select st_srid(st_geomfromtext('POINT(1 1)'), ?)", buildFixedExecutePacket(defines.MYSQL_TYPE_DOUBLE, false, le64(math.Float64bits(1))), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.TODO()
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, tc.sql)
+			defer prepareStmt.clearBinaryParamState(proc)
+			require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, tc.packet, 0))
+			proc.SetPrepareParamsWithIsBin(prepareStmt.params, []bool{false})
+			values, err := preparedParamValues(proc, nil, prepareStmt.ParamTypes,
+				[]types.StringConversionKind{binaryProtocolPrepareParamKind(
+					defines.MysqlType(prepareStmt.ParamTypes[0]), prepareStmt.ParamTypes[1]&0x80 != 0,
+					[]byte(prepareStmt.params.GetStringAt(0)))})
+			require.NoError(t, err)
+			preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+			require.NoError(t, plan.ValidatePreparedWindowParams(ctx, preparePlan, values))
+			require.NoError(t, plan.ValidatePreparedPaginationParams(ctx, preparePlan, values))
+			if tc.fill {
+				_, _, err = plan.FillValuesOfParamsInPlanWithPreparedNumericOverload(ctx, preparePlan, values)
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// COM_STMT_RESET drops the previous execution's planner values, which can hold
+// a large string payload, while the statement stays executable.
+func TestPrepareStmtResetDropsPlannerParamValues(t *testing.T) {
+	_, _, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	prepareStmt.paramValues.Reset(1)
+	ref := prepareStmt.paramValues.Ref(0)
+	*ref = plan.ParamValue{Value: strings.Repeat("x", 1<<20)}
+	prepareStmt.resetBinaryParamState()
+	require.Equal(t, plan.ParamValue{}, *ref)
+	again := prepareStmt.paramValues.Reset(1)
+	require.Same(t, ref, again[0], "the storage is reused by the next execution")
+}

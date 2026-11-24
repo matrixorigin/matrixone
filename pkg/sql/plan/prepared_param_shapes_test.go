@@ -96,3 +96,36 @@ func TestIsNonNegativePreparedIntegerRejectsProtocolText(t *testing.T) {
 	require.False(t, isNonNegativePreparedInteger(ParamValue{Value: "2", IsBinaryProtocol: true}))
 	require.False(t, isNonNegativePreparedInteger(ParamValue{IsBinaryProtocol: true}))
 }
+
+// A COM_STMT Boolean or float is validated as the text the wire carried; a
+// SQL EXECUTE value of the same Go type keeps its own validation.
+func TestPreparedProtocolTextValue(t *testing.T) {
+	boolParam := ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true}
+	floatParam := comStmtFloatParam(1)
+	for _, tc := range []struct {
+		name  string
+		param ParamValue
+		want  any
+	}{
+		{"COM_STMT TINY 1", func() ParamValue { p := boolParam; p.IsBinaryProtocol = true; return p }(), "1"},
+		{"COM_STMT DOUBLE 1.0", floatParam, "1"},
+		{"COM_STMT DOUBLE 1.5", comStmtFloatParam(1.5), "1.5"},
+		{"COM_STMT integer", comStmtIntParam(7), int64(7)},
+		{"SQL Boolean", boolParam, true},
+		{"SQL float", sqlFloatParam(1), float64(1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, preparedProtocolTextValue(tc.param))
+			require.Equal(t, tc.want, preparedProtocolTextValue(&tc.param))
+		})
+	}
+	require.Equal(t, "raw", preparedProtocolTextValue("raw"))
+
+	srid, _, err := geometrySRIDRuntimeValue(preparedProtocolTextValue(floatParam))
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), srid)
+	_, _, err = geometrySRIDRuntimeValue(preparedProtocolTextValue(comStmtFloatParam(1.5)))
+	require.Error(t, err, "a fractional SRID is still rejected")
+	_, _, err = geometrySRIDRuntimeValue(preparedProtocolTextValue(sqlFloatParam(1)))
+	require.Error(t, err, "SQL EXECUTE keeps rejecting a float SRID")
+}
