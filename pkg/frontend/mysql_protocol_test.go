@@ -6901,10 +6901,12 @@ func installTestTypedPrepareParams(t *testing.T, proc *process.Process, typs ...
 // buildFixedExecutePacket builds a one-parameter COM_STMT_EXECUTE packet whose
 // value is the little-endian fixed-width encoding of tp.
 func buildFixedExecutePacket(tp defines.MysqlType, unsigned bool, value []byte) []byte {
-	data := []byte{0, 1, 0, 0, 0, 0, 1, byte(tp), 0}
+	flag := byte(0)
 	if unsigned {
-		data[8] = 0x80
+		flag = 0x80
 	}
+	data := make([]byte, 0, 9+len(value))
+	data = append(data, 0, 1, 0, 0, 0, 0, 1, byte(tp), flag)
 	return append(data, value...)
 }
 
