@@ -158,7 +158,31 @@ func (f *cleanupTestSharedFS) Delete(ctx context.Context, names ...string) error
 	return f.FileService.Delete(ctx, names...)
 }
 
+type cleanupTestLocalFS struct {
+	*fileservice.LocalFS
+	failWrite atomic.Bool
+}
+
+func (f *cleanupTestLocalFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	if f.failWrite.Load() {
+		return errors.New("injected local metadata outage")
+	}
+	return f.LocalFS.Write(ctx, vector)
+}
+
 func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
+	t.Run("journal-available", func(t *testing.T) {
+		testMultiUpdateSpillCleanup(t, false, false)
+	})
+	t.Run("local-recovers", func(t *testing.T) {
+		testMultiUpdateSpillCleanup(t, true, false)
+	})
+	t.Run("shared-recovers", func(t *testing.T) {
+		testMultiUpdateSpillCleanup(t, true, true)
+	})
+}
+
+func testMultiUpdateSpillCleanup(t *testing.T, failJournal, sharedRecoversFirst bool) {
 	ctx := t.Context()
 	id := t.Name()
 	runtime.SetupServiceBasedRuntime(id, runtime.NewRuntime(metadata.ServiceType_CN, id, nil))
@@ -168,7 +192,7 @@ func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
 	proc.Base.LockService = cleanupTestLockService{id: id}
 	root := t.TempDir()
 
-	startCN := func() (*stopper.Stopper, *fileservice.LocalFS) {
+	startCN := func() (*stopper.Stopper, *colexec.Server, *cleanupTestLocalFS) {
 		local, err := fileservice.NewLocalFS(ctx, defines.LocalFileServiceName, root, fileservice.DisabledCacheConfig, nil)
 		require.NoError(t, err)
 		st := stopper.NewStopper(id)
@@ -176,10 +200,12 @@ func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
 			st.Stop()
 			local.Close(context.Background())
 		})
-		require.NoError(t, colexec.NewServer(id).StartCNS3Cleanup(st, id, local, fs))
-		return st, local
+		srv := colexec.NewServer(id)
+		metadataFS := &cleanupTestLocalFS{LocalFS: local}
+		require.NoError(t, srv.StartCNS3Cleanup(st, id, metadataFS, fs))
+		return st, srv, metadataFS
 	}
-	st, oldLocal := startCN()
+	st, oldServer, oldLocal := startCN()
 	listObjects := func() []string {
 		files, err := fileservice.SortedList(fs.List(ctx, ""))
 		require.NoError(t, err)
@@ -196,7 +222,10 @@ func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
 		Pkey: &planpb.PrimaryKeyDef{PkeyColName: "absent"},
 		Cols: []*planpb.ColDef{{Name: "v", Typ: planpb.Type{Id: int32(types.T_varchar), Width: 256}}},
 	}
-	s3Writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, table, 64, false)
+	newWriter := func() *colexec.CNS3Writer {
+		return colexec.NewCNS3DataWriter(proc.Mp(), fs, table, 64, false, colexec.WithCNS3SpillCleanup(id))
+	}
+	s3Writer := newWriter()
 	input := batch.NewWithSchema(false, []string{"v"}, []types.Type{typ})
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(strings.Repeat("x", 80)), false, proc.Mp()))
@@ -211,6 +240,7 @@ func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
 	require.Len(t, listObjects(), 2, "one published object and one unpublished spill")
 
 	fs.failDelete.Store(true)
+	oldLocal.failWrite.Store(failJournal)
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 	proc.Ctx = canceled
@@ -221,12 +251,37 @@ func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
 	require.Nil(t, update.ctr.s3Writer)
 	st.Stop()
 	require.Len(t, listObjects(), 2, "the old CN cannot delete during the outage")
+	if failJournal {
+		require.ErrorContains(t, oldServer.FlushCNS3Cleanup(), "injected local metadata outage")
+		blockedWriter := newWriter()
+		t.Cleanup(func() { blockedWriter.Close() })
+		require.ErrorContains(t, blockedWriter.Write(ctx, input), "CN spill cleanup is waiting")
+		require.Len(t, listObjects(), 2, "no new upload may start while keys are held in memory")
+		if sharedRecoversFirst {
+			fs.failDelete.Store(false)
+		} else {
+			oldLocal.failWrite.Store(false)
+		}
+	}
+
+	require.NoError(t, oldServer.FlushCNS3Cleanup())
 	records, err := fileservice.SortedList(oldLocal.List(ctx, "cn-spill-cleanup/"+id))
 	require.NoError(t, err)
-	require.Len(t, records, 1, "terminal teardown must leave a retry record")
+	if sharedRecoversFirst {
+		require.Empty(t, records)
+		require.Equal(t, []string{publishedName}, listObjects())
+
+		writer := newWriter()
+		t.Cleanup(func() { writer.Close() })
+		require.NoError(t, writer.Write(ctx, input), "the original CN accepts spills after recovery")
+		require.NoError(t, writer.Close())
+		require.Equal(t, []string{publishedName}, listObjects())
+	} else {
+		require.Len(t, records, 1, "unpublished keys must survive the CN restart")
+	}
 
 	fs.failDelete.Store(false)
-	_, local := startCN()
+	_, _, local := startCN()
 	require.Eventually(t, func() bool {
 		files, listErr := fileservice.SortedList(fs.List(ctx, ""))
 		return listErr == nil && len(files) == 1 && files[0].Name == publishedName

@@ -262,7 +262,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			if s3writer == nil {
 				pkType := *bat.Vecs[1].GetType()
-				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, -1)
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, -1, colexec.WithCNS3SpillCleanup(proc.GetService()))
 			}
 
 			if err = s3writer.Write(proc.Ctx, bat); err != nil {

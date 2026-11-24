@@ -218,6 +218,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		}
 		opts := []ioutil.SinkerOption{
 			ioutil.WithBuffer(writer.insertFreeLists[i], false),
+			colexec.WithCNS3SpillCleanup(proc.GetService()),
 		}
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
@@ -576,6 +577,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
+	opts = append(opts, colexec.WithCNS3SpillCleanup(proc.GetService()))
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(

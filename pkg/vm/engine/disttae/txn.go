@@ -1151,6 +1151,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 		s3Writer = colexec.NewCNS3DataWriter(
 			txn.proc.GetMPool(), fs, tableDef, -1, false,
+			colexec.WithCNS3SpillCleanup(txn.proc.GetService()),
 		)
 
 		for _, bat = range mp[tbKey] {
@@ -1294,6 +1295,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
 			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1,
+			colexec.WithCNS3SpillCleanup(txn.proc.GetService()),
 		)
 
 		for i := 0; i < len(mp[tbKey]); i++ {

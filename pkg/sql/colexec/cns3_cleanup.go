@@ -24,6 +24,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +48,10 @@ type cnSpillCleanup struct {
 	shared fileservice.FileService
 	prefix string
 	dir    string
+
+	mu      sync.Mutex
+	pending [][]byte
+	blocked atomic.Bool
 }
 
 // StartCNS3Cleanup uses the CN's metadata filesystem to retain failed
@@ -62,6 +68,35 @@ func (srv *Server) StartCNS3Cleanup(st *stopper.Stopper, serviceID string, local
 	return nil
 }
 
+// WithCNS3SpillCleanup stops new uploads while the CN holds cleanup keys
+// that it could neither delete nor record. Already admitted spills keep their
+// owner until they finish. Reads and spill-free writes can continue.
+func WithCNS3SpillCleanup(serviceID string) ioutil.SinkerOption {
+	srv := GetServer(serviceID)
+	if srv == nil || srv.spillCleanup == nil {
+		return ioutil.WithSpillCheck(nil)
+	}
+	return ioutil.WithSpillCheck(srv.spillCleanup.checkSpill)
+}
+
+func (c *cnSpillCleanup) checkSpill() error {
+	if c.blocked.Load() {
+		return moerr.NewInvalidStateNoCtx("CN spill cleanup is waiting for shared storage or local metadata")
+	}
+	return nil
+}
+
+// FlushCNS3Cleanup makes one bounded attempt to retire the in-memory fallback.
+// The CN calls it after stopping the worker and draining pipeline owners.
+func (srv *Server) FlushCNS3Cleanup() error {
+	if srv == nil || srv.spillCleanup == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), spillCleanupInterval, moerr.CauseCleanUpUselessFiles)
+	defer cancel()
+	return srv.spillCleanup.retryPending(ctx)
+}
+
 func (c *cnSpillCleanup) remember(fs fileservice.FileService, stats []objectio.ObjectStats) error {
 	if services, ok := fs.(*fileservice.FileServices); ok {
 		// Unqualified object names are stored in the default service.
@@ -76,6 +111,7 @@ func (c *cnSpillCleanup) remember(fs fileservice.FileService, stats []objectio.O
 
 	ctx, cancel := context.WithTimeoutCause(context.Background(), spillCleanupInterval, moerr.CauseCleanUpUselessFiles)
 	defer cancel()
+	var journalErr error
 	for chunk := range slices.Chunk(stats, 1000) {
 		var names strings.Builder
 		for i := range chunk {
@@ -83,14 +119,65 @@ func (c *cnSpillCleanup) remember(fs fileservice.FileService, stats []objectio.O
 			names.WriteByte('\n')
 		}
 		data := []byte(names.String())
-		err := c.local.Write(ctx, fileservice.IOVector{
-			FilePath: path.Join(c.prefix, uuid.NewString()+".names"),
-			Entries:  []fileservice.IOEntry{{Size: int64(len(data)), Data: data}},
-		})
-		if err != nil {
-			logutil.Error("failed to record unpublished object cleanup", zap.String("objects", names.String()), zap.Error(err))
-			return err
+		if journalErr == nil {
+			journalErr = c.writeRecord(ctx, data)
+			if journalErr == nil {
+				continue
+			}
 		}
+
+		// Keep only compact keys after a failed record write. Close releases
+		// the writer and its buffers once the CN accepts these keys.
+		c.mu.Lock()
+		c.pending = append(c.pending, data)
+		c.blocked.Store(true)
+		c.mu.Unlock()
+		logutil.Warn("CN retained unpublished spill keys in memory",
+			zap.String("objects", names.String()), zap.Error(journalErr))
+	}
+	return nil
+}
+
+func (c *cnSpillCleanup) writeRecord(ctx context.Context, data []byte) error {
+	return c.local.Write(ctx, fileservice.IOVector{
+		FilePath: path.Join(c.prefix, uuid.NewString()+".names"),
+		Entries:  []fileservice.IOEntry{{Size: int64(len(data)), Data: data}},
+	})
+}
+
+func (c *cnSpillCleanup) retryPending(ctx context.Context) error {
+	c.mu.Lock()
+	pending := c.pending
+	c.pending = nil
+	c.mu.Unlock()
+
+	// One drainer runs at a time. Leave the upload gate closed while keys
+	// are in this local slice, including when Close adds another batch.
+	defer func() {
+		c.mu.Lock()
+		c.pending = append(c.pending, pending...)
+		c.blocked.Store(len(c.pending) > 0)
+		c.mu.Unlock()
+	}()
+
+	for len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return context.Cause(ctx)
+		}
+		data := pending[0]
+		writeCtx, cancel := context.WithTimeoutCause(ctx, spillCleanupInterval, moerr.CauseCleanUpUselessFiles)
+		writeErr := c.writeRecord(writeCtx, data)
+		cancel()
+		if writeErr != nil {
+			deleteCtx, cancel := context.WithTimeoutCause(ctx, spillCleanupInterval, moerr.CauseCleanUpUselessFiles)
+			_, deleteErr := ioutil.DeleteUnpublishedObjects(deleteCtx, c.shared, strings.Fields(string(data))...)
+			cancel()
+			if deleteErr != nil {
+				return errors.Join(writeErr, deleteErr)
+			}
+		}
+		pending[0] = nil
+		pending = pending[1:]
 	}
 	return nil
 }
@@ -99,7 +186,12 @@ func (c *cnSpillCleanup) run(ctx context.Context) {
 	ticker := time.NewTicker(spillCleanupInterval)
 	defer ticker.Stop()
 	for {
-		c.sweep(ctx)
+		if err := c.retryPending(ctx); err != nil && ctx.Err() == nil {
+			logutil.Warn("CN spill keys retained for retry", zap.Error(err))
+		}
+		if !c.blocked.Load() {
+			c.sweep(ctx)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -111,6 +203,9 @@ func (c *cnSpillCleanup) run(ctx context.Context) {
 func (c *cnSpillCleanup) sweep(ctx context.Context) {
 	if c.dir == "" {
 		for entry, err := range c.local.List(ctx, c.prefix) {
+			if c.blocked.Load() {
+				return
+			}
 			if err != nil {
 				logutil.Warn("failed to list CN spill cleanup records", zap.Error(err))
 				return
@@ -136,6 +231,9 @@ func (c *cnSpillCleanup) sweep(ctx context.Context) {
 	for ctx.Err() == nil {
 		entries, err := dir.ReadDir(64)
 		for _, entry := range entries {
+			if c.blocked.Load() {
+				return
+			}
 			if entry.Type().IsRegular() {
 				c.sweepFile(ctx, entry.Name())
 			}

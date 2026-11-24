@@ -1966,6 +1966,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 	s3Writer := colexec.NewCNS3DataWriter(
 		proc.Mp(), fs, tbl.tableDef, -1, false,
+		colexec.WithCNS3SpillCleanup(proc.GetService()),
 	)
 
 	defer s3Writer.CloseForService(proc.GetService())

@@ -468,6 +468,7 @@ func (s *service) closeService() error {
 			s.server.Close,
 			s.stopRPCs,
 			s.waitPipelineHandlers,
+			s.colexecServer.FlushCNS3Cleanup,
 			s.closeIncrService,
 			s.closeTxnTraceService,
 			func() error {

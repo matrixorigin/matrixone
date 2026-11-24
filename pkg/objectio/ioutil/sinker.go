@@ -99,6 +99,13 @@ func WithUnpublishedRunCleanup() SinkerOption {
 	}
 }
 
+// WithSpillCheck checks whether a new unpublished spill can start.
+func WithSpillCheck(check func() error) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.spillCheck = check
+	}
+}
+
 func WithOffHeap() SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.config.offHeap = true
@@ -397,6 +404,7 @@ type Sinker struct {
 		offHeap          bool
 		byteBoundedRuns  bool
 		cleanupFailedRun bool
+		spillCheck       func() error
 	}
 	fSinker struct {
 		executor FileSinker
@@ -808,6 +816,12 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 		atomic.AddInt64(&sinker.timing.spillNs, int64(time.Since(spillStart)))
 	}()
 	defer sinker.cleanupInMemoryStaged()
+	if check := sinker.config.spillCheck; check != nil &&
+		sinker.config.cleanupFailedRun && sinker.runSizeLimit() > 0 {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 
 	// sort all in memory data
 	sortStart := time.Now()
