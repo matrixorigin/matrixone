@@ -186,6 +186,13 @@ func TestObjectSplitBounds(t *testing.T) {
 		"a part starts at the 64KiB block holding the read's first byte")
 	require.Equal(t, []int64{0, 704 << 10, 1<<20 + 300<<10}, split.bounds(1<<20+300<<10, 1000), "inside the first block")
 	require.Equal(t, []int64{0, 704 << 10, 1<<20 + 300<<10}, split.bounds(1<<20+300<<10, 2<<20), "past the object")
+	four := objectSplitConfig{parts: 4, min: 1 << 20}
+	require.Equal(t, []int64{0, 384 << 10, 768 << 10, 1 << 20, 1<<20 + 300<<10}, four.bounds(1<<20+300<<10, 1<<20+1000))
+	require.Equal(t, []int64{0, 448 << 10, 768 << 10, 1152 << 10, 1<<20 + 300<<10}, four.bounds(1<<20+300<<10, 448<<10))
+	require.Equal(t, []int64{0, 128 << 10, 768 << 10, 1152 << 10, 1<<20 + 300<<10}, four.bounds(1<<20+300<<10, 128<<10))
+	require.Equal(t, []int64{0, 384 << 10, 768 << 10, 1152 << 10, 1<<20 + 300<<10}, four.bounds(1<<20+300<<10, 768<<10))
+	require.Equal(t, []int64{0, 64 << 10, 128 << 10}, objectSplitConfig{parts: 2, min: 0}.bounds(128<<10, 64<<10))
+	require.Equal(t, []int64{0, 64 << 10, 100 << 10}, objectSplitConfig{parts: 4, min: 0}.bounds(100<<10, 64<<10))
 }
 
 func TestDiskObjectSplitConfig(t *testing.T) {
