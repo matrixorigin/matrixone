@@ -609,7 +609,7 @@ func (d *DiskCache) rangeParts(start, end, align int64) [][2]int64 {
 // readDownload reads the bytes of download o from off into dst, once they are written. It
 // reports whether it read them, and whether the download wrote them.
 func readDownload(ctx context.Context, o *objectDownload, off int64, dst []byte) (read, written bool) {
-	if _, ok := o.waitFor(ctx, off, off+int64(len(dst)), maxIOWaitDuration); !ok {
+	if _, ok := o.waitFor(ctx, off, off+int64(len(dst)), 0); !ok {
 		return false, false
 	}
 	held, err := o.with(func(f *os.File) error {

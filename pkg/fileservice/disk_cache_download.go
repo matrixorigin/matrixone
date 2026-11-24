@@ -971,8 +971,14 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 				return true, false, nil
 			}
 		}
-		// The read waits for the download it chose until its bytes are written or it ends.
-		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, maxIOWaitDuration); !ok {
+		// The read waits for the download it chose until its bytes are written or it ends:
+		// for a whole-object download at most the I/O wait bound, for the download of a
+		// FilePrefetchObject as long as its context allows.
+		timeout := time.Duration(0)
+		if whole {
+			timeout = maxIOWaitDuration
+		}
+		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, timeout); !ok {
 			if err := readFailure(ctx, vector.FilePath, fromSource, cmp.Or(ctx.Err(), o.failure())); err != nil {
 				return true, false, &failingReadError{err: err}
 			}
