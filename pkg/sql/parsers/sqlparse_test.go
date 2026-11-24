@@ -705,6 +705,43 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	}
 }
 
+func TestAddRewriteHints_ShowMetadata(t *testing.T) {
+	const hint = `/*+ {"rewrites":{"db1.t1":"select id from db1.t1"}} */ `
+	ctx := context.Background()
+	for _, sql := range []string{
+		"show full fields from db1.t1",
+		"prepare p from show create table db1.t1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, sql, 1, "")
+			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.String(stmt, dialect.MYSQL)
+
+			require.NoError(t, AddRewriteHints(ctx, []tree.Statement{stmt}, hint+sql))
+			require.Equal(t, formatted, tree.String(stmt, dialect.MYSQL))
+
+			metadata := stmt
+			if prepare, ok := stmt.(*tree.PrepareStmt); ok {
+				metadata = prepare.Stmt
+			}
+			var option *tree.RewriteOption
+			switch show := metadata.(type) {
+			case *tree.ShowColumns:
+				option = show.RewriteOption
+			case *tree.ShowCreateTable:
+				option = show.RewriteOption
+			default:
+				t.Fatalf("unexpected statement type: %T", metadata)
+			}
+			require.NotNil(t, option)
+			chain := option.Rewrites["db1.t1"]
+			require.Len(t, chain, 1)
+			require.IsType(t, &tree.Select{}, chain[0].Stmt)
+		})
+	}
+}
+
 func TestAddRewriteHints_CreateTableAsSelect(t *testing.T) {
 	sql := `/*+ {"rewrites": {"db1.t1": "select * from db1.t1 where tenant_id = 1"}} */ create table db1.copy as select * from db1.t1`
 	stmts, err := parseAndApply(t, sql)
