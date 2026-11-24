@@ -34,15 +34,21 @@ func useRecoveryRPCSocket(t *testing.T, cfg *Config) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "mo-log-")
 	require.NoError(t, err)
-	socket := filepath.Join(dir, "rpc.sock")
-	// Darwin's sockaddr_un has room for 103 pathname bytes.
-	if len(socket) > 103 {
-		require.NoError(t, os.Remove(dir))
-		dir, err = os.MkdirTemp("/var/tmp", "mo-log-")
-		require.NoError(t, err)
-		socket = filepath.Join(dir, "rpc.sock")
-	}
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	socket := filepath.Join(dir, "rpc.sock")
+	// Darwin's sockaddr_un has room for 103 pathname bytes. On Linux a
+	// directory descriptor gives the in-process peers a short alias while
+	// keeping the socket in the test's own temp directory.
+	if len(socket) > 103 {
+		handle, err := os.Open(dir)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, handle.Close()) })
+		alias := fmt.Sprintf("/proc/self/fd/%d", handle.Fd())
+		if _, err := os.Stat(alias); err != nil {
+			return // Keep the test's loopback TCP endpoint without procfs.
+		}
+		socket = filepath.Join(alias, "rpc.sock")
+	}
 	addr := "unix://" + socket
 	cfg.LogServicePort = 0
 	cfg.ServiceListenAddress = addr
