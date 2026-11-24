@@ -31,8 +31,11 @@ type cowSlice struct {
 	fsp *fixedSlicePool
 	// Populated by the single writer only after exact keys outgrow one segment.
 	exactKeys map[string]struct{}
-	fs        *atomic.Value // *fixedSlice
-	v         *atomic.Uint64
+	// Set on the requesting CN once this table has seen an exact lock request.
+	// Only the owner knows which keys remain after a range merge.
+	remoteExactRows bool
+	fs              *atomic.Value // *fixedSlice
+	v               *atomic.Uint64
 
 	// just for testing
 	hack struct {

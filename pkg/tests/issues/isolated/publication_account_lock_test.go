@@ -230,8 +230,8 @@ func TestAlterPublicationExplicitTargetLockScope(t *testing.T) {
 }
 
 func TestCreatePublicationBeyondLockSliceCapacity(t *testing.T) {
-	const maxSlice = 128
-	locks := lockservice.Config{MaxLockRowCount: 16, MaxFixedSliceSize: maxSlice}
+	const maxSlice = 16
+	locks := lockservice.Config{MaxLockRowCount: 4, MaxFixedSliceSize: maxSlice}
 	cluster := startAccountLockCluster(t, 2, locks, locks)
 	owner, _ := openAccountLockSQL(t, cluster, 0)
 	publisher, _ := openAccountLockSQL(t, cluster, 1)

@@ -184,7 +184,7 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		err = txn.addLocks(l.bind.Group, l.bind, rows, l.logger, true, opts.ExactRows)
+		err = txn.recordRemoteLocks(l.bind, rows, l.logger, true, opts.ExactRows)
 		logRemoteLockAdded(l.logger, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, err)
 		return
@@ -193,7 +193,7 @@ func (l *remoteLockTable) lock(
 	// The request may have reached the remote owner and acquired locks even if
 	// the response was lost or the client-side context timed out. Keep local
 	// bookkeeping so normal transaction close can send the remote unlock.
-	_ = txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger, opts.ExactRows)
+	_ = txn.recordRemoteLocks(l.bind, rows, l.logger, false, opts.ExactRows)
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
 		cb(pb.Result{}, err)

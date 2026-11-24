@@ -135,17 +135,27 @@ func (txn *activeTxn) lockAdded(
 	return txn.addLocks(group, bind, locks, logger, true, false)
 }
 
-// lockAddedForCleanup records locks that a failed remote request may have
-// acquired. The rows must be unlocked when the transaction closes, but cannot
-// be used as confirmed holder edges by deadlock detection.
-func (txn *activeTxn) lockAddedForCleanup(
-	group uint32,
+// recordRemoteLocks records requests for wait-for lookups and unlock. The
+// owner applies the ordinary lock limit to the keys it actually holds. Once
+// exact requests use segments on this table, the caller may still remember
+// points the owner merged into a range. Allow segments in that caller's
+// bookkeeping too. A failed RPC still records its keys as uncertain.
+func (txn *activeTxn) recordRemoteLocks(
 	bind pb.LockTable,
 	locks [][]byte,
 	logger *log.MOLogger,
-	exact bool,
+	confirmed, exact bool,
 ) error {
-	return txn.addLocks(group, bind, locks, logger, false, exact)
+	h := txn.getHoldLocksLocked(bind.Group)
+	keys := h.tableKeys[bind.Table]
+	segmented := exact || (keys != nil && keys.remoteExactRows)
+	if err := txn.addLocks(bind.Group, bind, locks, logger, confirmed, segmented); err != nil {
+		return err
+	}
+	if exact {
+		h.tableKeys[bind.Table].remoteExactRows = true
+	}
+	return nil
 }
 
 func (txn *activeTxn) addLocks(
@@ -153,7 +163,7 @@ func (txn *activeTxn) addLocks(
 	bind pb.LockTable,
 	locks [][]byte,
 	logger *log.MOLogger,
-	confirmed, exact bool,
+	confirmed, segmented bool,
 ) error {
 
 	if txn.beforeLockAdded != nil {
@@ -202,7 +212,7 @@ func (txn *activeTxn) addLocks(
 	pending := locks
 	if !ok {
 		first := len(locks)
-		if exact {
+		if segmented {
 			first = min(first, txn.fsp.maxSize())
 		}
 		var err error
@@ -215,7 +225,7 @@ func (txn *activeTxn) addLocks(
 		pending = locks[first:]
 	}
 	if len(pending) > 0 {
-		if exact {
+		if segmented {
 			v.appendExact(pending)
 		} else if err := v.append(pending); err != nil {
 			return err
