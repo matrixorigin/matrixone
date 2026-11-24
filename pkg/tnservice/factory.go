@@ -93,6 +93,22 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 	return client, nil
 }
 
+// The Log Service client applies its RPC limit to the complete request. Reserve
+// room for the LogRecord header and request envelope before sizing WAL records.
+func effectiveMaxWALRecordSize(configured, clientMaxMessageSize int) (int, error) {
+	const rpcEnvelopeReserve = 1024
+	if clientMaxMessageSize <= rpcEnvelopeReserve {
+		return 0, moerr.NewBadConfigNoCtx("TN RPC max-message-size is too small for Log Service WAL")
+	}
+	if configured <= 0 {
+		configured = logservicedriver.DefaultMaxWALRecordSize
+	}
+	if clientLimit := clientMaxMessageSize - rpcEnvelopeReserve; configured > clientLimit {
+		configured = clientLimit
+	}
+	return configured, nil
+}
+
 func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Client) (storage.TxnStorage, error) {
 	return mem.NewKVTxnStorage(0, logClient, s.rt.Clock()), nil
 }
@@ -168,13 +184,18 @@ func (s *store) newTAEStorage(
 		PullWorkerPoolSize:     int64(s.cfg.LogtailServer.PullWorkerPoolSize),
 	}
 
+	maxWALRecordSize, err := effectiveMaxWALRecordSize(
+		int(s.cfg.LogService.MaxWALRecordSize), int(s.cfg.RPC.MaxMessageSize))
+	if err != nil {
+		return nil, err
+	}
 	opt := &options.Options{
 		Clock:             s.rt.Clock(),
 		Fs:                fs,
 		LocalFs:           localFs,
 		TmpFs:             tmpFs.(*fileservice.TmpFileService),
 		WalClientFactory:  logservicedriver.LogServiceClientFactory(factory),
-		MaxWALRecordSize:  int(s.cfg.LogService.MaxWALRecordSize),
+		MaxWALRecordSize:  maxWALRecordSize,
 		Shard:             shard,
 		CheckpointCfg:     ckpcfg,
 		GCCfg:             gcCfg,

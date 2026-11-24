@@ -579,7 +579,9 @@ func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
-	_ = txn.PrepareRollback()
+	if err := txn.PrepareRollback(); err != nil {
+		logutil.Error("PrepareRollback failed", zap.Error(err), TxnField(txn))
+	}
 }
 
 func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {

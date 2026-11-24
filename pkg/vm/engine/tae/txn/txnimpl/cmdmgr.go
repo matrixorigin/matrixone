@@ -36,6 +36,11 @@ type commandManager struct {
 	preparedSize  int
 }
 
+// At most 20,000 transactions can wait in the WAL queue. Retaining only small
+// records bounds this queue's additional serialized data to 80 MiB; large
+// records are encoded again when they enter the WAL stage.
+const maxRetainedPreflightRecordSize = 4 * 1024
+
 func newCommandManager(driver wal.Store) *commandManager {
 	return &commandManager{
 		cmd:        txnbase.NewTxnCmd(),
@@ -57,34 +62,56 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.csn++
 }
 
+func (mgr *commandManager) discardPreparedRecord() {
+	if mgr.preparedEntry != nil {
+		mgr.preparedEntry.Free()
+		mgr.preparedEntry = nil
+		mgr.preparedSize = 0
+	}
+}
+
 func (mgr *commandManager) PreflightTxnRecord(store *txnStore) (err error) {
 	if mgr.driver == nil || mgr.preparedEntry != nil {
 		return nil
 	}
+	logEntry, walSize, err := mgr.marshalTxnRecord(store)
+	if err != nil {
+		return err
+	}
+	if walSize > maxRetainedPreflightRecordSize {
+		logEntry.Free()
+	} else {
+		mgr.preparedEntry = logEntry
+		mgr.preparedSize = walSize
+	}
+	return nil
+}
+
+func (mgr *commandManager) marshalTxnRecord(store *txnStore) (logEntry entry.Entry, walSize int, err error) {
 	mgr.cmd.SetTxn(store.txn)
 
 	t1 := time.Now()
 	buf, err := mgr.cmd.MarshalBinary()
 	if err != nil {
-		return err
+		return nil, 0, err
 	}
 	if len(buf) > mgr.maxWalSize {
-		return wal.NewRecordTooLargeError(len(buf), mgr.maxWalSize)
+		return nil, 0, wal.NewRecordTooLargeError(len(buf), mgr.maxWalSize)
 	}
 
-	logEntry := entry.GetBase()
+	logEntry = entry.GetBase()
 	info := &entry.Info{Group: wal.GroupUserTxn}
 	logEntry.SetInfo(info)
 	logEntry.SetApproxPayloadSize(int64(len(buf)))
 	logEntry.SetType(IOET_WALEntry_TxnRecord)
 	if err = logEntry.SetPayload(buf); err != nil {
 		logEntry.Free()
-		return err
+		return nil, 0, err
 	}
 	infoBuf, err := info.Marshal()
 	if err != nil {
 		logEntry.Free()
-		return err
+		return nil, 0, err
 	}
 	logEntry.SetInfoBuf(infoBuf)
 	if validator, ok := mgr.driver.(interface{ ValidateUserTxnRecordSize(int) error }); ok {
@@ -92,7 +119,7 @@ func (mgr *commandManager) PreflightTxnRecord(store *txnStore) (err error) {
 		// including the fixed-size Info buffer materialized above.
 		if err = validator.ValidateUserTxnRecordSize(logEntry.TotalSize() + 8); err != nil {
 			logEntry.Free()
-			return err
+			return nil, 0, err
 		}
 	}
 	logutil.Debugf("Marshal Command Size=%d", len(buf))
@@ -103,22 +130,24 @@ func (mgr *commandManager) PreflightTxnRecord(store *txnStore) (err error) {
 		logutil.Warn("SlOW-LOG", zap.Int("wal-size", len(buf)),
 			zap.String("txn", store.txn.String()), zap.Duration("marshal-log-entry-duration", dur))
 	}
-	mgr.preparedEntry = logEntry
-	mgr.preparedSize = len(buf)
-	return nil
+	return logEntry, len(buf), nil
 }
 
 func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
 	}
-	if err = mgr.PreflightTxnRecord(store); err != nil {
-		return nil, err
+	var walSize int
+	if mgr.preparedEntry != nil {
+		logEntry = mgr.preparedEntry
+		walSize = mgr.preparedSize
+		mgr.preparedEntry = nil
+		mgr.preparedSize = 0
+	} else {
+		if logEntry, walSize, err = mgr.marshalTxnRecord(store); err != nil {
+			return nil, err
+		}
 	}
-	logEntry = mgr.preparedEntry
-	mgr.preparedEntry = nil
-	walSize := mgr.preparedSize
-	mgr.preparedSize = 0
 
 	t2 := time.Now()
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupUserTxn, logEntry)

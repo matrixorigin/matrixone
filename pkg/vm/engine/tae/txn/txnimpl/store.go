@@ -255,6 +255,7 @@ func (store *txnStore) Close() error {
 		}
 	}
 	store.dbs = nil
+	store.cmdMgr.discardPreparedRecord()
 	store.cmdMgr = nil
 	store.logs = nil
 	store.warChecker = nil
@@ -745,9 +746,7 @@ func (store *txnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err er
 func (store *txnStore) ApplyRollback() (err error) {
 	if store.cmdMgr.GetCSN() != 0 {
 		for _, db := range store.dbs {
-			if err = db.ApplyRollback(); err != nil {
-				break
-			}
+			err = combineTxnLifecycleErrors(err, db.ApplyRollback())
 		}
 	}
 	store.CleanUp()
@@ -944,9 +943,7 @@ func (store *txnStore) AddTxnEntry(entry txnif.TxnEntry) {
 func (store *txnStore) PrepareRollback() error {
 	var err error
 	for _, db := range store.dbs {
-		if err = db.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, db.PrepareRollback())
 	}
 
 	return err

@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -104,4 +105,42 @@ func TestCommandManagerChecksConfiguredRecordLimitBeforeAppend(t *testing.T) {
 	require.ErrorAs(t, err, &tooLarge)
 	require.Equal(t, encodedSize, w.lastRecordEntry)
 	require.Zero(t, w.appends)
+}
+
+func TestCommandManagerPreflightDoesNotRetainSerializedRecord(t *testing.T) {
+	w := &recordingWALStore{}
+	mgr := newCommandManager(w)
+	txn := txnbase.NewTxn(nil, &txnbase.NoopTxnStore{}, bytes.Repeat([]byte("x"), 8*1024), types.BuildTS(1, 0), types.TS{})
+	store := &txnStore{txn: txn}
+	mgr.AddCmd(txnbase.NewTxnStateCmd("first", 0, types.TS{}))
+	require.NoError(t, mgr.PreflightTxnRecord(store))
+	require.Nil(t, mgr.preparedEntry)
+	// The queued transaction may still be held after preflight. Its serialized
+	// bytes must be released, and the WAL stage must use the final command.
+	mgr.AddCmd(txnbase.NewTxnStateCmd("second", 0, types.TS{}))
+	want, err := mgr.cmd.MarshalBinary()
+	require.NoError(t, err)
+	e, err := mgr.ApplyTxnRecord(store)
+	require.NoError(t, err)
+	require.Equal(t, want, w.payload)
+	require.Equal(t, 1, w.appends)
+	e.DoneWithErr(nil)
+	e.Free()
+}
+
+func TestCommandManagerRetainsOnlySmallPreflightRecord(t *testing.T) {
+	w := &recordingWALStore{}
+	mgr := newCommandManager(w)
+	txn := txnbase.NewTxn(nil, &txnbase.NoopTxnStore{}, []byte("small"), types.BuildTS(1, 0), types.TS{})
+	store := &txnStore{txn: txn}
+	mgr.AddCmd(txnbase.NewTxnStateCmd("state", 0, types.TS{}))
+	require.NoError(t, mgr.PreflightTxnRecord(store))
+	require.NotNil(t, mgr.preparedEntry)
+	require.LessOrEqual(t, mgr.preparedSize, maxRetainedPreflightRecordSize)
+	e, err := mgr.ApplyTxnRecord(store)
+	require.NoError(t, err)
+	require.Nil(t, mgr.preparedEntry)
+	require.Equal(t, 1, w.appends)
+	e.DoneWithErr(nil)
+	e.Free()
 }
