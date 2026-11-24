@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
@@ -1061,7 +1060,7 @@ func TestDiskCacheDownloadCaptureDoesNotCountShortReads(t *testing.T) {
 			defer finish(false)
 			captured, err := read.capture(context.Background(), o, file, "obj")
 			require.False(t, captured)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "got %v", err)
+			require.ErrorIs(t, err, errCaptureUnreadable)
 			require.Empty(t, vector.Entries[0].Data)
 			require.Zero(t, o.takeServed())
 		})
@@ -1083,7 +1082,7 @@ func (s failingCaptureSource) ReadAt(p []byte, offset int64) (int, error) {
 	return copy(p, "cde"), s.err
 }
 
-func TestDiskCacheDownloadCapturePreservesReadError(t *testing.T) {
+func TestDiskCacheDownloadCaptureReportsUnreadableFile(t *testing.T) {
 	for _, cancelDuringRead := range []bool{false, true} {
 		name := "read error"
 		if cancelDuringRead {
@@ -1099,7 +1098,7 @@ func TestDiskCacheDownloadCapturePreservesReadError(t *testing.T) {
 			defer cancel()
 			injected := errors.New("injected file read error")
 			source := failingCaptureSource{err: injected}
-			want := injected
+			var want error = errCaptureUnreadable
 			if cancelDuringRead {
 				source.onFailed = cancel
 				want = context.Canceled
