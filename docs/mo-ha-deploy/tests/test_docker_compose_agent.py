@@ -264,6 +264,11 @@ case "$1" in
         done
         ;;
     stop)
+        if [ "${STOP_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$STOP_ONCE_MARK" ]; then
+            : > "$STOP_ONCE_MARK"
+            echo "Error: docker stop failed" >&2
+            exit 1
+        fi
         [ "${STOP_ERROR:-0}" = 0 ] || exit "$STOP_ERROR"
         shift
         ids=
@@ -372,6 +377,7 @@ class ResourceAgentTests(unittest.TestCase):
             DOCKER_PS_COUNT_FILE=str(self.root / "docker-ps-count"),
             CONFIG_ONCE_MARK=str(self.root / "config-once"),
             DATE_OFFSET_FILE=str(self.root / "date-offset"),
+            STOP_ONCE_MARK=str(self.root / "stop-once"),
         )
         project_name = settings.pop("PROJECT_NAME", None)
         env.update(settings)
@@ -1034,6 +1040,29 @@ class ResourceAgentTests(unittest.TestCase):
         arguments = stop_calls[0].split()[2:]
         self.assertEqual(arguments[:2], ["-t", "50"], calls)
         self.assertEqual(arguments[2:], ["helper"], calls)
+        self.assertNotIn("docker stop repeated helper", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+        self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+        self.assertTrue((self.root / "trace.helper.stopped").exists())
+
+    def test_stop_bounds_recovery_when_overlapped_stop_fails(self):
+        self.add_container("matrixone", "my-project", self.yaml, container_id="matrixone", service="app")
+        self.add_container("helper", "my-project", self.yaml, container_id="helper", service="helper")
+        calls = self.action(
+            "stop",
+            0,
+            SERVICES="app",
+            COMPOSE_IDS="matrixone",
+            STOP_FAIL_ONCE="1",
+            DOWN_ELAPSED="60",
+            STOP_BARRIER=str(self.root / "barrier"),
+        )
+        self.assertIn("docker stop helper", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertEqual(stop_calls[-1], "docker stop -t 50 helper", calls)
+        down_at = calls.index("compose -f docker-compose.yaml down --remove-orphans=false")
+        self.assertLess(down_at, calls.index(stop_calls[-1]), calls)
         self.assertNotIn("docker stop repeated helper", calls)
         self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
         self.assertTrue((self.root / "trace.matrixone.stopped").exists())

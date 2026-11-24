@@ -536,18 +536,14 @@ docker_compose_stop()
 	fi
 
 	# down can miss one-offs, removed services, and earlier project names.
-	# When the skipped set was known before down, this is a short recovery
-	# and keeps the container grace period. When discovery stayed incomplete,
-	# bound the stop so it and the following check fit in the 120s budget
-	# after down has already used part of that budget.
+	# Every recovery stop, including one after a failed overlapped stop,
+	# keeps a full 60s grace only when that grace and verification still
+	# fit in the 120s budget. Otherwise it stops in the time still left.
 	remaining=$(labeled_container_ids active) || return "$OCF_ERR_GENERIC"
 	if [ -n "$remaining" ]; then
 		now=$(date +%s) || return "$OCF_ERR_GENERIC"
 		remain=$((120 - (now - stop_started) - 10))
-		# A full 60s grace still fits, or the skipped set was known before
-		# down: keep the container's configured StopTimeout. Otherwise the
-		# recovery stop must finish in the time still left for verification.
-		if [ "$discovery_complete" = 1 ] || [ "$remain" -ge 60 ]; then
+		if [ "$remain" -ge 60 ]; then
 			docker stop $remaining >/dev/null
 		elif [ "$remain" -lt 1 ]; then
 			ocf_log err "no time left in the 120s stop budget for $remaining"
