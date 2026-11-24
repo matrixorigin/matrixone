@@ -2070,8 +2070,7 @@ func TestRetainedLogStartRejectsReplacementStoreIncarnation(t *testing.T) {
 			rsm := NewStateMachine(0, 1).(*stateMachine)
 			rsm.state.CommandDeliveryEnabled = true
 			shard := pb.LogShardInfo{
-				ShardID:                  shardID,
-				ReplicaStoreIncarnations: map[uint64]string{replicaID: "original-disk"},
+				ShardID: shardID,
 			}
 			if change == pb.StartReplica {
 				shard.Replicas = map[uint64]string{replicaID: storeID}
@@ -2103,12 +2102,15 @@ func TestRetainedLogStartRejectsReplacementStoreIncarnation(t *testing.T) {
 			first := heartbeat("original-disk")
 			require.Equal(t, []pb.ScheduleCommand{command}, first.Commands)
 			require.Len(t, first.CommandIDs, 1)
+			require.Equal(t, "original-disk", rsm.state.LogState.Shards[shardID].ReplicaStoreIncarnations[replicaID],
+				"the first delivery must bind the replica before it reports itself")
 			// The committed response can be lost before the original disk sees it.
 			var snapshot bytes.Buffer
 			require.NoError(t, rsm.SaveSnapshot(&snapshot, nil, nil))
 			restored := NewStateMachine(0, 2).(*stateMachine)
 			require.NoError(t, restored.RecoverFromSnapshot(&snapshot, nil, nil))
 			rsm = restored
+			require.Equal(t, "original-disk", rsm.state.LogState.Shards[shardID].ReplicaStoreIncarnations[replicaID])
 			retry := heartbeat("original-disk")
 			require.Equal(t, first.Commands, retry.Commands)
 			require.Equal(t, first.CommandIDs, retry.CommandIDs)

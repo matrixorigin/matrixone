@@ -346,12 +346,13 @@ func classifyZombiesFromHAKeeperState(
 // Every peer's gossip-backed membership view is eventually consistent. A
 // partial set of replies cannot establish absence: the only answering peer
 // might not have learned that this replica joined. Probe every configured
-// peer and classify only if each one reports the shard and omits the replica.
-// Even unanimous gossip can lag a recent membership change, so this remains
+// peer; when some peers confirm absence and others cannot answer, consult
+// replicated HAKeeper membership within the same startup budget. Even
+// unanimous gossip can lag a recent membership change, so that branch remains
 // a conservative best-effort startup check, not a Raft membership proof.
 //
-// The check is best-effort: if any peer or HAKeeper leader does not answer,
-// the shard is treated as "not a zombie" so legitimate
+// The check is best-effort: if neither gossip nor the HAKeeper leader can
+// confirm removal, the shard is treated as "not a zombie" so legitimate
 // whole-cluster cold starts are not blocked. An absent HAKeeper shard or an
 // epoch-zero shard is likewise considered uninitialized, not evidence of
 // removal. The whole sweep is bounded by zombieSelfCheckTimeout; if the budget
@@ -388,21 +389,34 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 	}
 
 	logger := l.runtime.Logger()
-	ctx, cancel := context.WithTimeout(ctx, zombieSelfCheckTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, zombieSelfCheckTimeout, moerr.CauseGetCheckerState)
 	defer cancel()
+	// Keep part of the startup budget for a replicated membership read when
+	// gossip is incomplete, even if one concrete peer stops answering.
+	gossipCtx, cancelGossip := context.WithTimeout(ctx, zombieSelfCheckTimeout/2)
+	defer cancelGossip()
+	var unresolved []metadata.LogShard
+	responsive := make(map[string]struct{}, len(addresses))
 	for _, rec := range shards {
-		if ctx.Err() != nil {
-			return zombies
+		if gossipCtx.Err() != nil {
+			break
 		}
 		if rec.NonVoting {
 			continue
 		}
 		var completeReplies, presentReplies int
-		for _, address := range addresses {
-			if ctx.Err() != nil {
-				return zombies
+		for i, address := range addresses {
+			if gossipCtx.Err() != nil {
+				break
 			}
-			members, ok, err := getShardMembershipFn(ctx, l.cfg.UUID, address, rec.ShardID)
+			// Divide the remaining gossip time among peers, so an isolated
+			// address cannot prevent probing the later healthy addresses.
+			deadline, _ := gossipCtx.Deadline()
+			probeCtx, cancelProbe := context.WithTimeout(
+				gossipCtx, time.Until(deadline)/time.Duration(len(addresses)-i),
+			)
+			members, ok, err := getShardMembershipFn(probeCtx, l.cfg.UUID, address, rec.ShardID)
+			cancelProbe()
 			if err != nil {
 				logger.Warn("zombie self-check: getShardMembership failed",
 					zap.String("address", address),
@@ -414,6 +428,7 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 			if !ok {
 				continue
 			}
+			responsive[address] = struct{}{}
 			completeReplies++
 			if _, present := members[rec.ReplicaID]; present {
 				presentReplies++
@@ -421,6 +436,54 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 		}
 		if completeReplies == len(addresses) && presentReplies == 0 {
 			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+		} else if completeReplies > 0 && completeReplies < len(addresses) && presentReplies == 0 {
+			// Gossip cannot prove absence with missing peers. The replicated
+			// HAKeeper membership can resolve this ambiguity if a leader is up.
+			unresolved = append(unresolved, rec)
+		}
+	}
+	if len(unresolved) > 0 && ctx.Err() == nil {
+		// Try peers that answered gossip first. Query them individually so a
+		// blackholed address cannot consume the entire leader-read budget.
+		candidates := make([]string, 0, len(addresses))
+		for _, address := range addresses {
+			if _, ok := responsive[address]; ok {
+				candidates = append(candidates, address)
+			}
+		}
+		for _, address := range addresses {
+			if _, ok := responsive[address]; !ok {
+				candidates = append(candidates, address)
+			}
+		}
+		cfg := l.cfg.GetHAKeeperClientConfig()
+		// Concrete peers are available here. Avoid sending the authoritative
+		// fallback through a discovery proxy that may select the same isolated
+		// peer, and exclude this store whose server has not started yet.
+		cfg.DiscoveryAddress = ""
+		deadline, _ := ctx.Deadline()
+		for i, address := range candidates {
+			if ctx.Err() != nil {
+				break
+			}
+			readCtx, cancelRead := context.WithTimeout(
+				ctx, time.Until(deadline)/time.Duration(len(candidates)-i),
+			)
+			cfg.ServiceAddresses = []string{address}
+			state, err := getHAKeeperStateForZombieCheckFn(readCtx, l.cfg.UUID, cfg)
+			if err != nil {
+				err = moerr.AttachCause(readCtx, err)
+			}
+			cancelRead()
+			if err == nil {
+				for key := range classifyZombiesFromHAKeeperState(unresolved, state) {
+					zombies[key] = struct{}{}
+				}
+				break
+			}
+			logger.Warn("zombie self-check: get HAKeeper state failed",
+				zap.String("address", address),
+				zap.Error(err))
 		}
 	}
 	return zombies

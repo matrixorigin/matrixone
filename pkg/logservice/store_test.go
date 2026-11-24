@@ -2123,6 +2123,100 @@ func TestCheckZombieReplicas_DiscoveryOnlyUsesHAKeeperState(t *testing.T) {
 		"discovery-only mode must use HAKeeper state, not one proxy-selected gossip view")
 }
 
+func TestCheckZombieReplicas_PartialGossipUsesHAKeeperState(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	origMembership := getShardMembershipFn
+	defer func() { getShardMembershipFn = origMembership }()
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		if address == "10.0.0.1:32001" {
+			return map[uint64]string{8: "other"}, true, nil
+		}
+		return nil, false, moerr.NewInternalErrorNoCtx("peer unavailable")
+	}
+	origState := getHAKeeperStateForZombieCheckFn
+	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
+	mode := 0
+	var queried []string
+	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
+		require.Empty(t, cfg.DiscoveryAddress)
+		require.Len(t, cfg.ServiceAddresses, 1)
+		queried = append(queried, cfg.ServiceAddresses[0])
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.LessOrEqual(t, time.Until(deadline), zombieSelfCheckTimeout)
+		if mode == 2 || (mode == 1 && cfg.ServiceAddresses[0] == "10.0.0.1:32001") {
+			return pb.CheckerState{}, moerr.NewNoHAKeeper(ctx)
+		}
+		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
+			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{8: "other"}},
+			4: {ShardID: 4, Epoch: 2, Replicas: map[uint64]string{7: "uuid-1", 8: "other"}},
+		}}}, nil
+	}
+	l := &store{cfg: Config{
+		UUID: "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			DiscoveryAddress: "10.0.0.100:32001",
+			ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"},
+		},
+	}}
+	l.runtime = runtime.DefaultRuntime()
+	shards := []metadata.LogShard{
+		{LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7},
+		{LogShardRecord: metadata.LogShardRecord{ShardID: 4}, ReplicaID: 7},
+	}
+	require.Equal(t, map[zombieKey]struct{}{{shardID: 3, replicaID: 7}: {}},
+		l.checkZombieReplicas(context.Background(), shards))
+	require.Equal(t, []string{"10.0.0.1:32001"}, queried,
+		"one replicated read resolves all uncertain replicas")
+	mode, queried = 1, nil
+	require.Equal(t, map[zombieKey]struct{}{{shardID: 3, replicaID: 7}: {}},
+		l.checkZombieReplicas(context.Background(), shards))
+	require.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001"}, queried,
+		"failure to query one peer must leave time for another")
+	mode, queried = 2, nil
+	require.Empty(t, l.checkZombieReplicas(context.Background(), shards),
+		"without a HAKeeper leader, partial gossip must preserve cold-start replicas")
+}
+
+func TestCheckZombieReplicas_BlackholedPeerLeavesHAKeeperBudget(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	origTimeout := zombieSelfCheckTimeout
+	defer func() { zombieSelfCheckTimeout = origTimeout }()
+	zombieSelfCheckTimeout = 200 * time.Millisecond
+	origMembership := getShardMembershipFn
+	defer func() { getShardMembershipFn = origMembership }()
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		if address == "10.0.0.1:32001" {
+			return map[uint64]string{8: "other"}, true, nil
+		}
+		<-ctx.Done()
+		return nil, false, ctx.Err()
+	}
+	origState := getHAKeeperStateForZombieCheckFn
+	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
+	stateReads := 0
+	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
+		stateReads++
+		require.NoError(t, ctx.Err(), "the blackholed peer must leave time for the leader read")
+		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
+			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{8: "other"}},
+		}}}, nil
+	}
+	l := &store{cfg: Config{
+		UUID: "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{
+			ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"},
+		},
+	}}
+	l.runtime = runtime.DefaultRuntime()
+	shards := []metadata.LogShard{{
+		LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7,
+	}}
+	require.Equal(t, map[zombieKey]struct{}{{shardID: 3, replicaID: 7}: {}},
+		l.checkZombieReplicas(context.Background(), shards))
+	require.Equal(t, 1, stateReads)
+}
+
 func TestCheckZombieReplicas_DiscoveryFailurePreservesColdStart(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	origTimeout := zombieSelfCheckTimeout
@@ -2214,7 +2308,7 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 }
 
 // An unanswered peer may be the one with a newer membership view. Continue
-// probing every address, but defer exclusion if any answer is unavailable.
+// probing every address, then use replicated membership to resolve the gap.
 func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	var probed []string
@@ -2233,6 +2327,13 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 		t.Fatalf("unexpected address %q", address)
 		return nil, false, nil
 	}
+	origState := getHAKeeperStateForZombieCheckFn
+	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
+	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
+		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
+			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{7: "uuid-1", 8: "other"}},
+		}}}, nil
+	}
 
 	l := &store{cfg: Config{
 		UUID: "uuid-1",
@@ -2249,7 +2350,7 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
 	assert.False(t, isZombie,
-		"a single stale gossip answer cannot prove that the replica was removed")
+		"HAKeeper confirms that the missing peer's newer membership includes the replica")
 	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001", "10.0.0.3:32001"}, probed,
 		"every address must be probed; the check does not short-circuit on a single answer")
 }
@@ -2430,8 +2531,8 @@ func TestCheckZombieReplicas_StopsWhenStartupBudgetExpires(t *testing.T) {
 	}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Empty(t, zombies)
-	assert.Equal(t, []string{"10.0.0.1:32001"}, probed,
-		"the self-check must stop when the startup budget expires")
+	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001"}, probed,
+		"per-peer deadlines must leave time to probe the next address before the startup budget expires")
 }
 
 func TestCheckZombieReplicas_StopsWhenParentContextCanceled(t *testing.T) {

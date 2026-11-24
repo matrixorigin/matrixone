@@ -1092,10 +1092,10 @@ type LogShardInfo struct {
 	Term uint64 `protobuf:"varint,5,opt,name=Term,proto3" json:"Term,omitempty"`
 	// NonVotingReplicas is the non-voting replicas belongs to this shard.
 	NonVotingReplicas map[uint64]string `protobuf:"bytes,6,rep,name=NonVotingReplicas,proto3" json:"NonVotingReplicas,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	// ReplicaStoreIncarnations records the persistent storage incarnation from
-	// which each running replica last reported. It fences a replacement store
-	// with the same UUID from reusing a replica ID whose durable Raft state was
-	// lost with the previous storage incarnation.
+	// ReplicaStoreIncarnations records the persistent storage incarnation bound
+	// at the first Start delivery or reported by a running replica. It fences a
+	// replacement store with the same UUID from reusing a replica ID whose
+	// durable Raft state was lost with the previous storage incarnation.
 	ReplicaStoreIncarnations map[uint64]string `protobuf:"bytes,7,rep,name=ReplicaStoreIncarnations,proto3" json:"ReplicaStoreIncarnations,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	XXX_NoUnkeyedLiteral     struct{}          `json:"-"`
 	XXX_unrecognized         []byte            `json:"-"`

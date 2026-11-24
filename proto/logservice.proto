@@ -116,10 +116,10 @@ message LogShardInfo {
   // NonVotingReplicas is the non-voting replicas belongs to this shard.
   map<uint64, string> NonVotingReplicas = 6;
 
-  // ReplicaStoreIncarnations records the persistent storage incarnation from
-  // which each running replica last reported. It fences a replacement store
-  // with the same UUID from reusing a replica ID whose durable Raft state was
-  // lost with the previous storage incarnation.
+  // ReplicaStoreIncarnations records the persistent storage incarnation bound
+  // at the first Start delivery or reported by a running replica. It fences a
+  // replacement store with the same UUID from reusing a replica ID whose
+  // durable Raft state was lost with the previous storage incarnation.
   map<uint64, string> ReplicaStoreIncarnations = 7;
 
   // TODO: per shard stats like CPU/memory/network usage can be added here

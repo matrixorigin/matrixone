@@ -869,6 +869,7 @@ func (s *stateMachine) getCommandBatchFiltered(
 				}
 				continue
 			}
+			s.bindOrdinaryLogStartIncarnation(cmd)
 			deliver = append(deliver, cmd)
 			if deliverIDs != nil {
 				deliverIDs = append(deliverIDs, batch.CommandIDs[i])
@@ -900,6 +901,41 @@ func (s *stateMachine) getCommandBatchFiltered(
 	}
 	return sm.Result{}
 
+}
+
+// Bind the Raft replica ID to the disk that first receives its Start. A
+// heartbeat reporting the replica would otherwise be the first incarnation
+// record, leaving lost-response redelivery unsafe before that heartbeat.
+func (s *stateMachine) bindOrdinaryLogStartIncarnation(cmd pb.ScheduleCommand) {
+	if (!s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled) ||
+		cmd.Bootstrapping || cmd.ServiceType != pb.LogService || cmd.ConfigChange == nil {
+		return
+	}
+	change := cmd.ConfigChange.ChangeType
+	if change != pb.StartReplica && change != pb.StartNonVotingReplica {
+		return
+	}
+	replica := cmd.ConfigChange.Replica
+	shard, ok := s.state.LogState.Shards[replica.ShardID]
+	if !ok {
+		return
+	}
+	members := shard.Replicas
+	if change == pb.StartNonVotingReplica {
+		members = shard.NonVotingReplicas
+	}
+	if members[replica.ReplicaID] != cmd.UUID {
+		return
+	}
+	store := s.state.LogState.Stores[cmd.UUID]
+	if store.StoreIncarnation == "" || shard.ReplicaStoreIncarnations[replica.ReplicaID] != "" {
+		return
+	}
+	if shard.ReplicaStoreIncarnations == nil {
+		shard.ReplicaStoreIncarnations = make(map[uint64]string)
+	}
+	shard.ReplicaStoreIncarnations[replica.ReplicaID] = store.StoreIncarnation
+	s.state.LogState.Shards[replica.ShardID] = shard
 }
 
 // hakeeperAdmissionTarget returns the LogStore that a schedule command would
