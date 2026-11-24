@@ -307,12 +307,27 @@ func (o *objectDownload) endWith(complete bool, err error) {
 	o.mu.Unlock()
 }
 
-// joinedReadError is the failed read of object storage by a download a read of the disk
-// cache joined: unlike an error of the cache itself, it fails the read, with err.
-type joinedReadError struct{ err error }
+// failingReadError is an error of a read of the disk cache that, unlike an error of the
+// cache itself, fails the read, with err: the failed read of object storage by a download
+// it joined, or an error of its entry.
+type failingReadError struct{ err error }
 
-func (e *joinedReadError) Error() string { return e.err.Error() }
-func (e *joinedReadError) Unwrap() error { return e.err }
+func (e *failingReadError) Error() string { return e.err.Error() }
+func (e *failingReadError) Unwrap() error { return e.err }
+
+// readEntryFrom fills entry from r, read from a cache file. It returns the error of r,
+// which leaves the read to take the bytes elsewhere, with err, or a failingReadError of
+// the entry's own error.
+func (d *DiskCache) readEntryFrom(ctx context.Context, entry *IOEntry, r io.Reader) (local, err error) {
+	from := &sourceErrReader{Reader: r}
+	if err := entry.readFrom(ctx, from, d.cacheDataAllocator); err != nil {
+		if from.err != nil {
+			return err, err
+		}
+		return nil, &failingReadError{err: err}
+	}
+	return nil, nil
+}
 
 // objectReadError returns err as a read of the object at filePath of its own reports it:
 // a short object is an unexpected end of the file.
@@ -958,7 +973,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		// The read waits for the download it chose until its bytes are written or it ends.
 		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, maxIOWaitDuration); !ok {
 			if err := o.failure(); err != nil {
-				return true, false, &joinedReadError{err: objectReadError(err, vector.FilePath)}
+				return true, false, &failingReadError{err: objectReadError(err, vector.FilePath)}
 			}
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil
@@ -966,7 +981,7 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		metric.FSDiskCacheDownloadReadWaitedCounter.Inc()
 	}
 	held, err := o.with(func(f *os.File) error {
-		if err := entry.readFrom(ctx, io.NewSectionReader(f, entry.Offset-base, entry.Size), d.cacheDataAllocator); err != nil {
+		if _, err := d.readEntryFrom(ctx, entry, io.NewSectionReader(f, entry.Offset-base, entry.Size)); err != nil {
 			return err
 		}
 		// Only bytes delivered successfully count toward read share. Eviction accounting

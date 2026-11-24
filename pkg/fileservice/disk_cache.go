@@ -709,9 +709,8 @@ func (d *DiskCache) Read(
 					pos = next
 				}
 				if readers != nil {
-					from := &sourceErrReader{Reader: io.MultiReader(readers...)}
-					if err := entry.readFrom(ctx, from, d.cacheDataAllocator); err != nil {
-						if from.err != nil {
+					if local, err := d.readEntryFrom(ctx, entry, io.MultiReader(readers...)); err != nil {
+						if local != nil {
 							for _, r := range rs {
 								d.paths.close(r.diskPath, openedFiles[r.diskPath])
 								delete(openedFiles, r.diskPath)
@@ -761,9 +760,8 @@ func (d *DiskCache) Read(
 			d.preloads.read(diskPath, entry.Size)
 		}
 		// Reads of a file kept open share it, so each reads at its own offset.
-		from := &sourceErrReader{Reader: io.NewSectionReader(file, readOffset, readSize)}
-		if err := entry.readFrom(ctx, from, d.cacheDataAllocator); err != nil {
-			if from.err != nil && fromRange {
+		if local, err := d.readEntryFrom(ctx, entry, io.NewSectionReader(file, readOffset, readSize)); err != nil {
+			if local != nil && fromRange {
 				d.paths.close(diskPath, opened)
 				delete(openedFiles, diskPath)
 				d.dropCachedRange(ctx, diskPath)
@@ -781,11 +779,11 @@ func (d *DiskCache) Read(
 
 	for i := range vector.Entries {
 		if err := fillEntry(&vector.Entries[i]); err != nil {
-			// A failed read of object storage by a download the read joined fails the read;
-			// an error of the cache itself is ignored.
-			var joined *joinedReadError
-			if errors.As(err, &joined) {
-				return joined.err
+			// A failed read of object storage by a download the read joined, and an error
+			// of the entry, fail the read; an error of the cache itself is ignored.
+			var failing *failingReadError
+			if errors.As(err, &failing) {
+				return failing.err
 			}
 			numError++
 			logutil.Warn(
