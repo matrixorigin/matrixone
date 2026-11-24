@@ -182,7 +182,13 @@ func (s *S3FS) indexObjectCached(filePath string) (string, bool) {
 func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 	diskPath, ok := s.indexObjectCached(vector.FilePath)
 	if !ok {
-		return s.readIndexDownload(ctx, vector)
+		// The entries a download no longer serves are read from the file it published.
+		if joined, err := s.readIndexDownload(ctx, vector); !joined || err != nil || vector.allDone() {
+			return err
+		}
+		if diskPath, ok = s.indexObjectCached(vector.FilePath); !ok {
+			return nil
+		}
 	}
 	p, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
@@ -254,16 +260,16 @@ func (s *S3FS) readIndexObject(ctx context.Context, vector *IOVector) error {
 
 // readIndexDownload fills the entries of vector not done from the download of the object
 // into the index-file cache under way, as a read of the disk cache does, whatever the
-// read's skip of disk-cache reads.
-func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) error {
+// read's skip of disk-cache reads. It reports whether there was one.
+func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) (bool, error) {
 	p, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil || isDownload(ctx) {
-		return nil
+		return false, nil
 	}
 	d := s.diskCache
 	diskPath := d.pathForFile(p.File)
 	if o := d.download(diskPath); o == nil || !o.indexFile {
-		return nil
+		return false, nil
 	}
 	for i := range vector.Entries {
 		e := &vector.Entries[i]
@@ -273,13 +279,13 @@ func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) error {
 		_, filled, err := d.readFromDownload(ctx, diskPath, e, vector)
 		var failing *failingReadError
 		if errors.As(err, &failing) {
-			return failing.err
+			return true, failing.err
 		}
 		if filled {
 			e.done, e.fromCache = true, d
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // touchIndexObject marks the entry at diskPath used, at most once per indexObjectTouch,
