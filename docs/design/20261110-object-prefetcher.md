@@ -298,7 +298,9 @@ earlier bound of 30 seconds at a configured network rate, with requests due soon
 from it, was never reached there and is removed.
 
 When a new request does not fit:
-- A request larger than the bound is dropped, and the queue is left unchanged.
+- A request larger than the bound is dropped, and the queue is left unchanged. A request
+  for an object already queued still merges its due time and share into the queued entry,
+  which keeps its bytes: that scan needs them as soon as it asks (decision 2026-11-24).
 - Otherwise, entries whose scans have all ended are dropped first.
 - Then the last entry in download order is dropped, if the new request orders before it.
   If not, the new request is dropped.
