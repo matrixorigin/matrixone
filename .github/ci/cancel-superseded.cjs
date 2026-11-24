@@ -124,11 +124,14 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
   })).data;
   const title = new RegExp(`^Coverage standby / ${parent.id}/${parent.run_attempt}/[01]/` +
     `${parent.head_sha}/(?:cs|idc)/[a-f0-9]{64}$`);
-  const matches = run => active.has(run.status) && run.event === 'workflow_dispatch' &&
+  const isShortTitle = run => /^GROUP[01]$/.test(run.display_title || '');
+  const hasWorkerIdentity = run => active.has(run.status) && run.event === 'workflow_dispatch' &&
     run.workflow_id === worker.id && run.path === '.github/workflows/coverage-standby-worker.yaml' &&
     run.repository?.full_name === 'matrixorigin/matrixone' &&
-    run.head_branch === 'main' && run.run_attempt === 1 &&
-    title.test(run.display_title || '');
+    run.head_branch === 'main' && run.run_attempt === 1;
+  const matches = run => hasWorkerIdentity(run) && (
+    title.test(run.display_title || '') || (isShortTitle(run) && title.test(run.canonicalTitle || '') &&
+      run.display_title === `GROUP${run.canonicalTitle.split('/')[3]}`));
   const candidates = new Map();
   // A 204 dispatch response can become visible shortly after the parent ends.
   // Rescan briefly so a late-indexed, still-queued child is not left behind.
@@ -152,7 +155,13 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
         await scan(status, mid + 1, hi);
         return;
       }
-      for (const run of data.workflow_runs) if (matches(run)) candidates.set(run.id, run);
+      // Short titles are just discovery hints. Check the same full identity
+      // from the live worker's skipped job before any cancellation.
+      for (const run of data.workflow_runs) {
+        if (hasWorkerIdentity(run) && (title.test(run.display_title || '') || isShortTitle(run))) {
+          candidates.set(run.id, run);
+        }
+      }
       if (data.workflow_runs.length < 100 || page * 100 >= data.total_count) return;
     }
   }
@@ -188,14 +197,26 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
     try { await discover(); } catch (err) { failures.set(discover.name, err); }
   }
   const get = async id => {
+    let run;
     try {
       const { data } = await github.rest.actions.getWorkflowRun({ ...repo, run_id: id });
       if (data.id !== id) throw new Error('Coverage worker lookup ID mismatch');
-      return data;
+      run = { ...data, canonicalTitle: null };
     } catch (err) {
       if (err.status === 404) return { id, status: 'missing' };
       throw err;
     }
+    if (!hasWorkerIdentity(run) || !isShortTitle(run)) return run;
+    const { data } = await github.rest.actions.listJobsForWorkflowRunAttempt({
+      ...repo, run_id: id, attempt_number: 1, per_page: 100,
+    });
+    if (data.jobs.length !== data.total_count) throw new Error('Incomplete coverage worker identity');
+    const suffix = ' / Run identity';
+    const markers = data.jobs.filter(job => job.name.endsWith(suffix));
+    if (markers.length !== 1) return run;
+    const [marker] = markers;
+    return marker.run_id === id && marker.run_attempt === 1 && marker.status === 'completed' &&
+      marker.conclusion === 'skipped' ? { ...run, canonicalTitle: marker.name.slice(0, -suffix.length) } : run;
   };
   const stillCurrent = async () => {
     const { data: current } = await github.rest.actions.getWorkflowRunAttempt({

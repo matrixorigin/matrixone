@@ -299,6 +299,11 @@ function coverageHarness({ children, parentOverride = {}, tick, receipts = [], l
       if (!rows.has(run_id)) throw Object.assign(new Error('missing'), { status: 404 });
       return { data: { ...rows.get(run_id) } };
     },
+    listJobsForWorkflowRunAttempt: async ({ run_id, attempt_number }) => {
+      assert.equal(attempt_number, 1);
+      const jobs = rows.get(run_id)?.fixtureJobs || [];
+      return { data: { total_count: jobs.length, jobs } };
+    },
     cancelWorkflowRun: async ({ run_id }) => { calls.push(['cancel', run_id, elapsed]); },
   };
   const core = { info() {}, summary: {
@@ -333,6 +338,33 @@ test('completed parent attempt releases only its queued and running standby chil
   await h.run();
   assert.deepEqual(h.calls, [['cancel', 700, 10000], ['cancel', 701, 10000],
     ['force', 700, 130000], ['force', 701, 130000]]);
+});
+
+test('short worker names never authorize cleanup without the original exact identity', async () => {
+  const h = coverageHarness({ children: [] });
+  const title = h.child(700, 0, 'cs').display_title;
+  for (const [id, pipeline, overrides] of [
+    [700, title, {}],
+    [701, title.replace(' / 600/', ' / 601/'), {}],
+    [702, title, { run_id: 700 }],
+    [703, title, { conclusion: 'success' }],
+    [704, null, {}],
+    [705, title.replace('/2/0/', '/1/0/'), {}],
+    [706, title.replace('/2/0/', '/2/1/'), {}],
+  ]) {
+    const run = h.child(id, 0, 'cs', { display_title: 'GROUP0' });
+    run.fixtureJobs = pipeline ? [{ name: pipeline + ' / Run identity', run_id: id,
+      run_attempt: 1, status: 'completed', conclusion: 'skipped', ...overrides }] : [];
+    h.rows.set(id, run);
+  }
+  const group1 = h.child(707, 1, 'idc');
+  h.rows.set(707, { ...group1, display_title: 'GROUP1', fixtureJobs: [{
+    name: group1.display_title + ' / Run identity', run_id: 707,
+    run_attempt: 1, status: 'completed', conclusion: 'skipped',
+  }] });
+  await h.run();
+  assert.deepEqual(h.calls.map(([kind, id]) => [kind, id]),
+    [['cancel', 700], ['cancel', 707], ['force', 700], ['force', 707]]);
 });
 
 test('admitted worker absent from all list scans is cancelled by its paginated receipt', async () => {
