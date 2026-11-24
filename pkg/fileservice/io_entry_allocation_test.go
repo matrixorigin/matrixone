@@ -308,8 +308,8 @@ func TestDiskCacheDownloadAllocationFailure(t *testing.T) {
 	t.Cleanup(func() { cache.Close(ctx) })
 	diskPath := cache.pathForFile("obj")
 	download := newPreloadGeneration(t, cache.preloads, diskPath, []byte("xy"))
-	cache.downloads.m = map[string]*objectDownload{diskPath: download}
-	download.advance(2)
+	cache.downloads.store(diskPath, download)
+	download.advance(0, 2)
 	allocator := new(limitedReadAllocator)
 	ctx = context.WithValue(ctx, ioEntryAllocatorKey{}, allocator)
 	vector := &IOVector{FilePath: "obj", Entries: []IOEntry{{Size: 2}}}
