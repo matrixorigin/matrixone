@@ -405,14 +405,22 @@ func TestTPReuseProjectionErrorRecovery(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{math.MaxInt64, math.MaxInt64 - 1}, values)
 	}
-	checkValid()
-	err = f.execute("", false, nil, func(*batch.Batch) {
-		t.Error("the failed batch was published to the consumer")
-	})
-	var moErr *moerr.Error
-	require.ErrorAs(t, err, &moErr)
-	require.True(t, moerr.IsMoErrCode(moErr, moerr.ErrOutOfRange), "expected overflow, got %v", err)
-	checkValid()
+	var warmBytes int64
+	for cycle := range 2 {
+		checkValid()
+		err := f.execute("", false, nil, func(*batch.Batch) {
+			t.Error("the failed batch was published to the consumer")
+		})
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.True(t, moerr.IsMoErrCode(moErr, moerr.ErrOutOfRange), "expected overflow, got %v", err)
+		checkValid()
+		if cycle == 0 {
+			warmBytes = f.proc.Mp().CurrNB()
+		} else {
+			require.Equal(t, warmBytes, f.proc.Mp().CurrNB(), "retained capacity after projection error")
+		}
+	}
 }
 
 func BenchmarkTPReusablePipelineQueries(b *testing.B) {
