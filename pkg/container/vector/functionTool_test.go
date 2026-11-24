@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -409,7 +408,7 @@ func TestAppendByteJsonEncoded(t *testing.T) {
 
 	oldLength := result.vec.Length()
 	oldAreaLength := len(result.vec.area)
-	oldAreaData := uintptr(unsafe.Pointer(&result.vec.area[0]))
+	oldAreaData := &result.vec.area[0]
 	values := toSliceOfLengthNoTypeCheck[types.Varlena](result.vec, oldLength+1)
 	var sentinel types.Varlena
 	sentinel[0] = 1
@@ -425,7 +424,7 @@ func TestAppendByteJsonEncoded(t *testing.T) {
 	require.ErrorContains(t, err, "encode failed")
 	require.Equal(t, oldLength, result.vec.Length())
 	require.Equal(t, oldAreaLength, len(result.vec.area))
-	require.Equal(t, oldAreaData, uintptr(unsafe.Pointer(&result.vec.area[0])), "failed encoding must not commit replacement backing")
+	require.Same(t, oldAreaData, &result.vec.area[0], "failed encoding must not commit replacement backing")
 	require.Equal(t, sentinel, values[oldLength])
 	require.True(t, result.vec.nsp.Contains(uint64(oldLength)))
 

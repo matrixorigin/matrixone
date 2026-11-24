@@ -20,7 +20,6 @@ import (
 	"math"
 	"slices"
 	"testing"
-	"unsafe"
 
 	"golang.org/x/exp/rand"
 
@@ -262,8 +261,9 @@ func checkIntegerMinMax[T integerT](t *testing.T, oid types.T, sizes []int) {
 	r := rand.New(rand.NewSource(uint64(oid)))
 	var zero T
 	minT, maxT := zero, ^zero
-	if maxT < minT { // signed: ^0 is -1, so shift it to the most negative value
-		minT = maxT << (uint(unsafe.Sizeof(zero))*8 - 1)
+	if maxT < minT { // signed: ^0 is -1; shift 1 up to the sign bit for the minimum
+		for minT = 1; minT > 0; minT <<= 1 {
+		}
 		maxT = ^minT
 	}
 	for _, n := range sizes {
