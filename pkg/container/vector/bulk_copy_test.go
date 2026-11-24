@@ -99,7 +99,7 @@ func TestBatchCopySelectionAliasAndAdmission(t *testing.T) {
 			state := newTestVectorAllocationAccount(t, 1, 128)
 			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 			dmp := state.view(t, mp)
-			out := newAccountedTestVector(t, types.T_int64.ToType(), dmp)
+			out := NewVec(types.T_int64.ToType(), dmp)
 			t.Cleanup(func() { out.Free(dmp) })
 			var err error
 			if rangeCopy {
