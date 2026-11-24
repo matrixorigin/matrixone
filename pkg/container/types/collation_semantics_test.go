@@ -107,3 +107,45 @@ func TestMergeStringCharsetKeepsSupplementaryRepertoire(t *testing.T) {
 	require.Equal(t, CharsetUTF8MB4UnicodeCI,
 		MergeStringCharset([]Type{mb3, mb4}, CharsetUTF8))
 }
+
+// Typed native Unicode strings must be valid UTF-8 within their charset's
+// repertoire; legacy text and binary types are unrestricted. The UCA weight
+// bytes for U+FFFF are not valid UTF-8 and must not be admitted, where they
+// could alias the real U+FFFF in a later hash or sort.
+func TestValidateCollationValue(t *testing.T) {
+	legacy := T_varchar.ToType()
+	mb3 := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB3UnicodeCI)
+	mb4 := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB4UnicodeCI)
+	mb4Text := NewWithCharset(T_text, 0, 0, CharsetUTF8MB4UnicodeCI)
+	binary := NewWithCharset(T_varbinary, 64, 0, CharsetUTF8MB4UnicodeCI)
+	for _, tc := range []struct {
+		name  string
+		typ   Type
+		value []byte
+		bad   bool
+	}{
+		{"legacy_empty", legacy, nil, false},
+		{"legacy_invalid_utf8", legacy, []byte{0xff, 0x00, 0x80}, false},
+		{"mb4_empty", mb4, nil, false},
+		{"mb4_non_bmp", mb4, []byte("😀"), false},
+		{"mb4_long", mb4, bytes.Repeat([]byte("😀"), 8), false},
+		{"mb4_text_non_bmp", mb4Text, []byte("😀"), false},
+		{"mb3_bmp", mb3, []byte("中文"), false},
+		{"mb3_reject_non_bmp", mb3, []byte("😀"), true},
+		{"mb3_reject_non_bmp_long", mb3, bytes.Repeat([]byte("😀"), 8), true},
+		{"mb4_reject_invalid", mb4, []byte{0xff}, true},
+		{"mb4_reject_invalid_long", mb4, bytes.Repeat([]byte{0xff}, 49), true},
+		{"mb4_reject_uca_weight_bytes", mb4, []byte{0x30, 0xfb, 0xc1, 0x30, 0xff, 0xff, 0x20}, true},
+		{"mb4_text_reject_invalid", mb4Text, []byte{0xff}, true},
+		{"binary_with_unicode_metadata", binary, []byte{0xff}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateCollationValue(tc.typ, tc.value)
+			if tc.bad {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
