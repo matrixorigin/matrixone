@@ -24,6 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// After a selection (UnionInt32) or row copy (UnionOne), the marshal plan takes
+// the bulk path when every varlena payload has its own area range, and the
+// canonical path when payloads are shared (const broadcasts); either way the
+// wire decodes to the selected rows.
+
 func TestUnionSelectionPreservesOwnedDisjointVarlenaLayout(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() {
@@ -201,7 +206,8 @@ func TestUnionOneNullClearsReusedVarlenaDescriptor(t *testing.T) {
 	}
 }
 
-func TestUnionOneConstDestinationDoesNotAcquireDisjointProof(t *testing.T) {
+// A const NULL destination stays const NULL as const NULL rows are added.
+func TestUnionOneConstDestinationStaysConst(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 	destination := NewVec(types.T_varchar.ToType(), mp)
@@ -217,42 +223,84 @@ func TestUnionOneConstDestinationDoesNotAcquireDisjointProof(t *testing.T) {
 	require.True(t, destination.IsConstNull())
 }
 
-func TestUnionOneNullDoesNotClearWindowOwnerDescriptor(t *testing.T) {
-	mp := mpool.MustNewZero()
-	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-	owner := NewVec(types.T_varchar.ToType(), mp)
-	t.Cleanup(func() { owner.Free(mp) })
-	values := [][]byte{bytes.Repeat([]byte{'a'}, 49), bytes.Repeat([]byte{'b'}, 57)}
-	require.NoError(t, AppendBytesList(owner, values, nil, mp))
-	view, err := owner.Window(0, 1)
-	require.NoError(t, err)
-	t.Cleanup(func() { view.Free(nil) })
-	source := NewConstNull(types.T_varchar.ToType(), 1, mp)
-	t.Cleanup(func() { source.Free(mp) })
-	// A window is read-only: appending to it fails and leaves the owner intact.
-	require.Error(t, view.UnionOne(source, 0, mp))
-	require.Equal(t, 1, view.Length())
-	for row, value := range values {
-		require.Equal(t, value, owner.GetBytesAt(row), "NULL append must not mutate shared descriptors")
+// BenchmarkMarshalBinaryOwnedVarlena is the non-Arrow control for the shared
+// vector serialization path. The vector is built through ordinary owned
+// appends, and only MarshalBinaryWithBuffer is measured.
+func BenchmarkMarshalBinaryOwnedVarlena(b *testing.B) {
+	const rows = 8192
+	tests := []struct {
+		name   string
+		value  []byte
+		nullAt int
+	}{
+		{name: "inline_15_owned", value: bytes.Repeat([]byte{'i'}, 15), nullAt: -1},
+		{name: "long_49_owned", value: bytes.Repeat([]byte{'l'}, 49), nullAt: -1},
+		{name: "inline_15_one_null", value: bytes.Repeat([]byte{'i'}, 15), nullAt: rows / 2},
+		{name: "long_49_one_null", value: bytes.Repeat([]byte{'l'}, 49), nullAt: rows / 2},
+	}
+
+	for _, test := range tests {
+		b.Run(test.name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			vec := NewVec(types.T_varchar.ToType(), mp)
+			for row := 0; row < rows; row++ {
+				if err := AppendBytes(vec, test.value, row == test.nullAt, mp); err != nil {
+					vec.Free(mp)
+					b.Fatal(err)
+				}
+			}
+			defer vec.Free(mp)
+
+			var buf bytes.Buffer
+			buf.Grow(vec.Size() + 64)
+			b.ReportAllocs()
+			b.SetBytes(int64(vec.Size()))
+			b.ResetTimer()
+			for range b.N {
+				buf.Reset()
+				if err := vec.MarshalBinaryWithBuffer(&buf); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
-func TestUnionOneVarlenaAllocationFailureFailsClosed(t *testing.T) {
-	sourceMP := mpool.MustNewZero()
-	t.Cleanup(func() { require.Zero(t, sourceMP.CurrNB()) })
-	source := NewVec(types.T_varchar.ToType(), sourceMP)
-	t.Cleanup(func() { source.Free(sourceMP) })
-	require.NoError(t, AppendBytes(source, make([]byte, 2<<20), false, sourceMP))
-	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
-	})
-	destination := NewVec(types.T_varchar.ToType(), mp)
-	t.Cleanup(func() { destination.Free(mp) })
-	require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
-	require.True(t, destination.VarlenaAreaIsDisjoint())
-	require.Error(t, destination.UnionOne(source, 0, mp))
-	require.Equal(t, "prefix", destination.GetStringAt(0))
+// BenchmarkMarshalBinarySelectedVarlena covers shuffle and hash-build spill
+// batches, which materialize bucket selections through UnionInt32 before
+// serialization.
+func BenchmarkMarshalBinarySelectedVarlena(b *testing.B) {
+	const rows = 8192
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType(), mp)
+	value := bytes.Repeat([]byte{'x'}, 49)
+	sels := make([]int32, rows)
+	for row := 0; row < rows; row++ {
+		sels[row] = int32(row)
+		if err := AppendBytes(source, value, false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer source.Free(mp)
+
+	selected := NewVec(types.T_varchar.ToType(), mp)
+	if err := selected.PreExtend(rows, mp); err != nil {
+		b.Fatal(err)
+	}
+	if err := selected.UnionInt32(source, sels, mp); err != nil {
+		b.Fatal(err)
+	}
+	defer selected.Free(mp)
+
+	var buf bytes.Buffer
+	buf.Grow(selected.Size() + 64)
+	b.ReportAllocs()
+	b.SetBytes(int64(selected.Size()))
+	b.ResetTimer()
+	for range b.N {
+		buf.Reset()
+		if err := selected.MarshalBinaryWithBuffer(&buf); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

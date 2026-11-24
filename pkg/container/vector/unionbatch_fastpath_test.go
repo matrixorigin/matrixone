@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -913,4 +914,44 @@ func TestConstNullCleanAndUnionBatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUnionOneNullDoesNotClearWindowOwnerDescriptor(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	owner := NewVec(types.T_varchar.ToType(), mp)
+	t.Cleanup(func() { owner.Free(mp) })
+	values := [][]byte{bytes.Repeat([]byte{'a'}, 49), bytes.Repeat([]byte{'b'}, 57)}
+	require.NoError(t, AppendBytesList(owner, values, nil, mp))
+	view, err := owner.Window(0, 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { view.Free(nil) })
+	source := NewConstNull(types.T_varchar.ToType(), 1, mp)
+	t.Cleanup(func() { source.Free(mp) })
+	// A window is read-only: appending to it fails and leaves the owner intact.
+	require.Error(t, view.UnionOne(source, 0, mp))
+	require.Equal(t, 1, view.Length())
+	for row, value := range values {
+		require.Equal(t, value, owner.GetBytesAt(row), "NULL append must not mutate shared descriptors")
+	}
+}
+
+func TestUnionOneVarlenaAllocationFailureFailsClosed(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, sourceMP.CurrNB()) })
+	source := NewVec(types.T_varchar.ToType(), sourceMP)
+	t.Cleanup(func() { source.Free(sourceMP) })
+	require.NoError(t, AppendBytes(source, make([]byte, 2<<20), false, sourceMP))
+	mp, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	destination := NewVec(types.T_varchar.ToType(), mp)
+	t.Cleanup(func() { destination.Free(mp) })
+	require.NoError(t, AppendBytes(destination, []byte("prefix"), false, mp))
+	require.True(t, destination.VarlenaAreaIsDisjoint())
+	require.Error(t, destination.UnionOne(source, 0, mp))
+	require.Equal(t, "prefix", destination.GetStringAt(0))
 }
