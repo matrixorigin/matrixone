@@ -669,6 +669,9 @@ function report_slow_ut_cases(){
     if [[ -n "${CURRENT_UT_PID}" ]] || (( CURRENT_UT_DRAIN_FAILED != 0 )); then
         lifecycle_args+=(--require-lifecycle-lf)
     fi
+    if (( UT_TERMINATING != 0 )); then
+        lifecycle_args+=(--failures)
+    fi
     rm -f "${lifecycle_report}"
     if ! slow_output=$(python3 -B "${BUILD_WKSP}/optools/summarize_ut_slow_cases.py" \
         "${UT_REPORT}" "${lifecycle_args[@]}"); then
@@ -679,9 +682,7 @@ function report_slow_ut_cases(){
     mkdir -p "${UT_DIAGNOSTIC_DIR}"
     printf '%s\n' "${slow_output}" > "${slow_report}"
     logger "ERR" "Slow or completed UT cases from ${UT_REPORT}:"
-    while IFS= read -r line; do
-        [[ -n "${line}" ]] && logger "ERR" "${line}"
-    done <<< "${slow_output}"
+    printf '%s\n' "${slow_output}" | sed 's/^/[ut_summary] /' | tee -a "${G_WKSP}/${LOG}"
 }
 
 function snapshot_ut_diagnostics(){

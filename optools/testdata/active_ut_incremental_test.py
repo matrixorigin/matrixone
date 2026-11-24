@@ -33,6 +33,131 @@ class IncrementalReaderTest(unittest.TestCase):
             value["Test"] = test
         return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
 
+    def test_timeout_failure_details_preserve_context_and_bound_output(self):
+        events = [
+            {"Action": "output", "Package": "example/a", "Test": "TestFast", "Output": "first assertion\n" + "x" * 20000 + "\nlast assertion\n"},
+            {"Action": "output", "Package": "example/b", "Test": "TestFast", "Output": "unrelated passing output\n"},
+            {"Action": "fail", "Package": "example/a", "Test": "TestFast", "Elapsed": 0.01},
+            {"Action": "output", "Package": "example/a", "Output": "panic: package failed\n"},
+            {"Action": "fail", "Package": "example/a"},
+            {"Action": "build-output", "ImportPath": "example/build", "Output": "compiler error\n"},
+            {"Action": "build-fail", "ImportPath": "example/build"},
+            {"Action": "run", "Package": "example/timeout", "Test": "TestStuck"},
+            {"Action": "output", "Package": "example/timeout", "Test": "TestStuck", "Output": "panic: test timed out\n"},
+            {"Action": "fail", "Package": "example/timeout"},
+        ]
+        self.report.write_bytes(b"".join(json.dumps(event).encode() + b"\n" for event in events)
+                                + b'{"Action":"fail","Package":"example/incomplete"}')
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report),
+                                          "--failures", "--require-lifecycle-lf"], text=True)
+        for expected in ("TestFast", "first assertion", "last assertion", "[output truncated]",
+                         "panic: package failed", "example/build", "compiler error",
+                         "unresolved-output", "TestStuck", "panic: test timed out"):
+            self.assertIn(expected, output)
+        self.assertNotIn("unrelated passing output", output)
+        self.assertNotIn("example/incomplete", output)
+
+    def test_timeout_failure_count_is_bounded(self):
+        events = [self.event("fail", f"Test{i}") for i in range(34)]
+        self.report.write_bytes(b"".join(events))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report),
+                                          "--failures"], text=True)
+        self.assertIn("additional failure or context events omitted=2", output)
+        self.assertNotIn('test="Test33"', output)
+
+    def test_unresolved_package_output_does_not_crowd_out_later_failures(self):
+        events = []
+        for i in range(10):
+            events.append({"Action": "output", "Package": "example/timeout",
+                           "Test": f"TestStuck{i}", "Output": "still running\n"})
+        events.extend([
+            {"Action": "fail", "Package": "example/timeout"},
+            {"Action": "output", "Package": "example/later", "Test": "TestLater", "Output": "later failure\n"},
+            {"Action": "fail", "Package": "example/later", "Test": "TestLater"},
+        ])
+        self.report.write_bytes(b"".join(json.dumps(event).encode() + b"\n" for event in events))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report),
+                                          "--failures"], text=True)
+        self.assertIn("TestLater", output)
+        self.assertIn("later failure", output)
+        self.assertEqual(8, output.count("action=unresolved-output"))
+        self.assertIn("additional failure or context events omitted=2", output)
+
+    def test_repeated_package_failures_keep_each_output(self):
+        events = [
+            {"Action": "output", "Package": "example/sharded", "Output": "first shard panic\n"},
+            {"Action": "fail", "Package": "example/sharded"},
+            {"Action": "output", "Package": "example/sharded", "Output": "second shard panic\n"},
+            {"Action": "fail", "Package": "example/sharded"},
+        ]
+        self.report.write_bytes(b"".join(json.dumps(event).encode() + b"\n" for event in events))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report),
+                                          "--failures"], text=True)
+        self.assertEqual(2, output.count('action=fail package="example/sharded"'))
+        self.assertIn("first shard panic", output)
+        self.assertIn("second shard panic", output)
+
+    def test_overlapping_case_and_evicted_output_are_not_silently_lost(self):
+        events = [
+            {"Action": "start", "Package": "example/overlap"},
+            {"Action": "run", "Package": "example/overlap", "Test": "TestSame"},
+            {"Action": "start", "Package": "example/overlap"},
+            {"Action": "run", "Package": "example/overlap", "Test": "TestSame"},
+            {"Action": "output", "Package": "example/overlap", "Test": "TestSame", "Output": "shared earlier output\n"},
+            {"Action": "pass", "Package": "example/overlap", "Test": "TestSame"},
+            {"Action": "fail", "Package": "example/overlap", "Test": "TestSame"},
+            {"Action": "pass", "Package": "example/overlap"},
+            {"Action": "pass", "Package": "example/overlap"},
+            {"Action": "start", "Package": "example/overlap"},
+            {"Action": "run", "Package": "example/overlap", "Test": "TestSame"},
+            {"Action": "output", "Package": "example/overlap", "Test": "TestSame", "Output": "fresh generation output\n"},
+            {"Action": "fail", "Package": "example/overlap", "Test": "TestSame"},
+            {"Action": "output", "Package": "example/eviction", "Test": "TestOld", "Output": "evicted beginning\n"},
+        ]
+        events.extend({"Action": "output", "Package": "example/other", "Test": f"Test{i}", "Output": "x\n"}
+                      for i in range(256))
+        events.extend([
+            {"Action": "output", "Package": "example/eviction", "Test": "TestOld", "Output": "later output\n"},
+            {"Action": "fail", "Package": "example/eviction", "Test": "TestOld"},
+        ])
+        self.report.write_bytes(b"".join(json.dumps(event).encode() + b"\n" for event in events))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report),
+                                          "--failures"], text=True)
+        self.assertIn("shared earlier output", output)
+        self.assertEqual(1, output.count("shared earlier output"))
+        self.assertIn("fresh generation output", output)
+        self.assertIn("later output", output)
+        self.assertIn("earlier output may be missing (buffer limit reached)", output)
+
+    def test_unfinished_output_retires_with_the_package_generation(self):
+        package = "example/sharded"
+        events = [
+            {"Action": "start", "Package": package},
+            {"Action": "run", "Package": package, "Test": "TestOld"},
+            {"Action": "output", "Package": package, "Test": "TestOld", "Output": "old timeout stack\n"},
+            {"Action": "fail", "Package": package},
+        ]
+        for _ in range(7):
+            events.extend([{"Action": "start", "Package": package}, {"Action": "fail", "Package": package}])
+        events.extend([
+            {"Action": "start", "Package": package},
+            {"Action": "run", "Package": package, "Test": "TestNew"},
+            {"Action": "output", "Package": package, "Test": "TestNew", "Output": "new timeout stack\n"},
+            {"Action": "fail", "Package": package},
+        ])
+        self.report.write_bytes(b"".join(json.dumps(event).encode() + b"\n" for event in events))
+        script = Path(reader.__file__).with_name("summarize_ut_slow_cases.py")
+        output = subprocess.check_output([sys.executable, str(script), str(self.report),
+                                          "--failures"], text=True)
+        self.assertEqual(1, output.count("old timeout stack"))
+        self.assertIn("new timeout stack", output)
+        self.assertEqual(2, output.count("action=unresolved-output"))
+
     def read(self, *reports):
         return reader.snapshot(str(self.state), [str(p) for p in reports or [self.report]])
 
@@ -156,7 +281,7 @@ class IncrementalReaderTest(unittest.TestCase):
             self.event("start", "") + self.event("run") + self.event("fail", "")[:-1]
         )
         active_out = self.report.with_suffix(".active")
-        _, packages, malformed = summarize(self.report, active_out=active_out)
+        _, packages, malformed, _, _ = summarize(self.report, active_out=active_out)
         self.assertEqual(0, malformed)
         self.assertEqual("fail", packages[0][3])
         self.assertIn("unfinished UT case at package exit:", active_out.read_text())
@@ -190,7 +315,7 @@ class IncrementalReaderTest(unittest.TestCase):
         for tail in (self.event("fail", "")[:-2], b"\xff"):
             with self.subTest(tail=tail):
                 self.report.write_bytes(prefix + tail)
-                _, packages, malformed = summarize(self.report, active_out=active_out)
+                _, packages, malformed, _, _ = summarize(self.report, active_out=active_out)
                 self.assertEqual([], packages)
                 self.assertEqual(1, malformed)
                 self.assertTrue(active_out.read_text().startswith("active UT case: "))

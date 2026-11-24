@@ -1123,13 +1123,20 @@ kill -TERM "$$"
 func TestCancellationReportsCompletedSlowCases(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
-function logger() { printf "%s\n" "$2"; }
+function logger() { printf "%s\n" "$2"; echo called >> "$CASE_DIR/logger-calls"; }
 UT_REPORT="$CASE_DIR/report.json"
 UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
 mkdir -p "$UT_DIAGNOSTIC_DIR"
 cat > "$UT_REPORT" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/slow","Test":"TestSlow"}
 {"Time":"2026-09-10T01:00:04Z","Action":"pass","Package":"example/slow","Test":"TestSlow","Elapsed":3.5}
+EOF
+for ((i=0; i<200; i++)); do
+ printf '%s\n' '{"Action":"output","Package":"example/fast","Test":"TestFailed","Output":"detail line\n"}' >> "$UT_REPORT"
+done
+cat >> "$UT_REPORT" <<'EOF'
+{"Time":"2026-09-10T01:00:04Z","Action":"output","Package":"example/fast","Test":"TestFailed","Output":"assertion: unexpected result\n"}
+{"Time":"2026-09-10T01:00:04Z","Action":"fail","Package":"example/fast","Test":"TestFailed","Elapsed":0.01}
 {"Time":"2026-09-10T01:00:05Z","Action":"run","Package":"example/slow","Test":"TestBlocked"}
 EOF
 trap handle_ut_termination TERM
@@ -1142,6 +1149,9 @@ set -e
 [[ -s "$UT_DIAGNOSTIC_DIR/ut-report.json" ]] || exit 92
 [[ -s "$UT_DIAGNOSTIC_DIR/ut-checkpoint.log" ]] || exit 93
 grep -q 'TestSlow' "$UT_DIAGNOSTIC_DIR/top.txt"
+grep -q 'TestFailed' "$UT_DIAGNOSTIC_DIR/top.txt"
+grep -q 'assertion: unexpected result' "$UT_DIAGNOSTIC_DIR/top.txt"
+[[ $(wc -l < "$CASE_DIR/logger-calls" | tr -d ' ') -lt 50 ]] || exit 94
 `
 	out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
