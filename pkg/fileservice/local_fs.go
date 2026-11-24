@@ -787,6 +787,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				C: bytesCounter,
 			}
 
+			dataEntry := &entry
 			if entry.Size < 0 {
 				var data []byte
 				data, err = io.ReadAll(r)
@@ -797,24 +798,33 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				entry.Size = int64(len(data))
 
 			} else {
-				finally := entry.prepareData(ctx)
+				if cap(entry.Data) < int(entry.Size) {
+					// Rollback must clear the vector entry that owns the allocated data.
+					dataEntry = &vector.Entries[i]
+				}
+				finally, prepareErr := dataEntry.prepareData(ctx)
+				if prepareErr != nil {
+					return prepareErr
+				}
 				defer finally(&err)
 				var n int
-				n, err = io.ReadFull(r, entry.Data)
+				n, err = io.ReadFull(r, dataEntry.Data)
 				if err != nil {
 					return err
 				}
-				if int64(n) != entry.Size {
+				if int64(n) != dataEntry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
 				}
 			}
 
-			if err = entry.setCachedData(ctx, l); err != nil {
+			if err = dataEntry.setCachedData(ctx, l); err != nil {
 				return err
 			}
-			fileWithChecksum.dontNeedContentRange(entry.Offset, entry.Size)
+			fileWithChecksum.dontNeedContentRange(dataEntry.Offset, dataEntry.Size)
 
-			vector.Entries[i] = entry
+			if dataEntry == &entry {
+				vector.Entries[i] = entry
+			}
 
 		}
 

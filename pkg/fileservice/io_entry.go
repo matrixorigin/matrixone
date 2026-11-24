@@ -56,7 +56,10 @@ func (i *IOEntry) ReadFromOSFile(ctx context.Context, file *os.File, allocator C
 	LogEvent(ctx, str_ReadFromOSFile_begin)
 	defer LogEvent(ctx, str_ReadFromOSFile_end)
 
-	finally := i.prepareData(ctx)
+	finally, err := i.prepareData(ctx)
+	if err != nil {
+		return err
+	}
 	defer finally(&err)
 
 	r := io.LimitReader(file, i.Size)
@@ -112,13 +115,20 @@ func CacheOriginalData(ctx context.Context, r io.Reader, data []byte, allocator 
 	return
 }
 
-func (i *IOEntry) prepareData(ctx context.Context) (finally func(err *error)) {
+// ioEntryAllocatorKey allows tests to inject an allocator for a single read.
+type ioEntryAllocatorKey struct{}
+
+func (i *IOEntry) prepareData(ctx context.Context) (finally func(err *error), err error) {
 	LogEvent(ctx, str_prepareData_begin)
 	defer LogEvent(ctx, str_prepareData_end)
 	if cap(i.Data) < int(i.Size) {
-		slice, dec, err := ioAllocator().Allocate(uint64(i.Size), malloc.NoHints)
+		allocator, ok := ctx.Value(ioEntryAllocatorKey{}).(malloc.Allocator)
+		if !ok {
+			allocator = ioAllocator()
+		}
+		slice, dec, err := allocator.Allocate(uint64(i.Size), malloc.NoHints)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		i.Data = slice
 		if i.releaseData != nil {
