@@ -77,6 +77,12 @@ func (c Policy) CacheFullFile() bool {
 	return !c.Any(SkipFullFilePreloads)
 }
 
+// wholeRead reports whether a read under c may read its whole object to cache it: an
+// exact read reads only its entries.
+func (c Policy) wholeRead() bool {
+	return c.CacheFullFile() && !c.Any(ExactRead)
+}
+
 type contextKeyPolicy struct{}
 
 // WithFileServicePolicy attaches a read/write cache policy to ctx.

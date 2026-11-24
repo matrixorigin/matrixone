@@ -341,7 +341,8 @@ exactly its entries and never a whole object. Object metadata and bloom filter l
 exactly their extents in every scan: a prefetch range around them would hold the last
 columns of the object. Probes that read a few columns of an object to check keys or
 visibility, as the CN's insert and upsert dedup, the TN's precommit dedup and MVCC loads,
-read exactly their entries and never the whole object. A
+read exactly their entries and never the whole object; so does every read marked
+`ExactRead`, whatever its other policy. A
 row fetch never reads the bytes of a column it does not read, such as the vector column
 (decision 2026-11-12). The reads a prefetch object makes for itself join no prefetch
 object.

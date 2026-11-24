@@ -127,7 +127,7 @@ func (s *S3FS) readRange(vector *IOVector) (min, max *int64, readFull bool) {
 	if !s.indexObject(p) {
 		return vector.readRange()
 	}
-	if p.CacheFullFile() && s.tierOf(p) == indexTier {
+	if p.wholeRead() && s.tierOf(p) == indexTier {
 		return ptrTo[int64](0), nil, true
 	}
 	min, max = vector.readMinimalRange()

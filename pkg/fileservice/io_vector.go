@@ -126,7 +126,7 @@ func (i *IOVector) ReleaseReadBuffers() {
 }
 
 func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
-	readFull = i.Policy.CacheFullFile() &&
+	readFull = i.Policy.wholeRead() &&
 		!i.Policy.Any(SkipDiskCache)
 
 	if readFull {
