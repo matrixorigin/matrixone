@@ -66,6 +66,18 @@ case "$3" in
         ;;
     down)
         [ "${DOWN_ERROR:-0}" = 0 ] || exit "$DOWN_ERROR"
+        # COMPOSE_REMOVE_ORPHANS supplies the default. An explicit flag wins,
+        # including --remove-orphans=false.
+        remove_orphans=0
+        case "${COMPOSE_REMOVE_ORPHANS:-}" in
+            true|TRUE|1|yes|YES) remove_orphans=1 ;;
+        esac
+        for arg in "$@"; do
+            case "$arg" in
+                --remove-orphans|--remove-orphans=true|--remove-orphans=1) remove_orphans=1 ;;
+                --remove-orphans=false|--remove-orphans=0) remove_orphans=0 ;;
+            esac
+        done
         if [ -n "$STOP_BARRIER" ]; then
             i=0
             while [ ! -f "$STOP_BARRIER.started" ] && [ "$i" -lt 40 ]; do
@@ -86,6 +98,42 @@ case "$3" in
                 [ -n "$id" ] || continue
                 touch "$TRACE.$id.stopped"
             done
+            if [ "$remove_orphans" = 1 ]; then
+                orphans=$(python3 -c '
+import json, os, re
+from pathlib import Path
+document = json.loads(os.environ.get("CONFIG_JSON") or "{}")
+services = set(document.get("services") or {})
+raw = document.get("name") or ""
+if not isinstance(raw, str):
+    raw = ""
+project = re.sub(r"[^a-z0-9_-]", "", raw.lower())
+if not project:
+    project = re.sub(r"[^a-z0-9_-]", "", os.path.basename(os.getcwd()).lower())
+root = Path(os.environ["CONTAINERS"])
+for path in sorted(root.iterdir()):
+    if not path.is_file() or path.name.endswith(".after"):
+        continue
+    parts = path.read_text().split("\\t")
+    parts[-1] = parts[-1].rstrip("\\n")
+    if len(parts) < 5:
+        continue
+    _, container_project, _, oneoff, service = parts[:5]
+    if oneoff.lower() == "true" or container_project != project:
+        continue
+    if service and service not in services:
+        print(path.name)
+')
+                for id in $orphans; do
+                    if [ -f "$TRACE.$id.stop-claimed" ]; then
+                        printf 'down stop repeated %s\\n' "$id" >> "$TRACE"
+                    else
+                        touch "$TRACE.$id.stop-claimed"
+                        printf 'down stop %s\\n' "$id" >> "$TRACE"
+                    fi
+                    touch "$TRACE.$id.stopped"
+                done
+            fi
         fi
         ;;
     *) exit 99 ;;
@@ -193,6 +241,14 @@ case "$1" in
         ;;
     stop)
         [ "${STOP_ERROR:-0}" = 0 ] || exit "$STOP_ERROR"
+        shift
+        for id do
+            if [ -f "$TRACE.$id.stop-claimed" ]; then
+                printf 'docker stop repeated %s\\n' "$id" >> "$TRACE"
+            else
+                touch "$TRACE.$id.stop-claimed"
+            fi
+        done
         if [ -n "$STOP_BARRIER" ]; then
             if [ -f "$STOP_BARRIER.started" ] && [ ! -f "$STOP_BARRIER.finished" ]; then
                 printf 'stop overlapped stop\n' >> "$TRACE"
@@ -206,7 +262,6 @@ case "$1" in
                 touch "$STOP_BARRIER.finished"
             fi
         fi
-        shift
         for id do
             [ "${STOP_NO_EFFECT:-0}" = 1 ] || touch "$TRACE.$id.stopped"
         done
@@ -568,12 +623,12 @@ class ResourceAgentTests(unittest.TestCase):
 
     def test_stop_compose_success(self):
         calls = self.action("stop", 0, COMPOSE_IDS="running")
-        self.assertIn("compose -f docker-compose.yaml down", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
         self.assert_no_mutation(calls)
 
     def test_stop_compose_success_with_absolute_yaml(self):
         calls = self.action("stop", 0, COMPOSE_IDS="running", OCF_RESKEY_ymlfile=str(self.yaml))
-        self.assertIn(f"compose -f {self.yaml} down", calls)
+        self.assertIn(f"compose -f {self.yaml} down --remove-orphans=false", calls)
         self.assert_no_mutation(calls)
 
     def test_stop_compose_success_but_container_still_running(self):
@@ -693,7 +748,7 @@ class ResourceAgentTests(unittest.TestCase):
         calls = self.action("stop", 0, COMPOSE_IDS="running", STOP_BARRIER=str(self.root / "barrier"))
         self.assertIn("docker stop task", calls)
         self.assertIn("down overlapped stop", calls)
-        self.assertIn("compose -f docker-compose.yaml down", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
 
     def test_stop_overlaps_former_project_service_and_oneoff(self):
         self.add_container("matrixone", "previous-project", self.yaml, container_id="service")
@@ -770,7 +825,35 @@ class ResourceAgentTests(unittest.TestCase):
         stop_calls = [call for call in calls if call.startswith("docker stop ")]
         self.assertEqual([call.split()[2:] for call in stop_calls], [["helper"]], calls)
         self.assertIn("down overlapped stop", calls)
-        self.assertIn("compose -f docker-compose.yaml down", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+        self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
+        for call in stop_calls:
+            arguments = call.split()[2:]
+            self.assertNotIn("matrixone", arguments, call)
+            self.assertFalse(
+                any(arg == "-t" or arg.startswith("--time") or arg.startswith("-t") for arg in arguments),
+                call,
+            )
+        self.assertTrue((self.root / "trace.matrixone.stopped").exists())
+        self.assertTrue((self.root / "trace.helper.stopped").exists())
+
+    def test_stop_does_not_signal_orphan_twice_when_remove_orphans_is_inherited(self):
+        self.add_container("matrixone", "my-project", self.yaml, container_id="matrixone", service="app")
+        self.add_container("helper", "my-project", self.yaml, container_id="helper", service="helper")
+        calls = self.action(
+            "stop",
+            0,
+            SERVICES="app",
+            COMPOSE_IDS="matrixone",
+            COMPOSE_REMOVE_ORPHANS="true",
+            STOP_BARRIER=str(self.root / "barrier"),
+        )
+        stop_calls = [call for call in calls if call.startswith("docker stop ")]
+        self.assertEqual([call.split()[2:] for call in stop_calls], [["helper"]], calls)
+        self.assertIn("down overlapped stop", calls)
+        self.assertIn("compose -f docker-compose.yaml down --remove-orphans=false", calls)
+        self.assertNotIn("down stop repeated helper", calls)
+        self.assertNotIn("docker stop repeated helper", calls)
         self.assertFalse(any(call.startswith("docker kill ") for call in calls), calls)
         for call in stop_calls:
             arguments = call.split()[2:]

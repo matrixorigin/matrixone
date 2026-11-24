@@ -477,6 +477,8 @@ docker_compose_stop()
 	# from that model. One docker stop signals only those skipped
 	# containers, overlapped with down, so two 60s grace periods fit in
 	# the 120s Pacemaker budget. No shorter timeout is passed.
+	# --remove-orphans=false overrides an inherited COMPOSE_REMOVE_ORPHANS
+	# so down does not send a second stop to a container already draining.
 	stop_pid=
 	compose_project=
 	modeled_services=
@@ -495,7 +497,7 @@ docker_compose_stop()
 
 	compose_ids=
 	if ! { [ -r "$CONFIG_FILE" ] && [ -x "$OCF_RESKEY_binpath" ] &&
-		run_compose down && compose_ids=$(run_compose ps -aq); }; then
+		run_compose down --remove-orphans=false && compose_ids=$(run_compose ps -aq); }; then
 		compose_ids=
 		if [ -n "$stop_pid" ]; then
 			wait "$stop_pid" || true
