@@ -80,7 +80,6 @@ func toSliceOfLengthNoTypeCheck[T any](vec *Vector, length int) []T {
 	if length == 0 {
 		return nil
 	}
-	checkTypeIfRaceDetectorEnabled[T](vec)
 	return util.UnsafeSliceCastToLength[T](vec.data, length)
 }
 
@@ -2242,7 +2241,6 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		}
 		return nil
 	}
-	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	if err := v.checkMP(mp); err != nil {
 		return err
 	}
