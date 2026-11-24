@@ -38,7 +38,7 @@ func TestIssue28579PreparedIntegerDivKeepsPrecision(t *testing.T) {
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[1].Typ.Id)
 
 	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), queryPlan, []any{
-		ParamValue{Value: "3", PrepareParamKind: types.StringConversionInteger},
+		sqlIntParam(3),
 	})
 	require.NoError(t, err)
 	got, err := evalPreparedDivExpr(t, filled)
@@ -57,13 +57,13 @@ func TestIssue28578UnsignedDividendRejectsNegativeQuotient(t *testing.T) {
 			name:     "signed divisor",
 			wantLeft: types.T_uint64,
 			sql:      "prepare issue28578_signed from 'select cast(10 as unsigned) div cast(? as signed)'",
-			param:    ParamValue{Value: "-3", PrepareParamKind: types.StringConversionInteger},
+			param:    sqlIntParam(-3),
 		},
 		{
 			name:     "decimal divisor",
 			wantLeft: types.T_decimal256,
 			sql:      "prepare issue28578_decimal from 'select cast(10 as unsigned) div cast(? as decimal(10, 2))'",
-			param:    ParamValue{Value: "-3.00", PrepareParamKind: types.StringConversionDecimal},
+			param:    ParamValue{Value: "-3.00", SourceType: decimalParamType("-3.00"), HasSourceType: true},
 		},
 	}
 

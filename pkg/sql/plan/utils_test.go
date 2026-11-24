@@ -537,47 +537,35 @@ func TestIsPositivePreparedInteger(t *testing.T) {
 		{name: "year positive", value: types.MoYear(1), want: true},
 		{name: "year zero", value: types.MoYear(0)},
 		{
-			name: "binary integer string",
-			value: ParamValue{
-				Value:            "2",
-				PrepareParamKind: types.StringConversionInteger,
-			},
-			want: true,
+			name:  "binary integer string",
+			value: comStmtIntParam(2),
+			want:  true,
 		},
 		{
-			name: "binary integer zero",
-			value: ParamValue{
-				Value:            "0",
-				PrepareParamKind: types.StringConversionInteger,
-			},
+			name:  "binary integer zero",
+			value: comStmtIntParam(0),
 		},
 		{
-			name: "binary integer negative",
-			value: ParamValue{
-				Value:            "-1",
-				PrepareParamKind: types.StringConversionInteger,
-			},
+			name:  "binary integer negative",
+			value: comStmtIntParam(-1),
 		},
 		{
-			name: "binary integer overflow",
-			value: ParamValue{
-				Value:            "9223372036854775808",
-				PrepareParamKind: types.StringConversionInteger,
-			},
+			name:  "binary integer overflow",
+			value: comStmtUintParam(9223372036854775808),
 		},
 		{
 			name: "binary integer malformed",
 			value: ParamValue{
-				Value:            "2.5",
-				PrepareParamKind: types.StringConversionInteger,
+				Value:      "2.5",
+				SourceType: types.T_int64.ToType(), HasSourceType: true,
 			},
 		},
 		{name: "ordinary string", value: "2"},
 		{
 			name: "float provenance",
 			value: ParamValue{
-				Value:            int64(2),
-				PrepareParamKind: types.StringConversionFloat,
+				Value:      int64(2),
+				SourceType: types.T_float64.ToType(), HasSourceType: true,
 			},
 		},
 		{name: "float value", value: float64(2)},
@@ -647,13 +635,13 @@ func TestPreparedParamValueNumericReprepareType(t *testing.T) {
 		{name: "runtime integer widens", value: ParamValue{Value: "64", RuntimeType: types.T_int32.ToType(), HasRuntimeType: true}, want: types.T_int64.ToType(), ok: true},
 		{name: "unsigned integer preserves sign domain", value: ParamValue{Value: "64", RuntimeType: types.T_uint8.ToType(), HasRuntimeType: true}, want: types.T_uint64.ToType(), ok: true},
 		{name: "source decimal gets parameter envelope", value: ParamValue{Value: "64.5", SourceType: decimalType, HasSourceType: true}, want: wideDecimalType, ok: true},
-		{name: "integer kind fallback", value: ParamValue{Value: "64", PrepareParamKind: types.StringConversionInteger}, want: types.T_int64.ToType(), ok: true},
-		{name: "malformed integer keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: types.StringConversionInteger}, want: types.T_int64.ToType(), ok: true},
-		{name: "float kind fallback", value: ParamValue{Value: "1.5", PrepareParamKind: types.StringConversionFloat}, want: types.T_float64.ToType(), ok: true},
+		{name: "integer kind fallback", value: sqlIntParam(64), want: types.T_int64.ToType(), ok: true},
+		{name: "malformed integer keeps protocol domain", value: ParamValue{Value: "bad", IsBinaryProtocol: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}, want: types.T_int64.ToType(), ok: true},
+		{name: "float kind fallback", value: sqlFloatParam(1.5), want: types.T_float64.ToType(), ok: true},
 		{name: "float32 widens", value: ParamValue{Value: "1.5", RuntimeType: types.T_float32.ToType(), HasRuntimeType: true}, want: types.T_float64.ToType(), ok: true},
-		{name: "decimal kind gets parameter envelope", value: ParamValue{Value: "1.5", PrepareParamKind: types.StringConversionDecimal}, want: wideDecimalType, ok: true},
-		{name: "malformed decimal keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: types.StringConversionDecimal}, want: wideDecimalType, ok: true},
-		{name: "boolean becomes integer parameter", value: ParamValue{Value: "true", PrepareParamKind: types.StringConversionBoolean}, want: types.T_int64.ToType(), ok: true},
+		{name: "decimal kind gets parameter envelope", value: ParamValue{Value: "1.5", SourceType: decimalParamType("1.5"), HasSourceType: true}, want: wideDecimalType, ok: true},
+		{name: "malformed decimal keeps protocol domain", value: ParamValue{Value: "bad", SourceType: decimalParamType("bad"), HasSourceType: true}, want: wideDecimalType, ok: true},
+		{name: "boolean becomes integer parameter", value: sqlBoolParam(true), want: types.T_int64.ToType(), ok: true},
 		{name: "null has no type", value: ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}},
 		{name: "untyped text stays text", value: ParamValue{Value: "64"}},
 		{name: "primitive unsigned widens", value: uint16(64), want: types.T_uint64.ToType(), ok: true},
@@ -960,8 +948,7 @@ func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 	}}}
 	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
 		context.Background(), planUnderTest, []any{ParamValue{
-			Value: raw, MaterializedValue: canonical,
-			RuntimeType: visible, HasRuntimeType: true,
+			Value: canonical, RuntimeType: visible, HasRuntimeType: true,
 			IsBinaryProtocol: true, RetainParamRef: true,
 		}})
 	require.NoError(t, err)
@@ -1045,8 +1032,7 @@ func BenchmarkPreparedDecimalDomainsAndMaterializationLargeLexeme(b *testing.B) 
 		}
 		candidate := DeepCopyPlan(template)
 		if _, err := replaceParamVals(ctx, candidate, []any{ParamValue{
-			Value: value, MaterializedValue: canonical,
-			RuntimeType: visible, HasRuntimeType: true,
+			Value: canonical, RuntimeType: visible, HasRuntimeType: true,
 			IsBinaryProtocol: true, RetainParamRef: true,
 		}}); err != nil {
 			b.Fatal(err)
@@ -1409,11 +1395,8 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	}
 
 	limitPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ?")
-	t.Run("SQL source type does not replace limit domain", func(t *testing.T) {
-		value := ParamValue{
-			Value: int64(2), PrepareParamKind: types.StringConversionInteger,
-			SourceType: types.New(types.T_decimal128, 1, 0), HasSourceType: true,
-		}
+	t.Run("SQL integer source keeps the limit domain", func(t *testing.T) {
+		value := sqlIntParam(2)
 		require.NoError(t, ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{value}))
 		filled := DeepCopyPlan(limitPlan)
 		_, err := replaceParamVals(context.Background(), filled, []any{value})
@@ -1441,20 +1424,20 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 		{name: "string", value: "3", wrongArgs: true},
 		{name: "float", value: float64(3), wrongArgs: true},
 		{name: "decimal", value: types.Decimal64(3), wrongArgs: true},
-		{name: "text integer", value: ParamValue{Value: int64(2), PrepareParamKind: types.StringConversionInteger}},
-		{name: "binary integer", value: ParamValue{Value: "2", PrepareParamKind: types.StringConversionInteger}},
-		{name: "binary uint64", value: ParamValue{Value: "18446744073709551615", PrepareParamKind: types.StringConversionInteger}},
-		{name: "runtime boolean", value: ParamValue{Value: true, PrepareParamKind: types.StringConversionBoolean}},
-		{name: "binary boolean", value: ParamValue{Value: "1", PrepareParamKind: types.StringConversionBoolean}},
+		{name: "text integer", value: ParamValue{Value: int64(2), SourceType: types.T_int64.ToType(), HasSourceType: true}},
+		{name: "binary integer", value: sqlIntParam(2)},
+		{name: "binary uint64", value: sqlUintParam(18446744073709551615)},
+		{name: "runtime boolean", value: ParamValue{Value: true, SourceType: types.T_bool.ToType(), HasSourceType: true}},
+		{name: "binary boolean", value: sqlBoolParam(true)},
 		{name: "wrapped text integer", value: ParamValue{Value: "2"}, wrongArgs: true},
 		{name: "binary protocol integer text", value: ParamValue{Value: "2", IsBinaryProtocol: true}},
 		{name: "binary protocol uint64 text", value: ParamValue{Value: "18446744073709551615", IsBinaryProtocol: true}},
 		{name: "binary protocol malformed text", value: ParamValue{Value: "two", IsBinaryProtocol: true}, wrongArgs: true},
 		{name: "binary protocol decimal text", value: ParamValue{Value: "2.0", IsBinaryProtocol: true}, wrongArgs: true},
-		{name: "binary float", value: ParamValue{Value: "2", PrepareParamKind: types.StringConversionFloat}, wrongArgs: true},
-		{name: "binary decimal", value: ParamValue{Value: "2", PrepareParamKind: types.StringConversionDecimal}, wrongArgs: true},
+		{name: "binary float", value: sqlFloatParam(2), wrongArgs: true},
+		{name: "binary decimal", value: ParamValue{Value: "2", SourceType: decimalParamType("2"), HasSourceType: true}, wrongArgs: true},
 		{name: "negative signed", value: int64(-1), outOfRange: true},
-		{name: "negative binary", value: ParamValue{Value: "-1", PrepareParamKind: types.StringConversionInteger}, outOfRange: true},
+		{name: "negative binary", value: sqlIntParam(-1), outOfRange: true},
 		{name: "negative binary protocol text", value: ParamValue{Value: "-1", IsBinaryProtocol: true}, outOfRange: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
