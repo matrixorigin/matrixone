@@ -388,7 +388,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.spillEngine != nil {
 					ctr.cleanBuf(proc)
 					// Clear previous bucket state before advancing.
-					ctr.cleanBucketState()
+					ctr.cleanBucketState(proc)
 					var allocationErr error
 					ok, bktErr := ctr.spillEngine.AdvanceToNextBucket(proc, analyzer,
 						func(jm *message.JoinMap, res spillutil.BucketResult) {
@@ -570,7 +570,7 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 	}
 	ctr.captured, err = colexec.NewRowBitmap(ctr.batchRowCount)
 	if err != nil {
-		ctr.cleanCaptured()
+		ctr.cleanCaptured(proc)
 		return err
 	}
 	ctr.captureResultIdx = make([]int32, len(ap.Result))
@@ -836,7 +836,8 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				)
 			}
 			// Ownership transfers only after trySend succeeds. Before that
-			// point Reset/Free still owns and releases these vectors.
+			// point Reset/Free still owns and releases the capture vectors and
+			// their pool.
 			ctr.captured = nil
 			ctr.capturedVecs = nil
 			ctr.capturedMP = nil
@@ -863,13 +864,13 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
 			msg, err := receiveWorkerMsg(proc.Ctx, ap.Mailbox)
 			if err != nil {
-				msg.free()
+				freeWorkerJoinMsg(msg)
 				ap.Mailbox.stopAndDrain()
 				return err
 			}
 
 			if msg.aborted {
-				msg.free()
+				freeWorkerJoinMsg(msg)
 				ap.Mailbox.stopAndDrain()
 				if msg.err != nil {
 					return msg.err
@@ -889,7 +890,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 && msg.captured != nil {
 				mergeErr = ctr.mergeCaptured(ap, msg, proc)
 			}
-			msg.free()
+			freeWorkerJoinMsg(msg)
 			if mergeErr != nil {
 				ap.Mailbox.stopAndDrain()
 				return mergeErr

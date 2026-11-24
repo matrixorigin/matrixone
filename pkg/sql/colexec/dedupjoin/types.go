@@ -68,13 +68,13 @@ const (
 // populates captured and capturedVecs.
 //
 // Ownership: once a non-merger successfully publishes this message to the
-// mailbox, it must relinquish captured / capturedVecs. The merger then becomes
-// the sole owner and releases capturedVecs with the worker's capturedMP.
+// mailbox, it must relinquish captured / capturedVecs / capturedMP. The merger
+// then becomes the sole owner and frees capturedVecs with capturedMP.
 type WorkerJoinMsg struct {
 	matched      *bitmap.Bitmap
 	captured     *bitmap.Bitmap
 	capturedVecs []*vector.Vector
-	capturedMP   *mpool.MPool
+	capturedMP   *mpool.MPool // exact pool used to create capturedVecs
 	aborted      bool
 	err          error
 }
@@ -180,7 +180,7 @@ func (m *WorkerJoinMailbox) drainLocked() {
 			if !ok {
 				return
 			}
-			msg.free()
+			freeWorkerJoinMsg(msg)
 		default:
 			return
 		}
@@ -206,19 +206,26 @@ func (m *WorkerJoinMailbox) resetParticipant() {
 	m.roundDone = make(chan struct{})
 }
 
-// Use the state pool recorded by the allocating worker, including after a
-// mailbox transfer. Vector.Free checks that each capture belongs to that pool.
+// freeCapturedVecs releases vectors owned by a WorkerJoinMsg using the pool
+// transferred with them. It clears each released slot so cleanup can safely
+// resume if a later vector violates the pool invariant.
 func freeCapturedVecs(vecs []*vector.Vector, mp *mpool.MPool) {
-	for _, v := range vecs {
+	for i, v := range vecs {
 		if v != nil {
+			if mp == nil {
+				panic(moerr.NewInternalErrorNoCtx("dedup join captured vectors have no owning memory pool"))
+			}
 			v.Free(mp)
+			vecs[i] = nil
 		}
 	}
 }
 
-func (msg *WorkerJoinMsg) free() {
+func freeWorkerJoinMsg(msg *WorkerJoinMsg) {
 	if msg != nil {
 		freeCapturedVecs(msg.capturedVecs, msg.capturedMP)
+		msg.capturedVecs = nil
+		msg.capturedMP = nil
 	}
 }
 
@@ -298,9 +305,10 @@ type container struct {
 	// captured values are emitted into the Result slots that point at the
 	// build-side placeholder columns.
 	capturedVecs []*vector.Vector
-	capturedMP   *mpool.MPool // state pool used to allocate capturedVecs
 	// resultVecMP is the pool result vectors are created with (resultMP).
-	resultVecMP      *mpool.MPool
+	resultVecMP *mpool.MPool
+	// capturedMP is the pool capturedVecs were created with (the state view).
+	capturedMP       *mpool.MPool
 	captured         *bitmap.Bitmap
 	captureResultIdx []int32
 
@@ -508,7 +516,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.maxAllocSize = 0
 
 	ctr.cleanResultBatches(proc)
-	ctr.cleanBucketState()
+	ctr.cleanBucketState(proc)
 	ctr.cleanExprExecutor()
 	ctr.cleanStableUpdateVecs(proc)
 	ctr.cleanBatch(proc)
@@ -532,7 +540,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 		dedupJoin.Mailbox.drain()
 	}
 	ctr.cleanResultBatches(proc)
-	ctr.cleanBucketState()
+	ctr.cleanBucketState(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanExprExecutor()
 	ctr.cleanStableUpdateVecs(proc)
@@ -602,10 +610,14 @@ func (ctr *container) cleanResultBatches(proc *process.Process) {
 	}
 }
 
-func (ctr *container) cleanCaptured() {
-	freeCapturedVecs(ctr.capturedVecs, ctr.capturedMP)
-	ctr.capturedVecs = nil
+func (ctr *container) cleanCaptured(proc *process.Process) {
+	for _, v := range ctr.capturedVecs {
+		if v != nil {
+			v.Free(ctr.capturedMP)
+		}
+	}
 	ctr.capturedMP = nil
+	ctr.capturedVecs = nil
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -634,8 +646,8 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 // cleanBucketState releases per-bucket state before advancing to the next
 // spill bucket. This prevents stale JoinMap / capture state from leaking
 // across bucket boundaries.
-func (ctr *container) cleanBucketState() {
-	ctr.cleanCaptured()
+func (ctr *container) cleanBucketState(proc *process.Process) {
+	ctr.cleanCaptured(proc)
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
