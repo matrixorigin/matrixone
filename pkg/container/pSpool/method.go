@@ -33,7 +33,7 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt uint32) *PipelineSpool {
 		shardRefs:    nil,
 		doRefCheck:   make([]bool, bl),
 		rs:           newReceivers(receiverCnt, bl),
-		cache:        initCachedBatch(mp, bl),
+		cache:        newBatchCache(mp, bl),
 		csDoneSignal: make(chan struct{}, receiverCnt),
 		abortDone:    make(chan struct{}),
 	}

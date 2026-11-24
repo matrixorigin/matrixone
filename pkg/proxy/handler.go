@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 
 	"github.com/fagongzi/goetty/v2"
@@ -33,6 +34,7 @@ import (
 	moconfig "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -282,11 +284,38 @@ func (h *handler) handle(c goetty.IOSession) error {
 		tunnelOptions = append(tunnelOptions, withCacheReuseBarrier())
 	}
 	t := newTunnel(h.ctx, h.logger, h.counterSet, tunnelOptions...)
+	var cc ClientConn
+	var sc ServerConn
+	var st *stopper.Stopper
 	defer func() {
+		if cc != nil && cc.RawConn() != nil {
+			if err := cc.RawConn().Close(); err != nil && !logutil.IsExpectedConnectionCloseError(err) {
+				h.logger.Error("failed to close tcp connection", zap.Uint32("ConnID", cc.ConnID()), zap.String("phase", "interrupt"), zap.Error(err))
+			}
+		}
 		_ = t.Close()
-		// This defer was installed before the client/server and event-handler
-		// cleanup defers, so reaching it proves the old tunnel generation can no
-		// longer touch a backend that is about to be reused.
+		if st != nil {
+			st.Stop()
+		}
+		if sc != nil {
+			cached := false
+			if clientConn, ok := cc.(*clientConn); ok && h.connCache != nil {
+				cached = clientConn.isConnCached()
+			}
+			if !cached {
+				serverC := t.getServerConn()
+				if serverC == nil {
+					serverC = sc
+				}
+				_ = serverC.Close()
+			}
+		}
+		// A cached backend cannot be reused and client state cannot be released
+		// until all forwarding and transfer work for this tunnel has stopped.
+		t.workers.Wait()
+		if cc != nil {
+			_ = cc.Close()
+		}
 		t.markCacheReuseReady()
 	}()
 
@@ -312,11 +341,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return err
 	}
 	h.logger.Debug("client conn created")
-	defer func() { _ = cc.Close() }()
 
 	// client builds connections with a best CN server and returns
 	// the server connection.
-	sc, err := cc.BuildConnWithServer(h.ctx, "")
+	sc, err = cc.BuildConnWithServer(h.ctx, "")
 	if err != nil {
 		if isConnEndErr(err) {
 			return nil
@@ -333,30 +361,6 @@ func (h *handler) handle(c goetty.IOSession) error {
 		return err
 	}
 	h.logger.Debug("server conn created")
-	defer func() {
-		// If the connCache is nil, means the connection cached feature is not
-		// enabled. Do close the server connection if the connection cache
-		// feature is not enabled.
-		if h.connCache == nil {
-			_ = sc.Close()
-			return
-		}
-		// connCache enabled: only keep backend connection alive when it has
-		// been cached successfully.
-		if clientConn, ok := cc.(*clientConn); ok && clientConn.isConnCached() {
-			return
-		}
-		serverC := t.getServerConn()
-		if serverC == nil {
-			serverC = sc
-		}
-		if serverC != nil {
-			// This connection was not admitted to the cache. A protocol QUIT can
-			// wait indefinitely for a broken CN to close its side; direct Close is
-			// the terminal ownership edge and also removes connManager state.
-			_ = serverC.Close()
-		}
-	}()
 
 	goId := goid.Get()
 
@@ -368,17 +372,13 @@ func (h *handler) handle(c goetty.IOSession) error {
 		zap.Int64("goId", goId),
 	)
 
-	st := stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
-	defer st.Stop()
+	st = stopper.NewStopper("proxy-conn-handle", stopper.WithLogger(h.logger.RawLogger()))
 	// Starts the event handler go-routine to handle the events comes from tunnel data flow,
 	// such as, kill connection event.
 	if err := st.RunNamedTask("event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e, ok := <-t.reqC:
-				if !ok {
-					return
-				}
+			case e := <-t.reqC:
 				if err := cc.HandleEvent(ctx, e, t.respC); err != nil {
 					h.logger.Error("failed to handle event",
 						zap.Any("event", e), zap.Error(err))
@@ -403,15 +403,33 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}
 
 	if err := t.run(cc, sc); err != nil {
+		if h.ctx.Err() != nil {
+			h.cleanupBackendOnClientDisconnect(io.EOF, cc, t)
+		}
 		return err
 	}
+	return h.waitForTunnel(cc, t, c.ID(), goId)
+}
 
+func (h *handler) waitForTunnel(cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
+	var err error
 	select {
+	case err = <-t.errC:
 	case <-h.ctx.Done():
-		return h.ctx.Err()
-	case err := <-t.errC:
-		return h.handleTunnelErr(err, cc, t, c.ID(), goId)
+		// Preserve an already-published transport error over a later stop.
+		select {
+		case err = <-t.errC:
+		default:
+			err = h.ctx.Err()
+		}
 	}
+	if contextErr := h.ctx.Err(); contextErr != nil && errors.Is(err, contextErr) {
+		// A pipe can label its parent's cancellation as a server disconnect;
+		// it does not prove that a forwarded statement has stopped on the CN.
+		h.cleanupBackendOnClientDisconnect(io.EOF, cc, t)
+		return err
+	}
+	return h.handleTunnelErr(err, cc, t, sessionID, goId)
 }
 
 func (h *handler) rejectBeforeSession(conn net.Conn) {
@@ -423,31 +441,15 @@ func (h *handler) rejectBeforeSession(conn net.Conn) {
 }
 
 func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
-	skipCacheQuit := false
 	clientDisconnect := getErrorCode(err) == codeClientDisconnect
 	if !clientDisconnect && t != nil && t.hasInFlightClientRequest() {
 		clientDisconnect = (isEOFErr(err) || isConnEndErr(err)) &&
 			getErrorCode(err) != codeServerDisconnect
 	}
 	if clientDisconnect {
-		skipCacheQuit = h.cleanupBackendOnClientDisconnect(err, cc, t)
+		h.cleanupBackendOnClientDisconnect(err, cc, t)
 	}
 	if isEOFErr(err) || isConnEndErr(err) {
-		// On abnormal client disconnect, no COM_QUIT may be sent.
-		// Trigger quit path once to avoid leaking backend connections.
-		if h.connCache != nil && !skipCacheQuit {
-			if clientConn, ok := cc.(*clientConn); ok {
-				if quitErr := clientConn.handleQuitEvent(h.ctx); quitErr != nil &&
-					!errors.Is(quitErr, errPipeClosed) {
-					h.logger.Warn("failed to clean up backend connection on close",
-						zap.Uint32("Conn ID", cc.ConnID()),
-						zap.Uint64("session ID", sessionID),
-						zap.Int64("goId", goId),
-						zap.Error(quitErr),
-					)
-				}
-			}
-		}
 		h.logger.Info("connection closed",
 			zap.Uint32("Conn ID", cc.ConnID()),
 			zap.Uint64("session ID", sessionID),
@@ -465,12 +467,10 @@ func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID
 	return err
 }
 
-// cleanupBackendOnClientDisconnect returns true when the caller must not run
-// the conn-cache QUIT/cache path for this backend connection.
-func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) bool {
+func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) {
 	if cc == nil || getErrorCode(err) == codeServerDisconnect ||
 		(getErrorCode(err) != codeClientDisconnect && !isEOFErr(err) && !isConnEndErr(err)) {
-		return false
+		return
 	}
 	var currentSC ServerConn
 	if t != nil {
@@ -480,16 +480,16 @@ func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *
 		currentSC = t.getServerConn()
 	}
 	if t != nil && t.hasExpectedCacheQuit() {
-		return false
+		return
 	}
 	if t != nil && t.hasExpectedClientQuit() {
 		h.closeBackendAfterClientDisconnect(cc, currentSC)
-		return true
+		return
 	}
 	if isEOFErr(err) || isConnEndErr(err) {
 		if t == nil || !t.hasInFlightClientRequest() {
 			h.closeBackendAfterClientDisconnect(cc, currentSC)
-			return true
+			return
 		}
 	}
 	// Close the captured backend before any control-plane notification. The
@@ -502,7 +502,6 @@ func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *
 			zap.Error(err),
 		)
 	}
-	return true
 }
 
 func (h *handler) closeBackendAfterClientDisconnect(cc ClientConn, sc ServerConn) {
@@ -517,8 +516,8 @@ func (h *handler) closeBackendAfterClientDisconnect(cc ClientConn, sc ServerConn
 	}
 }
 
-// Close closes the handler.
-func (h *handler) Close() error {
+// closeDependencies runs after the server has joined its connection handlers.
+func (h *handler) closeDependencies() {
 	if h != nil {
 		if h.connCache != nil {
 			_ = h.connCache.Close()
@@ -529,8 +528,6 @@ func (h *handler) Close() error {
 		if h.plugin != nil {
 			_ = h.plugin.Close()
 		}
-		h.moCluster.Close()
 		_ = h.haKeeperClient.Close()
 	}
-	return nil
 }
