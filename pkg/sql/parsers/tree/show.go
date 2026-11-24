@@ -28,8 +28,9 @@ func (s *showImpl) Free() {
 // SHOW CREATE TABLE statement
 type ShowCreateTable struct {
 	showImpl
-	Name     *UnresolvedObjectName
-	AtTsExpr *AtTimeStamp
+	Name          *UnresolvedObjectName
+	AtTsExpr      *AtTimeStamp
+	RewriteOption *RewriteOption
 }
 
 func (node *ShowCreateTable) Format(ctx *FmtCtx) {
@@ -100,13 +101,14 @@ func NewShowCreateDatabase(i bool, n string) *ShowCreateDatabase {
 // SHOW COLUMNS statement.
 type ShowColumns struct {
 	showImpl
-	Ext     bool
-	Full    bool
-	Table   *UnresolvedObjectName
-	ColName *UnresolvedName
-	DBName  string
-	Like    *ComparisonExpr
-	Where   *Where
+	Ext           bool
+	Full          bool
+	Table         *UnresolvedObjectName
+	ColName       *UnresolvedName
+	DBName        string
+	Like          *ComparisonExpr
+	Where         *Where
+	RewriteOption *RewriteOption
 }
 
 func (node *ShowColumns) Format(ctx *FmtCtx) {
