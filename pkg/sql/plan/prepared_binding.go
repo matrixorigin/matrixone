@@ -178,20 +178,44 @@ func preparedConfigurationStoredValue(ctx context.Context, expr *Expr) (any, boo
 // preparedProtocolTextValue returns the value a validator written for the
 // COM_STMT text transport reads. A COM_STMT TINY 0/1 is decoded to a Boolean
 // and a FLOAT/DOUBLE to a float; such a validator reads them as the text the
-// wire carried (1, 0, 1.5, ...). SQL EXECUTE values and every other type are
-// returned unchanged.
+// wire carried (1, 0, 1.5, ...). A DECIMAL is kept as its canonical lexeme,
+// which spells 10 as 1e1; one without a visible fraction is read as its
+// integer digits. SQL EXECUTE values and every other type are returned
+// unchanged.
 func preparedProtocolTextValue(stored any) any {
 	param, ok := AsParamValue(stored)
 	if !ok {
 		return stored
 	}
 	if param.IsBinaryProtocol {
-		switch param.Value.(type) {
+		switch value := param.Value.(type) {
 		case bool, float32, float64:
 			return preparedNumericValueSpelling(param.Value)
+		case string:
+			if param.HasDirectResultType && param.DirectResultType.Oid.IsDecimal() &&
+				param.DirectResultType.Scale == 0 {
+				return preparedDecimalIntegerSpelling(value)
+			}
 		}
 	}
 	return param.Value
+}
+
+// preparedDecimalIntegerSpelling spells a canonical DECIMAL lexeme of an
+// integer (digits, optionally followed by e and a non-negative exponent) as
+// plain digits: 1e1 is 10. A lexeme of more than 20 digits exceeds every
+// integer domain and, like anything that is not such a lexeme, is returned
+// unchanged, so the caller's integer parse rejects it.
+func preparedDecimalIntegerSpelling(canonical string) string {
+	digits, exponent, found := strings.Cut(canonical, "e")
+	if !found {
+		return canonical
+	}
+	zeros, err := strconv.Atoi(exponent)
+	if err != nil || zeros < 0 || len(strings.TrimPrefix(digits, "-"))+zeros > 20 {
+		return canonical
+	}
+	return digits + strings.Repeat("0", zeros)
 }
 
 func preparedBoundDoubleValue(ctx context.Context, expr *Expr) (float64, bool) {

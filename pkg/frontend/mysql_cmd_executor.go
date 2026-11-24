@@ -1550,6 +1550,12 @@ func doSetVar(
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
+		if !assign.System && !assign.SetNames {
+			value, valueType, evalErr = systemVariableNumericCopy(ses, assign.Value, value, valueType)
+			if evalErr != nil {
+				return evaluatedAssignment{}, evalErr
+			}
+		}
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
 			_, isDefault := assign.Value.(*tree.DefaultVal)

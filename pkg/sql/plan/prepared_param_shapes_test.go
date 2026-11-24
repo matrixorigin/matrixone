@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -128,4 +129,43 @@ func TestPreparedProtocolTextValue(t *testing.T) {
 	require.Error(t, err, "a fractional SRID is still rejected")
 	_, _, err = geometrySRIDRuntimeValue(preparedProtocolTextValue(sqlFloatParam(1)))
 	require.Error(t, err, "SQL EXECUTE keeps rejecting a float SRID")
+
+	// A COM_STMT DECIMAL carries its canonical lexeme; without a visible
+	// fraction it is read as the integer the wire spelled.
+	for _, tc := range []struct {
+		wire string
+		want any
+	}{
+		{"10", "10"},
+		{"11", "11"},
+		{"0", "0"},
+		{"-20", "-20"},
+		{"4294967295", "4294967295"},
+		{"10.0", "1e1"},
+		{"1.5", "15e-1"},
+		{"1" + strings.Repeat("0", 30), "1e30"},
+	} {
+		normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(tc.wire)
+		require.True(t, ok, tc.wire)
+		param := ParamValue{
+			Value: canonical, IsBinaryProtocol: true,
+			RuntimeType: normalized, HasRuntimeType: true,
+			DirectResultType: visible, HasDirectResultType: true,
+		}
+		require.Equal(t, tc.want, preparedProtocolTextValue(param), tc.wire)
+	}
+}
+
+func TestPreparedDecimalIntegerSpelling(t *testing.T) {
+	for in, want := range map[string]string{
+		"1e1":   "10",
+		"-25e2": "-2500",
+		"7":     "7",
+		"1e19":  "1" + strings.Repeat("0", 19),
+		"1e20":  "1e20",
+		"15e-1": "15e-1",
+		"1ex":   "1ex",
+	} {
+		require.Equal(t, want, preparedDecimalIntegerSpelling(in), in)
+	}
 }

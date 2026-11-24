@@ -6918,18 +6918,29 @@ func buildFixedExecutePacket(tp defines.MysqlType, unsigned bool, value []byte) 
 func TestParseExecuteDataNativeValuesKeepValidation(t *testing.T) {
 	le64 := func(v uint64) []byte { return binary.LittleEndian.AppendUint64(nil, v) }
 	le16 := func(v uint16) []byte { return binary.LittleEndian.AppendUint16(nil, v) }
+	decimal := func(text string) []byte {
+		return buildFixedExecutePacket(defines.MYSQL_TYPE_NEWDECIMAL, false, append([]byte{byte(len(text))}, text...))
+	}
+	const srid = "select st_srid(st_geomfromtext('POINT(1 1)'), ?)"
 	for _, tc := range []struct {
-		name   string
-		sql    string
-		packet []byte
-		fill   bool
+		name    string
+		sql     string
+		packet  []byte
+		fill    bool
+		fillErr bool
 	}{
-		{"BIT LIMIT", "select 1 limit ?", buildFixedExecutePacket(defines.MYSQL_TYPE_BIT, true, le64(1)), false},
-		{"YEAR OFFSET", "select 1 limit 1 offset ?", buildFixedExecutePacket(defines.MYSQL_TYPE_YEAR, true, le16(0)), false},
-		{"BIT LAG", "select lag(a, ?) over (order by a) from (select 1 as a) t", buildFixedExecutePacket(defines.MYSQL_TYPE_BIT, true, le64(1)), false},
-		{"YEAR NTH_VALUE", "select nth_value(a, ?) over (order by a) from (select 1 as a) t", buildFixedExecutePacket(defines.MYSQL_TYPE_YEAR, true, le16(1)), false},
-		{"TINY 1 SRID", "select st_srid(st_geomfromtext('POINT(1 1)'), ?)", buildTinyExecutePacket(1, false), true},
-		{"DOUBLE 1.0 SRID", "select st_srid(st_geomfromtext('POINT(1 1)'), ?)", buildFixedExecutePacket(defines.MYSQL_TYPE_DOUBLE, false, le64(math.Float64bits(1))), true},
+		{"BIT LIMIT", "select 1 limit ?", buildFixedExecutePacket(defines.MYSQL_TYPE_BIT, true, le64(1)), false, false},
+		{"YEAR OFFSET", "select 1 limit 1 offset ?", buildFixedExecutePacket(defines.MYSQL_TYPE_YEAR, true, le16(0)), false, false},
+		{"BIT LAG", "select lag(a, ?) over (order by a) from (select 1 as a) t", buildFixedExecutePacket(defines.MYSQL_TYPE_BIT, true, le64(1)), false, false},
+		{"YEAR NTH_VALUE", "select nth_value(a, ?) over (order by a) from (select 1 as a) t", buildFixedExecutePacket(defines.MYSQL_TYPE_YEAR, true, le16(1)), false, false},
+		{"TINY 1 SRID", "select st_srid(st_geomfromtext('POINT(1 1)'), ?)", buildTinyExecutePacket(1, false), true, false},
+		{"DOUBLE 1.0 SRID", "select st_srid(st_geomfromtext('POINT(1 1)'), ?)", buildFixedExecutePacket(defines.MYSQL_TYPE_DOUBLE, false, le64(math.Float64bits(1))), true, false},
+		// A DECIMAL reaches the planner as its canonical lexeme, which spells
+		// 10 as 1e1; the SRID check still reads the wire's integer.
+		{"NEWDECIMAL 10 SRID", srid, decimal("10"), true, false},
+		{"NEWDECIMAL 11 SRID", srid, decimal("11"), true, false},
+		{"NEWDECIMAL 10.0 SRID", srid, decimal("10.0"), true, true},
+		{"NEWDECIMAL 1.5 SRID", srid, decimal("1.5"), true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.TODO()
@@ -6947,7 +6958,11 @@ func TestParseExecuteDataNativeValuesKeepValidation(t *testing.T) {
 			require.NoError(t, plan.ValidatePreparedPaginationParams(ctx, preparePlan, values))
 			if tc.fill {
 				_, _, err = plan.FillValuesOfParamsInPlanWithPreparedNumericOverload(ctx, preparePlan, values)
-				require.NoError(t, err)
+				if tc.fillErr {
+					require.ErrorContains(t, err, "SRID should be an integer")
+				} else {
+					require.NoError(t, err)
+				}
 			}
 		})
 	}

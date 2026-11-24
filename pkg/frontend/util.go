@@ -377,6 +377,64 @@ func getExprValueWithPrepareMeta(
 	return value, resultType, err
 }
 
+// systemVariableNumericCopy gives a user variable assigned directly from a
+// system variable (SET @v = @@x, parentheses allowed) the variable's numeric
+// value and type. A Boolean or DOUBLE system variable is projected as TEXT
+// (see systemVariableDeclaredType), but its value is numeric, and in MySQL the
+// copy is too: SET @lim = @@autocommit makes @lim the integer 1, which a
+// prepared LIMIT accepts. Every other assignment is returned unchanged.
+func systemVariableNumericCopy(
+	ses *Session, e tree.Expr, value any, valueType plan.Type,
+) (any, plan.Type, error) {
+	for {
+		paren, ok := e.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		e = paren.Expr
+	}
+	source, ok := e.(*tree.VarExpr)
+	if !ok || !source.System || value == nil || !types.T(valueType.Id).IsMySQLString() {
+		return value, valueType, nil
+	}
+	native, err := ses.GetTxnCompileCtx().ResolveVariable(source.Name, true, source.Global)
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	switch v := native.(type) {
+	case int:
+		native = int64(v)
+	case int8:
+		native = int64(v)
+	case int16:
+		native = int64(v)
+	case int32:
+		native = int64(v)
+	case int64:
+	case uint:
+		native = uint64(v)
+	case uint8:
+		native = uint64(v)
+	case uint16:
+		native = uint64(v)
+	case uint32:
+		native = uint64(v)
+	case uint64:
+	case float32:
+		native = float64(v)
+	case float64:
+	case bool:
+		// A Boolean system variable is TINYINT(1) in MySQL.
+		native = int64(0)
+		if v {
+			native = int64(1)
+		}
+	default:
+		return value, valueType, nil
+	}
+	return native, inferUserDefinedVarType(native), nil
+}
+
 func getPreparedPlanExprValueWithMeta(
 	expr *plan.Expr,
 	ses *Session,

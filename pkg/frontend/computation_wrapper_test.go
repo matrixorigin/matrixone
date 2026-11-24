@@ -1250,6 +1250,59 @@ func TestUserVariableNullTypeDoesNotLeakHistoryToExecuteParams(t *testing.T) {
 	}
 }
 
+// SET @v = @@x copies a Boolean or DOUBLE system variable, which the
+// synthetic SELECT projects as TEXT, with its numeric value and type, so a
+// prepared LIMIT accepts SET @lim = @@autocommit as it accepts SET @lim = 1.
+// A string system variable and a literal string stay TEXT and are rejected.
+func TestSetUserVarFromSystemVarKeepsNumericType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 107, "select 1 limit ?")
+	defer prepareStmt.Close()
+	ctx := execCtx.reqCtx
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "autocommit", int64(1)))
+	textType := plan.Type{Id: int32(types.T_text)}
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+
+	for _, tc := range []struct {
+		name      string
+		expr      string
+		projected any
+		want      any
+		wantType  types.T
+		limitOK   bool
+	}{
+		{"autocommit", "@@autocommit", "1", int64(1), types.T_int64, true},
+		{"parenthesized", "((@@session.autocommit))", "1", int64(1), types.T_int64, true},
+		{"double", "@@long_query_time", "10", float64(10), types.T_float64, false},
+		{"string", "@@sql_mode", "x", "x", types.T_text, false},
+		{"literal string", "'1'", "1", "1", types.T_text, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := mysql.Parse(ctx, "set @lim = "+tc.expr, 1)
+			require.NoError(t, err)
+			source := stmts[0].(*tree.SetVar).Assignments[0].Value
+			value, valueType, err := systemVariableNumericCopy(ses, source, tc.projected, textType)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, value)
+			require.Equal(t, tc.wantType, types.T(valueType.Id))
+
+			require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+				"lim", value, "", false, valueType, false))
+			params, values, _, _, _, _, err := buildExecuteUserParamsWithMemberOfPositions(
+				cw.proc, ses.txnCompileCtx.ResolveVariablePrepareParamKind,
+				[]*plan.Expr{{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "lim"}}}}, nil, nil)
+			require.NoError(t, err)
+			defer params.Free(cw.proc.Mp())
+			err = plan2.ValidatePreparedPaginationParams(ctx, preparePlan, values)
+			if tc.limitOK {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
 func TestBuildPlanRegexpDefersOnlyRuntimeStringDomains(t *testing.T) {
 	ctx := defines.AttachAccount(context.Background(), sysAccountID, rootID, moAdminRoleID)
 	for _, sql := range []string{
