@@ -53,7 +53,11 @@ var BitmapPool = fileservice.NewPool(
 	func(bm *bitmap.Bitmap) {
 		bm.Clear()
 	},
-	nil,
+	// A Get that finds no free slot allocates a bitmap outside the pool;
+	// its Put must return the words to bitmapMP.
+	func(bm *bitmap.Bitmap) {
+		bm.Free()
+	},
 )
 
 var NullBitmap Bitmap

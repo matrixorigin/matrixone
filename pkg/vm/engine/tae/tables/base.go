@@ -627,6 +627,16 @@ func (obj *baseObject) Scan(
 ) (err error) {
 	node := obj.PinNode()
 	defer node.Unref()
+	// A batch this call creates is closed on error, so a partly built one
+	// (vectors, Deletes) does not leak. A batch the caller passed in stays
+	// the caller's to close.
+	created := *bat == nil
+	defer func() {
+		if err != nil && created && *bat != nil {
+			(*bat).Close()
+			*bat = nil
+		}
+	}()
 	return node.Scan(
 		ctx, bat, txn, readSchema.(*catalog.Schema), blkID, colIdxes, mp)
 }

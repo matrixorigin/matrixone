@@ -81,22 +81,6 @@ func (n *Bitmap) prepareInit(mp *mpool.MPool) error {
 	return nil
 }
 
-// resetWords sets n.data to words zero words, reusing the current block
-// when it is large enough.
-func (n *Bitmap) resetWords(words int) error {
-	if cap(n.data) >= words {
-		n.data = n.data[:words]
-		clear(n.data)
-		return nil
-	}
-	data, err := n.allocWords(words, words)
-	if err != nil {
-		return err
-	}
-	n.replaceWords(data)
-	return nil
-}
-
 // mustWrite panics when n is read-only. Every method that changes bits
 // calls it before the first write.
 func (n *Bitmap) mustWrite() {
@@ -161,25 +145,4 @@ func (n *Bitmap) replaceWords(words []uint64) {
 		n.mp.Free(wordBytes(n.data[:1]))
 	}
 	n.data = words
-}
-
-// growWords makes room for capWords words without changing len(n.data) or
-// any word. The new words are zero.
-func (n *Bitmap) growWords(capWords int) error {
-	if capWords <= cap(n.data) {
-		return nil
-	}
-	if n.mp == nil {
-		return errNoPool()
-	}
-	if c := cap(n.data); c <= maxInt/2 && capWords < 2*c {
-		capWords = 2 * c
-	}
-	words, err := n.allocWords(len(n.data), capWords)
-	if err != nil {
-		return err
-	}
-	copy(words, n.data)
-	n.replaceWords(words)
-	return nil
 }

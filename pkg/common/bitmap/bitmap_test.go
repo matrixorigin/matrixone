@@ -33,12 +33,6 @@ const (
 // testMP backs the bitmaps of tests that do not check pool accounting.
 var testMP = mpool.MustNewZero()
 
-func mustOK(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
 func newBm(n int) *Bitmap {
 	var bm Bitmap
 	mustOK(bm.InitWithSize(int64(n), testMP))

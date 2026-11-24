@@ -6372,10 +6372,11 @@ func (v *Vector) window(start, end int, logicalRows bool) (*Vector, error) {
 
 // WindowInto is Window into a descriptor the caller already holds: w becomes a
 // read-only reference to [start, end) of v's memory without allocating a new
-// Vector. w must be read-only (a reference or a zero Vector); whatever it
+// Vector. w must be read-only (a reference or a zero Vector) and must not own
+// its nulls bitmap (a read-only vector can, e.g. Arrow validity); whatever it
 // referenced before is dropped.
 func (v *Vector) WindowInto(w *Vector, start, end int) error {
-	if !w.IsReadOnly() {
+	if !w.IsReadOnly() || !w.nsp.IsReadOnly() {
 		return moerr.NewInternalErrorNoCtx("vector window target owns memory")
 	}
 	if !v.validWindowRange(start, end, false) {

@@ -1360,7 +1360,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 // convertRowsIntoBatchInLocation converts frontend result rows into a batch.
 // Some producers, such as DATA BRANCH DIFF, render temporal values as text in
 // the session time zone; loc is the zone used to read TIMESTAMP text back.
-func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]any, loc *time.Location) (*batch.Batch, *plan.ResultColDef, error) {
+func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]any, loc *time.Location) (_ *batch.Batch, _ *plan.ResultColDef, err error) {
 	if loc == nil {
 		loc = time.Local
 	}
@@ -1370,6 +1370,12 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 	}
 	//1. make vector type
 	bat := batch.New(colNames)
+	// On error, free the vectors already built in pool.
+	defer func() {
+		if err != nil {
+			bat.Clean(pool)
+		}
+	}()
 	//2. make batch
 	cnt := len(rows)
 	bat.SetRowCount(cnt)

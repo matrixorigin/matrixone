@@ -152,6 +152,10 @@ func (node *persistedNode) Scan(
 			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
 				dup, err := (*bat).GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector().Dup(mp)
 				if err != nil {
+					// vecs[:i] are in *bat, which the caller closes.
+					for _, v := range vecs[i:] {
+						v.Close()
+					}
 					return err
 				}
 				vecs[i].Close()
@@ -204,6 +208,18 @@ func (node *persistedNode) Scan(
 				length := constInner.Length()
 				newInner := vector.NewVec(*constInner.GetType(), mp)
 				if err = newInner.UnionBatch(constInner, 0, length, nil, mp); err != nil {
+					newInner.Free(mp)
+					// Close is idempotent, so closing every input vector
+					// (tidvec included) is safe whatever was closed already.
+					for _, v := range vecs {
+						v.Close()
+					}
+					if tidvec != nil {
+						tidvec.Close()
+					}
+					if release != nil {
+						release()
+					}
 					return
 				}
 				destVec.Close()

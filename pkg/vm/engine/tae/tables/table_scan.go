@@ -91,7 +91,17 @@ func HybridScanByBlock(
 	colIdxs []int,
 	blkID *objectio.Blockid,
 	mp *mpool.MPool,
-) error {
+) (err error) {
+	// Once Scan has run, an error leaves *bat closed and nil, also when the
+	// caller passed one in: it may hold part of this block. Errors before
+	// that leave the caller's batch alone.
+	scanned := false
+	defer func() {
+		if err != nil && scanned && *bat != nil {
+			(*bat).Close()
+			*bat = nil
+		}
+	}()
 	dataObject, err := tableEntry.GetObjectByID(blkID.Object(), false)
 	if err != nil {
 		return err
@@ -109,6 +119,7 @@ func HybridScanByBlock(
 			defer deletesBeforeScan.Free()
 		}
 	}
+	scanned = true
 	err = dataObject.GetObjectData().Scan(
 		ctx, bat, txn, readSchema, offset, colIdxs, mp)
 	if err != nil {
@@ -122,7 +133,6 @@ func HybridScanByBlock(
 	defer func() { invisibleAppendRows.Free() }()
 	if filterInvisibleAppendRows {
 		if invisibleAppendRows, err = (*bat).Deletes.Clone(mp); err != nil {
-			(*bat).Close()
 			return err
 		}
 		if deletesBeforeScan != nil {
@@ -136,9 +146,8 @@ func HybridScanByBlock(
 	defer it.Release()
 	for it.Next() {
 		tombstone := it.Item()
-		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
+		err = tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
 		if err != nil {
-			(*bat).Close()
 			return err
 		}
 	}
@@ -146,7 +155,6 @@ func HybridScanByBlock(
 	id.BlockID = *blkID
 	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes, uint64(deleteStartOffset))
 	if err != nil {
-		(*bat).Close()
 		return err
 	}
 	rows := invisibleAppendRows

@@ -51,14 +51,6 @@ func (nsp *Nulls) IsReadOnly() bool {
 	return nsp == nil || nsp.np.IsReadOnly()
 }
 
-// Free returns nsp's words to its pool and leaves it empty with the same
-// pool. A read-only Nulls only drops its reference.
-func (nsp *Nulls) Free() {
-	if nsp != nil {
-		nsp.np.Free()
-	}
-}
-
 // InitView makes nsp a read-only view of rows [start, end) of src: row r of
 // nsp is row start+r of src. It shares src's words and allocates nothing;
 // it is valid only while src is unchanged and alive.
@@ -68,32 +60,6 @@ func (nsp *Nulls) InitView(src *Nulls, start, end int) {
 		bm = &src.np
 	}
 	nsp.np.InitView(bm, int64(start), int64(end))
-}
-
-// tryAddRows is addRows returning the allocation error instead of
-// panicking.
-func (nsp *Nulls) tryAddRows(rows []uint64) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	maxRow := rows[0]
-	for _, row := range rows[1:] {
-		maxRow = max(maxRow, row)
-	}
-	if err := nsp.np.TryExpandWithSize(int(maxRow) + 1); err != nil {
-		return err
-	}
-	nsp.np.AddMany(rows)
-	return nil
-}
-
-// mustOK panics with err. The in-place writers (Add, Set, AddRange, Or)
-// have no error result; they can fail only when growing the bitmap from its
-// pool, or when the Nulls is read-only.
-func mustOK(err error) {
-	if err != nil {
-		panic(err)
-	}
 }
 
 func Ptr(nsp *Nulls) *uint64 {

@@ -1619,7 +1619,8 @@ func BlockDataReadInner(
 				return err
 			}
 		}
-		_, err = materializeBlockData(
+		var ignored objectio.Bitmap
+		ignored, err = materializeBlockData(
 			ctx,
 			info,
 			columns,
@@ -1632,6 +1633,7 @@ func BlockDataReadInner(
 			mp,
 			fs,
 		)
+		ignored.Release()
 		return err
 	}
 
