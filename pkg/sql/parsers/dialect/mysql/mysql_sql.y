@@ -8794,11 +8794,11 @@ as_name_opt:
     }
 |   STRING
     {
-        $$ = tree.NewCStr($1, 1)
+        $$ = yylex.(*Lexer).stringAlias($1, $<pos>1)
     }
 |   AS STRING
     {
-        $$ = tree.NewCStr($2, 1)
+        $$ = yylex.(*Lexer).stringAlias($2, $<pos>2)
     }
 
 stmt_name:

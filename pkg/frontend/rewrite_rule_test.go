@@ -725,6 +725,10 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 		{"different projections with equal item counts", `select length('docs\'notes') as note_len from db1.t1`, "", right, false},
 		{"different expressions with matching aliases", `select length('docs\'notes') as n from db1.t1`, "", `select a as n from db1.t1 where a=2`, false},
 		{"different sources with matching projection structure", `select length('docs\'notes') as n from db1.t2`, "", `select length('plain') as n from db1.t1 where a=2`, false},
+		{"different explicit aliases", `select length('docs\'notes') as earlier_heading from db1.t1`, "", `select length('ok') as later_heading from db1.t1 where a=2`, false},
+		{"unescaped string alias is stable", `select length('docs\'notes') 'first' from db1.t1`, "", `select length('ok') as last_name from db1.t1 where a=2`, false},
+		{"case alone is not a different alias", `select length('docs\'notes') as Heading from db1.t1`, "", `select length('ok') as heading from db1.t1 where a=2`, true},
+		{"escaped string alias is not an identifier mismatch", `select length('docs\'notes') as 'a\tb' from db1.t1`, "", `select length('ok') as 'a\tb' from db1.t1 where a=2`, true},
 		{"different function with opaque argument", `select length('docs\'notes') as n from db1.t1`, "", `select lower('plain') as n from db1.t1 where a=2`, false},
 		{"different function arity with opaque argument", `select concat('docs\'notes', a) as n from db1.t1`, "", `select concat('plain') as n from db1.t1 where a=2`, false},
 		{"escaped table alias is not a different base table", `select length('docs\'notes') from db1.t1 as 't\tn'`, "", `select length('plain') from db1.t1 as 't\tn' where a=2`, true},
@@ -765,13 +769,14 @@ func TestLoadRuleCacheUsesValidatedLaterRuleForIneligibleEarlierRule(t *testing.
 
 func TestMergeRewriteRulesUnreadableProjectionKeepsOtherParserModes(t *testing.T) {
 	const mode = "ANSI,NO_BACKSLASH_ESCAPES"
-	const earlier = `select "a", length('docs\'notes') as n from db1.t1`
+	const earlier = `select "a", length('docs\'notes') as "n" from db1.t1`
 	for _, tc := range []struct {
 		later   string
 		wantErr bool
 	}{
 		{`select a, length('ok') as n from db1.t1 where a=2`, true},    // "a" is a column, not a different projection
 		{`select 'a', length('ok') as n from db1.t1 where a=2`, false}, // the single-quoted string is not that column
+		{`select a, length('ok') as m from db1.t1 where a=2`, false},   // "n" is an identifier in this mode
 	} {
 		got, err := mergeRewriteRulesWithSQLMode(t.Context(), earlier, tc.later, mode)
 		if tc.wantErr {

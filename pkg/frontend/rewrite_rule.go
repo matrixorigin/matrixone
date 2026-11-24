@@ -1493,7 +1493,7 @@ func (s *rewriteRuleMergeShape) withoutProjection() *tree.Select {
 }
 
 func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peer *rewriteRuleMergeShape) (*rewriteRuleMergeShape, bool) {
-	full, sources, err := mysql.ParseOneWithWhereSources(ctx, rule, 1, "")
+	full, sources, err := mysql.ParseOneWithRewriteSources(ctx, rule, 1, 0)
 	if err != nil {
 		return nil, false
 	}
@@ -1506,10 +1506,10 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peer *re
 	if !ok || len(shape.clause.Exprs) != len(peer.clause.Exprs) {
 		return nil, true
 	}
-	if rewriteRuleEscapedShapeIncompatible(ctx, rule, sqlMode, shape, peer) {
+	if rewriteRuleEscapedShapeIncompatible(ctx, rule, sqlMode, shape, peer, sources) {
 		return nil, true
 	}
-	span := sources[shape.clause.Where]
+	span := sources.Where[shape.clause.Where]
 	prefix, _, suffix, available := span.Split(rule, true)
 	if !available {
 		return nil, false
@@ -1517,7 +1517,7 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peer *re
 	// Only the predicate is opaque. Prove that the original projection, table
 	// and trailing clauses still describe a mergeable SELECT in this session.
 	neutral := prefix + " true " + suffix
-	st, newSources, err := mysql.ParseOneWithWhereSources(ctx, neutral, 1, sqlMode)
+	st, newSources, err := mysql.ParseOneWithRewriteSources(ctx, neutral, 1, mysql.ParseSQLModeFlags(sqlMode))
 	if err != nil {
 		return nil, false
 	}
@@ -1527,7 +1527,7 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peer *re
 		return nil, false
 	}
 	clause, ok := s.Select.(*tree.SelectClause)
-	if !ok || newSources[clause.Where].Start != span.Start || newSources[clause.Where].End != len(prefix)+len(" true") {
+	if !ok || newSources.Where[clause.Where].Start != span.Start || newSources.Where[clause.Where].End != len(prefix)+len(" true") {
 		return nil, false
 	}
 	// Only the session-mode parse may supply a shape for comparison.
@@ -1536,7 +1536,7 @@ func rewriteRuleCatalogShape(ctx context.Context, rule, sqlMode string, peer *re
 
 // Compare syntax outside string values, never the values decoded by recovery.
 // A match here is inconclusive: it cannot authorize a rule or its predicate.
-func rewriteRuleEscapedShapeIncompatible(ctx context.Context, rule, mode string, catalog, peer *rewriteRuleMergeShape) bool {
+func rewriteRuleEscapedShapeIncompatible(ctx context.Context, rule, mode string, catalog, peer *rewriteRuleMergeShape, sources mysql.RewriteSources) bool {
 	flags := mysql.ParseSQLModeFlags(mode)
 	if !flags.Has(mysql.SQLModeNoBackslashEscapes) {
 		return false
@@ -1545,14 +1545,12 @@ func rewriteRuleEscapedShapeIncompatible(ctx context.Context, rule, mode string,
 	if flags != mysql.SQLModeFlags(mysql.SQLModeNoBackslashEscapes) {
 		// A double-quoted column, for instance, must not be mistaken for a
 		// string just because a different literal needs backslash escapes.
-		parts := slices.DeleteFunc(strings.Split(mode, ","), func(s string) bool {
-			return strings.EqualFold(strings.TrimSpace(s), "NO_BACKSLASH_ESCAPES")
-		})
-		stmt, err := mysql.ParseOneWithSQLMode(ctx, rule, 1, strings.Join(parts, ","))
+		stmt, parsedSources, err := mysql.ParseOneWithRewriteSources(ctx, rule, 1, flags&^mysql.SQLModeFlags(mysql.SQLModeNoBackslashEscapes))
 		if err != nil {
 			return false
 		}
 		defer stmt.Free()
+		sources = parsedSources
 		var ok bool
 		shape, ok = rewriteRuleMergeShapeForStatement(stmt)
 		if !ok || len(shape.clause.Exprs) != len(peer.clause.Exprs) {
@@ -1573,6 +1571,11 @@ func rewriteRuleEscapedShapeIncompatible(ctx context.Context, rule, mode string,
 	}
 	for i, x := range shape.clause.Exprs {
 		y := peer.clause.Exprs[i]
+		// The peer alias was validated in the reader's mode. Do not use an
+		// escape-dependent alias from the recovery parse to prove a mismatch.
+		if !sources.EscapedAliases[x.As] && !sameRewriteAlias(x.As, y.As) {
+			return true
+		}
 		if reflect.TypeOf(x.Expr) != reflect.TypeOf(y.Expr) {
 			return true
 		}
@@ -1615,23 +1618,26 @@ func sameRewriteProjection(ctx context.Context, leftSQL, rightSQL, leftMode, rig
 		return false, moerr.NewInvalidInput(ctx, "cannot compare rewrite projections")
 	}
 	return slices.EqualFunc(a.clause.Exprs, b.clause.Exprs, func(x, y tree.SelectExpr) bool {
-		// A STRING token used as an alias is an identifier, not a literal.
-		if x.As == nil || y.As == nil {
-			return x.As == y.As && reflect.DeepEqual(x.Expr, y.Expr)
-		}
-		return x.As.Compare() == y.As.Compare() && reflect.DeepEqual(x.Expr, y.Expr)
+		return sameRewriteAlias(x.As, y.As) && reflect.DeepEqual(x.Expr, y.Expr)
 	}), nil
 }
 
+func sameRewriteAlias(x, y *tree.CStr) bool {
+	if x == nil || y == nil {
+		return x == y
+	}
+	return x.Compare() == y.Compare()
+}
+
 func rewriteRuleMergeShapeForRule(ctx context.Context, rule, sqlMode string) (*rewriteRuleMergeShape, bool, error) {
-	stmt, sources, err := mysql.ParseOneWithWhereSources(ctx, rule, 1, sqlMode)
+	stmt, sources, err := mysql.ParseOneWithRewriteSources(ctx, rule, 1, mysql.ParseSQLModeFlags(sqlMode))
 	if err != nil {
 		return nil, false, moerr.NewInternalErrorf(ctx, "failed to parse rewrite rule %q while merging rewrite rules: %v", rule, err)
 	}
 	shape, ok := rewriteRuleMergeShapeForStatement(stmt)
 	if ok {
 		shape.source = rule
-		shape.predicate = sources[shape.clause.Where]
+		shape.predicate = sources.Where[shape.clause.Where]
 	}
 	return shape, ok, nil
 }

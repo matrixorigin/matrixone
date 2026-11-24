@@ -285,12 +285,30 @@ func (w WhereSource) Split(sql string, keepWhere bool) (string, string, string, 
 	return balanceExecutableComment(sql[:end], false, w.startInComment), balanceExecutableComment(sql[w.Start:w.End], w.startInComment, w.endInComment), balanceExecutableComment(sql[w.End:], w.endInComment, false), true
 }
 
-func ParseOneWithWhereSources(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, map[*tree.Where]WhereSource, error) {
-	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
+// RewriteSources belongs to one parse; source provenance is not part of AST equality.
+type RewriteSources struct {
+	Where          map[*tree.Where]WhereSource
+	EscapedAliases map[*tree.CStr]bool // STRING aliases whose spelling may depend on backslash escapes
+}
+
+func ParseOneWithRewriteSources(ctx context.Context, sql string, lower int64, flags SQLModeFlags) (tree.Statement, RewriteSources, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, flags)
 	defer PutScanner(lexer.scanner)
-	lexer.whereSources = make(map[*tree.Where]WhereSource)
+	sources := RewriteSources{Where: make(map[*tree.Where]WhereSource)}
+	lexer.rewriteSources = &sources
 	stmt, err := parseOne(ctx, lexer)
-	return stmt, lexer.whereSources, err
+	return stmt, sources, err
+}
+
+func (l *Lexer) stringAlias(s string, end int) *tree.CStr {
+	a := tree.NewCStr(s, 1)
+	if l.escapedStrings[end] {
+		if l.rewriteSources.EscapedAliases == nil {
+			l.rewriteSources.EscapedAliases = make(map[*tree.CStr]bool)
+		}
+		l.rewriteSources.EscapedAliases[a] = true
+	}
+	return a
 }
 
 // ParseOneForIdentifierComparison is only for comparing projections, never for
@@ -305,12 +323,12 @@ func ParseOneForIdentifierComparison(ctx context.Context, sql string, lower int6
 
 func (l *Lexer) newWhere(expr tree.Expr, start int, lookahead bool) *tree.Where {
 	w := &tree.Where{Type: tree.AstWhere, Expr: expr}
-	if l.whereSources != nil {
+	if l.rewriteSources != nil {
 		end, inside := l.scanner.Pos, l.scanner.CommentFlag
 		if lookahead {
 			end, inside = l.beforeLookahead, l.beforeInComment
 		}
-		l.whereSources[w] = WhereSource{start, end, l.whereInComment[start], inside}
+		l.rewriteSources.Where[w] = WhereSource{start, end, l.whereInComment[start], inside}
 	}
 	return w
 }
@@ -354,7 +372,8 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
-	whereSources          map[*tree.Where]WhereSource
+	rewriteSources        *RewriteSources
+	escapedStrings        map[int]bool // end offsets survive yacc lookahead
 	beforeLookahead       int
 	beforeInComment       bool
 	whereInComment        map[int]bool
@@ -463,7 +482,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if l.stopLexing {
 		return 0
 	}
-	if l.whereSources != nil {
+	if l.rewriteSources != nil {
 		l.beforeLookahead, l.beforeInComment = l.scanner.Pos, l.scanner.CommentFlag
 	}
 	var typ int
@@ -474,7 +493,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ, str = l.scanner.Scan()
 	}
 	lval.pos = l.scanner.Pos
-	if l.whereSources != nil && typ == WHERE && l.scanner.CommentFlag {
+	if l.rewriteSources != nil && typ == STRING && strings.Contains(l.scanner.buf[l.scanner.PrePos:l.scanner.Pos], `\`) {
+		if l.escapedStrings == nil {
+			l.escapedStrings = make(map[int]bool)
+		}
+		l.escapedStrings[lval.pos] = true
+	}
+	if l.rewriteSources != nil && typ == WHERE && l.scanner.CommentFlag {
 		if l.whereInComment == nil {
 			l.whereInComment = make(map[int]bool)
 		}

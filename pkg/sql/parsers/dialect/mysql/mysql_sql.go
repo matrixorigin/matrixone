@@ -26740,7 +26740,7 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:8796
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[1].str, 1)
+			yyLOCAL = yylex.(*Lexer).stringAlias(yyDollar[1].str, yyDollar[1].pos)
 		}
 		yyVAL.union = yyLOCAL
 	case 1266:
@@ -26748,7 +26748,7 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:8800
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[2].str, 1)
+			yyLOCAL = yylex.(*Lexer).stringAlias(yyDollar[2].str, yyDollar[2].pos)
 		}
 		yyVAL.union = yyLOCAL
 	case 1267:

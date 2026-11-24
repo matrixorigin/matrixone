@@ -535,6 +535,12 @@ alter role test_rule_role_dup_projection_b add rule "select length('ok') as n fr
 select n from db1.t_dup;
 -- @session
 
+-- A different explicit alias selects the later projection even when its function and table match.
+alter role test_rule_role_dup_projection_a add rule "select length('docs\\'notes') as earlier_heading from db1.t_dup" on table db1.t_dup;
+-- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
+select * from db1.t_dup;
+-- @session
+
 -- If only the unreadable literal differs, the earlier rule cannot be discarded.
 alter role test_rule_role_dup_projection_a add rule "select length('docs\\'notes') as n from db1.t_dup" on table db1.t_dup;
 -- @session:id=31&user=sys:test_rule_user_dup_projection:test_rule_role_dup_projection_a&password=123456
