@@ -261,8 +261,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
-	// A failed varlen append may already have exposed shared or partial area
-	// layout. Roll back logical lengths, but keep this proof fail-closed.
 	v.sorted = checkpoint.sorted
 	return nil
 }
