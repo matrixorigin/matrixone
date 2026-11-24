@@ -567,6 +567,9 @@ type readSources struct {
 	// flights is set when it takes its bytes from the prefetch objects under way that hold
 	// them, through readFromFlights.
 	flights bool
+	// window is set when its range read may read prefetch ranges around it, through
+	// prefetchRead, as prefetchUnit allows.
+	window bool
 	// fetch is set when its range read takes its bytes from a prefetch object, joined or
 	// its own, through fetchRange.
 	fetch bool
@@ -575,17 +578,18 @@ type readSources struct {
 // sourcesFor returns the shared sources a read of vector under ctx may take its bytes from.
 func (s *S3FS) sourcesFor(ctx context.Context, vector *IOVector) readSources {
 	p := vector.Policy
-	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads)
+	// A read that skips the disk cache cannot read what a download puts there. The reads
+	// of a download join no prefetch object.
+	join := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !isDownload(ctx)
 	columns := p.Any(ColumnPrefetch, ExactRead)
 	return readSources{
-		indexRead: s.indexObjectReadable(p),
-		// A read that skips the disk cache cannot read what a download puts there. The
-		// reads of a download join none.
-		queue:       disk && s.prefetcher != nil && (columns || !p.Any(SkipFullFilePreloads)) && !isDownload(ctx),
+		indexRead:   s.indexObjectReadable(p),
+		queue:       join && s.prefetcher != nil && (columns || !p.Any(SkipFullFilePreloads)),
 		queueRanges: columns,
-		flights:     disk && p.Any(ColumnPrefetch, ExactRead),
+		flights:     join && columns,
+		window:      join,
 		// A read that streams an entry to its caller opens its own reader.
-		fetch: disk && !vector.streams(),
+		fetch: join && !vector.streams(),
 	}
 }
 
@@ -1437,7 +1441,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	var prefetchContent []byte
 	var prefetchReads int
 	var fetchedUncached bool
-	if !readFullObject && s.diskCache != nil && min != nil && max != nil {
+	src := s.sourcesFor(ctx, vector)
+	if !readFullObject && min != nil && max != nil && src.window {
 		if unit, ok := s.diskCache.prefetchUnit(vector); ok {
 			open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 				return getReader(ctx, &start, &end)
@@ -1494,7 +1499,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	// Any other range read takes its bytes from a prefetch object, which other reads of
 	// them join. A read that streams an entry to its caller opens its own reader.
-	if prefetchContent == nil && !readFullObject && min != nil && max != nil && s.sourcesFor(ctx, vector).fetch {
+	if prefetchContent == nil && !readFullObject && min != nil && max != nil && src.fetch {
 		open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			return getReader(ctx, &start, &end)
 		}

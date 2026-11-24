@@ -643,7 +643,10 @@ func (d *DiskCache) Read(
 			// try full file
 			diskPath = objectPath()
 			var filled bool
-			downloading, filled, err = d.readFromDownload(ctx, diskPath, entry, vector)
+			// The reads of a download join no other.
+			if !isDownload(ctx) {
+				downloading, filled, err = d.readFromDownload(ctx, diskPath, entry, vector)
+			}
 			if err != nil {
 				return err
 			}

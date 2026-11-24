@@ -367,3 +367,27 @@ func TestExactReadJoinsQueuedRanges(t *testing.T) {
 	vec := &IOVector{FilePath: "object", Policy: ExactColumnsRead, Entries: []IOEntry{{Offset: r.Offset, Size: r.Size}}}
 	require.True(t, fs.joinQueued(ctx, vec, fs.sourcesFor(ctx, vec)))
 }
+
+// BC15: a read made under a download's context joins no prefetch object.
+func TestReadOfDownloadJoinsNoPrefetchObject(t *testing.T) {
+	r := PrefetchRange{Offset: 40 << 10, Size: 4 << 10}
+	for _, policy := range []Policy{ColumnPrefetch | SkipFullFilePreloads, SkipFullFilePreloads} {
+		t.Run(map[bool]string{true: "column", false: "range"}[policy.Any(ColumnPrefetch)], func(t *testing.T) {
+			fs, storage, data := newPrefetchRangeFS(t, 0, 300<<10)
+			<-fs.diskCache.load.done
+			s := &probeStorage{ObjectStorage: storage, at: r.Offset, gate: make(chan struct{}),
+				answer: func(rc io.ReadCloser) (io.ReadCloser, error) { return rc, nil }}
+			fs.storage = s
+			t.Cleanup(sync.OnceFunc(func() { close(s.gate) }))
+			require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: r.Size, Ranges: []PrefetchRange{r}}))
+			require.Eventually(t, s.hit.Load, 5*time.Second, time.Millisecond)
+			ctx, cancel := context.WithTimeout(withDownloadStarted(context.Background(), func() {}), 5*time.Second)
+			defer cancel()
+			vec := &IOVector{FilePath: "object", Policy: policy | SkipMemoryCache, Entries: []IOEntry{{Offset: r.Offset, Size: r.Size}}}
+			defer vec.Release()
+			require.NoError(t, fs.Read(ctx, vec))
+			require.Equal(t, data[r.Offset:r.Offset+r.Size], vec.Entries[0].Data)
+			require.EqualValues(t, 1, s.others.Load(), "the read reads its bytes itself")
+		})
+	}
+}

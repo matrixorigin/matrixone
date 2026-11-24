@@ -25,13 +25,15 @@ import (
 // wantSources is the table of the shared sources a read may take its bytes from, by its
 // policy, whether it is a read of a download and whether it streams an entry.
 func wantSources(s *S3FS, p Policy, download, streams bool) readSources {
-	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads)
+	// BC15: the reads of a download join no prefetch object.
+	disk := s.diskCache != nil && !p.Any(SkipDiskCacheReads) && !download
 	return readSources{
 		indexRead: p.Any(IndexFileObject) && p&SkipCacheReads != SkipCacheReads && s.cachesIndexObjects(),
 		// BC16: an exact read joins queued ranges as a column read does.
-		queue:       disk && s.prefetcher != nil && !(!p.Any(ColumnPrefetch, ExactRead) && p.Any(SkipFullFilePreloads)) && !download,
+		queue:       disk && s.prefetcher != nil && !(!p.Any(ColumnPrefetch, ExactRead) && p.Any(SkipFullFilePreloads)),
 		queueRanges: p.Any(ColumnPrefetch, ExactRead),
 		flights:     disk && p.Any(ColumnPrefetch, ExactRead),
+		window:      disk,
 		fetch:       disk && !streams,
 	}
 }
