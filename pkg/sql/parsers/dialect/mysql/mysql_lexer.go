@@ -297,7 +297,7 @@ func (l *Lexer) rewriteMergeName(name string) string {
 }
 
 // ParseOneForRewriteMerge parses comparison trees and records WHERE source ranges.
-// Identifier tokens are folded for shape comparison; literals retain their type and bytes.
+// Mode 1 folds identifier tokens for shape comparison. Literals retain their type and bytes.
 func ParseOneForRewriteMerge(ctx context.Context, sql string, lower int64, mode SQLModeFlags) (tree.Statement, map[*tree.Where]WhereSource, error) {
 	l := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, mode)
 	defer PutScanner(l.scanner)
@@ -564,9 +564,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	l.lastToken = typ
 	if l.whereSources != nil {
 		switch {
-		case typ == ID || typ == QUOTE_ID:
+		case l.lower == 1 && (typ == ID || typ == QUOTE_ID):
 			str = tree.NewCStr(str, 1).Compare()
-		case typ == HEXNUM || typ != 0 && keywords[strings.ToLower(str)] == typ:
+		case typ == HEXNUM || l.lower == 1 && typ != 0 && keywords[strings.ToLower(str)] == typ:
 			str = strings.ToLower(str)
 		}
 	}

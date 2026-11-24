@@ -347,6 +347,19 @@ alter role test_rule_role_inherit_b add rule "select trim(code) as x from db1.t_
 select x from db1.t_rule_text order by x;
 -- @session
 
+-- The table alias must bind in the reader's table-name mode.
+alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id from db1.t_rule_text order by id;
+-- @session
+set global lower_case_table_names = 0;
+-- @session:id=28&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select @@lower_case_table_names;
+select id from db1.t_rule_text order by id;
+-- @session
+set global lower_case_table_names = 1;
+
 -- 14. Invalid rewrite SQL is rejected before overwriting existing rule
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;

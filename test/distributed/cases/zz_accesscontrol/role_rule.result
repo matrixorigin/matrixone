@@ -354,6 +354,20 @@ select x from db1.t_rule_text order by x;
 ➤ x[12,20,0]  𝄀
 0001  𝄀
 销售订单
+alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
+select id from db1.t_rule_text order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-5,64,0]  𝄀
+0
+select id from db1.t_rule_text order by id;
+➤ id[4,32,0]  𝄀
+3
+set global lower_case_table_names = 1;
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
 alter role test_rule_role_validate add rule "delete from db1.t1 where a = 1" on table db1.t1;

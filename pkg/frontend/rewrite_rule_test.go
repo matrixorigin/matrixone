@@ -682,7 +682,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 		{10, "db3.t3", "select * from db3.t3 /* persisted */ where id = 1"},
 	})
 
-	rules, _, err := loadRuleCache(context.Background(), ses)
+	rules, _, err := loadRuleCache(context.Background(), ses, 1)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
 		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
@@ -725,7 +725,7 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 		{10, "db1.t1", "select a from"},
 	})
 
-	_, _, err := loadRuleCache(context.Background(), ses)
+	_, _, err := loadRuleCache(context.Background(), ses, 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
 }
@@ -2182,7 +2182,7 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 	} {
 		left := "select " + tc.left + " as x from db.t where id = 1"
 		right := "select " + tc.right + " as x from db.t where id = 2"
-		got, err := mergeRewriteRulesInMode(t.Context(), left, right, mysql.ParseSQLModeFlags(tc.mode))
+		got, err := mergeRewriteRulesInMode(t.Context(), left, right, 1, mysql.ParseSQLModeFlags(tc.mode))
 		require.NoError(t, err, tc)
 		if tc.merge {
 			assert.Equal(t, "select "+tc.left+" as x from db.t where (id = 1) or (id = 2)", got, tc)
@@ -2195,6 +2195,33 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "select label AS 'Name' from db.t where (id = 1) or (id = 2)", got)
 
+}
+
+func TestMergeRewriteRulesTableNameMode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		left  string
+		right string
+		lower int64
+		merge bool
+	}{
+		{"different aliases", "db.t as `X`", "db.t as x", 0, false},
+		{"mode one folds aliases", "db.t as `X`", "db.t as x", 1, true},
+		{"same alias", "db.t as `x`", "db.t as x", 0, true},
+		{"different sources", "db.T as x", "db.t as x", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := "select trim(`Code`) as code from " + tc.left + " where id = 1"
+			right := "select trim(code) as code from " + tc.right + " where x.id = 2"
+			got, err := mergeRewriteRulesInMode(t.Context(), left, right, tc.lower, mysql.ParseSQLModeFlags("ANSI_QUOTES"))
+			require.NoError(t, err)
+			if tc.merge {
+				require.Equal(t, "select trim(`Code`) as code from "+tc.left+" where (id = 1) or (x.id = 2)", got)
+			} else {
+				require.Equal(t, right, got)
+			}
+		})
+	}
 }
 
 func TestRoleRuleModesAndBinaryHint(t *testing.T) {
@@ -2512,7 +2539,7 @@ func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule, 0)
+			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule, 1, 0)
 			require.NoError(t, err)
 			require.Equal(t, tc.ok, ok)
 			if !tc.ok {

@@ -262,11 +262,12 @@ type Session struct {
 	// A loaded cache is reused only while a fresh proof still matches it, so a
 	// rule change committed through another CN is observed here (issue #29133).
 	// The zero version never authorizes reuse.
-	ruleVariants             *roleRuleVariants
-	ruleCacheIdentity        rewriteRuleIdentity
-	ruleCacheVersion         any
-	ruleCacheVersionProvider func(context.Context, *Session) (any, error)
-	ruleCacheRevision        uint64 // changes on every publication, including equal policy
+	ruleVariants                 *roleRuleVariants
+	ruleCacheIdentity            rewriteRuleIdentity
+	ruleCacheLowerCaseTableNames int64
+	ruleCacheVersion             any
+	ruleCacheVersionProvider     func(context.Context, *Session) (any, error)
+	ruleCacheRevision            uint64 // changes on every publication, including equal policy
 	// rewritePolicyGeneration changes whenever session policy state is
 	// invalidated. Prepared statements capture this generation at publication
 	// time so a request-frozen policy cannot be registered after a refresh.
