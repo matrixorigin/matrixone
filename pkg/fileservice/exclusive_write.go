@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -67,6 +68,72 @@ func linkLocalFile(tempPath, nativePath, logicalPath string) error {
 		return moerr.NewFileAlreadyExistsNoCtx(logicalPath)
 	}
 	return err
+}
+
+// SyncLocalFileForPublication makes an immutable local object durable before a
+// caller publishes a reference to it. A visible link can survive a failed
+// directory sync, so this also applies to retries that find the object.
+// Non-local services retain their own persistence semantics.
+func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath string) error {
+	if sub, ok := fs.(*subPathFS); ok {
+		upstreamPath, err := sub.toUpstreamFilePath(filePath)
+		if err != nil {
+			return err
+		}
+		return SyncLocalFileForPublication(ctx, sub.upstream, upstreamPath)
+	}
+
+	var nativePath func(string) string
+	switch f := fs.(type) {
+	case *LocalFS:
+		nativePath = f.toNativeFilePath
+	case *LocalETLFS:
+		nativePath = f.toNativeFilePath
+	case *S3FS:
+		if storage, ok := f.rawStorage.(*diskObjectStorage); ok {
+			nativePath = func(file string) string {
+				return filepath.Join(storage.path, f.pathToKey(file))
+			}
+		}
+	}
+	if nativePath == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(filePath, fs.Name())
+	if err != nil {
+		return err
+	}
+	name, err := filepath.EvalSymlinks(nativePath(path.File))
+	if err != nil {
+		return err
+	}
+	// Sync the inode first, then its name and each parent directory entry.
+	// This also repairs a retry after an interrupted parent mkdir or sync.
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := syncPublicationPath(name); err != nil {
+			return err
+		}
+		parent := filepath.Dir(name)
+		if parent == name {
+			return nil
+		}
+		name = parent
+	}
+}
+
+func syncPublicationPath(name string) error {
+	file, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
 }
 
 // Match S3 API endpoints, optionally prefixed by a virtual-hosted bucket.

@@ -128,7 +128,7 @@ func (s *FileArtifactStore) Publish(ctx context.Context, accountID uint64, handl
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(owned)), Data: owned}},
 	})
 	if err == nil {
-		return digest, nil
+		return s.finishArtifactPublication(ctx, path, digest)
 	}
 	if !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 		return "", errutil.Wrapf(err, "python artifact publish %s", digest)
@@ -146,6 +146,13 @@ func (s *FileArtifactStore) existingArtifact(ctx context.Context, accountID uint
 	}
 	if existing != source {
 		return "", udferr.Newf("python artifact publish %s encountered a digest collision", digest)
+	}
+	return s.finishArtifactPublication(ctx, artifactPath(accountID, digest), digest)
+}
+
+func (s *FileArtifactStore) finishArtifactPublication(ctx context.Context, path, digest string) (string, error) {
+	if err := fileservice.SyncLocalFileForPublication(ctx, s.fs, path); err != nil {
+		return "", errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: sync Python artifact %s", digest)
 	}
 	return digest, nil
 }
@@ -165,7 +172,7 @@ func (s *FileArtifactStore) admitPublication(ctx context.Context, accountID uint
 			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(identity)), Data: []byte(identity)}},
 		})
 		if err == nil {
-			return nil
+			return syncArtifactAdmission(ctx, s.fs, path)
 		}
 		if !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
 			return errutil.Wrapf(err, "python artifact admission")
@@ -175,10 +182,17 @@ func (s *FileArtifactStore) admitPublication(ctx context.Context, accountID uint
 			return err
 		}
 		if reserved == identity {
-			return nil
+			return syncArtifactAdmission(ctx, s.fs, path)
 		}
 	}
 	return udferr.Newf("RESOURCE_EXHAUSTED: Python artifact publication budget of %d identities is full", s.maxPublications)
+}
+
+func syncArtifactAdmission(ctx context.Context, fs fileservice.FileService, path string) error {
+	if err := fileservice.SyncLocalFileForPublication(ctx, fs, path); err != nil {
+		return errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: sync Python artifact admission")
+	}
+	return nil
 }
 
 func (s *FileArtifactStore) admissionIdentity(ctx context.Context, path string) (string, error) {

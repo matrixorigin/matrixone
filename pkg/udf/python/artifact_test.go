@@ -17,6 +17,8 @@ package python
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +28,72 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFileArtifactStoreLocalPublishRetryRequiresSync(t *testing.T) {
+	const source = "def f(ctx): return 7"
+	digest := udf.PythonInlineArtifactDigest("f", source)
+	for _, tc := range []struct {
+		name, directory, visible string
+	}{
+		{"artifact", filepath.Join(udf.PythonArtifactDirectory, "7"), artifactPath(7, digest)},
+		{"artifact ancestor", udf.PythonArtifactDirectory, artifactPath(7, digest)},
+		{"admission", udf.PythonArtifactAdmissionDirectory, artifactAdmissionPath(0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			root := t.TempDir()
+			fs, err := fileservice.NewLocalFS2(ctx, defines.SharedFileServiceName, root, fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			store, err := NewFileArtifactStore(fs, DefaultMaxArtifactBytes)
+			require.NoError(t, err)
+			store.maxPublications = 1
+
+			dir := filepath.Join(root, tc.directory)
+			require.NoError(t, os.MkdirAll(filepath.Join(root, udf.PythonArtifactDirectory, "7"), 0700))
+			require.NoError(t, os.MkdirAll(dir, 0700))
+			// Search and write permissions let the link succeed. Without read
+			// permission, opening the directory for sync fails.
+			t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0700)) })
+			require.NoError(t, os.Chmod(dir, 0300))
+			handle, err := os.Open(dir)
+			if err == nil {
+				require.NoError(t, handle.Close())
+				t.Skip("test user can open a directory without read permission")
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+
+			published, err := store.Publish(ctx, 7, "f", source)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.Empty(t, published)
+			_, err = fs.StatFile(ctx, tc.visible)
+			require.NoError(t, err, "the link is visible after failed sync")
+			if tc.visible == artifactPath(7, digest) {
+				resolved, err := store.Resolve(ctx, 7, "f", digest)
+				require.NoError(t, err)
+				require.Equal(t, source, resolved)
+			}
+
+			published, err = store.Publish(ctx, 7, "f", source)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.Empty(t, published)
+			if tc.visible == artifactAdmissionPath(0) {
+				_, err = store.Resolve(ctx, 7, "f", digest)
+				require.ErrorContains(t, err, "unavailable")
+			}
+
+			require.NoError(t, os.Chmod(dir, 0700))
+			published, err = store.Publish(ctx, 7, "f", source)
+			require.NoError(t, err)
+			require.Equal(t, digest, published)
+			resolved, err := store.Resolve(ctx, 7, "f", digest)
+			require.NoError(t, err)
+			require.Equal(t, source, resolved)
+			_, err = store.Publish(ctx, 7, "f", "def f(ctx): return 8")
+			require.ErrorContains(t, err, "RESOURCE_EXHAUSTED")
+		})
+	}
+}
 
 func newTestArtifactStore(t *testing.T, maxSize int64) *FileArtifactStore {
 	t.Helper()
