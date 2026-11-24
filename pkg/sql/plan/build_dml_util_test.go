@@ -688,8 +688,8 @@ func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	assertPlanHasPrefixCount(t, "update constraint_test.single_idx_t set val = 'abcdef-long' where id = 1", "val", 2)
 	assertPlanHasPrefixCount(t, "delete from constraint_test.single_idx_t where id = 1", "val", 1)
 
-	// Composite ENUM secondary-index DELETEs use the legacy outer-join path,
-	// which keeps selected base rows visible long enough to reject a missing entry.
+	// ENUM secondary-index deletes preserve unmatched base rows long enough for
+	// the integrity assertion to report a missing index entry.
 	singleIdx.Cols[1].Typ = plan.Type{Id: int32(types.T_enum), Enumvalues: "x,y"}
 	singleIdx.Indexes[0].Parts = []string{"val", "id"}
 	singleIdx.Indexes[0].IndexAlgoParams = ""

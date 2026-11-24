@@ -798,7 +798,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNodeId := appendDeleteSourceScan()
 	if !delCtx.skipTargetDelete {
 		// create delete index plans
-		err = buildDeleteIndexPlans(ctx, builder, bindCtx, delCtx)
+		err = buildDeleteIndexPlans(ctx, builder, bindCtx, delCtx, canTruncate)
 		if err != nil {
 			return err
 		}
@@ -2278,8 +2278,8 @@ func makeOneDeletePlan(
 	canTruncate bool,
 ) (int32, error) {
 	if delNodeInfo.assertIndexEntry {
-		rowIdTyp := types.T_Rowid.ToType()
-		rowID := &plan.Expr{Typ: makePlan2Type(&rowIdTyp), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(delNodeInfo.indexEntryRowIDPos)}}}
+		rowIDTyp := types.T_Rowid.ToType()
+		rowID := &plan.Expr{Typ: makePlan2Type(&rowIDTyp), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(delNodeInfo.indexEntryRowIDPos)}}}
 		entryExists, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{rowID})
 		if err != nil {
 			return -1, err
@@ -3546,22 +3546,6 @@ func appendPreInsertPlan(
 	return sourceStep, nil
 }
 
-func makeDeleteIndexEntryAssert(builder *QueryBuilder, entryExists, entryRequired *Expr, indexName, tableName string) (*Expr, error) {
-	notRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*Expr{entryRequired})
-	if err != nil {
-		return nil, err
-	}
-	valid, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{notRequired, entryExists})
-	if err != nil {
-		return nil, err
-	}
-	return BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{
-		valid,
-		makePlan2StringConstExprWithType(fmt.Sprintf("DELETE found no required entry for index %s on table %s; index is corrupted, stop writes and rebuild it from base rows", indexName, tableName)),
-		makePlan2StringConstExprWithType("index_corrupt"),
-	})
-}
-
 func appendDeleteIndexTablePlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -3829,7 +3813,6 @@ func appendDeleteIndexTablePlan(
 	if hasRuntimeFilter {
 		recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], joinNode, builder)
 	}
-
 	return lastNodeId, nil
 }
 
@@ -5574,39 +5557,37 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 		delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-		if !isUpdate && isSK && !delCtx.isDeleteWithoutFilters {
-			requiredParts := make([]*Expr, 0, len(indexdef.Parts))
+		if delCtx.isMulti && !isUpdate && isSK && !delCtx.isDeleteWithoutFilters {
+			requiresEntry := false
 			for _, part := range indexdef.Parts {
-				part = catalog.ResolveAlias(part)
-				pos, ok := posMap[part]
-				if !ok || pos < 0 || pos >= len(builder.qry.Nodes[lastNodeId].ProjectList) {
-					putDeleteNodeInfo(delNodeInfo)
-					return moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
-				}
-				value := &plan.Expr{Typ: builder.qry.Nodes[lastNodeId].ProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(pos)}}}
-				partRequired, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
-				if bindErr != nil {
-					putDeleteNodeInfo(delNodeInfo)
-					return bindErr
-				}
-				requiredParts = append(requiredParts, partRequired)
-			}
-			var bindErr error
-			required := makePlan2BoolConstExprWithType(true)
-			if len(requiredParts) == 1 {
-				required = requiredParts[0]
-			} else if len(requiredParts) > 1 {
-				required, bindErr = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", requiredParts)
-				if bindErr != nil {
-					putDeleteNodeInfo(delNodeInfo)
-					return bindErr
+				if typ, ok := typMap[catalog.ResolveAlias(part)]; ok &&
+					(typ.Id == int32(types.T_enum) || typ.Enumvalues != "") {
+					requiresEntry = true
+					break
 				}
 			}
-			delNodeInfo.assertIndexEntry = true
-			delNodeInfo.indexEntryName = indexdef.IndexName
-			delNodeInfo.indexEntryTable = delCtx.tableDef.Name
-			delNodeInfo.indexEntryRequired = required
-			delNodeInfo.indexEntryRowIDPos = indexEntryRowIDPos
+			if requiresEntry {
+				required := makePlan2BoolConstExprWithType(true)
+				if len(indexdef.Parts) == 1 {
+					part := catalog.ResolveAlias(indexdef.Parts[0])
+					pos, ok := posMap[part]
+					if !ok || pos < 0 || pos >= len(builder.qry.Nodes[lastNodeId].ProjectList) {
+						putDeleteNodeInfo(delNodeInfo)
+						return moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
+					}
+					value := &plan.Expr{Typ: builder.qry.Nodes[lastNodeId].ProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(pos)}}}
+					required, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
+					if err != nil {
+						putDeleteNodeInfo(delNodeInfo)
+						return err
+					}
+				}
+				delNodeInfo.assertIndexEntry = true
+				delNodeInfo.indexEntryRequired = required
+				delNodeInfo.indexEntryRowIDPos = indexEntryRowIDPos
+				delNodeInfo.indexEntryName = indexdef.IndexName
+				delNodeInfo.indexEntryTable = delCtx.tableDef.Name
+			}
 		}
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 		putDeleteNodeInfo(delNodeInfo)
@@ -5810,9 +5791,10 @@ func indexNeedsRewriteForUpdate(tableDef *TableDef, indexdef *IndexDef, updateCo
 }
 
 // make delete index plans here
-func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
+func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, canTruncate bool) error {
 
 	isUpdate := delCtx.updateColLength > 0
+	var err error
 
 	// delete unique/secondary index table
 	// Refer to this PR:https://github.com/matrixorigin/matrixone/pull/12093
@@ -5820,25 +5802,6 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	canTruncate := delCtx.isDeleteWithoutFilters
-
-	accountId, err := ctx.GetAccountId()
-	if err != nil {
-		return err
-	}
-
-	enabled, err := IsForeignKeyChecksEnabled(ctx)
-	if err != nil {
-		return err
-	}
-
-	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 ||
-		delCtx.tableDef.ViewSql != nil ||
-		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
-		delCtx.objRef.PubInfo != nil {
-		canTruncate = false
-	}
-
 	if (hasUniqueKey || hasSecondaryKey) && !canTruncate {
 		typMap := make(map[string]plan.Type)
 		posMap := make(map[string]int)

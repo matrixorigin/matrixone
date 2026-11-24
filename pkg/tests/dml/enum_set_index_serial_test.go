@@ -214,3 +214,117 @@ where t.reldatabase=? and t.relname=? and i.name='mi'`, database, tc.name).Scan(
 		checkPublicSerial()
 	})
 }
+
+func TestDeleteRejectsLegacyEnumIndexKeyMismatch(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		database := strings.ToLower(testutils.GetDatabaseName(t))
+		quoted := "`" + strings.ReplaceAll(database, "`", "``") + "`"
+		exec := func(query string) sql.Result {
+			t.Helper()
+			result, err := conn.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+			return result
+		}
+		count := func(query string) int {
+			t.Helper()
+			var n int
+			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&n), query)
+			return n
+		}
+		exec("create database " + quoted)
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			_, err := conn.ExecContext(cleanup, "drop database "+quoted)
+			require.NoError(t, err)
+		}()
+		exec("use " + quoted)
+		exec("create table indexed_rows(id int primary key,e enum('a','b'),n int,key ix(e,n))")
+		exec("insert into indexed_rows values(1,'a',null),(2,'b',null),(3,'a',1)")
+		exec("create table delete_side(id int primary key)")
+		exec("insert into delete_side values(1),(2)")
+
+		var indexTable string
+		require.NoError(t, conn.QueryRowContext(ctx, `select distinct i.index_table_name
+from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id
+where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).Scan(&indexTable))
+		quotedIndex := "`" + strings.ReplaceAll(indexTable, "`", "``") + "`"
+
+		// Recreate the historical display-string encoding in the physical index
+		// while leaving the base ENUM row unchanged.
+		exec("update " + quotedIndex + " set __mo_index_idx_col=serial_full('a',null,serial(1)) where __mo_index_pri_col=1")
+
+		baseIDs := func() []int {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, "select id from indexed_rows order by id")
+			require.NoError(t, err)
+			defer rows.Close()
+			var ids []int
+			for rows.Next() {
+				var id int
+				require.NoError(t, rows.Scan(&id))
+				ids = append(ids, id)
+			}
+			require.NoError(t, rows.Err())
+			return ids
+		}
+		indexEntries := func() []string {
+			t.Helper()
+			rows, err := conn.QueryContext(ctx, "select hex(__mo_index_idx_col),__mo_index_pri_col from "+quotedIndex+" order by __mo_index_pri_col")
+			require.NoError(t, err)
+			defer rows.Close()
+			var entries []string
+			for rows.Next() {
+				var key string
+				var owner int
+				require.NoError(t, rows.Scan(&key, &owner))
+				entries = append(entries, fmt.Sprintf("%s:%d", key, owner))
+			}
+			require.NoError(t, rows.Err())
+			return entries
+		}
+
+		beforeBase := baseIDs()
+		beforeEntries := indexEntries()
+		_, err = conn.ExecContext(ctx, "delete from indexed_rows where id=1")
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr)
+		require.EqualValues(t, 1712, mysqlErr.Number)
+		require.Equal(t, beforeBase, baseIDs())
+		require.Equal(t, beforeEntries, indexEntries())
+
+		// A failed multi-target DELETE must leave both targets and the stale
+		// physical entry unchanged.
+		_, err = conn.ExecContext(ctx, "delete a,b from indexed_rows a join delete_side b on a.id=b.id where a.id=1")
+		require.ErrorAs(t, err, &mysqlErr)
+		require.EqualValues(t, 1712, mysqlErr.Number)
+		require.Equal(t, beforeBase, baseIDs())
+		require.Equal(t, 2, count("select count(*) from delete_side"))
+		require.Equal(t, beforeEntries, indexEntries())
+
+		// Composite serial_full keys are present even when a key part is NULL.
+		result := exec("delete from indexed_rows where id=2")
+		affected, err := result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 1, affected)
+		require.Equal(t, []int{1, 3}, baseIDs())
+		var expectedEntries []string
+		for _, entry := range beforeEntries {
+			if !strings.HasSuffix(entry, ":2") {
+				expectedEntries = append(expectedEntries, entry)
+			}
+		}
+		require.Equal(t, expectedEntries, indexEntries())
+	})
+}
