@@ -1297,12 +1297,12 @@ func (bat *Batch) SetAccountedExtraBuffer(buffer *mpool.AccountedBuffer) error {
 	}
 	bat.releaseExtraBuf()
 	bat.ExtraBuf = data
-	bat.extraBufMP = pool
+	bat.mp = pool
 	return nil
 }
 
 func (bat *Batch) HasAccountedExtraBuffer() bool {
-	return bat != nil && bat.extraBufMP != nil
+	return bat != nil && bat.mp != nil
 }
 
 func (bat *Batch) MoveExtraBufferFrom(source *Batch) {
@@ -1311,9 +1311,9 @@ func (bat *Batch) MoveExtraBufferFrom(source *Batch) {
 	}
 	bat.releaseExtraBuf()
 	bat.ExtraBuf = source.ExtraBuf
-	bat.extraBufMP = source.extraBufMP
+	bat.mp = source.mp
 	source.ExtraBuf = nil
-	source.extraBufMP = nil
+	source.mp = nil
 }
 
 // DropExtraBuffer releases an accounted payload or drops an ordinary Go-heap
@@ -1325,11 +1325,11 @@ func (bat *Batch) DropExtraBuffer() {
 }
 
 func (bat *Batch) releaseExtraBuf() {
-	if bat.extraBufMP != nil && cap(bat.ExtraBuf) != 0 {
-		bat.extraBufMP.Free(bat.ExtraBuf)
+	if bat.mp != nil && cap(bat.ExtraBuf) != 0 {
+		bat.mp.Free(bat.ExtraBuf)
 	}
 	bat.ExtraBuf = nil
-	bat.extraBufMP = nil
+	bat.mp = nil
 }
 
 // OwnReadOnlyVectors replaces every read-only (reference) vector of bat with

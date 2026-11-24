@@ -63,9 +63,10 @@ type Batch struct {
 	selection    *bitmap.Bitmap
 	physicalRows int
 
-	// extraBufMP owns ExtraBuf only when it was detached from an accounted
-	// off-heap buffer. Ordinary Go-heap ExtraBuf values leave this nil.
-	extraBufMP *mpool.MPool
+	// mp is the pool for the batch's own memory allocations. Today it is
+	// set only when ExtraBuf was detached from an accounted off-heap buffer,
+	// and it then owns ExtraBuf; ordinary Go-heap ExtraBuf values leave it nil.
+	mp *mpool.MPool
 
 	// leases keeps alive the lent backings (for example pinned FileService
 	// cache entries) that this batch's vectors alias. The batch is the lender:
