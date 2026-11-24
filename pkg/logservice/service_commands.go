@@ -57,7 +57,8 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 				panic(fmt.Sprintf("unknown config change cmd type %d", cmd.ConfigChange.ChangeType))
 			}
 		} else if cmd.GetShutdownStore() != nil {
-			s.handleShutdownStore(cmd)
+			// Ignore teardown commands that may still be queued in HAKeeper.
+			continue
 		} else if cmd.GetCreateTaskService() != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
@@ -103,7 +104,7 @@ func (s *Service) handleRemoveReplica(cmd pb.ScheduleCommand) {
 func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
-	join := len(cmd.ConfigChange.InitialMembers) == 0
+	join := len(cmd.ConfigChange.InitialMembers) == 0 && !s.store.nh.HasNodeInfo(shardID, replicaID)
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperReplica(replicaID,
 			cmd.ConfigChange.InitialMembers, join); err != nil {
@@ -120,7 +121,7 @@ func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 func (s *Service) handleStartNonVotingReplica(cmd pb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
-	join := len(cmd.ConfigChange.InitialMembers) == 0
+	join := len(cmd.ConfigChange.InitialMembers) == 0 && !s.store.nh.HasNodeInfo(shardID, replicaID)
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.startHAKeeperNonVotingReplica(replicaID,
 			cmd.ConfigChange.InitialMembers, join); err != nil {
@@ -155,14 +156,6 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	s.handleStopReplica(cmd)
 	s.store.removeMetadata(shardID, replicaID)
-}
-
-func (s *Service) handleShutdownStore(_ pb.ScheduleCommand) {
-	// notify main routine that have received shutdown cmd
-	select {
-	case s.shutdownC <- struct{}{}:
-	default:
-	}
 }
 
 func (s *Service) heartbeatWorker(ctx context.Context) {
