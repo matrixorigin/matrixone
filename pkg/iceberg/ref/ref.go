@@ -58,6 +58,7 @@ func ParseNessieRef(raw string, meta *api.TableMetadata) (Spec, error) {
 
 // EquivalentReadRefs compares Iceberg refs without looking up catalog metadata.
 func EquivalentReadRefs(left, right string) bool {
+	left, right = strings.TrimSpace(left), strings.TrimSpace(right)
 	if left == right {
 		return true
 	}

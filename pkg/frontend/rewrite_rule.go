@@ -593,7 +593,7 @@ func isStandaloneSQLModeAssignment(a *tree.VarAssignmentExpr) bool {
 	return ok
 }
 
-// roleRuleHintSQL encodes binary tokens only after rule selection and merging.
+// roleRuleHintSQL encodes binary tokens for JSON transport.
 // JSON replaces invalid UTF-8, so any remaining invalid byte must fail closed.
 func roleRuleHintSQL(ctx context.Context, rule string, mode mysql.SQLModeFlags) (string, error) {
 	if utf8.ValidString(rule) {
@@ -1457,6 +1457,20 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string, lo
 		}
 	}
 
+	if slices.ContainsFunc(leftShape.clause.Exprs, rewriteProjectionNeedsOriginalHeading) {
+		leftNames, err := rewriteRuleOutputNames(ctx, leftRule, lower, mode)
+		if err != nil {
+			return "", false, err
+		}
+		rightNames, err := rewriteRuleOutputNames(ctx, rightRule, lower, mode)
+		if err != nil {
+			return "", false, err
+		}
+		if !slices.Equal(leftNames, rightNames) {
+			return "", false, nil
+		}
+	}
+
 	if leftShape.clause.Where == nil {
 		return leftRule, true, nil
 	}
@@ -1563,6 +1577,42 @@ func sameRewriteProjection(a, b tree.SelectExpr) bool {
 		return false
 	}
 	return reflect.DeepEqual(a.Expr, b.Expr)
+}
+
+func rewriteProjectionNeedsOriginalHeading(expr tree.SelectExpr) bool {
+	if expr.As != nil && !expr.As.Empty() {
+		return false
+	}
+	switch expr.Expr.(type) {
+	case *tree.UnresolvedName, tree.UnqualifiedStar:
+		return false
+	default:
+		return true
+	}
+}
+
+func rewriteRuleOutputNames(ctx context.Context, sql string, lower int64, mode mysql.SQLModeFlags) ([]string, error) {
+	// The hint transport can change binary spelling before the planner sees it.
+	// Invalid bytes in discarded predicates are checked after rule selection.
+	if encoded, err := roleRuleHintSQL(ctx, sql, mode); err == nil {
+		sql = encoded
+	}
+	stmt, err := mysql.ParseOneWithSQLModeFlags(ctx, sql, lower, mode)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Free()
+	shape, ok := rewriteRuleMergeShapeForStatement(stmt)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "missing rewrite rule projections")
+	}
+	names := make([]string, len(shape.clause.Exprs))
+	for i, expr := range shape.clause.Exprs {
+		if !rewriteRuleSelectExprIsStar(expr.Expr) {
+			names[i] = plan2.SelectOutputColumnName(expr)
+		}
+	}
+	return names, nil
 }
 
 func rewriteRuleSelectExprsAreMergeable(exprs tree.SelectExprs) bool {

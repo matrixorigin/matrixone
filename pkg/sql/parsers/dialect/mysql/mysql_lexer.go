@@ -260,7 +260,12 @@ func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, err
 }
 
 func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, error) {
-	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
+	return ParseOneWithSQLModeFlags(ctx, sql, lower, ParseSQLModeFlags(sqlMode))
+}
+
+// ParseOneWithSQLModeFlags parses one statement with the given lexer flags.
+func ParseOneWithSQLModeFlags(ctx context.Context, sql string, lower int64, flags SQLModeFlags) (tree.Statement, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, flags)
 	defer PutScanner(lexer.scanner)
 	return parseOne(ctx, lexer)
 }

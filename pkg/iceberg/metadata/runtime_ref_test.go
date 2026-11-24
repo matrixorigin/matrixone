@@ -116,6 +116,7 @@ func TestRuntimeScanPlannerReadRefPrecedenceAndRouting(t *testing.T) {
 		{name: "branch name parsed once", ref: "branch:snapshot:11", wantRef: "snapshot:11", wantID: 22},
 		{name: "Nessie branch name parsed once", ref: "branch:snapshot:11", nessie: true, configPrefix: "main|warehouse", wantPrefix: "snapshot:11|warehouse", wantID: 22},
 		{name: "generic tag", ref: "tag:audit", wantRef: "audit", wantID: 11},
+		{name: "untyped name with surrounding whitespace", ref: " audit ", wantRef: "audit", wantID: 11},
 		{name: "generic hash keeps existing lookup", ref: "hash:abcdef", wantRef: "hash:abcdef", wantCode: api.ErrTableNotFound},
 		{name: "unknown typed prefix remains a name", ref: "custom:missing", wantRef: "custom:missing", wantCode: api.ErrTableNotFound},
 		{name: "supplied opaque prefix", ref: "tag:audit", prefix: "opaque-route", nessie: true, wantPrefix: "opaque-route", wantRef: "audit", wantID: 11},

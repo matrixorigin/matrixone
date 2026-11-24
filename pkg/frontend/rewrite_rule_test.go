@@ -2197,6 +2197,32 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 
 }
 
+func TestMergeRewriteRulesOutputColumnNames(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		merge       bool
+	}{
+		{"_binary 'A'", "_binary 0x41", false},
+		{"_binary 'A' as ''", "_binary 0x41 as ''", false},
+		{"concat(_binary 'A','!')", "concat(_binary 0x41,'!')", false},
+		{"_binary 'A' as code", "_binary 0x41 as code", true},
+		{"_binary 'A'", "_binary 'A'", true},
+		{"trim(`Code`)", "trim(code)", true},
+	} {
+		t.Run(tc.left+" / "+tc.right, func(t *testing.T) {
+			left := "select " + tc.left + " from db.t where id = 1"
+			right := "select " + tc.right + " from db.t where id = 2"
+			got, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if tc.merge {
+				require.Equal(t, "select "+tc.left+" from db.t where (id = 1) or (id = 2)", got)
+			} else {
+				require.Equal(t, right, got)
+			}
+		})
+	}
+}
+
 func TestMergeRewriteRulesTableNameMode(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -2241,6 +2267,8 @@ func TestMergeRewriteRulesIcebergSource(t *testing.T) {
 		{"snapshot 0", "snapshot '0'", false},
 		{"ref `Audit`", "ref 'Audit'", true},
 		{"ref Audit", "ref 'Audit'", true},
+		{"ref 'audit'", "ref 'audit '", true},
+		{"ref ' Audit '", "ref 'audit '", false},
 		{"ref `Audit`", "ref `audit`", false},
 		{"ref 'BRANCH:Audit'", "ref 'branch:Audit'", true},
 		{"ref 'BRANCH:Audit'", "ref 'branch:audit'", false},

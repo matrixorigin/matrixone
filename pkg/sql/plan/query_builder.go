@@ -12723,7 +12723,8 @@ func appendSelectListWithGroupingOrder(
 					provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
 					ctx.appendHeading(selectExpr.As.Origin(), provenance)
 				} else {
-					ctx.appendHeading(expr.ColNameOrigin(), headingProvenance{})
+					heading, provenance := implicitSelectHeading(expr)
+					ctx.appendHeading(heading, provenance)
 				}
 
 				newExpr, err := qualifyExpr(expr)
@@ -12748,7 +12749,8 @@ func appendSelectListWithGroupingOrder(
 			if selectExpr.As != nil && !selectExpr.As.Empty() {
 				ctx.appendHeading(selectExpr.As.Origin(), headingProvenance{})
 			} else {
-				ctx.appendHeading(legalUTF8GeneratedHeading(tree.String(expr, dialect.MYSQL)), headingProvenance{})
+				heading, provenance := implicitSelectHeading(expr)
+				ctx.appendHeading(heading, provenance)
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
@@ -12760,18 +12762,14 @@ func appendSelectListWithGroupingOrder(
 				provenance := ctx.generatedHeadingProvenance[int32(exprIdx)]
 				ctx.appendHeading(selectExpr.As.Origin(), provenance)
 			} else {
+				heading, provenance := implicitSelectHeading(expr)
+				ctx.appendHeading(heading, provenance)
 				for {
-					if parenExpr, ok := expr.(*tree.ParenExpr); ok {
-						expr = parenExpr.Expr
-					} else {
+					paren, ok := expr.(*tree.ParenExpr)
+					if !ok {
 						break
 					}
-				}
-				if heading, ok := tree.NameConstHeading(expr); ok {
-					ctx.appendHeading(legalUTF8GeneratedHeading(heading), headingProvenance{})
-				} else {
-					heading, provenance := formatSelectExpressionHeading(expr)
-					ctx.appendHeading(legalUTF8GeneratedHeading(heading), provenance)
+					expr = paren.Expr
 				}
 			}
 
@@ -12900,6 +12898,31 @@ func qualifyGroupingSetHiddenOrderExpr(
 // text of an unaliased expression can carry raw literal bytes (e.g. a _binary
 // literal), so the derived name gets invalid sequences replaced. Aliases and
 // catalog names are appended by other sites and are intentionally untouched.
+// SelectOutputColumnName returns the derived-table binding name for one
+// select expression. Star expansion requires the source schema.
+func SelectOutputColumnName(expr tree.SelectExpr) string {
+	if expr.As != nil && !expr.As.Empty() {
+		return strings.ToLower(expr.As.Origin())
+	}
+	heading, _ := implicitSelectHeading(expr.Expr)
+	return strings.ToLower(heading)
+}
+
+func implicitSelectHeading(expr tree.Expr) (string, headingProvenance) {
+	switch value := expr.(type) {
+	case *tree.UnresolvedName:
+		return value.ColNameOrigin(), headingProvenance{}
+	case *tree.NumVal:
+		return legalUTF8GeneratedHeading(tree.String(value, dialect.MYSQL)), headingProvenance{}
+	default:
+		if heading, ok := tree.NameConstHeading(expr); ok {
+			return legalUTF8GeneratedHeading(heading), headingProvenance{}
+		}
+		heading, provenance := formatSelectExpressionHeading(expr)
+		return legalUTF8GeneratedHeading(heading), provenance
+	}
+}
+
 func legalUTF8GeneratedHeading(s string) string {
 	if utf8.ValidString(s) {
 		return s

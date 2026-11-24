@@ -347,6 +347,18 @@ alter role test_rule_role_inherit_b add rule "select trim(code) as x from db1.t_
 select x from db1.t_rule_text order by x;
 -- @session
 
+-- Role-rule output names must stay bindable through the derived result.
+alter role test_rule_role_inherit_a add rule "select _binary 'A' from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select _binary 0x41 from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select count(`0x41`), min(hex(`0x41`)) from db1.t_rule_text;
+-- @session
+alter role test_rule_role_inherit_a add rule "select _binary 'A' as code from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select _binary 0x41 as code from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select count(code), min(hex(code)) from db1.t_rule_text;
+-- @session
+
 -- The table alias must bind in the reader's table-name mode.
 alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
 alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
