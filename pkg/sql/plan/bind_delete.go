@@ -406,7 +406,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 		for j, idxDef := range idxDefs {
 			var partTypes map[string]plan.Type
-			if !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			if !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
 				partTypes = make(map[string]plan.Type, len(idxDef.Parts))
 				for _, part := range idxDef.Parts {
 					resolvedPart := catalog.ResolveAlias(part)

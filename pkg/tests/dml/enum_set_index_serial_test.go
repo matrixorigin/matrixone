@@ -388,6 +388,7 @@ where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).S
 		exec("create table spatial_rows(id int primary key,e enum('a','b'),g point null,key ei(e))")
 		exec("create spatial index sx on spatial_rows(g)")
 		exec("insert into spatial_rows values(1,'a',null),(2,'b',st_geomfromtext('POINT(2 2)'))")
+		exec("alter table spatial_rows rename column g to __mo_alias_geom")
 		spatialDelete := exec("delete from spatial_rows where id=1")
 		spatialAffected, err := spatialDelete.RowsAffected()
 		require.NoError(t, err)
