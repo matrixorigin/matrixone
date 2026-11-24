@@ -12,7 +12,7 @@ permissions:
   contents: read
 jobs:
   select:
-    if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' && github.event_name == 'push' && github.actor == 'Ariznawlll'
+    if: github.workflow_ref == 'matrixorigin/matrixone/.github/workflows/coverage-standby-pr32922.yaml@refs/heads/weilu-runner-test' && github.event_name == 'push' && github.actor == 'Ariznawlll' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: ci
@@ -55,7 +55,7 @@ jobs:
     - id: select
       timeout-minutes: 85
       env:
-        PR: "32922"
+        PR: "33174"
         GROUP: ${{ inputs.group }}
         HEAD: ${{ inputs.head }}
         SOURCE: ${{ inputs.source }}
