@@ -133,21 +133,8 @@ func icebergPlanningStatsFromPipeline(stats *pipeline.IcebergPlanningStats) proc
 
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
 func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
-	if isRemote && proc != nil {
-		if proc.Ctx == nil {
-			proc.Ctx = context.Background()
-		}
-		proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-		topCtx := proc.GetTopContext()
-		if topCtx == nil {
-			topCtx = context.Background()
-		}
-		proc.ReplaceTopCtx(context.WithValue(topCtx, defines.RemoteRunContext{}, true))
-	}
-	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
-	err := p.Unmarshal(data)
-	if err != nil {
+	if err := p.Unmarshal(data); err != nil {
 		return nil, err
 	}
 	ctx := &scopeContext{
@@ -165,6 +152,24 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 
+	if isRemote && proc != nil {
+		// Nested IVF SQL inherits the sending statement's rule through the
+		// process top context; an unmarked fragment must override any
+		// prior marker rather than silently promote a legacy coordinator.
+		if proc.Ctx == nil {
+			proc.Ctx = context.Background()
+		}
+		proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+		topCtx := proc.GetTopContext()
+		if topCtx == nil {
+			topCtx = context.Background()
+		}
+		topCtx = context.WithValue(topCtx, defines.RemoteRunContext{}, true)
+		if ctx.ivfOwnership == ivfOwnershipStable || topCtx.Value(stableIvfOwnershipKey{}) != nil {
+			topCtx = context.WithValue(topCtx, stableIvfOwnershipKey{}, ctx.ivfOwnership == ivfOwnershipStable)
+		}
+		proc.ReplaceTopCtx(topCtx)
+	}
 	return s, nil
 }
 
@@ -201,6 +206,9 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 		id:     0,
 		parent: nil,
 		regs:   make(map[*process.WaitRegister]int32),
+	}
+	if s.Proc != nil && stableIvfOwnership(s.Proc.GetTopContext()) {
+		ctx.ivfOwnership = ivfOwnershipStable
 	}
 	ctx.root = ctx
 	p, ctxId, err := generatePipeline(s, ctx, 1)
@@ -338,6 +346,11 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if ctxId, ins, err = convertToPipelineInstruction(op, s.Proc, ctx, ctxId); err != nil {
 			return err
+		}
+		if ctx.root.ivfOwnership == ivfOwnershipStable {
+			if alias := ivfOwnershipWireAlias(p, ins, vm.OpType(ins.Op)); alias != 0 {
+				ins.Op = alias
+			}
 		}
 		p.InstructionList = append(p.InstructionList, ins)
 		return nil
@@ -478,7 +491,11 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		}
 	}
 	for i := range p.InstructionList {
-		ins, err := convertToVmOperator(p.InstructionList[i], ctx, eng)
+		wire := p.InstructionList[i]
+		if err := decodeIvfOwnershipInstruction(ctx.root, p, wire); err != nil {
+			return err
+		}
+		ins, err := convertToVmOperator(wire, ctx, eng)
 		if err != nil {
 			return err
 		}
