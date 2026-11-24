@@ -1163,7 +1163,7 @@ exit 0
 }
 
 func TestCancellationSummarizesUnmergedFailureReports(t *testing.T) {
-	for _, mode := range []string{"joined", "prebuilt", "empty-main", "light", "engine", "plan", "prebuilt-symlink", "prebuilt-nonnumeric"} {
+	for _, mode := range []string{"joined", "prebuilt", "empty-main", "light", "engine", "plan", "prebuilt-symlink", "prebuilt-nonnumeric", "midpoint"} {
 		t.Run(mode, func(t *testing.T) {
 			script := `source ./run_ut.sh UT
 UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
@@ -1192,6 +1192,21 @@ case "$MODE" in
   fi
   PREBUILT_RACE_REPORT="$report"; CLUSTER_PREBUILD_DRAIN_FAILED=1 ;;
  joined) PREBUILT_RACE_REPORT="$report" ;;
+ midpoint)
+  python3 - "$report.00" "${UT_MIDPOINT_FILL_MIB:-9}" <<'PYFIXTURE'
+import pathlib, sys
+report = pathlib.Path(sys.argv[1])
+terminal = report.read_bytes()
+line = b'{"Action":"run","Package":"example/noise","Test":"TestNoise"}\n'
+block = line * ((1024 * 1024 + len(line) - 1) // len(line))
+with report.open("wb") as stream:
+    for group in range(2):
+        for _ in range(int(sys.argv[2])):
+            stream.write(block)
+        if not group:
+            stream.write(terminal)
+PYFIXTURE
+  PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
  prebuilt|empty-main) PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
  light) LIGHT_RACE_REPORT="$report.00"; LIGHT_RACE_DRAIN_FAILED=1 ;;
  engine) ENGINE_RACE_REPORT="$report"; ENGINE_RACE_DRAIN_FAILED=1; cp "$report.00" "$report"; : > "$report.ready" ;;

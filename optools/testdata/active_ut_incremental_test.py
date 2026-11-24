@@ -181,7 +181,7 @@ class IncrementalReaderTest(unittest.TestCase):
             )
             args += ["--live-source", str(shard)]
         output = io.StringIO()
-        with mock.patch.object(slow, "AUX_INPUT_BYTES", 640), mock.patch("sys.stdout", output):
+        with mock.patch.multiple(slow, AUX_INPUT_BYTES=640, AUX_TERMINAL_BYTES=0), mock.patch("sys.stdout", output):
             self.assertEqual(slow.main(args), 0)
         self.assertIn("supplemental scan partial", output.getvalue())
         self.assertIn("TestLateFirst", output.getvalue())
@@ -190,7 +190,7 @@ class IncrementalReaderTest(unittest.TestCase):
         self.assertNotIn("TestTorn", output.getvalue())
 
         output = io.StringIO()
-        with mock.patch.object(slow, "AUX_INPUT_BYTES", 2), mock.patch("sys.stdout", output):
+        with mock.patch.multiple(slow, AUX_INPUT_BYTES=2, AUX_TERMINAL_BYTES=0), mock.patch("sys.stdout", output):
             self.assertEqual(slow.main(args), 0)
         self.assertIn("none found in scanned records", output.getvalue())
 
@@ -226,12 +226,92 @@ class IncrementalReaderTest(unittest.TestCase):
                 shard.write_bytes(b"omitted-prefix" + preceding + first + last)
                 output = io.StringIO()
                 # The prefix check must fit inside the budget.
-                with mock.patch.object(slow, "AUX_INPUT_BYTES", len(first) + len(last) + 1), mock.patch("sys.stdout", output):
+                with mock.patch.multiple(slow, AUX_INPUT_BYTES=len(first) + len(last) + 1, AUX_TERMINAL_BYTES=0), mock.patch("sys.stdout", output):
                     self.assertEqual(slow.main(args), 0)
                 result = output.getvalue()
                 self.assertEqual('test="TestAtBoundary"' in result, preceding == b"\n")
                 self.assertIn('test="TestLast"', result)
                 self.assertIn("supplemental scan partial", result)
+
+
+    def test_prefix_recovers_boundary_and_nearby_but_not_distant_output(self):
+        self.report.touch()
+        shard = self.report.with_suffix(".00")
+
+        def context(test, output):
+            return json.dumps({"Action": "output", "Package": "example/test",
+                               "Test": test, "Output": output}).encode() + b"\n"
+
+        spam = self.event("run", "TestSpam") * 100
+        repeat = self.event("fail", "TestNear")
+        tail = repeat + self.event("fail", "TestTorn").rstrip(b"\n")
+        shard.write_bytes(context("TestDistant", "distant assertion") + spam +
+                          self.event("fail", "TestDistant") + spam +
+                          context("TestNear", "nearby assertion") + repeat + tail)
+        output = io.StringIO()
+        # The auxiliary cut is inside the first TestNear row. The second
+        # has identical bytes, but is an independent real terminal.
+        with mock.patch.object(slow, "AUX_INPUT_BYTES", len(tail) + 17), mock.patch("sys.stdout", output):
+            self.assertEqual(0, slow.main(["summary", str(self.report), "--failures",
+                                           "--live-source", str(shard)]))
+        result = output.getvalue()
+        self.assertEqual(2, result.count('action=fail package="example/test" test="TestNear"'))
+        self.assertIn('action=fail package="example/test" test="TestDistant"', result)
+        self.assertIn('action=unresolved-output package="example/test" test="TestNear"\n'
+                      '[failed_ut_output] nearby assertion', result)
+        self.assertIn("assertion context can be missing", result)
+        self.assertNotIn("distant assertion", result)
+        self.assertNotIn("TestTorn", result)
+        self.assertNotIn("supplemental scan partial", result)
+
+    def test_prefix_context_accepts_aligned_window_start_only(self):
+        def context(text):
+            event = {"Action": "output", "Package": "example/test",
+                     "Test": "TestOne", "Output": text}
+            return json.dumps(event).encode() + b"\n"
+
+        first, last = context("edge"), context("later")
+        budget = len(first) + len(last)
+        for predecessor in (b"\n", b"x"):
+            with self.subTest(predecessor=predecessor):
+                self.report.write_bytes(b"prefix" + predecessor + first + last)
+                with slow.open_report(self.report) as stream, \
+                        mock.patch.object(slow, "PREFIX_CONTEXT_BYTES", budget), \
+                        mock.patch.object(slow.os, "pread", wraps=os.pread) as pread:
+                    value = slow.prefix_context(stream, self.report.stat().st_size,
+                                                "example/test", "TestOne")
+                    self.assertEqual("edgelater" if predecessor == b"\n" else "later", value)
+                    pread.assert_called_once_with(stream.fileno(), budget + 1, len(b"prefix"))
+
+    def test_prefix_read_error_keeps_complete_prior_failure(self):
+        terminal = self.event("fail", "TestBeforeReadError")
+        stream = mock.Mock()
+        stream.name = "shard.00"
+        stream.raw.read.side_effect = [terminal, OSError("injected read error")]
+        diagnostics = []
+        found, partial = slow.prefix_failures(
+            stream, len(terminal) + 5, float("inf"), 32, 0, diagnostics,
+        )
+        self.assertTrue(partial)
+        self.assertEqual([("example/test", "TestBeforeReadError", "fail")],
+                         [row[:3] for row in found])
+        self.assertEqual(["report read failed: shard.00: injected read error"], diagnostics)
+
+    def test_prefix_shares_absolute_deadline_and_reports_partial(self):
+        self.report.touch()
+        args = ["summary", str(self.report), "--failures"]
+        for suffix in (".00", ".01"):
+            shard = self.report.with_suffix(suffix)
+            shard.write_bytes(self.event("fail", "TestTooLate") + self.event("run") * 8)
+            args += ["--live-source", str(shard)]
+        # Model one slow underlying read. The next source doesn't get a
+        # fresh time budget (and is never read by the prefix pass).
+        with mock.patch.object(slow, "AUX_INPUT_BYTES", 128), \
+                mock.patch.object(slow.time, "monotonic", side_effect=[1, 1, 4, 4]), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(0, slow.main(args))
+            self.assertIn("supplemental scan partial", output.getvalue())
+            self.assertNotIn("TestTooLate", output.getvalue())
 
     def test_aux_overlap_tracking_cap_keeps_terminal_and_labels_output_context(self):
         self.report.write_bytes(b"")
