@@ -20,8 +20,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2640,11 +2638,10 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 			require.NoError(t, err)
 			output := batch.NewWithSchema(nil, colTypes, allocation)
 			cacheVectors := containers.NewVectors(len(colTypes) + 2)
-			var sel bitmap.Bitmap
 			request := &engine.ReaderFilterRequest{
 				OutputAllocation: allocation,
 				ColumnUses:       []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnRetain},
-				PublishSelection: &sel,
+				PublishSelection: true,
 				Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 					t.Fatal("a Select read must not call Apply")
 					return engine.ReaderFilterResult{}, nil

@@ -83,7 +83,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 		count = source.RowCount()
 		selected.All = true
 	}
-	if r.publish && filter.PublishSelection != nil && !selected.All {
+	if r.publish && filter.PublishSelection && !selected.All {
 		for col, v := range source.Vecs {
 			if filter.ColumnUse(col, len(out.Vecs)) == engine.ReaderColumnUnused {
 				continue
@@ -92,11 +92,11 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 				return false, err
 			}
 		}
-		filter.PublishSelection.InitWithSize(int64(source.RowCount()))
+		sel := out.OwnSelection(source.RowCount())
 		for _, row := range selected.Sels {
-			filter.PublishSelection.Add(uint64(row))
+			sel.Add(uint64(row))
 		}
-		out.SetSelection(filter.PublishSelection)
+		out.SetSelection(sel)
 		return false, nil
 	}
 	for col, v := range source.Vecs {

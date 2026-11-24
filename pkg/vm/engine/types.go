@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -1351,12 +1350,12 @@ type ReaderFilterRequest struct {
 	// readers continue calling Apply.
 	Select           ReaderSelection
 	OutputAllocation *mpool.MPool
-	// PublishSelection, when set, lets a Select read keep its columns'
-	// physical rows (read-only cache references) and publish the selected rows
-	// as the batch's selection, held in this caller-owned bitmap, instead of
-	// compacting them. Readers fall back to compaction when the block's rows
-	// are not its physical rows (deletes, storage row selections).
-	PublishSelection *bitmap.Bitmap
+	// PublishSelection lets a Select read keep its columns' physical rows
+	// (read-only cache references) and publish the selected rows as the output
+	// batch's own selection instead of compacting them. Readers fall back to
+	// compaction when the block's rows are not its physical rows (deletes,
+	// storage row selections).
+	PublishSelection bool
 	Apply            ReaderFilter
 	Exact            *objectio.ExactScanState
 	Observe          func(objectio.ExactScanStats)

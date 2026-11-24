@@ -90,3 +90,59 @@ func TestBatchSelection(t *testing.T) {
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+// A batch's selection is owned or borrowed, like its vectors: OwnSelection
+// fills the batch's own storage, a forwarded or viewed selection borrows the
+// input's bitmap, and Clean releases only the batch's own storage.
+func TestBatchSelectionOwnedOrBorrowed(t *testing.T) {
+	producer := NewWithSize(0)
+	own := producer.OwnSelection(6)
+	require.Same(t, &producer.ownSel, own)
+	require.Equal(t, int64(6), own.Len())
+	require.Zero(t, own.Count())
+	own.AddMany([]uint64{0, 3})
+	producer.SetSelection(own)
+	require.Same(t, &producer.ownSel, producer.Selection())
+	require.Equal(t, 2, producer.RowCount())
+	require.Equal(t, 6, producer.PhysicalRowCount())
+
+	// A forwarder borrows: no copy, the same bitmap.
+	forwarder := NewWithSize(0)
+	forwarder.SetSelection(producer.Selection())
+	require.Same(t, producer.Selection(), forwarder.Selection())
+	require.NotSame(t, &forwarder.ownSel, forwarder.Selection())
+
+	// A view borrows the parent's selection; a physical view has none.
+	var view Batch
+	producer.ViewInto(&view)
+	require.Same(t, producer.Selection(), view.Selection())
+	var physical Batch
+	producer.PhysicalView(&physical)
+	require.False(t, physical.HasSelection())
+
+	// A narrower copies into its own storage and never touches the input's.
+	narrower := NewWithSize(0)
+	narrowed := narrower.OwnSelection(0)
+	narrowed.InitWith(forwarder.Selection())
+	narrowed.Remove(3)
+	narrower.SetSelection(narrowed)
+	require.Equal(t, []int64{0}, narrower.SelectionRows(nil))
+	require.Equal(t, []int64{0, 3}, producer.SelectionRows(nil))
+
+	// Re-initializing the own storage for the next batch drops the published
+	// selection first.
+	again := producer.OwnSelection(4)
+	require.False(t, producer.HasSelection())
+	require.Equal(t, 6, producer.RowCount(), "the physical row count comes back")
+	require.Equal(t, int64(4), again.Len())
+
+	// Cleaning a borrower leaves the lender's selection alone; cleaning the
+	// owner releases its storage.
+	mp := mpool.MustNewZero()
+	forwarder.Clean(mp)
+	require.Equal(t, int64(4), producer.ownSel.Len())
+	producer.Clean(mp)
+	require.False(t, producer.HasSelection())
+	require.Zero(t, producer.ownSel.Len())
+	narrower.Clean(mp)
+}

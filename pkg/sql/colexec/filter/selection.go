@@ -23,13 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// selectionState is the filter's selected-batch machinery. A selected output
-// borrows the input's vectors and the filter-owned bitmap; both stay valid
+// selectionState is the filter's selected-batch machinery. A selected output,
+// view, borrows the input's vectors and owns its selection; both stay valid
 // until the next Call.
 type selectionState struct {
 	// output is set by the parent's preparation (vm.SelectionProducer).
 	output   bool
-	rows     bitmap.Bitmap
 	mask     []bool
 	physical batch.Batch
 	view     batch.Batch
@@ -57,9 +56,13 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	physicalRows := physical.RowCount()
 
 	// selected == false means every physical row is selected.
+	// rows is view's own selection: a copy of the input's selection, narrowed
+	// below, or built from the first predicate that drops a row.
 	selected := input.HasSelection()
+	var rows *bitmap.Bitmap
 	if selected {
-		s.rows.InitWith(input.Selection())
+		rows = s.view.OwnSelection(0)
+		rows.InitWith(input.Selection())
 	}
 
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
@@ -73,7 +76,7 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 		}
 		var mask []bool
 		if selected {
-			s.mask = batch.SelectionMaskOf(&s.rows, physicalRows, s.mask)
+			s.mask = batch.SelectionMaskOf(rows, physicalRows, s.mask)
 			mask = s.mask
 		}
 		vec, err := filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{physical}, mask)
@@ -102,26 +105,26 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 			return !null && v
 		}
 		if !selected {
-			s.rows.InitWithSize(int64(physicalRows))
+			rows = s.view.OwnSelection(physicalRows)
 			for row := 0; row < physicalRows; row++ {
 				if keep(uint64(row)) {
-					s.rows.Add(uint64(row))
+					rows.Add(uint64(row))
 				}
 			}
-			if s.rows.Count() == physicalRows {
+			if rows.Count() == physicalRows {
 				continue // every row survives; stay unselected
 			}
 			selected = true
 		} else {
-			itr := s.rows.IteratorValue()
+			itr := rows.IteratorValue()
 			for itr.HasNext() {
 				row := itr.Next()
 				if !keep(row) {
-					s.rows.Remove(row)
+					rows.Remove(row)
 				}
 			}
 		}
-		if s.rows.IsEmpty() {
+		if rows.IsEmpty() {
 			return batch.EmptyBatch, nil
 		}
 	}
@@ -129,9 +132,10 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	if !selected {
 		return input, nil
 	}
-	s.view = batch.Batch{}
+	// PhysicalView resets every field a view uses and keeps view's own
+	// selection storage, which rows points into.
 	input.PhysicalView(&s.view)
-	s.view.SetSelection(&s.rows)
+	s.view.SetSelection(rows)
 	if s.output {
 		return &s.view, nil
 	}

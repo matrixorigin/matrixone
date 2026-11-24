@@ -1126,7 +1126,7 @@ func blockDataReadWithFilter(
 			}
 		}
 
-		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && applyFilter.PublishSelection == nil && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf()) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
+		if applyFilter.Select != nil && applyFilter.OutputAllocation != nil && !applyFilter.PublishSelection && !info.IsAppendable() && tombstones.IsEmpty() && phyAddrColumnPos < 0 && orderByLimit == nil && len(outputBat.ExtraBuf()) == 0 && scopedOwnedColumns(applyFilter, len(outputBat.Vecs)) {
 			defer tombstones.Release()
 			return blockDataReadScopedOwned(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter, preFilterRows)
 		}
@@ -1223,7 +1223,7 @@ func blockDataReadWithFilter(
 		// The block's live rows are its physical rows only without deletes or
 		// a storage row selection. Then every column can stay a read-only
 		// reference to the cache and the batch carries the selection.
-		publishSelection := applyFilter.PublishSelection != nil && deleteMask.IsEmpty() &&
+		publishSelection := applyFilter.PublishSelection && deleteMask.IsEmpty() &&
 			physicalRows == nil
 		if !filterResult.All {
 			if publishSelection && len(filterResult.Sels) > 0 {

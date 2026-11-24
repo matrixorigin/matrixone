@@ -1626,7 +1626,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Attrs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
-	bat.selection = nil
+	bat.ownSel = bitmap.Bitmap{}
 }
 
 func (bat *Batch) Last() bool {

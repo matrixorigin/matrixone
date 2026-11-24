@@ -63,8 +63,12 @@ type Batch struct {
 
 	// selection, when non-nil, marks the physical rows that are the batch's
 	// logical rows (see selection.go). Its length is the vectors' physical
-	// row count.
+	// row count. It points either at ownSel (the batch owns it) or at a
+	// bitmap borrowed from the producer of the batch's input.
 	selection *bitmap.Bitmap
+	// ownSel is the batch's own selection storage, reused for every batch it
+	// carries (OwnSelection) and released by Clean.
+	ownSel bitmap.Bitmap
 
 	// mp is the pool for the batch's own memory allocations; today that is
 	// only extraBuf. nil means the batch owns nothing from a pool, as for

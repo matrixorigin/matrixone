@@ -64,7 +64,7 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 }
 
 // publishBatchSelection keeps the read columns' physical rows and publishes
-// rows as output's selection, in the caller-owned request.PublishSelection.
+// rows as output's own selection.
 // Columns the caller marked unused are cleared.
 func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, physicalRows int, request *engine.ReaderFilterRequest) {
 	width := len(output.Vecs)
@@ -73,7 +73,7 @@ func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, p
 			output.Vecs[pos].CleanOnlyData()
 		}
 	}
-	sel := request.PublishSelection
+	sel := output.OwnSelection(physicalRows)
 	sel.InitWithRows(int64(physicalRows), rows)
 	output.SetSelection(sel)
 }

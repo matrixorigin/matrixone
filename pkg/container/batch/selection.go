@@ -29,14 +29,30 @@ import (
 //
 // Only an operator that declares it accepts a selection on that input edge
 // receives one (see vm.SelectionConsumer); every other consumer, codec and
-// remote boundary gets compacted data. A selected batch borrows its vectors
-// and its bitmap from the producer, so it is valid until the producer's next
-// Call, the same as any other operator output.
+// remote boundary gets compacted data. A selected batch is valid until the
+// producer's next Call, the same as any other operator output.
+//
+// A batch's selection is owned or borrowed, like its vectors. A producer, or a
+// consumer that narrows its input's selection, fills the output batch's own
+// storage (OwnSelection). A consumer that forwards a selection unchanged, and
+// every view, borrows the input's bitmap read-only. Copy only to modify.
+
+// OwnSelection returns the batch's own selection storage, cleared and sized to
+// physicalRows. The caller fills it, or copies an input selection into it and
+// narrows it, and then publishes it with SetSelection. A batch copied by value
+// shares its original's storage and must not call OwnSelection.
+func (bat *Batch) OwnSelection(physicalRows int) *bitmap.Bitmap {
+	if bat.selection == &bat.ownSel {
+		bat.ClearSelection()
+	}
+	bat.ownSel.InitWithSize(int64(physicalRows))
+	return &bat.ownSel
+}
 
 // SetSelection publishes the set bits of sel as this batch's logical rows over
 // its physical vectors. sel's length (sel.Len()) must be the vectors' physical
-// row count, and sel must not be modified while the batch is published; the
-// producer keeps ownership.
+// row count. sel is either the batch's own storage (OwnSelection) or a bitmap
+// borrowed from the producer, which must not change it until its next Call.
 func (bat *Batch) SetSelection(sel *bitmap.Bitmap) {
 	bat.selection = sel
 	bat.rowCount = sel.Count()
