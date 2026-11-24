@@ -78,7 +78,7 @@ func TestPreparedRefreshFailureReleasesProtocolResources(t *testing.T) {
 				require.ErrorIs(t, resp.GetData().(error), want)
 				require.Nil(t, stmt.cursor)
 				require.Zero(t, ses.preparedCursorBytes.Load())
-				require.Nil(t, stmt.params)
+				requireNoBinaryParamValues(t, stmt)
 				require.Empty(t, stmt.getFromSendLongData)
 				require.Equal(t, ctx, execCtx.reqCtx, "request marker must not survive ExecCtx reuse")
 				before := len(bh.executedSQLs)
