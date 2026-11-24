@@ -18,12 +18,13 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import stat
 import sys
 from collections import OrderedDict
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -34,6 +35,8 @@ from active_ut_incremental import (
     apply_event, atomic_write, fresh, render,
 )
 
+AUX_INPUT_BYTES = 8 * 1024 * 1024
+MAX_AUX_LIFECYCLE_KEYS = 4096
 MAX_FAILURES = 32
 MAX_UNRESOLVED_OUTPUTS = 8
 MAX_BUFFERED_OUTPUTS = 256
@@ -89,13 +92,21 @@ def open_report(path: Path):
         raise
 
 
-def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None):
+def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None, window=None):
     """Read only the regular-file prefix present when this descriptor opens."""
-    info = os.fstat(report.fileno())
-    if not stat.S_ISREG(info.st_mode):
-        raise OSError("report is not a regular file")
     name = source_name if source_name is not None else report.name
-    remaining = info.st_size
+    discard_first = False
+    if window is None:
+        info = os.fstat(report.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("report is not a regular file")
+        remaining = info.st_size
+    else:
+        remaining, clipped = window
+        if clipped and remaining:
+            # The first budgeted byte is the predecessor of the payload.
+            discard_first = report.read(1) != b"\n"
+            remaining -= 1
     try:
         while remaining:
             line = report.readline(min(remaining, MAX_LIFECYCLE_LINE_BYTES + 1))
@@ -115,11 +126,15 @@ def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None)
                             diagnostics.append(f"report truncated while reading: {name}")
                         break
                     remaining -= len(line)
-                yield b"!"  # Count the discarded oversized or torn record.
+                if not discard_first:
+                    yield b"!"  # Count the discarded oversized or torn record.
+                discard_first = False
                 continue
             if not line.endswith(b"\n") and (require_lf or remaining):
                 break
-            yield line
+            if not discard_first:
+                yield line
+            discard_first = False
     except OSError as error:
         if diagnostics is not None:
             diagnostics.append(f"report read failed: {name}: {error}")
@@ -127,10 +142,21 @@ def snapshot_lines(report, require_lf: bool, diagnostics=None, source_name=None)
             raise
 
 
+def auxiliary_budgets(sizes: List[int], remaining: int) -> List[int]:
+    """Reclaim spare bytes from small sources before sharing the rest."""
+    budgets = [0] * len(sizes)
+    for done, index in enumerate(sorted(range(len(sizes)), key=sizes.__getitem__)):
+        budget = min(sizes[index], remaining // (len(sizes) - done))
+        budgets[index] = budget
+        remaining -= budget
+    return budgets
+
+
 def summarize(
     report_path: Path, limit: int = 20, active_out: Optional[Path] = None,
     *, require_lifecycle_lf: bool = False, capture_failures: bool = False,
-    failure_only: bool = False, stream=None, diagnostics=None,
+    failure_only: bool = False, stream=None, diagnostics=None, window=None,
+    failure_limits: Tuple[int, int] = (MAX_FAILURES, MAX_UNRESOLVED_OUTPUTS),
 ) -> Tuple[
     List[Tuple[float, str, str, str, str]],
     List[Tuple[float, str, str, str, str]],
@@ -148,11 +174,17 @@ def summarize(
     omitted_failures = 0
     outputs = OrderedDict()
     output_evicted = False
-    lifecycle = fresh(None) if active_out is not None or capture_failures else None
+    # A clipped prefix can conceal concurrent invocations. Keep their
+    # snippets as context, not as output attributed to a specific failure.
+    lifecycle = fresh(None) if (active_out is not None or capture_failures) and not (
+        window and window[1]
+    ) else None
+    lifecycle_updates = 0
+    failure_limit, context_limit = failure_limits
     unfinished = []
 
     with (nullcontext(stream) if stream is not None else open_report(report_path)) as report:
-        for raw_line in snapshot_lines(report, require_lifecycle_lf, diagnostics, report_path):
+        for raw_line in snapshot_lines(report, require_lifecycle_lf, diagnostics, report_path, window):
             try:
                 line = raw_line.decode("utf-8")
             except UnicodeDecodeError:
@@ -177,14 +209,16 @@ def summarize(
             if capture_failures and complete:
                 name = test if isinstance(test, str) else ""
                 output_key = (package, name)
-                if name:
+                if lifecycle is None:
+                    overlapping = False
+                elif name:
                     entry = lifecycle["cases"].get(package, {}).get(name)
                     overlapping = bool(entry and entry[2] > 1)
                 else:
                     entry = lifecycle["packages"].get(package)
                     overlapping = bool(entry and entry[1] > 1)
                 if action in ("output", "build-output") and (
-                    len(failures) < MAX_FAILURES or len(unresolved_outputs) < MAX_UNRESOLVED_OUTPUTS
+                    len(failures) < failure_limit or len(unresolved_outputs) < context_limit
                 ):
                     output = event.get("Output")
                     if isinstance(output, str):
@@ -209,7 +243,13 @@ def summarize(
                     key = (package, name, action)
                     # A package can have multiple independent batched test
                     # invocations. Each terminal event is authoritative.
-                    if len(failures) < MAX_FAILURES:
+                    if len(failures) < failure_limit:
+                        if lifecycle is None and buffer[2]:
+                            if len(unresolved_outputs) < context_limit:
+                                unresolved_outputs.append((package, name, "unresolved-output", *buffer))
+                            else:
+                                omitted_failures += 1
+                            buffer = ("", "", 0, False)
                         failures.append((*key, *buffer))
                     else:
                         omitted_failures += 1
@@ -221,7 +261,7 @@ def summarize(
                             if other_package != package or not other_test:
                                 continue
                             context_key = (package, other_test, "unresolved-output")
-                            if len(unresolved_outputs) < MAX_UNRESOLVED_OUTPUTS:
+                            if len(unresolved_outputs) < context_limit:
                                 unresolved_outputs.append((*context_key, *other_buffer))
                             else:
                                 omitted_failures += 1
@@ -243,6 +283,17 @@ def summarize(
                 framed_size = len(raw_line) + (0 if has_lf else 1)
                 if framed_size <= MAX_LIFECYCLE_LINE_BYTES and (has_lf or not require_lifecycle_lf):
                     apply_event(lifecycle, event, None if failure_only else unfinished)
+                    if failure_only:
+                        lifecycle_updates += 1
+                        # Sample the key count every 256 updates. Each update
+                        # can add at most a package bucket plus one key.
+                        if lifecycle_updates % 256 == 0 and (
+                            len(lifecycle["packages"]) + len(lifecycle["cases"])
+                            + sum(map(len, lifecycle["cases"].values())) > MAX_AUX_LIFECYCLE_KEYS
+                        ):
+                            lifecycle = None
+                            if diagnostics is not None:
+                                diagnostics.append(f"overlap tracking capped; subsequent snippets are context only: {report_path}")
             if failure_only:
                 continue
             timestamp = parse_time(event.get("Time"))
@@ -294,7 +345,8 @@ def summarize(
     return completed_tests[:limit], completed_packages[:limit], malformed, failures + unresolved_outputs, omitted_failures
 
 
-def print_failure_details(failures: List[Tuple[str, str, str, str, str, int, bool]], omitted: int) -> None:
+def print_failure_details(failures: List[Tuple[str, str, str, str, str, int, bool]], omitted: int,
+                          partial: bool = False) -> None:
     """Print the bounded output collected before each terminal failure."""
     print("[failed_ut_cases] failures and unresolved output:")
     print("[failed_ut_cases] output is bounded; overlapping invocations may interleave")
@@ -311,9 +363,10 @@ def print_failure_details(failures: List[Tuple[str, str, str, str, str, int, boo
         for line in output.splitlines():
             print(f"[failed_ut_output] {line}")
     if not failures:
-        print("[failed_ut_cases] none")
+        print("[failed_ut_cases] none found in scanned records" if partial else "[failed_ut_cases] none")
     if omitted:
-        print(f"[failed_ut_cases] additional failure or context events omitted={omitted}")
+        suffix = " (scanned records only)" if partial else ""
+        print(f"[failed_ut_cases] additional failure or context events omitted={omitted}{suffix}")
 
 
 def main(argv: List[str]) -> int:
@@ -345,33 +398,54 @@ def main(argv: List[str]) -> int:
             print(f"slow UT case report unavailable: {args.report}: {error}", file=sys.stderr)
             return 1
         diagnostics.append(f"main report unavailable: {args.report}: {error}")
+    partial = False
     if args.failures:
-        for path, live in [(p, True) for p in args.live_source] + [(p, False) for p in args.stopped_source]:
-            try:
-                with open_report(path) as stream:
+        with ExitStack() as opened:
+            sources = []
+            for path, live in [(p, True) for p in args.live_source] + [(p, False) for p in args.stopped_source]:
+                try:
+                    stream = opened.enter_context(open_report(path))
                     info = os.fstat(stream.fileno())
                     identity = (info.st_dev, info.st_ino)
                     if identity in seen:
+                        stream.close()
                         continue
                     seen.add(identity)
+                    sources.append((path, live, stream, info.st_size))
+                except OSError as error:
+                    partial = True
+                    diagnostics.append(f"report unavailable: {path}: {error}")
+            budgets = auxiliary_budgets([size for _, _, _, size in sources], AUX_INPUT_BYTES)
+            for (path, live, stream, size), budget in zip(sources, budgets):
+                start = size - budget
+                partial |= start != 0
+                if not budget:
+                    continue
+                try:
+                    # Read the exact window without buffered read-ahead. Keep
+                    # the chosen descriptor even if its path rotates.
+                    stream.seek(start)
+                    data = stream.raw.read(budget)
+                    if len(data) != budget:
+                        partial = True
+                        diagnostics.append(f"report truncated while reading: {path}")
+                    context_count = sum(item[2] == "unresolved-output" for item in failures)
                     _, _, source_malformed, source_failures, source_omitted = summarize(
-                        path, require_lifecycle_lf=live, capture_failures=True, failure_only=True,
-                        stream=stream, diagnostics=diagnostics,
+                        path, require_lifecycle_lf=live or len(data) != budget, capture_failures=True,
+                        failure_only=True, stream=io.BytesIO(data), diagnostics=diagnostics,
+                        window=(len(data), start != 0),
+                        failure_limits=(MAX_FAILURES - len(failures) + context_count,
+                                        MAX_UNRESOLVED_OUTPUTS - context_count),
                     )
-            except OSError as error:
-                diagnostics.append(f"report unavailable: {path}: {error}")
-                continue
-            malformed += source_malformed
-            omitted += source_omitted
-            for failure in source_failures:
-                action = failure[2]
-                count = sum(item[2] == "unresolved-output" for item in failures)
-                if (action == "unresolved-output" and count >= MAX_UNRESOLVED_OUTPUTS) or (
-                    action != "unresolved-output" and len(failures) - count >= MAX_FAILURES
-                ):
-                    omitted += 1
-                else:
-                    failures.append(failure)
+                except OSError as error:
+                    partial = True
+                    diagnostics.append(f"report unavailable: {path}: {error}")
+                    continue
+                malformed += source_malformed
+                omitted += source_omitted
+                failures.extend(source_failures)
+        if partial:
+            diagnostics.append("supplemental scan partial; searched bounded tails; failure counts may be incomplete")
     for diagnostic in diagnostics:
         print(f"[failed_ut_cases] {diagnostic}")
     print(f"[slow_ut_cases] completed test cases (top {limit}):")
@@ -400,7 +474,7 @@ def main(argv: List[str]) -> int:
             "(report may be truncated by cancellation)"
         )
     if args.failures:
-        print_failure_details(failures, omitted)
+        print_failure_details(failures, omitted, partial)
     return 0
 
 

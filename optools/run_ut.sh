@@ -662,7 +662,7 @@ function report_slow_ut_cases(){
     local lifecycle_report="${UT_REPORT}.lifecycle"
     local -a lifecycle_args=(--active-out "${lifecycle_report}")
     local -a sources=() extra_reports=()
-    local family report source live
+    local family report source live mode
     if [[ -n "${CURRENT_UT_PID}" ]] || (( CURRENT_UT_DRAIN_FAILED != 0 )); then
         lifecycle_args+=(--require-lifecycle-lf)
     fi
@@ -671,14 +671,17 @@ function report_slow_ut_cases(){
         # Only still-owned reports were not transferred to UT_REPORT. Select
         # the same ready base or shards used by the report consumer.
         for family in LIGHT ENGINE PLAN PREBUILT; do
+            mode=normal
             case "${family}" in
                 LIGHT) report=${LIGHT_RACE_REPORT}; live=${LIGHT_RACE_DRAIN_FAILED}; [[ -z "${LIGHT_RACE_JOB_PID}" ]] || live=1 ;;
                 ENGINE) report=${ENGINE_RACE_REPORT}; live=${ENGINE_RACE_DRAIN_FAILED}; [[ -z "${ENGINE_RACE_JOB_PID}" ]] || live=1 ;;
                 PLAN) report=${PLAN_RACE_REPORT}; live=${PLAN_RACE_DRAIN_FAILED}; [[ -z "${PLAN_RACE_JOB_PID}" ]] || live=1 ;;
-                PREBUILT) report=${PREBUILT_RACE_REPORT}; live=${CURRENT_UT_DRAIN_FAILED}; [[ -z "${CURRENT_UT_PID}" ]] || live=1 ;;
+                PREBUILT)
+                    report=${PREBUILT_RACE_REPORT}; live=${CURRENT_UT_DRAIN_FAILED}; mode=prebuilt-snapshot
+                    if [[ -n "${CURRENT_UT_PID}" ]] || (( CLUSTER_PREBUILD_DRAIN_FAILED != 0 )); then live=1; fi ;;
             esac
             [[ -n "${report}" ]] || continue
-            if ! collect_ut_report_sources "${report}"; then
+            if ! collect_ut_report_sources "${report}" "${mode}"; then
                 logger "ERR" "cannot select UT report sources: ${report}"
                 continue
             fi

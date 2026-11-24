@@ -1163,7 +1163,7 @@ exit 0
 }
 
 func TestCancellationSummarizesUnmergedFailureReports(t *testing.T) {
-	for _, mode := range []string{"joined", "prebuilt", "empty-main", "light", "engine", "plan"} {
+	for _, mode := range []string{"joined", "prebuilt", "empty-main", "light", "engine", "plan", "prebuilt-symlink", "prebuilt-nonnumeric"} {
 		t.Run(mode, func(t *testing.T) {
 			script := `source ./run_ut.sh UT
 UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
@@ -1182,6 +1182,15 @@ cat > "$report.00" <<'EOF'
 EOF
 printf '%s' '{"Action":"fail","Package":"example/issues","Test":"TestIncomplete","Elapsed":1}' > "$report.01"
 case "$MODE" in
+ prebuilt-symlink|prebuilt-nonnumeric)
+  mv "$report.00" "$report"; rm "$report.01"
+  printf '%s\n' '{"Action":"fail","Package":"example/issues","Test":"TestIneligible"}' > "$CASE_DIR/other"
+  if [[ "$MODE" == prebuilt-symlink ]]; then
+   ln -s "$CASE_DIR/other" "$report.00"
+  else
+   cp "$CASE_DIR/other" "$report.other"
+  fi
+  PREBUILT_RACE_REPORT="$report"; CLUSTER_PREBUILD_DRAIN_FAILED=1 ;;
  joined) PREBUILT_RACE_REPORT="$report" ;;
  prebuilt|empty-main) PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
  light) LIGHT_RACE_REPORT="$report.00"; LIGHT_RACE_DRAIN_FAILED=1 ;;
@@ -1189,7 +1198,7 @@ case "$MODE" in
  plan) PLAN_RACE_REPORT="$report"; PLAN_RACE_DRAIN_FAILED=1; printf 'partial base\n' > "$report" ;;
 esac
 set +e
-( handle_ut_termination )
+( trap handle_ut_termination TERM; fixture_self_pid pid; kill -TERM "$pid"; exit 89 )
 status=$?
 set -e
 if [[ "$MODE" == joined ]]; then
@@ -1198,7 +1207,12 @@ if [[ "$MODE" == joined ]]; then
 else
  [[ "$status" == 125 ]] || exit 92
  ! grep -q TestShardFailure "$UT_DIAGNOSTIC_DIR/ut-report.json" || exit 93
- [[ -f "$report.00" ]] || exit 94
+ if [[ "$MODE" == prebuilt-* ]]; then
+  [[ "$report" -ef "$UT_DIAGNOSTIC_DIR/live-prebuilt-$G_TS/live.base.jsonl" ]] || exit 94
+  ! grep -q TestIneligible "$UT_DIAGNOSTIC_DIR/top.txt" || exit 98
+ else
+  [[ -f "$report.00" ]] || exit 94
+ fi
 fi
 [[ $(grep -c 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt") == 1 ]] || exit 95
 grep -q 'shard assertion' "$UT_DIAGNOSTIC_DIR/top.txt" || exit 96

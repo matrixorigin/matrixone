@@ -167,6 +167,89 @@ class IncrementalReaderTest(unittest.TestCase):
         self.assertIn("ignored malformed JSON lines=1", output)
         self.assertIn("report unavailable", output)
 
+    def test_live_byte_budget_shares_tails_and_discloses_partial_result(self):
+        main = self.report
+        main.write_bytes(b"")
+        args = ["summary", str(main), "--failures"]
+        for suffix in ("First", "Second"):
+            shard = main.with_suffix("." + suffix)
+            shard.write_bytes(
+                self.event("fail", "TestOutside" + suffix)
+                + 100 * self.event("run", "TestNoise")
+                + self.event("fail", "TestLate" + suffix)
+                + self.event("fail", "TestTorn" + suffix).rstrip(b"\n")
+            )
+            args += ["--live-source", str(shard)]
+        output = io.StringIO()
+        with mock.patch.object(slow, "AUX_INPUT_BYTES", 640), mock.patch("sys.stdout", output):
+            self.assertEqual(slow.main(args), 0)
+        self.assertIn("supplemental scan partial", output.getvalue())
+        self.assertIn("TestLateFirst", output.getvalue())
+        self.assertIn("TestLateSecond", output.getvalue())
+        self.assertNotIn("TestOutside", output.getvalue())
+        self.assertNotIn("TestTorn", output.getvalue())
+
+        output = io.StringIO()
+        with mock.patch.object(slow, "AUX_INPUT_BYTES", 2), mock.patch("sys.stdout", output):
+            self.assertEqual(slow.main(args), 0)
+        self.assertIn("none found in scanned records", output.getvalue())
+
+    def test_live_byte_budget_reclaims_small_shard_shares(self):
+        self.report.write_bytes(b"")
+        args = ["summary", str(self.report), "--failures"]
+        sizes = []
+        for index in range(8):
+            shard = self.report.with_suffix(f".{index}")
+            data = self.event("fail", "TestOld" if index == 0 else f"TestSmall{index}")
+            if index == 0:
+                data += 20 * self.event("output", "TestSpam")
+            sizes.append(len(data))
+            shard.write_bytes(data)
+            args += ["--live-source", str(shard)]
+
+        output = io.StringIO()
+        with mock.patch.object(slow, "AUX_INPUT_BYTES", sum(sizes)), mock.patch("sys.stdout", output):
+            self.assertEqual(slow.main(args), 0)
+        result = output.getvalue()
+        self.assertIn('test="TestOld"', result)
+        self.assertEqual(result.count('[failed_ut_cases] action=fail '), 8)
+        self.assertNotIn("supplemental scan partial", result)
+
+    def test_live_tail_accepts_first_record_only_after_newline(self):
+        self.report.write_bytes(b"")
+        shard = self.report.with_suffix(".00")
+        first = self.event("fail", "TestAtBoundary")
+        last = self.event("fail", "TestLast")
+        args = ["summary", str(self.report), "--failures", "--live-source", str(shard)]
+        for preceding in (b"\n", b"x"):
+            with self.subTest(preceding=preceding):
+                shard.write_bytes(b"omitted-prefix" + preceding + first + last)
+                output = io.StringIO()
+                # The prefix check must fit inside the budget.
+                with mock.patch.object(slow, "AUX_INPUT_BYTES", len(first) + len(last) + 1), mock.patch("sys.stdout", output):
+                    self.assertEqual(slow.main(args), 0)
+                result = output.getvalue()
+                self.assertEqual('test="TestAtBoundary"' in result, preceding == b"\n")
+                self.assertIn('test="TestLast"', result)
+                self.assertIn("supplemental scan partial", result)
+
+    def test_aux_overlap_tracking_cap_keeps_terminal_and_labels_output_context(self):
+        self.report.write_bytes(b"")
+        shard = self.report.with_suffix(".00")
+        late = json.dumps({"Action": "output", "Package": "example/test", "Test": "TestLate",
+                           "Output": "potentially shared snippet"}).encode() + b"\n"
+        shard.write_bytes(self.event("start", "") + self.event("start", "") +
+                          b"".join(self.event("run", f"TestRun{i}") for i in range(256)) +
+                          late + self.event("fail", "TestLate"))
+        output = io.StringIO()
+        with mock.patch.object(slow, "MAX_AUX_LIFECYCLE_KEYS", 2), mock.patch("sys.stdout", output):
+            self.assertEqual(slow.main(["summary", str(self.report), "--failures",
+                                        "--live-source", str(shard)]), 0)
+        result = output.getvalue()
+        self.assertIn('action=fail package="example/test" test="TestLate"\n[failed_ut_output] no output retained', result)
+        self.assertIn('action=unresolved-output package="example/test" test="TestLate"\n[failed_ut_output] potentially shared snippet', result)
+        self.assertIn("overlap tracking capped", result)
+
     def test_timeout_failure_details_preserve_context_and_bound_output(self):
         events = [
             {"Action": "output", "Package": "example/a", "Test": "TestFast", "Output": "first assertion\n" + "x" * 20000 + "\nlast assertion\n"},
