@@ -3265,11 +3265,11 @@ func TestParseExecuteDataDecimalRebindsPreparedAbsExactly(t *testing.T) {
 		buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value), 0))
 	require.Equal(t, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}, prepareStmt.ParamTypes)
 	proc.SetPrepareParamsWithIsBin(prepareStmt.params, []bool{false})
-	values, err := preparedParamValues(proc, prepareStmt.ParamTypes,
+	values, err := preparedParamValues(proc, nil, prepareStmt.ParamTypes,
 		[]types.StringConversionKind{types.StringConversionDecimal})
 	require.NoError(t, err)
 	require.Len(t, values, 1)
-	param := values[0].(plan.ParamValue)
+	param := mustParamValue(values[0])
 	require.Equal(t, value, param.Value)
 	require.True(t, param.HasRuntimeType)
 	require.Equal(t, types.T_decimal256, param.RuntimeType.Oid)
@@ -3352,7 +3352,7 @@ func TestParseExecuteDataBitCountMarkerUsesPacketDomain(t *testing.T) {
 			}()
 			require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, tc.packet(proto), 0))
 			proc.SetPrepareParamsWithIsBin(prepareStmt.params, []bool{false})
-			values, err := preparedParamValues(proc, prepareStmt.ParamTypes,
+			values, err := preparedParamValues(proc, nil, prepareStmt.ParamTypes,
 				[]types.StringConversionKind{tc.paramKind})
 			require.NoError(t, err)
 			runtimePlan, specialized, err := plan.FillValuesOfParamsInPlanWithSpecialization(
@@ -3522,7 +3522,7 @@ func buildPreparedSetExecutePacket(proto *MysqlProtocolImpl, nullBitmap byte, fi
 	return data
 }
 
-func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
+func TestPrepareStmtClearBinaryParamStateKeepsParamArea(t *testing.T) {
 	ctx := context.TODO()
 	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
 
@@ -3533,13 +3533,19 @@ func TestPrepareStmtClearBinaryParamStateReleasesParamArea(t *testing.T) {
 	firstAreaLen := len(prepareStmt.params.GetArea())
 	require.Greater(t, firstAreaLen, 0)
 
+	params := prepareStmt.params
 	prepareStmt.clearBinaryParamState(proc)
-	require.Nil(t, prepareStmt.params)
+	require.Same(t, params, prepareStmt.params, "the storage stays with the statement")
+	require.Zero(t, prepareStmt.params.Length())
+	require.Empty(t, prepareStmt.params.GetArea(), "but not the execution's values")
 	require.Empty(t, prepareStmt.getFromSendLongData)
 
+	allocs := proc.Mp().Stats().NumAlloc.Load()
 	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, buildStringExecutePacket(proto, defines.MYSQL_TYPE_VAR_STRING, secondPayload), 0))
 	require.Equal(t, secondPayload, prepareStmt.params.GetStringAt(0))
-	require.Equal(t, firstAreaLen, len(prepareStmt.params.GetArea()))
+	require.Equal(t, allocs, proc.Mp().Stats().NumAlloc.Load(), "the next execution reuses it")
+	prepareStmt.Close()
+	require.Nil(t, prepareStmt.params)
 }
 
 func TestParseExecuteDataRejectsTruncatedNewParamBoundFlag(t *testing.T) {
