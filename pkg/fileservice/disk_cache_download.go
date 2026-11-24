@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -972,8 +973,8 @@ func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry
 		}
 		// The read waits for the download it chose until its bytes are written or it ends.
 		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, maxIOWaitDuration); !ok {
-			if err := o.failure(); err != nil {
-				return true, false, &failingReadError{err: objectReadError(err, vector.FilePath)}
+			if err := readFailure(ctx, vector.FilePath, fromSource, cmp.Or(ctx.Err(), o.failure())); err != nil {
+				return true, false, &failingReadError{err: err}
 			}
 			metric.FSDiskCacheDownloadReadTimedOutCounter.Inc()
 			return true, false, nil

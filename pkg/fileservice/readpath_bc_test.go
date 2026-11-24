@@ -203,3 +203,49 @@ func TestStreamedReadFallsBackOnUnreadableDownloadFile(t *testing.T) {
 	require.NoError(t, <-result)
 	require.True(t, bytes.Equal(data[1000:5000], vec.Entries[0].Data))
 }
+
+// stalledWholeDownload starts a whole-object download of the object whose source sends
+// nothing until the returned function is called.
+func stalledWholeDownload(t *testing.T, fs *S3FS) (*objectDownload, func()) {
+	d := fs.diskCache
+	<-d.load.done
+	storage := newBlackBoxStorage(fs.storage, func(_ string, offset int64) bool { return offset == 0 })
+	fs.storage = storage
+	release := sync.OnceFunc(func() { close(storage.gate) })
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = fs.PrefetchFile(context.Background(), "object")
+	}()
+	t.Cleanup(func() {
+		release()
+		<-done
+	})
+	var download *objectDownload
+	require.Eventually(t, func() bool {
+		download = d.download(d.pathForFile("object"))
+		return download != nil
+	}, 5*time.Second, time.Millisecond)
+	return download, release
+}
+
+// BC12: a read of the disk cache whose context ends while it waits for a download returns
+// its context's error.
+func TestDownloadWaitEndsWithReadContext(t *testing.T) {
+	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
+	fs.diskCache.downloadMaxExtraWait = time.Hour
+	download, _ := stalledWholeDownload(t, fs)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	vec := &IOVector{FilePath: "object", Entries: []IOEntry{{Size: 4096}}}
+	defer vec.Release()
+	result := make(chan error, 1)
+	go func() { result <- fs.diskCache.Read(ctx, vec) }()
+	require.Eventually(t, func() bool {
+		download.mu.Lock()
+		defer download.mu.Unlock()
+		return len(download.waiters) == 1
+	}, 5*time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+}
