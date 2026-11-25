@@ -467,7 +467,7 @@ func TestJSONArrayAggregateSharedTemporalAndYearConversion(t *testing.T) {
 		{
 			name:     "year",
 			vec:      buildFixedVec(t, mp, types.T_year.ToType(), []types.MoYear{2024}),
-			wantJSON: `[2024]`, wantType: "INTEGER",
+			wantJSON: `[2024]`, wantType: "UNSIGNED INTEGER",
 		},
 	}
 

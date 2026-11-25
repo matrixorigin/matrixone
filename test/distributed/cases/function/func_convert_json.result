@@ -46,7 +46,7 @@ select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from co
 BIT  ¦  Cg==
 select json_type(convert(y, json)), convert(y, json) from convert_json_source;
 ➤ json_type(cast(y as json))[12,-1,0]  ¦  cast(y as json)[-1,2147483647,0]  𝄀
-INTEGER  ¦  2020
+UNSIGNED INTEGER  ¦  2020
 select json_type(convert(cast(x'ff' as blob), json)),
 json_unquote(convert(cast(x'ff' as blob), json));
 ➤ json_type(cast(cast(0xff as blob) as json))[12,-1,0]  ¦  json_unquote(cast(cast(0xff as blob) as json))[12,-1,0]  𝄀
@@ -63,7 +63,7 @@ INTEGER
 select json_type(convert(cast(18446744073709551615 as unsigned), json)),
 convert(cast(18446744073709551615 as unsigned), json);
 ➤ json_type(cast(cast(18446744073709551615 as unsigned) as json))[12,-1,0]  ¦  cast(cast(18446744073709551615 as unsigned) as json)[-1,2147483647,0]  𝄀
-INTEGER  ¦  18446744073709551615
+UNSIGNED INTEGER  ¦  18446744073709551615
 select json_type(convert(cast(1.20 as decimal(10,2)), json)),
 convert(cast(1.20 as decimal(10,2)), json);
 ➤ json_type(cast(cast(1.20 as decimal(10, 2)) as json))[12,-1,0]  ¦  cast(cast(1.20 as decimal(10, 2)) as json)[-1,2147483647,0]  𝄀

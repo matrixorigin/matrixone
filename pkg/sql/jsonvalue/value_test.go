@@ -89,7 +89,7 @@ func TestFromVectorMySQLConstructorTypes(t *testing.T) {
 			append: func(v *vector.Vector, mp *mpool.MPool) error {
 				return vector.AppendFixed(v, types.MoYear(2024), false, mp)
 			},
-			wantJSON: `2024`, wantType: "INTEGER",
+			wantJSON: `2024`, wantType: "UNSIGNED INTEGER",
 		},
 		{
 			name: "binary", typ: types.T_binary.ToType(),

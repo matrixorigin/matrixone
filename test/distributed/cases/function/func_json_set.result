@@ -28,7 +28,7 @@ result
 {"fruits": ["apple", null, "cherry"]}
 select json_type(json_extract(json_set('{}', '$.year', cast('2024' as year)), '$.year')), json_contains(json_set('{}', '$.year', cast('2024' as year)), '2024', '$.year'), json_contains(json_set('{}', '$.year', cast('2024' as year)), '"2024"', '$.year');
 ➤ json_type(json_extract(json_set({}, $.year, cast(2024 as year)), $.year))[12,65535,0]  ¦  json_contains(json_set({}, $.year, cast(2024 as year)), 2024, $.year)[-5,64,0]  ¦  json_contains(json_set({}, $.year, cast(2024 as year)), "2024", $.year)[-5,64,0]  𝄀
-INTEGER  ¦  1  ¦  0
+UNSIGNED INTEGER  ¦  1  ¦  0
 select json_unquote(json_extract(json_set('{}', '$.time', cast('04:05:06' as time(0))), '$.time')), json_unquote(json_extract(json_set('{}', '$.blob', cast(x'00ff' as blob)), '$.blob')), json_unquote(json_extract(json_set('{}', '$.bit', cast(b'1010' as bit(4))), '$.bit'));
 ➤ json_unquote(json_extract(json_set({}, $.time, cast(04:05:06 as time)), $.time))[12,65535,0]  ¦  json_unquote(json_extract(json_set({}, $.blob, cast(0x00ff as blob)), $.blob))[12,65535,0]  ¦  json_unquote(json_extract(json_set({}, $.bit, cast(0b1010 as bit(4))), $.bit))[12,65535,0]  𝄀
 04:05:06.000000  ¦  base64:type252:AP8=  ¦  base64:type16:Cg==

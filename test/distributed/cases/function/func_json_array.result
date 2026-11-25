@@ -211,7 +211,7 @@ select id, json_array(vf32, vf64) from jat;
 3  ¦  [[4.0, 5.0, 6.0], [3.0, 2.0, 1.0]]
 select json_type(json_extract(json_array(cast('2024' as year)), '$[0]')), json_contains(json_array(cast('2024' as year)), '2024'), json_contains(json_array(cast('2024' as year)), '"2024"');
 ➤ json_type(json_extract(json_array(cast(2024 as year)), $[0]))[12,65535,0]  ¦  json_contains(json_array(cast(2024 as year)), 2024)[-5,64,0]  ¦  json_contains(json_array(cast(2024 as year)), "2024")[-5,64,0]  𝄀
-INTEGER  ¦  1  ¦  0
+UNSIGNED INTEGER  ¦  1  ¦  0
 select json_unquote(json_extract(json_array(cast('04:05:06' as time(0)), cast('04:05:06.123456' as time(6))), '$[0]')), json_unquote(json_extract(json_array(cast('04:05:06' as time(0)), cast('04:05:06.123456' as time(6))), '$[1]'));
 ➤ json_unquote(json_extract(json_array(cast(04:05:06 as time), cast(04:05:06.123456 as time(6))), $[0]))[12,65535,0]  ¦  json_unquote(json_extract(json_array(cast(04:05:06 as time), cast(04:05:06.123456 as time(6))), $[1]))[12,65535,0]  𝄀
 04:05:06.000000  ¦  04:05:06.123456

@@ -160,7 +160,8 @@ func (bj ByteJson) TYPE() string {
 	case TpCodeInt64:
 		return "INTEGER"
 	case TpCodeUint64:
-		return "INTEGER"
+		// MySQL distinguishes J_UINT from J_INT in JSON_TYPE (#33202).
+		return "UNSIGNED INTEGER"
 	case TpCodeFloat64:
 		return "DOUBLE"
 	case TpCodeString:
@@ -217,6 +218,10 @@ var physicalJSONTypeOrder = map[string]int{
 	"BLOB":     -10,
 	"BIT":      -10,
 	"LITERAL":  -11,
+
+	// Unsigned integers share the signed integer physical order so persisted
+	// cluster keys keep their pre-existing relative order.
+	"UNSIGNED INTEGER": -4,
 }
 
 type JsonModifyType byte

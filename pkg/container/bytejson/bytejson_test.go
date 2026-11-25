@@ -160,10 +160,12 @@ func TestMySQLOpaqueTypeDoesNotAllocatePayload(t *testing.T) {
 	require.Zero(t, allocs, "tagged BIT TYPE should not materialize the payload")
 }
 
-func TestUint64TypeRemainsInteger(t *testing.T) {
+// MySQL reports J_UINT values (including unsigned columns such as YEAR) as
+// UNSIGNED INTEGER, see issue #33202.
+func TestUint64TypeIsUnsignedInteger(t *testing.T) {
 	value, err := CreateByteJSON(uint64(2024))
 	require.NoError(t, err)
-	require.Equal(t, "INTEGER", value.TYPE())
+	require.Equal(t, "UNSIGNED INTEGER", value.TYPE())
 }
 
 func TestBinaryJSONPayloadLenLegacyBlobLargePayloadAllocations(t *testing.T) {
@@ -1377,4 +1379,20 @@ func TestLegacyFloatCatalogRendering(t *testing.T) {
 	old, err := str.UnquoteWithLegacyFloat()
 	require.NoError(t, err)
 	require.Equal(t, plain, old)
+}
+
+// TestByteJsonTypeUnsignedInteger covers issue #33202: uint64 JSON numbers
+// must report MySQL's UNSIGNED INTEGER type instead of INTEGER.
+func TestByteJsonTypeUnsignedInteger(t *testing.T) {
+	require.Equal(t, "INTEGER", makeJson(t, "9223372036854775807").TYPE())
+	require.Equal(t, "INTEGER", makeJson(t, "-9223372036854775808").TYPE())
+	require.Equal(t, "UNSIGNED INTEGER", makeJson(t, "9223372036854775808").TYPE())
+	require.Equal(t, "UNSIGNED INTEGER", makeJson(t, "18446744073709551615").TYPE())
+	require.Equal(t, "DOUBLE", makeJson(t, "18446744073709551616").TYPE())
+
+	// Physical order must treat signed and unsigned integers as one numeric
+	// class, comparing them by value.
+	require.Equal(t, physicalJSONTypeOrder["INTEGER"], physicalJSONTypeOrder["UNSIGNED INTEGER"])
+	require.Greater(t, CompareByteJsonPhysical(makeJson(t, "18446744073709551615"), makeJson(t, "1")), 0)
+	require.Less(t, CompareByteJsonPhysical(makeJson(t, "18446744073709551615"), makeJson(t, `"a"`)), 0)
 }
