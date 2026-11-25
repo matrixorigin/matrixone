@@ -19,7 +19,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -81,49 +80,6 @@ func TestStartupLoadPreservesRefilledFile(t *testing.T) {
 			require.NoError(t, err, "startup load removed the current cache file")
 			require.Equal(t, want, string(got))
 			require.True(t, d.cache.Contains(path))
-		})
-	}
-}
-
-func TestMemoryPrefetchDeliversCallbacksAfterGoexit(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		exit func()
-	}{
-		{name: "baseline_callback_returns", exit: func() {}},
-		{name: "first_callback_exits_goroutine", exit: runtime.Goexit},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			const unit = 64 << 10
-			fs, _, data := newPrefetchRangeFS(t, unit, 2*unit)
-			<-fs.diskCache.load.done
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			first, second := make(chan struct{}), make(chan struct{})
-			ctx = OnDiskCacheWritten(ctx, func(string, IOEntry) {
-				defer close(first)
-				tc.exit()
-			})
-			ctx = OnDiskCacheWritten(ctx, func(string, IOEntry) { close(second) })
-			vector := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
-				Entries: []IOEntry{{Offset: 16, Size: 64}}}
-			defer vector.Release()
-			require.NoError(t, fs.Read(ctx, vector))
-			require.Equal(t, data[16:80], vector.Entries[0].Data)
-			select {
-			case <-first:
-			case <-ctx.Done():
-				t.Fatal("the first callback was never called")
-			}
-			require.Eventually(t, func() bool { return fs.diskCache.async.flightCopies.Load() == 0 },
-				time.Second, time.Millisecond, "the callback runner must release its copy")
-			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForIOEntry("object", IOEntry{Size: unit})))
-			select {
-			case <-second:
-			default:
-				t.Fatal("the range was published and its callback copy released, but the second callback was never called")
-			}
 		})
 	}
 }

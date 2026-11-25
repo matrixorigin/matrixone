@@ -855,12 +855,6 @@ func (d *DiskCache) Update(
 		return nil
 	}
 
-	// callback
-	var onWritten []OnDiskCacheWrittenFunc
-	if v := ctx.Value(CtxKeyDiskCacheCallbacks); v != nil {
-		onWritten = append(onWritten, v.(*DiskCacheCallbacks).OnWritten...)
-	}
-
 	for _, entry := range vector.Entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -879,15 +873,11 @@ func (d *DiskCache) Update(
 		}
 
 		diskPath := d.pathForIOEntry(path.File, entry)
-		if async && len(onWritten) == 0 {
+		if async {
 			d.writeEntryAsync(ctx, vector.FilePath, diskPath, entry)
 			continue
 		}
-		if async {
-			d.scheduleAsyncUpdate(ctx, vector.FilePath, diskPath, entry, onWritten)
-			continue
-		}
-		if err := d.updateEntry(ctx, vector.FilePath, diskPath, entry, onWritten); err != nil {
+		if err := d.updateEntry(ctx, vector.FilePath, diskPath, entry); err != nil {
 			return err
 		}
 	}
@@ -900,19 +890,12 @@ func (d *DiskCache) updateEntry(
 	filePath string,
 	diskPath string,
 	entry IOEntry,
-	onWritten []OnDiskCacheWrittenFunc,
 ) error {
 	live := func() bool { return ctx.Err() == nil }
-	written, err := d.publishUnlessDeleted(filePath, entry, live, func(claim func() bool) (bool, error) {
+	_, err := d.publishUnlessDeleted(filePath, entry, live, func(claim func() bool) (bool, error) {
 		return d.writeEntry(ctx, diskPath, entry, claim)
 	})
-	if err != nil || !written {
-		return err
-	}
-	for _, fn := range onWritten {
-		fn(filePath, entry)
-	}
-	return nil
+	return err
 }
 
 func (d *DiskCache) writeEntry(
@@ -1382,8 +1365,6 @@ func (d *DiskCache) finalizeFileTo(
 }
 
 func (d *DiskCache) Flush(ctx context.Context) {
-	// OnWritten callbacks are post-publication notifications and deliberately
-	// outside this barrier, so a callback may safely reenter Flush or Close.
 	d.flushAsyncUpdates(ctx)
 }
 

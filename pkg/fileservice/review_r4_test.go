@@ -17,10 +17,6 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"os"
-	"os/exec"
-	"runtime"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -124,53 +120,6 @@ func TestAsyncWholeFillDoesNotPublishAfterDeleteMark(t *testing.T) {
 				return
 			}
 			require.NoFileExists(t, diskPath, "the old whole object must not appear once its delete has been counted")
-		})
-	}
-}
-
-func TestMemoryPrefetchCallbackPanicIsContained(t *testing.T) {
-	const childCase = "MATRIXONE_REVIEW_PREFETCH_CALLBACK_CHILD"
-	if mode := os.Getenv(childCase); mode != "" {
-		const unit = 64 << 10
-		fs, _, data := newPrefetchRangeFS(t, unit, 2*unit)
-		<-fs.diskCache.load.done
-		fs.SetAsyncUpdate(true)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		wantOffset := int64(unit + 16)
-		wantSize := int64(64)
-		callbackAfterPanic := make(chan struct{})
-		ctx = OnDiskCacheWritten(ctx, func(string, IOEntry) {
-			panic("review: disk cache callback panicked")
-		})
-		ctx = OnDiskCacheWritten(ctx, func(string, IOEntry) { close(callbackAfterPanic) })
-		policy := Policy(SkipFullFilePreloads | SkipMemoryCache)
-		if mode == "baseline_exact_entry" {
-			policy |= ExactRead
-		}
-		vec := &IOVector{FilePath: "object", Policy: policy,
-			Entries: []IOEntry{{Offset: wantOffset, Size: wantSize}}}
-		defer vec.Release()
-		require.NoError(t, fs.Read(ctx, vec))
-		require.Equal(t, data[wantOffset:wantOffset+wantSize], vec.Entries[0].Data)
-		select {
-		case <-callbackAfterPanic:
-		case <-ctx.Done():
-			t.Fatal("the callback after the panic was never called")
-		}
-		return
-	}
-	for _, mode := range []string{"baseline_exact_entry", "aligned_memory_prefetch"} {
-		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMemoryPrefetchCallbackPanicIsContained$",
-				"-test.cpu="+strconv.Itoa(runtime.GOMAXPROCS(0)), "-test.count=1")
-			cmd.Env = append(os.Environ(), childCase+"="+mode)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("the callback panic escaped the fileservice background worker: %v\n%s", err, output)
-			}
 		})
 	}
 }

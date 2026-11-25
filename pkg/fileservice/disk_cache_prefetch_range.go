@@ -700,13 +700,10 @@ func (d *DiskCache) fetchRange(
 
 // run reads the range of f, registered, through its opener, caches the range when f
 // caches, and forgets f. It is canceled by a delete of the object or the closing of the
-// cache. The write callbacks of the range run once f ended and released its buffer, on a
-// copy of the range; f does not cache the range when the copy does not fit in the copies
-// the cache keeps.
+// cache.
 func (f *memoryPrefetchObject) run() {
 	d := f.d
-	updateCtx, reserve, written := d.deferWriteCallbacks(closingValues{Context: f.closing, values: context.WithoutCancel(f.ctx)})
-	defer written()
+	updateCtx := closingValues{Context: f.closing, values: context.WithoutCancel(f.ctx)}
 	defer d.prefetchObjects.reads.Done()
 	defer f.cancelRead()
 	defer context.AfterFunc(f.closing, f.cancelRead)()
@@ -720,7 +717,7 @@ func (f *memoryPrefetchObject) run() {
 		err = errSourceShort
 	}
 	f.fail(err)
-	if err == nil && !f.skipCache && reserve(int64(len(content))) {
+	if err == nil && !f.skipCache {
 		err = d.Update(updateCtx, &IOVector{
 			FilePath: f.filePath,
 			Policy:   f.policy,

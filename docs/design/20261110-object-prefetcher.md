@@ -209,19 +209,9 @@ prefetch past its share reads its own bytes.
 Buffers are reused by power-of-two size up to 32 MiB; a buffer is reused only once its
 prefetch object ended and no read copies from it.
 
-An asynchronous disk-cache update without written callbacks writes its bytes to a cache
-file before it returns; only the file's publication is asynchronous, so no copy of the
-bytes waits in memory for it. An update with written callbacks keeps a copy of its bytes
-in memory, and its publication slot, until its callbacks ran; these copies hold at most
-64 MiB for each disk cache. With no publication slot or room free, an update waits for
-one, unless only callbacks returning can free it: then the update is dropped, as one
-larger than the room is (decision 2026-11-23: a callback that submits an update would
-otherwise wait for the slot it holds). The written callbacks of a MemoryPrefetchObject
-run after it ended and released its buffer, on a copy of its range; these copies, each
-counted as a buffer of its range, hold at most 64 MiB for each disk cache, and a MemoryPrefetchObject whose copy does not fit does
-not cache its range, so no callback waits for capacity held by callbacks. The written callbacks of
-asynchronous updates run in the order the updates were submitted, whichever is
-published first; an update that publishes nothing holds no place in that order. A read
+An asynchronous disk-cache update writes its bytes to a cache file before it returns;
+only the file's publication is asynchronous, so no copy of the bytes waits in memory for
+it. With no publication slot free, an update waits for one. A read
 that skips disk-cache reads reads object storage itself; it does not join a prefetch
 object. A read of an index-file object reads the index-file cache, and joins a download
 into it under way, which a skip of disk-cache reads does not apply to; a read that skips
@@ -229,9 +219,7 @@ every cache read skips it too. A fill
 of an index-file object fills only the index-file cache, never the disk cache, also when
 the index-file cache cannot be written, and a fill that skips every cache write fills
 neither. A MemoryPrefetchObject
-caches its range before it ends, so the reads after it find the range cached, unless
-the copy for its written callbacks does not fit (above); a read then finds the range
-missing and reads it itself. A download
+caches its range before it ends, so the reads after it find the range cached. A download
 the disk cache keeps for a cached file holds no reader of its source once the fill ends
 (decision 2026-11-18, v9, after the TN OOM in the nightly regression: the source of a
 write's fill is the written object's bytes).

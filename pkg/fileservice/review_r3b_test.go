@@ -16,58 +16,12 @@ package fileservice
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/require"
 )
-
-func TestAsyncCallbackGoexitDoesNotStrandNextUpdate(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		exit func()
-	}{
-		{name: "return", exit: func() {}},
-		{name: "goexit", exit: runtime.Goexit},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			disk, err := NewDiskCache(context.Background(), t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
-			require.NoError(t, err)
-			defer disk.Close(context.Background())
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			firstCalled := make(chan struct{})
-			secondCalled := make(chan struct{})
-			update := func(path string, cb OnDiskCacheWrittenFunc) {
-				t.Helper()
-				require.NoError(t, disk.Update(OnDiskCacheWritten(ctx, cb), &IOVector{
-					FilePath: path,
-					Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
-				}, true))
-			}
-			update("first", func(string, IOEntry) {
-				defer close(firstCalled)
-				tc.exit()
-			})
-			select {
-			case <-firstCalled:
-			case <-ctx.Done():
-				t.Fatal("first update did not call its callback")
-			}
-			update("second", func(string, IOEntry) { close(secondCalled) })
-			disk.Flush(ctx)
-			require.True(t, disk.cache.Contains(disk.pathForIOEntry("second", IOEntry{Size: 1})), "second update should publish before testing callback delivery")
-			select {
-			case <-secondCalled:
-			case <-ctx.Done():
-				t.Fatalf("second update published but its callback was stranded after the first callback exited (%d occupied slots)", len(disk.async.slots))
-			}
-		})
-	}
-}
 
 func TestIndexPrefetchPreservesConcurrentDiskCacheFill(t *testing.T) {
 	for _, tc := range []struct {

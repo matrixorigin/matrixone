@@ -158,7 +158,6 @@ func initFileServiceMetrics() {
 	registry.MustRegister(FSPrefetchObjectWaitingGauge)
 	registry.MustRegister(FSPrefetchObjectWaitDuration)
 	registry.MustRegister(FSPrefetchReadCounter)
-	registry.MustRegister(FSDiskCacheAsyncCallbackPanicCounter)
 }
 
 func initLogtailMetrics() {

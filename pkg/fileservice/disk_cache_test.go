@@ -57,25 +57,6 @@ func TestDiskCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 
-	// counter
-	numWritten := 0
-	numEvict := 0
-	ctx = OnDiskCacheWritten(ctx, func(path string, entry IOEntry) {
-		numWritten++
-	})
-	ctx = OnDiskCacheWritten(ctx, nil) // for coverage
-	ctx = OnDiskCacheEvict(ctx, func(path string) {
-		numEvict++
-	})
-	ctx = OnDiskCacheEvict(ctx, nil) // for coverage
-
-	// DiskCacheCallback context
-	_, set := ctx.Deadline()
-	assert.False(t, set)
-	if err := ctx.Err(); err != nil {
-		t.Fatal(err)
-	}
-
 	// new
 	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
@@ -109,12 +90,18 @@ func TestDiskCache(t *testing.T) {
 	}
 	testUpdate(cache)
 
-	assert.Equal(t, 1, numWritten)
+	// written is the cache file of the entry written.
+	stat := func() os.FileInfo {
+		info, err := os.Stat(cache.pathForIOEntry("foo", IOEntry{Offset: 0, Size: 1}))
+		require.NoError(t, err)
+		return info
+	}
+	written := stat()
 
 	// update again
 	testUpdate(cache)
 
-	assert.Equal(t, 1, numWritten)
+	assert.True(t, os.SameFile(written, stat()))
 
 	// read
 	testRead := func(cache *DiskCache) {
@@ -168,7 +155,7 @@ func TestDiskCache(t *testing.T) {
 
 	testRead(cache)
 
-	assert.Equal(t, 1, numWritten)
+	assert.True(t, os.SameFile(written, stat()))
 
 	// new cache instance and update
 	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
@@ -177,7 +164,7 @@ func TestDiskCache(t *testing.T) {
 
 	testUpdate(cache)
 
-	assert.Equal(t, 1, numWritten)
+	assert.True(t, os.SameFile(written, stat()))
 
 	// delete file
 	err = cache.DeletePaths(ctx, []string{"foo"})
@@ -190,12 +177,6 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	ctx := context.Background()
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
-
-	numEvict := 0
-	ctx = OnDiskCacheEvict(ctx, func(path string) {
-		numEvict++
-	})
-	ctx = OnDiskCacheEvict(ctx, nil) // for coverage
 
 	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false, nil, "")
 	assert.Nil(t, err)

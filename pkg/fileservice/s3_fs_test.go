@@ -4093,10 +4093,17 @@ func TestS3FSCacheUpdatesPreserveRetryOrder(t *testing.T) {
 	var eventsMu sync.Mutex
 	var events []string
 	record := func(event string) { eventsMu.Lock(); defer eventsMu.Unlock(); events = append(events, event) }
-	ctx = OnDiskCacheWritten(ctx, func(string, IOEntry) { record("disk") })
 	ctx = WithEventLogger(ctx)
 	logger := ctx.Value(EventLoggerKey).(*eventLogger)
-	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "retry", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](1 << 20), DiskCapacity: ptrTo[toml.ByteSize](1 << 20), DiskPath: ptrTo(t.TempDir()), CacheCallbacks: CacheCallbacks{PostSet: []CacheCallbackFunc{func(fscache.CacheKey, fscache.Data) { record("memory") }}}}, nil, false, false)
+	var fs *S3FS
+	// The memory cache is set after the disk cache holds the entry.
+	postSet := func(fscache.CacheKey, fscache.Data) {
+		if fs.diskCache.cache.Contains(fs.diskCache.pathForIOEntry("foo", IOEntry{Size: 4096})) {
+			record("disk")
+		}
+		record("memory")
+	}
+	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "retry", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](1 << 20), DiskCapacity: ptrTo[toml.ByteSize](1 << 20), DiskPath: ptrTo(t.TempDir()), CacheCallbacks: CacheCallbacks{PostSet: []CacheCallbackFunc{postSet}}}, nil, false, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	fs.SetAsyncUpdate(false)

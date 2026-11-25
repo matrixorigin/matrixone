@@ -15,7 +15,6 @@
 package fileservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -23,8 +22,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -556,134 +553,4 @@ func TestFlightTransitionBudgetWaiterContextEnds(t *testing.T) {
 func assertEventuallyBytes(t *testing.T, fs *S3FS, want int64) bool {
 	return assert.Eventually(t, func() bool { return prefetchBytes(fs) == want }, 2*time.Second, time.Millisecond,
 		"the buffer of the copied, ended flight is still charged: %d", prefetchBytes(fs))
-}
-
-// A copy kept for write callbacks is charged as a flight buffer of its range, so short
-// ranges bound the callbacks waiting by count too.
-func TestFlightWriteCallbackCopiesChargeBuffers(t *testing.T) {
-	const unit = 64 << 10
-	fs, _, _ := newPrefetchRangeFS(t, unit, 4*unit)
-	d := fs.diskCache
-	d.async.flightCopiesMax = 4 * flightBufSize(1)
-	ctx := OnDiskCacheWritten(context.Background(), func(string, IOEntry) {})
-	var runs []func()
-	for i := 0; i < 4; i++ {
-		_, reserve, run := d.deferWriteCallbacks(ctx)
-		require.True(t, reserve(1))
-		runs = append(runs, run)
-	}
-	_, reserve, run := d.deferWriteCallbacks(ctx)
-	require.False(t, reserve(1), "a fifth one-byte copy does not fit")
-	run()
-	for _, run := range runs {
-		run()
-	}
-	require.Zero(t, d.async.flightCopies.Load())
-}
-
-// The copies of a flight's range kept for its write callbacks are bounded, outside the
-// flight budget: a flight whose copy does not fit does not cache its range, and a read
-// that reads its own bytes runs its callbacks on them.
-func TestFlightWriteCallbackCopiesAreBounded(t *testing.T) {
-	const unit = 64 << 10
-	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
-	fs.diskCache.prefetchFlightBytes = unit
-	fs.diskCache.async.flightCopiesMax = unit
-	entered := make(chan struct{})
-	gate := make(chan struct{})
-	release := sync.OnceFunc(func() { close(gate) })
-	defer release()
-	var calls atomic.Int32
-	ctx := OnDiskCacheWritten(context.Background(), func(string, IOEntry) {
-		if calls.Add(1) == 1 {
-			close(entered)
-			<-gate
-		}
-	})
-	read := func(off int64) *IOVector {
-		return &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
-			Entries: []IOEntry{{Offset: off, Size: 10}}}
-	}
-	first := read(5)
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- fs.Read(ctx, first) }()
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("callback did not run")
-	}
-	require.Equal(t, int64(unit), fs.diskCache.async.flightCopies.Load())
-	require.Eventually(t, func() bool { return prefetchBytes(fs) == 0 }, 5*time.Second, time.Millisecond,
-		"the flight released its budget before its callbacks")
-
-	second := read(2*unit + 5)
-	require.NoError(t, fs.Read(ctx, second))
-	require.Equal(t, data[2*unit+5:2*unit+15], second.Entries[0].Data)
-	second.Release()
-	require.Equal(t, int64(unit), fs.diskCache.async.flightCopies.Load(), "no second copy is kept")
-
-	release()
-	require.NoError(t, <-firstDone)
-	require.Equal(t, data[5:15], first.Entries[0].Data)
-	first.Release()
-	require.Eventually(t, func() bool { return fs.diskCache.async.flightCopies.Load() == 0 }, 5*time.Second, time.Millisecond)
-}
-
-// A write callback of a flight can delete the object, close the prefetches, update the
-// cache or read: the flight has ended when its callbacks run.
-func TestFlightWriteCallbackCallsDeleteOrClose(t *testing.T) {
-	for _, nested := range []string{"delete", "close", "direct update", "read"} {
-		t.Run(nested, func(t *testing.T) {
-			const unit = 64 << 10
-			fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
-			fs.diskCache.prefetchFlightBytes = unit
-			returned := make(chan error, 1)
-			var nestedOnce atomic.Bool
-			cb := func(string, IOEntry) {
-				if nestedOnce.Swap(true) {
-					return
-				}
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-				switch nested {
-				case "close":
-					fs.diskCache.closePrefetches(ctx)
-					returned <- ctx.Err()
-				case "read":
-					vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
-						Entries: []IOEntry{{Offset: 3*unit + 5, Size: 10}}}
-					err := fs.Read(ctx, vec)
-					if err == nil && !bytes.Equal(data[3*unit+5:3*unit+15], vec.Entries[0].Data) {
-						err = errors.New("nested read returned wrong bytes")
-					}
-					vec.Release()
-					returned <- err
-				default:
-					returned <- fs.Delete(ctx, "object")
-				}
-			}
-			ctx := OnDiskCacheWritten(context.Background(), cb)
-			if nested == "direct update" {
-				require.NoError(t, fs.diskCache.Update(ctx, &IOVector{FilePath: "object",
-					Entries: []IOEntry{{Offset: 0, Size: 10, Data: data[:10]}}}, false))
-			} else {
-				vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
-					Entries: []IOEntry{{Offset: 5, Size: 10}}}
-				// The callback may delete the object before the read copies its bytes.
-				if err := fs.Read(ctx, vec); err == nil {
-					require.Equal(t, data[5:15], vec.Entries[0].Data)
-					vec.Release()
-				} else {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
-				}
-			}
-			select {
-			case err := <-returned:
-				require.NoError(t, err, "the nested call waited for the flight running its callback")
-			case <-time.After(10 * time.Second):
-				t.Fatal("callback did not return")
-			}
-			require.Eventually(t, func() bool { return prefetchBytes(fs) == 0 }, 5*time.Second, time.Millisecond, "budget returns to 0")
-		})
-	}
 }
