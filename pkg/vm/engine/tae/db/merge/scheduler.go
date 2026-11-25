@@ -40,6 +40,7 @@ import (
 const (
 	bigDataTaskCntThreshold   = 4
 	objectOpsTriggerThreshold = 5
+	manualMergeRetryWindow    = time.Minute
 )
 
 var ErrMergeSchedulerStopped = moerr.NewInternalErrorNoCtx("merge scheduler stopped")
@@ -335,8 +336,9 @@ var DefaultTrigger = &MMsgTaskTrigger{
 }
 
 type MMsgTaskTrigger struct {
-	expire time.Time
-	byUser bool
+	expire     time.Time
+	retryUntil time.Time // deadline for already gathered, denied one-shot tasks
+	byUser     bool
 
 	table catalog.MergeTable
 
@@ -362,6 +364,7 @@ type MMsgTaskTrigger struct {
 func (b *MMsgTaskTrigger) Clone() *MMsgTaskTrigger {
 	return &MMsgTaskTrigger{
 		expire:       b.expire,
+		retryUntil:   b.retryUntil,
 		byUser:       b.byUser,
 		table:        b.table,
 		l0:           b.l0.Clone(),
@@ -387,6 +390,8 @@ func (b *MMsgTaskTrigger) String() string {
 	var buf bytes.Buffer
 	if !b.expire.IsZero() {
 		buf.WriteString(fmt.Sprintf("expire{%s}", time.Until(b.expire).Round(time.Second)))
+	} else if !b.retryUntil.IsZero() {
+		buf.WriteString(fmt.Sprintf("retry-until{%s}", b.retryUntil.Format(time.RFC3339)))
 	}
 	if b.l0 != nil {
 		if buf.Len() > 0 {
@@ -1228,21 +1233,28 @@ func (a *MergeScheduler) doSched(
 	}
 	trigger.table = todo.table
 
-	// remove expired triggers
+	// A live policy patch remains in the queue. One-shot triggers are
+	// consumed unless admission defers some of their tasks below.
 	for len(supp.triggers) > 0 {
-		last := supp.triggers[len(supp.triggers)-1]
-		// trigger for once
-		if last.expire.IsZero() {
-			supp.triggers = supp.triggers[:len(supp.triggers)-1]
+		i := len(supp.triggers) - 1
+		last := supp.triggers[i]
+		if !last.expire.IsZero() && !last.expire.Before(now) {
 			trigger = last
 			break
 		}
-		if last.expire.Before(now) {
-			supp.triggers = supp.triggers[:len(supp.triggers)-1]
-		} else {
-			trigger = last
-			break
+		supp.triggers[i] = nil
+		supp.triggers = supp.triggers[:i]
+		if !last.expire.IsZero() {
+			continue
 		}
+		if !last.retryUntil.IsZero() && !now.Before(last.retryUntil) {
+			logutil.Warn("MergeExecutorEvent-ManualRetryExpired",
+				zap.String("table", todo.table.GetNameDesc()),
+				zap.Int("tasks", len(last.assigns)))
+			continue
+		}
+		trigger = last
+		break
 	}
 
 	// this table is paused, postpone tasks if it triggered by inner codes.
@@ -1252,20 +1264,23 @@ func (a *MergeScheduler) doSched(
 		return
 	}
 
-	// Gather tasks
-
 	rc := a.rc
-	tasks := a.pad.gatherByTrigger(
-		context.Background(),
-		trigger,
-		supp.lastMergeTime,
-		rc,
-	)
+	var tasks, denied []mergeTask
+	if trigger.retryUntil.IsZero() {
+		tasks = a.pad.gatherByTrigger(context.Background(), trigger, supp.lastMergeTime, rc)
+	} else {
+		// Retry the same candidates. Compact further denials in place.
+		tasks = trigger.assigns
+		denied = tasks[:0]
+	}
 
 	afterGather := a.clock.Now()
 	// Schedule tasks
 	for _, task := range tasks {
 		if _, granted := rc.Acquire(int64(task.eSize)); !granted {
+			if trigger.byUser && trigger.expire.IsZero() {
+				denied = append(denied, task)
+			}
 			continue
 		}
 		task.doneCB = a.taskObserverFactory(supp, task.eSize, rc)
@@ -1284,6 +1299,20 @@ func (a *MergeScheduler) doSched(
 		} else {
 			rc.Release(int64(task.eSize))
 		}
+	}
+
+	if !trigger.retryUntil.IsZero() {
+		clear(tasks[len(denied):])
+	}
+	var retry *MMsgTaskTrigger
+	if len(denied) > 0 {
+		retry = trigger
+		if retry.retryUntil.IsZero() {
+			retry = NewMMsgTaskTrigger(todo.table).WithByUser(true)
+			retry.retryUntil = afterGather.Add(manualMergeRetryWindow)
+		}
+		retry.assigns = denied
+		supp.triggers = append(supp.triggers, retry)
 	}
 
 	// Postprocess tasks: issue new vacuum task or adjust the next due time
@@ -1317,7 +1346,15 @@ func (a *MergeScheduler) doSched(
 	} else {
 		supp.nextDue = a.baseInterval
 	}
-	a.pq.Update(todo, afterGather.Add(supp.nextDue))
+	due := afterGather.Add(supp.nextDue)
+	if retry != nil {
+		delay := min(max(a.baseInterval, time.Second), manualMergeRetryWindow/4)
+		due = afterGather.Add(delay)
+		if retry.retryUntil.Before(due) {
+			due = retry.retryUntil
+		}
+	}
+	a.pq.Update(todo, due)
 
 }
 
