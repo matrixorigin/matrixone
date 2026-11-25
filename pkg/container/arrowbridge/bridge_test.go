@@ -666,6 +666,9 @@ func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
 
 	window, err := bat.Vecs[0].Window(1, 3)
 	require.NoError(t, err)
+	// The window outlives bat below: its payload is the Arrow buffer, but its
+	// nulls are a view of bat's bitmap, so it takes its own copy.
+	require.NoError(t, window.DetachNulls(mp))
 	record.Release()
 	sliced.Release()
 	base.Release()

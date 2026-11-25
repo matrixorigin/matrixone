@@ -296,10 +296,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 			objectID := rowID.BorrowObjectID()
 			obj, err := task.tableEntry.GetObjectByID(objectID, false)
 			if err != nil || canPruneTombstoneTarget(obj, mergeStartTS) {
-				if data.Deletes == nil {
-					data.Deletes = &nulls.Nulls{}
-				}
-				data.Deletes.Add(uint64(row))
+				data.Delete(row)
 				return nil
 			}
 			return nil

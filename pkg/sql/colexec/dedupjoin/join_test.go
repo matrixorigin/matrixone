@@ -221,8 +221,7 @@ func TestDedupResetClearsBucketState(t *testing.T) {
 	arg.ctr.batches = []*batch.Batch{batch.EmptyBatch}
 	arg.ctr.batchRowCount = 1
 	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
-
+	mustBitmapOK(arg.ctr.matched.InitWithSize(1, bitmapTestMP))
 	arg.Reset(proc, false, nil)
 	require.Nil(t, arg.ctr.batches)
 	require.Zero(t, arg.ctr.batchRowCount)
@@ -262,7 +261,8 @@ func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
 			jm.SetRowCount(1)
 			jm.IncRef(1)
 			matched := &bitmap.Bitmap{}
-			matched.InitWithSize(1)
+			matched.Init(bitmapTestMP)
+			mustBitmapOK(matched.InitWithSize(1, bitmapTestMP))
 			mailbox := NewWorkerJoinMailbox(2)
 			arg := &DedupJoin{
 				RightTypes:        []types.Type{typ},
@@ -883,17 +883,16 @@ func makeCaptureFixture(t *testing.T, proc *process.Process, bucketCnt int) (*co
 		captured:     &bitmap.Bitmap{},
 		matched:      &bitmap.Bitmap{},
 	}
-	ctr.captured.InitWithSize(int64(bucketCnt))
-	ctr.matched.InitWithSize(int64(bucketCnt))
-
+	mustBitmapOK(ctr.captured.InitWithSize(int64(bucketCnt), bitmapTestMP))
+	mustBitmapOK(ctr.matched.InitWithSize(int64(bucketCnt), bitmapTestMP))
 	msg := &WorkerJoinMsg{
 		matched:      &bitmap.Bitmap{},
 		captured:     &bitmap.Bitmap{},
 		capturedVecs: []*vector.Vector{mkVec()},
 		capturedMP:   proc.Mp(),
 	}
-	msg.matched.InitWithSize(int64(bucketCnt))
-	msg.captured.InitWithSize(int64(bucketCnt))
+	mustBitmapOK(msg.matched.InitWithSize(int64(bucketCnt), bitmapTestMP))
+	mustBitmapOK(msg.captured.InitWithSize(int64(bucketCnt), bitmapTestMP))
 	return ctr, msg
 }
 
@@ -1318,8 +1317,7 @@ func TestDedupFinalizeMissingWorkerHonorsCancellation(t *testing.T) {
 	}
 	arg.ctr.state = Finalize
 	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
-
+	mustBitmapOK(arg.ctr.matched.InitWithSize(1, bitmapTestMP))
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
 	cancel()
@@ -1344,7 +1342,7 @@ func TestDedupFinalizeConcurrentCancellationReturns(t *testing.T) {
 	}
 	arg.ctr.state = Finalize
 	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.matched.InitWithSize(1, bitmapTestMP))
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
 
@@ -1415,7 +1413,7 @@ func TestDedupFinalizeWorkerFailureCleansTransferredMessages(t *testing.T) {
 	}
 	arg.ctr.state = Finalize
 	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.matched.InitWithSize(1, bitmapTestMP))
 	t.Cleanup(func() { arg.Free(proc, true, workerErr) })
 	worker, account := newFinalizeCaptureWorker(t, proc, mailbox)
 	var wg sync.WaitGroup
@@ -1471,7 +1469,7 @@ func TestDedupFinalizeWorkerFailureDoesNotWaitForMissingWorker(t *testing.T) {
 	}
 	arg.ctr.state = Finalize
 	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.matched.InitWithSize(1, bitmapTestMP))
 	ctx, cancel := context.WithCancelCause(proc.Ctx)
 	proc.Ctx = ctx
 	resultC := make(chan error, 1)
@@ -1521,7 +1519,7 @@ func TestDedupFinalizeNormalAbortDoesNotHideCancellation(t *testing.T) {
 	}
 	arg.ctr.state = Finalize
 	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.matched.InitWithSize(1, bitmapTestMP))
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
 	cancel()
@@ -1554,7 +1552,7 @@ func TestDedupFinalizeMailboxSupportsMultipleSpillBuckets(t *testing.T) {
 	for bucket := range 2 {
 		for i, worker := range workers {
 			worker.ctr.matched = &bitmap.Bitmap{}
-			worker.ctr.matched.InitWithSize(4)
+			mustBitmapOK(worker.ctr.matched.InitWithSize(4, bitmapTestMP))
 			worker.ctr.matched.Add(uint64(bucket*2 + i))
 		}
 
@@ -1606,8 +1604,7 @@ func TestDedupFinalizeResetPublishesAbortForNextSpillBucket(t *testing.T) {
 		Mailbox:  mailbox,
 	}
 	worker.ctr.matched = &bitmap.Bitmap{}
-	worker.ctr.matched.InitWithSize(1)
-
+	mustBitmapOK(worker.ctr.matched.InitWithSize(1, bitmapTestMP))
 	finalizeErrC := make(chan error, 1)
 	go func() {
 		finalizeErrC <- worker.ctr.finalize(worker, proc)
@@ -1656,8 +1653,7 @@ func TestDedupFinalizeCancellationAfterPublishDoesNotDuplicateStatus(t *testing.
 		Mailbox:  mailbox,
 	}
 	worker.ctr.matched = &bitmap.Bitmap{}
-	worker.ctr.matched.InitWithSize(1)
-
+	mustBitmapOK(worker.ctr.matched.InitWithSize(1, bitmapTestMP))
 	errC := make(chan error, 1)
 	go func() {
 		errC <- worker.ctr.finalize(worker, proc)
@@ -1704,7 +1700,7 @@ func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
 	arg.ctr.batches = joinMap.GetBatches()
 	arg.ctr.batchRowCount = joinMap.GetRowCount()
 	arg.ctr.matched = &bitmap.Bitmap{}
-	arg.ctr.matched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.matched.InitWithSize(1, bitmapTestMP))
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
 		freeTestChildren(arg)
@@ -1761,12 +1757,13 @@ func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
 		arg.ctr.batches = joinMap.GetBatches()
 		arg.ctr.batchRowCount = joinMap.GetRowCount()
 		arg.ctr.matched = &bitmap.Bitmap{}
-		arg.ctr.matched.InitWithSize(int64(len(buildValues)))
+		mustBitmapOK(arg.ctr.matched.InitWithSize(int64(len(buildValues)), bitmapTestMP))
 		for _, row := range mergerMatches {
 			arg.ctr.matched.Add(row)
 		}
 		worker := &bitmap.Bitmap{}
-		worker.InitWithSize(int64(len(buildValues)))
+		worker.Init(bitmapTestMP)
+		mustBitmapOK(worker.InitWithSize(int64(len(buildValues)), bitmapTestMP))
 		for _, row := range workerMatches {
 			worker.Add(row)
 		}

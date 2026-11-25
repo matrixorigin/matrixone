@@ -21,6 +21,7 @@ import (
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -130,7 +131,7 @@ func (bf *prefixBloomFilter) MayContainsKey(key []byte) (bool, error) {
 }
 
 func (bf *prefixBloomFilter) MayContainsAnyKeys(
-	keys containers.Vector,
+	keys containers.Vector, _ *mpool.MPool,
 ) (bool, *nulls.Nulls, error) {
 	panic("not supported")
 }

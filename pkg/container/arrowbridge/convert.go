@@ -391,7 +391,7 @@ func convertFixed(
 	}
 	// A read-only reference vector over the Arrow buffer the keeper holds.
 	vec := vector.NewVecWithData(target, column.Len(), view, nil, nil)
-	if err := installValidity(column, vec, nullCount); err != nil {
+	if err := installValidity(column, vec, nullCount, mp); err != nil {
 		vec.Free(mp)
 		return nil, stats, err
 	}
@@ -464,7 +464,9 @@ func holdArrayData(
 
 // installValidity converts the Arrow validity bitmap (1 = valid) into the
 // vector's null bitmap (1 = null) by flipping bits.
-func installValidity(column arrow.Array, vec *vector.Vector, nullCount int) error {
+// installValidity builds the vector's null bitmap from mp. A borrowed
+// (read-only) vector still owns its bitmap, which Free returns to mp.
+func installValidity(column arrow.Array, vec *vector.Vector, nullCount int, mp *mpool.MPool) error {
 	if nullCount == 0 {
 		return nil
 	}
@@ -477,8 +479,7 @@ func installValidity(column arrow.Array, vec *vector.Vector, nullCount int) erro
 	if data.Offset() < 0 || (data.Offset()+column.Len()+7)/8 > len(validity) {
 		return moerr.NewInvalidInputNoCtx("Arrow validity buffer is too short")
 	}
-	vec.GetNulls().GetBitmap().InitWithInvertedBits(validity, data.Offset(), column.Len())
-	return nil
+	return vec.GetNulls().GetBitmap().InitWithInvertedBits(validity, data.Offset(), column.Len(), mp)
 }
 
 type varlenView struct {
@@ -602,7 +603,7 @@ func convertVarlen(
 	}
 	vec.Free(nil)
 	vec = vector.NewVecWithData(target, column.Len(), descriptorBuf, view.values, nil)
-	if err = installValidity(column, vec, nullCount); err != nil {
+	if err = installValidity(column, vec, nullCount, mp); err != nil {
 		vec.Free(mp)
 		return nil, ConvertStats{}, err
 	}

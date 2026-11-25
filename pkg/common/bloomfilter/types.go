@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 // InitialMemoryCapacity describes the backing created by New, excluding the
@@ -55,19 +56,20 @@ func (bf *BloomFilter) Valid() bool {
 	return bf != nil && bf.shared != nil
 }
 
-func New(rowCount int64, probability float64) BloomFilter {
+// New returns a bloom filter whose bitmap is allocated from mp. The caller
+// releases it with Free (or Clean) when done.
+func New(rowCount int64, probability float64, mp *mpool.MPool) (BloomFilter, error) {
 	bitSize, seedCount := computeMemAndHashCount(rowCount, probability)
 	hashSeed := make([]uint64, seedCount)
 	for i := 0; i < seedCount; i++ {
 		hashSeed[i] = uint64(rand.Int63())
 	}
-	bits := bitmap.Bitmap{}
-	bits.InitWithSize(bitSize)
-
 	shared := &sharedData{
-		bitmap:   bits,
 		hashSeed: hashSeed,
 		refCount: 1,
+	}
+	if err := shared.bitmap.InitWithSize(bitSize, mp); err != nil {
+		return BloomFilter{}, err
 	}
 
 	bf := BloomFilter{
@@ -83,7 +85,7 @@ func New(rowCount int64, probability float64) BloomFilter {
 		bf.vals[j] = make([]uint64, seedCount*3)
 	}
 
-	return bf
+	return bf, nil
 }
 
 func (bf *BloomFilter) Reset() {

@@ -81,10 +81,13 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 		vec := vector.NewVecWithData(typ, int(result.Rows), v.Data, area, nil)
 		bat.Vecs[i] = vec
 		if len(v.Nulls) != 0 {
-			// The null bitmap is the read-only vector's own (Go heap), built
-			// here; only its data and area reference the native window.
+			// The null bitmap is built here from mp and owned by the vector,
+			// which frees it with the batch; only its data and area reference
+			// the native window.
 			nsp := vec.GetNulls()
-			nsp.InitWithSize(int(result.Rows))
+			if err = nsp.InitWithSize(int(result.Rows), mp); err != nil {
+				return bat, err
+			}
 			for row := uint32(0); row < result.Rows; row++ {
 				if v.Nulls[row/8]&(1<<(row%8)) != 0 {
 					nsp.Add(uint64(row))

@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,8 +57,18 @@ func BuildBloomfilter(
 	if probability <= 0 {
 		probability = Default_Coarse_Probility
 	}
-	nbf := bloomfilter.New(int64(rowCount), probability)
+	nbf, err := bloomfilter.New(int64(rowCount), probability, mp)
+	if err != nil {
+		return nil, err
+	}
 	bf = &nbf
+	// The caller owns bf; release it on every error return.
+	defer func() {
+		if bf == nil || err != nil {
+			nbf.Free()
+			bf = nil
+		}
+	}()
 	bat := buffer.Fetch(mp)
 	defer buffer.Putback(bat, mp)
 	var done bool
@@ -151,8 +162,11 @@ func (exec *GCExecutor) doFilter(
 		// 2. do filter on the batch and get the bitmap
 		//    bit 1 means the row can be GC'ed
 		//    bit 0 means the row cannot be GC'ed
+		exec.bm.Init(exec.mp)
 		exec.bm.Clear()
-		exec.bm.TryExpandWithSize(bat.RowCount())
+		if err := exec.bm.TryExpandWithSize(bat.RowCount()); err != nil {
+			return err
+		}
 		err = mergeutil.SortColumnsByIndex(bat.Vecs, 2, exec.mp)
 		if err != nil {
 			return err
@@ -282,8 +296,9 @@ func (exec *GCExecutor) Close() error {
 		exec.buffer.impl.Close(exec.mp)
 		exec.buffer.impl = nil
 	}
+	exec.bm.Free()
+	exec.bm = bitmap.Bitmap{}
 	exec.mp = nil
 	exec.sels = nil
-	exec.bm = bitmap.Bitmap{}
 	return nil
 }
