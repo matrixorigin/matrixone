@@ -35,7 +35,6 @@ type StoreImpl struct {
 	maxRecordSize int
 
 	appendMu sync.Mutex
-	appendWg sync.WaitGroup
 
 	driverAppendQueue sm.Queue
 	doneWithErrQueue  sm.Queue
@@ -108,12 +107,14 @@ func (w *StoreImpl) Close() error {
 }
 
 func (w *StoreImpl) drain() {
-	// Let any append that passed the closed check register and enqueue before
-	// waiting. Subsequent appends observe the closed state under appendMu.
+	// Take ownership after any append that passed the closed check has enqueued.
 	w.appendMu.Lock()
+	appendQueue := w.driverAppendQueue
+	w.driverAppendQueue = nil
 	w.appendMu.Unlock()
-	w.appendWg.Wait()
-	w.driverAppendQueue.Stop()
+
+	// Drain each producer before stopping its consumer.
+	appendQueue.Stop()
 	w.doneWithErrQueue.Stop()
 	w.logInfoQueue.Stop()
 	w.checkpointQueue.Stop()
@@ -137,13 +138,6 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	if w.IsClosed() {
 		return nil, 0, sm.ErrClose
 	}
-	w.appendWg.Add(1)
-	accepted := false
-	defer func() {
-		if !accepted {
-			w.appendWg.Done()
-		}
-	}()
 	lsn = w.peekNextLSN(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
@@ -178,7 +172,6 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	if err != nil {
 		panic(err)
 	}
-	accepted = true
 	return
 }
 
@@ -215,7 +208,6 @@ func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 			panic(err)
 		}
 	}
-	w.appendWg.Add(-len(items))
 }
 
 func (w *StoreImpl) onLogInfoQueue(items ...any) {

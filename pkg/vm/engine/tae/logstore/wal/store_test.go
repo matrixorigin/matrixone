@@ -49,8 +49,10 @@ type blockedAppendClient struct {
 }
 
 func (c *blockedAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
-	c.used = true
-	close(c.started)
+	if !c.used {
+		c.used = true
+		close(c.started)
+	}
 	<-c.release
 	return c.Client.Append(ctx, record)
 }
@@ -89,6 +91,9 @@ func TestStoreCloseDeadlineIncludesAppendDrain(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("append did not reach LogService")
 	}
+	queued := mockEntry()
+	_, err = wal.AppendEntry(GroupUserTxn, queued)
+	require.NoError(t, err)
 
 	done := make(chan error, 1)
 	go func() { done <- wal.Close() }()
@@ -109,7 +114,19 @@ func TestStoreCloseDeadlineIncludesAppendDrain(t *testing.T) {
 	default:
 	}
 	allowAppend()
-	require.NoError(t, e.WaitDone())
+	completed := make(chan error, 2)
+	go func() {
+		completed <- e.WaitDone()
+		completed <- queued.WaitDone()
+	}()
+	for range 2 {
+		select {
+		case err := <-completed:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("accepted append did not complete after release")
+		}
+	}
 	select {
 	case <-closed:
 	case <-time.After(time.Second):
