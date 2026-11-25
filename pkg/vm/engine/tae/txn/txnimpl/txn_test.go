@@ -239,6 +239,145 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 	require.Equal(t, nonAppendableID, vector.GetFixedAtNoTypeCheck[types.Rowid](merged.GetDownstreamVector(), 0))
 }
 
+func TestFindDeletesForCandidatesDoesNotPublishPartialFilteringOnError(t *testing.T) {
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	pool := containers.NewVectorPool(t.Name(), 8)
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+	tbl := &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt:  dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool)),
+		},
+	}
+	candidates, err := newDuplicatedRowIDs(pool, 1)
+	require.NoError(t, err)
+	defer candidates.Close()
+	firstObjectID := objectio.NewObjectid()
+	firstID := types.NewRowIDWithObjectIDBlkNumAndRowID(firstObjectID, 0, 0)
+	secondObjectID := objectio.NewObjectid()
+	secondID := types.NewRowIDWithObjectIDBlkNumAndRowID(secondObjectID, 0, 0)
+	candidates.add(true, 0, firstID)
+	candidates.add(false, 0, secondID)
+
+	firstStats := objectio.NewObjectStatsWithObjectID(&firstObjectID, false, false, false)
+	first := catalog.MockObjectEntry(
+		entry,
+		firstStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(keys containers.Vector) error {
+					return containers.MarkNull(keys.GetDownstreamVector(), 0)
+				},
+			}
+		},
+		types.BuildTS(1, 0),
+	)
+	secondStats := objectio.NewObjectStatsWithObjectID(&secondObjectID, false, false, false)
+	second := catalog.MockObjectEntry(
+		entry,
+		secondStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(containers.Vector) error {
+					return moerr.NewMPoolCapacityNoCtxf("test capacity")
+				},
+			}
+		},
+		types.BuildTS(2, 0),
+	)
+	entry.AddEntryLocked(first)
+	entry.AddEntryLocked(second)
+
+	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+	require.False(t, candidates.appendable.IsNull(candidates.appendableByKey[0][0]))
+	require.False(t, candidates.nonAppendable.IsNull(candidates.nonAppendableByKey[0][0]))
+}
+
+func TestFindDeletesForCandidatesReturnsCopyBackCapacityError(t *testing.T) {
+	const capacity = 1 << 20
+	mp, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	pool := containers.NewVectorPool(t.Name(), 1, containers.WithMPool(mp))
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+	tbl := &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt:  dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool)),
+		},
+	}
+	candidates, err := newDuplicatedRowIDs(pool, 1)
+	require.NoError(t, err)
+	defer candidates.Close()
+	appendableObjectID := objectio.NewObjectid()
+	appendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(appendableObjectID, 0, 0)
+	nonAppendableObjectID := objectio.NewObjectid()
+	nonAppendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(nonAppendableObjectID, 0, 0)
+	candidates.add(true, 0, appendableID)
+	candidates.add(false, 0, nonAppendableID)
+
+	var filler []byte
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+	}()
+	firstStats := objectio.NewObjectStatsWithObjectID(&appendableObjectID, false, false, false)
+	first := catalog.MockObjectEntry(
+		entry,
+		firstStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(keys containers.Vector) error {
+					if err := containers.MarkNull(keys.GetDownstreamVector(), 0); err != nil {
+						return err
+					}
+					var err error
+					filler, err = mp.Alloc(capacity-int(mp.CurrNB()), true)
+					return err
+				},
+			}
+		},
+		types.BuildTS(1, 0),
+	)
+	secondStats := objectio.NewObjectStatsWithObjectID(&nonAppendableObjectID, false, false, false)
+	second := catalog.MockObjectEntry(
+		entry,
+		secondStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(containers.Vector) error {
+					return moerr.NewTxnWWConflictNoCtx(0, "")
+				},
+			}
+		},
+		types.BuildTS(2, 0),
+	)
+	entry.AddEntryLocked(first)
+	entry.AddEntryLocked(second)
+
+	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+	require.False(t, candidates.appendable.IsNull(candidates.appendableByKey[0][0]))
+	require.False(t, candidates.nonAppendable.IsNull(candidates.nonAppendableByKey[0][0]))
+	require.NotNil(t, filler)
+	mp.Free(filler)
+	filler = nil
+}
+
 func TestDedupSnapByPKClosesCandidatesOnWWConflict(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(3, 2)
