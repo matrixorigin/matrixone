@@ -1578,8 +1578,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
-		vector.AppendBytes(vec, nil, true, mp)
-		return nil
+		return vector.AppendBytes(vec, nil, true, mp)
 	}
 
 	var temporalValue loadDataTemporalValue

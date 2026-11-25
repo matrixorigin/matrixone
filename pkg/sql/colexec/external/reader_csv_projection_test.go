@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -118,6 +119,24 @@ func TestJSONLineNullRemainsNullWithParallelLoad(t *testing.T) {
 
 			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
 			require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+
+			t.Run("allocation failure", func(t *testing.T) {
+				const poolCap = 1 << 20
+				mp, err := mpool.NewMPool(t.Name(), poolCap, mpool.NoFixed)
+				require.NoError(t, err)
+				defer mpool.DeleteMPool(mp)
+				limitedProc := testutil.NewProcessWithMPool(t, "", mp)
+				defer limitedProc.Free()
+				reserved, err := mp.Alloc(poolCap, true)
+				require.NoError(t, err)
+				defer mp.Free(reserved)
+				limitedBatch := batch.NewWithSize(1)
+				limitedBatch.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+				defer limitedBatch.Clean(mp)
+
+				require.Error(t, getOneRowData(limitedProc, limitedBatch, line, 0, param))
+				require.Zero(t, limitedBatch.Vecs[0].Length())
+			})
 		})
 	}
 }
