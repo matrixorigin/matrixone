@@ -55,34 +55,57 @@ func useRecoveryRPCSocket(t *testing.T, cfg *Config) {
 	cfg.ServiceAddress = addr
 }
 
+// Run readiness probes synchronously so a failed phase cannot leave a probe
+// running during service cleanup.
+func waitForRecovery(t *testing.T, parent context.Context, phase string, timeout, interval time.Duration, probe func(context.Context) error) {
+	t.Helper()
+	phaseCtx, stop := context.WithTimeout(parent, timeout)
+	defer stop()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		if err := phaseCtx.Err(); err != nil {
+			t.Fatalf("%s: %v; last observation: %v", phase, err, lastErr)
+		}
+		lastErr = probe(phaseCtx)
+		if lastErr == nil {
+			return
+		}
+		select {
+		case <-phaseCtx.Done():
+			t.Fatalf("%s: %v; last observation: %v", phase, phaseCtx.Err(), lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForRecoveryPeers(t *testing.T, ctx context.Context, timeout time.Duration, a, b *Service) {
+	t.Helper()
+	waitForRecovery(t, ctx, "discover both Raft peers", timeout, 30*time.Millisecond, func(context.Context) error {
+		for _, pair := range [2][2]*Service{{a, b}, {b, a}} {
+			local, peer := pair[0], pair[1]
+			registry, ok := local.store.nh.GetNodeHostRegistry()
+			if !ok {
+				return fmt.Errorf("store %s has no registry", local.ID())
+			}
+			meta, ok := registry.GetMeta(peer.ID())
+			if !ok || string(meta) != peer.cfg.LogServiceServiceAddr() {
+				return fmt.Errorf("store %s has not discovered %s", local.ID(), peer.ID())
+			}
+		}
+		return nil
+	})
+}
+
 // A real disk-backed three-store Raft group. The retired store never returns:
 // a surviving store must reopen its existing replica from an actual command.
 func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	// Run readiness probes in this goroutine so none can outlive a failed
-	// phase and race with service cleanup.
 	wait := func(phase string, timeout, interval time.Duration, probe func(context.Context) error) {
 		t.Helper()
-		phaseCtx, stop := context.WithTimeout(ctx, timeout)
-		defer stop()
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		var lastErr error
-		for {
-			if err := phaseCtx.Err(); err != nil {
-				t.Fatalf("%s: %v; last observation: %v", phase, err, lastErr)
-			}
-			lastErr = probe(phaseCtx)
-			if lastErr == nil {
-				return
-			}
-			select {
-			case <-phaseCtx.Done():
-				t.Fatalf("%s: %v; last observation: %v", phase, phaseCtx.Err(), lastErr)
-			case <-ticker.C:
-			}
-		}
+		waitForRecovery(t, ctx, phase, timeout, interval, probe)
 	}
 	var configs [3]Config
 	var services [3]*Service
@@ -139,20 +162,7 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 		})
 	}
 	// The two initial voters need each other's Raft addresses before election.
-	wait("initial voters discover each other", 10*time.Second, 30*time.Millisecond, func(context.Context) error {
-		for i := 0; i < 2; i++ {
-			registry, ok := services[i].store.nh.GetNodeHostRegistry()
-			if !ok {
-				return fmt.Errorf("store %s has no registry", services[i].ID())
-			}
-			peer := 1 - i
-			meta, ok := registry.GetMeta(services[peer].ID())
-			if !ok || string(meta) != configs[peer].LogServiceServiceAddr() {
-				return fmt.Errorf("store %s has not discovered %s", services[i].ID(), services[peer].ID())
-			}
-		}
-		return nil
-	})
+	waitForRecoveryPeers(t, ctx, 10*time.Second, services[0], services[1])
 	initialMembers := map[uint64]string{1: members[1], 2: members[2]}
 	for i := 0; i < 2; i++ {
 		require.NoError(t, services[i].store.startHAKeeperReplica(uint64(i+1), initialMembers, false))
@@ -527,18 +537,24 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	batch = heartbeat()
 	require.Empty(t, batch.Commands, "the retained Start is acknowledged by the recovered replica")
 }
+
 func TestInitialHAKeeperOrphanRestoresQuorum(t *testing.T) {
-	const shard = hakeeper.DefaultHAKeeperShardID
+	const (
+		shard        = hakeeper.DefaultHAKeeperShardID
+		phaseTimeout = 60 * time.Second
+	)
 	var configs [3]Config
 	var services [3]*Service
 	members := make(map[uint64]string, len(configs))
 	var seeds, bootstrap, addresses [3]string
 	for i := range configs {
 		cfg := getServiceTestConfig()
+		useRecoveryRPCSocket(t, &cfg)
 		cfg.DataDir = t.TempDir()
 		cfg.SnapshotExportDir = filepath.Join(cfg.DataDir, "exported")
 		cfg.FS = vfs.Default
-		cfg.RTTMillisecond = 50
+		// Leave election headroom for disk and scheduling delays under -race.
+		cfg.RTTMillisecond = 200
 		cfg.LogDBDisablePrealloc = true
 		configs[i] = cfg
 		id := uint64(i + 1)
@@ -578,24 +594,25 @@ func TestInitialHAKeeperOrphanRestoresQuorum(t *testing.T) {
 
 	readMembership := func(i int) *dragonboat.Membership {
 		t.Helper()
-		deadline, cancel := context.WithTimeout(t.Context(), 25*time.Second)
-		defer cancel()
-		tick := time.NewTicker(25 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			ctx, stop := context.WithTimeout(deadline, time.Second)
-			m, err := services[i].store.nh.SyncGetShardMembership(ctx, shard)
-			stop()
-			if err == nil {
-				return m
+		nh := services[i].store.nh
+		var membership *dragonboat.Membership
+		phase := fmt.Sprintf("read HAKeeper membership from voter %d", i+1)
+		waitForRecovery(t, t.Context(), phase, phaseTimeout, 30*time.Millisecond, func(ctx context.Context) error {
+			leader, _, ok, err := nh.GetLeaderID(shard)
+			if err != nil {
+				return err
 			}
-			select {
-			case <-deadline.Done():
-				t.Fatalf("voter %d has no quorum: %v", i+1, err)
-			case <-tick.C:
+			if !ok || leader == 0 {
+				return fmt.Errorf("no elected leader")
 			}
-		}
+			attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			membership, err = nh.SyncGetShardMembership(attempt, shard)
+			return err
+		})
+		return membership
 	}
+	waitForRecoveryPeers(t, t.Context(), phaseTimeout, services[0], services[1])
 	require.NoError(t, services[0].store.startHAKeeperReplica(1, members, false))
 	require.NoError(t, services[1].store.startHAKeeperReplica(2, members, false))
 	require.Equal(t, members, readMembership(1).Nodes)
@@ -628,22 +645,25 @@ func TestInitialHAKeeperOrphanRestoresQuorum(t *testing.T) {
 	}
 	bootstrapStore := func() {
 		t.Helper()
-		open(2)
 		s := services[2]
 		require.True(t, s.store.nh.HasNodeInfo(shard, 3))
 		require.Equal(t, int64(-1), s.store.getReplicaID(shard))
-		ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), phaseTimeout)
 		defer cancel()
 		require.NoError(t, s.BootstrapHAKeeper(ctx, configs[2]))
 	}
+	open(2)
+	waitForRecoveryPeers(t, t.Context(), phaseTimeout, services[1], services[2])
 	bootstrapStore()
 	require.Equal(t, int64(3), services[2].store.getReplicaID(shard), "the valid voter must reopen")
 	require.Equal(t, members, readMembership(1).Nodes)
 
 	// A newer peer view proves retirement even when another peer has a prefix.
 	open(0)
+	waitForRecoveryPeers(t, t.Context(), phaseTimeout, services[0], services[1])
 	services[2].store.removeMetadata(shard, 3)
 	closeStore(2)
+	require.Equal(t, members, readMembership(1).Nodes)
 	commitRemoveReplica(t, services[1].store, 3)
 	membership := readMembership(1)
 	require.NotContains(t, membership.Nodes, uint64(3))
@@ -651,6 +671,7 @@ func TestInitialHAKeeperOrphanRestoresQuorum(t *testing.T) {
 	retired = pb.ShardInfoQueryResult{ShardID: shard, Epoch: membership.ConfigChangeID, Replicas: map[uint64]pb.ReplicaInfo{
 		1: {UUID: membership.Nodes[1]}, 2: {UUID: membership.Nodes[2]},
 	}}
+	open(2)
 	bootstrapStore()
 	_, err := services[2].store.nh.GetNodeUser(shard)
 	require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
