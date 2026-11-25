@@ -350,24 +350,39 @@ func (l *localLockTable) releaseLocks(
 	locks := ls.slice()
 	defer locks.unref()
 
-	if mode == immediateLocalUnlock || mode == resolverLocalUnlock {
+	switch mode {
+	case normalLocalUnlock:
+		l.mu.Lock()
+	case handoffLocalUnlock:
+		if !tryRemoteUnlockMutex(&l.mu.RWMutex) {
+			return ErrLockTimeout
+		}
+	default:
 		if !l.mu.TryLock() {
 			return ErrLockTimeout
 		}
-	} else {
-		l.mu.Lock()
 	}
 	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
 
 	var replacements map[string]*lockHandoffTarget
-	defer func() {
-		l.mu.Unlock()
-		// Credit the reference while each replacement transaction is still
-		// locked, without taking the service mutex under the table mutex.
-		if replacements != nil {
-			l.finishHandoffTargets(replacements, incHandoffRef)
+	if mode == handoffLocalUnlock && len(mutations) != 0 && !l.mu.closed {
+		replacements = l.findHandoffTargetsLocked(txn, locks, mutations)
+		if len(replacements) != 0 {
+			// A new replacement may reuse a transaction whose mutex is
+			// still held. Drop the table mutex before preparing the targets.
+			l.mu.Unlock()
+			// Credit drain references after dropping the table mutex and
+			// before unlocking the replacement transactions.
+			defer l.finishHandoffTargets(replacements, incHandoffRef)
+			if err := l.lockHandoffTargets(txn, replacements); err != nil {
+				return err
+			}
+			if !tryRemoteUnlockMutex(&l.mu.RWMutex) {
+				return ErrLockTimeout
+			}
 		}
-	}()
+	}
+	defer l.mu.Unlock()
 	if l.mu.closed {
 		return nil
 	}
@@ -383,13 +398,9 @@ func (l *localLockTable) releaseLocks(
 		}
 	}
 
-	if mode == handoffLocalUnlock && len(mutations) != 0 {
-		replacements = make(map[string]*lockHandoffTarget, len(mutations))
-		if err := l.stageHandoffTargets(txn, locks, mutations, replacements); err != nil {
+	if len(replacements) != 0 {
+		if err := l.stageHandoffTargetsLocked(replacements); err != nil {
 			return err
-		}
-		if l.mu.closed {
-			return nil
 		}
 	}
 
@@ -488,11 +499,10 @@ type lockHandoffTarget struct {
 	adoptRef bool
 }
 
-// The caller holds table.mu and the old holder mutex. A busy replacement
-// can be waiting for table.mu, so reject this release attempt before mutation.
-func (l *localLockTable) stageHandoffTargets(
-	source *activeTxn, locks *fixedSlice, mutations []pb.ExtraMutation, targets map[string]*lockHandoffTarget,
-) error {
+func (l *localLockTable) findHandoffTargetsLocked(
+	source *activeTxn, locks *fixedSlice, mutations []pb.ExtraMutation,
+) map[string]*lockHandoffTarget {
+	var targets map[string]*lockHandoffTarget
 	locks.iter(func(row []byte) bool {
 		for _, mutation := range mutations {
 			if !bytes.Equal(mutation.Key, row) {
@@ -500,6 +510,9 @@ func (l *localLockTable) stageHandoffTargets(
 			}
 			if !mutation.Skip && len(mutation.ReplaceTo) != 0 {
 				if lock, ok := l.mu.store.Get(row); ok && lock.holders.contains(source.txnID) {
+					if targets == nil {
+						targets = make(map[string]*lockHandoffTarget)
+					}
 					key := string(mutation.ReplaceTo)
 					if targets[key] == nil {
 						targets[key] = &lockHandoffTarget{}
@@ -511,20 +524,10 @@ func (l *localLockTable) stageHandoffTargets(
 		}
 		return true
 	})
+	return targets
+}
 
-	// Creating a replacement may need a pooled transaction's mutex. Do not
-	// hold the table mutex during that acquisition. The source transaction's
-	// mutex still protects its ownership, except for whole-table retirement.
-	l.mu.Unlock()
-	err := l.lockHandoffTargets(source, targets)
-	l.mu.Lock()
-	if err != nil {
-		return err
-	}
-	if l.mu.closed {
-		return nil
-	}
-
+func (l *localLockTable) stageHandoffTargetsLocked(targets map[string]*lockHandoffTarget) error {
 	for _, target := range targets {
 		if target.txn.fenceReplacedLockTableLocked(l.bind, l, l.logger) {
 			// Nothing was transferred. Keep the source's retry ownership

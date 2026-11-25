@@ -884,6 +884,103 @@ func TestRollbackCleanupYieldsWhileTableBusy(t *testing.T) {
 	}
 }
 
+// Record actual busy-table RPCs after they return to the sender.
+type rollbackUnlockRecorder struct {
+	Client
+	table uint64
+	done  chan string
+}
+
+func (c *rollbackUnlockRecorder) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if req.Method == pb.Method_Unlock && req.LockTable.Table == c.table {
+		select {
+		case c.done <- string(req.Unlock.TxnID):
+		default:
+		}
+	}
+	return resp, err
+}
+
+func TestRollbackBacklogDoesNotBlockAnotherTableOnOwner(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner, source := nodes[0], nodes[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		const busyTable, healthyTable = 1444, 1445
+		opts := newTestRowExclusiveOptions()
+		seed := []byte("seed")
+		for _, table := range []uint64{busyTable, healthyTable} {
+			_, err := owner.Lock(ctx, table, newTestRows(0), seed, opts)
+			require.NoError(t, err)
+		}
+		require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+
+		recorder := &rollbackUnlockRecorder{
+			Client: source.remote.client, table: busyTable, done: make(chan string, 2*defaultHandleWorkers),
+		}
+		source.remote.client = recorder
+		healthy := func(id string) {
+			lockCtx, stop := context.WithTimeout(ctx, time.Second)
+			defer stop()
+			_, err := source.Lock(lockCtx, healthyTable, newTestRows(1), []byte(id), opts)
+			require.NoError(t, err, "remote Lock on the healthy table")
+			require.NoError(t, source.Unlock(ctx, []byte(id), timestamp.Timestamp{}))
+		}
+		healthy("before-contention")
+
+		ids := make([][]byte, defaultHandleWorkers)
+		for i := range ids {
+			ids[i] = []byte(fmt.Sprintf("busy-%d", i))
+			_, err := source.Lock(ctx, busyTable, newTestRows(byte(i+1)), ids[i], opts)
+			require.NoError(t, err)
+		}
+
+		busy := owner.tableGroups.get(0, busyTable).(*localLockTable)
+		busy.mu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				busy.mu.Unlock()
+			}
+		}()
+
+		resolved := make(chan struct{}, len(ids))
+		for _, id := range ids {
+			scheduled, err := source.ResolveRollbackCleanup(id, func() { resolved <- struct{}{} })
+			require.NoError(t, err)
+			require.True(t, scheduled)
+		}
+		seen := make(map[string]struct{}, len(ids))
+		for len(seen) < len(ids) {
+			select {
+			case id := <-recorder.done:
+				seen[id] = struct{}{}
+			case <-ctx.Done():
+				t.Fatalf("only %d of %d rollbacks attempted owner cleanup", len(seen), len(ids))
+			}
+		}
+		require.Empty(t, resolved, "a busy owner acknowledged cleanup before releasing the rows")
+		healthy("during-contention")
+
+		busy.mu.Unlock()
+		locked = false
+		for range ids {
+			select {
+			case <-resolved:
+			case <-ctx.Done():
+				t.Fatal("rollback failed to resume when the owner table became available")
+			}
+		}
+		for i := range ids {
+			_, held, err := owner.GetLockHolder(ctx, busyTable, []byte{byte(i + 1)}, opts)
+			require.NoError(t, err)
+			require.False(t, held)
+		}
+		healthy("after-contention")
+	})
+}
+
 type blackholedUnlockOwner struct {
 	Client
 	owner      string

@@ -517,6 +517,24 @@ func (s *service) unlockTransaction(
 	return nil
 }
 
+// Allow short mutex holds to finish within one RPC, but yield the worker
+// when cleanup contends beyond a small fraction of its send budget.
+func tryRemoteUnlockMutex(mu *sync.RWMutex) bool {
+	if mu.TryLock() {
+		return true
+	}
+	deadline := time.Now().Add(time.Millisecond)
+	for {
+		time.Sleep(25 * time.Microsecond)
+		if mu.TryLock() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+	}
+}
+
 // unlockRemoteTable uses the same txn mutex as owner-wide Unlock. Proxy
 // mutations and drain references belong to one table, even when an owner
 // serves several tables for the same transaction.
@@ -546,7 +564,11 @@ func (s *service) unlockRemoteTable(ctx context.Context, bind pb.LockTable, req 
 	if txn == nil {
 		return nil
 	}
-	txn.Lock()
+	// A timed-out sender can proceed to another transaction. Leave this
+	// holder in place and let cleanup retry instead of pinning an RPC worker.
+	if !tryRemoteUnlockMutex(txn.RWMutex) {
+		return ErrLockTimeout
+	}
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, req.TxnID) {
 		return nil
