@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -800,8 +799,6 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
-	// Decoding replaces every column; no previous lent backing stays aliased.
-	bat.leases.Release()
 	cursor := batchUnmarshalCursor{data: data}
 	rowCount, err := cursor.readInt64()
 	if err != nil {
@@ -1019,8 +1016,6 @@ func (bat *Batch) unmarshalFromReader(
 	if bat == nil || r == nil {
 		return io.ErrClosedPipe
 	}
-	// Decoding replaces every column; no previous lent backing stays aliased.
-	bat.leases.Release()
 	i64, err := types.ReadInt64(r)
 	if err != nil {
 		return err
@@ -1585,7 +1580,7 @@ func (bat *Batch) CloneSelectedColumnsTo(
 }
 
 // ViewInto makes dst a view of bat: the same vectors, attributes, row count
-// and selection. dst owns nothing it references (no vectors, leases or
+// and selection. dst owns nothing it references (no vectors, selection or
 // ExtraBuf); it is valid while bat is, and is released by dropping it.
 func (bat *Batch) ViewInto(dst *Batch) {
 	dst.Recursive = bat.Recursive
@@ -1620,7 +1615,6 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			vec.Free(m)
 		}
 	}
-	bat.leases.Release()
 
 	bat.Vecs = nil
 	bat.Attrs = nil
@@ -1651,7 +1645,6 @@ func (bat *Batch) CleanOnlyData() {
 			vec.CleanOnlyData()
 		}
 	}
-	bat.leases.Release()
 	bat.rowCount = 0
 	bat.selection = nil
 }
@@ -1661,46 +1654,6 @@ func (bat *Batch) FreeColumns(m *mpool.MPool) {
 		if vec != nil {
 			vec.Free(m)
 		}
-	}
-	bat.leases.Release()
-}
-
-// HoldLease makes the batch the lender of lease: it keeps one reference until
-// the batch next drops or reuses its column data. Vectors installed into this
-// batch may alias lease's bytes until then.
-func (bat *Batch) HoldLease(lease bufferlease.BufferLease) error {
-	if bat == nil {
-		return moerr.NewInternalErrorNoCtx("cannot hold a buffer lease in a nil batch")
-	}
-	return bat.leases.Hold(lease)
-}
-
-// MoveLeasesFrom transfers source's lease references to bat, together with
-// the vectors (or aliases of them) the caller moves from source to bat. bat's
-// previous references are released first: the caller has already dropped or
-// replaced the columns that aliased them.
-func (bat *Batch) MoveLeasesFrom(source *Batch) {
-	if bat == nil || source == nil || bat == source {
-		return
-	}
-	bat.leases.Release()
-	bat.leases, source.leases = source.leases, bat.leases
-}
-
-// HeldLeases reports how many lease references the batch holds.
-func (bat *Batch) HeldLeases() int {
-	if bat == nil {
-		return 0
-	}
-	return bat.leases.Len()
-}
-
-// ReleaseLeases drops the batch's lease references. The caller guarantees no
-// vector of the batch still aliases a lent backing (they were reset, freed or
-// materialized).
-func (bat *Batch) ReleaseLeases() {
-	if bat != nil {
-		bat.leases.Release()
 	}
 }
 

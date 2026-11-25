@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -47,12 +46,66 @@ type ConvertOptions struct {
 	MaxPinAmplification float64
 	// Allocation, when set, is the accounted MPool view that charges every
 	// materialized MO backing to the caller's statement account; it is used in
-	// place of Convert's mp. Borrowed Arrow capacity is charged by its source
-	// lease.
+	// place of Convert's mp.
 	Allocation *mpool.MPool
 	// ForceMaterialize is a verification/rollback switch used to compare the
 	// borrowed path with identical conversion semantics.
 	ForceMaterialize bool
+	// Descriptors is the caller's reusable scratch for the varlena
+	// descriptors of borrowed varlen columns. Without it, varlen columns are
+	// materialized.
+	Descriptors *Descriptors
+}
+
+// Descriptors is caller-owned scratch for the varlena descriptors of borrowed
+// varlen columns: one buffer per output column, reused by every Convert. A
+// batch converted with it is valid until the next Convert with the same
+// Descriptors, or Free.
+type Descriptors struct {
+	mp      *mpool.MPool
+	buffers [][]byte
+}
+
+// buffer returns column's descriptor buffer, zeroed and sized, from mp.
+func (d *Descriptors) buffer(column, size int, mp *mpool.MPool) ([]byte, error) {
+	if d.mp != mp {
+		d.Free()
+		d.mp = mp
+	}
+	if column >= len(d.buffers) {
+		d.buffers = append(d.buffers, make([][]byte, column+1-len(d.buffers))...)
+	}
+	buf := d.buffers[column]
+	if cap(buf) < size {
+		if cap(buf) != 0 {
+			mp.Free(buf)
+			d.buffers[column] = nil
+		}
+		var err error
+		if buf, err = mp.Alloc(size, true); err != nil {
+			return nil, err
+		}
+		d.buffers[column] = buf
+	}
+	buf = buf[:size]
+	clear(buf)
+	return buf, nil
+}
+
+// Free releases every descriptor buffer. Batches converted with d must no
+// longer be read.
+func (d *Descriptors) Free() {
+	if d == nil {
+		return
+	}
+	for i, buf := range d.buffers {
+		if cap(buf) != 0 {
+			d.mp.Free(buf)
+		}
+		d.buffers[i] = nil
+	}
+	d.buffers = d.buffers[:0]
+	d.mp = nil
 }
 
 // ConvertStats separates avoided payload copies from the capacity retained to
@@ -77,11 +130,11 @@ func newOutputVector(typ types.Type, mp *mpool.MPool) (*vector.Vector, error) {
 	return vector.NewVec(typ, mp), nil
 }
 
-// Convert builds a complete batch transactionally. Borrowed columns alias
-// Arrow buffers whose references the returned batch holds (batch.HoldLease)
-// until it is cleaned or reuses its columns; a vector moved out of the batch
-// must be materialized first. On any error every vector and lease already
-// installed in the partial batch is released.
+// Convert builds a complete batch transactionally. Borrowed columns are
+// read-only references to record's buffers (and, for varlen columns, to the
+// caller's Descriptors): the caller owns record and must keep it alive until
+// it drops the batch. A vector that must outlive that is materialized first.
+// On any error every vector already installed in the partial batch is freed.
 func (p *Plan) Convert(
 	ctx context.Context,
 	record arrow.RecordBatch,
@@ -162,12 +215,12 @@ func (p *Plan) convert(
 		switch binding.kind {
 		case conversionBorrowFixed:
 			vec, columnStats, err = convertFixed(
-				ctx, column, binding.target.Type, mp, options.ForceMaterialize, nullCount, bat,
+				ctx, column, binding.target.Type, mp, options.ForceMaterialize, nullCount,
 			)
 		case conversionBorrowVarlen:
 			vec, columnStats, err = convertVarlen(
 				ctx, column, binding.target.Type, mp, options.MaxPinAmplification,
-				options.ForceMaterialize, nullCount, bat,
+				options.ForceMaterialize, nullCount, options.Descriptors, outputIndex,
 			)
 		default:
 			vec, columnStats, err = materializeConverted(ctx, column, binding, mp, options.Location)
@@ -318,7 +371,6 @@ func convertFixed(
 	mp *mpool.MPool,
 	forceMaterialize bool,
 	nullCount int,
-	keeper bufferlease.Keeper,
 ) (*vector.Vector, ConvertStats, error) {
 	var stats ConvertStats
 	if column.DataType().ID() == arrow.TIME64 {
@@ -386,10 +438,7 @@ func convertFixed(
 		return vec, stats, err
 	}
 
-	if err := holdArrayData(keeper, data, view, int64(buffers[1].Cap())); err != nil {
-		return nil, stats, err
-	}
-	// A read-only reference vector over the Arrow buffer the keeper holds.
+	// A read-only reference vector over the caller's Arrow buffer.
 	vec := vector.NewVecWithData(target, column.Len(), view, nil, nil)
 	if err := installValidity(column, vec, nullCount); err != nil {
 		vec.Free(mp)
@@ -435,33 +484,6 @@ func materializeFixedLayout(
 	return vec, stats, nil
 }
 
-// holdArrayData makes keeper (the output batch) the lender of view: it holds
-// a reference to the Arrow ArrayData until it drops or reuses its columns.
-// Vectors aliasing view hold no lease of their own.
-func holdArrayData(
-	keeper bufferlease.Keeper,
-	data arrow.ArrayData,
-	view []byte,
-	accounted int64,
-) error {
-	if keeper == nil {
-		return moerr.NewInternalErrorNoCtx("borrowed Arrow buffer has no lender")
-	}
-	// Arrow ArrayData is the physical lifetime root visible to this package. A
-	// File reader may in turn have attached a RangeLease to that object graph;
-	// retaining ArrayData therefore preserves both layers without teaching the
-	// container bridge about FileService.
-	data.Retain()
-	lease, err := bufferlease.NewRefCounted(view, accounted, data.Release)
-	if err != nil {
-		data.Release()
-		return err
-	}
-	// The keeper takes its own reference; ours is dropped here.
-	defer lease.Release()
-	return keeper.HoldLease(lease)
-}
-
 // installValidity converts the Arrow validity bitmap (1 = valid) into the
 // vector's null bitmap (1 = null) by flipping bits.
 func installValidity(column arrow.Array, vec *vector.Vector, nullCount int) error {
@@ -499,7 +521,8 @@ func convertVarlen(
 	maxPinAmplification float64,
 	forceMaterialize bool,
 	nullCount int,
-	keeper bufferlease.Keeper,
+	scratch *Descriptors,
+	outputColumn int,
 ) (*vector.Vector, ConvertStats, error) {
 	view, err := inspectVarlen(ctx, column)
 	if err != nil {
@@ -535,7 +558,7 @@ func convertVarlen(
 	// only the long values keeps that invariant while still avoiding their copy.
 	// BINARY(N) assignment stores exactly N bytes, so any short value forces an
 	// owned, zero-padded image for the entire column.
-	if forceMaterialize || avoided == 0 || fixedBinaryPadRow {
+	if forceMaterialize || avoided == 0 || fixedBinaryPadRow || scratch == nil {
 		vec, stats, err := materializeVarlen(ctx, column, target, view, mp)
 		if !fixedBinaryPadRow {
 			stats.EligiblePayloadBytes = avoided
@@ -552,26 +575,10 @@ func convertVarlen(
 		return vec, stats, err
 	}
 
-	// The vector is a read-only reference: its descriptors live in a buffer
-	// of mp handed to the keeper together with the Arrow values it points
-	// into, and both are released when the keeper drops its leases.
-	if keeper == nil {
-		return nil, ConvertStats{}, moerr.NewInternalErrorNoCtx("borrowed Arrow buffer has no lender")
-	}
-	descriptorBuf, err := mp.Alloc(column.Len()*types.VarlenaSize, true)
-	if err != nil {
-		return nil, ConvertStats{}, err
-	}
-	for i := range descriptorBuf {
-		descriptorBuf[i] = 0
-	}
-	descriptorLease, err := bufferlease.NewRefCounted(descriptorBuf, int64(len(descriptorBuf)), func() { mp.Free(descriptorBuf) })
-	if err != nil {
-		mp.Free(descriptorBuf)
-		return nil, ConvertStats{}, err
-	}
-	err = keeper.HoldLease(descriptorLease)
-	descriptorLease.Release()
+	// The vector is a read-only reference: its descriptors live in the
+	// caller's reusable Descriptors buffer and point into the caller's Arrow
+	// values.
+	descriptorBuf, err := scratch.buffer(outputColumn, column.Len()*types.VarlenaSize, mp)
 	if err != nil {
 		return nil, ConvertStats{}, err
 	}
@@ -595,11 +602,6 @@ func convertVarlen(
 		descriptors[row].SetOffsetLen(uint32(offset), uint32(len(value)))
 	}
 
-	data := column.Data()
-	if err = holdArrayData(keeper, data, view.values, view.retainedCapacity); err != nil {
-		vec.Free(mp)
-		return nil, ConvertStats{}, err
-	}
 	vec.Free(nil)
 	vec = vector.NewVecWithData(target, column.Len(), descriptorBuf, view.values, nil)
 	if err = installValidity(column, vec, nullCount); err != nil {

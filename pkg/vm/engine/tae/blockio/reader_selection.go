@@ -104,7 +104,7 @@ func loadBorrowedLateColumns(
 		seqnums[i], typs[i], dest[i] = columns[pos], colTypes[pos], output.Vecs[pos]
 	}
 	if _, err := ioutil.LoadColumnsDataIntoBorrowed(ctx, seqnums, typs, fs, info.MetaLocation(), dest, mp, policy,
-		request.BorrowColumns(late, len(output.Vecs)), output); err != nil {
+		request.BorrowColumns(late, len(output.Vecs)), request.Pins()); err != nil {
 		return err
 	}
 	physical := output.PhysicalRowCount()

@@ -70,7 +70,6 @@ func (c *batchCache) put(bat *batch.Batch, aliased bool) {
 		dedupVectors(bat.Vecs)
 	}
 	bat.DropExtraBuffer()
-	bat.ReleaseLeases()
 	bat.SetRowCount(0)
 
 	c.mu.Lock()

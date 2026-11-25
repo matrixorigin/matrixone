@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -974,7 +975,8 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		for i := range colTypes {
 			out.Vecs[i] = vector.NewVec(colTypes[i], allocation)
 		}
-		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		// The test is the lender of the retained columns: borrowing is opt-in.
+		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnRetain}, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			t.Fatal("selected reader must not rerun Apply")
 			return engine.ReaderFilterResult{}, nil
 		}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
@@ -982,6 +984,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			require.True(t, b.Vecs[1].IsReadOnly(), "sealed cached input must retain its byte owner")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
+		t.Cleanup(request.ReleasePins)
 		_, err = BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{}, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "retained-cache-read", out, cacheVectors, queryMP, fs, []int{0, 1}, request)
 		require.NoError(t, err)
 		require.Equal(t, 3, out.RowCount())
@@ -1008,13 +1011,14 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		for i := range colTypes {
 			out.Vecs[i] = vector.NewVec(colTypes[i], allocation)
 		}
-		request := &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+		var request *engine.ReaderFilterRequest
+		request = &engine.ReaderFilterRequest{OutputAllocation: allocation, Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			t.Fatal("selected read must not rerun Apply")
 			return engine.ReaderFilterResult{}, nil
 		}, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, 8, b.RowCount())
 			require.Equal(t, 8, b.Vecs[1].Length())
-			require.Zero(t, out.HeldLeases(), "owned/unused demand must avoid cache leases")
+			require.Zero(t, request.Pins().(*bufferlease.Holder).Len(), "owned/unused demand must avoid cache pins")
 			require.True(t, b.Vecs[1].IsReadOnly(), "validated varlen input should stay pinned only in the callback")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}
@@ -2675,7 +2679,10 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 				require.Equal(t, []int32{0, 2, 4, 6}, vector.MustFixedColNoTypeCheck[int32](output.Vecs[0]))
 				require.Equal(t, "a payload longer than the inline varlena-6", output.Vecs[1].GetStringAt(3))
 			}
+			// The test, the lender, releases the pins once it is done with
+			// the batch.
 			output.CleanOnlyData()
+			request.ReleasePins()
 			freeTestBatchWithOwnPools(output)
 			cacheVectors.Free(queryMP)
 			require.Zero(t, account.Snapshot().Used)

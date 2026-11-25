@@ -129,7 +129,8 @@ func (l *RefCounted) TryDisown() bool {
 }
 
 // Keeper is implemented by lenders that keep borrowed backings alive for the
-// readers of the vectors that alias them (for example a batch.Batch).
+// readers of the vectors that alias them (for example a scan's reader request,
+// through a Holder).
 type Keeper interface {
 	HoldLease(lease BufferLease) error
 }

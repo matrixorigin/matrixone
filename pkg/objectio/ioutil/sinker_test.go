@@ -55,8 +55,6 @@ func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 1, data, nil, nil), error(nil)
 	require.NoError(t, err)
 	bat := batch.New([]string{"v"})
-	require.NoError(t, bat.HoldLease(lease))
-	lease.Release()
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
 
@@ -65,6 +63,7 @@ func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	require.ErrorContains(t, err, "unique-owned vector backing")
 	require.True(t, vec.IsReadOnly())
 	bat.Clean(nil)
+	lease.Release() // the lender releases what it lent
 	require.Nil(t, lease.Bytes())
 }
 

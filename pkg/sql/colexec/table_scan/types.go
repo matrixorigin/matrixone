@@ -252,6 +252,9 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	// The scan lends its output batch's borrowed columns: once the request is
+	// dropped nothing reads that batch, so release the cache pins.
+	tableScan.ctr.readerFilter.ReleasePins()
 	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
 	tableScan.ctr.membershipPrepared = false
@@ -262,8 +265,7 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 		tableScan.OpAnalyzer.Alloc(allocSize)
 	}
 	tableScan.closeReader()
-	// The output batch is the lender of the cache pins its borrowed columns
-	// alias; nothing reads it after Reset, so do not keep the pins while the
+	// Nothing reads the output batch after Reset; drop its data while the
 	// operator waits to be reused.
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.CleanOnlyData()
@@ -319,6 +321,9 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
+	// The scan lends its output batch's borrowed columns: once the request is
+	// dropped nothing reads that batch, so release the cache pins.
+	tableScan.ctr.readerFilter.ReleasePins()
 	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
 	tableScan.ctr.readerFilter = nil
 	tableScan.ctr.membershipPrepared = false

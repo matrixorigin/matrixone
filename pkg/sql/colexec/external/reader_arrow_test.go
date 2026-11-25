@@ -30,8 +30,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
-
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
@@ -950,15 +948,11 @@ func TestFitArrowBatchUsesActualCanonicalWireSize(t *testing.T) {
 
 func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
+	// The reader owns the Arrow buffer the converted batch borrows.
 	data := types.EncodeSlice([]int64{11, 22, 33})
-	lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
-	require.NoError(t, err)
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 3, data, nil, nil), error(nil)
 	require.NoError(t, err)
 	bat := batch.New([]string{"v"})
-	// The converted batch is the lender of the Arrow buffer.
-	require.NoError(t, bat.HoldLease(lease))
-	lease.Release()
 	bat.Vecs[0] = vec
 	bat.SetRowCount(3)
 
@@ -984,11 +978,12 @@ func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	require.Equal(t, sourcePointer,
 		uintptr(unsafe.Pointer(unsafe.SliceData(fitted.Vecs[0].GetData()))))
 	require.Equal(t, []int64{11}, vector.MustFixedColNoTypeCheck[int64](fitted.Vecs[0]))
-	require.NotNil(t, lease.Bytes(), "the source batch's lease moved with the borrowed prefix")
-	require.Equal(t, 1, fitted.HeldLeases())
+	// The borrowed prefix still aliases the reader's buffer after the
+	// source batch was cleaned.
+	require.Equal(t, sourcePointer,
+		uintptr(unsafe.Pointer(unsafe.SliceData(fitted.Vecs[0].GetData()))))
 
 	fitted.Clean(mp)
-	require.Nil(t, lease.Bytes())
 	require.Zero(t, mp.CurrNB())
 }
 

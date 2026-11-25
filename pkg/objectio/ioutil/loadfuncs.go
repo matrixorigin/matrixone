@@ -204,9 +204,10 @@ func LoadColumnsDataIntoReadonly(
 // LoadColumnsDataIntoBorrowed borrows only entries with ObjectIO's immutable
 // validation capability and an admitted per-column borrow policy. A nil policy
 // preserves full borrowing; an incompatible policy conservatively copies owned.
-// keeper is the lender of every borrowed destination (normally the batch the
-// destinations belong to): it holds the cache pins until it drops or reuses
-// those vectors. A nil keeper copies every column.
+// keeper holds the cache pins of every borrowed destination for the lender,
+// the producer that published the destinations (for a scan, its reader
+// request): the producer releases them when it reuses or drops those vectors.
+// A nil keeper copies every column.
 func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool, keeper bufferlease.Keeper) (bool, error) {
 	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, keeper, allowBorrow)
 	return hit, err

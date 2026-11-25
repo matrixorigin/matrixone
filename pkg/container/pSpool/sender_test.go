@@ -47,7 +47,7 @@ func poisonedLease(t *testing.T, backing []byte) *bufferlease.RefCounted {
 }
 
 // The spool copies an aliased producer batch: the copy must stay valid after
-// the producer's lender releases the lent backing at its next call.
+// the producer, the lender, releases the lent backing at its next call.
 func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	data := types.EncodeSlice([]int64{11, 22})
@@ -55,8 +55,6 @@ func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 2, data, nil, nil), error(nil)
 	require.NoError(t, err)
 	source := batch.New([]string{"v"})
-	require.NoError(t, source.HoldLease(lease))
-	lease.Release()
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 
@@ -69,9 +67,9 @@ func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 		uintptr(unsafe.Pointer(unsafe.SliceData(copied.Vecs[0].GetData()))),
 	)
 	require.False(t, copied.Vecs[0].IsReadOnly())
-	require.Zero(t, copied.HeldLeases())
 	source.Clean(mp)
-	require.Nil(t, lease.Bytes(), "the producer batch released its lease")
+	lease.Release() // the producer's next call releases what it lent
+	require.Nil(t, lease.Bytes())
 	require.Equal(t, []int64{11, 22}, vector.MustFixedColNoTypeCheck[int64](copied.Vecs[0]))
 
 	cache.put(copied, aliased)
@@ -97,8 +95,6 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	vec = vector.NewVecWithData(types.T_varchar.ToType(), 2, owner.GetData(), area, nil)
 
 	source := batch.New([]string{"v"})
-	require.NoError(t, source.HoldLease(lease))
-	lease.Release()
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 	sourceDataPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetData())))
@@ -116,6 +112,7 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	require.False(t, copied.Vecs[0].IsReadOnly())
 
 	source.Clean(mp)
+	lease.Release() // the producer's next call releases what it lent
 	require.Nil(t, lease.Bytes())
 	require.Equal(t, string(first), copied.Vecs[0].GetStringAt(0))
 	require.Equal(t, string(second), copied.Vecs[0].GetStringAt(1))

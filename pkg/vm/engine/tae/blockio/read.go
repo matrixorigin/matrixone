@@ -1143,9 +1143,9 @@ func blockDataReadWithFilter(
 				typs[i] = colTypes[pos]
 				dest[i] = outputBat.Vecs[pos]
 			}
-			// The output batch is the lender of every borrowed column: it holds the
-			// cache pins until its next CleanOnlyData/Clean.
-			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)), outputBat)
+			// The request's owner is the lender of every borrowed column: the
+			// request pins the cache entries until the output batch is reused.
+			_, err = ioutil.LoadColumnsDataIntoBorrowed(ctx, idxes, typs, fs, info.MetaLocation(), dest, mp, policy, applyFilter.BorrowColumns(earlyColumns, len(outputBat.Vecs)), applyFilter.Pins())
 		} else {
 			deleteMask, err = materializeBlockColumnsAtPositions(
 				ctx,

@@ -1033,8 +1033,8 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 }
 
 // TryBorrowCachedVector turns the empty dst into a read-only reference vector
-// (nil pool) over a privately validated cache column. keeper (the lender that
-// published dst, normally the output batch) holds the cache pin and, through
+// (nil pool) over a privately validated cache column. keeper (held for the lender
+// that published dst, for a scan its reader request) holds the cache pin and, through
 // an accounted view mp, a reservation of the full pinned capacity, until it
 // drops or reuses its columns. dst must never be mutated; a consumer that
 // needs to write copies it first.
