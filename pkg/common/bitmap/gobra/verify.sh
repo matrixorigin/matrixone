@@ -8,7 +8,10 @@
 # Viper verifies every member on its own, against the others' contracts, so
 # verifying members in separate runs proves the same thing as one run. By
 # default each member of bitmap.go gets a Gobra run, and so a Z3 process, of
-# its own; VERIFY_JOBS runs (default 4) go at once. In a single run Silicon
+# its own; VERIFY_JOBS runs go at once. One run peaks at about 2.5 GB (JVM
+# heap capped at 2 GB by the default GOBRA_JAVA_OPTS, plus Z3), so the default
+# is one job per 3 GB of available memory, at most 4. Without the heap cap a
+# JVM grows to a quarter of RAM, and many parallel runs exhaust memory. In a single run Silicon
 # reuses each Z3 process across many members, and some of these proofs then
 # succeed or fail depending on what that process verified before them.
 # "--one" does the single run anyway.
@@ -16,18 +19,25 @@ set -euo pipefail
 dir=$(cd "$(dirname "$0")/.." && pwd)
 : "${GOBRA_JAR:?set GOBRA_JAR to the path of gobra.jar}"
 : "${Z3_EXE:?set Z3_EXE to the path of z3}"
-export Z3_EXE GOBRA_JAR
+: "${GOBRA_JAVA_OPTS:=-Xss128m -Xmx2g}"
+if [ -z "${VERIFY_JOBS:-}" ]; then
+	avail_gb=$(awk '/^MemAvailable:/ { print int($2 / 1048576) }' /proc/meminfo 2>/dev/null || echo 0)
+	VERIFY_JOBS=$((avail_gb / 3))
+	[ "$VERIFY_JOBS" -gt 4 ] && VERIFY_JOBS=4
+	[ "$VERIFY_JOBS" -lt 1 ] && VERIFY_JOBS=1
+fi
+export Z3_EXE GOBRA_JAR GOBRA_JAVA_OPTS
 cd "$dir"
 
 if [ "${1:-}" = "--one" ]; then
 	shift
-	exec java -Xss128m -jar "$GOBRA_JAR" -I gobra/stubs -i types.go bitmap.go bitmap_lemmas.gobra "$@"
+	exec java $GOBRA_JAVA_OPTS -jar "$GOBRA_JAR" -I gobra/stubs -i types.go bitmap.go bitmap_mem.gobra bitmap_lemmas.gobra "$@"
 fi
 
 run() { # run <label> <files...>; prints one result line
 	label=$1
 	shift
-	if out=$(java -Xss128m -jar "$GOBRA_JAR" -I gobra/stubs --assertTimeout 120000 -i "$@" 2>&1) &&
+	if out=$(java $GOBRA_JAVA_OPTS -jar "$GOBRA_JAR" -I gobra/stubs --assertTimeout 120000 -i "$@" 2>&1) &&
 		grep -q "Gobra found 0 errors" <<<"$out"; then
 		echo "ok    $label"
 	else
@@ -57,12 +67,12 @@ results=$(mktemp)
 trap 'rm -f "$results"' EXIT
 {
 	# Line 1 of bitmap.go starts no member: this run verifies only the lemmas.
-	echo "bitmap_lemmas.gobra types.go bitmap.go@1 bitmap_lemmas.gobra"
-	echo "pure-functions-and-predicates types.go bitmap.go@$(echo $pure | tr ' ' ',') bitmap_lemmas.gobra@1"
+	echo "bitmap_lemmas.gobra types.go bitmap.go@1 bitmap_mem.gobra bitmap_lemmas.gobra"
+	echo "pure-functions-and-predicates types.go bitmap.go@$(echo $pure | tr ' ' ',') bitmap_mem.gobra bitmap_lemmas.gobra@1"
 	while read -r line name; do
-		echo "$name types.go bitmap.go@$line bitmap_lemmas.gobra@1"
+		echo "$name types.go bitmap.go@$line bitmap_mem.gobra bitmap_lemmas.gobra@1"
 	done <<<"$members"
-} | xargs -P "${VERIFY_JOBS:-4}" -L 1 bash -c 'run "$@"' _ | tee "$results" || true
+} | xargs -P "$VERIFY_JOBS" -L 1 bash -c 'run "$@"' _ | tee "$results" || true
 if grep -q '^FAIL' "$results"; then
 	echo "verification failed"
 	exit 1

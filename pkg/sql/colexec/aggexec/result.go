@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -502,18 +501,16 @@ func (r *optSplitResult) modifyChunkSize(n int) {
 	r.optInformation.chunkSize = n
 }
 
-// getNspFromBoolVector generate a nsp bitmap from a bool type vector and return it.
-func getNspFromBoolVector(v *vector.Vector) *nulls.Nulls {
+// setNullsFromBoolVector makes dst's NULL rows exactly the true rows of v, a
+// bool vector.
+func setNullsFromBoolVector(dst, v *vector.Vector) {
+	dst.SetNulls(nil)
 	bs := vector.MustFixedColNoTypeCheck[bool](v)
-
-	nsp := nulls.NewWithSize(len(bs))
-	bm := nsp.GetBitmap()
-	for i, j := uint64(0), uint64(len(bs)); i < j; i++ {
+	for i := range bs {
 		if bs[i] {
-			bm.Add(i)
+			dst.GetNulls().Add(uint64(i))
 		}
 	}
-	return nsp
 }
 
 func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
@@ -535,7 +532,7 @@ func (r *optSplitResult) MergeAnotherEmpty(x, y int, anotherIsEmpty bool) {
 func (r *optSplitResult) flushAll() []*vector.Vector {
 	if r.optInformation.doesThisNeedEmptyList && r.optInformation.shouldSetNullToEmptyGroup {
 		for i := range r.emptyList {
-			r.resultList[i].SetNulls(getNspFromBoolVector(r.emptyList[i]))
+			setNullsFromBoolVector(r.resultList[i], r.emptyList[i])
 		}
 	}
 

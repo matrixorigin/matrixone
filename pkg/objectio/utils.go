@@ -227,7 +227,9 @@ func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch 
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
 		// XXX do we need to init nulls here?   can we be lazy?
-		bat.Vecs[i].GetNulls().InitWithSize(n)
+		if err := bat.Vecs[i].GetNulls().InitWithSize(n, m); err != nil {
+			panic(err)
+		}
 	}
 	return bat
 }

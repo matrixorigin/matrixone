@@ -18,6 +18,7 @@ Load only the reference needed for the task:
 |------|------|
 | CGo compile/link/load/module errors, controlled local test execution, layered matrices, hung tests, "pre-existing" claims, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
 | `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests, distributed pipeline hangs, remote dispatch/receiver registration | [references/operator-pipeline.md](references/operator-pipeline.md) |
+| Creating, holding, copying, or freeing a `bitmap.Bitmap` / `nulls.Nulls` outside a Vector; bitmap/nulls leaks or use-after-free; Gobra verification of bitmap/nulls | [references/bitmap-memory.md](references/bitmap-memory.md) |
 | Systematic regression design, counterexamples, white-box/black-box validation, planner/explain/rewrite correctness, avoiding scenario overfit | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext index algorithm work, plugin registry, GPU-only algorithm registration, index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
 | Changed persisted format or interpretation, upgrade/restore, or protocol and plan encoding | [Shared upgrade compatibility contract](../../../.agents/skills/mo-dev/references/upgrade-compatibility.md) |
@@ -30,6 +31,7 @@ Consult the referenced material before acting:
 | Gate | When | Action |
 |------|------|--------|
 | **G-MODIFY** | Before editing any `colexec` operator or `process` signal type | Read [operator-pipeline.md](references/operator-pipeline.md). |
+| **G-BITMAP** | Code creates or holds a `Bitmap`/`Nulls` not owned by a Vector, or changes `pkg/common/bitmap` / `pkg/container/nulls` | Read [bitmap-memory.md](references/bitmap-memory.md). Every bitmap is vector-owned, read-only (`mp == nil`), or owned by a named component that `Free`s it on every exit path; no fourth state. |
 | **G-CGO-ERR** | Any build/test returns module/vendor, header, link, `dyld`, or shared-library errors | Read [cgo-build-test.md](references/cgo-build-test.md) and identify the failing layer before changing code. |
 | **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (missing Pixi activation, `gmake` jobserver, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
 | **G-IDXPLUGIN** | Before adding/editing an index-algorithm plugin, OR adding any `switch`/`if` on an index **algo** name in `pkg/sql/{compile,plan}` or `pkg/catalog` | Read [index-plugin.md](references/index-plugin.md). Route through `pkg/indexplugin`; new algo switches are forbidden. |

@@ -267,6 +267,13 @@ func (tableScan *TableScan) readBatch(
 		tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.columnUses
 		tableScan.ctr.readerFilter.PublishSelection = nil
 		if tableScan.publishesSelection() {
+			// The reader fills rows from the scan's pool; selection.free
+			// releases it.
+			rows := &tableScan.ctr.selection.rows
+			if mp := tableScan.mp(proc); rows.MPool() != mp {
+				rows.Free()
+				rows.Init(mp)
+			}
 			tableScan.ctr.readerFilter.PublishSelection = &tableScan.ctr.selection.rows
 			tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.selection.borrowedUses(tableScan.ctr.columnUses)
 		}

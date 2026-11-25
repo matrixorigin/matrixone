@@ -151,7 +151,7 @@ func NewFunctionTestCase(
 		// generate the nulls.
 		var nsp *nulls.Nulls = nil
 		if len(inputs[i].nullList) != 0 {
-			nsp = nulls.NewWithSize(len(inputs[i].nullList))
+			nsp = mustNullsOK(nulls.NewWithSize(len(inputs[i].nullList), bitmapTestMP))
 			for j, b := range inputs[i].nullList {
 				if b {
 					nsp.Set(uint64(j))
@@ -323,7 +323,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 	// generate the expected nsp
 	var expectedNsp *nulls.Nulls = nil
 	if fc.expected.nullList != nil {
-		expectedNsp = nulls.NewWithSize(len(fc.expected.nullList))
+		expectedNsp = mustNullsOK(nulls.NewWithSize(len(fc.expected.nullList), bitmapTestMP))
 		for i, b := range fc.expected.nullList {
 			if b {
 				expectedNsp.Add(uint64(i))

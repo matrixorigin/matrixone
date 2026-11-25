@@ -143,7 +143,9 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
-			rsNull.InitWithSize(length)
+			if err := rsNull.InitWithSize(length, resultVec.MPool()); err != nil {
+				return err
+			}
 			nullsInited = true
 			for i := 0; i < length; i++ {
 				if selectList.Contains(uint64(i)) {
@@ -162,7 +164,9 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 		} else {
 			if v.HasNull() {
 				if !nullsInited {
-					rsNull.InitWithSize(length)
+					if err := rsNull.InitWithSize(length, resultVec.MPool()); err != nil {
+						return err
+					}
 					nullsInited = true
 				}
 				nulls.Or(rsNull, v.GetNulls(), rsNull)
