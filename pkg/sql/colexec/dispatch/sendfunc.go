@@ -60,7 +60,7 @@ var (
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
 
-// marshalRemoteBatch encodes a batch in the stable Batch wire format.
+// marshalRemoteBatch encodes a batch in the Batch wire format.
 func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")

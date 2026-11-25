@@ -716,7 +716,7 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	require.NoError(t, err)
 	var encoded bytes.Buffer
 	require.NoError(t, encoded.WriteByte(spillPayloadBatch))
-	require.NoError(t, bat.MarshalBinaryForSpillTo(&encoded))
+	require.NoError(t, bat.MarshalFramedTo(&encoded))
 	require.Equal(t, uint64(encoded.Len()), serialized)
 	require.GreaterOrEqual(t, scratch, serialized)
 }

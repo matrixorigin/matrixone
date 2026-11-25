@@ -1200,7 +1200,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 		reuseBat.CleanOnlyData()
 		reader := io.NewSectionReader(ctr.spillFile, record.offset, record.size)
-		if err := reuseBat.UnmarshalFromReaderWithMetadataForSpill(
+		if err := reuseBat.UnmarshalSizedFrom(
 			reader,
 			record.size,
 			decodedMP,

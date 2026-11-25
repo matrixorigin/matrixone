@@ -86,7 +86,6 @@ func TestUnmarshalFromReaderRejectsInvalidLengthsBeforeAllocation(t *testing.T) 
 	zeroCount := int32(0)
 	negative := int32(-1)
 	huge := int32(1<<20 + 1)
-	one := int32(1)
 	oversized := int32(1 << 30)
 
 	for _, test := range []struct {
@@ -102,15 +101,14 @@ func TestUnmarshalFromReaderRejectsInvalidLengthsBeforeAllocation(t *testing.T) 
 			data: encode(types.EncodeInt64(&zeroRows), types.EncodeInt32(&huge)),
 		},
 		{
-			name: "negative attribute count",
+			name: "negative extra buffer size",
 			data: encode(types.EncodeInt64(&zeroRows), types.EncodeInt32(&zeroCount), types.EncodeInt32(&negative)),
 		},
 		{
-			name: "oversized attribute payload",
+			name: "extra buffer larger than the input",
 			data: encode(
 				types.EncodeInt64(&zeroRows),
 				types.EncodeInt32(&zeroCount),
-				types.EncodeInt32(&one),
 				types.EncodeInt32(&oversized),
 			),
 		},

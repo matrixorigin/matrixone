@@ -467,9 +467,8 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 }
 
 // Column names of the batches deletion builds. A batch carries no names:
-// these travel beside it to Relation.Delete, and on the wire (inside a remote
-// row's DeltaLoc blob, and on the remote rows themselves) to older CNs that
-// identify the layouts by name. Shared; do not modify.
+// these travel beside it to Relation.Delete, and fix the layouts the relay
+// recognizers read by position. Shared; do not modify.
 var (
 	// DelBatchAttrs names makeDelBatch's row-delete batch.
 	DelBatchAttrs = colexec.DeleteRowsAttrs

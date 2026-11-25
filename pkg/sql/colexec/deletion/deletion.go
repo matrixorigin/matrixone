@@ -134,7 +134,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 					return result, err
 				}
 				bat.SetRowCount(bat.GetVector(0).Length())
-				byts, err1 := bat.MarshalBinaryWithNames(DelBatchAttrs)
+				byts, err1 := bat.MarshalBinary()
 				if err1 != nil {
 					result.Status = vm.ExecStop
 					return result, err1
@@ -163,7 +163,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 					return result, err
 				}
 
-				batBytes, err := bat.MarshalBinaryWithNames(TombstoneObjectStatsAttrs)
+				batBytes, err := bat.MarshalBinary()
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, err

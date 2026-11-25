@@ -1272,10 +1272,7 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	}
 
 	var val []byte
-	// The relayed batch is self-describing: the consumer (this CN's or an
-	// older CN's multi_update, and the relay recognizer) reads the names
-	// from the blob, as older CNs did from the batch.
-	if val, err = bat.MarshalBinaryWithBufferAndNames(&writer.buf, true, attrs); err != nil {
+	if val, err = bat.MarshalBinaryWithBuffer(&writer.buf, true); err != nil {
 		return
 	}
 	if err = vector.AppendBytes(output.Vecs[4], val, false, mp); err != nil {

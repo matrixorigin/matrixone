@@ -2153,7 +2153,7 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	require.NoError(t, err)
 	partials[1].Clean(proc.Mp())
 	partials[1] = batch.NewWithSize(0)
-	require.NoError(t, partials[1].UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
+	require.NoError(t, partials[1].UnmarshalBinaryWithAnyMp(wire.Bytes(), proc.Mp()))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs(partials)
 	t.Cleanup(func() { mergeChild.Free(proc, false, nil) })
@@ -3768,7 +3768,7 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 			remotePartial.Clean(proc.Mp())
 		}
 	})
-	require.NoError(t, remotePartial.UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
+	require.NoError(t, remotePartial.UnmarshalBinaryWithAnyMp(wire.Bytes(), proc.Mp()))
 	partial.Clean(proc.Mp())
 	partial = remotePartial
 	remotePartial = nil

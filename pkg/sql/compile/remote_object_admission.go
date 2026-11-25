@@ -41,9 +41,6 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
@@ -75,27 +72,6 @@ type remotePersistedMetadataProducer interface {
 
 func (a remoteObjectAdmission) any() bool {
 	return a.multiUpdateS3 || a.insertS3 || a.deleteRemote
-}
-
-// relayWireNames returns the column names to write on the wire with bat, a
-// batch the fragment sends back to its coordinator. A batch carries no
-// names, but an older coordinator recognizes the standalone insert's and the
-// remote delete's relay batches by name. So when the scope runs such a
-// producer and bat has that producer's layout, the producer's fixed names
-// are returned; otherwise nil (no names). The multi_update relay was never
-// named. Coordinators of this version recognize relay batches by layout.
-func (a remoteObjectAdmission) relayWireNames(bat *batch.Batch) []string {
-	if a.insertS3 {
-		if names := insert.RelayWireNames(bat); names != nil {
-			return names
-		}
-	}
-	if a.deleteRemote {
-		if names := deletion.RelayWireNames(bat); names != nil {
-			return names
-		}
-	}
-	return nil
 }
 
 // scopeRemoteObjectAdmission walks the scope the coordinator itself
