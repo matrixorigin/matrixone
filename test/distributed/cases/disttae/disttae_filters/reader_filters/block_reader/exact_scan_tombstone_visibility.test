@@ -1,7 +1,9 @@
 -- @suite
 -- @case
--- @desc: pushed exact scans preserve visibility across full, partial, mixed-block, and delete tombstones (#33159)
+-- @desc: pushed-scan result correctness for BlockIO tombstone visibility boundaries (#33159)
 -- @label:bvt
+
+-- Predicate pushdown reaches TAE BlockIO; this checks row visibility, not plan choice.
 
 drop database if exists issue_33159_exact_scan;
 create database issue_33159_exact_scan;
