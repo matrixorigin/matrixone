@@ -148,7 +148,15 @@ func (s cleanupTestLockService) GetConfig() lockservice.Config {
 
 type cleanupTestSharedFS struct {
 	fileservice.FileService
-	failDelete atomic.Bool
+	failDelete  atomic.Bool
+	failJournal atomic.Bool
+}
+
+func (f *cleanupTestSharedFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	if f.failJournal.Load() && strings.HasPrefix(vector.FilePath, "cn-spill-cleanup/") {
+		return errors.New("injected shared journal outage")
+	}
+	return f.FileService.Write(ctx, vector)
 }
 
 func (f *cleanupTestSharedFS) Delete(ctx context.Context, names ...string) error {
@@ -171,10 +179,10 @@ func (f *cleanupTestLocalFS) Write(ctx context.Context, vector fileservice.IOVec
 }
 
 func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
-	t.Run("journal-available", func(t *testing.T) {
+	t.Run("replacement-with-fresh-local-directory", func(t *testing.T) {
 		testMultiUpdateSpillCleanup(t, false, false)
 	})
-	t.Run("local-recovers", func(t *testing.T) {
+	t.Run("local-record-promotes-to-shared", func(t *testing.T) {
 		testMultiUpdateSpillCleanup(t, true, false)
 	})
 	t.Run("shared-recovers", func(t *testing.T) {
@@ -185,33 +193,35 @@ func TestMultiUpdateFreeRetriesUnpublishedSpillAfterCNRestart(t *testing.T) {
 func testMultiUpdateSpillCleanup(t *testing.T, failJournal, sharedRecoversFirst bool) {
 	ctx := t.Context()
 	id := t.Name()
-	runtime.SetupServiceBasedRuntime(id, runtime.NewRuntime(metadata.ServiceType_CN, id, nil))
 	fs := &cleanupTestSharedFS{FileService: testutil.NewSharedFS()}
 	t.Cleanup(func() { fs.Close(context.Background()) })
 	proc := testutil.NewProcess(t, testutil.WithFileService(fs))
 	proc.Base.LockService = cleanupTestLockService{id: id}
 	root := t.TempDir()
 
-	startCN := func() (*stopper.Stopper, *colexec.Server, *cleanupTestLocalFS) {
-		local, err := fileservice.NewLocalFS(ctx, defines.LocalFileServiceName, root, fileservice.DisabledCacheConfig, nil)
+	startCN := func(serviceID, dir string) (*stopper.Stopper, *colexec.Server, *cleanupTestLocalFS) {
+		runtime.SetupServiceBasedRuntime(serviceID, runtime.NewRuntime(metadata.ServiceType_CN, serviceID, nil))
+		local, err := fileservice.NewLocalFS(ctx, defines.LocalFileServiceName, dir, fileservice.DisabledCacheConfig, nil)
 		require.NoError(t, err)
-		st := stopper.NewStopper(id)
+		st := stopper.NewStopper(serviceID)
 		t.Cleanup(func() {
 			st.Stop()
 			local.Close(context.Background())
 		})
-		srv := colexec.NewServer(id)
+		srv := colexec.NewServer(serviceID)
 		metadataFS := &cleanupTestLocalFS{LocalFS: local}
-		require.NoError(t, srv.StartCNS3Cleanup(st, id, metadataFS, fs))
+		require.NoError(t, srv.StartCNS3Cleanup(st, serviceID, metadataFS, fs))
 		return st, srv, metadataFS
 	}
-	st, oldServer, oldLocal := startCN()
+	st, oldServer, oldLocal := startCN(id, root)
 	listObjects := func() []string {
 		files, err := fileservice.SortedList(fs.List(ctx, ""))
 		require.NoError(t, err)
 		names := make([]string, 0, len(files))
 		for _, file := range files {
-			names = append(names, file.Name)
+			if !file.IsDir {
+				names = append(names, file.Name)
+			}
 		}
 		return names
 	}
@@ -240,6 +250,7 @@ func testMultiUpdateSpillCleanup(t *testing.T, failJournal, sharedRecoversFirst 
 	require.Len(t, listObjects(), 2, "one published object and one unpublished spill")
 
 	fs.failDelete.Store(true)
+	fs.failJournal.Store(failJournal)
 	oldLocal.failWrite.Store(failJournal)
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -264,7 +275,11 @@ func testMultiUpdateSpillCleanup(t *testing.T, failJournal, sharedRecoversFirst 
 		}
 	}
 
-	require.NoError(t, oldServer.FlushCNS3Cleanup())
+	if failJournal && !sharedRecoversFirst {
+		require.ErrorContains(t, oldServer.FlushCNS3Cleanup(), "injected shared journal outage")
+	} else {
+		require.NoError(t, oldServer.FlushCNS3Cleanup())
+	}
 	records, err := fileservice.SortedList(oldLocal.List(ctx, "cn-spill-cleanup/"+id))
 	require.NoError(t, err)
 	if sharedRecoversFirst {
@@ -276,18 +291,41 @@ func testMultiUpdateSpillCleanup(t *testing.T, failJournal, sharedRecoversFirst 
 		require.NoError(t, writer.Write(ctx, input), "the original CN accepts spills after recovery")
 		require.NoError(t, writer.Close())
 		require.Equal(t, []string{publishedName}, listObjects())
+	} else if failJournal {
+		require.Len(t, records, 1, "a local backup is used while shared writes are unavailable")
+		fs.failJournal.Store(false)
+		promoter, _, local := startCN(id, root)
+		require.Eventually(t, func() bool {
+			localRecords, localErr := fileservice.SortedList(local.List(ctx, "cn-spill-cleanup/"+id))
+			sharedRecords, sharedErr := fileservice.SortedList(fs.List(ctx, "cn-spill-cleanup"))
+			return localErr == nil && sharedErr == nil && len(localRecords) == 0 && len(sharedRecords) == 1
+		}, 5*time.Second, 10*time.Millisecond, "a replacement must promote the backup even while shared deletion fails")
+		promoter.Stop()
+		require.Len(t, listObjects(), 2)
 	} else {
-		require.Len(t, records, 1, "unpublished keys must survive the CN restart")
+		require.Empty(t, records)
+		sharedRecords, err := fileservice.SortedList(fs.List(ctx, "cn-spill-cleanup"))
+		require.NoError(t, err)
+		require.Len(t, sharedRecords, 1, "terminal cleanup must transfer ownership to shared storage")
 	}
 
 	fs.failDelete.Store(false)
-	_, _, local := startCN()
+	startCN(id+"-new", t.TempDir())
 	require.Eventually(t, func() bool {
 		files, listErr := fileservice.SortedList(fs.List(ctx, ""))
-		return listErr == nil && len(files) == 1 && files[0].Name == publishedName
+		if listErr != nil {
+			return false
+		}
+		var liveNames []string
+		for _, file := range files {
+			if !file.IsDir {
+				liveNames = append(liveNames, file.Name)
+			}
+		}
+		return len(liveNames) == 1 && liveNames[0] == publishedName
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
-		records, listErr := fileservice.SortedList(local.List(ctx, "cn-spill-cleanup/"+id))
+		records, listErr := fileservice.SortedList(fs.List(ctx, "cn-spill-cleanup"))
 		return listErr == nil && len(records) == 0
 	}, 5*time.Second, 10*time.Millisecond)
 }
