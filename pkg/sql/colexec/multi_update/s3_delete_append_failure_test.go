@@ -62,17 +62,20 @@ func TestPrepareDeleteBatchesAppendFailure(t *testing.T) {
 
 			writer := &s3WriterDelegate{deleteBlockMap: make([]map[types.Blockid]*deleteBlockData, 1)}
 			blockID := rowID.CloneBlockID()
+			// The block (and its bitmap) exists before the pool is
+			// exhausted, so the failure is in the append under test.
+			block, err := newDeleteBlockData(src, 1, mp)
+			require.NoError(t, err)
 			if tc.preallocateRow {
-				block := newDeleteBlockData(src, 1, mp)
 				require.NoError(t, block.bat.Vecs[RowIDIdx].PreExtend(1, mp))
 				if tc.varlenPK {
 					require.NoError(t, block.bat.Vecs[PkIdx].PreExtend(1, mp))
 				}
-				writer.deleteBlockMap[0] = map[types.Blockid]*deleteBlockData{blockID: block}
 			}
+			writer.deleteBlockMap[0] = map[types.Blockid]*deleteBlockData{blockID: block}
 			defer func() {
 				for _, block := range writer.deleteBlockMap[0] {
-					block.bat.Clean(mp)
+					block.free(mp)
 				}
 			}()
 
@@ -92,7 +95,7 @@ func TestPrepareDeleteBatchesAppendFailure(t *testing.T) {
 			}
 			require.Error(t, err, "an omitted tombstone must abort the delete")
 			require.Nil(t, bats)
-			block := writer.deleteBlockMap[0][blockID]
+			block = writer.deleteBlockMap[0][blockID]
 			require.NotNil(t, block)
 			require.False(t, block.bitmap.Contains(uint64(rowID.GetRowOffset())))
 			require.Equal(t, 0, block.bat.RowCount())

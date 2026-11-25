@@ -566,7 +566,8 @@ func TestIgnoreFillCopiesVectorsTheCallerDoesNotOwn(t *testing.T) {
 	// A read-only (borrowed) vector cannot be written in place at all, but
 	// the copy still adjusts its rows.
 	ro := vector.NewVecWithData(*child.GetType(), child.Length(), child.GetData(), child.GetArea(), nil)
-	ro.GetNulls().Add(1)
+	// A read-only vector's NULLs are read-only too: reference the child's.
+	ro.GetNulls().InitView(child.GetNulls(), 0, child.Length())
 	vecs = []*vector.Vector{ro}
 	_, err = fill.Fill(vecs, []string{"s"}, cols, nil, proc)
 	require.NoError(t, err)

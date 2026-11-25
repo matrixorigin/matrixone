@@ -3873,3 +3873,32 @@ func BenchmarkMakeExecuteSqlDiscardedPreparedSQL(b *testing.B) {
 		})
 	}
 }
+
+// A column that fails to convert must not leak the vectors and null bitmaps
+// already built for earlier columns.
+func Test_convertRowsIntoBatchFreesPartialBatchOnError(t *testing.T) {
+	mrs := &MysqlResultSet{}
+	text := new(MysqlColumn)
+	text.SetName("s")
+	text.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	text.SetLength(64)
+	mrs.AddColumn(text)
+	dec := new(MysqlColumn)
+	dec.SetName("d")
+	dec.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	dec.SetSigned(true)
+	dec.SetLength(20)
+	dec.SetDecimal(2)
+	mrs.AddColumn(dec)
+	mrs.AddRow([]any{"a value long enough to live in the area", "1.00"})
+	mrs.AddRow([]any{nil, "not a decimal"})
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(pool)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	require.Error(t, err)
+	require.Nil(t, data)
+	require.Nil(t, pColDefs)
+	require.Zero(t, pool.CurrNB())
+}

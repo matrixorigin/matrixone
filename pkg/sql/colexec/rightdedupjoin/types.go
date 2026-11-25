@@ -238,6 +238,7 @@ func (ctr *container) cleanHashMap() {
 }
 
 func (ctr *container) cleanBitmap(proc *process.Process) {
+	ctr.matched.Free()
 	ctr.matched = nil
 }
 

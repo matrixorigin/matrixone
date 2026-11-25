@@ -152,6 +152,10 @@ func (node *persistedNode) Scan(
 			if attr == pkgcatalog.SystemRelAttr_LogicalID && vecs[i].IsConstNull() {
 				dup, err := (*bat).GetVectorByName(pkgcatalog.SystemRelAttr_ID).GetDownstreamVector().Dup(mp)
 				if err != nil {
+					// vecs[:i] are in *bat, which the caller closes.
+					for _, v := range vecs[i:] {
+						v.Close()
+					}
 					return err
 				}
 				vecs[i].Close()
@@ -160,14 +164,33 @@ func (node *persistedNode) Scan(
 			(*bat).AddVector(attr, vecs[i])
 		}
 	} else {
-		if (*bat).Deletes == nil {
-			(*bat).Deletes = nulls.NewWithSize(1024)
-		}
 		len := (*bat).Length()
+		if !deletes.IsEmpty() {
+			// Reserve every row the merge can set, so the Adds below cannot
+			// fail. Nothing loaded is in the batch yet: on failure close it.
+			need := len + int(deletes.Len())
+			if (*bat).Deletes == nil {
+				(*bat).Deletes, err = nulls.NewWithSize(need, mp)
+			} else {
+				err = (*bat).Deletes.GetBitmap().TryExpandWithSize(need)
+			}
+			if err != nil {
+				deletes.Free()
+				for _, v := range vecs {
+					v.Close()
+				}
+				if release != nil {
+					release()
+				}
+				return err
+			}
+		}
 		deletes.Foreach(func(i uint64) bool {
 			(*bat).Deletes.Add(i + uint64(len))
 			return true
 		})
+		// The rows are merged into the batch's own bitmap.
+		deletes.Free()
 
 		// RelLogicalID COMPAT
 		var tidvec containers.Vector
@@ -199,6 +222,18 @@ func (node *persistedNode) Scan(
 				length := constInner.Length()
 				newInner := vector.NewVec(*constInner.GetType(), mp)
 				if err = newInner.UnionBatch(constInner, 0, length, nil, mp); err != nil {
+					newInner.Free(mp)
+					// Close is idempotent, so closing every input vector
+					// (tidvec included) is safe whatever was closed already.
+					for _, v := range vecs {
+						v.Close()
+					}
+					if tidvec != nil {
+						tidvec.Close()
+					}
+					if release != nil {
+						release()
+					}
 					return
 				}
 				destVec.Close()
@@ -416,11 +451,13 @@ func (node *persistedNode) FillBlockTombstones(
 			if types.PrefixCompare(rowID[:], blkID[:]) == 0 {
 				if *deletes == nil {
 					*deletes = &nulls.Nulls{}
+					(*deletes).Init(mp)
 				}
 				offset := rowID.GetRowOffset()
 				(*deletes).Add(uint64(offset) + deleteStartOffset)
 			}
 		}
+		visibilityDeletes.Free()
 		for i := range vecs {
 			vecs[i].Close()
 		}
