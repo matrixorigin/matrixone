@@ -3689,6 +3689,40 @@ func (f *testMembershipFilter) Valid() bool { return true }
 func (f *testMembershipFilter) Exact() bool { return false }
 func (f *testMembershipFilter) Free()       {}
 
+func TestConstructBlockPKFilterInvalidCompositePrefix(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	col := &plan.ColDef{Name: "__mo_cpkey_col", Typ: plan.Type{Id: int32(types.T_varchar)}}
+	table := &plan.TableDef{
+		Cols:          []*plan.ColDef{col},
+		Name2ColIndex: map[string]int32{col.Name: 0},
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: col.Name, CompPkeyCol: col},
+	}
+	expr := MakeFunctionExprForTest("prefix_eq", []*plan.Expr{
+		MakeColExprForTest(0, types.T_varchar, col.Name),
+		plan2.MakePlan2StringConstExprWithType("prefix"),
+	})
+	base, err := ConstructBasePKFilter(expr, table, mp)
+	require.NoError(t, err)
+	require.False(t, base.Valid)
+	require.Equal(t, types.T_varchar, base.Oid)
+
+	keys := vector.NewVec(types.T_varchar.ToType())
+	defer keys.Free(mp)
+	for _, key := range []string{"prefix-a", "prefix-b", "prefix-c"} {
+		require.NoError(t, vector.AppendBytes(keys, []byte(key), false, mp))
+	}
+	bf := &testMembershipFilter{hits: []uint8{1, 0, 1}}
+	filter, err := ConstructBlockPKFilter(false, base, bf)
+	require.NoError(t, err)
+	if filter.Cleanup != nil {
+		defer filter.Cleanup()
+	}
+	require.True(t, filter.Valid)
+	require.Equal(t, []int64{0, 2}, filter.SortedSearchFunc(containers.Vectors{*keys}))
+	require.Equal(t, []int64{0, 2}, filter.UnSortedSearchFunc(containers.Vectors{*keys}))
+	require.Equal(t, 2, bf.calls)
+}
+
 func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	pk := vector.NewVec(types.T_int64.ToType())

@@ -90,9 +90,15 @@ func ConstructBlockPKFilter(
 		}
 	}()
 
-	disjuncts := basePKFilter.Disjuncts
-	if len(disjuncts) == 0 {
-		disjuncts = []BasePKFilter{basePKFilter}
+	// An invalid PK descriptor can carry the zero-valued EQUAL operator.
+	// With membership filtering, skip PK search instead of intersecting the
+	// membership hits with an equality against an empty key.
+	var disjuncts []BasePKFilter
+	if basePKFilter.Valid {
+		disjuncts = basePKFilter.Disjuncts
+		if len(disjuncts) == 0 {
+			disjuncts = []BasePKFilter{basePKFilter}
+		}
 	}
 
 	var (
