@@ -339,7 +339,7 @@ func (s *service) handleRemoteLock(
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	admission, admitted := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows)
+	admission, admitted := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows, false)
 	if !admitted {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
@@ -389,7 +389,7 @@ func (s *service) handleRemoteLock(
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableNotFound, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	if current.getBind().Changed(bind) {
+	if !sameLockTableForTxn(current, l) {
 		newBind := current.getBind()
 		resp.NewBind = &newBind
 		s.bindChangeMu.RUnlock()
@@ -399,12 +399,23 @@ func (s *service) handleRemoteLock(
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
 	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
 
-	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	txn := s.activeTxnHolder.admitRemoteTxn(req.Lock.TxnID, req.Lock.ServiceID, req.Lock.AdmissionDeadline)
+	if txn == nil {
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRemoteLockAdmissionExpired(ctx), cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txn.Lock()
-	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+	if txn.closing.Load() || !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrTxnNotFound, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if s.activeTxnHolder.remoteAdmissionExpired(req.Lock.TxnID, req.Lock.AdmissionDeadline) {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRemoteLockAdmissionExpired(ctx), cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 	if txn.deadlockFound {
@@ -420,7 +431,13 @@ func (s *service) handleRemoteLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) &&
+	if txn.fenceReplacedLockTableLocked(bind, l, s.logger) {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableBindChanged, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if txn.lockTableBindTouched(bind, l) &&
 		bind.ServiceID == s.serviceID &&
 		!admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
@@ -441,7 +458,7 @@ func (s *service) handleRemoteLock(
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()
 			if err == nil {
-				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
+				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, l); e != nil {
 					result = pb.Result{}
 					err = e
 				}
@@ -460,11 +477,16 @@ func (s *service) handleForwardLock(
 	cs morpc.ClientSession) {
 	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	logFields := remoteLockResponseLogFields(req)
+	live := s.cfg.ForwardedLockAdmission
+	if live != nil && req.Lock.Options.ForwardTo != s.serviceID {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrTxnNotFound, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	if lockWaitDeadlineExpired(req.Lock.Options, time.Now()) {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	admission, admitted := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows)
+	admission, admitted := s.beginLockAdmission(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows, false)
 	if !admitted {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
@@ -485,16 +507,22 @@ func (s *service) handleForwardLock(
 	if cancelBind != nil {
 		defer cancelBind()
 	}
-	l, err := s.getLockTableWithContext(
-		bindCtx,
-		req.LockTable.Group,
-		req.LockTable.Table)
-	if err != nil ||
-		l == nil {
-		// means that the lockservice sending the lock request holds a stale
-		// lock table binding.
-		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
-		return
+	l := s.tableGroups.get(req.LockTable.Group, req.LockTable.Table)
+	if l == nil {
+		tableID := req.LockTable.Table
+		if req.Lock.Options.Sharding == pb.Sharding_ByRow {
+			tableID = req.LockTable.OriginTable
+		}
+		var err error
+		l, err = s.getLockTableWithCreateContext(
+			bindCtx, req.LockTable.Group, tableID, req.Lock.Rows, req.Lock.Options.Sharding)
+		if err == nil && l == nil {
+			err = ErrLockTableNotFound
+		}
+		if err != nil {
+			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+			return
+		}
 	}
 	if err := bindCtx.Err(); err != nil {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, lockWaitContextError(bindCtx, err), cs, defaultRPCWriteTimeout, logFields)
@@ -505,6 +533,9 @@ func (s *service) handleForwardLock(
 		return
 	}
 
+	if s.option.beforeRemoteLockBindCheck != nil {
+		s.option.beforeRemoteLockBindCheck()
+	}
 	s.bindChangeMu.RLock()
 	bind := l.getBind()
 	current := s.tableGroups.get(bind.Group, bind.Table)
@@ -513,18 +544,26 @@ func (s *service) handleForwardLock(
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableNotFound, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
-	if current.getBind().Changed(bind) {
-		newBind := current.getBind()
-		resp.NewBind = &newBind
+	if !sameLockTableForTxn(current, l) {
 		s.bindChangeMu.RUnlock()
-		_ = writeResponseWithDeadline(s.logger, cancel, resp, nil, cs, defaultRPCWriteTimeout, logFields)
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableBindChanged, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 	s.activeTxnHolder.keepRemoteActiveTxn(req.Lock.ServiceID)
 	s.activeTxnHolder.keepRemoteLockBindActive(req.Lock.ServiceID, req.LockTable)
-	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	var txn *activeTxn
+	if live == nil {
+		txn = s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	} else {
+		txn = s.activeTxnHolder.admitForwardedTxn(req.Lock.TxnID, live)
+	}
+	if txn == nil {
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrTxnNotFound, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	txn.Lock()
-	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+	if txn.closing.Load() || !bytes.Equal(txn.txnID, req.Lock.TxnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrTxnNotFound, cs, defaultRPCWriteTimeout, logFields)
@@ -543,7 +582,13 @@ func (s *service) handleForwardLock(
 		return
 	}
 
-	if txn.lockTableBindTouched(bind) &&
+	if txn.fenceReplacedLockTableLocked(bind, l, s.logger) {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTableBindChanged, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if txn.lockTableBindTouched(bind, l) &&
 		bind.ServiceID == s.serviceID &&
 		!admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
@@ -564,7 +609,7 @@ func (s *service) handleForwardLock(
 		func(result pb.Result, err error) {
 			defer completion.callbackDone()
 			if err == nil {
-				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
+				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, l); e != nil {
 					result = pb.Result{}
 					err = e
 				}
@@ -596,7 +641,16 @@ func (s *service) handleRemoteUnlock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	err := s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
+	if req.Unlock.TableScoped && req.LockTable.ServiceID != s.serviceID {
+		writeResponse(s.logger, cancel, resp, ErrLockTableBindChanged, cs)
+		return
+	}
+	var err error
+	if req.Unlock.TableScoped {
+		err = s.unlockRemoteTable(ctx, req.LockTable, req.Unlock)
+	} else {
+		err = s.unlockTransaction(context.Background(), req.Unlock.TxnID, req.Unlock.CommitTS, normalCleanup, req.Unlock.Mutations...)
+	}
 	writeResponse(s.logger, cancel, resp, err, cs)
 }
 

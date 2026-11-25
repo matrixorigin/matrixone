@@ -156,6 +156,11 @@ type UnknownCommitResolver interface {
 	) error
 }
 
+// RollbackCleanupResolver transfers a registered rollback to LockService.
+type RollbackCleanupResolver interface {
+	ResolveRollbackCleanup(txnID []byte, onResolved func()) (bool, error)
+}
+
 // CommitSequenceProvider allocates a source-CN-local sequence for Commit
 // admission. A lockservice incarnation has one allocator, so a newer sequence
 // proves that a Commit was created after a fenced unknown Commit on that CN.

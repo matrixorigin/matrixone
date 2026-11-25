@@ -188,7 +188,7 @@ func TestCloseLocalLockTableNotifiesOutsideTableMutex(t *testing.T) {
 								handled <- struct{}{}
 							},
 						},
-						eventC: events.eventC,
+						queue: events,
 					}
 					lock.addWaiter(logger, w)
 					waiters = append(waiters, w)
@@ -271,7 +271,7 @@ func TestRemoveLocalLockTableClosesOutsideHolderMutex(t *testing.T) {
 								handled <- struct{}{}
 							},
 						},
-						eventC: events.eventC,
+						queue: events,
 					}
 					lock.addWaiter(logger, w)
 					waiters = append(waiters, w)
