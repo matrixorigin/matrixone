@@ -16,7 +16,6 @@ package logservicedriver
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,6 +35,8 @@ const (
 	MaxReadBatchSize          = mpool.MB * 64
 	defaultDriverCloseTimeout = 4 * time.Minute
 )
+
+var errWALCloseTimeout = moerr.NewInternalErrorNoCtx("log service WAL close")
 
 type replayState struct {
 	mode   driver.ReplayMode
@@ -169,7 +170,7 @@ func (d *LogServiceDriver) CloseAfterDrain(drain func()) error {
 		if timeout <= 0 {
 			timeout = defaultDriverCloseTimeout
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, errWALCloseTimeout)
 		defer cancel()
 
 		// Cleanup retains ownership after a timeout: an in-flight append may
@@ -185,7 +186,7 @@ func (d *LogServiceDriver) CloseAfterDrain(drain func()) error {
 		case d.closeErr = <-done:
 		case <-ctx.Done():
 			d.cancelTruncate()
-			d.closeErr = fmt.Errorf("log service WAL close: %w", ctx.Err())
+			d.closeErr = moerr.AttachCause(ctx, ctx.Err())
 		}
 	})
 	return d.closeErr

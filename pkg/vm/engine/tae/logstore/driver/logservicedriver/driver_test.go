@@ -315,6 +315,7 @@ func TestCloseDeadlineIncludesInFlightTruncate(t *testing.T) {
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, errWALCloseTimeout)
 	case <-time.After(time.Second):
 		t.Fatal("driver Close did not return while truncate was blocked")
 	}
