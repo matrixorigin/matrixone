@@ -94,17 +94,22 @@ func TestDefaultAdmissionBoundaries(t *testing.T) {
 		{"merge", 100, 200, 30, 10, 60, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, ask := range []int64{0, max(0, tc.avail-1), tc.avail, tc.avail + 1} {
+			admissionAvailable := tc.avail
+			if tc.merge {
+				headroom := max(int64(0), tc.limit-tc.rss)
+				admissionAvailable = max(int64(0), headroom/3*2+(headroom%3)*2/3-tc.reserved)
+			}
+			for _, ask := range []int64{0, max(0, admissionAvailable-1), admissionAvailable, admissionAvailable + 1} {
 				m := admissionFixture(tc.limit, tc.total, tc.rss, tc.reserved, tc.merge)
 				require.Equal(t, tc.avail, m.Available())
 				left, ok := m.Acquire(ask)
-				if ask <= tc.avail {
+				if ask <= admissionAvailable {
 					require.True(t, ok)
-					require.Equal(t, tc.avail-ask, left)
+					require.Equal(t, admissionAvailable-ask, left)
 					require.Equal(t, tc.reserved+ask, m.reserved.Load())
 				} else {
 					require.False(t, ok)
-					require.Equal(t, tc.avail, left)
+					require.Equal(t, admissionAvailable, left)
 					require.Equal(t, tc.reserved, m.reserved.Load())
 				}
 			}
@@ -160,7 +165,11 @@ func TestDefaultAdmissionExhaustedMemoryDoesNotWrap(t *testing.T) {
 		t.Run(map[bool]string{false: "physical", true: "merge"}[merge], func(t *testing.T) {
 			// A prior reservation may remain after RSS rises above the budget.
 			m := admissionFixture(math.MaxInt64, math.MaxInt64, 0, 0, merge)
-			_, ok := m.Acquire(math.MaxInt64)
+			initialAsk := int64(math.MaxInt64)
+			if merge {
+				initialAsk = initialAsk/3*2 + (initialAsk%3)*2/3
+			}
+			_, ok := m.Acquire(initialAsk)
 			require.True(t, ok)
 			m.limit.Store(100)
 			m.actualTotalMemory.Store(100)
@@ -168,18 +177,23 @@ func TestDefaultAdmissionExhaustedMemoryDoesNotWrap(t *testing.T) {
 				m.rss.Store(rss)
 				require.Zero(t, m.Available())
 				left, ok := m.Acquire(1)
-				if ok || left != 0 || m.reserved.Load() != math.MaxInt64 {
+				if ok || left != 0 || m.reserved.Load() != initialAsk {
 					t.Errorf("rss=%d: left=%d, granted=%t, reserved=%d", rss, left, ok, m.reserved.Load())
 				}
 			}
 
 			// Releasing the old reservation does not create capacity while RSS
 			// is above budget. Capacity returns when RSS falls below budget.
-			require.Zero(t, m.Release(math.MaxInt64))
+			require.Zero(t, m.Release(initialAsk))
 			left, ok := m.Acquire(1)
 			require.False(t, ok)
 			require.Zero(t, left)
-			m.rss.Store(99)
+			if merge {
+				// Two bytes of headroom admit one byte after the margin.
+				m.rss.Store(98)
+			} else {
+				m.rss.Store(99)
+			}
 			left, ok = m.Acquire(1)
 			require.True(t, ok)
 			require.Zero(t, left)
@@ -188,7 +202,11 @@ func TestDefaultAdmissionExhaustedMemoryDoesNotWrap(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, int64(-1), left)
 			require.Equal(t, int64(2), m.reserved.Load())
-			require.Equal(t, int64(1), m.Release(2))
+			wantAvailable := int64(1)
+			if merge {
+				wantAvailable = 2 // Available reports raw headroom, not admission margin.
+			}
+			require.Equal(t, wantAvailable, m.Release(2))
 		})
 	}
 }
