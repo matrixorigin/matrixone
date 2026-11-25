@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
@@ -90,6 +91,31 @@ func reconcileDataBranchClear(
 			if expr == nil && !col.NotNull && col.GeneratedCol == nil && !col.Typ.AutoIncr {
 				compareIdxes = append(compareIdxes, idx) // implicit NULL default
 			} else if col.GeneratedCol == nil && !col.Typ.AutoIncr && function.IsConstant(expr, false) {
+				// Convert the value as COPY ALTER would, before copying its
+				// representation into a vector with the endpoint type.
+				castTypes := baseline.columns.conversions[idx]
+				if !isDataBranchLogicalTypeEquivalent(expr.Typ, col.Typ) {
+					castTypes = append([]plan.Type{col.Typ}, castTypes...)
+				}
+				if len(castTypes) != 0 {
+					expr = plan2.DeepCopyExpr(expr)
+				}
+				for _, typ := range castTypes {
+					expr, err = plan2.MakePlan2AssignmentCastExpr(ctx, expr, typ)
+					if err != nil {
+						return err
+					}
+				}
+				target := dataBranchColumnDefByName(targetDef, tables.def.colNames[idx])
+				if target != nil && !isDataBranchLogicalTypeEquivalent(expr.Typ, target.Typ) {
+					if len(castTypes) == 0 {
+						expr = plan2.DeepCopyExpr(expr)
+					}
+					expr, err = plan2.MakePlan2AssignmentCastExpr(ctx, expr, target.Typ)
+					if err != nil {
+						return err
+					}
+				}
 				value, free, err := colexec.GetReadonlyResultFromExpression(ses.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 				if err != nil {
 					return err
@@ -231,7 +257,10 @@ func reconcileBoundedClearPickInserts(
 	if len(compareIdxes) == 0 {
 		compareIdxes = tables.def.visibleIdxes
 	}
-	upper := tables.tarClearBaseline.upperColumns
+	var upper []*plan.ColDef
+	if baseline := tables.tarClearBaseline; baseline != nil {
+		upper = baseline.upperColumns
+	}
 	mp := ses.proc.Mp()
 	var remove []int64
 	for start := 0; start < wrapped.batch.RowCount(); start += maxSqlBatchCnt {
@@ -478,6 +507,7 @@ func reconcileDataBranchBaselineRows(
 // schema and the first later definition for a column added since then.
 type dataBranchClearColumns struct {
 	present, introduced []*plan.ColDef
+	conversions         [][]plan.Type
 }
 
 func resolveDataBranchClearColumns(
@@ -485,13 +515,19 @@ func resolveDataBranchClearColumns(
 ) *dataBranchClearColumns {
 	cols := &dataBranchClearColumns{
 		present: make([]*plan.ColDef, len(names)), introduced: make([]*plan.ColDef, len(names)),
+		conversions: make([][]plan.Type, len(names)),
 	}
 	for i, name := range names {
 		col := dataBranchColumnDefByName(defs[len(defs)-1], name)
+		var laterTypes []plan.Type
 		for j := len(defs) - 1; j > 0 && col != nil; j-- {
 			previous := dataBranchPreviousLineageColumn(defs[j-1], defs[j], col, lineageOnly[j])
 			if previous == nil {
 				cols.introduced[i] = col
+				slices.Reverse(laterTypes)
+				cols.conversions[i] = laterTypes
+			} else if !isDataBranchLogicalTypeEquivalent(previous.Typ, col.Typ) {
+				laterTypes = append(laterTypes, col.Typ)
 			}
 			col = previous
 		}

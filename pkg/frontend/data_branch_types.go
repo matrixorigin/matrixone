@@ -353,6 +353,7 @@ type tableStuff struct {
 	// A side crossing a truncate is collected as visible rows at its upper
 	// boundary. A bounded source also carries its own lower snapshot image.
 	tarVisibleState, baseVisibleState bool
+	boundedPick                       bool
 	tarClearBaseline                  *dataBranchSnapshotRelation
 	tarPathDefs, basePathDefs         []*plan.TableDef
 	// lcaIdent is the winning owner identity lcaRel was reopened under

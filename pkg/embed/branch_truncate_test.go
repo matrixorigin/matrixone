@@ -550,6 +550,93 @@ func TestDataBranchAfterTableClear(t *testing.T) {
 	t.Run("lifecycle_fixture", func(t *testing.T) {
 		assertBranchClearFixture(t, db, "../../test/distributed/cases/git4data/branch/metadata/branch_rebuild_lifecycle")
 	})
+	t.Run("pick_destination_clear_only", func(t *testing.T) {
+		exec, query := branchClearSQL(t, db)
+		for _, stmt := range []string{
+			"create database branch_clr_dst_only", "use branch_clr_dst_only",
+			"create table root(k int primary key, v int)", "insert into root values (1,10)",
+			"data branch create table src from root", "delete from src where k=1",
+			"data branch create table dst_fail from root", "truncate table dst_fail",
+			"data branch create table dst_skip from root", "truncate table dst_skip",
+			"create snapshot branch_clr_dst_lo for account sys", "insert into src values (1,99)",
+			"create snapshot branch_clr_dst_hi for account sys",
+		} {
+			exec(stmt)
+		}
+		const window = " between snapshot branch_clr_dst_lo and branch_clr_dst_hi keys(1) when conflict "
+		_, err := db.ExecContext(t.Context(), "data branch pick src into dst_fail"+window+"fail")
+		require.ErrorContains(t, err, "conflict")
+		require.Empty(t, query("select * from dst_fail", 2))
+		exec("data branch pick src into dst_skip" + window + "skip")
+		require.Empty(t, query("select * from dst_skip", 2))
+		exec("data branch pick src into dst_skip" + window + "accept")
+		require.Equal(t, [][]string{{"1", "99"}}, query("select * from dst_skip", 2))
+		exec("drop snapshot branch_clr_dst_hi")
+		exec("drop snapshot branch_clr_dst_lo")
+		exec("drop database branch_clr_dst_only")
+	})
+	t.Run("pick_clear_independent_empty_destination", func(t *testing.T) {
+		exec, query := branchClearSQL(t, db)
+		for _, stmt := range []string{
+			"create database branch_clr_dst_absent", "use branch_clr_dst_absent",
+			"create table src(k int primary key, v int)", "insert into src values (1,10)",
+			"create table dst(k int primary key, v int)",
+			"create snapshot branch_clr_absent_lo for account sys", "truncate table src",
+			"insert into src values (1,11)", "create snapshot branch_clr_absent_hi for account sys",
+		} {
+			exec(stmt)
+		}
+		exec("data branch pick src into dst between snapshot branch_clr_absent_lo and branch_clr_absent_hi when conflict fail")
+		require.Equal(t, [][]string{{"1", "11"}}, query("select * from dst", 2))
+		exec("drop snapshot branch_clr_absent_hi")
+		exec("drop snapshot branch_clr_absent_lo")
+		exec("drop database branch_clr_dst_absent")
+	})
+	for _, tt := range []struct {
+		name, sourceAdd, sourceModify, destinationAdd, insert, before, after string
+	}{
+		{
+			"default_change", "add column x int default 7, algorithm=copy",
+			"modify column x int default 9, algorithm=inplace", "add column x int default 7, algorithm=copy",
+			"insert into src(k,v) values (1,10)", "7", "9",
+		},
+		{
+			"decimal_scale", "add column x decimal(10,0) default 7, algorithm=copy",
+			"modify column x decimal(10,2) default 7, algorithm=copy",
+			"add column x decimal(10,2) default 7, algorithm=copy",
+			"insert into src values (1,10,0.07)", "7.00", "0.07",
+		},
+	} {
+		t.Run("clear_historical_"+tt.name, func(t *testing.T) {
+			exec, query := branchClearSQL(t, db)
+			for _, stmt := range []string{
+				"create database branch_clr_history", "use branch_clr_history",
+				"create table root(k int primary key, v int)", "insert into root values (1,10)",
+				"data branch create table src from root", "data branch create table dst from root",
+				"alter table src " + tt.sourceAdd, "alter table dst " + tt.destinationAdd,
+			} {
+				exec(stmt)
+			}
+			const sourceID = "select rel_id from mo_catalog.mo_tables where reldatabase='branch_clr_history' and relname='src'"
+			originalID := query(sourceID, 1)
+			require.Len(t, originalID, 1)
+			exec("alter table src " + tt.sourceModify)
+			if tt.name == "default_change" {
+				require.Equal(t, originalID, query(sourceID, 1))
+			} else {
+				require.NotEqual(t, originalID, query(sourceID, 1))
+			}
+			require.Equal(t, [][]string{{"1", "10", tt.before}}, query("select * from src", 3))
+			require.Equal(t, [][]string{{"1", "10", tt.before}}, query("select * from dst", 3))
+			exec("truncate table src")
+			exec(tt.insert)
+			require.Equal(t, [][]string{{"src", "UPDATE", "1", "10", tt.after}},
+				query("data branch diff src against dst", 5))
+			exec("data branch merge src into dst when conflict accept")
+			require.Equal(t, [][]string{{"1", "10", tt.after}}, query("select * from dst", 3))
+			exec("drop database branch_clr_history")
+		})
+	}
 }
 
 func TestDataBranchClearBoundaryAfterGC(t *testing.T) {

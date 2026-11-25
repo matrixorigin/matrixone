@@ -2298,6 +2298,7 @@ func constructChangeHandle(
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 
 	if betweenFrom != nil && betweenTo != nil {
+		tables.boundedPick = true
 		tarRange.restrict(*betweenFrom, *betweenTo)
 	}
 	tarHydrationRel := tables.tarRel
@@ -2322,7 +2323,7 @@ func constructChangeHandle(
 			}
 			if tables.tarClearBaseline.rel != nil {
 				if tables.tarClearBaseline.columns, err = boundedDataBranchClearColumns(
-					ctx, ses, bh, candidates, *tables, branchInfo, *tables.tarClearBaseline, tarSnapshot,
+					ctx, ses, bh, candidates, *tables, branchInfo, *tables.tarClearBaseline, tarSnapshot, true,
 				); err != nil {
 					return
 				}
@@ -2339,7 +2340,7 @@ func constructChangeHandle(
 				tarHydrationRel, tarHydrationSnapshot, tarHydrationIdent = endpoint.rel, endpoint.at, endpoint.ident
 				tarHydrationRelSnapshot = endpoint.at
 				if boundedUpperColumns, err = boundedDataBranchClearColumns(
-					ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot,
+					ctx, ses, bh, candidates, *tables, branchInfo, *endpoint, tarSnapshot, false,
 				); err != nil {
 					return
 				}
@@ -2561,16 +2562,16 @@ func dataBranchSourceAt(
 // rename or DROP/ADD, so include both definitions and compare their stable IDs.
 func boundedDataBranchClearColumns(
 	ctx context.Context, ses *Session, bh BackgroundExec, candidates []branchIdentity, tables tableStuff,
-	info *branchMetaInfo, historical dataBranchSnapshotRelation, endpointSP types.TS,
+	info *branchMetaInfo, historical dataBranchSnapshotRelation, endpointSP types.TS, needDefaults bool,
 ) (*dataBranchClearColumns, error) {
 	id := historical.rel.GetTableID(ctx)
 	endpointID := tables.tarRel.GetTableID(ctx)
 	var defs []*plan.TableDef
+	var pathTS []types.TS
 	if id == endpointID {
 		defs = []*plan.TableDef{tables.tarRel.GetTableDef(ctx)}
 	} else {
 		var path []uint64
-		var pathTS []types.TS
 		if i := slices.Index(info.pathFromLCAToTar, id); i >= 0 {
 			path, pathTS = info.pathFromLCAToTar[i:], info.pathFromLCAToTarTS[i:]
 			if len(tables.tarPathDefs) == len(info.pathFromLCAToTar) {
@@ -2589,12 +2590,64 @@ func boundedDataBranchClearColumns(
 			}
 		}
 	}
-	lineageOnly := make([]bool, len(defs)+1)
-	for i := 2; i < len(lineageOnly); i++ {
+	lineageOnly := make([]bool, len(defs))
+	for i := 1; i < len(lineageOnly); i++ {
 		lineageOnly[i] = true
 	}
+	if needDefaults && len(defs) > 1 {
+		var err error
+		defs, lineageOnly, err = dataBranchClearCreationSchemas(ctx, ses, bh, candidates,
+			tables.tarRel, endpointSP, defs, pathTS, lineageOnly)
+		if err != nil {
+			return nil, err
+		}
+	}
 	older := historical.rel.GetTableDef(identityCtx(ctx, historical.ident))
-	return resolveDataBranchClearColumns(tables.def.colNames, append([]*plan.TableDef{older}, defs...), lineageOnly), nil
+	return resolveDataBranchClearColumns(tables.def.colNames, append([]*plan.TableDef{older}, defs...),
+		append([]bool{false}, lineageOnly...)), nil
+}
+
+// Use a versioned physical generation's creation schema before its final
+// schema. An in-place ALTER may have changed a default without rewriting rows.
+func dataBranchClearCreationSchemas(
+	ctx context.Context, ses *Session, bh BackgroundExec, owners []branchIdentity,
+	endpoint engine.Relation, endpointSP types.TS, defs []*plan.TableDef, pathTS []types.TS, edges []bool,
+) ([]*plan.TableDef, []bool, error) {
+	out := make([]*plan.TableDef, 0, len(defs))
+	outEdges := make([]bool, 0, len(defs))
+	for i, def := range defs {
+		if i != 0 && edges[i] && def.Version != 0 && defs[i-1].TblId != def.TblId {
+			rel, owner, at := endpoint, owners[0], endpointSP
+			if i+1 < len(defs) {
+				var err error
+				at = pathTS[i+1]
+				rel, owner, err = reopenDataBranchNodeByID(ctx, ses, bh, owners, def.TblId, at)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			createdAt, err := getTablesCreationCommitTS(ctx, ses, owner, rel, owner, rel, []types.TS{at, at})
+			if err != nil {
+				return nil, nil, err
+			}
+			created, owner, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{owner}, def.TblId, createdAt[0])
+			if err != nil {
+				return nil, nil, err
+			}
+			creationDef := created.GetTableDef(identityCtx(ctx, owner))
+			if creationDef.Version != 0 {
+				// The catalog lookup can fall back to a rewritten row when
+				// history is unavailable. Its default is not the introduction value.
+				return nil, nil, moerr.NewNotSupportedNoCtxf(
+					"DATA BRANCH cannot establish the creation schema for table %d across a clear", def.TblId,
+				)
+			}
+			out = append(out, creationDef)
+			outEdges = append(outEdges, edges[i])
+		}
+		out, outEdges = append(out, def), append(outEdges, edges[i])
+	}
+	return out, outEdges, nil
 }
 
 func dataBranchPathTableDefs(

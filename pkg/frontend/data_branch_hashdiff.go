@@ -1748,15 +1748,32 @@ func hashDiffIfHasLCA(
 				rel: tblStuff.lcaRel, at: branchTS, ident: tblStuff.resolvedLCAIdentity(ctx, ses),
 			}
 			layoutNames := sideStuff.def.lcaColNames
-			path, defs, names, lineageOnly := dagInfo.pathFromLCAToTar,
+			path, pathTS, defs, names, lineageOnly := dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
 				tblStuff.tarPathDefs, tblStuff.def.colNames, dagInfo.pathFromLCAToTarLineageOnly
+			endpoint := tblStuff.tarRel
+			endpointSP, baseRelSP := tblStuff.resolvedRelSnapshots(ses)
+			owner, otherOwner := tblStuff.endpointIdentities(ctx, ses)
 			if forBase {
-				path = dagInfo.pathFromLCAToBase
+				path, pathTS = dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS
 				defs, names, lineageOnly = tblStuff.basePathDefs, tblStuff.def.baseColNames, dagInfo.pathFromLCAToBaseLineageOnly
+				endpoint, endpointSP = tblStuff.baseRel, baseRelSP
+				owner, otherOwner = otherOwner, owner
 			}
 			if tblStuff.tarClearBaseline != nil && (!forBase || !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory) {
 				baseline = *tblStuff.tarClearBaseline
 				layoutNames = nil
+				if forBase && !dagInfo.hasLCA() {
+					// The source's lower image aligns live destination rows;
+					// it cannot prove that the independent destination deleted a row.
+					destinationDeliver := deliver
+					deliver = func(wrapped batchWithKind) error {
+						if wrapped.kind == diffDelete && !wrapped.fromUpdate {
+							tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+							return nil
+						}
+						return destinationDeliver(wrapped)
+					}
+				}
 			} else if baseline.rel != nil {
 				rel, exactDef, _, err := lcaProbeTableDefAtSnapshot(ctx, ses, sideStuff, branchTS)
 				if err != nil {
@@ -1764,13 +1781,19 @@ func hashDiffIfHasLCA(
 				}
 				baseline.rel = rel
 				if i := slices.Index(path, rel.GetTableID(identityCtx(ctx, baseline.ident))); i >= 0 &&
-					len(defs) == len(path) && len(lineageOnly) == len(path) {
+					len(defs) == len(path) && len(pathTS) == len(path) && len(lineageOnly) == len(path) {
 					// Each cached definition is anchored at the end of its
 					// generation, not necessarily at this side's fork. Walk
 					// from that definition back to the exact snapshot by
 					// physical identity, without dropping introduction defaults.
-					forkDefs := append([]*plan2.TableDef{exactDef}, defs[i:]...)
-					forkEdges := append([]bool{false, false}, lineageOnly[i+1:]...)
+					owners := dedupeBranchIdentities(owner, otherOwner)
+					forkDefs, forkEdges, err := dataBranchClearCreationSchemas(ctx, ses, bh, owners,
+						endpoint, endpointSP, defs[i:], pathTS[i:], lineageOnly[i:])
+					if err != nil {
+						return err
+					}
+					forkDefs = append([]*plan2.TableDef{exactDef}, forkDefs...)
+					forkEdges = append([]bool{false}, forkEdges...)
 					baseline.columns = resolveDataBranchClearColumns(names, forkDefs, forkEdges)
 				}
 			}
@@ -1938,7 +1961,7 @@ func hashDiffIfHasLCA(
 			}
 			baseUpdates = append(baseUpdates, rows)
 		}
-		if boundedClearPick {
+		if boundedClearPick || (tblStuff.boundedPick && tblStuff.baseVisibleState) {
 			var deletions []databranchutils.BranchHashmap
 			if rows := baseClearChanges[clearDelete].rows; rows != nil && rows.ItemCount() != 0 {
 				deletions = append(deletions, rows)
