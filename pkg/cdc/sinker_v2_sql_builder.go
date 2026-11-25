@@ -40,8 +40,17 @@ import (
 // - SQL size limits (splits large statements into multiple)
 // - All MatrixOne data types serialization
 type CDCStatementBuilder struct {
-	// Column types (excluding internal columns like __mo_rowid)
+	// Column types of the columns replicated by INSERT/REPLACE statements
+	// (excluding internal columns like __mo_rowid and generated columns,
+	// which the target computes from the replicated base columns).
 	insertColTypes []*types.Type
+
+	// insertColSrcIdx maps each replicated column slot to its vector position
+	// within the user-defined prefix of a source batch. Rows are extracted
+	// through this projection, so generated columns occupy a batch position
+	// but are never decoded: some admissible generated payloads (geometry)
+	// have no extractor case, and their values never reach the SQL anyway.
+	insertColSrcIdx []int
 
 	// Primary key information
 	pkColTypes []*types.Type
@@ -72,8 +81,14 @@ func NewCDCStatementBuilder(
 	}
 	qualifiedTable := quoteSQLIdentifier(dbName) + "." + quoteSQLIdentifier(tableName)
 	insertColNames := make([]string, 0, len(tableDef.Cols))
+	visibleCols := 0
 
-	// Extract column types (excluding internal columns)
+	// Extract column types (excluding internal columns). Generated columns are
+	// computed by the target from the replicated base columns and must not
+	// appear in the INSERT column list or the upsert assignments, and their
+	// batch vectors must not even be decoded, so every replicated column
+	// records its source batch position here while generated columns only
+	// advance that position.
 	for i, col := range tableDef.Cols {
 		if col == nil {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("column %d is nil", i))
@@ -84,15 +99,24 @@ func NewCDCStatementBuilder(
 		if _, ok := catalog.InternalColumns[col.Name]; ok || col.Hidden {
 			continue
 		}
+		srcIdx := visibleCols
+		visibleCols++
+		if col.GeneratedCol != nil {
+			continue
+		}
 		b.insertColTypes = append(b.insertColTypes, &types.Type{
 			Oid:   types.T(col.Typ.Id),
 			Width: col.Typ.Width,
 			Scale: col.Typ.Scale,
 		})
+		b.insertColSrcIdx = append(b.insertColSrcIdx, srcIdx)
 		insertColNames = append(insertColNames, col.Name)
 	}
-	if len(b.insertColTypes) == 0 {
+	if visibleCols == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("tableDef has no visible columns")
+	}
+	if len(b.insertColTypes) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("tableDef has no insertable columns: every visible column is generated")
 	}
 
 	// Extract primary key information
@@ -287,7 +311,7 @@ func (b *CDCStatementBuilder) BuildInsertSQL(
 	if bat == nil || bat.RowCount() == 0 {
 		return nil, nil
 	}
-	return b.buildInsertSQL(ctx, newBatchRowIterator(bat), fromTs, toTs)
+	return b.buildInsertSQL(ctx, newBatchRowIterator(bat, b.insertColSrcIdx), fromTs, toTs)
 }
 
 // buildAtomicInsertSQL constructs bounded INSERT statements from the ordered,
@@ -303,7 +327,7 @@ func (b *CDCStatementBuilder) buildAtomicInsertSQL(
 	if bat == nil || bat.RowCount() == 0 {
 		return nil, nil
 	}
-	return b.buildInsertSQL(ctx, bat.GetRowIterator(), fromTs, toTs)
+	return b.buildInsertSQL(ctx, bat.GetProjectedRowIterator(b.insertColSrcIdx), fromTs, toTs)
 }
 
 func (b *CDCStatementBuilder) buildInsertSQL(
@@ -316,6 +340,8 @@ func (b *CDCStatementBuilder) buildInsertSQL(
 	prefix := b.buildInsertPrefix(fromTs, toTs)
 	assembler := newStatementAssembler(ctx, prefix, b.insertSuffix, b.maxSQLSize)
 
+	// Rows are extracted through the column projection, so only replicated
+	// slots are decoded and dropped generated payloads are never touched.
 	row := make([]any, len(b.insertColTypes))
 	for iter.Next() {
 		if err := iter.Row(ctx, row); err != nil {
@@ -335,13 +361,17 @@ func (b *CDCStatementBuilder) buildInsertSQL(
 	return assembler.finish(), nil
 }
 
+// batchRowIterator walks a snapshot batch through the builder's column
+// projection: srcIdx maps each replicated row slot to its source vector, so
+// generated columns are skipped without ever being decoded.
 type batchRowIterator struct {
 	bat    *batch.Batch
 	offset int
+	srcIdx []int
 }
 
-func newBatchRowIterator(bat *batch.Batch) *batchRowIterator {
-	return &batchRowIterator{bat: bat, offset: -1}
+func newBatchRowIterator(bat *batch.Batch, srcIdx []int) *batchRowIterator {
+	return &batchRowIterator{bat: bat, offset: -1, srcIdx: srcIdx}
 }
 
 func (iter *batchRowIterator) Next() bool {
@@ -350,7 +380,7 @@ func (iter *batchRowIterator) Next() bool {
 }
 
 func (iter *batchRowIterator) Row(ctx context.Context, row []any) error {
-	return extractRowFromEveryVector(ctx, iter.bat, iter.offset, row)
+	return extractProjectedRowFromEveryVector(ctx, iter.bat, iter.offset, row, iter.srcIdx)
 }
 
 func (iter *batchRowIterator) Close() {}
@@ -411,6 +441,8 @@ func (b *CDCStatementBuilder) buildDeletePrefix(fromTs, toTs types.TS) []byte {
 }
 
 // formatInsertRow formats a row for INSERT statement: (val1,val2,...)
+// row already carries only the replicated slots, in statement column order:
+// the projection has dropped generated columns at extraction time.
 func (b *CDCStatementBuilder) formatInsertRow(ctx context.Context, row []any) ([]byte, error) {
 	buf := make([]byte, 0, 256) // Estimated row size
 	buf = append(buf, '(')

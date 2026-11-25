@@ -103,6 +103,37 @@ func extractRowFromEveryVector(
 	return nil
 }
 
+// extractProjectedRowFromEveryVector gets the rowIndex row from the vectors
+// selected by srcIdx: row slot j is decoded from vector srcIdx[j]. The sql
+// sink drops generated columns from its statements and must not decode their
+// vectors either, because some admissible generated payloads (geometry) have
+// no extractor case and would fail rows that otherwise replicate fine.
+func extractProjectedRowFromEveryVector(
+	ctx context.Context,
+	dataSet *batch.Batch,
+	rowIndex int,
+	row []any,
+	srcIdx []int,
+) error {
+	for j := 0; j < len(row); j++ {
+		vec := dataSet.Vecs[srcIdx[j]]
+		rowIndexBackup := rowIndex
+		if vec.IsConstNull() {
+			row[j] = nil
+			continue
+		}
+		if vec.IsConst() {
+			rowIndex = 0
+		}
+
+		if err := extractRowFromVector(ctx, vec, j, row, rowIndex); err != nil {
+			return err
+		}
+		rowIndex = rowIndexBackup
+	}
+	return nil
+}
+
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {

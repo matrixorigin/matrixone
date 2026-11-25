@@ -790,10 +790,23 @@ func (bat *AtomicBatch) GetRowIterator() RowIterator {
 	}
 }
 
+// GetProjectedRowIterator returns an iterator whose rows are extracted through
+// srcIdx: each row slot is read from its mapped source vector, so generated
+// columns are skipped without ever being decoded. The sql sink uses it for
+// its INSERT column projection; the plain iterator keeps prefix semantics for
+// DELETE/PK extraction.
+func (bat *AtomicBatch) GetProjectedRowIterator(srcIdx []int) RowIterator {
+	return &atomicBatchRowIter{
+		iter:   bat.Rows.Iter(),
+		srcIdx: srcIdx,
+	}
+}
+
 var _ RowIterator = new(atomicBatchRowIter)
 
 type atomicBatchRowIter struct {
-	iter btree.IterG[AtomicBatchRow]
+	iter   btree.IterG[AtomicBatchRow]
+	srcIdx []int // nil selects the full user-defined prefix
 }
 
 func (iter *atomicBatchRowIter) Item() AtomicBatchRow {
@@ -806,6 +819,15 @@ func (iter *atomicBatchRowIter) Next() bool {
 
 func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 	batchRow := iter.iter.Item()
+	if iter.srcIdx != nil {
+		return extractProjectedRowFromEveryVector(
+			ctx,
+			batchRow.Src,
+			batchRow.Offset,
+			row,
+			iter.srcIdx,
+		)
+	}
 	return extractRowFromEveryVector(
 		ctx,
 		batchRow.Src,
