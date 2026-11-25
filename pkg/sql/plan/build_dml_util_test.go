@@ -681,6 +681,11 @@ func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	singleIdxIndexTable := mock.ctxt.tables[singleIdx.Indexes[0].IndexTableName]
 	require.NotNil(t, singleIdxIndexTable)
 	singleIdxIndexTable.Cols[0].Typ = plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	// Real index table definitions expose both physical key and owner positions.
+	singleIdxIndexTable.Name2ColIndex = make(map[string]int32, len(singleIdxIndexTable.Cols))
+	for i, col := range singleIdxIndexTable.Cols {
+		singleIdxIndexTable.Name2ColIndex[col.Name] = int32(i)
+	}
 	assertPlanHasPrefixCount(t, "insert into constraint_test.single_idx_t values (1, 'abcdef-long') on duplicate key update val = values(val)", "val", 2)
 	assertPlanHasPrefixCount(t, "update constraint_test.single_idx_t set val = 'abcdef-long' where id = 1", "val", 2)
 	assertPlanHasPrefixCount(t, "delete from constraint_test.single_idx_t where id = 1", "val", 1)
