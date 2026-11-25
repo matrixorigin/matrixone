@@ -182,6 +182,8 @@ exit 81
 trap - INT QUIT
 trap '' INT
 export GORACE=atexit_sleep_ms=0
+# The synthetic module tests signal dispositions with a local Go driver.
+unset GOCACHEPROG
 export MO_SIGNAL_OUTPUT="$CASE_DIR/fallback-signals"
 status=0
 run_ut_command embedded batched run_race_test_batches example/package "$PREBUILT_RACE_TEST_BINARY" 4 || status=$?
@@ -193,7 +195,9 @@ if (( BASH_VERSINFO[0] >= 5 )); then [[ -e "$CASE_DIR/async-fallback" ]] || exit
 cmp "$CASE_DIR/foreground-signals" "$CASE_DIR/fallback-signals" || exit 92
 `
 	harnessTimeout := 2*nestedDriverTimeout + 30*time.Second
-	out, err := scheduleHarnessWithMockTimeout(t, harnessTimeout, script, mock, transform, "SIGNAL_PACKAGE="+root, "REAL_GO="+goTool, "RACE_FLAG="+raceFlag)
+	out, err := scheduleHarnessWithMockTimeout(t, harnessTimeout, script, mock, transform,
+		"SIGNAL_PACKAGE="+root, "REAL_GO="+goTool, "RACE_FLAG="+raceFlag,
+		"GOCACHEPROG="+filepath.Join(root, "must-not-start-cache-helper"))
 	if err != nil {
 		t.Fatalf("go test driver signal disposition: %v\n%s", err, out)
 	}

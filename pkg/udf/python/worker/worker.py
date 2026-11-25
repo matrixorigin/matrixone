@@ -44,6 +44,7 @@ if not _HANDLER_ENTRY:
     import queue
     import selectors
     import subprocess
+    import sysconfig
 
 import pyarrow as pa
 
@@ -2632,6 +2633,24 @@ class _HandlerCleanupPending(Exception):
         self.session = session
 
 
+def _python_child_environment() -> dict[str, str]:
+    env = {name: os.environ[name] for name in _HANDLER_ENV_ALLOWLIST if name in os.environ}
+    if sys.platform != "linux" or not sysconfig.get_config_var("Py_ENABLE_SHARED"):
+        return env
+    # A venv can use a shared libpython from a relocatable base installation.
+    # Find that library in the interpreter's own directories. Inheriting the
+    # parent's loader search path would also expose unrelated native libraries.
+    soname = sysconfig.get_config_var("INSTSONAME")
+    if not soname or os.path.basename(soname) != soname:
+        return env
+    for directory in (os.path.join(sys.base_prefix, "lib"), sysconfig.get_config_var("LIBDIR")):
+        if (directory and os.path.isabs(directory) and os.pathsep not in directory
+                and os.path.isfile(os.path.join(directory, soname))):
+            env["LD_LIBRARY_PATH"] = directory
+            break
+    return env
+
+
 class _HandlerProcessSession:
     """One handler child reused only inside a bounded invocation burst."""
 
@@ -2686,11 +2705,8 @@ class _HandlerProcessSession:
             # particular, do not inherit CN, object-store, database, or tenant
             # credentials from the worker process.  This is process hygiene,
             # not a sandbox boundary.
-            child_env = {
-                name: value
-                for name, value in os.environ.items()
-                if name in _HANDLER_ENV_ALLOWLIST
-            }
+            python_env = _python_child_environment()
+            child_env = python_env.copy()
             child_env[_HANDLER_RESPONSE_FD_ENV] = str(response_write_fd)
             child_env[_HANDLER_PARENT_WATCH_FD_ENV] = str(parent_watch_read_fd)
             popen_kwargs["env"] = child_env
@@ -2706,11 +2722,6 @@ class _HandlerProcessSession:
                 watchdog_path = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)), "watchdog.py"
                 )
-                watchdog_env = {
-                    name: value
-                    for name, value in os.environ.items()
-                    if name in _HANDLER_ENV_ALLOWLIST
-                }
                 self._watchdog_process = subprocess.Popen(
                     [
                         sys.executable,
@@ -2726,7 +2737,7 @@ class _HandlerProcessSession:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     close_fds=True,
-                    env=watchdog_env,
+                    env=python_env,
                     start_new_session=True,
                     pass_fds=(watchdog_read_fd,),
                 )

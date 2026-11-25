@@ -3015,6 +3015,37 @@ except Exception:
             )
         self.assertEqual([False], result.column(0).to_pylist())
 
+    def test_python_children_use_only_the_matching_shared_runtime(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = pathlib.Path(root) / "relocated" / "lib"
+            runtime.mkdir(parents=True)
+            soname = "libpython3.12.so.1.0"
+            library = runtime / soname
+            library.touch()
+            config = {
+                "Py_ENABLE_SHARED": 1,
+                "INSTSONAME": soname,
+                "LIBDIR": str(pathlib.Path(root) / "original" / "lib"),
+            }
+            with (
+                mock.patch.object(worker.sys, "platform", "linux"),
+                mock.patch.object(worker.sys, "base_prefix", str(runtime.parent)),
+                mock.patch.object(worker.sysconfig, "get_config_var", side_effect=config.get),
+                mock.patch.dict(os.environ, {
+                    "LD_LIBRARY_PATH": "/unrelated/lib",
+                    "LD_PRELOAD": "/unrelated/library.so",
+                    "PYTHONPATH": "/test/python",
+                    "MATRIXONE_TEST_SECRET": "must-not-leak",
+                }),
+            ):
+                env = worker._python_child_environment()
+                self.assertEqual(str(runtime), env["LD_LIBRARY_PATH"])
+                self.assertEqual("/test/python", env["PYTHONPATH"])
+                self.assertNotIn("LD_PRELOAD", env)
+                self.assertNotIn("MATRIXONE_TEST_SECRET", env)
+                library.unlink()
+                self.assertNotIn("LD_LIBRARY_PATH", worker._python_child_environment())
+
     def test_handler_preserves_runtime_pythonpath(self):
         descriptor = {"type_id": worker.BOOL, "offset_width": 32}
         batch = pa.RecordBatch.from_arrays(
