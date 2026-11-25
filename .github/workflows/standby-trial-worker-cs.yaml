@@ -29,7 +29,7 @@ jobs:
       with:
         repository: matrixorigin/matrixone
         ref: ${{ github.sha }}
-        path: .standby
+        path: .trial-admission
         sparse-checkout: .github/standby-trial/coverage_standby.py
         sparse-checkout-cone-mode: false
         persist-credentials: false
@@ -43,7 +43,16 @@ jobs:
         HEAD: ${{ inputs.head }}
         GROUP: ${{ inputs.group }}
         POOL: cs
-      run: python3 -I .standby/.github/standby-trial/coverage_standby.py admit
+      run: python3 -I .trial-admission/.github/standby-trial/coverage_standby.py admit
+    - name: Load the pinned CI 487 failure reporting helper
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        repository: matrixorigin/CI
+        ref: fcd1f2ffe4119e412c78902728c17eda2febc394
+        path: .standby
+        sparse-checkout: scripts/summarize_ut_report.py
+        sparse-checkout-cone-mode: false
+        persist-credentials: false
     - id: reader
       name: Verify assigned reader before checkout
       shell: bash
@@ -569,7 +578,8 @@ jobs:
               echo 'go-ut-analysis is unavailable; the raw JSON report is attached.' | tee -a "${summary}"
             fi
           fi
-          python "$GITHUB_WORKSPACE/.ci-workflow/scripts/summarize_ut_report.py" "${report}" | tee -a "${summary}" || true
+          python3 -I "$GITHUB_WORKSPACE/.standby/scripts/summarize_ut_report.py" "${report}" \
+            --compact-output "$RUNNER_TEMP/ut-failure-compact.txt" | tee -a "${summary}" || true
         fi
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
           {
@@ -813,7 +823,22 @@ jobs:
     - name: Fail on coverage UT failure
       if: ${{ always() && !cancelled() && steps.coverage_ut.outcome == 'failure' }}
       timeout-minutes: 5
-      run: exit 1
+      run: |
+        status="$RUNNER_TEMP/ut-coverage-status.json"
+        failure="$RUNNER_TEMP/ut-failure-compact.txt"
+        phase="$RUNNER_TEMP/ut-coverage-phase-failure.txt"
+        echo 'Coverage UT failed.'
+        if [[ -s "$status" && ! -L "$status" ]]; then
+          jq -r '.reason | strings | gsub("[^a-zA-Z0-9_]"; "") | .[0:80] | "Coverage UT status: " + .' "$status" || true
+        fi
+        if [[ -s "$phase" && ! -L "$phase" ]]; then
+          head -c 512 "$phase" | awk '/^phase=[a-z_]+([[:space:]]|$)/ {print "Coverage UT phase: " substr($1, 7); exit}' || true
+        fi
+        if [[ -s "$failure" && ! -L "$failure" ]]; then
+          # Keep text produced by the tests inert as GitHub workflow commands.
+          head -c 8192 "$failure" | LC_ALL=C awk 'NR <= 16 {gsub(/[[:cntrl:]]/, ""); print "Coverage UT: " $0}' || true
+        fi
+        exit 1
     - name: Upload persistent tool recovery evidence
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

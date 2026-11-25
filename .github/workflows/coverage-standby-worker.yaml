@@ -1,5 +1,6 @@
 name: Coverage standby single-group worker
-run-name: ${{ github.event_name == 'push' && 'Register' || 'Coverage standby' }} / ${{ fromJSON(inputs.ticket || '{}').parent }}/${{ fromJSON(inputs.ticket || '{}').attempt }}/${{ fromJSON(inputs.ticket || '{}').group }}/${{ fromJSON(inputs.ticket || '{}').head }}/${{ inputs.pool }}/${{ fromJSON(inputs.ticket || '{}').key }}
+run-name: >-
+  ${{ github.event_name == 'push' && 'Register' || (fromJSON(inputs.ticket || '{}').title_version == 2 && format('GROUP{0}', fromJSON(inputs.ticket || '{}').group)) || format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5}', fromJSON(inputs.ticket || '{}').parent, fromJSON(inputs.ticket || '{}').attempt, fromJSON(inputs.ticket || '{}').group, fromJSON(inputs.ticket || '{}').head, inputs.pool, fromJSON(inputs.ticket || '{}').key) }}
 on:
   push:
     branches: [weilu-runner-test]
@@ -14,6 +15,7 @@ permissions:
   pull-requests: read
 jobs:
   cs:
+    name: ${{ inputs.pool == 'idc' && fromJSON(inputs.ticket || '{}').title_version == 2 && format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5} / Run identity', fromJSON(inputs.ticket || '{}').parent, fromJSON(inputs.ticket || '{}').attempt, fromJSON(inputs.ticket || '{}').group, fromJSON(inputs.ticket || '{}').head, inputs.pool, fromJSON(inputs.ticket || '{}').key) || 'cs' }}
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.run_attempt == 1 && inputs.pool == 'cs'
     uses: ./.github/workflows/standby-trial-worker-cs.yaml
     with:
@@ -29,6 +31,7 @@ jobs:
       CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
       CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   idc:
+    name: ${{ inputs.pool == 'cs' && fromJSON(inputs.ticket || '{}').title_version == 2 && format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5} / Run identity', fromJSON(inputs.ticket || '{}').parent, fromJSON(inputs.ticket || '{}').attempt, fromJSON(inputs.ticket || '{}').group, fromJSON(inputs.ticket || '{}').head, inputs.pool, fromJSON(inputs.ticket || '{}').key) || 'idc' }}
     if: github.repository == 'matrixorigin/matrixone' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/weilu-runner-test' && github.run_attempt == 1 && inputs.pool == 'idc'
     uses: ./.github/workflows/standby-trial-worker-idc.yaml
     with:
