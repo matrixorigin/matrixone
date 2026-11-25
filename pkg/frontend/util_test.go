@@ -3902,3 +3902,68 @@ func Test_convertRowsIntoBatchFreesPartialBatchOnError(t *testing.T) {
 	require.Nil(t, pColDefs)
 	require.Zero(t, pool.CurrNB())
 }
+
+func TestConvertRowsIntoBatchNullAtPoolCapacity(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetName("v")
+	col.SetColumnType(defines.MYSQL_TYPE_TINY)
+	col.SetSigned(true)
+
+	for _, tc := range []struct {
+		name      string
+		value     any
+		remaining int
+		wantError bool
+	}{
+		{name: "null fits without a copy", remaining: 16},
+		{name: "non-null needs only data", value: int8(7), remaining: 8},
+		{name: "null cannot fit", remaining: 8, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const capacity = 1 << 20
+			pool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(pool)
+			filler, err := pool.Alloc(capacity-tc.remaining, true)
+			require.NoError(t, err)
+			defer pool.Free(filler)
+			before := pool.CurrNB()
+
+			data, defs, err := convertRowsIntoBatch(pool, []Column{col}, [][]any{{tc.value}})
+			if tc.wantError {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+				require.Nil(t, data)
+				require.Nil(t, defs)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, defs)
+				require.Equal(t, 1, data.RowCount())
+				require.Equal(t, tc.value == nil, data.Vecs[0].GetNulls().Contains(0))
+				if tc.value != nil {
+					require.Equal(t, tc.value, vector.GetFixedAtNoTypeCheck[int8](data.Vecs[0], 0))
+				}
+				data.Clean(pool)
+			}
+			require.Equal(t, before, pool.CurrNB())
+		})
+	}
+}
+
+func TestConvertRowsIntoBatchDistinguishesNullAndEmptyBytes(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetName("v")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetLength(64)
+	pool := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(pool)
+
+	data, _, err := convertRowsIntoBatch(pool, []Column{col}, [][]any{{""}, {nil}, {"last"}})
+	require.NoError(t, err)
+	defer data.Clean(pool)
+	vec := data.Vecs[0]
+	require.False(t, vec.GetNulls().Contains(0))
+	require.Empty(t, vec.GetBytesAt(0))
+	require.True(t, vec.GetNulls().Contains(1))
+	require.False(t, vec.GetNulls().Contains(2))
+	require.Equal(t, []byte("last"), vec.GetBytesAt(2))
+}

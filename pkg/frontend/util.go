@@ -46,7 +46,6 @@ import (
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1388,17 +1387,8 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 	//2. make batch
 	cnt := len(rows)
 	bat.SetRowCount(cnt)
-	// nsp collects one column's NULL rows before they are copied into the
-	// vector; the last one is freed on return, the others as they are
-	// replaced.
-	var nsp *nulls.Nulls
-	defer func() { nsp.Free() }()
 	for colIndex, typ := range colTyps {
 		bat.Vecs[colIndex] = vector.NewVec(typ, pool)
-		nsp.Free()
-		if nsp, err = nulls.NewWithSize(cnt, pool); err != nil {
-			return nil, nil, err
-		}
 
 		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {
@@ -1406,95 +1396,88 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 			// Byte-valued and vector-valued cells must save the exact bytes
 			// the client-visible result presents (issue #31535): fmt.Sprintf
 			// renders []byte and vector values as numeric lists.
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val []byte
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = textRowValueBytes(row[colIndex])
+				if cell != nil {
+					val = textRowValueBytes(cell)
 				}
-				err := vector.AppendBytes(bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendBytes(bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 
 		case types.T_int8:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val int8
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(int8)
+				if cell != nil {
+					val = cell.(int8)
 				}
-				err := vector.AppendFixed[int8](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int8](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_int16:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val int16
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(int16)
+				if cell != nil {
+					val = cell.(int16)
 				}
 
-				err := vector.AppendFixed[int16](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int16](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_year:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.MoYear
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.MoYear)
+				if cell != nil {
+					val = cell.(types.MoYear)
 				}
 
-				err := vector.AppendFixed[types.MoYear](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.MoYear](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_int32:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val int32
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(int32)
+				if cell != nil {
+					val = cell.(int32)
 				}
 
-				err := vector.AppendFixed[int32](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int32](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_int64:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val int64
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(int64)
+				if cell != nil {
+					val = cell.(int64)
 				}
 
-				err := vector.AppendFixed[int64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[int64](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_uint8:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val uint8
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+				if cell != nil {
+					unchecked, uerr := getUnsignedRowValue(cell)
 					if uerr != nil {
 						return nil, nil, uerr
 					}
@@ -1504,18 +1487,17 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 					val = uint8(unchecked)
 				}
 
-				err := vector.AppendFixed[uint8](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint8](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_uint16:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val uint16
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+				if cell != nil {
+					unchecked, uerr := getUnsignedRowValue(cell)
 					if uerr != nil {
 						return nil, nil, uerr
 					}
@@ -1525,18 +1507,17 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 					val = uint16(unchecked)
 				}
 
-				err := vector.AppendFixed[uint16](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint16](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_uint32:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val uint32
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					unchecked, uerr := getUnsignedRowValue(row[colIndex])
+				if cell != nil {
+					unchecked, uerr := getUnsignedRowValue(cell)
 					if uerr != nil {
 						return nil, nil, uerr
 					}
@@ -1546,103 +1527,103 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 					val = uint32(unchecked)
 				}
 
-				err := vector.AppendFixed[uint32](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint32](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_uint64:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val uint64
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else if val, err = getUnsignedRowValue(row[colIndex]); err != nil {
-					return nil, nil, err
+				if cell != nil {
+					if val, err = getUnsignedRowValue(cell); err != nil {
+						return nil, nil, err
+					}
 				}
 
-				err := vector.AppendFixed[uint64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[uint64](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_float64:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val float64
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(float64)
+				if cell != nil {
+					val = cell.(float64)
 				}
 
-				err := vector.AppendFixed[float64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[float64](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_float32:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val float32
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(float32)
+				if cell != nil {
+					val = cell.(float32)
 				}
 
-				err := vector.AppendFixed[float32](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[float32](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_date:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Date
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else if val, err = getDateFromRowValue(row[colIndex]); err != nil {
-					return nil, nil, err
+				if cell != nil {
+					if val, err = getDateFromRowValue(cell); err != nil {
+						return nil, nil, err
+					}
 				}
 
-				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Date](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_time:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Time
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else if val, err = getTimeFromRowValue(row[colIndex], typ.Scale); err != nil {
-					return nil, nil, err
+				if cell != nil {
+					if val, err = getTimeFromRowValue(cell, typ.Scale); err != nil {
+						return nil, nil, err
+					}
 				}
 
-				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Time](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_datetime:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Datetime
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else if val, err = getDatetimeFromRowValue(row[colIndex], typ.Scale); err != nil {
-					return nil, nil, err
+				if cell != nil {
+					if val, err = getDatetimeFromRowValue(cell, typ.Scale); err != nil {
+						return nil, nil, err
+					}
 				}
 
-				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Datetime](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_timestamp:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Timestamp
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					timeStampRowVal := row[colIndex]
-					switch v := timeStampRowVal.(type) {
+				if cell != nil {
+					switch v := cell.(type) {
 					case types.Timestamp:
 						val = v
 					case string:
@@ -1654,63 +1635,65 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 						return nil, nil, moerr.NewInternalErrorNoCtxf("%v can't convert to timestamp type", v)
 					}
 				}
-				err := vector.AppendFixed[types.Timestamp](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Timestamp](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_decimal64:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Decimal64
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else if val, err = getDecimal64FromRowValue(row[colIndex], typ); err != nil {
-					return nil, nil, err
+				if cell != nil {
+					if val, err = getDecimal64FromRowValue(cell, typ); err != nil {
+						return nil, nil, err
+					}
 				}
 
-				err := vector.AppendFixed[types.Decimal64](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Decimal64](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_decimal128:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Decimal128
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else if val, err = getDecimal128FromRowValue(row[colIndex], typ); err != nil {
-					return nil, nil, err
+				if cell != nil {
+					if val, err = getDecimal128FromRowValue(cell, typ); err != nil {
+						return nil, nil, err
+					}
 				}
 
-				err := vector.AppendFixed[types.Decimal128](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Decimal128](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_decimal256:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Decimal256
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else if val, err = getDecimal256FromRowValue(row[colIndex], typ); err != nil {
-					return nil, nil, err
+				if cell != nil {
+					if val, err = getDecimal256FromRowValue(cell, typ); err != nil {
+						return nil, nil, err
+					}
 				}
 
-				err := vector.AppendFixed[types.Decimal256](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Decimal256](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
 			}
 		case types.T_enum:
-			for rowIdx, row := range rows {
+			for _, row := range rows {
+				cell := row[colIndex]
 				var val types.Enum
-				if row[colIndex] == nil {
-					nsp.Add(uint64(rowIdx))
-				} else {
-					val = row[colIndex].(types.Enum)
+				if cell != nil {
+					val = cell.(types.Enum)
 				}
 
-				err := vector.AppendFixed[types.Enum](bat.Vecs[colIndex], val, false, pool)
+				err := vector.AppendFixed[types.Enum](bat.Vecs[colIndex], val, cell == nil, pool)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -1718,8 +1701,6 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 		default:
 			return nil, nil, moerr.NewInternalErrorNoCtxf("unsupported type %d", typ.Oid)
 		}
-
-		bat.Vecs[colIndex].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
 }
