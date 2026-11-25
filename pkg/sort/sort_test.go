@@ -168,6 +168,21 @@ func TestSortByVectors(t *testing.T) {
 	require.Equal(t, []int64{2, 0, 1, 3, 4, 5}, selectors)
 }
 
+func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_bool.ToType())
+	defer first.Free(mp)
+	second := vector.NewVec(types.T_enum.ToType())
+	defer second.Free(mp)
+
+	require.NoError(t, vector.AppendFixedList(first, []bool{false, false, true}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(second, []types.Enum{1, 3, 0}, []bool{false, false, true}, mp))
+
+	selectors := []int64{0, 1, 2}
+	SortByVectors(selectors, []*vector.Vector{first, second}, []bool{false, true}, []bool{false, true})
+	require.Equal(t, []int64{1, 0, 2}, selectors)
+}
+
 func TestSortByVectorsFloatOrderPeersUseSecondaryKey(t *testing.T) {
 	mp := mpool.MustNewZero()
 	first := vector.NewVec(types.T_float64.ToType())
