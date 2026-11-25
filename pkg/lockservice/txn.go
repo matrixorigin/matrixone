@@ -411,6 +411,13 @@ func (txn *activeTxn) closeWithContextInternal(
 					} else {
 						l.unlock(txn, cs, commitTS, mutations...)
 					}
+					// The completion log reads cs before a successful detach releases it.
+					logTxnUnlockTableCompleted(
+						logger,
+						txn,
+						table,
+						cs,
+					)
 					if err != nil {
 						errMu.Lock()
 						if firstErr == nil {
@@ -420,12 +427,6 @@ func (txn *activeTxn) closeWithContextInternal(
 					} else if !release {
 						txn.removeClosedLockTable(group, table, cs)
 					}
-					logTxnUnlockTableCompleted(
-						logger,
-						txn,
-						table,
-						cs,
-					)
 					if parallelUnlock {
 						wg.Done()
 					}
