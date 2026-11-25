@@ -12,12 +12,15 @@ permissions:
   actions: read
   pull-requests: read
 jobs:
-  # The non-selected call is skipped (no runner or PR code). Its job metadata
-  # carries the original exact fingerprint without putting it in the run title.
-  cs:
+  # Actions can leave expressions unevaluated in the name of a skipped call.
+  # Expand the v2 fingerprint on an enabled call. Only its static leaf is skipped.
+  identity:
+    if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && fromJSON(inputs.ticket).title_version == 2
     name: >-
-      ${{ inputs.pool == 'idc' && fromJSON(inputs.ticket).title_version == 2
-          && format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5} / Run identity', fromJSON(inputs.ticket).parent, fromJSON(inputs.ticket).attempt, fromJSON(inputs.ticket).group, fromJSON(inputs.ticket).head, inputs.pool, fromJSON(inputs.ticket).key) || 'cs' }}
+      ${{ format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5}', fromJSON(inputs.ticket).parent, fromJSON(inputs.ticket).attempt, fromJSON(inputs.ticket).group, fromJSON(inputs.ticket).head, inputs.pool, fromJSON(inputs.ticket).key) }}
+    permissions: {}
+    uses: ./.github/workflows/coverage-standby-identity.yaml
+  cs:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'cs'
     uses: matrixorigin/CI/.github/workflows/coverage-worker-cs.yaml@3b50537a3379cec5e78d80f7b43d2a31936e4d35
     with:
@@ -33,9 +36,6 @@ jobs:
       CS_S3_JED_CONFIG: ${{ secrets.CS_S3_JED_CONFIG }}
       CS_S3_RUH_CONFIG: ${{ secrets.CS_S3_RUH_CONFIG }}
   idc:
-    name: >-
-      ${{ inputs.pool == 'cs' && fromJSON(inputs.ticket).title_version == 2
-          && format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{5} / Run identity', fromJSON(inputs.ticket).parent, fromJSON(inputs.ticket).attempt, fromJSON(inputs.ticket).group, fromJSON(inputs.ticket).head, inputs.pool, fromJSON(inputs.ticket).key) || 'idc' }}
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.pool == 'idc'
     uses: matrixorigin/CI/.github/workflows/coverage-worker-idc.yaml@3b50537a3379cec5e78d80f7b43d2a31936e4d35
     with:

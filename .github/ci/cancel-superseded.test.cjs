@@ -351,6 +351,8 @@ test('short worker names never authorize cleanup without the original exact iden
     [704, null, {}],
     [705, title.replace('/2/0/', '/1/0/'), {}],
     [706, title.replace('/2/0/', '/2/1/'), {}],
+    [708, 'unexpanded marker', {}],
+    [709, title, { run_attempt: 2 }],
   ]) {
     const run = h.child(id, 0, 'cs', { display_title: 'GROUP0' });
     run.fixtureJobs = pipeline ? [{ name: pipeline + ' / Run identity', run_id: id,
@@ -362,9 +364,95 @@ test('short worker names never authorize cleanup without the original exact iden
     name: group1.display_title + ' / Run identity', run_id: 707,
     run_attempt: 1, status: 'completed', conclusion: 'skipped',
   }] });
-  await h.run();
+  await assert.rejects(h.run(), err => {
+    for (const id of [702, 703, 704, 706, 708, 709]) assert.match(err.message, new RegExp(id + ':'));
+    for (const id of [700, 701, 705, 707]) assert.doesNotMatch(err.message, new RegExp(id + ':'));
+    return true;
+  });
   assert.deepEqual(h.calls.map(([kind, id]) => [kind, id]),
     [['cancel', 700], ['cancel', 707], ['force', 700], ['force', 707]]);
+});
+
+test('queued and running short workers wait for identity together, without delaying proven siblings', async () => {
+  const h = coverageHarness({ children: [], tick(rows, _parent, elapsed) {
+    if (elapsed !== 15000) return;
+    for (const [id, group, pool] of [[710, 0, 'cs'], [711, 1, 'idc'], [712, 0, 'cs']]) {
+      const title = h.child(id, group, pool).display_title;
+      rows.get(id).fixtureJobs = [{ name: (id === 712 ? title.replace('600/2/', '601/2/') : title) +
+        ' / Run identity', run_id: id, run_attempt: 1, status: 'completed', conclusion: 'skipped' }];
+    }
+  } });
+  for (const [id, group, pool] of [[710, 0, 'cs'], [711, 1, 'idc'], [712, 0, 'cs']]) {
+    h.rows.set(id, h.child(id, group, pool, { display_title: 'GROUP' + group,
+      status: group ? 'in_progress' : 'queued' }));
+  }
+  h.rows.set(713, h.child(713, 1, 'cs'));
+  await h.run();
+  assert.deepEqual(h.calls.filter(([op]) => op === 'cancel'),
+    [['cancel', 713, 10000], ['cancel', 710, 15000], ['cancel', 711, 15000]]);
+  assert.deepEqual(h.calls.filter(([op]) => op === 'force').map(([, id]) => id), [713, 710, 711]);
+});
+
+test('permanently missing and ambiguous identities fail visibly without cancellation', async () => {
+  const h = coverageHarness({ children: [] });
+  const run = h.child(720, 0, 'cs');
+  const marker = { name: run.display_title + ' / Run identity', run_id: 721, run_attempt: 1,
+    status: 'completed', conclusion: 'skipped' };
+  h.rows.set(720, { ...run, display_title: 'GROUP0' });
+  h.rows.set(721, { ...run, id: 721, display_title: 'GROUP0', fixtureJobs: [marker, marker] });
+  const actions = h.options.github.rest.actions, list = actions.listJobsForWorkflowRunAttempt;
+  const reads = [];
+  actions.listJobsForWorkflowRunAttempt = args => { reads.push(args.run_id); return list(args); };
+  await assert.rejects(h.run(), err => {
+    assert.match(err.message, /720:.*identity/i);
+    assert.match(err.message, /721:.*identity/i);
+    return true;
+  });
+  assert.deepEqual(reads, [720, 721, 720, 720]);
+  assert.deepEqual(h.calls, []);
+});
+
+test('a previously verified short worker cannot be force-cancelled with a missing marker', async () => {
+  const h = coverageHarness({ children: [], tick(rows) {
+    if (h.calls.length) rows.get(722).fixtureJobs = [];
+  } });
+  const run = h.child(722, 1, 'idc');
+  h.rows.set(722, { ...run, display_title: 'GROUP1', fixtureJobs: [{
+    name: run.display_title + ' / Run identity', run_id: 722, run_attempt: 1,
+    status: 'completed', conclusion: 'skipped',
+  }] });
+  await assert.rejects(h.run(), /722:.*identity/i);
+  assert.deepEqual(h.calls, [['cancel', 722, 10000]]);
+});
+
+test('a temporary missing marker during grace does not fail a completed teardown', async () => {
+  const h = coverageHarness({ children: [], tick(rows, _parent, elapsed) {
+    if (elapsed === 20000) rows.get(724).fixtureJobs = [];
+    if (elapsed === 30000) rows.get(724).status = 'completed';
+  } });
+  const run = h.child(724, 1, 'idc');
+  h.rows.set(724, { ...run, display_title: 'GROUP1', fixtureJobs: [{
+    name: run.display_title + ' / Run identity', run_id: 724, run_attempt: 1,
+    status: 'completed', conclusion: 'skipped',
+  }] });
+  await h.run();
+  assert.deepEqual(h.calls, [['cancel', 724, 10000]]);
+});
+
+test('a deferred short worker is not cancelled if the parent no longer matches', async () => {
+  const h = coverageHarness({ children: [], tick(rows, parent, elapsed) {
+    if (elapsed !== 15000) return;
+    parent.head_sha = 'f'.repeat(40);
+    rows.get(723).fixtureJobs[0].status = 'completed';
+    rows.get(723).fixtureJobs[0].conclusion = 'skipped';
+  } });
+  const run = h.child(723, 0, 'cs');
+  h.rows.set(723, { ...run, display_title: 'GROUP0', fixtureJobs: [{
+    name: run.display_title + ' / Run identity', run_id: 723, run_attempt: 1,
+    status: 'queued', conclusion: null,
+  }] });
+  await h.run();
+  assert.deepEqual(h.calls, []);
 });
 
 test('admitted worker absent from all list scans is cancelled by its paginated receipt', async () => {

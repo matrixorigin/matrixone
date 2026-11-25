@@ -1,0 +1,53 @@
+name: Coverage identity metadata contract
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/coverage-identity-contract.yml'
+      - '.github/workflows/coverage-standby-identity.yaml'
+      - '.github/workflows/coverage-standby-worker.yaml'
+      - '.github/ci/cancel-superseded.cjs'
+      - '.github/ci/cancel-superseded.test.cjs'
+permissions: {}
+jobs:
+  fixture:
+    strategy:
+      matrix:
+        include:
+          - {group: 0, pool: cs}
+          - {group: 1, pool: idc}
+    name: >-
+      ${{ format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{3}000000000000000000000000', github.run_id, github.run_attempt, matrix.group, github.sha, matrix.pool) }}
+    uses: ./.github/workflows/coverage-standby-identity.yaml
+  verify:
+    needs: fixture
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    steps:
+      - name: Verify expanded names and attempt identity while this run is still active
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prefix="Coverage standby / $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT"
+          key="${GITHUB_SHA}000000000000000000000000"
+          endpoint="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+          for delay in 0 2 3 5 5 5; do
+            sleep "$delay"
+            jobs=$(gh api "$endpoint")
+            if jq -e --arg prefix "$prefix" --arg sha "$GITHUB_SHA" --arg key "$key" \
+                --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
+              [.jobs[] | select(.name | endswith(" / Run identity"))] as $m
+              | ($m | length) == 2
+                and all($m[]; .run_id == $run and .run_attempt == $attempt
+                  and .status == "completed" and .conclusion == "skipped")
+                and ([$m[].name] | sort) == [
+                  ($prefix+"/0/"+$sha+"/cs/"+$key+" / Run identity"),
+                  ($prefix+"/1/"+$sha+"/idc/"+$key+" / Run identity")]' <<<"$jobs"; then
+              exit 0
+            fi
+          done
+          jq -c '.jobs[] | {name, run_id, run_attempt, status, conclusion}' <<<"$jobs"
+          exit 1

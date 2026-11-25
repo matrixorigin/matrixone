@@ -95,6 +95,8 @@ async function releaseClosedPullRequestRuns({ github, context, core, wait = slee
   await cancelMatchingRuns({ github, repo, core, get, candidates, matches, stillCurrent, wait });
 }
 
+class CoverageIdentityPending extends Error {}
+
 // workflow_dispatch children do not inherit entrypoint's concurrency group.
 // A separate default-branch controller is needed because the parent collector
 // is itself cancelled when its parent terminates. Bind cleanup to the exact
@@ -130,8 +132,7 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
     run.repository?.full_name === 'matrixorigin/matrixone' &&
     run.head_branch === 'main' && run.run_attempt === 1;
   const matches = run => hasWorkerIdentity(run) && (
-    title.test(run.display_title || '') || (isShortTitle(run) && title.test(run.canonicalTitle || '') &&
-      run.display_title === `GROUP${run.canonicalTitle.split('/')[3]}`));
+    title.test(run.display_title || '') || (isShortTitle(run) && title.test(run.canonicalTitle || '')));
   const candidates = new Map();
   // A 204 dispatch response can become visible shortly after the parent ends.
   // Rescan briefly so a late-indexed, still-queued child is not left behind.
@@ -213,10 +214,16 @@ async function releaseCompletedCoverageWorkers({ github, context, core, wait = s
     if (data.jobs.length !== data.total_count) throw new Error('Incomplete coverage worker identity');
     const suffix = ' / Run identity';
     const markers = data.jobs.filter(job => job.name.endsWith(suffix));
-    if (markers.length !== 1) return run;
+    if (!markers.length) throw new CoverageIdentityPending('Coverage worker identity is not visible');
+    if (markers.length !== 1) throw new Error('Ambiguous coverage worker identity');
     const [marker] = markers;
-    return marker.run_id === id && marker.run_attempt === 1 && marker.status === 'completed' &&
-      marker.conclusion === 'skipped' ? { ...run, canonicalTitle: marker.name.slice(0, -suffix.length) } : run;
+    if (marker.run_id !== id || marker.run_attempt !== 1) throw new Error('Coverage worker identity run/attempt mismatch');
+    if (marker.status !== 'completed') throw new CoverageIdentityPending('Coverage worker identity has not completed');
+    if (marker.conclusion !== 'skipped') throw new Error('Coverage worker identity job was not skipped');
+    const canonicalTitle = marker.name.slice(0, -suffix.length);
+    const identity = /^Coverage standby \/ [1-9]\d*\/[1-9]\d*\/([01])\/[a-f0-9]{40}\/(?:cs|idc)\/[a-f0-9]{64}$/.exec(canonicalTitle);
+    if (!identity || run.display_title !== `GROUP${identity[1]}`) throw new Error('Invalid coverage worker identity title');
+    return { ...run, canonicalTitle };
   };
   const stillCurrent = async () => {
     const { data: current } = await github.rest.actions.getWorkflowRunAttempt({
@@ -267,14 +274,29 @@ async function cancelMatchingRuns({ github, repo, core, get, candidates, matches
     }
     core.info(`${force ? 'Force cancellation' : 'Cancellation'} requested for run ${run.id}, attempt ${run.run_attempt}`);
   };
-  for (const candidate of candidates.values()) {
-    if (!await stillCurrent()) return;
-    await forRun(candidate.id, async () => {
-      const run = await get(candidate.id);
-      if (!matches(run) || run.run_attempt !== candidate.run_attempt) return;
-      await requestCancel(run, false);
-      pending.set(run.id, run);
-    });
+  // A dispatched run can be visible before GitHub indexes its skipped job.
+  // Retry only unresolved lookups, with one shared wait per round. Never
+  // retry a cancellation request or infer identity from a short title.
+  let lookups = candidates.values();
+  for (let round = 0; ; round++) {
+    const deferred = [];
+    for (const candidate of lookups) {
+      if (!await stillCurrent()) return;
+      await forRun(candidate.id, async () => {
+        let run;
+        try { run = await get(candidate.id); } catch (err) {
+          if (!(err instanceof CoverageIdentityPending) || round >= 2) throw err;
+          deferred.push(candidate);
+          return;
+        }
+        if (!matches(run) || run.run_attempt !== candidate.run_attempt) return;
+        await requestCancel(run, false);
+        pending.set(run.id, run);
+      });
+    }
+    if (!deferred.length) break;
+    await wait(5_000);
+    lookups = deferred;
   }
   // Give ordinary cancellation two minutes for process teardown and bounded
   // diagnostics. Poll all candidates together, so cost is not N grace periods.
@@ -283,7 +305,13 @@ async function cancelMatchingRuns({ github, repo, core, get, candidates, matches
     if (!await stillCurrent()) return;
     for (const [id, initial] of pending) {
       await forRun(id, async () => {
-        const run = await get(id);
+        let run;
+        try { run = await get(id); } catch (err) {
+          // The grace poll takes no action. Defer an unindexed marker to the
+          // next poll; escalation below still requires fresh positive evidence.
+          if (err instanceof CoverageIdentityPending) return;
+          throw err;
+        }
         if (!matches(run) || run.run_attempt !== initial.run_attempt) pending.delete(id);
       });
     }
