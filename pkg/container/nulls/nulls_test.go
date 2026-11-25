@@ -608,3 +608,27 @@ func TestFilterVariantsMatchReference(t *testing.T) {
 		requireSameNulls(t, want, got, fmt.Sprintf("Filter unordered iter=%d", iter))
 	}
 }
+
+// Or of two empty inputs clears the result in place: a result that reserved
+// its validity keeps that storage, so later in-place Adds do not allocate.
+func TestOrOfEmptyKeepsReservedStorage(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var r Nulls
+	r.Init(mp)
+	require.NoError(t, r.GetBitmap().Reserve(130))
+	r.Add(3)
+	reserved := mp.CurrNB()
+	require.Positive(t, reserved)
+
+	Or(nil, &Nulls{}, &r)
+	require.True(t, r.IsEmpty())
+	require.False(t, r.Contains(3))
+	require.Equal(t, reserved, mp.CurrNB(), "the reservation is kept")
+
+	r.Add(0)
+	r.Add(129)
+	require.Equal(t, reserved, mp.CurrNB(), "Adds within the reservation do not allocate")
+	require.Equal(t, []uint64{0, 129}, r.ToArray())
+	r.Free()
+	require.Zero(t, mp.CurrNB())
+}

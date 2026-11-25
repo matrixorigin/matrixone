@@ -502,15 +502,22 @@ func (r *optSplitResult) modifyChunkSize(n int) {
 }
 
 // setNullsFromBoolVector makes dst's NULL rows exactly the true rows of v, a
-// bool vector.
-func setNullsFromBoolVector(dst, v *vector.Vector) {
+// bool vector. The null storage is reserved first, where a pool rejection is
+// an error, so the in-place Adds cannot fail.
+func setNullsFromBoolVector(dst, v *vector.Vector, mp *mpool.MPool) error {
 	dst.SetNulls(nil)
 	bs := vector.MustFixedColNoTypeCheck[bool](v)
+	if len(bs) > 0 {
+		if err := dst.PreExtendNulls(len(bs), mp); err != nil {
+			return err
+		}
+	}
 	for i := range bs {
 		if bs[i] {
 			dst.GetNulls().Add(uint64(i))
 		}
 	}
+	return nil
 }
 
 func (r *optSplitResult) getResultRealIndex(src int) (x, y int) {
@@ -529,16 +536,18 @@ func (r *optSplitResult) MergeAnotherEmpty(x, y int, anotherIsEmpty bool) {
 }
 
 // flushAll return all the result.
-func (r *optSplitResult) flushAll() []*vector.Vector {
+func (r *optSplitResult) flushAll() ([]*vector.Vector, error) {
 	if r.optInformation.doesThisNeedEmptyList && r.optInformation.shouldSetNullToEmptyGroup {
 		for i := range r.emptyList {
-			setNullsFromBoolVector(r.resultList[i], r.emptyList[i])
+			if err := setNullsFromBoolVector(r.resultList[i], r.emptyList[i], r.mp); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	var ret []*vector.Vector
 	ret, r.resultList = r.resultList[:r.nowIdx1+1], r.resultList[r.nowIdx1+1:]
-	return ret
+	return ret, nil
 }
 
 // extendResultPurely
