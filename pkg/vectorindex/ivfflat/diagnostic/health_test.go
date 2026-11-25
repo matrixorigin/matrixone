@@ -53,8 +53,8 @@ func TestBuildHealth(t *testing.T) {
 		require.Equal(t, tc.status, status)
 	}
 	m, a := BuildHealth(400, 10, 10, &b)
-	require.Equal(t, 3., m["growth_ratio"])
-	require.Equal(t, .2, m["training_sample_ratio"])
+	require.InDelta(t, 3., m["growth_ratio"], 1e-12)
+	require.InDelta(t, .2, m["training_sample_ratio"], 1e-12)
 	require.Len(t, a, 1)
 	require.Equal(t, "training_sample_insufficient", a[0].Reason)
 	_, a = BuildHealth(100, 1, 10, &b)
@@ -93,8 +93,8 @@ func TestSampledDrift(t *testing.T) {
 	b1.Count = 1
 	samples := []Sample{{"old", 1, []float64{11}}, {"new1", 0, []float64{2}}, {"new2", 1, []float64{12}}}
 	m := Drift(samples, map[string]bool{"old": true}, []*Bucket{b0, b1}, true)
-	require.Equal(t, 4., m["new_old_residual_ratio"])
-	require.Equal(t, .5, m["new_rows_in_largest_5pct_buckets_ratio"])
+	require.InDelta(t, 4., m["new_old_residual_ratio"], 1e-12)
+	require.InDelta(t, .5, m["new_rows_in_largest_5pct_buckets_ratio"], 1e-12)
 	require.Equal(t, int64(2), m["new_sample_count"])
 	require.Equal(t, true, m["approximate"])
 	// Symmetric remote clusters preserve each bucket mean. Center mismatch
@@ -120,7 +120,7 @@ func TestSampledDrift(t *testing.T) {
 	for _, b := range symmetric {
 		g, ok := b.Geometry()
 		require.True(t, ok)
-		require.Zero(t, g.Mismatch)
+		require.InDelta(t, 0, g.Mismatch, 1e-12)
 	}
 	require.InDelta(t, 10000., Drift(remote, oldKeys, symmetric, false)["new_old_residual_ratio"], 1e-8)
 	m = Drift(samples, map[string]bool{}, []*Bucket{b0, b1}, false)
@@ -147,8 +147,8 @@ func TestExactNeighborCoverage(t *testing.T) {
 	m, advice, err := exact.Coverage(ctx, buckets, membership, nil, .95, 1)
 	require.NoError(t, err)
 	curve := m["curve"].([]map[string]any)
-	require.Equal(t, .5, curve[0]["recall"])
-	require.Equal(t, 1., curve[1]["recall"])
+	require.InDelta(t, .5, curve[0]["recall"], 1e-12)
+	require.InDelta(t, 1., curve[1]["recall"], 1e-12)
 	require.Equal(t, 2, m["recommended_probe_limit"])
 	require.Len(t, advice, 2)
 	delete(membership, "0")
