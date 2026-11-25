@@ -133,4 +133,12 @@ drop snapshot sp2;
 drop table t1;
 drop table t2;
 
+-- Read the inherited row after one branch declares an equivalent text charset.
+create table lca_parent(a int primary key, b varchar(10));
+insert into lca_parent values(1, 'old');
+data branch create table lca_child from lca_parent;
+alter table lca_child modify column b varchar(10) character set utf8mb4 collate utf8mb4_bin;
+update lca_parent set b = 'new' where a = 1;
+data branch diff lca_child against lca_parent;
+
 drop database test;
