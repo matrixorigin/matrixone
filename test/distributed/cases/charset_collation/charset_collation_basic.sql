@@ -642,6 +642,13 @@ ALTER TABLE t_inplace_charset MODIFY COLUMN payload VARCHAR(30) CHARACTER SET ut
 SELECT CONCAT(CHARACTER_SET_NAME, '/', COLLATION_NAME, '/', CHARACTER_MAXIMUM_LENGTH) AS column_metadata FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'payload';
 SELECT HEX(payload) AS payload_hex FROM t_inplace_charset;
 
+-- An added column uses the same charset metadata as a modified column.
+ALTER TABLE t_inplace_charset ADD COLUMN added LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Added payload';
+UPDATE t_inplace_charset SET added = payload WHERE id = 1;
+SELECT COLUMN_NAME, CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'added';
+SELECT HEX(added) AS payload_hex FROM t_inplace_charset;
+
 -- @case
 -- @desc: Cleanup
 -- @label:bvt

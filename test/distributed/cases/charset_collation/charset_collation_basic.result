@@ -740,6 +740,15 @@ utf8mb4/utf8mb4_bin/30
 SELECT HEX(payload) AS payload_hex FROM t_inplace_charset;
 ➤ payload_hex[12,-1,0]  𝄀
 F09F9880
+ALTER TABLE t_inplace_charset ADD COLUMN added LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Added payload';
+UPDATE t_inplace_charset SET added = payload WHERE id = 1;
+SELECT COLUMN_NAME, CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'added';
+➤ COLUMN_NAME[12,-1,0]  ¦  CHARACTER_SET_NAME[12,-1,0]  ¦  COLLATION_NAME[12,-1,0]  ¦  COLUMN_COMMENT[12,-1,0]  𝄀
+added  ¦  utf8mb4  ¦  utf8mb4_bin  ¦  Added payload
+SELECT HEX(added) AS payload_hex FROM t_inplace_charset;
+➤ payload_hex[12,-1,0]  𝄀
+F09F9880
 DROP DATABASE IF EXISTS charset_test;
 DROP DATABASE IF EXISTS charset_test_utf8;
 DROP DATABASE IF EXISTS charset_test_utf8mb4;
