@@ -1227,7 +1227,9 @@ func blockDataReadWithFilter(
 			physicalRows == nil
 		if !filterResult.All {
 			if publishSelection && len(filterResult.Sels) > 0 {
-				publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter)
+				if err := publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter); err != nil {
+					return err
+				}
 				return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
 			}
 			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
@@ -1617,7 +1619,8 @@ func BlockDataReadInner(
 				return err
 			}
 		}
-		_, err = materializeBlockData(
+		var ignored objectio.Bitmap
+		ignored, err = materializeBlockData(
 			ctx,
 			info,
 			columns,
@@ -1630,6 +1633,7 @@ func BlockDataReadInner(
 			mp,
 			fs,
 		)
+		ignored.Release()
 		return err
 	}
 

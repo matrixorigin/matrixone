@@ -2671,6 +2671,8 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 			output := batch.NewWithSchema(nil, colTypes, allocation)
 			cacheVectors := containers.NewVectors(len(colTypes) + 2)
 			var sel bitmap.Bitmap
+			// The caller owns the published selection and its pool.
+			sel.Init(allocation)
 			request := &engine.ReaderFilterRequest{
 				OutputAllocation: allocation,
 				ColumnUses:       []engine.ReaderColumnUse{engine.ReaderColumnRetain, engine.ReaderColumnRetain},
@@ -2711,6 +2713,7 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 			output.CleanOnlyData()
 			freeTestBatchWithOwnPools(output)
 			cacheVectors.Free(queryMP)
+			sel.Free()
 			require.Zero(t, account.Snapshot().Used)
 			_, _, err = registry.CompleteTerminal(account)
 			require.NoError(t, err)

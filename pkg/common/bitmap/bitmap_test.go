@@ -21,6 +21,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,9 +30,12 @@ const (
 	BenchmarkRows = 8192
 )
 
+// testMP backs the bitmaps of tests that do not check pool accounting.
+var testMP = mpool.MustNewZero()
+
 func newBm(n int) *Bitmap {
 	var bm Bitmap
-	bm.InitWithSize(int64(n))
+	mustOK(bm.InitWithSize(int64(n), testMP))
 	return &bm
 }
 
@@ -50,7 +54,7 @@ func TestNulls(t *testing.T) {
 
 	ok := np.IsEmpty()
 	require.Equal(t, true, ok)
-	np.TryExpandWithSize(10)
+	mustOK(np.TryExpandWithSize(10))
 	np.Add(0)
 	ok = np.Contains(0)
 	require.Equal(t, true, ok)
@@ -72,7 +76,7 @@ func TestNulls(t *testing.T) {
 	require.True(t, np.Contains(3))
 
 	np.AddMany([]uint64{1, 2, 3})
-	np.Filter([]int64{0})
+	_, _ = np.Filter([]int64{0}, testMP)
 	fmt.Printf("%v\n", np.String())
 	fmt.Printf("size: %v\n", np.Size())
 	fmt.Printf("numbers: %v\n", np.Count())
@@ -84,8 +88,7 @@ func TestNulls(t *testing.T) {
 	require.Equal(t, encoded, streamed.Bytes())
 	require.Equal(t, len(encoded), np.MarshalSize())
 	require.ErrorIs(t, np.MarshalTo(shortMarshalWriter{}), io.ErrShortWrite)
-	nq.Unmarshal(encoded)
-
+	mustOK(nq.Unmarshal(encoded))
 	require.Equal(t, np.ToArray(), nq.ToArray())
 
 	np.Reset()
@@ -162,7 +165,7 @@ func TestBitmap_Compatibility(t *testing.T) {
 	data := npV1.MarshalV1()
 
 	np2 := newBm(BenchmarkRows)
-	np2.UnmarshalV1(data)
+	mustOK(np2.UnmarshalV1(data))
 	require.Equal(t, np.Count(), np2.Count())
 	require.Equal(t, np.ToArray(), np2.ToArray())
 	require.Equal(t, np.ToI64Array(nil), np2.ToI64Array(nil))
@@ -238,7 +241,7 @@ func TestBitmap_And2(t *testing.T) {
 func TestBitmapSize(t *testing.T) {
 	require.Equal(
 		t,
-		2*unsafe.Sizeof(int64(0))+unsafe.Sizeof([]uint64(nil)),
+		3*unsafe.Sizeof(int64(0))+unsafe.Sizeof([]uint64(nil))+unsafe.Sizeof((*mpool.MPool)(nil)),
 		unsafe.Sizeof(Bitmap{}),
 	)
 }
@@ -247,7 +250,7 @@ func TestBitmapRemapOrdered(t *testing.T) {
 	{
 		t.Run("go", func(t *testing.T) {
 			var value Bitmap
-			value.InitWithSize(130)
+			mustOK(value.InitWithSize(130, testMP))
 			value.AddMany([]uint64{0, 2, 63, 64, 65, 128, 129})
 
 			value.RemapOrdered([]int64{0, 2, 64, 65, 129}, false)
@@ -257,7 +260,7 @@ func TestBitmapRemapOrdered(t *testing.T) {
 				require.True(t, value.Contains(row))
 			}
 
-			value.InitWithSize(130)
+			mustOK(value.InitWithSize(130, testMP))
 			value.AddMany([]uint64{0, 2, 63, 64, 65, 128, 129})
 			value.RemapOrdered([]int64{1, 63, 128}, true)
 			require.Equal(t, int64(130), value.Len())
@@ -287,7 +290,8 @@ func TestBitmapOrderedRemapSparseTail(t *testing.T) {
 						}
 						backing := unsafe.SliceData(value.data)
 						capacity := cap(value.data)
-						original := value.Clone()
+						original, err := value.Clone(testMP)
+						mustOK(err)
 						start := int64(0)
 						if tailOnly {
 							start = int64(length)
@@ -325,7 +329,7 @@ func TestBitmapOrderedRemapSparseTail(t *testing.T) {
 						// Repeated compaction and reuse must not resurrect discarded bits.
 						value.RemapOrdered(nil, false)
 						require.NoError(t, value.Validate())
-						value.TryExpandWithSize(length)
+						mustOK(value.TryExpandWithSize(length))
 						require.Zero(t, value.Count())
 						require.NoError(t, value.Validate())
 					})
@@ -352,7 +356,7 @@ func TestBitmapOrderedRemapRejectsInvalidTail(t *testing.T) {
 
 func TestBitmapRemapMaskOrdered(t *testing.T) {
 	var value Bitmap
-	value.InitWithSize(130)
+	mustOK(value.InitWithSize(130, testMP))
 	value.AddMany([]uint64{1, 63, 64, 127, 129})
 
 	selection := newBm(130)
@@ -364,7 +368,7 @@ func TestBitmapRemapMaskOrdered(t *testing.T) {
 	require.True(t, value.Contains(1))
 	require.True(t, value.Contains(2))
 
-	value.InitWithSize(130)
+	mustOK(value.InitWithSize(130, testMP))
 	value.AddMany([]uint64{1, 63, 64, 127, 129})
 	value.RemapMaskOrdered(selection, true)
 	require.Equal(t, int64(130), value.Len())
@@ -378,7 +382,7 @@ func TestBitmapRemapMaskOrderedWithOffset(t *testing.T) {
 	selection.AddMany([]uint64{0, 62, 128})
 
 	var value Bitmap
-	value.InitWithSize(130)
+	mustOK(value.InitWithSize(130, testMP))
 	value.AddMany([]uint64{1, 63, 64, 127, 129})
 	value.RemapMaskOrderedWithOffset(selection, false, 1)
 	require.Equal(t, int64(3), value.Len())
@@ -387,7 +391,7 @@ func TestBitmapRemapMaskOrderedWithOffset(t *testing.T) {
 	require.True(t, value.Contains(1))
 	require.True(t, value.Contains(2))
 
-	value.InitWithSize(130)
+	mustOK(value.InitWithSize(130, testMP))
 	value.AddMany([]uint64{1, 63, 64, 127, 129})
 	value.RemapMaskOrderedWithOffset(selection, true, 1)
 	require.Equal(t, 2, value.Count())
@@ -402,6 +406,7 @@ func TestBitmapPrepareUnmarshal(t *testing.T) {
 	encoded := source.Marshal()
 
 	var streamed Bitmap
+	streamed.Init(testMP)
 	payload, err := streamed.PrepareUnmarshal(
 		encoded[:MarshalHeaderSize],
 		len(encoded),
@@ -462,7 +467,7 @@ func TestInitWithInvertedBits(t *testing.T) {
 				continue
 			}
 			var n Bitmap
-			n.InitWithInvertedBits(src, offset, length)
+			mustOK(n.InitWithInvertedBits(src, offset, length, testMP))
 			require.Equal(t, int64(length), n.Len())
 			want := 0
 			for row := 0; row < length; row++ {

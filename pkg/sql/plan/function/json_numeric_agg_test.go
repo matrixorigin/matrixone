@@ -51,7 +51,7 @@ func jsonNumericAggNulls(values []bool) *nulls.Nulls {
 	if len(values) == 0 {
 		return nil
 	}
-	nsp := nulls.NewWithSize(len(values))
+	nsp := mustNullsOK(nulls.NewWithSize(len(values), bitmapTestMP))
 	for i, isNull := range values {
 		if isNull {
 			nsp.Set(uint64(i))

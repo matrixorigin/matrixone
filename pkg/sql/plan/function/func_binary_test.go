@@ -1027,7 +1027,7 @@ func TestTimestampAddWithNullParameter(t *testing.T) {
 		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(5), 1, proc.Mp())
 		// Create a DATE vector with NULL value
 		dateVec := vector.NewVec(types.T_date.ToType(), proc.Mp())
-		nsp := nulls.NewWithSize(1)
+		nsp := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 		nsp.Add(0)
 		dateVec.SetNulls(nsp)
 		dateVec.SetLength(1)
@@ -1059,7 +1059,7 @@ func TestTimestampAddWithNullParameter(t *testing.T) {
 		unitVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte("DAY"), 1, proc.Mp())
 		// Create an INT64 vector with NULL value
 		intervalVec := vector.NewVec(types.T_int64.ToType(), proc.Mp())
-		nsp := nulls.NewWithSize(1)
+		nsp := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 		nsp.Add(0)
 		intervalVec.SetNulls(nsp)
 		intervalVec.SetLength(1)
@@ -1091,7 +1091,7 @@ func TestTimestampAddWithNullParameter(t *testing.T) {
 		intervalVec, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, proc.Mp())
 		// Create a DATE vector with NULL value
 		dateVec := vector.NewVec(types.T_date.ToType(), proc.Mp())
-		nsp := nulls.NewWithSize(1)
+		nsp := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 		nsp.Add(0)
 		dateVec.SetNulls(nsp)
 		dateVec.SetLength(1)
@@ -1856,7 +1856,7 @@ func TestTimestampAddNonConstantUnit(t *testing.T) {
 		unitVec := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		vector.AppendStringList(unitVec, unitStrs, nil, proc.Mp())
 		// Set second element as NULL
-		nulls := nulls.NewWithSize(2)
+		nulls := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nulls.Set(1)
 		unitVec.SetNulls(nulls)
 
@@ -15658,8 +15658,9 @@ func TestTimestampAddDateDeniedTypeGrowth(t *testing.T) {
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Equal(t, types.T_date, result.GetResultVector().GetType().Oid)
 			require.Equal(t, 128, result.GetResultVector().Length())
-			// Payload only: the NULL bitmap is Go-owned and not charged.
-			require.Equal(t, uint64(512), account.Snapshot().Used)
+			// The payload plus the result's NULL bitmap reserved for 128
+			// rows (two words); the denied type growth charged nothing.
+			require.Equal(t, uint64(512+16), account.Snapshot().Used)
 			require.Equal(t, make([]types.Date, 128), vector.MustFixedColNoTypeCheck[types.Date](result.GetResultVector()))
 		})
 	}

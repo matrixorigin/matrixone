@@ -16,6 +16,9 @@ package function
 
 import (
 	"context"
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 func TestDecimalIntegerDivResolution(t *testing.T) {
@@ -100,7 +101,7 @@ func TestDecimalIntegerDivUnsignedBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := make([]uint64, 1)
-			err := decimalIntegerDivUnsigned([]types.Decimal256{parse(tc.left)}, []types.Decimal256{parse(tc.right)}, out, tc.s0, tc.s1, nulls.NewWithSize(1), true)
+			err := decimalIntegerDivUnsigned([]types.Decimal256{parse(tc.left)}, []types.Decimal256{parse(tc.right)}, out, tc.s0, tc.s1, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true)
 			if tc.bad {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 			} else {
@@ -219,7 +220,7 @@ func BenchmarkDecimalIntegerDivUnsigned(b *testing.B) {
 		left[i] = types.Decimal256{B0_63: 5678}
 	}
 	out := make([]uint64, n)
-	ns := nulls.NewWithSize(n)
+	ns := mustNullsOK(nulls.NewWithSize(n, bitmapTestMP))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

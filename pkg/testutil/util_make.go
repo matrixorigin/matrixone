@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -133,7 +132,7 @@ var (
 func makeVector[T types.FixedSizeT](values []T, nsp []uint64, typ types.Type, mp *mpool.MPool) *vector.Vector {
 	vec := vector.NewVec(typ, mp)
 	err := vector.AppendFixedList(vec, values, nil, mp)
-	vec.SetNulls(nulls.Build(len(values), nsp...))
+	vec.GetNulls().Add(nsp...)
 
 	if err != nil {
 		panic(err)
@@ -149,7 +148,7 @@ func makeStringVector(values []string, nsp []uint64, typ types.Type, mp *mpool.M
 		err = vector.AppendStringList(vec, values, nil, mp)
 	} else {
 		err = vector.AppendStringList(vec, values, nil, mp)
-		vec.SetNulls(nulls.Build(len(values), nsp...))
+		vec.GetNulls().Add(nsp...)
 	}
 	if err != nil {
 		panic(err)
@@ -178,7 +177,7 @@ func makeJsonVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.Vect
 		err = vector.AppendBytesList(vec, newVals, nil, mp)
 	} else {
 		err = vector.AppendBytesList(vec, newVals, nil, mp)
-		vec.SetNulls(nulls.Build(len(values), nsp...))
+		vec.GetNulls().Add(nsp...)
 	}
 	if err != nil {
 		panic(err)
@@ -201,7 +200,7 @@ func makeDateVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.Vect
 
 	vec := vector.NewVec(dateType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
-	vec.SetNulls(nulls.Build(len(values), nsp...))
+	vec.GetNulls().Add(nsp...)
 	if err != nil {
 		panic(err)
 	}
@@ -223,7 +222,7 @@ func makeTimeVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.Vect
 
 	vec := vector.NewVec(timeType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
-	vec.SetNulls(nulls.Build(len(values), nsp...))
+	vec.GetNulls().Add(nsp...)
 	if err != nil {
 		panic(err)
 	}
@@ -245,7 +244,7 @@ func makeDatetimeVector(values []string, nsp []uint64, mp *mpool.MPool) *vector.
 
 	vec := vector.NewVec(datetimeType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
-	vec.SetNulls(nulls.Build(len(values), nsp...))
+	vec.GetNulls().Add(nsp...)
 	if err != nil {
 		panic(err)
 	}
@@ -267,7 +266,7 @@ func makeTimestampVector(values []string, nsp []uint64, mp *mpool.MPool) *vector
 
 	vec := vector.NewVec(timestampType, mp)
 	err = vector.AppendFixedList(vec, newVals, nil, mp)
-	vec.SetNulls(nulls.Build(len(values), nsp...))
+	vec.GetNulls().Add(nsp...)
 	if err != nil {
 		panic(err)
 	}
