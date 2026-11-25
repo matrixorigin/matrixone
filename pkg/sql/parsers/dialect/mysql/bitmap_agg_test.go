@@ -68,3 +68,45 @@ func TestBitmapAggregate(t *testing.T) {
 	_, err := ParseOne(t.Context(), "select unrelated_fn(v) over () from t", 1)
 	require.ErrorContains(t, err, "syntax error")
 }
+
+func TestBitmapAggregateNamesInIDPositions(t *testing.T) {
+	for _, name := range []string{
+		"bitmap_or_agg", "bitmap_construct_agg", "Bitmap_Or_Agg", "Bitmap_Construct_Agg",
+	} {
+		t.Run("CREATE ROLE/"+name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), "CREATE ROLE "+name+";", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			roles := stmt.(*tree.CreateRole).Roles
+			require.Len(t, roles, 1)
+			require.Equal(t, strings.ToLower(name), roles[0].UserName)
+		})
+		t.Run("SET ROLE/"+name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), "SET ROLE "+name+";", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, strings.ToLower(name), stmt.(*tree.SetRole).Role.UserName)
+		})
+		t.Run("ICEBERG REF/"+name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), "SELECT * FROM gold_orders FOR ICEBERG REF "+name+";", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+			table := join.Left.(*tree.AliasedTableExpr).Expr.(*tree.TableName)
+			require.NotNil(t, table.IcebergRef)
+			require.Equal(t, tree.IcebergRefNamedRef, table.IcebergRef.Type)
+			require.Equal(t, tree.Identifier(name), table.IcebergRef.RefName)
+		})
+	}
+
+	// Both words are legal in ident, but neither was a bare role/ref name.
+	// Cover both identifier keyword productions so neither can be used wholesale.
+	for _, name := range []string{"engine", "bitmap_count"} {
+		for _, prefix := range []string{"CREATE ROLE ", "SET ROLE ", "SELECT * FROM gold_orders FOR ICEBERG REF "} {
+			t.Run(prefix+name, func(t *testing.T) {
+				_, err := ParseOne(t.Context(), prefix+name+";", 1)
+				require.ErrorContains(t, err, "syntax error")
+			})
+		}
+	}
+}
