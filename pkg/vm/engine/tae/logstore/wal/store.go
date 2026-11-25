@@ -141,6 +141,9 @@ func (w *StoreImpl) start() {
 }
 
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
+	if w.IsClosed() {
+		return nil, 0, sm.ErrClose
+	}
 	w.appendMu.Lock()
 	defer w.appendMu.Unlock()
 	if w.IsClosed() {
@@ -183,32 +186,35 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	return
 }
 
-// TODO: error handling
 func (w *StoreImpl) onDriverAppendQueue(items ...any) {
-	for _, item := range items {
-		driverEntry := item.(*driverEntry.Entry)
-		if w.maxRecordSize == 0 || driverEntry.Entry.GetInfo().(*entry.Info).Group != GroupUserTxn {
-			driverEntry.Entry.PrepareWrite()
+	for i, item := range items {
+		e := item.(*driverEntry.Entry)
+		if w.maxRecordSize == 0 || e.Entry.GetInfo().(*entry.Info).Group != GroupUserTxn {
+			e.Entry.PrepareWrite()
 		}
-		err := w.driver.Append(driverEntry)
+		err := w.driver.Append(e)
 		if err != nil {
+			groupErr := entry.NewGroupError(err)
+			for _, rejected := range items[i:] {
+				rejected.(*driverEntry.Entry).DoneWithErr(groupErr)
+			}
+			groupErr.Release()
 			panic(err)
 		}
-		// driverEntry.Entry.DoneWithErr(nil)
-		_, err = w.doneWithErrQueue.Enqueue(driverEntry)
+		_, err = w.doneWithErrQueue.Enqueue(e)
 		if err != nil {
 			panic(err)
 		}
 	}
 }
 
-// TODO: error handling
 func (w *StoreImpl) onDoneWithErrQueue(items ...any) {
 	for _, item := range items {
 		e := item.(*driverEntry.Entry)
 		err := e.WaitDone()
 		if err != nil {
-			panic(err)
+			// The producer already completed the transaction entry on failure.
+			continue
 		}
 		e.Entry.DoneWithErr(nil)
 		_, err = w.logInfoQueue.Enqueue(e)

@@ -397,13 +397,27 @@ func TestAppendFailureCompletesWaiterBeforeFailStop(t *testing.T) {
 		WithConfigOptMaxTimeout(time.Millisecond),
 	)
 	d := NewLogServiceDriver(&cfg)
-	failStop := make(chan error, 1)
-	d.onAppendFailure = func(err error) { failStop <- err }
+	first := entry.MockEntryWithPayload([]byte("first"))
+	second := entry.MockEntryWithPayload([]byte("second"))
+	failStop := make(chan [3]error, 1)
+	d.onAppendFailure = func(err error) {
+		failStop <- [3]error{err, first.Entry.GetError(), second.Entry.GetError()}
+	}
 
-	e := entry.MockEntryWithPayload([]byte("append failure"))
-	d.onCommitIntents(e)
-	require.ErrorIs(t, e.WaitDone(), errExpected)
-	require.ErrorIs(t, <-failStop, errExpected)
+	d.onCommitIntents(first, second)
+	select {
+	case results := <-failStop:
+		for _, err := range results {
+			require.ErrorIs(t, err, errExpected)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("append failure did not reach fail-stop")
+	}
+	for _, e := range []*entry.Entry{first, second} {
+		require.ErrorIs(t, e.WaitDone(), errExpected)
+		require.ErrorIs(t, e.Entry.WaitDone(), errExpected)
+		e.Entry.Free()
+	}
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
 	require.Zero(t, d.getCommittedDSNWatermark())
 	require.NoError(t, d.Close())

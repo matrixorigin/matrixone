@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	walentry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"go.uber.org/zap"
 )
 
@@ -123,6 +124,11 @@ func (w *LogEntryWriter) NotifyDone(err error) {
 }
 
 func (w *LogEntryWriter) notifyDoneLocked(err error) {
+	if err != nil && len(w.entries) > 0 {
+		groupErr := walentry.NewGroupError(err)
+		defer groupErr.Release()
+		err = groupErr
+	}
 	for i := 0; i < len(w.entries); i++ {
 		w.entries[i].DoneWithErr(err)
 		w.entries[i] = nil

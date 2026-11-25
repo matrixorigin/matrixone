@@ -285,7 +285,33 @@ func (b *Base) GetError() error {
 
 func (b *Base) WaitDone() error {
 	b.wg.Wait()
-	return b.err
+	return WaitForGroupError(b.err)
+}
+
+// GroupError holds waiters until every entry in a failed group is completed.
+type GroupError struct {
+	error
+	ready chan struct{}
+}
+
+func (e *GroupError) Unwrap() error { return e.error }
+
+func NewGroupError(err error) *GroupError {
+	return &GroupError{error: err, ready: make(chan struct{})}
+}
+
+// Release lets waiters observe the failure after the producer completes the group.
+func (e *GroupError) Release() {
+	close(e.ready)
+}
+
+// WaitForGroupError returns the original failure after the group has completed.
+func WaitForGroupError(err error) error {
+	if group, ok := err.(*GroupError); ok {
+		<-group.ready
+		return group.error
+	}
+	return err
 }
 
 func (b *Base) DoneWithErr(err error) {

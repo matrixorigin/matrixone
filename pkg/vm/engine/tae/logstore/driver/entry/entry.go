@@ -130,7 +130,7 @@ func (e *Entry) Prepare() error {
 
 func (e *Entry) WaitDone() error {
 	e.wg.Wait()
-	return e.err
+	return entry.WaitForGroupError(e.err)
 }
 
 func (e *Entry) DoneWithErr(err error) {
@@ -138,6 +138,11 @@ func (e *Entry) DoneWithErr(err error) {
 	info := e.Entry.GetInfo()
 	if info != nil {
 		e.Info = info.(*entry.Info)
+	}
+	// The producer owns failure completion. The Store orders successful
+	// completion and updates its log information in the consumer.
+	if err != nil {
+		e.Entry.DoneWithErr(err)
 	}
 	e.wg.Done()
 }
