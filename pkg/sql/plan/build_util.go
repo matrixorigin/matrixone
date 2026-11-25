@@ -325,11 +325,6 @@ func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs 
 	return nil
 }
 
-// Use the same selector as main for explicitly declared utf8mb4_bin. In
-// 4.2 the underlying text storage and comparison already use UTF-8 and
-// binary order. The selector preserves the declaration for metadata and DDL.
-const utf8mb4BinColumnScale = 1
-
 func supportsColumnCharset(typ *plan.Type) bool {
 	return typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar) || typ.Id == int32(types.T_text)
 }
@@ -337,19 +332,12 @@ func supportsColumnCharset(typ *plan.Type) bool {
 // ColumnStorageScalesEqual compares scales for storage compatibility. In 4.2,
 // an explicit utf8mb4_bin declaration uses the legacy text representation.
 func ColumnStorageScalesEqual(left, right *plan.Type) bool {
-	if left.Id != right.Id {
-		return false
-	}
-	if left.Scale == right.Scale {
-		return true
-	}
-	return supportsColumnCharset(left) &&
-		(left.Scale == 0 && right.Scale == utf8mb4BinColumnScale ||
-			right.Scale == 0 && left.Scale == utf8mb4BinColumnScale)
+	return left.Id == right.Id &&
+		types.TextStorageScale(types.T(left.Id), left.Scale) == types.TextStorageScale(types.T(right.Id), right.Scale)
 }
 
 func hasExplicitUTF8MB4Bin(typ *plan.Type) bool {
-	return supportsColumnCharset(typ) && typ.Scale == utf8mb4BinColumnScale
+	return supportsColumnCharset(typ) && typ.Scale == types.UTF8MB4BinColumnScale
 }
 
 func applyColumnCharset(typ *plan.Type, attrs []tree.ColumnAttribute) bool {
@@ -372,7 +360,7 @@ func applyColumnCharset(typ *plan.Type, attrs []tree.ColumnAttribute) bool {
 		if !supportsColumnCharset(typ) {
 			return false
 		}
-		typ.Scale = utf8mb4BinColumnScale
+		typ.Scale = types.UTF8MB4BinColumnScale
 	}
 	return true
 }

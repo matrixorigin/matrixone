@@ -479,6 +479,13 @@ func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
 	return result, nil
 }
 
+// Hash keys encode text bytes independently of the SQL charset declaration.
+func sameProbeKeyType(left, right types.Type) bool {
+	left.Scale = types.TextStorageScale(left.Oid, left.Scale)
+	right.Scale = types.TextStorageScale(right.Oid, right.Scale)
+	return left == right
+}
+
 func (bh *branchHashmap) PopByVectors(keyVecs []*vector.Vector, removeAll bool) ([]GetResult, error) {
 	return bh.lookupByVectors(keyVecs, &removeAll)
 }
@@ -511,7 +518,7 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 	}
 	for i, vec := range keyVecs {
-		if *vec.GetType() != keyTypes[i] {
+		if !sameProbeKeyType(*vec.GetType(), keyTypes[i]) {
 			return 0, moerr.NewInvalidInputNoCtxf("key vector type mismatch at column %d", i)
 		}
 	}
@@ -624,7 +631,7 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bo
 		}
 	}
 	for i, vec := range keyVecs {
-		if *vec.GetType() != keyTypes[i] {
+		if !sameProbeKeyType(*vec.GetType(), keyTypes[i]) {
 			return nil, moerr.NewInvalidInputNoCtxf("key vector type mismatch at column %d", i)
 		}
 	}
