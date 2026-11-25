@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   authorize:
-    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'f8998e0754e8a0700e673c02c5f9931de916cf34' && github.ref == 'refs/heads/weilu-runner-test'
+    if: github.repository == 'matrixorigin/matrixone' && github.actor == 'Ariznawlll' && github.run_attempt == 1 && github.event.before == 'de7b14c4e25a1647ab8a2b32cf679e1399c479ec' && github.ref == 'refs/heads/weilu-runner-test'
     runs-on: ubuntu-latest
     environment: ci
     permissions:
@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/fixed-ci/scripts:$GITHUB_WORKSPACE/reviewed/scripts" python3 - <<'PY'
-          import json, os
+          import json, os, urllib.request
           from pathlib import Path
           from coverage_pr_entry import ENTRY, PROJECT, route
           import node_cache_real_pr_gate as approved
@@ -57,13 +57,24 @@ jobs:
           def check(ok, message):
               if not ok:
                   raise SystemExit(message)
-          def get(path, token):
-              code, data = approved.read(f"repos/{PROJECT}/{path}", token=token)
-              check(code == 200, "Required GitHub record unavailable")
-              return data
-          p = get(f"pulls/{number}", os.environ["CS_PR_METADATA_TOKEN"])
-          r = get(f"actions/runs/{run_id}", os.environ["API_TOKEN"])
-          j = get(f"actions/jobs/{preflight}", os.environ["API_TOKEN"])
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+          def actions_record(path):
+              check(path in (f"actions/runs/{run_id}", f"actions/jobs/{preflight}"),
+                    "Unapproved Actions provenance path")
+              request = urllib.request.Request(f"https://api.github.com/repos/{PROJECT}/{path}",
+                  headers={"Authorization": "Bearer " + os.environ["API_TOKEN"],
+                           "Accept": "application/vnd.github+json"})
+              with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
+                  raw = response.read(2 * 1024**2 + 1)
+                  check(response.status == 200 and len(raw) <= 2 * 1024**2,
+                        "Actions provenance record unavailable")
+                  return json.loads(raw)
+          code, p = approved.read(f"repos/{PROJECT}/pulls/{number}", token=os.environ["CS_PR_METADATA_TOKEN"])
+          check(code == 200, "Required PR record unavailable")
+          r = actions_record(f"actions/runs/{run_id}")
+          j = actions_record(f"actions/jobs/{preflight}")
           check(p["user"]["login"] == author and p["base"]["ref"] == "main"
                 and p["head"]["repo"]["full_name"] == source and p["head"]["sha"] == head,
                 "PR no longer matches the authorized trial subject")
