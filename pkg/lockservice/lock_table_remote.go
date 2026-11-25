@@ -264,7 +264,8 @@ func remoteLockRejectedBeforeAdmission(err error) bool {
 }
 
 func remoteLockResponseCompleted(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
+	return moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) ||
+		moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) ||
 		moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout)
@@ -289,14 +290,37 @@ func (l *remoteLockTable) unlockWithContext(
 		txn,
 		l.bind,
 	)
+	resolver, _ := ctx.Value(resolverContextKey{}).(*unknownCommitResolver)
+	unavailable := false
+	if resolver != nil {
+		if ctx.Err() != nil {
+			return resolverUnlockDeferred{}
+		}
+		if !resolver.tryOwner(l.bind.ServiceID, txn.txnKey) {
+			return resolverUnlockDeferred{owner: l.bind.ServiceID}
+		}
+		defer func() { resolver.finishOwner(l.bind.ServiceID, unavailable) }()
+	}
 	_, hasUncertainRoute := txn.remoteCutoffs[l]
 	retryCount := 0
 	backoff := remoteRetryInitialBackoff
 	for {
 		if err := ctx.Err(); err != nil {
+			if resolver != nil {
+				return resolverUnlockDeferred{}
+			}
 			return err
 		}
-		err := l.doUnlock(ctx, txn, commitTS, mutations...)
+		var err error
+		if resolver == nil {
+			err = l.doUnlock(ctx, txn, commitTS, mutations...)
+		} else {
+			// Reserve time to check authoritative ownership after a send
+			// times out. A retired binding needs no owner acknowledgement.
+			sendCtx, cancel := context.WithTimeout(ctx, resolverOwnerSendTimeout)
+			err = l.doUnlock(sendCtx, txn, commitTS, mutations...)
+			cancel()
+		}
 		if err == nil {
 			if hasUncertainRoute {
 				delete(txn.remoteCutoffs, l)
@@ -308,11 +332,19 @@ func (l *remoteLockTable) unlockWithContext(
 			return err
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) {
+			if resolver != nil {
+				return err
+			}
 			if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
 				return err
 			}
 			backoff = nextRemoteRetryBackoff(backoff)
 			continue
+		}
+		if resolver != nil {
+			unavailable = retryRemoteLockError(err) ||
+				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+				moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
 		}
 		retryCount++
 		// Rate limit unlock error logs: log first 3, then every 100th
@@ -331,11 +363,15 @@ func (l *remoteLockTable) unlockWithContext(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleErrorWithContext(ctx, err, false); err == nil {
+		err = l.handleErrorWithContext(ctx, err, false)
+		if err == nil {
 			if hasUncertainRoute {
 				delete(txn.remoteCutoffs, l)
 			}
 			return nil
+		}
+		if resolver != nil {
+			return err
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
 			return err

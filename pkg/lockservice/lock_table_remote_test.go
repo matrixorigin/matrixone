@@ -1628,21 +1628,24 @@ func runRemoteLockTableTests(
 type grantedLockResponseGate struct {
 	Client
 	acquired, release chan struct{}
+	once              sync.Once
 	lost              bool
 }
 
 func (c *grantedLockResponseGate) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
 	resp, err := c.Client.Send(ctx, req)
 	if req.Method == pb.Method_Lock && err == nil {
-		close(c.acquired)
-		select {
-		case <-c.release:
-		case <-ctx.Done():
-		}
-		if c.lost {
-			releaseResponse(resp)
-			return nil, context.Canceled
-		}
+		c.once.Do(func() {
+			close(c.acquired)
+			select {
+			case <-c.release:
+			case <-ctx.Done():
+			}
+			if c.lost {
+				releaseResponse(resp)
+				resp, err = nil, context.Canceled
+			}
+		})
 	}
 	return resp, err
 }
@@ -1706,5 +1709,68 @@ func testFencedRemoteGrantRelease(t *testing.T, lost bool) {
 		require.NoError(t, err)
 		require.NoError(t, owner.Unlock(ctx, id, timestamp.Timestamp{}))
 		require.False(t, retained, "owner still holds the granted row after source transaction unlock")
+	})
+}
+
+func TestRemoteLockUpgradeDoesNotDelayRelease(t *testing.T) {
+	t.Run("completed", func(t *testing.T) { testRemoteLockUpgradeRelease(t, false) })
+	t.Run("earlier reply lost", func(t *testing.T) { testRemoteLockUpgradeRelease(t, true) })
+}
+
+func testRemoteLockUpgradeRelease(t *testing.T, lost bool) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner, source := nodes[0], nodes[1]
+		owner.activeTxnHolder.(*mapBasedTxnHolder).fsp = newFixedSlicePool(4)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1441
+		seed, id := []byte("seed"), []byte("upgrade")
+		options := newTestRowExclusiveOptions()
+		_, err := owner.Lock(ctx, table, newTestRows(0), seed, options)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+
+		firstOptions := options
+		if lost {
+			gate := &grantedLockResponseGate{
+				Client: source.remote.client, acquired: make(chan struct{}),
+				release: make(chan struct{}), lost: true,
+			}
+			close(gate.release)
+			source.remote.client = gate
+			firstOptions.LockWaitDeadline = time.Now().Add(1500 * time.Millisecond).UnixNano()
+		}
+		_, err = source.Lock(ctx, table, newTestRows(1), id, firstOptions)
+		if lost {
+			require.ErrorIs(t, err, context.Canceled)
+		} else {
+			require.NoError(t, err)
+		}
+
+		_, err = source.Lock(ctx, table, newTestRows(2, 3, 4, 5, 6), id, options)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "%v", err)
+		rangeOptions := options
+		rangeOptions.Granularity = pb.Granularity_Range
+		_, err = source.Lock(ctx, table, newTestRows(0, 9), id, rangeOptions)
+		require.NoError(t, err)
+
+		commitTS := timestamp.Timestamp{PhysicalTime: 20}
+		if lost {
+			earlyCtx, cancelEarly := context.WithTimeout(ctx, 200*time.Millisecond)
+			err := source.unlockWithContext(earlyCtx, id, commitTS)
+			cancelEarly()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			_, held, err := owner.GetLockHolder(ctx, table, newTestRows(9)[0], options)
+			require.NoError(t, err)
+			require.True(t, held)
+			require.NoError(t, source.unlockWithContext(ctx, id, commitTS))
+		} else {
+			unlockCtx, cancelUnlock := context.WithTimeout(ctx, time.Second)
+			defer cancelUnlock()
+			require.NoError(t, source.unlockWithContext(unlockCtx, id, commitTS))
+		}
+		_, held, err := owner.GetLockHolder(ctx, table, newTestRows(9)[0], options)
+		require.NoError(t, err)
+		require.False(t, held)
 	})
 }

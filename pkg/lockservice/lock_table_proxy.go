@@ -295,8 +295,10 @@ func (lp *localLockTableProxy) releaseLocks(
 		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
 	}
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
-			// The owner rejected this handoff during staging. Only undo
+		_, deferred := err.(resolverUnlockDeferred)
+		if deferred || moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+			// No handoff was sent, or the owner rejected it during staging.
+			// Only undo
 			// markers created by this attempt, since earlier sends may have
 			// completed remotely even when their replies were lost.
 			for _, row := range newPending {
