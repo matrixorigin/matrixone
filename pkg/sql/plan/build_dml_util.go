@@ -3681,16 +3681,16 @@ func appendDeleteIndexTablePlan(
 	joinConds = []*Expr{condExpr}
 	if indexNeedsOwnerMatch(baseTableDef, indexdef, prefixLengths) {
 		if rightOwnerPos < 0 {
-			return -1, moerr.NewInternalError(builder.GetContext(), "DELETE index table has no owner column")
+			return -1, moerr.NewInternalError(builder.GetContext(), "index table has no owner column")
 		}
 		pkName := baseTableDef.Pkey.PkeyColName
 		pkPos, ok := posMap[pkName]
 		if !ok || pkPos < 0 {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate primary key %s", pkName)
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate old primary key %s", pkName)
 		}
 		pkType, ok := typMap[pkName]
 		if !ok {
-			return -1, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate primary key type %s", pkName)
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate old primary key type %s", pkName)
 		}
 		owner := &plan.Expr{
 			Typ: uniqueTableDef.Cols[rightOwnerPos].Typ,
@@ -5449,11 +5449,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
 	} else {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-		var ownerTable *TableDef
-		if !isUpdate {
-			ownerTable = delCtx.tableDef
-		}
-		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, ownerTable, isUk)
+		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, delCtx.tableDef, isUk)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
 		uniqueTblPkTyp = uniqueTableDef.Cols[0].Typ

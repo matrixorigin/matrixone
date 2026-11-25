@@ -513,7 +513,7 @@ func (builder *QueryBuilder) makeSerializedExactRuntimeFilterPair(
 	return probeSpec, buildSpec, true
 }
 
-// indexOwnerProbeKeySlot identifies the physical-key equality of a DELETE
+// indexOwnerProbeKeySlot identifies the physical-key equality of a DML
 // join that also checks the owner. Both equalities remain in the hash join.
 func (builder *QueryBuilder) indexOwnerProbeKeySlot(node, scan *plan.Node) (int, bool) {
 	if node.JoinType != plan.Node_INNER || node.IsRightJoin || len(node.OnList) != 2 ||

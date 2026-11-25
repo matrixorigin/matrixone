@@ -220,6 +220,50 @@ where t.reldatabase=database() and t.relname='prefix_guard' and i.name='ux'`).Sc
 		require.Equal(t, 1, bitmap)
 		require.Equal(t, 8, n)
 
+		// The old physical key is shared by aa and ab. The full old primary
+		// key selects which entry UPDATE removes, even when the owner changes.
+		exec("create table update_collision(id varchar(8) primary key, s set('','a'), n int, key ix(id(1),s,n))")
+		var collisionIndex string
+		require.NoError(t, conn.QueryRowContext(ctx, `select distinct i.index_table_name
+from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id
+where t.reldatabase=database() and t.relname='update_collision' and i.name='ix'`).Scan(&collisionIndex))
+		collisionIndex = "`" + strings.ReplaceAll(collisionIndex, "`", "``") + "`"
+		indexEntries := func() []string {
+			t.Helper()
+			var entries string
+			require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(concat(__mo_index_pri_col,':',hex(__mo_index_idx_col)) order by __mo_index_pri_col) from "+collisionIndex).Scan(&entries))
+			return strings.Split(entries, ",")
+		}
+		for _, tc := range []struct {
+			query, newOwner string
+			affected        int64
+		}{
+			{"update update_collision set s=2 where id='ab'", "ab", 1},
+			{"update update_collision set id='ac',s=2 where id='ab'", "ac", 1},
+			{"update update_collision t join update_aux p on p.id=1 set t.id='ac',t.s=2,p.n=p.n+1 where t.id='ab'", "ac", 2},
+		} {
+			exec("delete from update_collision where id in ('aa','ab','ac')")
+			exec("insert into update_collision values ('aa',1,0),('ab',1,0)")
+			before := indexEntries()
+			require.Len(t, before, 2)
+			_, key, found := strings.Cut(before[0], ":")
+			require.True(t, found)
+			require.Equal(t, "ab:"+key, before[1])
+
+			result := exec(tc.query)
+			affected, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, tc.affected, affected, tc.query)
+			require.Equal(t, 2, count("select count(*) from update_collision use index()"))
+			require.Equal(t, 1, count("select count(*) from update_collision use index() where id='aa' and s+0=1"))
+			require.Equal(t, 1, count("select count(*) from update_collision use index() where id='"+tc.newOwner+"' and s+0=2"))
+			after := indexEntries()
+			require.Len(t, after, 2)
+			require.Equal(t, before[0], after[0], tc.query)
+			require.True(t, strings.HasPrefix(after[1], tc.newOwner+":"), after[1])
+			require.NotEqual(t, tc.newOwner+":"+key, after[1], tc.query)
+		}
+
 		// Older catalogs can contain an ENUM in a table-level composite PK.
 		// MASTER stores that PK in both its key and owner during backfill.
 		for _, tc := range []struct {

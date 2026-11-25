@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -47,6 +48,27 @@ func indexNeedsOwnerMatch(tableDef *planpb.TableDef, indexDef *planpb.IndexDef, 
 	}
 	kind := classifyIndexPKPart(indexDef.Parts, tableDef.Pkey.PkeyColName, prefixLengths)
 	return kind == indexPKPartPrefix || (len(indexDef.Parts) == 1 && kind == indexPKPartAbsent)
+}
+
+// bindIndexOwnerProbe keeps full owner equality in the join while allowing
+// the hidden index scan to prune using the physical key alone.
+func (builder *QueryBuilder) bindIndexOwnerProbe(baseOwner *Expr, scan *Node, keyPos int32) (*Expr, error) {
+	ownerPos, ok := scan.TableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
+	if !ok || ownerPos < 0 || int(ownerPos) >= len(scan.TableDef.Cols) {
+		return nil, moerr.NewInternalError(builder.GetContext(), "index table has no owner column")
+	}
+	tag := scan.BindingTags[0]
+	indexOwner := GetColExpr(scan.TableDef.Cols[ownerPos].Typ, tag, ownerPos)
+	indexOwner.GetCol().Name = catalog.IndexTablePrimaryColName
+	ownerCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{baseOwner, indexOwner})
+	if err != nil {
+		return nil, err
+	}
+	if builder.indexOwnerProbes == nil {
+		builder.indexOwnerProbes = make(map[int32]indexOwnerProbe)
+	}
+	builder.indexOwnerProbes[tag] = indexOwnerProbe{keyCol: keyPos, ownerCol: ownerPos}
+	return ownerCond, nil
 }
 
 func isSpatialIndexDef(idxDef *planpb.IndexDef) bool {
