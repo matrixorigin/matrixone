@@ -737,8 +737,14 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 		}
 		var snapshot *vector.Vector
 		if sourceVector.IsReadOnly() {
-			// A read-only reference to the reader's Arrow buffers.
-			snapshot, err = sourceVector.WindowByLogicalRows(0, rows)
+			// A read-only reference to the reader's Arrow buffers. Its nulls
+			// are a view of source's bitmap, which Clean frees, so the
+			// snapshot gets its own copy.
+			if snapshot, err = sourceVector.WindowByLogicalRows(0, rows); err == nil {
+				if err = snapshot.DetachNulls(mp); err != nil {
+					snapshot.Free(nil)
+				}
+			}
 		} else {
 			snapshot, err = sourceVector.CloneWindow(0, rows, mp)
 		}

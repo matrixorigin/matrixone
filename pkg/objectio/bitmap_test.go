@@ -93,3 +93,28 @@ func TestBitmap1(t *testing.T) {
 	var bm3 Bitmap
 	require.Equal(t, 0, bm3.Count())
 }
+
+// Bitmaps a Get allocates when every pool slot is taken, and the copies
+// PreExtend makes of pooled bitmaps, go back to bitmapMP on Release.
+func TestBitmapPoolOverflowReleaseFrees(t *testing.T) {
+	base := bitmapMP.CurrNB()
+	held := make([]Bitmap, 0, 4*BitmapPoolSize)
+	overflow := 0
+	for i := 0; i < 4*BitmapPoolSize; i++ {
+		bm := GetReusableBitmap()
+		if bm.Idx() < 0 {
+			overflow++
+		}
+		held = append(held, bm)
+	}
+	require.Greater(t, overflow, 0)
+	require.Greater(t, bitmapMP.CurrNB(), base)
+	// Grow some pooled bitmaps past the pooled size: copy-on-write.
+	for i := range held[:8] {
+		held[i].Add(uint64(BitmapBitsInPool) + 10)
+	}
+	for i := range held {
+		held[i].Release()
+	}
+	require.Equal(t, base, bitmapMP.CurrNB())
+}

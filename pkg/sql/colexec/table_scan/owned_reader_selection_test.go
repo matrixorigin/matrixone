@@ -92,7 +92,10 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 				return false, err
 			}
 		}
-		sel := out.OwnSelection(source.RowCount())
+		sel, err := out.OwnSelection(mp, source.RowCount())
+		if err != nil {
+			return false, err
+		}
 		for _, row := range selected.Sels {
 			sel.Add(uint64(row))
 		}

@@ -129,7 +129,8 @@ func TestBatches(t *testing.T) {
 
 	rowCnt := batches.RowCount()
 	bm := &bitmap.Bitmap{}
-	bm.InitWithSize(int64(rowCnt))
+	bm.Init(bitmapTestMP)
+	mustBitmapOK(bm.InitWithSize(int64(rowCnt), bitmapTestMP))
 	bm.AddRange(1000, 11000)
 	batches.Shrink(bm, proc)
 	require.Equal(t, rowCnt-10000, batches.RowCount())
@@ -163,7 +164,8 @@ func TestBatchesShrinkPreservesAllocationAndRollback(t *testing.T) {
 		var shrinkErr error
 		if shrink {
 			ignore := &bitmap.Bitmap{}
-			ignore.InitWithSize(DefaultBatchSize)
+			ignore.Init(bitmapTestMP)
+			mustBitmapOK(ignore.InitWithSize(DefaultBatchSize, bitmapTestMP))
 			ignore.Add(0)
 			shrinkErr = batches.Shrink(ignore, proc)
 			if shrinkErr == nil {

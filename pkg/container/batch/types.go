@@ -66,7 +66,7 @@ type Batch struct {
 	// bitmap borrowed from the producer of the batch's input.
 	selection *bitmap.Bitmap
 	// ownSel is the batch's own selection storage, reused for every batch it
-	// carries (OwnSelection) and released by Clean.
+	// carries (OwnSelection) and released by Clean or FreeSelection.
 	ownSel bitmap.Bitmap
 
 	// mp is the pool for the batch's own memory allocations; today that is

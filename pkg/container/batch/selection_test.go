@@ -39,7 +39,9 @@ func TestBatchSelection(t *testing.T) {
 	require.Nil(t, bat.SelectionMask(nil))
 
 	var selection bitmap.Bitmap
-	selection.InitWithSize(6)
+
+	selection.Init(bitmapTestMP)
+	mustBitmapOK(selection.InitWithSize(6, bitmapTestMP))
 	selection.AddMany([]uint64{1, 4, 5})
 	bat.SetSelection(&selection)
 	require.Equal(t, []int64{1, 4, 5}, bat.SelectionRows(nil))
@@ -95,8 +97,10 @@ func TestBatchSelection(t *testing.T) {
 // fills the batch's own storage, a forwarded or viewed selection borrows the
 // input's bitmap, and Clean releases only the batch's own storage.
 func TestBatchSelectionOwnedOrBorrowed(t *testing.T) {
+	mp := mpool.MustNewZero()
 	producer := NewWithSize(0)
-	own := producer.OwnSelection(6)
+	own, err := producer.OwnSelection(mp, 6)
+	require.NoError(t, err)
 	require.Same(t, &producer.ownSel, own)
 	require.Equal(t, int64(6), own.Len())
 	require.Zero(t, own.Count())
@@ -122,8 +126,9 @@ func TestBatchSelectionOwnedOrBorrowed(t *testing.T) {
 
 	// A narrower copies into its own storage and never touches the input's.
 	narrower := NewWithSize(0)
-	narrowed := narrower.OwnSelection(0)
-	narrowed.InitWith(forwarder.Selection())
+	narrowed, err := narrower.OwnSelection(mp, 0)
+	require.NoError(t, err)
+	require.NoError(t, narrowed.InitWith(forwarder.Selection(), mp))
 	narrowed.Remove(3)
 	narrower.SetSelection(narrowed)
 	require.Equal(t, []int64{0}, narrower.SelectionRows(nil))
@@ -131,18 +136,46 @@ func TestBatchSelectionOwnedOrBorrowed(t *testing.T) {
 
 	// Re-initializing the own storage for the next batch drops the published
 	// selection first.
-	again := producer.OwnSelection(4)
+	again, err := producer.OwnSelection(mp, 4)
+	require.NoError(t, err)
 	require.False(t, producer.HasSelection())
 	require.Equal(t, 6, producer.RowCount(), "the physical row count comes back")
 	require.Equal(t, int64(4), again.Len())
 
 	// Cleaning a borrower leaves the lender's selection alone; cleaning the
-	// owner releases its storage.
-	mp := mpool.MustNewZero()
+	// owner releases its storage to the pool it came from.
 	forwarder.Clean(mp)
 	require.Equal(t, int64(4), producer.ownSel.Len())
 	producer.Clean(mp)
 	require.False(t, producer.HasSelection())
 	require.Zero(t, producer.ownSel.Len())
 	narrower.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+// OwnSelection reuses its storage across calls with the same pool, moves to a
+// new pool by releasing the old words, and FreeSelection returns them for a
+// batch that is never Cleaned.
+func TestBatchOwnSelectionPool(t *testing.T) {
+	mp1 := mpool.MustNewZero()
+	mp2 := mpool.MustNewZero()
+	var view Batch
+	sel, err := view.OwnSelection(mp1, 100)
+	require.NoError(t, err)
+	sel.Add(7)
+	view.SetSelection(sel)
+	require.Positive(t, mp1.CurrNB())
+
+	sel, err = view.OwnSelection(mp2, 100)
+	require.NoError(t, err)
+	require.False(t, view.HasSelection())
+	require.Zero(t, sel.Count())
+	require.Zero(t, mp1.CurrNB(), "a pool change frees the old words")
+	require.Same(t, mp2, sel.MPool())
+	view.SetSelection(sel)
+
+	view.FreeSelection()
+	require.False(t, view.HasSelection())
+	require.Zero(t, mp2.CurrNB())
+	view.FreeSelection() // idempotent
 }

@@ -1022,6 +1022,11 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		memoryBuffer,
 		c.mp,
 	)
+	if err != nil {
+		extraErrMsg = "BuildBloomfilter failed"
+		return err
+	}
+	defer bf.Free()
 
 	if deleteFiles, tmpNewFiles, newCkp, newCkpData, err = MergeCheckpoint(
 		ctx,

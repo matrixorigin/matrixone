@@ -55,14 +55,21 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	physical := &s.physical
 	physicalRows := physical.RowCount()
 
+	// view's selection is allocated from the filter's pool and freed in Free.
+	mp := filter.ctr.mp(proc)
 	// selected == false means every physical row is selected.
 	// rows is view's own selection: a copy of the input's selection, narrowed
 	// below, or built from the first predicate that drops a row.
 	selected := input.HasSelection()
 	var rows *bitmap.Bitmap
 	if selected {
-		rows = s.view.OwnSelection(0)
-		rows.InitWith(input.Selection())
+		var err error
+		if rows, err = s.view.OwnSelection(mp, 0); err != nil {
+			return nil, err
+		}
+		if err = rows.InitWith(input.Selection(), mp); err != nil {
+			return nil, err
+		}
 	}
 
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
@@ -105,7 +112,9 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 			return !null && v
 		}
 		if !selected {
-			rows = s.view.OwnSelection(physicalRows)
+			if rows, err = s.view.OwnSelection(mp, physicalRows); err != nil {
+				return nil, err
+			}
 			for row := 0; row < physicalRows; row++ {
 				if keep(uint64(row)) {
 					rows.Add(uint64(row))

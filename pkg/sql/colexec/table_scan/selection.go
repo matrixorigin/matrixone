@@ -98,7 +98,8 @@ func (tableScan *TableScan) execSelectedProjection(proc *process.Process, input 
 // Columns the reader left empty (unused after the filter) stay empty.
 func (s *selectionState) compactInto(out *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
 	if s.compact == nil || len(s.compact.Vecs) != len(out.Vecs) {
-		s.free(mp)
+		// out may still read its selection: free only the compact batch.
+		s.freeCompact(mp)
 		s.compact = batch.NewWithSize(len(out.Vecs))
 	}
 	compact := s.compact
@@ -141,6 +142,10 @@ func (s *selectionState) reset() {
 
 func (s *selectionState) free(mp *mpool.MPool) {
 	s.uses = nil
+	s.freeCompact(mp)
+}
+
+func (s *selectionState) freeCompact(mp *mpool.MPool) {
 	if s.compact != nil {
 		s.compact.Clean(mp)
 		s.compact = nil

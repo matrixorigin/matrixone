@@ -668,6 +668,9 @@ func TestFixedBorrowValidityLifetimeAndWindow(t *testing.T) {
 	// caller keeps alive until it drops every batch and window over it.
 	window, err := bat.Vecs[0].Window(1, 3)
 	require.NoError(t, err)
+	// The window outlives bat below: its payload is the Arrow buffer, but its
+	// nulls are a view of bat's bitmap, so it takes its own copy.
+	require.NoError(t, window.DetachNulls(mp))
 	bat.Clean(mp)
 	require.Equal(t, []int64{30, 40}, vector.MustFixedColNoTypeCheck[int64](window))
 	require.False(t, window.IsNull(0))

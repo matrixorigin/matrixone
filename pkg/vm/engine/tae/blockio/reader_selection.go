@@ -66,16 +66,28 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 // publishBatchSelection keeps the read columns' physical rows and publishes
 // rows as output's own selection.
 // Columns the caller marked unused are cleared.
-func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, physicalRows int, request *engine.ReaderFilterRequest) {
+func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, physicalRows int, request *engine.ReaderFilterRequest, mp *mpool.MPool) error {
 	width := len(output.Vecs)
 	for _, pos := range positions {
 		if request.ColumnUse(pos, width) == engine.ReaderColumnUnused {
 			output.Vecs[pos].CleanOnlyData()
 		}
 	}
-	sel := output.OwnSelection(physicalRows)
-	sel.InitWithRows(int64(physicalRows), rows)
+	// The selection is output's own storage, allocated from the same pool
+	// as an owned copy of a column would be; Clean releases it.
+	owner := mp
+	if request.OutputAllocation != nil {
+		owner = request.OutputAllocation
+	}
+	sel, err := output.OwnSelection(owner, physicalRows)
+	if err != nil {
+		return err
+	}
+	if err := sel.InitWithRows(int64(physicalRows), rows, owner); err != nil {
+		return err
+	}
 	output.SetSelection(sel)
+	return nil
 }
 
 // loadBorrowedLateColumns loads every column not read for the filter in

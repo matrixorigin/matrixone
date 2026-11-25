@@ -211,9 +211,9 @@ func TestBooleanValidityAdmissionFailure(t *testing.T) {
 	require.EqualValues(t, 8, account.Snapshot().Used)
 	require.Zero(t, result.GetNulls().GetBitmap().CapWords())
 	input.Vecs[0].SetNull(0)
-	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err, "the NULL bitmap is Go-owned and is not admitted")
-	require.True(t, result.IsNull(0))
+	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity,
+		"a nullable result reserves its NULL bitmap against the account")
 	require.EqualValues(t, 8, account.Snapshot().Used)
 	input.Vecs[0].GetNulls().Reset()
 	result, err = executor.Eval(proc, []*batch.Batch{input}, nil)

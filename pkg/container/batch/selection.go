@@ -38,15 +38,33 @@ import (
 // every view, borrows the input's bitmap read-only. Copy only to modify.
 
 // OwnSelection returns the batch's own selection storage, cleared and sized to
-// physicalRows. The caller fills it, or copies an input selection into it and
-// narrows it, and then publishes it with SetSelection. A batch copied by value
-// shares its original's storage and must not call OwnSelection.
-func (bat *Batch) OwnSelection(physicalRows int) *bitmap.Bitmap {
+// physicalRows, with its words allocated from mp. The caller fills it, or
+// copies an input selection into it and narrows it, and then publishes it with
+// SetSelection. The storage is reused across calls with the same mp and is
+// released by Clean or FreeSelection. A batch copied by value shares its
+// original's storage and must not call OwnSelection.
+func (bat *Batch) OwnSelection(mp *mpool.MPool, physicalRows int) (*bitmap.Bitmap, error) {
 	if bat.selection == &bat.ownSel {
 		bat.ClearSelection()
 	}
-	bat.ownSel.InitWithSize(int64(physicalRows))
-	return &bat.ownSel
+	if bat.ownSel.MPool() != mp {
+		// A pool change (a new execution) releases the old words first.
+		bat.ownSel.Free()
+		bat.ownSel = bitmap.Bitmap{}
+	}
+	if err := bat.ownSel.InitWithSize(int64(physicalRows), mp); err != nil {
+		return nil, err
+	}
+	return &bat.ownSel, nil
+}
+
+// FreeSelection drops the selection and returns the batch's own selection
+// storage to its pool. A batch that is never Cleaned, such as a view kept in
+// operator state, calls it when its owner is freed.
+func (bat *Batch) FreeSelection() {
+	bat.ClearSelection()
+	bat.ownSel.Free()
+	bat.ownSel = bitmap.Bitmap{}
 }
 
 // SetSelection publishes the set bits of sel as this batch's logical rows over
