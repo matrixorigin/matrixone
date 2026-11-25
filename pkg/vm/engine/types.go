@@ -1057,8 +1057,8 @@ type RangesShuffleParam struct {
 	CNCNT     int32 // number of all cns
 	CNIDX     int32 // cn index , starts from 0
 	IsLocalCN bool
-	// ShuffleByObjectID assigns IVF persisted and appendable objects to the
-	// same physical CN owner.
+	// ShuffleByObjectID hashes immutable IVF objects by their full ObjectID.
+	// Appendable objects follow IsLocalCN, the owner of replay rows.
 	ShuffleByObjectID  bool
 	ShuffleRangeUint64 []uint64
 	ShuffleRangeInt64  []int64

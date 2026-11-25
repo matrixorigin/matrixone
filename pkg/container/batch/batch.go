@@ -1427,32 +1427,40 @@ func (bat *Batch) releaseExtraBuf() {
 // OwnReadOnlyVectors replaces every read-only (reference) vector of bat with
 // a copy in mp, so the batch can be mutated in place. A vector shared by
 // several columns is copied once.
+//
+// It copies every vector before replacing any: a vector can sit in several
+// columns, and on a failed copy bat is left unchanged, its originals intact,
+// while the copies already made are freed.
 func (bat *Batch) OwnReadOnlyVectors(mp *mpool.MPool) error {
 	var copied map[*vector.Vector]*vector.Vector
-	// The replaced originals are no longer referenced by bat, also when a
-	// later Dup fails. A read-only vector can still own its nulls bitmap.
-	defer func() {
-		for vec := range copied {
-			vec.Free(nil)
-		}
-	}()
-	for i, vec := range bat.Vecs {
+	for _, vec := range bat.Vecs {
 		if vec == nil || !vec.IsReadOnly() {
 			continue
 		}
-		if owned, ok := copied[vec]; ok {
-			bat.Vecs[i] = owned
+		if _, ok := copied[vec]; ok {
 			continue
 		}
 		owned, err := vec.Dup(mp)
 		if err != nil {
+			for _, c := range copied {
+				c.Free(mp)
+			}
 			return err
 		}
 		if copied == nil {
 			copied = make(map[*vector.Vector]*vector.Vector)
 		}
 		copied[vec] = owned
-		bat.Vecs[i] = owned
+	}
+	for i, vec := range bat.Vecs {
+		if owned, ok := copied[vec]; ok {
+			bat.Vecs[i] = owned
+		}
+	}
+	// No column references the originals now. A read-only vector can still
+	// own its nulls bitmap.
+	for vec := range copied {
+		vec.Free(nil)
 	}
 	return nil
 }

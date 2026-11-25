@@ -600,6 +600,60 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return ndv
 }
 
+// Keep the outer-count estimate on its original set of small integer types.
+func boundNDVByIntegerSpan(ndv float64, keyType types.T, lo, hi float64, includeNull bool) float64 {
+	if keyType == types.T_int64 || keyType == types.T_uint64 {
+		return ndv
+	}
+	return boundNDVByExactIntegerSpan(ndv, keyType, lo, hi, includeNull)
+}
+
+// Exactly represented min/max values cap NDV overestimates from overlapping objects.
+func boundNDVByExactIntegerSpan(ndv float64, keyType types.T, lo, hi float64, includeNull bool) float64 {
+	span, ok := exactIntegerStatsSpan(keyType, lo, hi)
+	if !ok || !finitePositive(ndv) {
+		return ndv
+	}
+	if includeNull {
+		span++
+	}
+	return math.Min(ndv, span)
+}
+
+// With endpoints strictly within ±2^52, their inclusive span and an optional
+// NULL group also fit exactly in the float64 statistics representation.
+const maxExactIntegerStatsEndpoint = 1<<52 - 1
+
+func exactIntegerStatsSpan(keyType types.T, lo, hi float64) (float64, bool) {
+	var lower, upper float64
+	switch keyType {
+	case types.T_int8:
+		lower, upper = math.MinInt8, math.MaxInt8
+	case types.T_int16:
+		lower, upper = math.MinInt16, math.MaxInt16
+	case types.T_int32:
+		lower, upper = math.MinInt32, math.MaxInt32
+	case types.T_uint8:
+		upper = math.MaxUint8
+	case types.T_uint16:
+		upper = math.MaxUint16
+	case types.T_uint32:
+		upper = math.MaxUint32
+	case types.T_int64:
+		lower, upper = -maxExactIntegerStatsEndpoint, maxExactIntegerStatsEndpoint
+	case types.T_uint64:
+		upper = maxExactIntegerStatsEndpoint
+	default:
+		return 0, false
+	}
+	// UpdateStatsInfo uses [0,0] for an uninitialized zone map.
+	if !(lo >= lower && lo <= hi && hi <= upper) ||
+		math.Trunc(lo) != lo || math.Trunc(hi) != hi || lo == 0 && hi == 0 {
+		return 0, false
+	}
+	return hi - lo + 1, true
+}
+
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
 	switch exprImpl := arg.Expr.(type) {
 	case *plan.Expr_Col:

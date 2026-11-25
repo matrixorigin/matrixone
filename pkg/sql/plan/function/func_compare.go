@@ -415,7 +415,7 @@ func opBinaryFixedFixedToFixedNullSafe[T types.FixedSizeTExceptStrType](
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
 	// Result of <=> is never NULL
-	rsVec.GetNulls().Reset()
+	rsVec.GetNulls().Clear()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
@@ -447,7 +447,7 @@ func opBinaryBytesBytesToFixedNullSafe(
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
 	// Result of <=> is never NULL
-	rsVec.GetNulls().Reset()
+	rsVec.GetNulls().Clear()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
@@ -518,7 +518,7 @@ func opBinaryJSONBytesBytesToFixedNullSafe(
 		rightConst, rightConstNull = prepareJSONComparisonAt(p2, 0)
 	}
 	// Result of <=> is never NULL.
-	rsVec.GetNulls().Reset()
+	rsVec.GetNulls().Clear()
 
 	for row := uint64(0); row < uint64(length); row++ {
 		var leftRaw, rightRaw []byte
@@ -1715,10 +1715,6 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a != b
 		}, selectList)
-	case types.T_bit:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
-			return a != b
-		}, selectList)
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a != b
@@ -1747,7 +1743,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a != b
 		}, selectList)
-	case types.T_uint64:
+	case types.T_bit, types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a != b
 		}, selectList)

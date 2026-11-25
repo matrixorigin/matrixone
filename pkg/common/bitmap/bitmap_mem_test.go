@@ -249,3 +249,37 @@ func checkView(t *testing.T, mp *mpool.MPool, src *Bitmap, start, end int64) {
 	want.Free()
 	require.Equal(t, allocated, mp.CurrNB())
 }
+
+// A view of a read-only bitmap must not expose the source's words past its
+// end: they are shared with rows the source does not cover.
+func TestBitmapViewOfViewStopsAtSourceEnd(t *testing.T) {
+	mp := newTestPool(t)
+	var src Bitmap
+	require.NoError(t, src.InitWithSize(64, mp))
+	defer src.Free()
+	src.Add(0)
+	src.Add(1)
+
+	var outer, inner Bitmap
+	outer.InitView(&src, 0, 1)
+	require.Equal(t, 1, outer.Count())
+	require.False(t, outer.Contains(1))
+
+	inner.InitView(&outer, 0, 2)
+	require.Equal(t, 1, inner.Count())
+	require.True(t, inner.Contains(0))
+	require.False(t, inner.Contains(1), "row 1 is past the outer view's end")
+	require.Equal(t, []uint64{0}, inner.ToArray())
+
+	var decoded Bitmap
+	decoded.UnmarshalNoCopy(inner.Marshal())
+	require.NoError(t, decoded.Validate())
+	require.Equal(t, []uint64{0}, decoded.ToArray())
+
+	// An owned source keeps its words clear past Len: the view keeps the
+	// requested length.
+	var padded Bitmap
+	padded.InitView(&src, 0, 100)
+	require.EqualValues(t, 100, padded.Len())
+	require.Equal(t, []uint64{0, 1}, padded.ToArray())
+}
