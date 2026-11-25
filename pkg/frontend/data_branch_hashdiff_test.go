@@ -5287,6 +5287,7 @@ func TestDataBranchPickWindowForkClassification(t *testing.T) {
 			tables.tarRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(88)).AnyTimes()
 			tables.baseRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(89)).AnyTimes()
 			lo, srcFork, dstFork := types.BuildTS(11, 0), types.BuildTS(10, 0), types.BuildTS(12, 0)
+			tables.boundedPick = true
 			tables.pickWindowStart = &dataBranchPickWindowStart{tableID: 88, snapshot: lo}
 			forkRel := mock_frontend.NewMockRelation(ctrl)
 			forkRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()

@@ -1067,6 +1067,7 @@ func diffMergeAgency(
 	); err != nil {
 		return
 	}
+	tblStuff.boundedPick = pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != ""
 	if err = reconcileDataBranchEndpointSchema(ctx, ses, bh, &tblStuff, &dagInfo); err != nil {
 		return
 	}
@@ -1465,10 +1466,22 @@ func reconcileDataBranchEndpointSchema(
 		if err != nil {
 			return err
 		}
-		endpointColumns, err := dataBranchLineageEndpointColumns(
-			tarDefs, dagInfo.pathFromLCAToTarLineageOnly,
-			baseDefs, dagInfo.pathFromLCAToBaseLineageOnly,
-		)
+		tarEdges, baseEdges := dagInfo.pathFromLCAToTarLineageOnly, dagInfo.pathFromLCAToBaseLineageOnly
+		if tables.boundedPick {
+			tarDefs, tarEdges, err = pickForkSchemaPath(ctx, ses, bh, tarDefs, tarEdges,
+				dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS, tables.tarRel, tarSP,
+				dedupeBranchIdentities(tarIdent, baseIdent))
+			if err != nil {
+				return err
+			}
+			baseDefs, baseEdges, err = pickForkSchemaPath(ctx, ses, bh, baseDefs, baseEdges,
+				dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS, tables.baseRel, baseSP,
+				dedupeBranchIdentities(baseIdent, tarIdent))
+			if err != nil {
+				return err
+			}
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(tarDefs, tarEdges, baseDefs, baseEdges)
 		if err != nil {
 			return err
 		}
@@ -1490,7 +1503,7 @@ func reconcileDataBranchEndpointSchema(
 			}
 			idx++
 			reaches, tarLCACol, tarForkCol, redefined := dataBranchColumnAtFork(
-				tarDefs, dagInfo.pathFromLCAToTarLineageOnly, tarCol,
+				tarDefs, tarEdges, tarCol,
 			)
 			if !reaches || redefined || tarLCACol == nil {
 				continue
@@ -1503,7 +1516,7 @@ func reconcileDataBranchEndpointSchema(
 			// lineage match, as in the shared probe layout.
 			tables.def.baseLCAColNames[idx] = tables.def.tarLCAColNames[idx]
 			if reaches, _, baseForkCol, redefined := dataBranchColumnAtFork(
-				baseDefs, dagInfo.pathFromLCAToBaseLineageOnly, resolveBaseColumn(tarCol),
+				baseDefs, baseEdges, resolveBaseColumn(tarCol),
 			); reaches && !redefined && baseForkCol != nil {
 				tables.def.baseLCAColNames[idx] = baseForkCol.Name
 			}
@@ -1572,6 +1585,40 @@ func reconcileDataBranchEndpointSchema(
 		*tables, baseDef, writableIdxes,
 	)
 	return nil
+}
+
+// Record an in-place schema change as a same-table step after the logical
+// fork. The column identities at creation, not the child endpoint names,
+// map to the parent at the fork.
+func pickForkSchemaPath(
+	ctx context.Context, ses *Session, bh BackgroundExec, defs []*plan.TableDef, edges []bool,
+	path []uint64, snapshots []types.TS, endpoint engine.Relation, endpointSP types.TS,
+	owners []branchIdentity,
+) ([]*plan.TableDef, []bool, error) {
+	out := make([]*plan.TableDef, 0, len(defs))
+	outEdges := make([]bool, 0, len(defs))
+	for i, def := range defs {
+		sameGeneration := false
+		if i != 0 && !edges[i] && def.Version != 0 && defs[i-1] != def {
+			rel, ident, at := endpoint, owners[0], endpointSP
+			if i+1 < len(defs) {
+				var err error
+				at = snapshots[i+1]
+				rel, ident, err = reopenDataBranchNodeByID(ctx, ses, bh, owners, path[i], at)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			created, err := dataBranchPickWindowCreation(ctx, ses, bh, rel, ident, at)
+			if err != nil {
+				return nil, nil, err
+			}
+			out, outEdges = append(out, created), append(outEdges, false)
+			sameGeneration = true
+		}
+		out, outEdges = append(out, def), append(outEdges, sameGeneration || edges[i])
+	}
+	return out, outEdges, nil
 }
 
 func dataBranchColumnIndexByName(colNames []string, name string) int {
@@ -2657,6 +2704,16 @@ func dataBranchColumnAtFork(
 	}
 	current := endpointCol
 	for i := len(pathDefs) - 2; i >= 0; i-- {
+		if pathDefs[i].TblId != 0 && pathDefs[i].TblId == pathDefs[i+1].TblId {
+			current = dataBranchColumnDefByIdentity(pathDefs[i], current)
+			if current == nil {
+				return false, nil, forkCol, dataBranchLCASchemaContainsColumn(pathDefs[i], endpointCol)
+			}
+			if i == forkParentIdx {
+				forkCol = current
+			}
+			continue
+		}
 		previous := dataBranchColumnDefByName(pathDefs[i], current.Name)
 		if previous == nil && !lineageOnly[i+1] {
 			// An in-place rename on an ordinary clone edge can keep OriginName,
@@ -2786,8 +2843,8 @@ func dataBranchLineageEndpointColumns(
 		tarReachesLCA, tarLCACol, tarRedefined := dataBranchColumnReachesLCA(
 			tarDefs, tarLineageOnly, tarCol,
 		)
-		baseCol := dataBranchColumnDefByLogicalName(baseEndpoint, tarCol)
-		if baseCol == nil && tarReachesLCA && !tarRedefined {
+		var baseCol *plan.ColDef
+		if tarReachesLCA && !tarRedefined {
 			// A rename without OriginName can only be proved by both endpoint
 			// columns reaching the same logical LCA column. Endpoint-local
 			// ColId/Seqnum values alone are insufficient because sibling ALTERs
@@ -2810,6 +2867,9 @@ func dataBranchLineageEndpointColumns(
 				}
 				baseCol = candidate
 			}
+		}
+		if baseCol == nil {
+			baseCol = dataBranchColumnDefByLogicalName(baseEndpoint, tarCol)
 		}
 		if baseCol == nil || !isDataBranchUserVisibleColumn(baseCol) {
 			continue

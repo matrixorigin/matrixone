@@ -1112,7 +1112,13 @@ func hashDiff(
 	buildTargetCost = time.Since(buildTargetStart)
 
 	diffStart := time.Now()
-	if !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory {
+	// A direct child of a zero-history ancestor has a committed inherited
+	// image at its own creation. Use it for bounded PICK, not live-row-only
+	// reconciliation intended for independent tables.
+	useMaterializedFork := tblStuff.lcaHasZeroHistory && copt.preservePickConflicts &&
+		tblStuff.boundedPick && tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
+		len(dagInfo.pathFromLCAToBase) == 2
+	if !dagInfo.hasLCA() || (tblStuff.lcaHasZeroHistory && !useMaterializedFork) {
 		if tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
 			tarDataHashmap.ItemCount() > 0 && tarTombstoneHashmap.ItemCount() > 0 {
 			if err = pruneUnchangedPickRowsWithoutLCA(
@@ -1471,7 +1477,17 @@ func hashDiffIfHasLCA(
 	// already visible at its fork. Window deletes reconcile those separately.
 	var inheritedAt types.TS
 	baseProbeStuff := sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, true)
-	if tblStuff.pickWindowStart != nil && tarLCAProbe.LT(&baseLCAProbe) {
+	if tblStuff.lcaHasZeroHistory {
+		_, ident := tblStuff.endpointIdentities(ctx, ses)
+		cts, err := getTablesCreationCommitTS(ctx, ses, ident, tblStuff.baseRel, ident, tblStuff.baseRel,
+			[]types.TS{baseSP, baseSP})
+		if err != nil {
+			return err
+		}
+		baseLCAProbe, inheritedAt = cts[0], cts[0]
+		baseProbeStuff = dataBranchHistoricalProbeStuff(ctx, tblStuff, tblStuff.baseRel)
+		baseProbeStuff.lcaIdent = &ident
+	} else if tblStuff.boundedPick && tarLCAProbe.LT(&baseLCAProbe) {
 		if _, hasBaseFork := firstDataBranchForkTS(dagInfo.pathFromLCAToBaseTS, dagInfo.pathFromLCAToBaseLineageOnly); hasBaseFork {
 			inheritedAt = baseLCAProbe
 		}
@@ -1479,7 +1495,7 @@ func hashDiffIfHasLCA(
 
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
-		if tblStuff.pickWindowStart != nil && copt.conflictOpt != nil &&
+		if (tblStuff.boundedPick || tblStuff.pickWindowStart != nil) && copt.conflictOpt != nil &&
 			((wrapped.kind == diffDelete && !wrapped.fromUpdate) ||
 				(wrapped.kind == diffInsert && wrapped.fromUpdate)) &&
 			wrapped.batch.RowCount() > 0 && baseDataHashmap.ItemCount() > 0 {
@@ -1992,7 +2008,7 @@ func reconcilePickWindowDestinationInsert(
 	}
 	matches.SetRowCount(len(srcRows))
 	conflicting := make([]int64, 0, len(srcRows))
-	if src.fromUpdate {
+	if src.fromUpdate && !tables.lcaHasZeroHistory {
 		for i, srcRow := range srcRows {
 			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(srcRow), i, true,
 				src, batchWithKind{batch: matches})

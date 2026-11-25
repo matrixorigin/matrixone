@@ -487,3 +487,67 @@ select k,v from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: A conflict survives a lower bound in the pruned shared prefix
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+create snapshot pick_window_lo for account sys;
+data branch create table src from root;
+delete from root where k=1;
+data branch create table dst from root;
+insert into dst values (1,99);
+delete from src where k=1;
+update src set v=44 where k=2;
+create snapshot pick_window_hi for account sys;
+-- @regex("conflict: src DELETE and dst INSERT", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Writing values from hi follows column identity after a name swap
+create database pick_window;
+use pick_window;
+create table root (k int primary key, a int, b int);
+insert into root values (1,40,50);
+data branch create table src from root;
+data branch create table dst from root;
+data branch create table control from root;
+create snapshot pick_window_lo for account sys;
+update src set a=60;
+create snapshot pick_window_hi for account sys;
+data branch pick src into control between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,a,b from control order by k;
+alter table src algorithm=inplace, rename column a to tmp;
+alter table src algorithm=inplace, rename column b to a;
+alter table src algorithm=inplace, rename column tmp to b;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,a,b from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: A committed child of a zero-history ancestor can pick a window DELETE
+create database pick_window;
+use pick_window;
+begin;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table src from root;
+data branch create table dst from root;
+drop table root;
+commit;
+create snapshot pick_window_lo for account sys;
+delete from src where k=1;
+update src set v=40 where k=2;
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
