@@ -1570,7 +1570,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	}
 	mappedNull := getNullFlag(param.Extern.NullMap, colName, field.Val)
 	isNullOrEmpty := field.IsNull || mappedNull
-	emptyNumericField := len(field.Val) == 0 && !mappedNull && shouldLoadEmptyNumericAsZero(param, id)
+	emptyNumericField := len(field.Val) == 0 && !field.IsNull && !mappedNull && shouldLoadEmptyNumericAsZero(param, id)
 	if emptyNumericField {
 		field.Val = "0"
 		isNullOrEmpty = false
@@ -1578,8 +1578,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		isNullOrEmpty = true
 	}
 	if isNullOrEmpty {
-		vector.AppendBytes(vec, nil, true, mp)
-		return nil
+		return vector.AppendBytes(vec, nil, true, mp)
 	}
 
 	var temporalValue loadDataTemporalValue

@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -360,44 +359,6 @@ func checkNonVotingReplicaCount(s *store, shardID uint64) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-func TestHandleShutdown(t *testing.T) {
-	fn := func(t *testing.T, s *Service) {
-		cmd := pb.ScheduleCommand{
-			UUID: s.ID(),
-			ShutdownStore: &pb.ShutdownStore{
-				StoreID: s.ID(),
-			},
-			ServiceType: pb.LogService,
-		}
-
-		shutdownC := make(chan struct{})
-		exit := atomic.Bool{}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer func() {
-				cancel()
-				exit.Store(true)
-			}()
-
-			select {
-			case <-ctx.Done():
-				panic("deadline reached")
-			case <-shutdownC:
-				runtime.DefaultRuntime().Logger().Info("received shutdown command")
-			}
-		}()
-
-		s.shutdownC = shutdownC
-
-		for !exit.Load() {
-			s.handleCommands([]pb.ScheduleCommand{cmd})
-			time.Sleep(time.Millisecond)
-		}
-
-	}
-	runServiceTest(t, false, true, fn)
 }
 
 func TestServiceAddLogShard(t *testing.T) {

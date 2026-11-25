@@ -525,8 +525,8 @@ func (c *Compile) evaluateQueryPlacement(
 	}
 	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
 	// The local partition is the only one that can see the coordinator's
-	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
-	// distributed by ObjectID across all selected workers.
+	// appendable IVF ranges. Keep it at partition zero; immutable objects
+	// remain distributed by ObjectID across all selected workers.
 	if isIvfEntriesScan {
 		req.CurrentCNPolicy = schedule.CurrentCNRequired
 		req.CurrentCNOrdinalZero = true

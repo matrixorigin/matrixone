@@ -204,6 +204,13 @@ func checkIndexColumnSupportability(ctx context.Context, col *ColDef, keyPart *t
 
 	colName := keyPart.ColName.ColNameOrigin()
 
+	// Older ENUM/SET prefix indexes may contain label- or ordinal-based keys.
+	// Until their semantics are unified, do not create more such indexes.
+	if (indexKind == "secondary" || indexKind == "unique") && keyPart.Length > 0 &&
+		(col.Typ.Id == int32(types.T_enum) || isSetPlanType(&col.Typ)) {
+		return moerr.NewNotSupportedf(ctx, "index prefix on ENUM or SET column '%s'", colName)
+	}
+
 	switch col.Typ.Id {
 	case int32(types.T_blob):
 		if keyPart.Length > 0 && indexKind != "primary" {

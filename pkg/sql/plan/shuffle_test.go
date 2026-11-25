@@ -261,26 +261,6 @@ func TestShouldSkipAppendableObjByShuffleKeepsDefaultLocalBehavior(t *testing.T)
 	}
 }
 
-func TestShouldSkipAppendableObjByShuffleCanAssignUniqueObjectOwner(t *testing.T) {
-	row := types.RandomRowid()
-	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), true, false, true)
-	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
-	owners := 0
-
-	for cnidx := int32(0); cnidx < 3; cnidx++ {
-		rsp := &engine.RangesShuffleParam{
-			Node:              node,
-			CNCNT:             3,
-			CNIDX:             cnidx,
-			ShuffleByObjectID: true,
-		}
-		if !ShouldSkipObjByShuffle(rsp, stats) {
-			owners++
-		}
-	}
-	require.Equal(t, 1, owners)
-}
-
 func productionShapedObjectID(rng *rand.Rand, sequence uint64) types.Objectid {
 	var objectID types.Objectid
 
@@ -331,25 +311,27 @@ func TestIVFObjectIDShuffleAssignsExactlyOneOwner(t *testing.T) {
 	require.Equal(t, 1, owners)
 }
 
-func TestIVFObjectIDShuffleUsesSameOwnerForPersistedAndAppendable(t *testing.T) {
+func TestIVFObjectIDShuffleKeepsAppendableOnReplayOwner(t *testing.T) {
 	rng := rand.New(rand.NewSource(44))
 	objectID := productionShapedObjectID(rng, 29)
 	persisted := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
 	appendable := objectio.NewObjectStatsWithObjectID(&objectID, true, false, true)
 	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+	hashOwner := int32(IVFObjectIDHashToRange(objectID, 4))
+	// Deliberately make ownership by replay and by object ID distinguishable.
+	replayOwner := (hashOwner + 1) % 4
 
 	for cnidx := int32(0); cnidx < 4; cnidx++ {
 		rsp := &engine.RangesShuffleParam{
 			Node:              node,
 			CNCNT:             4,
 			CNIDX:             cnidx,
+			IsLocalCN:         cnidx == replayOwner,
 			ShuffleByObjectID: true,
 		}
-		require.Equal(t,
-			ShouldSkipObjByShuffle(rsp, persisted),
-			ShouldSkipObjByShuffle(rsp, appendable),
-		)
+		require.Equal(t, cnidx != hashOwner, ShouldSkipObjByShuffle(rsp, persisted))
+		require.Equal(t, cnidx != replayOwner, ShouldSkipObjByShuffle(rsp, appendable))
 	}
 }
 

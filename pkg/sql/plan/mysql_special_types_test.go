@@ -40,6 +40,23 @@ func TestFuncCastForEnumTypeKeepsMatchingErrorMember(t *testing.T) {
 	require.Equal(t, uint32(0), got.GetLit().GetEnumVal())
 }
 
+func TestNormalizeDeleteOldSetValueReusesStoredBitmap(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}
+	stored := &plan.Expr{
+		Typ: typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 2,
+			ColPos: 3,
+		}},
+	}
+	display, err := makeEnumOrSetDisplayValue(context.Background(), stored)
+	require.NoError(t, err)
+
+	got, err := normalizeDeleteOldValueExpr(context.Background(), display, typ)
+	require.NoError(t, err)
+	require.Equal(t, stored, got)
+}
+
 func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	ctx := context.Background()
 	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}
