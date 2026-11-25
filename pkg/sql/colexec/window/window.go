@@ -3214,6 +3214,7 @@ func searchLeftBound(loc *time.Location, start, end, rowIdx int, vec *vector.Vec
 	}
 
 	var left int
+	// typeswitch:partial RANGE bound arithmetic supports only float32 and float64 among floating-point types.
 	switch vec.GetType().Oid {
 	case types.T_bit:
 		col := vector.MustFixedColNoTypeCheck[uint64](vec)
