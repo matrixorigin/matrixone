@@ -140,7 +140,8 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
-	cutoff := time.Now().Add(remoteLockAdmissionWindow).UnixNano()
+	start := time.Now()
+	cutoff := start.Add(remoteLockAdmissionWindow).UnixNano()
 	if deadline := opts.LockWaitDeadline; deadline > 0 {
 		cutoff = min(cutoff, deadline)
 	}
@@ -164,9 +165,59 @@ func (l *remoteLockTable) lock(
 			rpcCancel()
 		}
 	}()
-	resp, err := l.client.Send(rpcCtx, req)
+	var resp *pb.Response
+	var err error
+	retryDelay := 10 * time.Millisecond
+	for {
+		resp, err = l.client.Send(rpcCtx, req)
+		txn.Lock()
+		if !moerr.IsMoErrCode(err, moerr.ErrRemoteLockAdmissionExpired) {
+			break
+		}
 
-	txn.Lock()
+		// The owner did not grant rows in this attempt, but it may already
+		// have published a holder. An earlier ambiguous request still keeps
+		// its original positive cutoff.
+		txn.retainRemoteCleanup(l, 0)
+		if txn.bindChanged || txn.closing.Load() {
+			cb(pb.Result{}, ErrLockTableBindChanged)
+			return
+		}
+		waitDeadline := time.Unix(0, opts.LockWaitDeadline)
+		if opts.LockWaitDeadline == 0 {
+			budget := defaultRPCTimeout
+			if opts.LockWaitTimeout > 0 {
+				budget = time.Duration(opts.LockWaitTimeout) * time.Second
+			}
+			waitDeadline = start.Add(budget)
+		}
+		txn.Unlock()
+		waitCtx, cancel := context.WithDeadlineCause(ctx, waitDeadline, ErrLockTimeout)
+		err = waitRemoteRetryBackoffWithContext(waitCtx, retryDelay)
+		if err == nil {
+			err = waitCtx.Err()
+		}
+		err = lockWaitContextError(waitCtx, err)
+		cancel()
+		txn.Lock()
+		if txn.bindChanged || txn.closing.Load() {
+			cb(pb.Result{}, ErrLockTableBindChanged)
+			return
+		}
+		if err != nil {
+			cb(pb.Result{}, err)
+			return
+		}
+		now := time.Now()
+		if !now.Before(waitDeadline) {
+			cb(pb.Result{}, ErrLockTimeout)
+			return
+		}
+		cutoff = min(now.Add(remoteLockAdmissionWindow).UnixNano(), waitDeadline.UnixNano())
+		req.Lock.AdmissionDeadline = cutoff
+		retryDelay = nextRemoteRetryBackoff(retryDelay)
+		txn.Unlock()
+	}
 
 	// A response from the owner completes this request even when earlier
 	// rows in a multi-row Lock still need release. A transport error leaves
@@ -259,12 +310,13 @@ func (l *remoteLockTable) lock(
 }
 
 func remoteLockRejectedBeforeAdmission(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
-		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound)
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart)
 }
 
 func remoteLockResponseCompleted(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) ||
+	return moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) ||
 		moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) ||

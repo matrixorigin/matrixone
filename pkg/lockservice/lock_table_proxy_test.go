@@ -1006,3 +1006,66 @@ func TestProxyHandoffCapacityAllowsReplacementCleanup(t *testing.T) {
 		}
 	})
 }
+
+func TestHandoffReplacementKeepsOriginalTableInstance(t *testing.T) {
+	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner := nodes[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1790
+		oldID, replacementID := []byte("old"), []byte("replacement")
+		opts := newTestRowSharedOptions()
+		rows := newTestRows(1)
+		_, err := owner.Lock(ctx, table, rows, oldID, opts)
+		require.NoError(t, err)
+		old := owner.tableGroups.get(0, table).(*localLockTable)
+		oldTxn := owner.activeTxnHolder.getActiveTxn(oldID, false, "")
+		adopting, resume := make(chan struct{}), make(chan struct{})
+		continueAdoption := sync.OnceFunc(func() { close(resume) })
+		defer continueAdoption()
+		handedOff := make(chan error, 1)
+		go func() {
+			oldTxn.Lock()
+			defer oldTxn.Unlock()
+			keys := oldTxn.lockHolders[0].tableKeys[table]
+			handedOff <- old.releaseLocks(oldTxn, keys, timestamp.Timestamp{}, handoffLocalUnlock,
+				func(group uint32, table uint64) {
+					close(adopting)
+					<-resume
+					owner.incRef(group, table)
+				}, pb.ExtraMutation{Key: rows[0], ReplaceTo: replacementID})
+		}()
+		select {
+		case <-adopting:
+		case <-ctx.Done():
+			t.Fatal("handoff did not reach reference adoption")
+		}
+		// Retirement can proceed once the physical handoff releases the table
+		// mutex. The new instance must see the replacement's old intent.
+		removed, err := owner.CloseRemoteLockTable(0, table, old.bind.Version)
+		require.NoError(t, err)
+		require.True(t, removed)
+		nextRows := newTestRows(2)
+		recreated, err := owner.getLockTableWithCreate(ctx, 0, table, nextRows, opts.Sharding)
+		require.NoError(t, err)
+		require.NotSame(t, old, recreated)
+		require.True(t, old.bind.Equal(recreated.getBind()))
+		locked := make(chan error, 1)
+		go func() {
+			_, err := owner.Lock(ctx, table, nextRows, replacementID, opts)
+			locked <- err
+		}()
+		continueAdoption()
+		require.NoError(t, <-handedOff)
+		require.ErrorIs(t, <-locked, ErrLockTableBindChanged)
+		_, held, err := owner.GetLockHolder(ctx, table, nextRows[0], opts)
+		require.NoError(t, err)
+		require.False(t, held)
+		require.NoError(t, owner.Unlock(ctx, oldID, timestamp.Timestamp{}))
+		require.NoError(t, owner.Unlock(ctx, replacementID, timestamp.Timestamp{}))
+		owner.mu.RLock()
+		refs := owner.mu.lockTableRef[0][table]
+		owner.mu.RUnlock()
+		require.Zero(t, refs)
+	})
+}

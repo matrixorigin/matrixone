@@ -287,7 +287,7 @@ func (s *service) Lock(
 	// it needs to inc table bind ref when set restart cn
 	bind := l.getBind()
 	current := s.tableGroups.get(bind.Group, bind.Table)
-	if current == nil || current.getBind().Changed(bind) {
+	if !sameLockTableForTxn(current, l) || txn.fenceReplacedLockTableLocked(bind, l, s.logger) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
@@ -312,7 +312,7 @@ func (s *service) Lock(
 			err = e
 		})
 	if err == nil {
-		if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
+		if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, l); e != nil {
 			result = pb.Result{}
 			err = e
 		}
@@ -591,10 +591,9 @@ func (s *service) unlockRemoteTable(ctx context.Context, bind pb.LockTable, req 
 		if !ok {
 			return ErrLockTableBindChanged
 		}
-		if err := local.releaseLocks(txn, keys, req.CommitTS, handoffLocalUnlock, req.Mutations...); err != nil {
+		if err := local.releaseLocks(txn, keys, req.CommitTS, handoffLocalUnlock, s.incRef, req.Mutations...); err != nil {
 			return err
 		}
-		s.adoptRemoteHandoffRefs(bind, table, req.Mutations)
 		txn.removeClosedLockTable(bind.Group, bind.Table, keys)
 	}
 	delete(h.tableBindIntents, bind.Table)
@@ -605,28 +604,6 @@ func (s *service) unlockRemoteTable(ctx context.Context, bind pb.LockTable, req 
 		delete(txn.lockHolders, bind.Group)
 	}
 	return nil
-}
-
-func (s *service) adoptRemoteHandoffRefs(bind pb.LockTable, table lockTable, mutations []pb.ExtraMutation) {
-	for _, mutation := range mutations {
-		if mutation.Skip || len(mutation.ReplaceTo) == 0 {
-			continue
-		}
-		replacement := s.activeTxnHolder.getActiveTxn(mutation.ReplaceTo, false, "")
-		if replacement == nil {
-			continue
-		}
-		replacement.Lock()
-		if bytes.Equal(replacement.txnID, mutation.ReplaceTo) {
-			if h := replacement.lockHolders[bind.Group]; h != nil {
-				if actual, ok := h.tableBinds[bind.Table]; ok && actual.Equal(bind) &&
-					replacement.lockTableBindTouched(bind, table) {
-					s.incRef(bind.Group, bind.Table)
-				}
-			}
-		}
-		replacement.Unlock()
-	}
 }
 
 func (s *service) UnlockWithContext(
@@ -1453,7 +1430,7 @@ func (s *service) fenceByBindChanged(bind pb.LockTable) {
 func (s *service) checkBindChangedBeforeLockSuccess(
 	txn *activeTxn,
 	txnID []byte,
-	bind pb.LockTable,
+	expected lockTable,
 ) error {
 	// Let any pending bind-change fence complete before reporting lock success.
 	// Keep the lock order consistent with Lock: bindChangeMu before txn.Lock.
@@ -1468,8 +1445,9 @@ func (s *service) checkBindChangedBeforeLockSuccess(
 	if txn.bindChanged {
 		return ErrLockTableBindChanged
 	}
-	l := s.tableGroups.get(bind.Group, bind.Table)
-	if l == nil || l.getBind().Changed(bind) {
+	bind := expected.getBind()
+	if !sameLockTableForTxn(s.tableGroups.get(bind.Group, bind.Table), expected) {
+		txn.markBindChangedLocked(s.logger)
 		return ErrLockTableBindChanged
 	}
 	return nil

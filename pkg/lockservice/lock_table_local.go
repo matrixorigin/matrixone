@@ -320,12 +320,12 @@ func (l *localLockTable) unlock(
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) {
-	_ = l.releaseLocks(txn, ls, commitTS, normalLocalUnlock, mutations...)
+	_ = l.releaseLocks(txn, ls, commitTS, normalLocalUnlock, nil, mutations...)
 }
 
 func (l *localLockTable) releaseLocks(
 	txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mode localUnlockMode,
-	mutations ...pb.ExtraMutation,
+	incHandoffRef func(uint32, uint64), mutations ...pb.ExtraMutation,
 ) error {
 	start := time.Now()
 	defer func() {
@@ -359,12 +359,18 @@ func (l *localLockTable) releaseLocks(
 	}
 	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
 
-	defer l.mu.Unlock()
+	var replacements map[string]*lockHandoffTarget
+	defer func() {
+		l.mu.Unlock()
+		// Credit the reference while each replacement transaction is still
+		// locked, without taking the service mutex under the table mutex.
+		if replacements != nil {
+			l.finishHandoffTargets(replacements, incHandoffRef)
+		}
+	}()
 	if l.mu.closed {
 		return nil
 	}
-
-	var replacements map[string]*lockHandoffTarget
 	if mode == immediateLocalUnlock {
 		waiting := false
 		locks.iter(func(key []byte) bool {
@@ -379,7 +385,6 @@ func (l *localLockTable) releaseLocks(
 
 	if mode == handoffLocalUnlock && len(mutations) != 0 {
 		replacements = make(map[string]*lockHandoffTarget, len(mutations))
-		defer l.finishHandoffTargets(replacements)
 		if err := l.stageHandoffTargets(txn, locks, mutations, replacements); err != nil {
 			return err
 		}
@@ -476,10 +481,11 @@ func (l *localLockTable) releaseLocks(
 }
 
 type lockHandoffTarget struct {
-	txn     *activeTxn
-	created bool
-	rows    [][]byte
-	staged  *cowSlice
+	txn      *activeTxn
+	created  bool
+	rows     [][]byte
+	staged   *cowSlice
+	adoptRef bool
 }
 
 // The caller holds table.mu and the old holder mutex. A busy replacement
@@ -520,6 +526,11 @@ func (l *localLockTable) stageHandoffTargets(
 	}
 
 	for _, target := range targets {
+		if target.txn.fenceReplacedLockTableLocked(l.bind, l, l.logger) {
+			// Nothing was transferred. Keep the source's retry ownership
+			// while the fenced replacement closes its earlier locks.
+			return moerr.NewLockNeedUpgradeNoCtx()
+		}
 		keys := append([][]byte(nil), target.rows...)
 		if group := target.txn.lockHolders[l.bind.Group]; group != nil {
 			if current := group.tableKeys[l.bind.Table]; current != nil {
@@ -550,6 +561,7 @@ func (l *localLockTable) stageHandoffTargets(
 		}
 		group.tableKeys[l.bind.Table] = target.staged
 		group.tableBinds[l.bind.Table] = l.bind
+		target.adoptRef = target.txn.lockTableBindTouched(l.bind, l)
 		group.markLocksConfirmed(l.bind.Table, target.rows)
 		target.staged = nil
 	}
@@ -585,10 +597,15 @@ func (l *localLockTable) lockHandoffTargets(source *activeTxn, targets map[strin
 	return nil
 }
 
-func (l *localLockTable) finishHandoffTargets(targets map[string]*lockHandoffTarget) {
+func (l *localLockTable) finishHandoffTargets(
+	targets map[string]*lockHandoffTarget, incRef func(uint32, uint64),
+) {
 	for _, target := range targets {
 		if target.txn == nil {
 			continue
+		}
+		if target.adoptRef && incRef != nil {
+			incRef(l.bind.Group, l.bind.Table)
 		}
 		if target.staged != nil {
 			target.staged.close()

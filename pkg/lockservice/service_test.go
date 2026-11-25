@@ -7227,3 +7227,34 @@ func TestServiceCloseSealsCancelsAndJoinsOperationAdmission(t *testing.T) {
 			require.False(t, s.beginLockTablePublication())
 		})
 }
+
+func TestSameBindingReplacementFencesPriorTransaction(t *testing.T) {
+	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		s := nodes[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1787
+		id := []byte("replacement")
+		opts := newTestRowExclusiveOptions()
+		_, err := s.Lock(ctx, table, newTestRows(1), id, opts)
+		require.NoError(t, err)
+		old := s.tableGroups.get(0, table)
+		removed, err := s.CloseRemoteLockTable(0, table, old.getBind().Version)
+		require.NoError(t, err)
+		require.True(t, removed)
+		current, err := s.getLockTableWithCreate(ctx, 0, table, newTestRows(2), opts.Sharding)
+		require.NoError(t, err)
+		require.NotSame(t, old, current)
+		require.True(t, old.getBind().Equal(current.getBind()))
+		_, err = s.Lock(ctx, table, newTestRows(2), id, opts)
+		require.ErrorIs(t, err, ErrLockTableBindChanged)
+		require.NoError(t, s.Unlock(ctx, id, timestamp.Timestamp{}))
+		_, held, err := s.GetLockHolder(ctx, table, newTestRows(2)[0], opts)
+		require.NoError(t, err)
+		require.False(t, held)
+		other := []byte("fresh")
+		_, err = s.Lock(ctx, table, newTestRows(2), other, opts)
+		require.NoError(t, err)
+		require.NoError(t, s.Unlock(ctx, other, timestamp.Timestamp{}))
+	})
+}

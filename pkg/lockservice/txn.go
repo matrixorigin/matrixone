@@ -272,6 +272,29 @@ func (h *tableLockHolder) markNewLocksUncertain(
 	}
 }
 
+// A plain remote route owns no local ledger. It can be rebuilt for the same
+// binding; local tables and shared proxies carry state tied to their instance.
+func sameLockTableForTxn(a, b lockTable) bool {
+	if a == b {
+		return true
+	}
+	left, leftRemote := a.(*remoteLockTable)
+	right, rightRemote := b.(*remoteLockTable)
+	return leftRemote && rightRemote && left.bind.Equal(right.bind)
+}
+
+// fenceReplacedLockTableLocked keeps cleanup on the instance that received
+// the transaction's existing locks, including when a bind is reused.
+func (txn *activeTxn) fenceReplacedLockTableLocked(bind pb.LockTable, table lockTable, logger *log.MOLogger) bool {
+	if h := txn.lockHolders[bind.Group]; h != nil {
+		if intent, ok := h.tableBindIntents[bind.Table]; ok && intent.table != nil && !sameLockTableForTxn(intent.table, table) {
+			txn.markBindChangedLocked(logger)
+			return true
+		}
+	}
+	return false
+}
+
 func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable, table lockTable) bool {
 	h := txn.getHoldLocksLocked(bind.Group)
 	if _, ok := h.tableBindIntents[bind.Table]; ok {
@@ -495,14 +518,14 @@ func unlockTxnTable(
 ) error {
 	if mode == localRollbackCleanup {
 		if local, ok := table.(*localLockTable); ok {
-			return local.releaseLocks(txn, rows, commitTS, immediateLocalUnlock)
+			return local.releaseLocks(txn, rows, commitTS, immediateLocalUnlock, nil)
 		}
 		return ErrLockTimeout
 	}
 	if mode == resolverCleanup {
 		switch table := table.(type) {
 		case *localLockTable:
-			return table.releaseLocks(txn, rows, commitTS, resolverLocalUnlock, mutations...)
+			return table.releaseLocks(txn, rows, commitTS, resolverLocalUnlock, nil, mutations...)
 		case *localLockTableProxy:
 			return table.releaseLocks(ctx, txn, rows, commitTS, true)
 		}
@@ -647,11 +670,15 @@ func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MO
 		return false
 	}
 
+	txn.markBindChangedLocked(logger)
+	return true
+}
+
+func (txn *activeTxn) markBindChangedLocked(logger *log.MOLogger) {
 	txn.bindChanged = true
 	for _, w := range txn.blockedWaiters {
 		w.notify(notifyValue{err: ErrLockTableBindChanged}, logger)
 	}
-	return true
 }
 
 func (txn *activeTxn) cancelBlocks(
