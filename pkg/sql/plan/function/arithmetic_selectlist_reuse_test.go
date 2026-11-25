@@ -36,15 +36,15 @@ func staleSelectList() *FunctionSelectList {
 
 func TestHasEvaluableRows(t *testing.T) {
 	t.Run("zero length", func(t *testing.T) {
-		require.False(t, hasEvaluableRows(nulls.NewWithSize(0), 0))
+		require.False(t, hasEvaluableRows(mustNullsOK(nulls.NewWithSize(0, bitmapTestMP)), 0))
 	})
 
 	t.Run("empty bitmap fast path", func(t *testing.T) {
-		require.True(t, hasEvaluableRows(nulls.NewWithSize(2), 2))
+		require.True(t, hasEvaluableRows(mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)), 2))
 	})
 
 	t.Run("all current rows null with stale tail", func(t *testing.T) {
-		rsNull := nulls.NewWithSize(3)
+		rsNull := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 		rsNull.Add(0)
 		rsNull.Add(1)
 		rsNull.Add(2)
@@ -52,13 +52,13 @@ func TestHasEvaluableRows(t *testing.T) {
 	})
 
 	t.Run("partial null", func(t *testing.T) {
-		rsNull := nulls.NewWithSize(2)
+		rsNull := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		rsNull.Add(1)
 		require.True(t, hasEvaluableRows(rsNull, 2))
 	})
 
 	t.Run("stale tail only", func(t *testing.T) {
-		rsNull := nulls.NewWithSize(3)
+		rsNull := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 		rsNull.Add(2)
 		require.True(t, hasEvaluableRows(rsNull, 2))
 	})

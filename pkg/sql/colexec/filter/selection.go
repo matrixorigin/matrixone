@@ -56,10 +56,19 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	physical := &s.physical
 	physicalRows := physical.RowCount()
 
+	// rows is allocated from the filter's pool and freed in Free. A pool
+	// change (a new execution) releases the old words first.
+	mp := filter.ctr.mp(proc)
+	if s.rows.MPool() != mp {
+		s.rows.Free()
+		s.rows.Init(mp)
+	}
 	// selected == false means every physical row is selected.
 	selected := input.HasSelection()
 	if selected {
-		s.rows.InitWith(input.Selection())
+		if err := s.rows.InitWith(input.Selection(), mp); err != nil {
+			return nil, err
+		}
 	}
 
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
@@ -102,7 +111,9 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 			return !null && v
 		}
 		if !selected {
-			s.rows.InitWithSize(int64(physicalRows))
+			if err := s.rows.InitWithSize(int64(physicalRows), mp); err != nil {
+				return nil, err
+			}
 			for row := 0; row < physicalRows; row++ {
 				if keep(uint64(row)) {
 					s.rows.Add(uint64(row))

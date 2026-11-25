@@ -80,11 +80,11 @@ func TestPreparedCompositeTemporalRangeDoesNotUseNumericPrefix(t *testing.T) {
 					values := []any{
 						ParamValue{
 							Value: test.lower, IsBinaryProtocol: true,
-							PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
+							EnableNumericPrefix: true,
 						},
 						ParamValue{
 							Value: test.upper, IsBinaryProtocol: true,
-							PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
+							EnableNumericPrefix: true,
 						},
 					}
 
@@ -137,6 +137,6 @@ func TestPreparedCompositeNumericRangeStillUsesNumericPrefix(t *testing.T) {
 	}}}
 
 	require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(prepared, []any{ParamValue{
-		Value: "12.34", PrepareParamKind: types.StringConversionDecimal, EnableNumericPrefix: true,
+		Value: "12.34", SourceType: decimalParamType("12.34"), HasSourceType: true, EnableNumericPrefix: true,
 	}}))
 }

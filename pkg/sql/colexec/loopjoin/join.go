@@ -390,7 +390,8 @@ func (ctr *container) initRightMatchedBitmap(
 		ctr.cleanRightMatchState(proc)
 		return mpool.ErrAllocationAccountInvalid
 	}
-	ctr.rightRowsMatched, err = colexec.NewRowBitmap(int64(total))
+	ctr.rightRowsMatched.Free()
+	ctr.rightRowsMatched, err = colexec.NewRowBitmap(int64(total), proc.Mp())
 	if err != nil {
 		ctr.cleanRightMatchState(proc)
 		return err

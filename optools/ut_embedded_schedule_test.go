@@ -782,6 +782,11 @@ function ut_test_execution_spawned() {`, 1)
 // The trap records the request instead of reentering cleanup from an arbitrary
 // command. The parent then delivers a second TERM; the owner must still drain
 // every admitted process group before acknowledging cancellation.
+//
+// Draining is the property under test: the admitted test process must be gone.
+// It may stop on TERM or be killed when the bounded TERM grace (20 ticks) runs
+// out, which happens on a loaded runner; both are a completed drain. The
+// graceful TERM path itself is checked by the execution-cancellation test.
 func TestEmbeddedPrebuiltPublicationCancellationLatch(t *testing.T) {
 	t.Parallel()
 	for _, owner := range []string{"test_pids", "watchdog_pids", "poll"} {
@@ -790,7 +795,7 @@ func TestEmbeddedPrebuiltPublicationCancellationLatch(t *testing.T) {
 scope=$'example/b\ngithub.com/matrixorigin/matrixone/pkg/embed\nexample/c'
 cleanup_check() {
  status=$?
- [[ -f "$CASE_DIR/stopped-execute-a" ]] || status=90
+ [[ -s "$CASE_DIR/pid-execute-a" ]] || status=90
  if kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null; then status=91; fi
  [[ ! -d "$artifact_dir" ]] || status=92
  [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93

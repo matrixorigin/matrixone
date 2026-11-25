@@ -51,7 +51,7 @@ func iterBools(n *Bitmap, mask []bool, length int) []bool {
 }
 
 func addRows(n *Bitmap, length int64, rows []int64) {
-	n.InitWithSize(length)
+	mustOK(n.InitWithSize(length, testMP))
 	for _, r := range rows {
 		n.Add(uint64(r))
 	}
@@ -77,7 +77,7 @@ func TestBitmapRowConversions(t *testing.T) {
 			addRows(&want, int64(length), rows)
 
 			var got Bitmap
-			got.InitWithRows(int64(length), append(rows, rows...)) // duplicates allowed
+			mustOK(got.InitWithRows(int64(length), append(rows, rows...), testMP)) // duplicates allowed
 			require.Equal(t, want.Count(), got.Count(), name)
 			require.Equal(t, want.Len(), got.Len(), name)
 			require.True(t, slices.Equal(iterRows(&want, nil), iterRows(&got, nil)), name)
@@ -101,8 +101,8 @@ func TestBitmapRowConversions(t *testing.T) {
 
 			// Reusing a larger bitmap's storage clears its old bits.
 			var reused Bitmap
-			reused.InitWithRows(20000, randomRows(r, 20000, 0.5))
-			reused.InitWithRows(int64(length), rows)
+			mustOK(reused.InitWithRows(20000, randomRows(r, 20000, 0.5), testMP))
+			mustOK(reused.InitWithRows(int64(length), rows, testMP))
 			require.True(t, slices.Equal(iterRows(&want, nil), AppendRows(&reused, []int64(nil))), name)
 		}
 	}
@@ -111,7 +111,7 @@ func TestBitmapRowConversions(t *testing.T) {
 // Words missing from data read as zero.
 func TestBitmapRowConversionsShortData(t *testing.T) {
 	var n Bitmap
-	n.InitWithRows(64, []int64{1, 63})
+	mustOK(n.InitWithRows(64, []int64{1, 63}, testMP))
 	n.numBits = 200 // data covers only the first word
 	require.Equal(t, []int64{1, 63}, AppendRows(&n, []int64(nil)))
 	require.True(t, slices.Equal(iterBools(&n, nil, 200), n.ExpandBools(nil, 200)))
@@ -122,7 +122,7 @@ const benchRows = 8192
 func benchBitmap(density float64) (*Bitmap, []int64) {
 	rows := randomRows(rand.New(rand.NewPCG(3, 4)), benchRows, density)
 	var n Bitmap
-	n.InitWithRows(benchRows, rows)
+	mustOK(n.InitWithRows(benchRows, rows, testMP))
 	return &n, rows
 }
 
@@ -178,7 +178,7 @@ func BenchmarkBitmapFromRows(b *testing.B) {
 		})
 		b.Run(fmt.Sprintf("density=%v/init-with-rows", density), func(b *testing.B) {
 			for b.Loop() {
-				n.InitWithRows(benchRows, rows)
+				mustOK(n.InitWithRows(benchRows, rows, testMP))
 			}
 		})
 	}

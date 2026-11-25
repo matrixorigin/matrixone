@@ -108,7 +108,9 @@ func TestCachedBatchCopiesMixedShapes(t *testing.T) {
 					if test.alias && i == len(src.Vecs)-1 {
 						require.Same(t, copied.Vecs[i-1], copied.Vecs[i])
 					} else {
-						required += int64(vec.Length()*vec.GetType().TypeSize() + cap(vec.GetArea()))
+						// Null bitmap words come from the same pool.
+						required += int64(vec.Length()*vec.GetType().TypeSize() + cap(vec.GetArea()) +
+							copied.Vecs[i].GetNulls().GetBitmap().CapWords()*8)
 					}
 				}
 				if checkMemory {

@@ -23,8 +23,44 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"golang.org/x/exp/constraints"
 )
+
+// Ownership. A Nulls owns its bitmap words through the bitmap's pool, the
+// pool of the vector it belongs to. Free returns them. A Nulls without a
+// pool is read-only: it references words it does not own (a decoded
+// buffer, or the bitmap a view was taken from), and every write panics.
+
+// Init gives an empty Nulls the pool it allocates from.
+func (nsp *Nulls) Init(mp *mpool.MPool) {
+	nsp.np.Init(mp)
+}
+
+// MPool returns the pool that owns nsp's words, or nil when read-only.
+func (nsp *Nulls) MPool() *mpool.MPool {
+	if nsp == nil {
+		return nil
+	}
+	return nsp.np.MPool()
+}
+
+// IsReadOnly reports whether nsp has no pool.
+func (nsp *Nulls) IsReadOnly() bool {
+	return nsp == nil || nsp.np.IsReadOnly()
+}
+
+// InitView makes nsp a read-only view of rows [start, end) of src: row r of
+// nsp is row start+r of src. It shares src's words and allocates nothing;
+// it is valid only while src is unchanged and alive.
+func (nsp *Nulls) InitView(src *Nulls, start, end int) {
+	var bm *bitmap.Bitmap
+	if src != nil {
+		bm = &src.np
+	}
+	nsp.np.InitView(bm, int64(start), int64(end))
+}
 
 func Ptr(nsp *Nulls) *uint64 {
 	if nsp == nil {
@@ -69,14 +105,13 @@ func (nsp *Nulls) ShowV1() ([]byte, error) {
 	return nsp.np.MarshalV1(), nil
 }
 
+// Read decodes data into nsp: a Nulls with a pool copies the words into
+// it, one without references data. Empty data leaves nsp unchanged.
 func (nsp *Nulls) Read(data []byte) error {
 	if len(data) == 0 {
-		// don't we need to reset?   Or we always, Read into a blank Nulls?
-		// nsp.np.Reset()
 		return nil
 	}
-	nsp.np.Unmarshal(data)
-	return nil
+	return nsp.np.Unmarshal(data)
 }
 
 func (nsp *Nulls) ReadNoCopy(data []byte) error {
