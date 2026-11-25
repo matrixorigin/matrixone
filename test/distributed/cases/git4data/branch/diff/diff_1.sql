@@ -153,16 +153,29 @@ data branch diff rename_child against rename_parent;
 
 -- Probe both branch directions after an explicit charset declaration on the inherited key.
 create table charset_pk_parent(k varchar(10) primary key, v int);
-insert into charset_pk_parent values ('a',1),('b',2);
+insert into charset_pk_parent values ('a',1),('b',2),('c',3);
 data branch create table charset_pk_child from charset_pk_parent;
 alter table charset_pk_child modify k varchar(10) character set utf8mb4 collate utf8mb4_bin not null, algorithm=inplace;
-update charset_pk_child set v = v + 10;
+update charset_pk_parent set v = 30 where k = 'c';
+data branch diff charset_pk_child against charset_pk_parent output count;
+update charset_pk_child set v = v + 10 where k in ('a','b');
 data branch diff charset_pk_child against charset_pk_parent output count;
 data branch diff charset_pk_parent against charset_pk_child output count;
 data branch pick charset_pk_child into charset_pk_parent keys('a');
 select k, v from charset_pk_parent order by k;
 data branch merge charset_pk_child into charset_pk_parent when conflict accept;
 select k, v from charset_pk_parent order by k;
+
+-- Changes written before and after COPY ALTER share one branch history.
+create table charset_history_parent(id int primary key, payload varchar(10));
+insert into charset_history_parent values (0, 'root');
+data branch create table charset_history_child from charset_history_parent;
+insert into charset_history_child values (1, 'before');
+alter table charset_history_child modify payload varchar(10) character set utf8mb4 collate utf8mb4_bin, algorithm=copy;
+insert into charset_history_child values (2, 'after');
+data branch diff charset_history_child against charset_history_parent output count;
+data branch merge charset_history_child into charset_history_parent when conflict accept;
+select id, payload from charset_history_parent order by id;
 
 -- A text output declaration does not change either generated expression.
 create table charset_generated_plain(id int primary key, payload varchar(20));

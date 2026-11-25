@@ -479,8 +479,8 @@ func (bh *branchHashmap) GetByEncodedKey(encodedKey []byte) (GetResult, error) {
 	return result, nil
 }
 
-// Hash keys encode text bytes independently of the SQL charset declaration.
-func sameProbeKeyType(left, right types.Type) bool {
+// Hash keys and values encode text bytes independently of the SQL charset declaration.
+func sameStorageType(left, right types.Type) bool {
 	left.Scale = types.TextStorageScale(left.Oid, left.Scale)
 	right.Scale = types.TextStorageScale(right.Oid, right.Scale)
 	return left == right
@@ -518,7 +518,7 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 	}
 	for i, vec := range keyVecs {
-		if !sameProbeKeyType(*vec.GetType(), keyTypes[i]) {
+		if !sameStorageType(*vec.GetType(), keyTypes[i]) {
 			return 0, moerr.NewInvalidInputNoCtxf("key vector type mismatch at column %d", i)
 		}
 	}
@@ -631,7 +631,7 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bo
 		}
 	}
 	for i, vec := range keyVecs {
-		if !sameProbeKeyType(*vec.GetType(), keyTypes[i]) {
+		if !sameStorageType(*vec.GetType(), keyTypes[i]) {
 			return nil, moerr.NewInvalidInputNoCtxf("key vector type mismatch at column %d", i)
 		}
 	}
@@ -1603,7 +1603,7 @@ func (bh *branchHashmap) validatePutTypesLocked(vecs []*vector.Vector, keyCols [
 		return moerr.NewInvalidInputNoCtx("vector count changed between PutByVectors calls")
 	}
 	for i, vec := range vecs {
-		if *vec.GetType() != bh.valueTypes[i] {
+		if !sameStorageType(*vec.GetType(), bh.valueTypes[i]) {
 			return moerr.NewInvalidInputNoCtxf("vector type mismatch at column %d", i)
 		}
 	}
@@ -1614,7 +1614,7 @@ func (bh *branchHashmap) validatePutTypesLocked(vecs []*vector.Vector, keyCols [
 		if idx < 0 || idx >= len(vecs) {
 			return moerr.NewInvalidInputNoCtxf("key column index %d out of range", idx)
 		}
-		if *vecs[idx].GetType() != bh.keyTypes[i] {
+		if !sameStorageType(*vecs[idx].GetType(), bh.keyTypes[i]) {
 			return moerr.NewInvalidInputNoCtxf("key column type mismatch at index %d", i)
 		}
 		if bh.keyCols[i] != idx {
