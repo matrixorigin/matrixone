@@ -48,7 +48,6 @@ func newForeignTVFBatch(param *ExternalParam, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(len(param.Cols))
 	for i, col := range param.Cols {
 		bat.Vecs[i] = vector.NewVec(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale), mp)
-		bat.Attrs = append(bat.Attrs, col.Name)
 	}
 	return bat
 }

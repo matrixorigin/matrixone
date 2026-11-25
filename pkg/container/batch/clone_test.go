@@ -43,7 +43,7 @@ func TestBatchCopiesAreDeepAndOwnedByTheirPool(t *testing.T) {
 	require.NoError(t, err)
 	dup, err := source.Dup(dst)
 	require.NoError(t, err)
-	selected, err := source.CloneSelectedColumns([]int{1}, nil, dst)
+	selected, err := source.CloneSelectedColumns([]int{1}, dst)
 	require.NoError(t, err)
 	require.Equal(t, sourceBytes, src.CurrNB(), "copies allocate from the destination pool")
 	for i, copied := range []*Batch{cloned, dup} {

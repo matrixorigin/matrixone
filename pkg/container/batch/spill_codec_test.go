@@ -87,9 +87,9 @@ func TestSpillCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.T) {
 			if test.extra != nil {
 				require.NoError(t, source.SetExtraBuf(mp, test.extra))
 			}
-			source.Attrs = test.attrs
 			var payload bytes.Buffer
-			require.NoError(t, source.MarshalBinaryTo(&payload))
+			_, err := source.MarshalBinaryWithBufferAndNames(&payload, false, test.attrs)
+			require.NoError(t, err)
 			source.Clean(mp)
 			var encoded bytes.Buffer
 			payloadSize := int64(payload.Len())

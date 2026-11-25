@@ -293,7 +293,6 @@ func (top *Top) Call(
 			}
 			top.ctr.buildBat.Recursive = bat.Recursive
 			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
-			top.ctr.buildBat.Attrs = bat.Attrs
 			if len(bat.ExtraBuf()) > 0 {
 				return result, moerr.NewInternalError(proc.Ctx, "top build should not have extra buffers")
 			}

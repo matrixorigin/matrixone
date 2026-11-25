@@ -54,7 +54,6 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 			bat = nil
 		}
 	}()
-	bat.Attrs = request.Headings
 	bat.SetRowCount(int(result.Rows))
 	// The vectors borrow the native result window. The window belongs to the
 	// query callback and stays valid until it returns, and the callback

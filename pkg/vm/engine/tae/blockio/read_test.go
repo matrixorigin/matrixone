@@ -787,7 +787,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
 			freeTestBatchWithOwnPools(output)
-			output = batch.NewWithSchema(nil, colTypes, allocation)
+			output = batch.NewWithTypes(colTypes, allocation)
 			original := append([]*vector.Vector(nil), output.Vecs...)
 			predicates := []int{1}
 			if tc.keyPredicate {
@@ -808,7 +808,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 				require.Zero(t, account.Snapshot().Used)
 				_, _, err := registry.CompleteTerminal(account)
 				require.NoError(t, err)
-				output = batch.NewWithSchema(nil, colTypes, allocation)
+				output = batch.NewWithTypes(colTypes, allocation)
 			})
 			failure := moerr.NewInvalidInputNoCtx("ordered membership callback error")
 			memberCalls, predicateCalls := 0, 0
@@ -2669,7 +2669,7 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 			require.NoError(t, err)
 			allocation, err := queryMP.WithAccount(account, mpool.AllocationOwnerSelection, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(t, err)
-			output := batch.NewWithSchema(nil, colTypes, allocation)
+			output := batch.NewWithTypes(colTypes, allocation)
 			cacheVectors := containers.NewVectors(len(colTypes) + 2)
 			request := &engine.ReaderFilterRequest{
 				OutputAllocation: allocation,

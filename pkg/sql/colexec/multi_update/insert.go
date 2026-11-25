@@ -57,7 +57,6 @@ func (update *MultiUpdate) insert_main_table(
 			bat.Vecs[len(attrs)] = vector.NewVec(plan.MakeTypeByPlan2Type(col.Typ), proc.Mp())
 			attrs = append(attrs, col.GetOriginCaseName())
 		}
-		bat.SetAttributes(attrs)
 		ctr.insertBuf[tableIndex] = bat
 	}
 
@@ -106,7 +105,6 @@ func (update *MultiUpdate) insert_unique_index_table(
 	// init buffer
 	if ctr.insertBuf[tableIndex] == nil {
 		ctr.insertBuf[tableIndex] = batch.NewWithSize(2)
-		ctr.insertBuf[tableIndex].Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
 			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType(), proc.Mp())
 		}
@@ -177,7 +175,7 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-		return source.Write(newCtx, insertBatch)
+		return source.Write(newCtx, insertBatch, lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).writeAttrs)
 	}); err != nil {
 		return err
 	}
@@ -202,7 +200,7 @@ func (update *MultiUpdate) insert_secondary_index_table(
 			}
 		}
 
-		ctr.insertBuf[tableIndex] = batch.New(attrs)
+		ctr.insertBuf[tableIndex] = batch.NewWithSize(len(attrs))
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
 			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType(), proc.Mp())
 		}
@@ -234,7 +232,6 @@ func (update *MultiUpdate) insert_table(
 	if info.isContiguous {
 		if info.refBatch == nil {
 			info.refBatch = batch.NewWithSize(len(updateCtx.InsertCols))
-			info.refBatch.SetAttributes(insertBatch.Attrs)
 		}
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
 			info.refBatch.Vecs[insertIdx] = inputBatch.Vecs[inputIdx]
@@ -268,7 +265,7 @@ func (update *MultiUpdate) insert_table(
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 	newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 	err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-		return info.Source.Write(newCtx, writeBatch)
+		return info.Source.Write(newCtx, writeBatch, info.writeAttrs)
 	})
 	if err != nil {
 		return err
@@ -385,7 +382,7 @@ func (update *MultiUpdate) check_null_and_insert_table(
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return source.Write(newCtx, insertBatch)
+			return source.Write(newCtx, insertBatch, lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).writeAttrs)
 		})
 		if err != nil {
 			return err

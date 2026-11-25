@@ -61,7 +61,7 @@ func TestDivisionWarningRuntimeFolding(t *testing.T) {
 				executor, err := NewExpressionExecutor(proc, expr)
 				require.NoError(t, err)
 				defer executor.Free()
-				input := batch.New(nil)
+				input := batch.NewWithSize(0)
 				for _, mode := range []string{"", "ERROR_FOR_DIVISION_BY_ZERO", ""} {
 					executor.ResetForNextQuery()
 					proc.GetSessionInfo().SqlMode = mode
@@ -131,7 +131,7 @@ func TestDivisionWarningRuntimeFoldingControls(t *testing.T) {
 			executor, err := NewExpressionExecutor(proc, expr)
 			require.NoError(t, err)
 			defer executor.Free()
-			input := batch.New(nil)
+			input := batch.NewWithSize(0)
 			input.SetRowCount(3)
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			if tc.dml {

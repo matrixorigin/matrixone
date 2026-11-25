@@ -90,10 +90,14 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// If the target table is a general table
 	for i := 0; i < resBat.RowCount(); i++ {
 		name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-		if err := bat.UnmarshalBinaryWithAnyMp(deltaLocs[i].GetByteSlice(area1), proc.Mp()); err != nil {
+		blob := deltaLocs[i].GetByteSlice(area1)
+		if err := bat.UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 			return input, err
 		}
-		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
+		// A row delete or tombstone object stats batch; its layout tells
+		// Delete which. Names written on the wire are never read.
+		attrs := colexec.RelayedDeleteAttrs(bat)
+		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, attrs, name)
 		if err != nil {
 			return input, err
 		}

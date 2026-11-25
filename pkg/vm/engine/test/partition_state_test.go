@@ -213,10 +213,11 @@ func Test_Bug_CheckpointInsertObjectOverwrittenMergeDeletedObject(t *testing.T) 
 				dbBatch := catalog.MockBatch(schema, rowsCnt)
 				defer dbBatch.Close()
 				bat := containers.ToCNBatch(dbBatch)
+				batAttrs := dbBatch.Attrs
 				txnOp := p.StartCNTxn()
 				_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
 				tH := handles[0]
-				require.Nil(t, tH.Write(p.Ctx, bat))
+				require.Nil(t, tH.Write(p.Ctx, bat, batAttrs))
 				require.Nil(t, txnOp.Commit(p.Ctx))
 			}
 			var err error
@@ -325,10 +326,11 @@ func Test_Bug_MissCleanDirtyBlockFlag(t *testing.T) {
 		dbBatch := catalog.MockBatch(schema, rowsCnt)
 		defer dbBatch.Close()
 		bat := containers.ToCNBatch(dbBatch)
+		batAttrs := dbBatch.Attrs
 		txnOp := p.StartCNTxn()
 		_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
 		tH := handles[0]
-		require.Nil(t, tH.Write(p.Ctx, bat))
+		require.Nil(t, tH.Write(p.Ctx, bat, batAttrs))
 		require.Nil(t, txnOp.Commit(p.Ctx))
 	}
 	var err error
@@ -445,10 +447,11 @@ func Test_EmptyObjectStats(t *testing.T) {
 		dbBatch := catalog.MockBatch(schema, rowsCnt)
 		defer dbBatch.Close()
 		bat := containers.ToCNBatch(dbBatch)
+		batAttrs := dbBatch.Attrs
 		txnOp := p.StartCNTxn()
 		_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
 		tH := handles[0]
-		require.Nil(t, tH.Write(p.Ctx, bat))
+		require.Nil(t, tH.Write(p.Ctx, bat, batAttrs))
 		require.Nil(t, txnOp.Commit(p.Ctx))
 	}
 
@@ -529,7 +532,7 @@ func Test_SubscribeUnsubscribeConsistency(t *testing.T) {
 		txnOp := p.StartCNTxn()
 		_, handles := p.CreateDBAndTables(txnOp, databaseName, schema)
 		tH := handles[0]
-		require.Nil(t, tH.Write(p.Ctx, containers.ToCNBatch(bats[0])))
+		require.Nil(t, tH.Write(p.Ctx, containers.ToCNBatch(bats[0]), bats[0].Attrs))
 		require.Nil(t, txnOp.Commit(p.Ctx))
 		testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
 	}

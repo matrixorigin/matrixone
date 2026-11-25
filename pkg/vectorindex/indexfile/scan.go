@@ -178,7 +178,6 @@ func forEachChunk(bat *batch.Batch, ref *Ref, fn func(chunkID int64, data []byte
 
 func newScanBatch(tableDef *plan.TableDef, mp *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(scanColumns))
-	bat.Attrs = append(bat.Attrs, scanColumns...)
 	for i, name := range scanColumns {
 		pos, ok := tableDef.Name2ColIndex[name]
 		if !ok || int(pos) >= len(tableDef.Cols) {

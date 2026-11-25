@@ -97,7 +97,8 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			info.SetMetaLocation(location)
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, location))
-			bat := batch.New([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
+			bat := batch.NewWithSize(2)
+			batAttrs := []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			bat.SetVector(1, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], objectio.EncodeBlockInfo(&info), false, txn.proc.Mp()))
@@ -109,7 +110,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			if tc.authorized {
 				ctx = context.WithValue(ctx, defines.MoColumnsUpdateKey{}, true)
 			}
-			require.NoError(t, tbl.Write(ctx, bat))
+			require.NoError(t, tbl.Write(ctx, bat, batAttrs))
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, tc.want, txn.writes[0].tableName)
 			summary, ok := txn.cnObjsSummary[tc.tableID][*stats.ObjectName().ObjectId()]
@@ -118,7 +119,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			require.Equal(t, tc.tableID, summary.tableId)
 			require.Equal(t, tc.want, summary.tbName)
 			if tc.want == catalog.MO_COLUMNS_UPDATE {
-				protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat)
+				protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat, batAttrs)
 				require.NoError(t, err)
 				req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 					EntryType: api.Entry_Insert, DatabaseId: catalog.MO_CATALOG_ID,
@@ -148,7 +149,8 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 
 			stats := objectio.NewObjectStats()
 			require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(1, 1)))
-			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+			bat := batch.NewWithSize(1)
+			batAttrs := []string{catalog.ObjectMeta_ObjectStats}
 			bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, txn.proc.Mp()))
 			bat.SetRowCount(1)
@@ -158,12 +160,12 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 			if skipTransfer {
 				ctx = context.WithValue(ctx, defines.SkipTransferKey{}, true)
 			}
-			require.NoError(t, tbl.Delete(ctx, bat, ""))
+			require.NoError(t, tbl.Delete(ctx, bat, batAttrs, ""))
 			require.Len(t, txn.writes, 1)
 			require.Equal(t, catalog.MO_COLUMNS_UPDATE, txn.writes[0].tableName)
 			require.Equal(t, skipTransfer, txn.writes[0].skipTransfer)
 
-			protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat)
+			protoBat, err := batch.BatchToProtoBatch(txn.writes[0].bat, batAttrs)
 			require.NoError(t, err)
 			req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 				EntryType:  api.Entry_Delete,
@@ -257,7 +259,7 @@ func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,
 ) *batch.Batch {
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, n := range ints {
 		vector.AppendFixed(vec, n, false, mp)
@@ -306,7 +308,7 @@ func insertCatalogTableForResetTest(
 	}, txn.proc.Mp(), packer)
 	require.NoError(t, err)
 	defer bat.Clean(txn.proc.Mp())
-	_, err = fillRandomRowidAndZeroTs(bat, txn.proc.Mp())
+	_, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, txn.proc.Mp())
 	require.NoError(t, err)
 	eng.GetLatestCatalogCache().InsertTable(bat)
 }
@@ -935,6 +937,7 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 		err := table.Write(
 			ctx,
 			makeBatchForTest(mp, i),
+			[]string{"a"},
 		)
 		assert.Nil(b, err)
 	}
@@ -948,7 +951,7 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 	other := batch.NewWithSize(0)
 	other.SetRowCount(500)
 	meta := batch.NewWithSize(1)
-	meta.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	metaAttrs := []string{catalog.ObjectMeta_ObjectStats}
 	meta.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), txn.proc.Mp())
 	t.Cleanup(func() { meta.Clean(txn.proc.Mp()) })
 	for _, rows := range []uint32{8192, 1844} {
@@ -961,7 +964,7 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 		{typ: INSERT, databaseId: 7, tableId: 42, bat: mem},
 		{typ: INSERT, databaseId: 7, tableId: 43, bat: other},
 		{typ: DELETE, databaseId: 7, tableId: 42, bat: mem},
-		{typ: INSERT, databaseId: 7, tableId: 42, bat: meta, fileName: "object"},
+		{typ: INSERT, databaseId: 7, tableId: 42, bat: meta, attrs: metaAttrs, fileName: "object"},
 	}
 	txn.snapshotWriteOffset.Store(0)
 	require.Equal(t, float64(10041), tbl.workspaceInsertRowEstimate(),
@@ -979,9 +982,9 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 	txn.Unlock()
 	require.Zero(t, got, "read-only fast path neither locks nor scans")
 	txn.readOnly.Store(false)
-	meta.Attrs[0] = "wrong_attribute"
+	txn.writes[3].attrs = []string{"wrong_attribute"}
 	require.Equal(t, float64(^uint64(0)), tbl.workspaceInsertRowEstimate(), "missing object metadata cannot leave a partial low bound")
-	meta.Attrs[0] = catalog.ObjectMeta_ObjectStats
+	txn.writes[3].attrs = metaAttrs
 	meta.SetRowCount(3)
 	require.Equal(t, float64(^uint64(0)), tbl.workspaceInsertRowEstimate(), "incomplete metadata cannot leave a partial low bound")
 }
@@ -1048,11 +1051,11 @@ func TestPartitionRowEstimate(t *testing.T) {
 	require.Zero(t, rows)
 	mp := mpool.MustNew("transient-stat-test")
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"v"}
+	batAttrs := []string{"v"}
 	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, mp)
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
-	insert, err := fillRandomRowidAndZeroTs(bat, mp)
+	insert, err := fillRandomRowidAndZeroTs(bat, batAttrs, mp)
 	require.NoError(t, err)
 	packer := types.NewPacker()
 	defer packer.Close()

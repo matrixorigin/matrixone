@@ -644,9 +644,6 @@ func BlockDataReadBackup(
 				loaded.Vecs[i] = nil
 			}
 			loaded.Vecs = loaded.Vecs[:requestedColumnCount]
-			if len(loaded.Attrs) > requestedColumnCount {
-				loaded.Attrs = loaded.Attrs[:requestedColumnCount]
-			}
 		}
 	}()
 	tombstones, err := ds.GetTombstones(ctx, &info.BlockID)

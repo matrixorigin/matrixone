@@ -4224,7 +4224,7 @@ func parseExplainBool(value string) (bool, bool) {
 }
 
 func buildMoExplainQuery(execCtx *ExecCtx, explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill outputCallBackFunc) error {
-	bat := batch.New([]string{explainColName})
+	bat := batch.NewWithSize(1)
 	rs := buffer.Lines
 	vs := make([][]byte, len(rs))
 
@@ -4258,7 +4258,7 @@ func buildMoExplainPhyPlan(
 	fill outputCallBackFunc,
 	trace schedule.Trace,
 ) error {
-	bat := batch.New([]string{explainColName})
+	bat := batch.NewWithSize(1)
 	vs := make([][]byte, 0)
 	count := 0
 	for {

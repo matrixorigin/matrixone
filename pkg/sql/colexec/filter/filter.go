@@ -208,7 +208,6 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 	} else {
 		if ctr.buf == nil {
 			ctr.buf = batch.NewWithSize(len(bat.Vecs))
-			ctr.buf.SetAttributes(bat.Attrs)
 			ctr.buf.Recursive = bat.Recursive
 			for j, vec := range bat.Vecs {
 				typ := *bat.GetVector(int32(j)).GetType()

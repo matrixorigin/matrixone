@@ -160,7 +160,7 @@ func TestDecimal256ConstantFoldBoundaries(t *testing.T) {
 						require.NoError(t, decoded.Unmarshal(encoded))
 						got = decoded
 					}
-					input := batch.New(nil)
+					input := batch.NewWithSize(0)
 					defer input.Clean(proc.Mp())
 					input.SetRowCount(3)
 					result, free, err := colexec.GetReadonlyResultFromExpression(proc, got, []*batch.Batch{input})
