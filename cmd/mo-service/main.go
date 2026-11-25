@@ -26,7 +26,6 @@ import (
 	goruntime "runtime"
 	"sync"
 	"syscall"
-	"time"
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
@@ -124,11 +123,10 @@ func main() {
 	}
 
 	ctx := context.Background()
-	shutdownC := make(chan struct{})
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
 	if *launchFile != "" {
-		if err := startCluster(ctx, stopper, shutdownC); err != nil {
+		if err := startCluster(ctx, stopper); err != nil {
 			panic(err)
 		}
 	} else if *configFile != "" {
@@ -136,48 +134,41 @@ func main() {
 		if err := parseConfigFromFile(*configFile, cfg); err != nil {
 			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := startService(ctx, cfg, stopper); err != nil {
 			panic(err)
 		}
 	} else {
 		panic(errors.New("no configuration specified"))
 	}
 
-	waitSignalToStop(stopper, shutdownC)
+	waitSignalToStop(stopper)
 	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
 
-func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) {
+func waitSignalToStop(stopper *stopper.Stopper) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 
 	go saveProfilesLoop(sigchan)
 
 	detail := "Starting shutdown..."
-	select {
-	case sig := <-sigchan:
-		detail += "signal: " + sig.String()
-		//dump heap profile before stopping services
-		heapProfilePath := saveProfile(profile.HEAP)
-		detail += ". heap profile: " + heapProfilePath
-		//dump goroutine before stopping services
-		routineProfilePath := saveProfile(profile.GOROUTINE)
-		detail += " routine profile: " + routineProfilePath
-		//dump block profile before stopping services if enabled
-		if *blockProfileRate > 0 {
-			blockProfilePath := saveProfile(profile.BLOCK)
-			detail += " block profile: " + blockProfilePath
-		}
-		//dump mutex profile before stopping services if enabled
-		if *mutexProfileFraction > 0 {
-			mutexProfilePath := saveProfile(profile.MUTEX)
-			detail += " mutex profile: " + mutexProfilePath
-		}
-	case <-shutdownC:
-		// waiting, give a chance let all log stores and tn stores to get
-		// shutdown cmd from ha keeper
-		time.Sleep(time.Second * 5)
-		detail += "ha keeper issues shutdown command"
+	sig := <-sigchan
+	detail += "signal: " + sig.String()
+	//dump heap profile before stopping services
+	heapProfilePath := saveProfile(profile.HEAP)
+	detail += ". heap profile: " + heapProfilePath
+	//dump goroutine before stopping services
+	routineProfilePath := saveProfile(profile.GOROUTINE)
+	detail += " routine profile: " + routineProfilePath
+	//dump block profile before stopping services if enabled
+	if *blockProfileRate > 0 {
+		blockProfilePath := saveProfile(profile.BLOCK)
+		detail += " block profile: " + blockProfilePath
+	}
+	//dump mutex profile before stopping services if enabled
+	if *mutexProfileFraction > 0 {
+		mutexProfilePath := saveProfile(profile.MUTEX)
+		detail += " mutex profile: " + mutexProfilePath
 	}
 
 	stopAllDynamicCNServices()
@@ -195,7 +186,6 @@ func startService(
 	ctx context.Context,
 	cfg *Config,
 	stopper *stopper.Stopper,
-	shutdownC chan struct{},
 ) error {
 	if err := cfg.validate(); err != nil {
 		return err
@@ -263,9 +253,9 @@ func startService(
 	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs, gossipNode)
 	case metadata.ServiceType_TN:
-		return startTNService(cfg, stopper, fs, shutdownC)
+		return startTNService(cfg, stopper, fs)
 	case metadata.ServiceType_LOG:
-		return startLogService(cfg, stopper, fs, shutdownC)
+		return startLogService(cfg, stopper, fs)
 	case metadata.ServiceType_PROXY:
 		return startProxyService(cfg, stopper)
 	case metadata.ServiceType_PYTHON_UDF:
@@ -330,7 +320,6 @@ func startTNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	shutdownC chan struct{},
 ) error {
 	if err := waitClusterCondition(cfg.mustGetServiceUUID(), cfg.HAKeeperClient, waitHAKeeperRunning); err != nil {
 		return err
@@ -347,7 +336,6 @@ func startTNService(
 			&c,
 			mustGetRuntime(cfg),
 			fileService,
-			shutdownC,
 			tnservice.WithConfigData(commonConfigKVMap))
 		if err != nil {
 			panic(err)
@@ -367,7 +355,6 @@ func startLogService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
-	shutdownC chan struct{},
 ) error {
 	lscfg := cfg.getLogServiceConfig()
 	commonConfigKVMap, _ := dumpCommonConfig(*cfg)
@@ -392,7 +379,7 @@ func startLogService(
 	s, err := logservice.NewService(
 		lscfg,
 		fileService,
-		shutdownC,
+		nil,
 		options...,
 	)
 	if err != nil {

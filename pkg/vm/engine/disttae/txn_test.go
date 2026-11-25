@@ -174,6 +174,52 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 	})
 }
 
+func TestGenWriteReqsRequiresReportedTNShardForWrites(t *testing.T) {
+	t.Run("DML", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		defer cleanTxnWritesForTest(txn)
+		txn.haveDDL.Store(false)
+		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1})
+		_, err := txn.WriteBatch(INSERT, "", 1, 7, 42, "db", "tbl", bat, catalogCreateTNStoreForTest())
+		require.NoError(t, err)
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Len(t, reqs, 1)
+		require.Len(t, decodePrecommitWriteCmdForTest(t, reqs[0]).EntryList, 1)
+
+		txn.writes[0].tnStore.Shards = nil
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.Nil(t, reqs)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+		require.ErrorContains(t, err, "TN tn-test has no reported shard")
+
+		txn.writes[0].bat.SetRowCount(0)
+		reqs, err = genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
+	})
+
+	t.Run("DDL", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		defer cleanTxnWritesForTest(txn)
+		addActiveDatabaseCreateForTest(txn, 7, "db", 42, 1)
+		appendCreateDatabaseTupleForTest(t, txn, 7, "db", 42, 7, "db", false)
+		txn.writes[0].tnStore.Shards = nil
+
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.Nil(t, reqs)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), "%v", err)
+	})
+
+	t.Run("no writes", func(t *testing.T) {
+		txn := newCatalogCreateTxnForTest(t)
+		reqs, err := genWriteReqs(context.Background(), txn)
+		require.NoError(t, err)
+		require.Empty(t, reqs)
+	})
+}
+
 func newCatalogCreateTxnForTest(t *testing.T) *Transaction {
 	t.Helper()
 	proc := testutil.NewProc(t)

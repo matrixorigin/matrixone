@@ -202,8 +202,10 @@ func (l Lock) closeTxn(
 	notify notifyValue) (lockCanRemoved bool) {
 	l.holders.remove(txn.txnID)
 
-	// has another holders
+	// A remaining shared holder will notify waiters later. Preserve this
+	// transaction's commit timestamp even if nobody is waiting yet.
 	if l.holders.size() > 0 {
+		l.waiters.resetCommittedAt(notify.ts)
 		return false
 	}
 
