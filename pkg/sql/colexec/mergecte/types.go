@@ -15,6 +15,7 @@
 package mergecte
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -56,7 +57,7 @@ type container struct {
 	// to the CTE frontier. It spans all sender Last markers in that round.
 	hasRecursiveRows bool
 	hashTable        *hashmap.StrHashMap
-	insertedRows     []int64
+	insertedRows     bitmap.Bitmap
 	memory           cteaccount.Accountant
 }
 
@@ -169,12 +170,9 @@ func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err e
 func (ctr *container) cleanHashTable(mp *mpool.MPool) {
 	hashmap.IteratorClearOwner(ctr.iterator)
 	ctr.iterator = nil
-	if cap(ctr.insertedRows) > 0 {
-		mpool.FreeSlice(mp, ctr.insertedRows)
-	}
+	ctr.insertedRows.Free()
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil
 	}
-	ctr.insertedRows = nil
 }

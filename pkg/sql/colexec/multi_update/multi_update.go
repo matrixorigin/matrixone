@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -552,7 +553,11 @@ func filterTargetRows(
 			return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid UPDATE changed-row column")
 		}
 	}
-	selections := make([]int64, 0, input.RowCount())
+	var keep bitmap.Bitmap
+	if err := keep.InitWithSize(int64(input.RowCount()), proc.Mp()); err != nil {
+		return nil, false, 0, err
+	}
+	defer keep.Free()
 	var matchedSemanticAffectedRows uint64
 	for i := 0; i < input.RowCount(); i++ {
 		if rowIDNulls.Contains(uint64(i)) ||
@@ -582,7 +587,7 @@ func filterTargetRows(
 		if !physicalActive {
 			continue
 		}
-		selections = append(selections, int64(i))
+		keep.Add(uint64(i))
 		matchedSemanticAffectedRows += uint64(activeCount)
 	}
 
@@ -594,11 +599,11 @@ func filterTargetRows(
 	if err != nil {
 		return nil, false, 0, err
 	}
-	if err := filtered.Shrink(selections, false, proc.Mp()); err != nil {
+	if err := filtered.ShrinkByMask(&keep, false, 0, proc.Mp()); err != nil {
 		filtered.Clean(proc.Mp())
 		return nil, false, 0, err
 	}
-	filtered.SetRowCount(len(selections))
+	filtered.SetRowCount(keep.Count())
 	if seen == nil || filtered.RowCount() == 0 {
 		semanticAffectedRows := matchedSemanticAffectedRows
 		if updateCtx.ChangedRowsCol != nil {
@@ -608,7 +613,11 @@ func filterTargetRows(
 			updateCtx, semanticAffectedRows, insertAffectedRows(updateCtx, filtered)), nil
 	}
 
-	physicalSelections := make([]int64, 0, filtered.RowCount())
+	// keep now selects the first row of each target row id among filtered's rows.
+	if err := keep.InitWithSize(int64(filtered.RowCount()), proc.Mp()); err != nil {
+		filtered.Clean(proc.Mp())
+		return nil, false, 0, err
+	}
 	iterator := seen.NewIterator()
 	for offset := 0; offset < filtered.RowCount(); offset += hashmap.UnitLimit {
 		count := min(hashmap.UnitLimit, filtered.RowCount()-offset)
@@ -626,15 +635,15 @@ func filterTargetRows(
 		for i, value := range values {
 			if zValues[i] != 0 && value > nextGroup {
 				nextGroup++
-				physicalSelections = append(physicalSelections, int64(offset+i))
+				keep.Add(uint64(offset + i))
 			}
 		}
 	}
-	if err := filtered.Shrink(physicalSelections, false, proc.Mp()); err != nil {
+	if err := filtered.ShrinkByMask(&keep, false, 0, proc.Mp()); err != nil {
 		filtered.Clean(proc.Mp())
 		return nil, false, 0, err
 	}
-	filtered.SetRowCount(len(physicalSelections))
+	filtered.SetRowCount(keep.Count())
 	semanticAffectedRows := matchedSemanticAffectedRows
 	if updateCtx.ChangedRowsCol != nil {
 		semanticAffectedRows = countSemanticAffectedRows(updateCtx, filtered, activeCols)
@@ -684,21 +693,20 @@ func filterODKUPhysicalRows(
 	if allChanged {
 		return input, false, affectedRows, nil
 	}
-	selections := make([]int64, 0, input.RowCount())
-	for row := 0; row < input.RowCount(); row++ {
-		if changed[row] {
-			selections = append(selections, int64(row))
-		}
+	var keep bitmap.Bitmap
+	if err := keep.InitWithBools(changed[:input.RowCount()], nil, proc.Mp()); err != nil {
+		return nil, false, 0, err
 	}
+	defer keep.Free()
 	filtered, err := input.Clone(proc.Mp())
 	if err != nil {
 		return nil, false, 0, err
 	}
-	if err := filtered.Shrink(selections, false, proc.Mp()); err != nil {
+	if err := filtered.ShrinkByMask(&keep, false, 0, proc.Mp()); err != nil {
 		filtered.Clean(proc.Mp())
 		return nil, false, 0, err
 	}
-	filtered.SetRowCount(len(selections))
+	filtered.SetRowCount(keep.Count())
 	return filtered, true, affectedRows, nil
 }
 

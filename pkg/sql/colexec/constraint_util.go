@@ -20,6 +20,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -32,9 +33,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
+// FilterRowIdForDel appends to retBat the row id and primary key of every row
+// of srcBat with a non-NULL row id not seen before in this batch. keep is the
+// caller's bitmap, reused across batches and freed by the caller.
 func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch.Batch,
-	idx int, primaryKeyIdx int) error {
-	var sels []int64
+	idx int, primaryKeyIdx int, keep *bitmap.Bitmap) error {
+	if err := keep.InitWithSize(int64(srcBat.RowCount()), proc.Mp()); err != nil {
+		return err
+	}
 	rowidVec := retBat.Vecs[0]
 	primaryVec := retBat.Vecs[1]
 	rowIdMap := make(map[types.Rowid]bool)
@@ -45,18 +51,18 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 				continue
 			}
 			rowIdMap[r] = true
-			sels = append(sels, int64(i))
+			keep.Add(uint64(i))
 		}
 	}
-	err := rowidVec.Union(srcBat.Vecs[idx], sels, proc.Mp())
+	err := rowidVec.UnionByMask(srcBat.Vecs[idx], keep, proc.Mp())
 	if err != nil {
 		return err
 	}
-	err = primaryVec.Union(srcBat.Vecs[primaryKeyIdx], sels, proc.Mp())
+	err = primaryVec.UnionByMask(srcBat.Vecs[primaryKeyIdx], keep, proc.Mp())
 	if err != nil {
 		return err
 	}
-	retBat.SetRowCount(len(sels))
+	retBat.SetRowCount(keep.Count())
 	return nil
 }
 
@@ -100,6 +106,9 @@ type IgnoreFill struct {
 	vecs     []*vector.Vector
 	dropVecs []*vector.Vector
 	view     *batch.Batch
+	// keep holds the rows DropNullPkRows keeps, allocated from mp and reused
+	// for every batch.
+	keep bitmap.Bitmap
 }
 
 // View returns the IgnoreFill's reusable batch referencing bat's vectors, for
@@ -143,18 +152,34 @@ func (f *IgnoreFill) DropNullPkRows(
 	warnings.SetWarningRetentionForProcess(proc)
 	defer warnings.Reset()
 
+	// The kept rows are the complement of the PK's NULL rows; only the NULL
+	// rows are visited, each with its warning.
 	rowCount := int(bat.RowCount())
-	keep := make([]int64, 0, rowCount)
-	for row := 0; row < rowCount; row++ {
-		if pkVec.IsNull(uint64(row)) {
-			warnings.Add(moerr.ER_BAD_NULL_ERROR,
-				fmt.Sprintf("Column '%s' cannot be null", pkName))
-			continue
+	keep := &f.keep
+	if err := keep.InitWithSize(int64(rowCount), f.mp); err != nil {
+		return false, err
+	}
+	if rowCount > 0 && !pkVec.IsConstNull() {
+		keep.AddRange(0, uint64(rowCount))
+	}
+	dropped := rowCount - keep.Count()
+	if !pkVec.IsConst() {
+		itr := pkVec.GetNulls().GetBitmap().IteratorValue()
+		for itr.HasNext() {
+			row := itr.Next()
+			if row >= uint64(rowCount) {
+				break
+			}
+			keep.Remove(row)
+			dropped++
 		}
-		keep = append(keep, int64(row))
+	}
+	for range dropped {
+		warnings.Add(moerr.ER_BAD_NULL_ERROR,
+			fmt.Sprintf("Column '%s' cannot be null", pkName))
 	}
 	warnings.Flush(proc)
-	if len(keep) == rowCount {
+	if dropped == 0 {
 		return false, nil
 	}
 	// The row selection must reach every physical vector of the batch exactly
@@ -172,7 +197,7 @@ func (f *IgnoreFill) DropNullPkRows(
 			continue
 		}
 		if (owned != nil && owned(slot)) || f.owns(vec) {
-			if err := vec.Shrink(keep, false, f.mp); err != nil {
+			if err := vec.ShrinkByMask(keep, false, 0, f.mp); err != nil {
 				return false, err
 			}
 			done[vec] = vec
@@ -192,13 +217,13 @@ func (f *IgnoreFill) DropNullPkRows(
 			dst = vector.NewVec(*vec.GetType(), f.mp)
 			f.dropVecs[slot] = dst
 		}
-		if err := dst.Union(vec, keep, f.mp); err != nil {
+		if err := dst.UnionByMask(vec, keep, f.mp); err != nil {
 			return false, err
 		}
 		done[vec] = dst
 		bat.Vecs[slot] = dst
 	}
-	bat.SetRowCount(len(keep))
+	bat.SetRowCount(keep.Count())
 	return true, nil
 }
 
@@ -308,6 +333,7 @@ func (f *IgnoreFill) Free() {
 	}
 	f.vecs, f.dropVecs = nil, nil
 	f.view = nil
+	f.keep.Free()
 	f.mp = nil
 }
 

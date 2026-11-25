@@ -15,6 +15,7 @@
 package lockop
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -151,6 +152,9 @@ type state struct {
 	// consumers. It remains live until the next Call or operator cleanup so a
 	// consumer may finish using the borrowed batch before it is reclaimed.
 	skipLockedOutput *batch.Batch
+	// accepted holds the rows SKIP LOCKED admits from the current batch;
+	// allocated from the process pool on first use, freed in Reset and Free.
+	accepted bitmap.Bitmap
 	// refresh holds the operator's own refresh-timestamp vectors (one per
 	// batch column, created once and refilled for every batch) and the view
 	// of the child's batch that publishes them; the child's vectors are

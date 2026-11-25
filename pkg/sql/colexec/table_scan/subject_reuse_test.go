@@ -136,9 +136,9 @@ func orLikeScanEval(t testing.TB, proc *process.Process, arg *TableScan, input *
 		} else {
 			require.False(t, result.All)
 			if len(want) == 0 {
-				require.Empty(t, result.Sels)
+				require.Empty(t, result.RowList(nil))
 			} else {
-				require.Equal(t, want, result.Sels)
+				require.Equal(t, want, result.RowList(nil))
 			}
 		}
 	} else {

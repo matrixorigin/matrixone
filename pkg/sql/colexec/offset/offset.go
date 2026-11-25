@@ -93,13 +93,16 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 			offset.ctr.buf.CleanOnlyData()
 		}
 		if offset.ctr.seen+uint64(length) > offset.ctr.offset {
-			offset.ctr.sels = appendRowRange(offset.ctr.sels[:0], int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen))
-			offset.ctr.buf, err = offset.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), input.Batch)
-			if err != nil {
-				return vm.CancelResult, err
+			// The rows past the offset are a contiguous tail: copy that window.
+			if offset.ctr.buf == nil {
+				offset.ctr.buf = batch.NewWithSize(len(input.Batch.Vecs))
+				for i, vec := range input.Batch.Vecs {
+					offset.ctr.buf.Vecs[i] = vector.NewVec(*vec.GetType(), proc.Mp())
+				}
 			}
-			err = offset.ctr.buf.Shrink(offset.ctr.sels, false, proc.Mp())
-			if err != nil {
+			offset.ctr.buf.Attrs = append(offset.ctr.buf.Attrs[:0], input.Batch.Attrs...)
+			start := int(offset.ctr.offset - offset.ctr.seen)
+			if err = offset.ctr.buf.UnionWindow(input.Batch, start, length-start, proc.Mp()); err != nil {
 				return vm.CancelResult, err
 			}
 			offset.ctr.seen += uint64(length)
@@ -108,12 +111,4 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		offset.ctr.seen += uint64(length)
 	}
-}
-
-// appendRowRange appends the count row numbers starting at start.
-func appendRowRange(sels []int64, start, count int64) []int64 {
-	for i := int64(0); i < count; i++ {
-		sels = append(sels, start+i)
-	}
-	return sels
 }

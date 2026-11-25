@@ -98,7 +98,7 @@ func TestSelectReaderFilterMaskMatchesApply(t *testing.T) {
 					res, err := scan.applyReaderFilter(proc, bat, []int{0})
 					require.NoError(t, err)
 					all = res.All
-					kept = append(kept, res.Sels...)
+					kept = res.RowList(nil)
 				}
 				bat.Clean(scan.mp(proc))
 				scan.Free(proc, false, nil)

@@ -236,7 +236,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 	delCtx := deletion.DeleteCtx
 
 	err = colexec.FilterRowIdForDel(proc, deletion.ctr.resBat, bat, delCtx.RowIdIdx,
-		delCtx.PrimaryKeyIdx)
+		delCtx.PrimaryKeyIdx, &deletion.ctr.keep)
 	if err != nil {
 		return result, err
 	}

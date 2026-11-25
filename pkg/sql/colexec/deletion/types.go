@@ -18,6 +18,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -90,6 +91,10 @@ type container struct {
 	// the deletion queue while the recording statement is still in
 	// flight and re-checks recorded membership at the next boundary.
 	unrecordedSinkNames []string
+
+	// keep holds the rows FilterRowIdForDel keeps; allocated from the
+	// process pool on first use and freed in Free.
+	keep bitmap.Bitmap
 
 	state        vm.CtrState
 	resBat       *batch.Batch
@@ -213,6 +218,8 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 	deletion.retainUnrecordedSinkObjects(proc)
 	ctr := &deletion.ctr
 	ctr.state = vm.Build
+	// The next run may use another process pool.
+	ctr.keep.Free()
 	if deletion.RemoteDelete {
 		ctr.freeBlockBitmaps()
 		for pidx, blockidRowidbatch := range ctr.partitionId_blockId_rowIdBatch {
@@ -269,6 +276,7 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.resBat.Clean(proc.GetMPool())
 		ctr.resBat = nil
 	}
+	ctr.keep.Free()
 
 	ctr.source = nil
 }

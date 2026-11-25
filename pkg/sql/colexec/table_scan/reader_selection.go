@@ -48,7 +48,9 @@ func (tableScan *TableScan) selectPredicateMask(proc *process.Process, input *ba
 	tableScan.ctr.subjectReuseAdmissionDone = true
 	analyzer := tableScan.OpAnalyzer
 	s := &tableScan.ctr.selection
-	mp := tableScan.mp(proc)
+	// The selection bitmaps are the operator's scratch, not scan output:
+	// they come from the process pool, never the output allocation.
+	mp := proc.Mp()
 	for _, bm := range []*bitmap.Bitmap{&s.keep, &s.pred, &s.dep} {
 		if bm.MPool() != mp {
 			bm.Free()

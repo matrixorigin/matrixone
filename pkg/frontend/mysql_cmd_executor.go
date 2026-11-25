@@ -43,6 +43,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
@@ -2353,15 +2354,13 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 				return err
 			}
 
-			bs := vector.MustFixedColWithTypeCheck[bool](vec)
-			var sels []int64
-			for i, b := range bs {
-				if b {
-					sels = append(sels, int64(i))
-				}
+			// The rows where the WHERE condition is TRUE (not NULL).
+			var sels bitmap.Bitmap
+			if err = colexec.InitBoolSelection(&sels, vec, bat.RowCount(), ses.proc.Mp()); err != nil {
+				return err
 			}
-
-			err = bat.Shrink(sels, false, ses.proc.Mp())
+			defer sels.Free()
+			err = bat.ShrinkByMask(&sels, false, 0, ses.proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -3941,15 +3940,13 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 				return err
 			}
 
-			bs := vector.MustFixedColWithTypeCheck[bool](vec)
-			var sels []int64
-			for i, b := range bs {
-				if b {
-					sels = append(sels, int64(i))
-				}
+			// The rows where the WHERE condition is TRUE (not NULL).
+			var sels bitmap.Bitmap
+			if err = colexec.InitBoolSelection(&sels, vec, bat.RowCount(), proc.Mp()); err != nil {
+				return err
 			}
-
-			err = bat.Shrink(sels, false, proc.Mp())
+			defer sels.Free()
+			err = bat.ShrinkByMask(&sels, false, 0, proc.Mp())
 			if err != nil {
 				return err
 			}

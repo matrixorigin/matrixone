@@ -1495,6 +1495,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		require.Zero(t, vec.Length())
 	}
 
+	var mask bitmap.Bitmap
 	for _, tc := range []struct {
 		name        string
 		deleted     []uint64
@@ -1511,75 +1512,88 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		{name: "all_delete_before_winners", deleted: []uint64{1}, wantPre: 7, wantIDs: []int32{2, 3}, wantDists: []float64{1, 0}},
 		{name: "explicit_identity", filterSels: []int64{0, 1, 2, 3, 4, 5, 6, 7}, wantPre: 8, wantIDs: []int32{2, 3}, wantDists: []float64{1, 0}},
 		{name: "all_storage_selection", storageRows: []int64{1, 2, 4, 5, 7}, wantPre: 5, wantIDs: []int32{2, 5}, wantDists: []float64{1, 4}},
+		// The residual keeps storage rows 2 and 5 (positions 1 and 3 of the
+		// selection); their positions map back through the selection.
+		{name: "storage_selection_residual", storageRows: []int64{1, 2, 4, 5, 7}, filterSels: []int64{1, 3}, wantPre: 5, wantIDs: []int32{2, 5}, wantDists: []float64{1, 4}},
 		{name: "empty_residual", filterSels: []int64{}, wantPre: 8},
 		{name: "empty_storage_selection", storageRows: []int64{}},
 		{name: "only_null_vector", filterSels: []int64{0}, wantPre: 8},
 		{name: "all_without_topk", noTopK: true, wantPre: 8, wantIDs: []int32{0, 1, 2, 3, 4, 5, 6, 7}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			output.CleanOnlyData()
-			defer output.CleanOnlyData()
-			var top *objectio.IndexReaderTopOp
-			if !tc.noTopK {
-				top = &objectio.IndexReaderTopOp{
-					ColPos: 1, Limit: 2, Typ: types.T_array_float32,
-					NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+		// Each case runs with the residual reporting its kept rows as a list
+		// and as a mask.
+		for _, asMask := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/mask=%t", tc.name, asMask), func(t *testing.T) {
+				output.CleanOnlyData()
+				defer output.CleanOnlyData()
+				var top *objectio.IndexReaderTopOp
+				if !tc.noTopK {
+					top = &objectio.IndexReaderTopOp{
+						ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+						NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+					}
+					if tc.noWinners {
+						top.UpperBoundType = plan.BoundType_EXCLUSIVE
+						top.UpperBound = 0
+					}
 				}
-				if tc.noWinners {
-					top.UpperBoundType = plan.BoundType_EXCLUSIVE
-					top.UpperBound = 0
+				filter := func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					require.Equal(t, []int{0}, loaded)
+					require.Zero(t, bat.Vecs[1].Length())
+					require.Zero(t, bat.Vecs[2].Length())
+					if tc.filterSels == nil {
+						return engine.ReaderFilterResult{All: true}, nil
+					}
+					inputRows := bat.RowCount()
+					require.NoError(t, bat.Vecs[0].Shrink(tc.filterSels, false, queryMP))
+					bat.SetRowCount(len(tc.filterSels))
+					if asMask {
+						require.NoError(t, mask.InitWithRows(int64(inputRows), tc.filterSels, queryMP))
+						return engine.ReaderFilterResult{Mask: &mask}, nil
+					}
+					return engine.ReaderFilterResult{Sels: tc.filterSels}, nil
 				}
-			}
-			filter := func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
-				require.Equal(t, []int{0}, loaded)
-				require.Zero(t, bat.Vecs[1].Length())
-				require.Zero(t, bat.Vecs[2].Length())
-				if tc.filterSels == nil {
-					return engine.ReaderFilterResult{All: true}, nil
+				var preRows int
+				var readErr error
+				if tc.storageRows != nil {
+					readErr = blockDataReadWithFilter(
+						ctx, &info, nil, []uint16{0, 1, 2}, colTypes, -1, types.TS{},
+						tc.storageRows, fileservice.Policy(0), output, cacheVectors, queryMP, fs,
+						[]int{0}, &engine.ReaderFilterRequest{Apply: filter}, top, &preRows,
+					)
+				} else {
+					preRows, readErr = BlockDataReadWithFilter(
+						ctx, &info, &blockReadTestDataSource{deleted: tc.deleted},
+						[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
+						objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-test",
+						output, cacheVectors, queryMP, fs, []int{0}, &engine.ReaderFilterRequest{Apply: filter},
+					)
 				}
-				require.NoError(t, bat.Vecs[0].Shrink(tc.filterSels, false, queryMP))
-				bat.SetRowCount(len(tc.filterSels))
-				return engine.ReaderFilterResult{Sels: tc.filterSels}, nil
-			}
-			var preRows int
-			var readErr error
-			if tc.storageRows != nil {
-				readErr = blockDataReadWithFilter(
-					ctx, &info, nil, []uint16{0, 1, 2}, colTypes, -1, types.TS{},
-					tc.storageRows, fileservice.Policy(0), output, cacheVectors, queryMP, fs,
-					[]int{0}, &engine.ReaderFilterRequest{Apply: filter}, top, &preRows,
-				)
-			} else {
-				preRows, readErr = BlockDataReadWithFilter(
-					ctx, &info, &blockReadTestDataSource{deleted: tc.deleted},
-					[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
-					objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-test",
-					output, cacheVectors, queryMP, fs, []int{0}, &engine.ReaderFilterRequest{Apply: filter},
-				)
-			}
-			require.NoError(t, readErr)
-			require.Equal(t, tc.wantPre, preRows)
-			require.Equal(t, len(tc.wantIDs), output.RowCount())
-			if len(tc.wantIDs) == 0 {
-				for _, vec := range output.Vecs {
-					require.Zero(t, vec.Length())
+				require.NoError(t, readErr)
+				require.Equal(t, tc.wantPre, preRows)
+				require.Equal(t, len(tc.wantIDs), output.RowCount())
+				if len(tc.wantIDs) == 0 {
+					for _, vec := range output.Vecs {
+						require.Zero(t, vec.Length())
+					}
+					return
 				}
-				return
-			}
-			require.Equal(t, tc.wantIDs, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
-			for pos, id := range tc.wantIDs {
-				require.Equal(t, "payload-"+string(rune('0'+id)), output.Vecs[2].GetStringAt(pos))
-			}
-			if tc.noTopK {
-				require.Equal(t, len(tc.wantIDs), output.Vecs[1].Length())
-				require.True(t, output.Vecs[1].IsNull(0))
-			} else {
-				require.Zero(t, output.Vecs[1].Length(), "Top-K must not materialize embeddings")
-				require.Equal(t, tc.wantDists, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
-			}
-		})
+				require.Equal(t, tc.wantIDs, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+				for pos, id := range tc.wantIDs {
+					require.Equal(t, "payload-"+string(rune('0'+id)), output.Vecs[2].GetStringAt(pos))
+				}
+				if tc.noTopK {
+					require.Equal(t, len(tc.wantIDs), output.Vecs[1].Length())
+					require.True(t, output.Vecs[1].IsNull(0))
+				} else {
+					require.Zero(t, output.Vecs[1].Length(), "Top-K must not materialize embeddings")
+					require.Equal(t, tc.wantDists, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
+				}
+			})
+		}
 	}
 
+	mask.Free()
 	freeTestBatchWithOwnPools(output)
 	require.Zero(t, queryMP.CurrNB())
 }

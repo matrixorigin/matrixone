@@ -76,13 +76,14 @@ func TestBooleanFilterSelection(t *testing.T) {
 					if late {
 						if len(want) == rows {
 							require.True(t, result.All)
+							require.Nil(t, result.Mask)
 							require.Empty(t, result.Sels)
 						} else {
 							require.False(t, result.All)
 							if len(sels) == 0 {
-								require.Empty(t, result.Sels)
+								require.Empty(t, result.RowList(nil))
 							} else {
-								require.Equal(t, sels, result.Sels)
+								require.Equal(t, sels, result.RowList(nil))
 							}
 						}
 					}
@@ -134,6 +135,7 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 			}
 			result, err := scan.evalFilter(proc, input, loaded)
 			require.NoError(t, err)
+			rows := result.RowList(nil)
 			require.Equal(t, 65, input.RowCount())
 			require.Equal(t, []uint64{1}, input.Vecs[1].GetNulls().ToArray())
 			for row, value := range vector.MustFixedColNoTypeCheck[int32](input.Vecs[1]) {
@@ -141,7 +143,7 @@ func TestBooleanFilterSparseNullBitmap(t *testing.T) {
 					require.Equal(t, int32(row+1), value)
 				}
 				if late {
-					require.Equal(t, int64(row+1), result.Sels[row])
+					require.Equal(t, int64(row+1), rows[row])
 				}
 			}
 			require.Equal(t, before.Used, account.Snapshot().Used)

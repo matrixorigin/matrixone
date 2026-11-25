@@ -499,8 +499,10 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		preInsertUnique.ctr.buf.CleanOnlyData()
 	}
 
-	var sels []int64
-	sels = sels[:0]
+	sels := &preInsertUnique.ctr.sels
+	if err := sels.InitWithSize(int64(inputBat.RowCount()), proc.Mp()); err != nil {
+		return vm.CancelResult, err
+	}
 	var firstGenerated uint64
 	for row := 0; row < inputBat.RowCount(); row++ {
 		generated := false
@@ -629,12 +631,12 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 				return vm.CancelResult, err
 			}
 		}
-		sels = append(sels, int64(row))
+		sels.Add(uint64(row))
 	}
 	if err := preInsertUnique.compactAutoIncrementCandidates(proc); err != nil {
 		return vm.CancelResult, err
 	}
-	if len(sels) == 0 {
+	if sels.IsEmpty() {
 		result.Batch = batch.EmptyBatch
 		duplicateWarnings.Flush(proc)
 		return result, nil
@@ -647,17 +649,17 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			if i == autoOutputColumn {
 				continue
 			}
-			if err := vec.Union(inputBat.Vecs[i], sels, proc.Mp()); err != nil {
+			if err := vec.UnionByMask(inputBat.Vecs[i], sels, proc.Mp()); err != nil {
 				return vm.CancelResult, err
 			}
 		}
-		preInsertUnique.ctr.buf.SetRowCount(len(sels))
+		preInsertUnique.ctr.buf.SetRowCount(sels.Count())
 		// Publish only after the complete output batch has been built, and
 		// update the shared statement coordinator once rather than once per row.
 		if firstGenerated != 0 {
 			proc.SetStatementLastInsertIDIfEarlier(firstGenerated)
 		}
-	} else if err := preInsertUnique.ctr.buf.Union(inputBat, sels, proc.Mp()); err != nil {
+	} else if err := preInsertUnique.ctr.buf.UnionByMask(inputBat, sels, proc.Mp()); err != nil {
 		return vm.CancelResult, err
 	}
 	result.Batch = preInsertUnique.ctr.buf

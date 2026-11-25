@@ -15,6 +15,7 @@
 package preinsert
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -54,6 +55,9 @@ type container struct {
 	// refreshAutoIncrementTableID.  Storing it here avoids mutating the
 	// shared *plan.TableDef that other operators may read concurrently.
 	tblId uint64
+	// selected holds the rows a target selector keeps, allocated from the
+	// process pool on first use and freed in Reset and Free.
+	selected bitmap.Bitmap
 }
 type PreInsert struct {
 	ctr container
@@ -122,6 +126,8 @@ func (preInsert *PreInsert) Release() {
 }
 
 func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	// The next run may use another process pool.
+	preInsert.ctr.selected.Free()
 	preInsert.ctr.autoIncrementGenerated = nil
 	preInsert.ctr.odkuOrdinals = nil
 	if preInsert.ctr.compPkExecutor != nil {
@@ -163,4 +169,5 @@ func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err
 		preInsert.ctr.buf = nil
 	}
 	preInsert.ctr.ignoreFill.Free()
+	preInsert.ctr.selected.Free()
 }

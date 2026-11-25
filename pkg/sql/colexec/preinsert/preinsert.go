@@ -405,21 +405,23 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return result, err
 	}
 	workBat := preInsert.ctr.buf
-	var selectedRows []int64
+	// selectedCount is the number of rows the target selector keeps; without
+	// a selector every row is kept.
+	selectedCount := bat.RowCount()
 	if preInsert.HasTargetSelector {
-		selectedRows, err = preInsert.targetSelectedRows(proc, bat)
-		if err != nil {
+		if err = preInsert.targetSelectedRows(proc, bat); err != nil {
 			return result, err
 		}
+		selectedCount = preInsert.ctr.selected.Count()
 		workBat, err = preInsert.ctr.buf.Clone(proc.Mp())
 		if err != nil {
 			return result, err
 		}
 		defer workBat.Clean(proc.Mp())
-		if err := workBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+		if err := workBat.ShrinkByMask(&preInsert.ctr.selected, false, 0, proc.Mp()); err != nil {
 			return result, err
 		}
-		workBat.SetRowCount(len(selectedRows))
+		workBat.SetRowCount(selectedCount)
 	}
 	if err = checkZeroTemporalInStrictMode(preInsert, workBat, proc); err != nil {
 		return result, err
@@ -433,7 +435,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	// counted a second time below.
 	preInsert.ctr.buf.AddRowCount(bat.RowCount())
 
-	if preInsert.HasAutoCol && (!preInsert.HasTargetSelector || len(selectedRows) > 0) {
+	if preInsert.HasAutoCol && selectedCount > 0 {
 		if shouldConvertZeroToNull(preInsert, proc) {
 			convertZeroToNull(workBat, preInsert)
 		}
@@ -454,11 +456,8 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 					continue
 				}
 				vecIdx := int(preInsert.ColOffset) + idx
-				for selectedIdx, inputIdx := range selectedRows {
-					if err = preInsert.ctr.buf.Vecs[vecIdx].Copy(
-						workBat.Vecs[vecIdx], inputIdx, int64(selectedIdx), proc.Mp()); err != nil {
-						return result, err
-					}
+				if err = preInsert.scatterSelected(preInsert.ctr.buf.Vecs[vecIdx], workBat.Vecs[vecIdx], proc); err != nil {
+					return result, err
 				}
 			}
 		}
@@ -468,7 +467,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	// join placeholders must not participate in target-table constraints.
 	var fillCols []*plan.ColDef
 	fillSkipAttr := -1
-	if !preInsert.HasTargetSelector || len(selectedRows) > 0 {
+	if selectedCount > 0 {
 		// check new rows not null
 		tempVecs := workBat.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
 		if proc != nil && proc.GetStmtProfile() != nil &&
@@ -545,9 +544,8 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 						}
 						preInsert.ctr.buf.Vecs[vecIdx] = dst
 					}
-					for selectedIdx, inputIdx := range selectedRows {
-						if cerr := dst.Copy(
-							workBat.Vecs[vecIdx], inputIdx, int64(selectedIdx), proc.Mp()); cerr != nil {
+					if preInsert.HasTargetSelector {
+						if cerr := preInsert.scatterSelected(dst, workBat.Vecs[vecIdx], proc); cerr != nil {
 							return result, cerr
 						}
 					}
@@ -734,13 +732,27 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 	return nil
 }
 
-func (preInsert *PreInsert) targetSelectedRows(proc *proc, bat *batch.Batch) ([]int64, error) {
+// scatterSelected copies the i-th row of the compacted src to the input row
+// of dst that the target selector's i-th selected row came from.
+func (preInsert *PreInsert) scatterSelected(dst, src *vector.Vector, proc *proc) error {
+	itr := preInsert.ctr.selected.IteratorValue()
+	for selectedIdx := int64(0); itr.HasNext(); selectedIdx++ {
+		if err := dst.Copy(src, int64(itr.Next()), selectedIdx, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// targetSelectedRows sets ctr.selected to the rows of bat the target
+// selector keeps.
+func (preInsert *PreInsert) targetSelectedRows(proc *proc, bat *batch.Batch) error {
 	rowNumberPos := int(preInsert.TargetRowNumberCol)
 	activePos := int(preInsert.TargetActiveCol)
 	rowIDPos := int(preInsert.TargetRowIDCol)
 	if rowNumberPos < 0 || rowNumberPos >= len(bat.Vecs) || activePos < 0 || activePos >= len(bat.Vecs) ||
 		rowIDPos < 0 || rowIDPos >= len(bat.Vecs) {
-		return nil, moerr.NewInternalErrorf(
+		return moerr.NewInternalErrorf(
 			proc.Ctx,
 			"invalid pre-insert target selector columns: row_number=%d active=%d row_id=%d input=%d",
 			rowNumberPos, activePos, rowIDPos, len(bat.Vecs),
@@ -751,18 +763,21 @@ func (preInsert *PreInsert) targetSelectedRows(proc *proc, bat *batch.Batch) ([]
 	rowIDVec := bat.Vecs[rowIDPos]
 	if rowNumberVec.GetType().Oid != types.T_int64 || activeVec.GetType().Oid != types.T_bool ||
 		rowIDVec.GetType().Oid != types.T_Rowid {
-		return nil, moerr.NewInternalError(proc.Ctx, "invalid pre-insert target selector types")
+		return moerr.NewInternalError(proc.Ctx, "invalid pre-insert target selector types")
 	}
-	selected := make([]int64, 0, bat.RowCount())
+	selected := &preInsert.ctr.selected
+	if err := selected.InitWithSize(int64(bat.RowCount()), proc.Mp()); err != nil {
+		return err
+	}
 	for row := 0; row < bat.RowCount(); row++ {
 		if rowNumberVec.IsNull(uint64(row)) || activeVec.IsNull(uint64(row)) || rowIDVec.IsNull(uint64(row)) ||
 			vector.GetFixedAtNoTypeCheck[int64](rowNumberVec, row) != 1 ||
 			!vector.GetFixedAtNoTypeCheck[bool](activeVec, row) {
 			continue
 		}
-		selected = append(selected, int64(row))
+		selected.Add(uint64(row))
 	}
-	return selected, nil
+	return nil
 }
 
 func shouldTreatZeroAsAutoIncr(proc *proc) bool {

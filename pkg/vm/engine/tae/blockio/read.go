@@ -1516,8 +1516,15 @@ func blockDataReadWithSelectedFilterTopK(
 			}
 
 			pooledPhysicalRows = pooledPhysicalRows[:0]
-			for _, row := range filterResult.Sels {
-				pooledPhysicalRows = append(pooledPhysicalRows, storageSelectRows[row])
+			if filterResult.Mask != nil {
+				itr := filterResult.Mask.IteratorValue()
+				for itr.HasNext() {
+					pooledPhysicalRows = append(pooledPhysicalRows, storageSelectRows[itr.Next()])
+				}
+			} else {
+				for _, row := range filterResult.Sels {
+					pooledPhysicalRows = append(pooledPhysicalRows, storageSelectRows[row])
+				}
 			}
 			selectedPhysicalRows = pooledPhysicalRows
 			return selectedPhysicalRows, nil

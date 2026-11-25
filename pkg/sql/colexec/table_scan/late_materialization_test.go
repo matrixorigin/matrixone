@@ -215,7 +215,7 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 	result, err := scan.applyReaderFilter(proc, bat, []int{0})
 	require.NoError(t, err)
 	require.False(t, result.All)
-	require.Equal(t, []int64{2, 3}, result.Sels)
+	require.Equal(t, []int64{2, 3}, result.RowList(nil))
 	require.Equal(t, 2, bat.RowCount())
 	require.Equal(t, []int32{2, 3}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
 	require.Zero(t, bat.Vecs[1].Length())
@@ -255,7 +255,7 @@ func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 
 	result, err := scan.applyReaderFilter(proc, bat, []int{0})
 	require.NoError(t, err)
-	require.Equal(t, []int64{2, 3}, result.Sels)
+	require.Equal(t, []int64{2, 3}, result.RowList(nil))
 	require.Equal(t, 2, bat.RowCount())
 	require.Zero(t, bat.Vecs[1].Length(), "late CHAR vector must remain unloaded during filtering")
 

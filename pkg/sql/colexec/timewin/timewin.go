@@ -19,6 +19,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1643,22 +1644,27 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 		return false, nil
 	}
 
-	count := ts.Length() - ts.GetNulls().Count()
-	size := uint64(count) * 8
-	if err := ctr.allocation.ReserveMetadata(proc, size); err != nil {
+	// The kept rows are the complement of the time column's NULL rows.
+	n := ts.Length()
+	var sels bitmap.Bitmap
+	if err := sels.InitWithSize(int64(n), proc.Mp()); err != nil {
 		return false, err
 	}
-	defer ctr.allocation.ReleaseMetadata(size)
-	sels := make([]int64, 0, count)
-	for i := 0; i < ts.Length(); i++ {
-		if !ts.IsNull(uint64(i)) {
-			sels = append(sels, int64(i))
+	defer sels.Free()
+	sels.AddRange(0, uint64(n))
+	itr := ts.GetNulls().GetBitmap().IteratorValue()
+	for itr.HasNext() {
+		row := itr.Next()
+		if row >= uint64(n) {
+			break
 		}
+		sels.Remove(row)
 	}
+	kept := sels.Count()
 	// The time vector and the input columns are compacted in place; each
 	// belongs to its producer (executor or child), so it is compacted through
 	// its own pool.
-	if err := ts.Shrink(sels, false, ts.MPool()); err != nil {
+	if err := ts.ShrinkByMask(&sels, false, 0, ts.MPool()); err != nil {
 		return false, err
 	}
 	for i, vec := range bat.Vecs {
@@ -1673,13 +1679,13 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process
 			}
 		}
 		if !duplicate {
-			if err := vec.Shrink(sels, false, vec.MPool()); err != nil {
+			if err := vec.ShrinkByMask(&sels, false, 0, vec.MPool()); err != nil {
 				return false, err
 			}
 		}
 	}
-	bat.SetRowCount(len(sels))
-	return len(sels) > 0, nil
+	bat.SetRowCount(kept)
+	return kept > 0, nil
 }
 
 func (ctr *container) evalPartVector(bat *batch.Batch, proc *process.Process) error {

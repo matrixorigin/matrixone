@@ -223,7 +223,10 @@ func callSkipLocked(
 			continue
 		}
 
-		accepted := make([]int64, 0, input.RowCount())
+		accepted := &lockOp.ctr.accepted
+		if err := accepted.InitWithSize(int64(input.RowCount()), proc.Mp()); err != nil {
+			return result, err
+		}
 		for rowIdx := 0; rowIdx < input.RowCount(); rowIdx++ {
 			if err := proc.Ctx.Err(); err != nil {
 				return result, err
@@ -259,19 +262,19 @@ func callSkipLocked(
 				result.Batch = nil
 				return result, lockOp.ctr.retryError
 			}
-			accepted = append(accepted, int64(rowIdx))
+			accepted.Add(uint64(rowIdx))
 		}
 
 		output, err := input.Dup(proc.Mp())
 		if err != nil {
 			return result, err
 		}
-		if err := output.Shrink(accepted, false, proc.Mp()); err != nil {
+		if err := output.ShrinkByMask(accepted, false, 0, proc.Mp()); err != nil {
 			output.Clean(proc.Mp())
 			return result, err
 		}
 		result.Batch = output
-		if len(accepted) == 0 && !input.Last() && result.Status != vm.ExecStop {
+		if accepted.IsEmpty() && !input.Last() && result.Status != vm.ExecStop {
 			output.Clean(proc.Mp())
 			// An all-skipped batch must not look like EOF to LIMIT or any other
 			// downstream operator. Pull another candidate batch instead.
@@ -2118,6 +2121,8 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanSkipLockedOutput(proc)
+	// The next run may use another process pool.
+	lockOp.ctr.accepted.Free()
 	clear(lockOp.ctr.refresh.replaced)
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
@@ -2128,6 +2133,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanSkipLockedOutput(proc)
+	lockOp.ctr.accepted.Free()
 	lockOp.ctr.refresh.free()
 	lockOp.cleanParker()
 	lockOp.ctr.relations = nil

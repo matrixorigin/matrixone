@@ -31,7 +31,6 @@ type container struct {
 	offsetExecutor colexec.ExpressionExecutor
 	buf            *batch.Batch
 	inputRows      uint64
-	sels           []int64
 }
 type Offset struct {
 	ctr           container

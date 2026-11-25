@@ -113,6 +113,18 @@ PR 4 does this:
 
 The kernels' own masking paths (`FunctionSelectList` with `AnyNull`) are no longer reached from the executor. Removing them is part of PR 6.
 
+**Remaining selections (PR 5).** Each of these sites built an ascending list a row at a time and then shrank or gathered by it. Each now builds a bitmap owned by the operator (allocated once, freed in `Reset` and `Free`) and uses `ShrinkByMask` or `UnionByMask`:
+
+- DML: the INSERT IGNORE NULL-PK filter (`IgnoreFill.DropNullPkRows`, whose kept rows are the complement of the key's NULL bitmap), DELETE's row-id dedup, the MULTI_UPDATE target and ODKU filters (the ODKU one straight from its bool column), PREINSERT's target selector, PREINSERT_UNIQUE's accepted rows and LOCK_OP's SKIP LOCKED rows.
+- MERGE_CTE's newly inserted rows, which the CTE cache filters by. TIME_WINDOW's non-NULL time rows and the Iceberg delete filter.
+- table_scan's Apply path (`evalFilter`) now works on the same bitmaps as the Select path. Each predicate builds its bitmap with `InitWithBools`, the batch shrinks in place by mask, and the kept rows over the input compose with `InitDeposit`. It returns `ReaderFilterResult.Mask`, so only the membership and exact-scan producers still return lists. The selection bitmaps come from the process pool, not the scan's output allocation.
+- OFFSET keeps a contiguous tail, so it copies that window instead of copying the batch and shrinking it.
+- The frontend's `SHOW VARIABLES` and `SHOW COLLATION` WHERE filters use `colexec.InitBoolSelection`, which also treats a NULL or constant condition correctly. Before, NULLs were ignored and a constant condition kept only row 0.
+
+`InitWithBools` now packs eight bools per multiply (`packBools`, trusted by the Gobra proof with a contract), about 4x faster than a bit at a time. On table_scan's eager filter (`BenchmarkBooleanFilterSelection`, 8192 rows, µs, PR 4 → PR 5): all rows true 12.0 → 2.0, a quarter NULL 31.9 → 21.5, all false 2.15 → 2.06, two thirds true 8.9 → 10.2. The last is slower because the in-place mask shrink of a 1-byte column costs more than shrinking by a list.
+
+Left for later: the set operators' `[]uint8` flags (built per 256-row hash chunk, so a bitmap needs an offset gather and showed no clear gain), the join gathers (RemapList, PR 10), `data_branch_hashdiff` (its removal lists come from conflict checks and one relies on ORDER BY), and the storage and TAE sites (logtail replay, checkpoint reader, collector, GC). PR 6 removes the list APIs, which forces the rest.
+
 ## Design: RemapList
 
 Every list that reorders or repeats rows does one of five things, and the first four fit one type.

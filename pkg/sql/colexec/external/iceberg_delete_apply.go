@@ -27,6 +27,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -176,18 +177,23 @@ func (external *External) applyIcebergDeletes(ctx context.Context, bat *batch.Ba
 			}
 		}
 	}
-	sels := keepMaskSelections(keep)
+	var sels bitmap.Bitmap
+	if err := sels.InitWithBools(keep, nil, param.outputPool(proc)); err != nil {
+		return err
+	}
+	defer sels.Free()
+	kept := sels.Count()
 	for _, state := range states {
 		param.addIcebergDeleteProfile(state, profileBefore[state], 0)
 	}
-	rowsFiltered := int64(rowsBefore - len(sels))
+	rowsFiltered := int64(rowsBefore - kept)
 	if rowsFiltered > 0 {
 		param.addParquetProfile(process.ParquetProfileStats{IcebergDeleteRowsFiltered: rowsFiltered})
 	}
-	if len(sels) == bat.RowCount() {
+	if kept == bat.RowCount() {
 		return nil
 	}
-	return bat.Shrink(sels, false, param.outputPool(proc))
+	return bat.ShrinkByMask(&sels, false, 0, param.outputPool(proc))
 }
 
 func icebergDeleteTaskDataFile(task *pipeline.IcebergDeleteFileTask) string {
@@ -775,16 +781,6 @@ func vectorEqualityValue(ctx context.Context, vec *vector.Vector, row int) (any,
 			"type": vec.GetType().String(),
 		}))
 	}
-}
-
-func keepMaskSelections(keep []bool) []int64 {
-	sels := make([]int64, 0, len(keep))
-	for idx, ok := range keep {
-		if ok {
-			sels = append(sels, int64(idx))
-		}
-	}
-	return sels
 }
 
 func (param *ExternalParam) addIcebergDeleteProfile(state *icebergdelete.ApplyState, before icebergdelete.Profile, rowsFiltered int64) {

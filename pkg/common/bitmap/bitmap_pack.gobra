@@ -1,0 +1,33 @@
+// +gobra
+
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Contract for packBools (bitmap_pack.go), which bitmap_select.go calls. Go
+// ignores .gobra files, and Gobra does not read bitmap_pack.go: it reads eight
+// bools at a time with unsafe, which Gobra cannot verify, so packBools is
+// trusted. TestPackBools checks the implementation against this contract.
+// Only the bitmap_select.go runs load this file, so the context of the
+// bitmap.go proofs is unchanged.
+package bitmap
+
+import "math/bits"
+
+// packBools returns the word whose bit k is values[base+k] for the at most
+// 64 rows [base, end).
+requires acc(values, 1/4) && 0 <= base && base <= end && end <= len(values) && end-base <= 64
+ensures acc(values, 1/4)
+ensures forall k int :: {bits.Bit(res, k)} 0 <= k && k < 64 ==> bits.Bit(res, k) == (k < end-base && values[base+k])
+decreases
+func packBools(values []bool, base, end int) (res uint64)

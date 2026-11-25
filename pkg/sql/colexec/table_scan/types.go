@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -47,11 +46,8 @@ type container struct {
 	filterExecutors           []colexec.ExpressionExecutor
 	runtimeFilterExecutors    []colexec.ExpressionExecutor
 	allFilterExecutors        []colexec.ExpressionExecutor // runtime + static; elements owned by above slices
-	filterBs                  vector.FunctionParameterWrapper[bool]
 	earlyColumns              []int
 	lateColumns               []int
-	filterRows                []int64
-	flatSels                  []int64
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
 	membershipPrepared        bool
@@ -245,7 +241,6 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	tableScan.ctr.allFilterExecutors = nil
 	tableScan.ctr.earlyColumns = tableScan.ctr.earlyColumns[:0]
 	tableScan.ctr.lateColumns = tableScan.ctr.lateColumns[:0]
-	tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0
@@ -312,7 +307,6 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.allFilterExecutors = nil
 	tableScan.ctr.earlyColumns = nil
 	tableScan.ctr.lateColumns = nil
-	tableScan.ctr.filterRows = nil
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0

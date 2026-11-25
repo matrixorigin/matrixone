@@ -125,12 +125,12 @@ func TestTargetSelectedRows(t *testing.T) {
 	preInsert := &PreInsert{
 		HasTargetSelector: true, TargetRowNumberCol: 0, TargetActiveCol: 1, TargetRowIDCol: 2,
 	}
-	selected, err := preInsert.targetSelectedRows(proc, bat)
-	require.NoError(t, err)
-	require.Equal(t, []int64{0}, selected)
+	t.Cleanup(preInsert.ctr.selected.Free)
+	require.NoError(t, preInsert.targetSelectedRows(proc, bat))
+	require.Equal(t, []uint64{0}, preInsert.ctr.selected.ToArray())
 
 	preInsert.TargetActiveCol = 3
-	_, err = preInsert.targetSelectedRows(proc, bat)
+	err := preInsert.targetSelectedRows(proc, bat)
 	require.ErrorContains(t, err, "invalid pre-insert target selector columns")
 }
 

@@ -21,6 +21,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -187,8 +188,8 @@ func checkedAdd(left, right uint64) (uint64, bool) {
 }
 
 // CacheBatch replaces a retained CTE cache slot while preserving memory accounting.
-// A nil selectedRows disables filtering; a non-nil empty slice retains no rows.
-func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer, freeBats *[]*batch.Batch, index int, src *batch.Batch, selectedRows []int64) (*batch.Batch, error) {
+// A nil selectedRows disables filtering; an empty bitmap retains no rows.
+func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer, freeBats *[]*batch.Batch, index int, src *batch.Batch, selectedRows *bitmap.Bitmap) (*batch.Batch, error) {
 	var cached *batch.Batch
 	if index < len(*freeBats) {
 		cached = (*freeBats)[index]
@@ -205,7 +206,7 @@ func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer
 			return nil, err
 		}
 		if selectedRows != nil {
-			if err := appBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+			if err := appBat.ShrinkByMask(selectedRows, false, 0, proc.Mp()); err != nil {
 				appBat.Clean(proc.Mp())
 				replacement.Rollback()
 				return nil, err
@@ -235,7 +236,7 @@ func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer
 		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
 		appBat.SetRowCount(src.RowCount())
 		if selectedRows != nil {
-			if err := appBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+			if err := appBat.ShrinkByMask(selectedRows, false, 0, proc.Mp()); err != nil {
 				appBat.Clean(proc.Mp())
 				(*freeBats)[index] = nil
 				replacement.Discard()
@@ -258,7 +259,7 @@ func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer
 		return nil, err
 	}
 	if selectedRows != nil {
-		if err := appBat.Shrink(selectedRows, false, proc.Mp()); err != nil {
+		if err := appBat.ShrinkByMask(selectedRows, false, 0, proc.Mp()); err != nil {
 			appBat.Clean(proc.Mp())
 			replacement.Rollback()
 			return nil, err

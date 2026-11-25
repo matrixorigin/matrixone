@@ -142,17 +142,7 @@ func (n *Bitmap) InitWithBools(values []bool, nulls *Bitmap, mp *mpool.MPool) (e
 		if end > len(values) {
 			end = len(values)
 		}
-		var word uint64
-		// @ invariant acc(values, 1/2) && (forall q int :: {&values[q]} 0 <= q && q < len(values) ==> values[q] == old(values[q])) && base <= r && r <= end && end <= len(values) && end-base <= 64
-		// @ invariant forall k int :: {bits.Bit(word, k)} 0 <= k && k < 64 ==> bits.Bit(word, k) == (k < r-base && old(values[base+k]))
-		// @ decreases end - r
-		for r := base; r < end; r++ {
-			var b uint64
-			if values[r] {
-				b = 1
-			}
-			word |= b << uint(r-base)
-		}
+		word := packBools(values, base, end)
 		if hasNulls {
 			word &^= nulls.bitsFrom(int64(base))
 		}

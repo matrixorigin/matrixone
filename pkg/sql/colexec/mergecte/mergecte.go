@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -190,7 +190,7 @@ func (ctr *container) cacheBatch(
 			return nil, err
 		}
 	}
-	var insertedRows []int64
+	var insertedRows *bitmap.Bitmap
 	if ctr.hashTable != nil && !src.Last() && !src.IsEmpty() {
 		var err error
 		insertedRows, err = ctr.filterInsertedRows(proc, src, analyzer)
@@ -211,13 +211,11 @@ func (ctr *container) filterInsertedRows(
 	proc *process.Process,
 	src *batch.Batch,
 	analyzer process.Analyzer,
-) ([]int64, error) {
+) (*bitmap.Bitmap, error) {
 	count := src.RowCount()
-	rows, err := colexec.GrowSetOperationSlice(ctr.insertedRows, count, proc.Mp(), &ctr.allocation)
-	if err != nil {
+	if err := ctr.insertedRows.InitWithSize(int64(count), proc.Mp()); err != nil {
 		return nil, err
 	}
-	ctr.insertedRows = rows[:0]
 	itr := ctr.iterator
 	oldSize := ctr.hashTable.Size()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -234,14 +232,14 @@ func (ctr *container) filterInsertedRows(
 		for j, value := range values {
 			if value > nextGroup {
 				nextGroup++
-				ctr.insertedRows = append(ctr.insertedRows, int64(i+j))
+				ctr.insertedRows.Add(uint64(i + j))
 			}
 		}
 	}
 	if allocated := ctr.hashTable.Size() - oldSize; allocated > 0 {
 		analyzer.Alloc(allocated)
 	}
-	return ctr.insertedRows, nil
+	return &ctr.insertedRows, nil
 }
 
 func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, error) {

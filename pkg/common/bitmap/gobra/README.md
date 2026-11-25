@@ -73,9 +73,10 @@ The proof assumes callers meet the preconditions, which the Go code does not che
 
 ## What is trusted
 
-The trusted base has four parts:
+The trusted base has five parts:
 
 - **The memory primitives** in `bitmap_mem.gobra`: `allocWords` returns fresh zero words from the pool, `replaceWords` returns the old words and installs new ones, `Free`, `prepareInit`, `mustWrite` (a no-op on an owned bitmap) and `MPool`. Their bodies are in `bitmap_mem.go`. `mustOK` is trusted to return only for a nil error (it panics otherwise).
+- **`packBools`** in `bitmap_pack.gobra`, which `InitWithBools` calls for each word: bit k of its result is `values[base+k]`. Its body (`bitmap_pack.go`) reads eight bools at a time with `unsafe` and packs them with one multiply, which Gobra cannot verify. Only the `bitmap_select.go` runs load `bitmap_pack.gobra`. `TestPackBools` checks the body against the contract, including bools backed by bytes other than 0 and 1.
 - **The bit-operation model** in `stubs/math/bits/bits.gobra`. Gobra treats `& | ^ &^ << >>` as uninterpreted functions, so the model gives them meaning through `Bit(w, k)`. Shifts by any count are modeled as Go defines them: a shift of 64 or more gives zero.
 - **The stub specs** for `bits.OnesCount64` and `bits.TrailingZeros64`.
 - **Gobra and Z3** themselves.

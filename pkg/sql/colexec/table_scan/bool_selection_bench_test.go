@@ -35,22 +35,24 @@ func BenchmarkBooleanFilterSelection(b *testing.B) {
 				scan := &TableScan{Attrs: []string{"mask"}, Types: []pb.Type{{Id: int32(types.T_bool)}}, FilterExprs: []*pb.Expr{lateTestCol(0, boolType)}}
 				b.Cleanup(func() { scan.Free(proc, false, nil) })
 				require.NoError(b, scan.Prepare(proc))
+				// The filter shrinks the input through the scan's pool.
+				mp := scan.mp(proc)
 				input := batch.NewWithSize(1)
-				b.Cleanup(func() { input.Clean(proc.Mp()) })
+				b.Cleanup(func() { input.Clean(mp) })
 				values := make([]bool, rows)
 				for i := range values {
 					values[i] = shape == "true" || (shape == "mixed" || shape == "nullable") && i%3 != 1
 				}
 				switch shape {
 				case "const_true":
-					v, err := vector.NewConstFixed(boolType, true, rows, proc.Mp())
+					v, err := vector.NewConstFixed(boolType, true, rows, mp)
 					require.NoError(b, err)
 					input.Vecs[0] = v
 				case "const_null":
-					input.Vecs[0] = vector.NewConstNull(boolType, rows, proc.Mp())
+					input.Vecs[0] = vector.NewConstNull(boolType, rows, mp)
 				default:
-					input.Vecs[0] = vector.NewVec(boolType, proc.Mp())
-					require.NoError(b, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
+					input.Vecs[0] = vector.NewVec(boolType, mp)
+					require.NoError(b, vector.AppendFixedList(input.Vecs[0], values, nil, mp))
 				}
 				b.ReportAllocs()
 				b.ResetTimer()

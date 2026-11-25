@@ -15,6 +15,7 @@
 package preinsertunique
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,7 +42,11 @@ const (
 )
 
 type container struct {
-	buf             *batch.Batch
+	buf *batch.Batch
+	// sels holds the input rows of the current batch that are emitted; it is
+	// allocated from the process pool on first use and freed with the
+	// accepted state.
+	sels            bitmap.Bitmap
 	acceptedMaps    []*hashmap.StrHashMap
 	acceptedIters   []hashmap.Iterator
 	acceptedKeyVecs [][]*vector.Vector
@@ -205,6 +210,7 @@ func (preInsertUnique *PreInsertUnique) Free(proc *process.Process, pipelineFail
 }
 
 func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process) {
+	preInsertUnique.ctr.sels.Free()
 	for i := range preInsertUnique.ctr.acceptedMaps {
 		if preInsertUnique.ctr.acceptedMaps[i] != nil {
 			preInsertUnique.ctr.acceptedMaps[i].Free()

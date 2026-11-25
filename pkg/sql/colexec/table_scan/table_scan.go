@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -301,6 +302,25 @@ func padCharColumnsToFullLength(bat *batch.Batch, mp *mpool.MPool) error {
 // and shrinking it is precisely the crash. It cannot mask a real misalignment either --
 // any vector the reader DID fill is shrunk, so every populated column stays consistent
 // with the row count set below.
+// shrinkPopulatedVecsByMask is shrinkPopulatedVecs for a selection bitmap.
+func shrinkPopulatedVecsByMask(bat *batch.Batch, sels *bitmap.Bitmap, mp *mpool.MPool) error {
+	kept := sels.Count()
+	if kept == bat.RowCount() {
+		return nil
+	}
+	rowCount := bat.RowCount()
+	for _, vec := range bat.Vecs {
+		if vec == nil || (vec.Length() == 0 && rowCount != 0) {
+			continue
+		}
+		if err := vec.ShrinkByMask(sels, false, 0, mp); err != nil {
+			return err
+		}
+	}
+	bat.SetRowCount(kept)
+	return nil
+}
+
 func shrinkPopulatedVecs(bat *batch.Batch, sels []int64, mp *mpool.MPool) error {
 	if len(sels) == bat.RowCount() {
 		return nil
@@ -338,12 +358,34 @@ func (tableScan *TableScan) evalFilter(
 	}
 
 	analyzer := tableScan.OpAnalyzer
-	sels := tableScan.ctr.flatSels[:0]
-	defer func() { tableScan.ctr.flatSels = sels }()
-
-	tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
-	hasSelection := false
+	s := &tableScan.ctr.selection
+	// The selection bitmaps are the operator's scratch, not scan output:
+	// they come from the process pool. Shrinking the output uses its pool.
+	mp := proc.Mp()
+	outMP := tableScan.mp(proc)
+	for _, bm := range []*bitmap.Bitmap{&s.keep, &s.pred, &s.dep} {
+		if bm.MPool() != mp {
+			bm.Free()
+			bm.Init(mp)
+		}
+	}
+	// keep tracks the surviving rows of the input as loaded, which the
+	// reader needs to align its late columns; pred holds one predicate's
+	// TRUE rows over the rows still present in bat.
+	keep, pred := &s.keep, &s.pred
+	inputRows := bat.RowCount()
+	selected := false
 	trackOriginalRows := loadedColumns != nil
+	none := func() (engine.ReaderFilterResult, error) {
+		tableScan.clearLoadedFilterColumns(bat, loadedColumns)
+		if !trackOriginalRows {
+			return engine.ReaderFilterResult{}, nil
+		}
+		if err := keep.InitWithSize(int64(inputRows), mp); err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
+		return engine.ReaderFilterResult{Mask: keep}, nil
+	}
 
 	for i := range tableScan.ctr.allFilterExecutors {
 		if bat.IsEmpty() {
@@ -371,75 +413,63 @@ func (tableScan *TableScan) evalFilter(
 		}
 
 		if vec.IsConst() {
-			if tableScan.ctr.filterBs == nil {
-				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
-			} else if !vector.ReuseFunctionFixedTypeParameter[bool](vec, tableScan.ctr.filterBs) {
-				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			if vec.IsConstNull() || !vector.GetFixedAtNoTypeCheck[bool](vec, 0) {
+				return none()
 			}
-			v, null := tableScan.ctr.filterBs.GetValue(0)
-			if null || !v {
-				tableScan.clearLoadedFilterColumns(bat, loadedColumns)
-				tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
-				hasSelection = true
-				break
-			}
-		} else {
-			sels = sels[:0]
-
-			values := vector.MustFixedColNoTypeCheck[bool](vec)
-			nulls := vec.GetNulls()
-			if !nulls.IsEmpty() {
-				for j, v := range values {
-					if v && !nulls.Contains(uint64(j)) {
-						sels = append(sels, int64(j))
-					}
+			continue
+		}
+		count := bat.RowCount()
+		if vec.Length() < count {
+			return engine.ReaderFilterResult{}, moerr.NewInternalErrorf(proc.Ctx,
+				"filter condition has %d rows for %d input rows", vec.Length(), count)
+		}
+		// The TRUE, non-NULL rows, built a word at a time.
+		values := vector.MustFixedColNoTypeCheck[bool](vec)[:count]
+		var nulls *bitmap.Bitmap
+		if nsp := vec.GetNulls(); !nsp.IsEmpty() {
+			nulls = nsp.GetBitmap()
+		}
+		if err = pred.InitWithBools(values, nulls, mp); err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
+		if pred.Count() == count {
+			continue
+		}
+		if pred.IsEmpty() {
+			return none()
+		}
+		if trackOriginalRows {
+			if !selected {
+				if err = keep.InitWith(pred, mp); err != nil {
+					return engine.ReaderFilterResult{}, err
 				}
 			} else {
-				for j, v := range values {
-					if v {
-						sels = append(sels, int64(j))
-					}
+				// pred covers the kept rows only: keep the kept row of rank
+				// k when the predicate holds for row k.
+				if err = s.dep.InitDeposit(keep, pred, mp); err != nil {
+					return engine.ReaderFilterResult{}, err
+				}
+				keep.Swap(&s.dep)
+			}
+		}
+		selected = true
+
+		if loadedColumns == nil {
+			if err := shrinkPopulatedVecsByMask(bat, pred, outMP); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
+		} else {
+			for _, pos := range loadedColumns {
+				if err := bat.Vecs[pos].ShrinkByMask(pred, false, 0, outMP); err != nil {
+					return engine.ReaderFilterResult{}, err
 				}
 			}
-
-			if len(sels) == 0 {
-				tableScan.clearLoadedFilterColumns(bat, loadedColumns)
-				tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
-				hasSelection = true
-				break
-			}
-
-			if len(sels) != bat.RowCount() {
-				if trackOriginalRows {
-					if !hasSelection {
-						tableScan.ctr.filterRows = append(tableScan.ctr.filterRows, sels...)
-						hasSelection = true
-					} else {
-						for j, row := range sels {
-							tableScan.ctr.filterRows[j] = tableScan.ctr.filterRows[row]
-						}
-						tableScan.ctr.filterRows = tableScan.ctr.filterRows[:len(sels)]
-					}
-				}
-
-				if loadedColumns == nil {
-					if err := shrinkPopulatedVecs(bat, sels, tableScan.mp(proc)); err != nil {
-						return engine.ReaderFilterResult{}, err
-					}
-				} else {
-					for _, pos := range loadedColumns {
-						if err := bat.Vecs[pos].Shrink(sels, false, tableScan.mp(proc)); err != nil {
-							return engine.ReaderFilterResult{}, err
-						}
-					}
-					bat.SetRowCount(len(sels))
-				}
-			}
+			bat.SetRowCount(pred.Count())
 		}
 	}
 
-	if trackOriginalRows && hasSelection {
-		return engine.ReaderFilterResult{Sels: tableScan.ctr.filterRows}, nil
+	if trackOriginalRows && selected {
+		return engine.ReaderFilterResult{Mask: keep}, nil
 	}
 	if !trackOriginalRows {
 		return engine.ReaderFilterResult{}, nil
