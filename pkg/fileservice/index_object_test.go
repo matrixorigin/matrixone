@@ -233,7 +233,7 @@ func TestIndexObjectPrefetchFillsIndexFileCache(t *testing.T) {
 	ctx := WithFileServicePolicy(context.Background(), IndexFileObject)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
 	fs.prefetcher.mu.Lock()
-	req := fs.prefetcher.entries["object"].req
+	req := fs.prefetcher.entries[prefetchKey{path: "object", index: true}].req
 	fs.prefetcher.mu.Unlock()
 	require.True(t, req.indexObject)
 	fs.prefetcher.remove("object")

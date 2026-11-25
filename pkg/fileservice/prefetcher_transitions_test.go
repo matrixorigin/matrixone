@@ -168,7 +168,7 @@ func TestPrefetcherTransitionQueuedMergeScanEndsDuringAdmission(t *testing.T) {
 	p.checkCharges(t)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e := p.entries["a"]
+	e := p.entries[prefetchKey{path: "a"}]
 	require.NotNil(t, e)
 	require.True(t, e.live(), "the queued entry of a holds only ended scans; the live request was dropped")
 	require.Equal(t, []PrefetchRange{{Offset: 100, Size: 30}}, e.req.Ranges)
@@ -287,7 +287,7 @@ func TestPrefetcherTransitionChargesAcrossTransitions(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "a", Size: 20, Ranges: []PrefetchRange{{Offset: 50, Size: 20}}, Scan: &PrefetchScan{}})
 	p.checkCharges(t)
 	p.mu.Lock()
-	require.Equal(t, int64(20), p.entries["a"].req.Size)
+	require.Equal(t, int64(20), p.entries[prefetchKey{path: "a"}].req.Size)
 	p.mu.Unlock()
 	_, leave, ok := p.join("a", func(ObjectPrefetch) bool { return true })
 	require.True(t, ok)

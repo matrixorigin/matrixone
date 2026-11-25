@@ -274,7 +274,10 @@ loses little by reading its ranges.
 
 ### At most one download of an object (invariant)
 
-- An object is never queued while it is queued, downloading or cached.
+- An object is never queued while it is queued, downloading or cached, into the same
+  cache: the prefetches of an object into the disk cache and into the index-file cache
+  are apart, and neither merges with, covers or takes the place of the other; they
+  download one after the other.
 - A request for an object that is already cached marks the object as used in the disk
   cache's recency order, so eviction removes objects that no scan asked for first. A
   request of ranges does not: a scan that reads only some columns of an object does not

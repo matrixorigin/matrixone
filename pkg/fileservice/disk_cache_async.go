@@ -73,6 +73,24 @@ type asyncCallbackTurn struct {
 	ready      bool
 }
 
+// pendingKey returns the key of the async publication of the file at diskPath into
+// target: the publications of an object into the disk cache and into the index-file cache
+// are pending apart.
+func pendingKey(target fillTarget, diskPath string) string {
+	if t, ok := target.(indexFillTarget); ok {
+		return "index-file\x00" + t.name
+	}
+	return diskPath
+}
+
+// pendingKey returns the key its publication is pending under.
+func (j *diskCacheAsyncUpdate) pendingKey() string {
+	if j.finalize != nil {
+		return pendingKey(j.finalize.target, j.diskPath)
+	}
+	return j.diskPath
+}
+
 type diskCacheAsyncFileFinalize struct {
 	file   *os.File
 	target fillTarget
@@ -338,12 +356,12 @@ func (d *DiskCache) scheduleAsyncUpdate(
 	a.submitters.Done()
 }
 
-// reserveAsyncFileFinalize reserves a slot for the async publication of the file at
-// diskPath, waiting for one to be free. It reports false when the cache is closed, when the
-// file's publication is already pending, when ctx ends first, when only callbacks
+// reserveAsyncFileFinalize reserves a slot for the async publication pending under key,
+// waiting for one to be free. It reports false when the cache is closed, when the
+// publication is already pending, when ctx ends first, when only callbacks
 // returning can free a slot, or once deleted, when set, reports true; a delete of an
 // object wakes the reservations waiting.
-func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath string, deleted func() bool) bool {
+func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, key string, deleted func() bool) bool {
 	a := &d.async
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -355,7 +373,7 @@ func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath strin
 		if deleted != nil && deleted() {
 			return false
 		}
-		if _, ok := a.mu.pending[diskPath]; ok {
+		if _, ok := a.mu.pending[key]; ok {
 			return false
 		}
 		if len(a.slots) < cap(a.slots) {
@@ -382,7 +400,7 @@ func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath strin
 	if len(a.mu.pending) == 0 {
 		a.mu.idle = make(chan struct{})
 	}
-	a.mu.pending[diskPath] = struct{}{}
+	a.mu.pending[key] = struct{}{}
 	// The reservation spans the foreground source copy. Close seals admission
 	// under the same mutex before waiting for submitters, so it cannot miss a
 	// finalizer that was admitted but has not reached the jobs channel yet.
@@ -390,10 +408,10 @@ func (d *DiskCache) reserveAsyncFileFinalize(ctx context.Context, diskPath strin
 	return true
 }
 
-func (d *DiskCache) releaseAsyncFileFinalizeReservation(diskPath string) {
+func (d *DiskCache) releaseAsyncFileFinalizeReservation(key string) {
 	a := &d.async
 	a.mu.Lock()
-	delete(a.mu.pending, diskPath)
+	delete(a.mu.pending, key)
 	<-a.slots
 	a.wakeFreedLocked()
 	if len(a.mu.pending) == 0 {
@@ -562,7 +580,7 @@ func (d *DiskCache) completeAsyncUpdate(
 		}
 		a := &d.async
 		a.mu.Lock()
-		delete(a.mu.pending, job.diskPath)
+		delete(a.mu.pending, job.pendingKey())
 		if retainForCallbacks {
 			job.retained = true
 			a.mu.callbackSlots++

@@ -610,8 +610,10 @@ func (s *S3FS) joinQueued(ctx context.Context, vector *IOVector, src readSources
 	if err != nil {
 		return false
 	}
+	// The read joins a download into the cache of its own tier.
+	index := s.indexObject(vector.Policy)
 	started, leave, ok := s.prefetcher.join(path.File, func(req ObjectPrefetch) bool {
-		return len(req.Ranges) == 0 || src.queueRanges && rangesHoldNeeded(req.Ranges, vector)
+		return req.indexObject == index && (len(req.Ranges) == 0 || src.queueRanges && rangesHoldNeeded(req.Ranges, vector))
 	})
 	if !ok {
 		return false

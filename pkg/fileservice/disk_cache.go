@@ -1065,10 +1065,11 @@ func (d *DiskCache) writeFileTo(
 		} else if t, ok := target.(entryFillTarget); ok {
 			deleted = t.deletedSinceRead
 		}
-		if !d.reserveAsyncFileFinalize(ctx, diskPath, deleted) {
+		w.slot = pendingKey(target, diskPath)
+		if !d.reserveAsyncFileFinalize(ctx, w.slot, deleted) {
+			w.slot = ""
 			return false, nil
 		}
-		w.slot = true
 	}
 	// A whole-object download registers once it holds the connection of its first part,
 	// before it holds the path; each later part takes its own when it starts. A range
@@ -1104,7 +1105,10 @@ func (d *DiskCache) writeFileTo(
 	// of its path the read declined: it then publishes nothing.
 	p, readStarted := ctx.Value(fileDownloadKey{}).(*filePrefetchObject)
 	unpublished := false
-	if asyncFinalize {
+	// A fill of the index-file cache waits for the path a pending publication of the
+	// object into the disk cache holds, and fills its own cache after it.
+	_, index := target.(indexFillTarget)
+	if asyncFinalize && !index {
 		var ok bool
 		if w.owner, ok = d.paths.tryAcquire(diskPath, cleanup); !ok {
 			return false, nil
@@ -1261,7 +1265,7 @@ func sourceStopped(err error) bool {
 // fileWrite is what a write of a cache file holds until it publishes the file or hands it
 // to an async finalize.
 type fileWrite struct {
-	slot         bool // an async finalize slot
+	slot         string // the pending key of an async finalize slot
 	owner        *pathOwner
 	file         *os.File
 	releaseConns func()
@@ -1278,8 +1282,8 @@ func (d *DiskCache) endFileWrite(diskPath string, w *fileWrite, err *error) {
 	if w.releaseConns != nil {
 		w.releaseConns()
 	}
-	if w.slot {
-		d.releaseAsyncFileFinalizeReservation(diskPath)
+	if w.slot != "" {
+		d.releaseAsyncFileFinalizeReservation(w.slot)
 	}
 }
 

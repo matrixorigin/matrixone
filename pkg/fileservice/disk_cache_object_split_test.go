@@ -400,7 +400,7 @@ func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 	fs.prefetcher = newPrefetcher(0, func() int64 { return 1 << 40 }, fs.haveObject, fs.prefetchObject)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
 	require.True(t, fs.prefetcher.isQueued("object"))
-	taken := fs.prefetcher.entries["object"].req
+	taken := fs.prefetcher.entries[prefetchKey{path: "object"}].req
 	require.NoError(t, fs.Delete(ctx, "object"))
 	require.False(t, fs.prefetcher.isQueued("object"), "the delete drops the queued prefetch")
 

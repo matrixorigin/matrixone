@@ -218,10 +218,10 @@ func TestPrefetcherMergeOfCachedRequestKeepsQueuedDownload(t *testing.T) {
 	columns := ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}}
 	p.add(columns)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 50, Ranges: []PrefetchRange{cached}})
-	require.Equal(t, columns.Ranges, p.entries["a"].req.Ranges, "the cache satisfies the request")
+	require.Equal(t, columns.Ranges, p.entries[prefetchKey{path: "a"}].req.Ranges, "the cache satisfies the request")
 	require.Equal(t, int64(10), p.prefetch.bytes)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 1000})
-	require.Nil(t, p.entries["a"].req.Ranges, "the whole object takes over")
+	require.Nil(t, p.entries[prefetchKey{path: "a"}].req.Ranges, "the whole object takes over")
 	require.Equal(t, int64(1000), p.prefetch.bytes)
 	p.close(context.Background())
 }
@@ -233,13 +233,13 @@ func TestPrefetcherMergeKeepsQueueBytes(t *testing.T) {
 	columns := ObjectPrefetch{FilePath: "a", Size: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 10}}}
 	p.add(columns)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 1000, Due: -1})
-	got := p.entries["a"].req
+	got := p.entries[prefetchKey{path: "a"}].req
 	require.Equal(t, columns.Ranges, got.Ranges, "the whole object is past the queue's bytes")
 	require.Equal(t, int64(10), got.Size)
 	require.Equal(t, int64(-1), got.Due, "it is still needed sooner")
 	require.Equal(t, int64(10), p.prefetch.bytes)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 100})
-	require.Nil(t, p.entries["a"].req.Ranges, "within the queue's bytes the whole object takes over")
+	require.Nil(t, p.entries[prefetchKey{path: "a"}].req.Ranges, "within the queue's bytes the whole object takes over")
 	require.Equal(t, int64(100), p.prefetch.bytes)
 	p.close(context.Background())
 }
@@ -485,15 +485,14 @@ func TestPrefetcherCloseWakesJoins(t *testing.T) {
 	<-closed
 }
 
-// isQueued reports whether the download of filePath is queued and not started.
+// isQueued reports whether a download of filePath is queued and not started.
 func (p *prefetcher) isQueued(filePath string) bool {
 	if p.queued.Load() == 0 {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e, ok := p.entries[filePath]
-	return ok && e.queue != nil
+	return slices.ContainsFunc(p.entriesLocked(filePath), func(e *prefetchEntry) bool { return e.queue != nil })
 }
 
 // A request for ranges the running download of its object does not download is queued
@@ -560,7 +559,7 @@ func TestPrefetcherDeferredRequestsBounded(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "a", Size: 200, Ranges: []PrefetchRange{{Offset: 1000, Size: 200}}})
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	e := p.entries["a"]
+	e := p.entries[prefetchKey{path: "a"}]
 	require.LessOrEqual(t, len(e.nextScans), 2, "ended scans are pruned")
 	require.Equal(t, int64(10), e.next.Size, "a request past the queues' bytes is not kept")
 }
@@ -584,8 +583,8 @@ func TestPrefetcherDeferredRequestsShareQueueBytes(t *testing.T) {
 		p.add(ObjectPrefetch{FilePath: f, Size: 60, Ranges: []PrefetchRange{{Offset: 100, Size: 60}}})
 	}
 	p.mu.Lock()
-	require.NotNil(t, p.entries["a"].next)
-	require.Nil(t, p.entries["b"].next, "the second request is past the queues' bytes")
+	require.NotNil(t, p.entries[prefetchKey{path: "a"}].next)
+	require.Nil(t, p.entries[prefetchKey{path: "b"}].next, "the second request is past the queues' bytes")
 	require.Equal(t, int64(60), p.queuedBytesLocked())
 	p.mu.Unlock()
 	require.False(t, p.remove("a"))
@@ -621,7 +620,7 @@ func TestPrefetcherEndedDeferredRequestYieldsBytes(t *testing.T) {
 	require.Equal(t, "b", <-started, "the live request is downloaded")
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	require.Nil(t, p.entries["a"].next)
+	require.Nil(t, p.entries[prefetchKey{path: "a"}].next)
 	require.Zero(t, p.deferred)
 	require.Empty(t, p.deferredOf)
 }
@@ -649,7 +648,7 @@ func TestPrefetcherEndedDeferredRequestNotInherited(t *testing.T) {
 	func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		require.Equal(t, int64(1), p.entries["a"].next.Size, "the ended request is dropped, not merged")
+		require.Equal(t, int64(1), p.entries[prefetchKey{path: "a"}].next.Size, "the ended request is dropped, not merged")
 		require.Equal(t, int64(1), p.deferred)
 	}()
 
@@ -659,8 +658,8 @@ func TestPrefetcherEndedDeferredRequestNotInherited(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "c", Size: 20, Due: 10, Ranges: []PrefetchRange{{Offset: 0, Size: 20}}, Scan: &PrefetchScan{}})
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	require.Contains(t, p.entries, "b", "the live queued download stays")
-	require.Contains(t, p.entries, "c")
+	require.Contains(t, p.entries, prefetchKey{path: "b"}, "the live queued download stays")
+	require.Contains(t, p.entries, prefetchKey{path: "c"})
 	require.Zero(t, p.deferred)
 }
 
@@ -684,8 +683,8 @@ func TestPrefetcherDeferredRequestDropsEndedQueued(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "a", Size: 30, Ranges: []PrefetchRange{{Offset: 100, Size: 30}}, Scan: &PrefetchScan{}})
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	require.NotNil(t, p.entries["a"].next)
-	require.NotContains(t, p.entries, "x")
+	require.NotNil(t, p.entries[prefetchKey{path: "a"}].next)
+	require.NotContains(t, p.entries, prefetchKey{path: "x"})
 }
 
 // A live request merged into a queued download makes room by dropping a queued download
@@ -702,8 +701,8 @@ func TestPrefetcherMergeDropsEndedQueued(t *testing.T) {
 	p.add(ObjectPrefetch{FilePath: "z", Size: 30, Ranges: []PrefetchRange{{Offset: 100, Size: 30}}, Scan: live})
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	require.Equal(t, int64(40), p.entries["z"].req.Size)
-	require.NotContains(t, p.entries, "y")
+	require.Equal(t, int64(40), p.entries[prefetchKey{path: "z"}].req.Size)
+	require.NotContains(t, p.entries, prefetchKey{path: "y"})
 }
 
 // A request for a queued download whose reads all ended replaces what they asked for: only
@@ -803,7 +802,7 @@ func TestPrefetcherDeferredMergeChargedWhenScanEndsDuringAdmission(t *testing.T)
 	p.add(ObjectPrefetch{FilePath: "a", Size: 30, Ranges: []PrefetchRange{{Offset: 300, Size: 30}}, Scan: &PrefetchScan{}})
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	next := p.entries["a"].next
+	next := p.entries[prefetchKey{path: "a"}].next
 	require.NotNil(t, next)
 	require.Equal(t, []PrefetchRange{{Offset: 300, Size: 30}}, next.Ranges, "what the ended scan asked for is not kept")
 	require.Equal(t, next.Size, p.deferred)
