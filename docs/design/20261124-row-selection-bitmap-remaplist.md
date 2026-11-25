@@ -8,8 +8,9 @@ Replace every row-selection index list with a bitmap, and move every reordering 
 
 1. **A bitmap is the only representation of "which rows survive".** `[]int64` sels used as a filter, `[]uint8` flags in `UnionBatch`, and the `[]bool` select list in expression evaluation are all replaced by `bitmap.Bitmap`. `Shrink([]int64)` and the use of `Union(sels)` for filtering go away.
 2. **Lists stay only where rows are reordered or repeated.** Sort and top permutations, join gathers, hash buckets and inverse (old→new) maps move into one `RemapList` type with one gather kernel. A bitmap cannot express these, and a list should not be used for anything else.
-3. **A selection is owned or borrowed by its batch, like a vector.** A batch carries storage for its own selection. A producer, or a consumer that narrows a selection, fills its output batch's storage; a consumer that forwards a selection unchanged, and every view, borrows the input's bitmap read-only until the producer's next `Call`, exactly as batches already borrow vectors. Copy only to modify. `Clean` frees only the batch's own storage. Every other bitmap and every RemapList keeps one owner: the operator or reader that produces it allocates it once (sized for the largest batch), re-initializes it per batch without reallocating, and frees it in `Free`.
-4. **Each phase is its own PR with a benchmark.** The work is split so each step removes a conversion and can be measured on its own.
+3. **A selection is owned or borrowed by its batch, like a vector.** A batch carries storage for its own selection. A producer, or a consumer that narrows a selection, fills its output batch's storage; a consumer that forwards a selection unchanged, and every view, borrows the input's bitmap read-only until the producer's next `Call`, exactly as batches already borrow vectors. Copy only to modify. `Clean` frees only the batch's own storage. A batch never pins anything: whoever lends memory to a batch keeps it alive (decision 4). Every other bitmap and every RemapList keeps one owner: the operator or reader that produces it allocates it once (sized for the largest batch), re-initializes it per batch without reallocating, and frees it in `Free`.
+4. **The lender keeps borrowed memory alive; the batch holds no leases.** A borrowed (read-only) vector is valid until its producer's next `Call`. Memory the producer owns (the Arrow reader's record, a native result window) needs no lease: the producer keeps it until it reuses or releases the batch. Only memory from a shared resource, such as the FileService cache, is pinned, and the producer holds the pins, not the batch. A consumer that keeps a batch longer copies it.
+5. **Each phase is its own PR with a benchmark.** The work is split so each step removes a conversion and can be measured on its own.
 
 ## Findings
 
@@ -112,6 +113,16 @@ Other bitmaps and RemapLists follow the producer rule: the owner allocates once,
 
 Both rules need `InitWithSize` to reuse capacity the way `InitWithRows` already does (PR 1). Until then, `OwnSelection` allocates new words for each batch, as filter and table_scan do on main. Both rules also fit the pool-owned bitmaps of #33144, where every bitmap has one owner that frees it. For a batch's own selection that owner is the batch: once #33144 lands, the storage comes from `Batch.mp` and `Clean` frees it there.
 
+**Borrowed vectors and pins.** Selections and vectors follow the same lending rule, and so does the memory under a borrowed vector:
+
+| Lender | What it lends | How it keeps it alive |
+| --- | --- | --- |
+| table_scan via blockio | columns borrowed from the FileService cache | the scan's `ReaderFilterRequest` holds the cache pins (`Pins`). The reader releases them before it reuses the output batch for the next block; the scan releases them in `Reset` and `Free`. Borrowing is opt-in: only columns the request explicitly retains (`ColumnUses`) are borrowed, so a caller that keeps batches (ivfflat) gets owned copies. |
+| Arrow external reader | columns aliasing its record batch | retains the record it published from until `ReleaseBatch`; varlen descriptors live in its reusable `arrowbridge.Descriptors` scratch |
+| sirius | columns aliasing the native result window | nothing: the window stays valid for the callback that consumes and cleans the batch |
+
+Every path that keeps a batch past the producer's next `Call` already copies: pSpool, the remote codec, spill, and operators that buffer their input.
+
 **Primitives to add to `pkg/common/bitmap`.**
 
 | Primitive | Replaces | Used by |
@@ -173,7 +184,7 @@ func (r *RemapList) Invert(srcRows int, dst []int32) []int32 // old→new with -
 
 ## Implementation plan
 
-Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup. Moving the selection's storage into the batch comes first, in the `Batch` cleanup PR (#33184, issue #33182): it adds `OwnSelection`, makes blockio and filter fill their output batch's own selection, turns `ReaderFilterRequest.PublishSelection` into a flag, and removes the producers' own selection bitmaps. projection and evalProjection already borrow and do not change.
+Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup. Moving the selection's storage into the batch and the pins out of it comes first, in the `Batch` cleanup PR (#33184, issue #33182). For the selection, it adds `OwnSelection`, makes blockio and filter fill their output batch's own selection, turns `ReaderFilterRequest.PublishSelection` into a flag, and removes the producers' own selection bitmaps; projection and evalProjection already borrow and do not change. For pins, it removes `Batch.leases`: the scan's request holds the cache pins, the Arrow reader retains its record and owns its descriptor scratch, and sirius needs none.
 
 | # | Track | PR | What changes | Measured by |
 | --- | --- | --- | --- | --- |
