@@ -507,6 +507,127 @@ func TestCDCGeneratedColumnSameIDRenameFence(t *testing.T) {
 	})
 }
 
+// TestCDCLowPrecisionGeneratedCopyAdmission proves the four low-precision
+// generated payload types CopyDecodeSupported newly admits actually flow
+// through the REAL guarded writable-target mapping: one source table with an
+// ordinary INT PK plus STORED generated BF16/FLOAT16/FLOAT8/FLOAT4 columns,
+// one pre-created ordinary writable MO target and one NoFull attached task.
+// The source must have stored the four expected values, the target must copy
+// the source-materialized values exactly, and the persisted watermark must
+// advance strictly past the write's source commit fence.
+func TestCDCLowPrecisionGeneratedCopyAdmission(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := int(cn.GetServiceConfig().CN.Frontend.Port)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+		defer cancel()
+		cleanupExec := func(step, query string) func() {
+			return func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cleanupCancel()
+				if _, err := db.ExecContext(cleanupCtx, query); err != nil {
+					t.Errorf("cleanup %s failed: %v", step, err)
+				}
+			}
+		}
+		require.NoError(t, execSQL(ctx, db, "CREATE DATABASE cdc_lpsrc"))
+		defer cleanupExec("drop lp source database", "DROP DATABASE IF EXISTS cdc_lpsrc")()
+		require.NoError(t, execSQL(ctx, db, "CREATE DATABASE cdc_lpsink"))
+		defer cleanupExec("drop lp sink database", "DROP DATABASE IF EXISTS cdc_lpsink")()
+		require.NoError(t, execSQL(ctx, db,
+			"CREATE TABLE cdc_lpsrc.lp (id INT PRIMARY KEY, a INT, "+
+				"gb BF16 GENERATED ALWAYS AS (CAST(a AS BF16)) STORED, "+
+				"gh FLOAT16 GENERATED ALWAYS AS (CAST(a + 1 AS FLOAT16)) STORED, "+
+				"g8 FLOAT8 GENERATED ALWAYS AS (CAST(a + 2 AS FLOAT8)) STORED, "+
+				"g4 FLOAT4 GENERATED ALWAYS AS (CAST(a + 3 AS FLOAT4)) STORED)"))
+		require.NoError(t, execSQL(ctx, db,
+			"CREATE TABLE cdc_lpsink.lp (id INT PRIMARY KEY, a INT, gb BF16, gh FLOAT16, g8 FLOAT8, g4 FLOAT4)"))
+		uri := fmt.Sprintf("mysql://dump:111@127.0.0.1:%d", port)
+		require.NoError(t, execSQL(ctx, db, "CREATE PITR cdc_lp_pitr FOR DATABASE cdc_lpsrc RANGE 2 'h'"))
+		defer cleanupExec("drop lp pitr", "DROP PITR IF EXISTS cdc_lp_pitr")()
+		require.NoError(t, execSQL(ctx, db, fmt.Sprintf(
+			"CREATE CDC cdc_lp_task '%s' 'matrixone' '%s' 'cdc_lpsrc.lp:cdc_lpsink.lp' {'Level'='table', 'NoFull'='true'}",
+			uri, uri)))
+		defer cleanupExec("drop lp cdc task", "DROP CDC TASK cdc_lp_task")()
+		require.NoError(t, execSQL(ctx, db, "INSERT INTO cdc_lpsrc.lp (id, a) VALUES (7, 1)"))
+		lpFence := func() (types.TS, string) {
+			ts := cn.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+			require.False(t, ts.IsEmpty(), "the source-CN commit fence must be nonempty")
+			return types.BuildTS(ts.PhysicalTime, uint32(ts.LogicalTime)), fmt.Sprintf("%d-%d", ts.PhysicalTime, ts.LogicalTime)
+		}
+		insertFenceTS, insertFenceText := lpFence()
+		lpReadback := func(dbName string) (float64, float64, float64, float64, error) {
+			var gb, gh, g8, g4 float64
+			err := db.QueryRowContext(ctx,
+				"SELECT CAST(gb AS DOUBLE), CAST(gh AS DOUBLE), CAST(g8 AS DOUBLE), CAST(g4 AS DOUBLE) FROM "+dbName+".lp WHERE id = 7").
+				Scan(&gb, &gh, &g8, &g4)
+			return gb, gh, g8, g4, err
+		}
+		srcB, srcH, src8, src4, err := lpReadback("cdc_lpsrc")
+		require.NoError(t, err, "the source must expose its stored low-precision values")
+		require.Equal(t, []float64{1, 2, 3, 4}, []float64{srcB, srcH, src8, src4},
+			"the source must actually have stored the four expected materialized values")
+		t.Logf("source-stored low-precision payloads: bf16=%v float16=%v float8=%v float4=%v", srcB, srcH, src8, src4)
+		require.Eventually(t, func() bool {
+			gb, gh, g8, g4, err := lpReadback("cdc_lpsink")
+			if err != nil {
+				return false
+			}
+			return gb == srcB && gh == srcH && g8 == src8 && g4 == src4
+		}, 90*time.Second, 500*time.Millisecond,
+			"the ordinary writable target must copy the four source-materialized low-precision values exactly")
+		var sinkRows int
+		require.NoError(t, db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cdc_lpsink.lp").Scan(&sinkRows))
+		require.Positive(t, sinkRows, "a nonzero target row set must prove the admission branch")
+		parseLp := func(s string) (types.TS, bool) {
+			physical, logical, ok := strings.Cut(s, "-")
+			if !ok || physical == "" || logical == "" {
+				return types.TS{}, false
+			}
+			p, err := strconv.ParseInt(physical, 10, 64)
+			if err != nil || p < 0 {
+				return types.TS{}, false
+			}
+			l, err := strconv.ParseUint(logical, 10, 32)
+			if err != nil {
+				return types.TS{}, false
+			}
+			return types.BuildTS(p, uint32(l)), true
+		}
+		lpWatermark := func() string {
+			var wm string
+			if err := db.QueryRowContext(ctx,
+				"SELECT w.watermark FROM mo_catalog.mo_cdc_watermark AS w JOIN mo_catalog.mo_cdc_task AS t "+
+					"ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+					"WHERE t.task_name = 'cdc_lp_task' AND w.db_name = 'cdc_lpsrc' AND w.table_name = 'lp'").Scan(&wm); err != nil {
+				return ""
+			}
+			return wm
+		}
+		var observed string
+		require.Eventually(t, func() bool {
+			observed = lpWatermark()
+			if observed == "" {
+				return false
+			}
+			wmTS, okW := parseLp(observed)
+			return okW && wmTS.GT(&insertFenceTS)
+		}, 90*time.Second, 500*time.Millisecond,
+			"the persisted catalog watermark must be strictly greater than the write's source commit fence (half-open stream; the persisted watermark is the next range's start)")
+		t.Logf("stage insert: source commit fence=%s persisted watermark=%s target_rows=%d", insertFenceText, observed, sinkRows)
+		var copiedB, copiedH, copied8, copied4 float64
+		require.NoError(t, db.QueryRowContext(ctx,
+			"SELECT CAST(gb AS DOUBLE), CAST(gh AS DOUBLE), CAST(g8 AS DOUBLE), CAST(g4 AS DOUBLE) FROM cdc_lpsink.lp WHERE id = 7").
+			Scan(&copiedB, &copiedH, &copied8, &copied4))
+		require.Equal(t, []float64{srcB, srcH, src8, src4}, []float64{copiedB, copiedH, copied8, copied4},
+			"the final target row keeps the exact copied values")
+	})
+}
+
 // TestCDCMixedCaseOrdinaryNoFullAttachment proves the SHOW-routed ordinary
 // admission compares the DECLARED spelling of a mixed-case column exactly: a
 // NoFull task attaches to a pre-created ordinary target whose mixed-case

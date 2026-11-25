@@ -492,10 +492,21 @@ func CopyDecodeSupported(t types.T) bool {
 	switch t {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128,
 		types.T_bool,
 		types.T_char, types.T_varchar, types.T_text,
 		types.T_date, types.T_datetime, types.T_timestamp:
+		return true
+	// The whole float family is named explicitly. The low-precision members
+	// complete the same proven pipeline the ordinary floats use: the row
+	// extractor decodes them through vector.GetLowPrecisionFloatAt and the
+	// SQL renderer emits their exact float text, both witnessed by
+	// TestLowPrecisionFloatColumnSQL. Given the last member its own case
+	// keeps a later float type from being read as another entry here.
+	case types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8:
+		return true
+	case types.T_float4:
 		return true
 	}
 	return false

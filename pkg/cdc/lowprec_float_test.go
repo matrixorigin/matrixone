@@ -64,3 +64,24 @@ func TestLowPrecisionFloatColumnSQL(t *testing.T) {
 		vec.Free(mp)
 	}
 }
+
+// TestCopyDecodePinsTheWholeFloatFamily records the admission pin's float
+// family truth table: every member of the family the type-switch auditor
+// guards is decodable for replication by the proven pipeline above, while
+// the fence stays closed for types outside the supported set.
+func TestCopyDecodePinsTheWholeFloatFamily(t *testing.T) {
+	for _, oid := range append([]types.T{types.T_float32, types.T_float64}, lowPrecTypes...) {
+		require.True(t, CopyDecodeSupported(oid),
+			"%s is decoded and rendered by the CDC copy pipeline and must stay admitted", oid)
+	}
+	for _, unsupported := range []types.T{
+		types.T_geometry,
+		types.T_binary,
+		types.T_json,
+		types.T_array_float32,
+		types.T_time,
+	} {
+		require.False(t, CopyDecodeSupported(unsupported),
+			"%s still fails closed at admission", unsupported)
+	}
+}

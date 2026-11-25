@@ -553,6 +553,22 @@ func TestClassifyShowColumnsOrdinaryMatrix(t *testing.T) {
 	generatedVisible := genSigVisible(genSigOrdinary("id", int32(types.T_int32)),
 		&plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}, GeneratedCol: &plan.GeneratedCol{IsStored: true}})
 
+	lowPrecGenVisible := genSigVisible(genSigOrdinary("id", int32(types.T_int32)),
+		&plan.ColDef{Name: "gb", Typ: plan.Type{Id: int32(types.T_bf16)}, GeneratedCol: &plan.GeneratedCol{IsStored: true}},
+		&plan.ColDef{Name: "gh", Typ: plan.Type{Id: int32(types.T_float16)}, GeneratedCol: &plan.GeneratedCol{IsStored: true}},
+		&plan.ColDef{Name: "g8", Typ: plan.Type{Id: int32(types.T_float8)}, GeneratedCol: &plan.GeneratedCol{IsStored: true}},
+		&plan.ColDef{Name: "g4", Typ: plan.Type{Id: int32(types.T_float4)}, GeneratedCol: &plan.GeneratedCol{IsStored: true}})
+	jsonGenVisible := genSigVisible(genSigOrdinary("id", int32(types.T_int32)),
+		&plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(types.T_json)}, GeneratedCol: &plan.GeneratedCol{IsStored: true}})
+	ordinaryTypedRows := func(names ...string) *sqlmock.Rows {
+		rows := sqlmock.NewRows([]string{"column_ordinal", "column_name", "generation_class", "not_null", "typed_digest"})
+		rows.AddRow(int64(0), "id", string(CDCColumnOrdinary), int64(1), int64(7))
+		for i, n := range names {
+			rows.AddRow(int64(i+1), n, string(CDCColumnOrdinary), int64(1), int64(8+i))
+		}
+		return rows
+	}
+
 	mixedCaseVisible := genSigVisible(genSigOrdinary("id", int32(types.T_int32)),
 		&plan.ColDef{Name: "myval", OriginName: "MyVal", Typ: plan.Type{Id: int32(types.T_int32)}})
 
@@ -655,6 +671,22 @@ func TestClassifyShowColumnsOrdinaryMatrix(t *testing.T) {
 			func(t *testing.T, _ *CDCTargetGenerationContract, err error) {
 				require.Error(t, err, "a denied or absent SHOW must fail closed")
 			}},
+		{name: "low-precision generated payloads copy into an ordinary writable target",
+			visible:     lowPrecGenVisible,
+			expectTyped: true,
+			rows:        ordinaryTypedRows("gb", "gh", "g8", "g4"),
+			check: func(t *testing.T, c *CDCTargetGenerationContract, err error) {
+				require.NoError(t, err, "the four proven-decodable low-precision payloads must admit the W copy through the real classifier")
+				require.Equal(t, []bool{true, true, true, true, true}, c.Copy)
+				require.Equal(t, []byte{CDCColumnOrdinary, CDCColumnOrdinary, CDCColumnOrdinary, CDCColumnOrdinary, CDCColumnOrdinary}, c.TargetClass)
+			}},
+		{name: "unsupported generated payload keeps the fail-closed fence",
+			visible:     jsonGenVisible,
+			expectTyped: true,
+			rows:        ordinaryTypedRows("v"),
+			check: func(t *testing.T, _ *CDCTargetGenerationContract, err error) {
+				require.ErrorContains(t, err, "cannot be decoded for replication")
+			}},
 		{"generated source never touches SHOW metadata", generatedVisible, nil, nil, true,
 			func(t *testing.T, _ *CDCTargetGenerationContract, err error) {
 				// The typed guarded path owns the outcome here - a fence for an
@@ -669,10 +701,16 @@ func TestClassifyShowColumnsOrdinaryMatrix(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			if tc.expectTyped {
+				// The shared `rows` field carries this route's typed CALL rows
+				// when it supplies them; otherwise the fixture default applies.
+				typedRows := sqlmock.NewRows([]string{"column_ordinal", "column_name", "generation_class", "not_null", "typed_digest"}).
+					AddRow(int64(0), "id", string(CDCColumnOrdinary), int64(1), int64(7)).
+					AddRow(int64(1), "v", string(CDCColumnGeneratedStored), int64(1), int64(8))
+				if tc.rows != nil {
+					typedRows = tc.rows
+				}
 				mock.ExpectQuery(regexp.QuoteMeta("CALL mo_cdc_target_generation_signature('dst', 't')")).
-					WillReturnRows(sqlmock.NewRows([]string{"column_ordinal", "column_name", "generation_class", "not_null", "typed_digest"}).
-						AddRow(int64(0), "id", string(CDCColumnOrdinary), int64(1), int64(7)).
-						AddRow(int64(1), "v", string(CDCColumnGeneratedStored), int64(1), int64(8)))
+					WillReturnRows(typedRows)
 			} else if tc.showErr != nil {
 				mock.ExpectQuery(regexp.QuoteMeta("SHOW FULL COLUMNS FROM `dst`.`t`")).WillReturnError(tc.showErr)
 			} else {
