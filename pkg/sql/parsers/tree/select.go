@@ -407,6 +407,9 @@ type SelectClause struct {
 	GroupBy  *GroupByClause
 	Having   *Where
 	Option   uint64
+	// InternalIndexBackfillSourceID is set only on a generated index statement.
+	// It is not represented in SQL and applies only to this SELECT clause.
+	InternalIndexBackfillSourceID uint64
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {

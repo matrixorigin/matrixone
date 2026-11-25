@@ -6692,6 +6692,13 @@ func (builder *QueryBuilder) bindSelectClause(
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
+	if sourceID := clause.InternalIndexBackfillSourceID; sourceID != 0 {
+		if len(ctx.bindings) != 1 || ctx.bindings[0] == nil || ctx.bindings[0].tableID != sourceID {
+			err = moerr.NewInternalError(builder.GetContext(), "index backfill source does not match its table binding")
+			return
+		}
+		ctx.bindings[0].indexBackfillRaw = true
+	}
 
 	ctx.binder = NewWhereBinder(builder, ctx)
 	// unfold stars and generate headings

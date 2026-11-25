@@ -793,7 +793,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNodeId := appendDeleteSourceScan()
 	if !delCtx.skipTargetDelete {
 		// create delete index plans
-		err = buildDeleteIndexPlans(ctx, builder, bindCtx, delCtx)
+		err = buildDeleteIndexPlans(ctx, builder, bindCtx, delCtx, canTruncate)
 		if err != nil {
 			return err
 		}
@@ -3537,6 +3537,7 @@ func appendDeleteIndexTablePlan(
 	typMap map[string]plan.Type,
 	posMap map[string]int,
 	baseNodeId int32,
+	baseTableDef *TableDef,
 	isUK bool,
 ) (int32, error) {
 	/********
@@ -3550,12 +3551,15 @@ func appendDeleteIndexTablePlan(
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
+	var rightOwnerPos int32 = -1
 	scanNodeProject := make([]*Expr, len(uniqueTableDef.Cols))
 	for colIdx, col := range uniqueTableDef.Cols {
 		if col.Name == catalog.Row_ID {
 			rightRowIdPos = int32(colIdx)
 		} else if col.Name == catalog.IndexTableIndexColName {
 			rightPkPos = int32(colIdx)
+		} else if col.Name == catalog.IndexTablePrimaryColName {
+			rightOwnerPos = int32(colIdx)
 		}
 		scanNodeProject[colIdx] = &plan.Expr{
 			Typ: col.Typ,
@@ -3675,6 +3679,37 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	joinConds = []*Expr{condExpr}
+	if indexNeedsOwnerMatch(baseTableDef, indexdef, prefixLengths) {
+		if rightOwnerPos < 0 {
+			return -1, moerr.NewInternalError(builder.GetContext(), "index table has no owner column")
+		}
+		pkName := baseTableDef.Pkey.PkeyColName
+		pkPos, ok := posMap[pkName]
+		if !ok || pkPos < 0 {
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate old primary key %s", pkName)
+		}
+		pkType, ok := typMap[pkName]
+		if !ok {
+			return -1, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate old primary key type %s", pkName)
+		}
+		owner := &plan.Expr{
+			Typ: uniqueTableDef.Cols[rightOwnerPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0, ColPos: rightOwnerPos, Name: catalog.IndexTablePrimaryColName,
+			}},
+		}
+		primaryKey := &plan.Expr{
+			Typ: pkType,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 1, ColPos: int32(pkPos), Name: pkName,
+			}},
+		}
+		ownerCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{owner, primaryKey})
+		if err != nil {
+			return -1, err
+		}
+		joinConds = append(joinConds, ownerCond)
+	}
 
 	buildExpr := &plan.Expr{
 		Typ: condExpr.GetF().Args[1].Typ,
@@ -5414,7 +5449,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
 	} else {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
+		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, delCtx.tableDef, isUk)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
 		uniqueTblPkTyp = uniqueTableDef.Cols[0].Typ
@@ -5696,9 +5731,10 @@ func indexNeedsRewriteForUpdate(tableDef *TableDef, indexdef *IndexDef, updateCo
 }
 
 // make delete index plans here
-func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
+func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, canTruncate bool) error {
 
 	isUpdate := delCtx.updateColLength > 0
+	var err error
 
 	// delete unique/secondary index table
 	// Refer to this PR:https://github.com/matrixorigin/matrixone/pull/12093
@@ -5706,25 +5742,6 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	canTruncate := delCtx.isDeleteWithoutFilters
-
-	accountId, err := ctx.GetAccountId()
-	if err != nil {
-		return err
-	}
-
-	enabled, err := IsForeignKeyChecksEnabled(ctx)
-	if err != nil {
-		return err
-	}
-
-	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 ||
-		delCtx.tableDef.ViewSql != nil ||
-		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
-		delCtx.objRef.PubInfo != nil {
-		canTruncate = false
-	}
-
 	if (hasUniqueKey || hasSecondaryKey) && !canTruncate {
 		typMap := make(map[string]plan.Type)
 		posMap := make(map[string]int)

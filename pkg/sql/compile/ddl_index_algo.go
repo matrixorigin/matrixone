@@ -47,26 +47,27 @@ func (s *Scope) handleUniqueIndexTable(
 	if err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource); err != nil {
 		return err
 	}
-	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
-	// it will be processed when inserting into the hidden table.
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, mainTableID, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
-func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
+func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, sourceID uint64, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 	// Skip index data population for CCPR tables when this is a CCPR task transaction.
 	// The index data will be synced via CCPR data synchronization instead.
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
 		return nil
 	}
+	if sourceID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "index backfill source table ID is missing")
+	}
 	insertSQL, err := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
 	if err != nil {
 		return err
 	}
 	if indexDef.Unique {
-		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL)
+		return c.precheckAndInsertUniqueIndexTable(qryDatabase, originalTableDef, indexDef, insertSQL, sourceID)
 	}
-	return c.runSql(insertSQL)
+	return c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithIndexBackfillSourceID(sourceID))
 }
 
 func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.TableDef, indexDef *plan.IndexDef) (string, error) {
@@ -74,25 +75,17 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 	if err != nil {
 		return "", err
 	}
-	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
-	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
-	if len(indexDef.Parts) > 1 {
-		nullChecks := make([]string, 0, len(indexDef.Parts))
-		for _, part := range indexDef.Parts {
-			part = catalog.ResolveAlias(part)
-			partExpr := quoteMySQLQualifiedIdent(part)
-			if length := prefixLengths[part]; length > 0 {
-				partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
-			}
-			nullChecks = append(nullChecks, fmt.Sprintf("%s IS NOT NULL", partExpr))
-		}
-		nullCheckExpr = strings.Join(nullChecks, " AND ")
+	partExprs := indexPartExpressions(indexDef.Parts, prefixLengths)
+	nullChecks := make([]string, len(partExprs))
+	for i, expr := range partExprs {
+		nullChecks[i] = expr + " IS NOT NULL"
 	}
+	groupExpr := strings.Join(partExprs, ",")
 	return fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s GROUP BY %s HAVING count(*) > 1 LIMIT 1",
 		groupExpr,
 		quoteMySQLIdent(dbName),
 		quoteMySQLIdent(tableDef.Name),
-		nullCheckExpr,
+		strings.Join(nullChecks, " AND "),
 		groupExpr,
 	), nil
 }
@@ -102,14 +95,19 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 	tableDef *plan.TableDef,
 	indexDef *plan.IndexDef,
 	insertSQL string,
+	sourceID uint64,
 ) error {
-	// Unique indexes allow NULL keys, so the check mirrors the hidden-index
-	// backfill filter and only groups non-NULL keys.
+	if sourceID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "index backfill source table ID is missing")
+	}
+	// The backfill source binding exposes stored ENUM and SET values.
+	// Group each non-NULL key part with its SQL equality semantics.
 	duplicateCheckSQL, err := buildCreateUniqueIndexDuplicateCheckSQL(dbName, tableDef, indexDef)
 	if err != nil {
 		return err
 	}
-	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId, executor.StatementOption{}.WithDisableLog())
+	duplicateCheckRes, err := c.runSqlWithResultAndOptions(duplicateCheckSQL, NoAccountId,
+		executor.StatementOption{}.WithDisableLog().WithIndexBackfillSourceID(sourceID))
 	if err != nil {
 		c.proc.Errorf(c.proc.Ctx, "create unique index duplicate check failed, sql is %s", duplicateCheckSQL)
 		return err
@@ -126,7 +124,7 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 		TargetTableName: indexDef.IndexTableName,
 		SkipPkDedup:     true,
 	}
-	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt)
+	stmtOpt := executor.StatementOption{}.WithAlterCopyOpt(opt).WithIndexBackfillSourceID(sourceID)
 
 	restoreCtx := c.proc.Ctx
 	if restoreCtx == nil {
@@ -162,7 +160,7 @@ func (s *Scope) handleRegularSecondaryIndexTable(
 		return err
 	}
 
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, mainTableID, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
 func (s *Scope) handleMasterIndexTable(
@@ -190,10 +188,13 @@ func (s *Scope) handleMasterIndexTable(
 	if c.isCCPRTaskTransaction() && isTableFromPublication(originalTableDef) {
 		return nil
 	}
+	if mainTableID == 0 {
+		return moerr.NewInternalError(c.proc.Ctx, "index backfill source table ID is missing")
+	}
 
 	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
+		err = c.runSqlWithOptions(insertSQL, executor.StatementOption{}.WithIndexBackfillSourceID(mainTableID))
 		if err != nil {
 			return err
 		}
