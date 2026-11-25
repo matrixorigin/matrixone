@@ -141,4 +141,13 @@ alter table lca_child modify column b varchar(10) character set utf8mb4 collate 
 update lca_parent set b = 'new' where a = 1;
 data branch diff lca_child against lca_parent;
 
+-- Resolve the historical column when a rename and a charset declaration occur on opposite endpoints.
+create table rename_parent(a int primary key, b varchar(10));
+insert into rename_parent values(1, 'old');
+data branch create table rename_child from rename_parent;
+alter table rename_child modify column b varchar(10) character set utf8mb4 collate utf8mb4_bin;
+alter table rename_parent rename column b to renamed_b;
+update rename_child set b = 'new' where a = 1;
+data branch diff rename_child against rename_parent;
+
 drop database test;

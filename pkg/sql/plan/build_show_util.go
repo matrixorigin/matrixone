@@ -196,8 +196,8 @@ func constructCreateTableSQLWithFormat(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
-		if hasExplicitUTF8MB4Bin(&col.Typ) && !legacySchemaHash {
-			buf.WriteString(" CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+		if !legacySchemaHash {
+			buf.WriteString(ColumnCharsetClause(&col.Typ))
 		}
 
 		//-------------------------------------------------------------------------------------------------------------
@@ -1154,6 +1154,14 @@ func skipBlockComment(s string, start int) int {
 		}
 	}
 	return len(s) - 1
+}
+
+// ColumnCharsetClause returns the explicit charset clause with its leading space.
+func ColumnCharsetClause(typ *plan.Type) string {
+	if hasExplicitUTF8MB4Bin(typ) {
+		return " CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"
+	}
+	return ""
 }
 
 // FormatColType Get the formatted description of the column type.

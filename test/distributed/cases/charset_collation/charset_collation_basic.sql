@@ -618,6 +618,20 @@ SELECT * FROM t_edge_cases ORDER BY id;
 SELECT id, LENGTH(data), CHAR_LENGTH(data) FROM t_edge_cases ORDER BY id;
 
 -- @case
+-- @desc: Temporal extraction preserves microseconds with an explicit charset
+-- @label:bvt
+CREATE TABLE t_extract_charset (legacy_text VARCHAR(32), explicit_text VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin);
+INSERT INTO t_extract_charset VALUES ('2025-01-02 03:04:05.123456', '2025-01-02 03:04:05.123456');
+SELECT EXTRACT(MICROSECOND FROM legacy_text) AS legacy_us, EXTRACT(MICROSECOND FROM explicit_text) AS explicit_us FROM t_extract_charset;
+
+-- @case
+-- @desc: Text interval declarations preserve typed temporal precision
+-- @label:bvt
+CREATE TABLE t_interval_charset (dt DATETIME(0), legacy_text VARCHAR(32), explicit_text VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin);
+INSERT INTO t_interval_charset VALUES ('2025-01-02 03:04:05', '00:00:00.123456', '00:00:00.123456');
+SELECT ADDTIME(dt, legacy_text) AS legacy_add, ADDTIME(dt, explicit_text) AS explicit_add, SUBTIME(dt, legacy_text) AS legacy_sub, SUBTIME(dt, explicit_text) AS explicit_sub FROM t_interval_charset;
+
+-- @case
 -- @desc: Cleanup
 -- @label:bvt
 DROP DATABASE IF EXISTS charset_test;
