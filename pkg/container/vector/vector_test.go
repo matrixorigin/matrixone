@@ -3021,7 +3021,7 @@ func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 		"full in-order copy preserves independent payload ranges")
 	copied.Free(mp)
 
-	require.NoError(t, flat.Shrink([]int64{0, 0}, false, mp))
+	require.NoError(t, flat.Shuffle([]int64{0, 0}, mp))
 	require.False(t, flat.VarlenaAreaIsDisjoint(),
 		"selection can duplicate a descriptor")
 	flat.Free(mp)
