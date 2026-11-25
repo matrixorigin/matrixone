@@ -48,7 +48,7 @@ func TestPipelineIgnoresLegacyGroupingTrailer(t *testing.T) {
 	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{7, 0, 0}, []bool{false, true, true}, mp))
 	input.Attrs = []string{"key"}
-	input.ExtraBuf = []byte{2, 0, 3, 1}
+	input.extraBuf = []byte{2, 0, 3, 1}
 	input.SetRowCount(3)
 	plain, err := input.MarshalBinaryWithBuffer(&bytes.Buffer{}, true)
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestPipelineIgnoresLegacyGroupingTrailer(t *testing.T) {
 	check := func() {
 		require.Equal(t, 3, output.RowCount())
 		require.Equal(t, input.Attrs, output.Attrs)
-		require.Equal(t, input.ExtraBuf, output.ExtraBuf)
+		require.Equal(t, input.extraBuf, output.extraBuf)
 		require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], 0))
 		require.False(t, output.Vecs[0].IsNull(0))
 		require.True(t, output.Vecs[0].IsNull(1))
@@ -117,7 +117,7 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), false, mp))
 	}
 	input.SetRowCount(3)
-	input.ExtraBuf = []byte(pipelineGroupingMagic)
+	input.extraBuf = []byte(pipelineGroupingMagic)
 	plain, err := input.MarshalBinaryWithBuffer(&bytes.Buffer{}, true)
 	require.NoError(t, err)
 	prefix, err := stableBatchPayloadLength(plain)
@@ -129,7 +129,7 @@ func TestPipelineEnvelopeBoundariesAndReuse(t *testing.T) {
 	output := NewWithSize(0)
 	t.Cleanup(func() { output.Clean(mp) })
 	require.NoError(t, output.UnmarshalBinaryForPipeline(plain, mp))
-	require.Equal(t, input.ExtraBuf, output.ExtraBuf)
+	require.Equal(t, input.extraBuf, output.extraBuf)
 
 	groupOnly := append(bytes.Clone(plain), legacyPipelineGroupingTrailer(3, 1)...)
 	end = len(groupOnly) - pipelineGroupingFooterSize
