@@ -229,7 +229,11 @@ func newDiskCache(
 	ret.trash.limit.Store(-1)
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
-		o := ret.download(path)
+		// The file of a whole object is the one its fill publishes, while it is registered.
+		var o *objectDownload
+		if p := ret.wholeFill(path, false); p != nil {
+			o = p.joinableDownload()
+		}
 		ret.preloads.cachedDownload(path, o)
 		if o != nil {
 			if n := o.takeServed(); n > 0 {
