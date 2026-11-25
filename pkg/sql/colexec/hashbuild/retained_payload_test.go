@@ -44,10 +44,11 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 		rowCount, payloadColumns, valueBytes int
 		rowsPerInput                         int
 		queryBudget                          uint64
-		budgetFailure                        bool
+		budgetFailure, keyOnly               bool
 	}{
 		{name: "single-column-below-limit", rowCount: 11, payloadColumns: 1, valueBytes: 92 << 10, rowsPerInput: 6, queryBudget: 16 << 20},
 		{name: "multiple-columns-over-limit-in-total", rowCount: 12, payloadColumns: 3, valueBytes: 48 << 10, rowsPerInput: 6, queryBudget: 16 << 20},
+		{name: "key-only-over-limit", rowCount: 12, payloadColumns: 1, valueBytes: 92 << 10, rowsPerInput: 6, queryBudget: 16 << 20, keyOnly: true},
 		{name: "single-column-over-limit", rowCount: 12, payloadColumns: 1, valueBytes: 92 << 10, rowsPerInput: 6, queryBudget: 16 << 20},
 		{name: "next-physical-batch-rejected-by-query-budget", rowCount: 12, payloadColumns: 1, valueBytes: 92 << 10, rowsPerInput: 11, queryBudget: 1075 << 10, budgetFailure: true},
 	} {
@@ -58,8 +59,12 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 			for range tc.payloadColumns {
 				columnTypes = append(columnTypes, payloadType)
 			}
-			fixture := newTestCase(t, nil, columnTypes, []*plan.Expr{newExpr(0, keyType)})
-			fixture.arg.NeedBatches = true
+			key := newExpr(0, keyType)
+			if tc.keyOnly {
+				key = newExpr(2, payloadType)
+			}
+			fixture := newTestCase(t, nil, columnTypes, []*plan.Expr{key})
+			fixture.arg.NeedBatches = !tc.keyOnly
 			fixture.arg.NeedAllocateSels = true
 			proc := fixture.proc
 			mp := proc.Mp()
@@ -125,6 +130,12 @@ func TestHashBuildRetainedVarlenAllocationBoundary(t *testing.T) {
 			require.NotNil(t, joinMap)
 			t.Cleanup(joinMap.Free)
 			require.Equal(t, int64(tc.rowCount), joinMap.GetRowCount())
+			if tc.keyOnly {
+				require.Equal(t, uint64(tc.rowCount), joinMap.GetGroupCount())
+				require.Empty(t, joinMap.GetBatches())
+				require.False(t, joinMap.HasBatchRowEnds())
+				return
+			}
 			require.Equal(t, uint64(1), joinMap.GetGroupCount())
 
 			seen := make([]bool, tc.rowCount)
