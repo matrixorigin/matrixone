@@ -632,6 +632,17 @@ INSERT INTO t_interval_charset VALUES ('2025-01-02 03:04:05', '00:00:00.123456',
 SELECT ADDTIME(dt, legacy_text) AS legacy_add, ADDTIME(dt, explicit_text) AS explicit_add, SUBTIME(dt, legacy_text) AS legacy_sub, SUBTIME(dt, explicit_text) AS explicit_sub FROM t_interval_charset;
 
 -- @case
+-- @desc: Widen VARCHAR in place across equivalent text charset declarations
+-- @label:bvt
+CREATE TABLE t_inplace_charset (id INT PRIMARY KEY, payload VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin);
+INSERT INTO t_inplace_charset VALUES (1, '😀');
+ALTER TABLE t_inplace_charset MODIFY COLUMN payload VARCHAR(20), ALGORITHM=INPLACE;
+SELECT CONCAT(CHARACTER_SET_NAME, '/', COLLATION_NAME, '/', CHARACTER_MAXIMUM_LENGTH) AS column_metadata FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'payload';
+ALTER TABLE t_inplace_charset MODIFY COLUMN payload VARCHAR(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, ALGORITHM=INPLACE;
+SELECT CONCAT(CHARACTER_SET_NAME, '/', COLLATION_NAME, '/', CHARACTER_MAXIMUM_LENGTH) AS column_metadata FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'payload';
+SELECT HEX(payload) AS payload_hex FROM t_inplace_charset;
+
+-- @case
 -- @desc: Cleanup
 -- @label:bvt
 DROP DATABASE IF EXISTS charset_test;

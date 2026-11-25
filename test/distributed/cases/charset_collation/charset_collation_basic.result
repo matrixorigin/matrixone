@@ -727,6 +727,19 @@ INSERT INTO t_interval_charset VALUES ('2025-01-02 03:04:05', '00:00:00.123456',
 SELECT ADDTIME(dt, legacy_text) AS legacy_add, ADDTIME(dt, explicit_text) AS explicit_add, SUBTIME(dt, legacy_text) AS legacy_sub, SUBTIME(dt, explicit_text) AS explicit_sub FROM t_interval_charset;
 ➤ legacy_add[93,64,0]  ¦  explicit_add[93,64,0]  ¦  legacy_sub[93,64,0]  ¦  explicit_sub[93,64,0]  𝄀
 2025-01-02 03:04:05  ¦  2025-01-02 03:04:05  ¦  2025-01-02 03:04:05  ¦  2025-01-02 03:04:05
+CREATE TABLE t_inplace_charset (id INT PRIMARY KEY, payload VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin);
+INSERT INTO t_inplace_charset VALUES (1, '😀');
+ALTER TABLE t_inplace_charset MODIFY COLUMN payload VARCHAR(20), ALGORITHM=INPLACE;
+SELECT CONCAT(CHARACTER_SET_NAME, '/', COLLATION_NAME, '/', CHARACTER_MAXIMUM_LENGTH) AS column_metadata FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'payload';
+➤ column_metadata[12,-1,0]  𝄀
+utf8/utf8_bin/20
+ALTER TABLE t_inplace_charset MODIFY COLUMN payload VARCHAR(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin, ALGORITHM=INPLACE;
+SELECT CONCAT(CHARACTER_SET_NAME, '/', COLLATION_NAME, '/', CHARACTER_MAXIMUM_LENGTH) AS column_metadata FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_inplace_charset' AND COLUMN_NAME = 'payload';
+➤ column_metadata[12,-1,0]  𝄀
+utf8mb4/utf8mb4_bin/30
+SELECT HEX(payload) AS payload_hex FROM t_inplace_charset;
+➤ payload_hex[12,-1,0]  𝄀
+F09F9880
 DROP DATABASE IF EXISTS charset_test;
 DROP DATABASE IF EXISTS charset_test_utf8;
 DROP DATABASE IF EXISTS charset_test_utf8mb4;
