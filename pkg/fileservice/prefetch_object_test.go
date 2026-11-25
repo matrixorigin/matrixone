@@ -126,7 +126,7 @@ func TestPrefetchRangeDoesNotJoinUncachedObject(t *testing.T) {
 	opened := make(chan struct{})
 	fetched := make(chan error, 1)
 	go func() {
-		_, _, _, err := d.fetchRange(context.Background(), "object", 0, 0, unit, func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
+		_, _, _, err := d.fetchRange(context.Background(), "object", 0, false, 0, unit, func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			close(opened)
 			<-held
 			return fs.storage.Read(ctx, "object", &start, &end)

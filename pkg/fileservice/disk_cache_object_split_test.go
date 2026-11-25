@@ -530,7 +530,7 @@ func TestJoinableSkipsPartNotBegun(t *testing.T) {
 	covering := func(lo, hi int64) prefetchObject {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return d.joinableLocked(diskPath, lo, hi, time.Now(), true)
+		return d.joinableLocked(diskPath, false, lo, hi, time.Now(), true)
 	}
 	require.NotNil(t, covering(1, 2), "the first part has begun")
 	require.Nil(t, covering(5, 6), "the second part has not begun")

@@ -373,7 +373,7 @@ func TestPrefetchFastestFlight(t *testing.T) {
 	slow := addFlight(&d, "p", 0, 4<<20, now)
 	fast := addFlight(&d, "p", 4096, 8192, now)
 	d.prefetchObjects.mu.Lock()
-	got := d.prefetchObjects.fastestLocked("p", 5000, 5010, now, 0, true)
+	got := d.prefetchObjects.fastestLocked("p", false, 5000, 5010, now, 0, true)
 	eta := got.eta(now, 5000, 5010)
 	d.prefetchObjects.mu.Unlock()
 	require.Same(t, fast, got)

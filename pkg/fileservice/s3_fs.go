@@ -1518,7 +1518,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		if src.tier != diskTier {
 			policy |= SkipDiskCacheWrites
 		}
-		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, policy, *min, *max, open)
+		content, ok, cached, err := s.diskCache.fetchRange(ctx, path.File, policy, vector.indexTier, *min, *max, open)
 		if err != nil {
 			return err
 		}

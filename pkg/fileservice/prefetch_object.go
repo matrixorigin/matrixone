@@ -27,6 +27,10 @@ import (
 type prefetchObject interface {
 	// span returns the bytes of the object it downloads.
 	span() (start, end int64)
+	// target returns the object it downloads and the cache it is of.
+	target() *prefetchTarget
+	// live reports whether it was not stopped.
+	live() bool
 	// joinable reports whether reads can join it yet.
 	joinable() bool
 	// eta estimates how long after now its bytes [lo, hi) arrive.
@@ -64,6 +68,8 @@ func (f *memoryPrefetchObject) span() (int64, int64) { return f.start, f.end }
 
 func (f *memoryPrefetchObject) joinable() bool { return true }
 
+func (f *memoryPrefetchObject) live() bool { return f.ctx == nil || f.ctx.Err() == nil }
+
 func (f *memoryPrefetchObject) caches() bool { return !f.skipCache }
 
 func (f *memoryPrefetchObject) endsCached() bool { return !f.skipCache || f.needs.joinsCaching }
@@ -99,6 +105,15 @@ func (f *memoryPrefetchObject) err() error { return f.cacheErr }
 func (p *filePrefetchObject) span() (int64, int64) { return p.start, p.end }
 
 func (p *filePrefetchObject) joinable() bool { return p.joinableDownload() != nil }
+
+// live reports whether p was not stopped, or its download wrote every byte.
+func (p *filePrefetchObject) live() bool {
+	if p.ctx.Err() == nil {
+		return true
+	}
+	o := p.joinableDownload()
+	return o != nil && o.isComplete()
+}
 
 func (p *filePrefetchObject) eta(_ time.Time, lo, hi int64) time.Duration {
 	o := p.joinableDownload()

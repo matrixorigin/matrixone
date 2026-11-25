@@ -219,7 +219,7 @@ func (p *filePrefetchObject) joinLocked(now time.Time) prefetchObject {
 	if p.whole {
 		return nil
 	}
-	return p.d.prefetchObjects.holdingLocked(p.diskPath, p.start, p.end, now, p.d.downloadMaxExtraWait)
+	return p.d.prefetchObjects.holdingLocked(p.diskPath, p.index, p.start, p.end, now, p.d.downloadMaxExtraWait)
 }
 
 // fitsLocked reports true: p needs only a connection.
@@ -277,15 +277,16 @@ func (d *DiskCache) forgetFill(objectPath string, p *filePrefetchObject) {
 	p.cancelRead()
 }
 
-// holdingLocked returns the prefetch object of the object at objectPath holding the bytes
-// [start, end) that a FilePrefetchObject joins instead of downloading them: the fastest
-// one reads can join that caches them, or a registered FilePrefetchObject a read started.
-func (f *prefetchObjects) holdingLocked(objectPath string, start, end int64, now time.Time, extraWait time.Duration) prefetchObject {
-	if o := f.fastestLocked(objectPath, start, end, now, extraWait, true); o != nil {
+// holdingLocked returns the prefetch object of the object at objectPath, of the cache
+// index names, holding the bytes [start, end) that a FilePrefetchObject joins instead of
+// downloading them: the fastest one reads can join that caches them, or a registered
+// FilePrefetchObject a read started.
+func (f *prefetchObjects) holdingLocked(objectPath string, index bool, start, end int64, now time.Time, extraWait time.Duration) prefetchObject {
+	if o := f.fastestLocked(objectPath, index, start, end, now, extraWait, true); o != nil {
 		return o
 	}
 	for _, o := range f.m[objectPath] {
-		if p, ok := o.(*filePrefetchObject); ok && p.readStarted && p.ctx.Err() == nil && p.start <= start && end <= p.end {
+		if p, ok := o.(*filePrefetchObject); ok && p.readStarted && p.index == index && p.live() && p.start <= start && end <= p.end {
 			return p
 		}
 	}
@@ -365,13 +366,12 @@ func (d *DiskCache) fileFill(objectPath string, index bool, lo, hi int64) (*file
 	var bestWait time.Duration
 	for _, o := range f.m[objectPath] {
 		p, ok := o.(*filePrefetchObject)
-		if !ok || p.index != index || p.start > lo || hi > p.end || p.ctx.Err() != nil {
+		if !ok || !joinsLocked(p, index, lo, hi, false) {
 			continue
 		}
-		if download := p.joinableDownload(); download != nil {
-			if _, wait := download.estimate(lo-p.start, hi-p.start); best == nil || wait < bestWait {
-				best, bestDownload, bestWait = p, download, wait
-			}
+		download := p.joinableDownload()
+		if _, wait := download.estimate(lo-p.start, hi-p.start); best == nil || wait < bestWait {
+			best, bestDownload, bestWait = p, download, wait
 		}
 	}
 	return best, bestDownload

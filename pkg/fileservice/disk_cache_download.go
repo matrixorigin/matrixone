@@ -994,9 +994,12 @@ func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, p *f
 	if wait == 0 {
 		metric.FSDiskCacheDownloadReadWrittenCounter.Inc()
 	} else {
-		if eta, ok := d.fastestPrefetch(diskPath, entry.Offset, end); ok && eta < wait {
-			if _, ok := d.prefetchUnit(vector); ok {
-				return true, false, nil
+		// A prefetch range of the disk cache being read delivers the bytes sooner.
+		if !p.index {
+			if eta, ok := d.fastestPrefetch(diskPath, entry.Offset, end); ok && eta < wait {
+				if _, ok := d.prefetchUnit(vector); ok {
+					return true, false, nil
+				}
 			}
 		}
 		if !d.joinsFill(entry.Size, wait) && !(p.whole && entry.Size*downloadDuplicateRatio > behind) {
@@ -1031,7 +1034,7 @@ func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, p *f
 // joinsFill reports whether a read of n bytes joins a file fill whose bytes arrive wait
 // from now: no later than the max extra wait after a range read could fetch them.
 func (d *DiskCache) joinsFill(n int64, wait time.Duration) bool {
-	return wait <= rangeReadCosts.cost(n)+d.downloadMaxExtraWait
+	return arrivesInTime(n, wait, d.downloadMaxExtraWait)
 }
 
 const (
