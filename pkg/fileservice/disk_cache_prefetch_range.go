@@ -875,9 +875,11 @@ type prefetchTarget struct {
 	filePath, diskPath string
 	open               rangeOpener
 	needs              flightNeeds
-	closing            context.Context
-	state              objectState
-	since              time.Time
+	// index is set on a fill of the index-file cache.
+	index   bool
+	closing context.Context
+	state   objectState
+	since   time.Time
 	// waitedFrom is when it began to wait for its resources, zero if it has not.
 	waitedFrom time.Time
 }

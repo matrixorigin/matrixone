@@ -851,9 +851,19 @@ func (d *DiskCache) startDownload(diskPath, tempPath string, measured, indexFile
 	return o
 }
 
-func (d *DiskCache) finishDownload(diskPath string, o *objectDownload) {
+// finishDownload ends the download o of the fill p of the object at diskPath, once its
+// file is published or dropped: p is forgotten, and a fill of bytes the write path holds
+// ends.
+func (d *DiskCache) finishDownload(diskPath string, o *objectDownload, p *filePrefetchObject) {
 	o.end(false)
 	d.downloads.remove(diskPath, o)
+	if p != nil {
+		d.forgetFill(p.diskPath, p)
+		if p.content {
+			close(p.endedCh)
+			p.markReady()
+		}
+	}
 	o.retire()
 }
 

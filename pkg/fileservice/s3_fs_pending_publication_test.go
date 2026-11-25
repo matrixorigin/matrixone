@@ -293,7 +293,7 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			opensBefore := storage.opens.Load()
 			if mode == "cancel-between-entries" || mode == "error-between-entries" {
 				// A follower whose bytes no download covers reads them as bounded ranges.
-				fs.diskCache.finishDownload(diskPath, fs.diskCache.download(diskPath))
+				fs.diskCache.finishDownload(diskPath, fs.diskCache.download(diskPath), fs.diskCache.wholeFill(diskPath, false))
 				readCtx, stop := context.WithCancel(context.Background())
 				defer stop()
 				secondRead := make(chan struct{})

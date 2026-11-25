@@ -1069,7 +1069,8 @@ func (d *DiskCache) writeFileTo(
 	// the object since the mark of ctx.
 	var whole *filePrefetchObject
 	if fill == storageFill {
-		whole = d.newWholeObject(ctx, diskPath)
+		_, index := target.(indexFillTarget)
+		whole = d.newWholeObject(ctx, diskPath, index)
 		defer func() { whole.endWhole(err) }()
 	}
 	if target.heldBeforeLock(ctx) {
@@ -1104,9 +1105,11 @@ func (d *DiskCache) writeFileTo(
 		}
 		ctx, releaseConns = whole.ctx, whole.releaseConn
 		w.releaseConns = releaseConns
-		// A download splits only when fewer than the limit are in flight once it is counted.
-		if objectSize != nil && d.objectSplit.parts > 1 {
+		if objectSize != nil {
 			if size, splitAt, err := objectSize(ctx); err == nil {
+				whole.endAt(size)
+				// A download splits only when fewer than the limit are in flight once it is
+				// counted.
 				if b := d.objectSplit.bounds(size, splitAt); b != nil &&
 					d.downloads.take(int64(cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))) {
 					bounds, lead, taken = b, leadPart(b, splitAt), true
@@ -1165,11 +1168,16 @@ func (d *DiskCache) writeFileTo(
 		} else {
 			download = d.startDownload(diskPath, f.Name(), fill != contentFill, indexFile, bounds, taken)
 			taken = false
-			w.owner.first(func() { d.finishDownload(diskPath, download) })
 		}
 		// Its lead part holds the connection the download took.
 		download.begin(lead)
-		fileDownloadStarted(ctx, download)
+		own := fileDownloadStarted(ctx, download)
+		if own == nil && !unpublished {
+			own = d.newContentFill(diskPath, download)
+		}
+		if !unpublished {
+			w.owner.first(func() { d.finishDownload(diskPath, download, own) })
+		}
 		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
 	}
@@ -1236,6 +1244,9 @@ func (d *DiskCache) writeFileTo(
 		deletes = whole.needs.deletes
 	}
 	if asyncFinalize {
+		if whole != nil {
+			whole.handedOff = true
+		}
 		d.scheduleReservedAsyncFileFinalize(diskPath, f, w.owner, target, deletes)
 		w = fileWrite{releaseConns: w.releaseConns}
 		return true, nil
