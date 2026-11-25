@@ -1078,16 +1078,31 @@ func (sv *SystemVariables) Clone() *SystemVariables {
 func (sv *SystemVariables) Get(name string) interface{} {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	return sv.mp[name]
 }
 
 func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
 	sv.mutationGeneration++
+}
+
+func canonicalSystemVariableName(name string) string {
+	name = strings.ToLower(name)
+	if name == "innodb_lock_wait_timeout" {
+		return "lock_wait_timeout"
+	}
+	return name
+}
+
+func init() {
+	// Both spellings use the native scope, validator and stored value.
+	alias := gSysVarsDefs["lock_wait_timeout"]
+	alias.Name = "innodb_lock_wait_timeout"
+	gSysVarsDefs[alias.Name] = alias
 }
 
 // definitions of system variables

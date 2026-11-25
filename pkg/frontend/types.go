@@ -1406,7 +1406,7 @@ func (ses *feSessionImpl) GetGlobalSysVars() *SystemVariables {
 }
 
 func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	if sv, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	} else if sv.Scope == ScopeSession {
@@ -1421,7 +1421,7 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1478,7 +1478,7 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 }
 
 func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}
@@ -1507,7 +1507,7 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 }
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
-	name = strings.ToLower(name)
+	name = canonicalSystemVariableName(name)
 	oldMatrixOneNative := false
 	oldOptimizerHints := ""
 	if name == "sql_mode" {
