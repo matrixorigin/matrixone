@@ -584,12 +584,7 @@ func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Nulls) {
 	}
 	vec.tryCOW()
 
-	var dels []int64
-	mask.Foreach(func(i uint64) bool {
-		dels = append(dels, int64(i))
-		return true
-	})
-	if err := vec.wrapped.Shrink(dels, true, vec.mpool); err != nil {
+	if err := vec.wrapped.ShrinkByMask(mask.GetBitmap(), true, 0, vec.mpool); err != nil {
 		panic(err)
 	}
 }

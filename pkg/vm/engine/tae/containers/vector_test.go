@@ -1319,3 +1319,32 @@ func TestVectorWrapper_WriteTo_ConcurrentCalls(t *testing.T) {
 		}
 	}
 }
+
+// CompactByBitmap removes the rows set in the mask and keeps NULLs aligned.
+func TestCompactByBitmap(t *testing.T) {
+	opts := withAllocator(Options{})
+	vec := NewVector(types.T_int32.ToType(), opts)
+	for i := 0; i < 10; i++ {
+		vec.Append(int32(i), i == 4 || i == 5)
+	}
+	mask, err := nulls.Build(10, opts.Allocator, 1, 5, 9)
+	require.NoError(t, err)
+	vec.CompactByBitmap(mask)
+	require.Equal(t, 7, vec.Length())
+	want := []int32{0, 2, 3, 4, 6, 7, 8}
+	for i, w := range want {
+		if w == 4 {
+			require.True(t, vec.IsNull(i))
+			continue
+		}
+		require.False(t, vec.IsNull(i), "row %d", i)
+		require.Equal(t, w, vec.Get(i).(int32))
+	}
+	// An empty mask leaves the vector unchanged.
+	var empty nulls.Nulls
+	vec.CompactByBitmap(&empty)
+	require.Equal(t, 7, vec.Length())
+	mask.Free()
+	vec.Close()
+	require.Zero(t, opts.Allocator.CurrNB())
+}

@@ -659,14 +659,13 @@ func BlockDataReadBackup(
 			err = moerr.NewInternalError(ctx, "backup object has no commit timestamp")
 			return
 		}
-		rows := tombstones.ToI64Array(nil)
-		if len(rows) > 0 {
-			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", len(rows)))
+		if !tombstones.IsEmpty() {
+			logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", location.String()), zap.Int("rows", tombstones.Count()))
 			// The decoded columns reference the cache; shrink owned copies.
 			if err = loaded.OwnReadOnlyVectors(mp); err != nil {
 				return
 			}
-			if err = loaded.Shrink(rows, true, mp); err != nil {
+			if err = loaded.ShrinkByMask(tombstones.Bitmap(), true, 0, mp); err != nil {
 				return
 			}
 		}
@@ -1176,10 +1175,8 @@ func blockDataReadWithFilter(
 
 		physicalRowCount = outputBat.Vecs[earlyColumns[0]].Length()
 		if !deleteMask.IsEmpty() {
-			var deleted []int64
-			deleted = deleteMask.ToI64Array(&deleted)
 			for _, pos := range earlyColumns {
-				if err := outputBat.Vecs[pos].Shrink(deleted, true, mp); err != nil {
+				if err := outputBat.Vecs[pos].ShrinkByMask(deleteMask.Bitmap(), true, 0, mp); err != nil {
 					return err
 				}
 			}
@@ -1638,9 +1635,8 @@ func BlockDataReadInner(
 	}
 
 	var (
-		deletedRows []int64
-		deleteMask  objectio.Bitmap
-		release     func()
+		deleteMask objectio.Bitmap
+		release    func()
 	)
 
 	// Normal scans must materialize the complete result, but they do not need
@@ -1687,10 +1683,8 @@ func BlockDataReadInner(
 		defer deleteMask.Release()
 
 		if !deleteMask.IsEmpty() {
-			var arr []int64
-			deletedRows = deleteMask.ToI64Array(&arr)
 			for i := range columns {
-				if err := outputBat.Vecs[i].Shrink(deletedRows, true, mp); err != nil {
+				if err := outputBat.Vecs[i].ShrinkByMask(deleteMask.Bitmap(), true, 0, mp); err != nil {
 					return err
 				}
 			}
@@ -1814,14 +1808,6 @@ func BlockDataReadInner(
 
 	// Note: it always goes here if no filter or the block is not sorted
 
-	// transform delete mask to deleted rows
-	// TODO: avoid this transformation
-	if !deleteMask.IsEmpty() {
-		var arr []int64
-
-		deletedRows = deleteMask.ToI64Array(&arr)
-	}
-
 	if shouldFallbackOrderedLimitToFullBlockRead(orderByLimit, info) {
 		// Ordered-limit pushdown can only prune sorted blocks. Fall back to the
 		// normal UnionBatch+Shrink path on unsorted blocks to avoid building
@@ -1875,8 +1861,8 @@ func BlockDataReadInner(
 			}
 			loadedColumnPos++
 		}
-		if len(deletedRows) > 0 {
-			if err = outputBat.Vecs[outputColPos].Shrink(deletedRows, true, mp); err != nil {
+		if !deleteMask.IsEmpty() {
+			if err = outputBat.Vecs[outputColPos].ShrinkByMask(deleteMask.Bitmap(), true, 0, mp); err != nil {
 				return
 			}
 		}

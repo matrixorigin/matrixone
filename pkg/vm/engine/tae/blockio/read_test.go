@@ -2690,3 +2690,101 @@ func TestBlockDataReadWithFilterPublishesSelection(t *testing.T) {
 		})
 	}
 }
+
+// A backup read of an object without a commit-ts column removes the
+// tombstoned rows with the delete mask itself.
+func TestBlockDataReadBackupNoCommitTSAppliesTombstones(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	for row := range 6 {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), row == 3, mp))
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(fmt.Sprintf("value-longer-than-inline-%d", row)), false, mp))
+	}
+	input.SetRowCount(6)
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, -1, false, false, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(mp)
+
+	loaded, _, err := BlockDataReadBackup(
+		ctx, &info, &blockReadTestDataSource{deleted: []uint64{1, 4}},
+		nil, types.TS{}, fs, common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 4, loaded.RowCount())
+	require.Equal(t, 4, loaded.Vecs[0].Length())
+	got := vector.MustFixedColWithTypeCheck[int32](loaded.Vecs[0])
+	require.Equal(t, int32(0), got[0])
+	require.Equal(t, int32(2), got[1])
+	require.True(t, loaded.Vecs[0].IsNull(2), "row 3 stays NULL")
+	require.Equal(t, int32(5), got[3])
+	for i, row := range []int{0, 2, 3, 5} {
+		require.Equal(t, fmt.Sprintf("value-longer-than-inline-%d", row), loaded.Vecs[1].GetStringAt(i))
+	}
+	loaded.Clean(common.DebugAllocator)
+}
+
+// An ordered limit on an unsorted block falls back to the full read, which
+// removes the deleted rows from every column, the row-id column included.
+func TestBlockDataReadInnerOrderedLimitFallbackAppliesDeletes(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	writeMP := mpool.MustNewZero()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), writeMP)
+	for row := range 8 {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row*10), row == 6, writeMP))
+	}
+	input.SetRowCount(8)
+	writer := ioutil.ConstructWriter(0, []uint16{0}, -1, false, false, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(writeMP)
+	mpool.DeleteMPool(writeMP)
+	require.False(t, info.IsSorted())
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	columns := []uint16{0, objectio.SEQNUM_ROWID}
+	colTypes := []types.Type{types.T_int32.ToType(), types.T_Rowid.ToType()}
+	output := batch.NewWithSize(len(columns))
+	for i := range colTypes {
+		output.Vecs[i] = vector.NewVec(colTypes[i], mp)
+	}
+	cacheVectors := containers.NewVectors(len(columns))
+	require.NoError(t, BlockDataReadInner(
+		ctx, &info, &blockReadTestDataSource{deleted: []uint64{0, 3, 7}},
+		columns, colTypes, 1, types.TS{}, nil,
+		&objectio.IndexReaderTopOp{Limit: 2, OrderedLimit: true},
+		fileservice.Policy(0), output, cacheVectors, mp, fs,
+	))
+	cacheVectors.Free(mp)
+	live := []int{1, 2, 4, 5, 6}
+	require.Equal(t, len(live), output.Vecs[0].Length())
+	require.Equal(t, len(live), output.Vecs[1].Length())
+	vals := vector.MustFixedColWithTypeCheck[int32](output.Vecs[0])
+	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](output.Vecs[1])
+	for i, row := range live {
+		require.Equal(t, row == 6, output.Vecs[0].IsNull(uint64(i)), "row %d", row)
+		if row != 6 {
+			require.Equal(t, int32(row*10), vals[i])
+		}
+		require.Equal(t, uint32(row), rowids[i].GetRowOffset())
+	}
+	freeTestBatchWithOwnPools(output)
+	require.Zero(t, mp.CurrNB())
+}

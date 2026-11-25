@@ -6212,34 +6212,67 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
 	if !negate {
-		itr := sels.Iterator()
-		idx := 0
-		for itr.HasNext() {
-			vs[idx] = vs[itr.Next()+offset]
-			idx++
-		}
+		keepFixedByMask(vs[:v.length], sels, offset)
 		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, false, offset)
 		v.length = length
 	} else if length > 0 {
-		itr := sels.Iterator()
-		sel := itr.Next() + offset
-		for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
-			if oldIdx != int(sel) {
-				vs[newIdx] = vs[oldIdx]
-				newIdx++
-			} else {
-				if !itr.HasNext() {
-					for idx := oldIdx + 1; idx < v.length; idx++ {
-						vs[newIdx] = vs[idx]
-						newIdx++
-					}
-					break
-				}
-				sel = itr.Next() + offset
-			}
-		}
+		removeFixedByMask(vs[:v.length], sels, offset)
 		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, true, offset)
 		v.length -= length
+	}
+}
+
+// keepFixedByMask moves row b+offset of vs to the front, in order, for every
+// set row b of sels. A full word moves 64 rows with one copy.
+func keepFixedByMask[T any](vs []T, sels *bitmap.Bitmap, offset uint64) {
+	out := 0
+	words := sels.NumWords()
+	for i := 0; i < words; i++ {
+		w := sels.Word(i)
+		if w == 0 {
+			continue
+		}
+		base := 64*i + int(offset)
+		if w == ^uint64(0) {
+			out += copy(vs[out:], vs[base:base+64])
+			continue
+		}
+		for w != 0 {
+			t := bits.TrailingZeros64(w)
+			w &^= 1 << uint(t)
+			vs[out] = vs[base+t]
+			out++
+		}
+	}
+}
+
+// removeFixedByMask drops row b+offset of vs for every set row b of sels and
+// closes the gaps, copying each run of kept rows at once. Rows at or past
+// len(vs) are ignored.
+func removeFixedByMask[T any](vs []T, sels *bitmap.Bitmap, offset uint64) {
+	n := len(vs)
+	out, next := 0, 0 // next: first row not yet placed
+	words := sels.NumWords()
+	for i := 0; i < words; i++ {
+		w := sels.Word(i)
+		base := 64*i + int(offset)
+		for w != 0 {
+			t := bits.TrailingZeros64(w)
+			w &^= 1 << uint(t)
+			row := base + t
+			if row >= n {
+				i = words
+				break
+			}
+			if out != next {
+				copy(vs[out:], vs[next:row])
+			}
+			out += row - next
+			next = row + 1
+		}
+	}
+	if out != next && next < n {
+		copy(vs[out:], vs[next:n])
 	}
 }
 
