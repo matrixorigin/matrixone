@@ -153,6 +153,54 @@ def test_constructor_forwards_auto_commit_to_auto_connect(monkeypatch):
     assert connect.call_args.kwargs['auto_commit'] is False
 
 
+@pytest.mark.parametrize('constructor_autocommit', [False, True])
+def test_sync_connect_inherits_autocommit_and_honors_reconnect_overrides(monkeypatch, constructor_autocommit):
+    import matrixone.client as module
+    from sqlalchemy.engine import Engine
+
+    client = Client(auto_commit=constructor_autocommit, logger=Mock())
+    factory = Mock(wraps=module.create_engine)
+    monkeypatch.setattr(module, 'create_engine', factory)
+    monkeypatch.setattr(Engine, 'connect', MagicMock())
+    monkeypatch.setattr(client, '_detect_backend_version', lambda: None)
+    try:
+        for options, expected in [
+            ({}, constructor_autocommit),
+            ({'auto_commit': False}, False),
+            ({'auto_commit': True}, True),
+            ({}, constructor_autocommit),
+            ({'auto_commit': None}, constructor_autocommit),
+        ]:
+            client.connect(database='test', on_connect=[], **options)
+            assert factory.call_args.kwargs['connect_args']['autocommit'] is expected
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('constructor_autocommit', [False, True])
+async def test_async_connect_inherits_autocommit_and_honors_reconnect_overrides(monkeypatch, constructor_autocommit):
+    import matrixone.async_client as module
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    client = AsyncClient(auto_commit=constructor_autocommit, logger=Mock())
+    factory = Mock(wraps=module.create_async_engine)
+    monkeypatch.setattr(module, 'create_async_engine', factory)
+    monkeypatch.setattr(AsyncEngine, 'begin', MagicMock())
+    try:
+        for options, expected in [
+            ({}, constructor_autocommit),
+            ({'auto_commit': False}, False),
+            ({'auto_commit': True}, True),
+            ({}, constructor_autocommit),
+            ({'auto_commit': None}, constructor_autocommit),
+        ]:
+            await client.connect(database='test', on_connect=[], **options)
+            assert factory.call_args.kwargs['connect_args']['autocommit'] is expected
+    finally:
+        await client.disconnect()
+
+
 @pytest.mark.parametrize('autocommit', [False, True])
 def test_driver_receives_sync_timeout_charset_and_autocommit(monkeypatch, autocommit):
     import matrixone.client as module

@@ -468,7 +468,7 @@ class Client(BaseMatrixOneClient):
         role: Optional[str] = None,
         charset: str = "utf8mb4",
         connection_timeout: Optional[int] = None,
-        auto_commit: bool = True,
+        auto_commit: Optional[bool] = None,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
         capability_overrides: Optional[dict] = None,
         local_infile: Optional[bool] = None,
@@ -492,7 +492,7 @@ class Client(BaseMatrixOneClient):
             role: Optional role name (will be combined with user if user doesn't contain '#' or ':')
             charset: Character set for the connection (default: utf8mb4)
             connection_timeout: Override constructor connection timeout; None inherits it
-            auto_commit: Enable autocommit (default: True)
+            auto_commit: Override constructor autocommit; None inherits it
             on_connect: Connection hook to execute after successful connection.
                        Can be:
                        - ConnectionHook instance
@@ -551,7 +551,7 @@ class Client(BaseMatrixOneClient):
             "charset": charset,
             "connect_timeout": timeout,
             "ssl_mode": ssl_mode,
-            "autocommit": auto_commit,
+            "autocommit": self.auto_commit if auto_commit is None else auto_commit,
             "local_infile": local_infile,
             "ssl_disabled": ssl_mode == "disabled",
             "ssl_verify_cert": ssl_mode == "required",
