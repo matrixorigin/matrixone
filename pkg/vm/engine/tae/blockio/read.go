@@ -1227,7 +1227,9 @@ func blockDataReadWithFilter(
 			physicalRows == nil
 		if !filterResult.All {
 			if publishSelection && len(filterResult.Sels) > 0 {
-				publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter)
+				if err := publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter); err != nil {
+					return err
+				}
 				return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
 			}
 			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
@@ -1617,7 +1619,8 @@ func BlockDataReadInner(
 				return err
 			}
 		}
-		_, err = materializeBlockData(
+		var ignored objectio.Bitmap
+		ignored, err = materializeBlockData(
 			ctx,
 			info,
 			columns,
@@ -1630,6 +1633,7 @@ func BlockDataReadInner(
 			mp,
 			fs,
 		)
+		ignored.Release()
 		return err
 	}
 
@@ -1947,7 +1951,8 @@ func materializeVectorTopNRows(
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows
-// present in the deleteMask. Returns nil when there is nothing to filter.
+// present in the deleteMask. Returns nil when no rows are deleted and a nonnil
+// empty slice when every row is deleted; callers use nil to mean all rows.
 func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
 	if length <= 0 || deleteMask.IsEmpty() {
 		return nil

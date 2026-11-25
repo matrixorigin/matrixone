@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/exp/rand"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -94,7 +95,13 @@ func minMaxFixture[T types.FixedSizeT](tb testing.TB, typ types.T, values []T, p
 		}
 	}
 	if backing == "readonly" && nulls != 0 {
-		v.GetNulls().GetBitmap().InitWithInvertedBits(validity, 3, len(values))
+		// A read-only vector's NULLs reference an encoded bitmap, as a
+		// cached block's do.
+		var owned bitmap.Bitmap
+		require.NoError(tb, owned.InitWithInvertedBits(validity, 3, len(values), mpool.MustNewZero()))
+		encoded := owned.Marshal()
+		owned.Free()
+		require.NoError(tb, v.GetNulls().ReadNoCopy(encoded))
 	}
 	return v
 }

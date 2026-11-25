@@ -79,7 +79,7 @@ func TestSumAvgNumericCoercionExecAndMerge(t *testing.T) {
 					require.NoError(t, err)
 					targets, shouldCast := bound.ShouldDoImplicitTypeCast()
 					require.True(t, shouldCast)
-					nsp := nulls.NewWithSize(len(tc.input.nullList))
+					nsp := mustNullsOK(nulls.NewWithSize(len(tc.input.nullList), bitmapTestMP))
 					for i, isNull := range tc.input.nullList {
 						if isNull {
 							nsp.Set(uint64(i))

@@ -546,6 +546,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) freeRightRowsMatched(proc *process.Process) {
+	ctr.rightRowsMatched.Free()
 	ctr.rightRowsMatched = nil
 }
 

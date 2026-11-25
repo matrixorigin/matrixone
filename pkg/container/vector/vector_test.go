@@ -450,10 +450,10 @@ func TestShrink(t *testing.T) {
 func TestShrinkByMask(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var bm bitmap.Bitmap
-	bm.InitWithSize(2)
+	require.NoError(t, bm.InitWithSize(2, mpool.MustNewZero()))
 	bm.AddMany([]uint64{0, 1})
 	var bmask bitmap.Bitmap
-	bmask.InitWith(&bm)
+	require.NoError(t, bmask.InitWith(&bm, bm.MPool()))
 
 	//{ // Array Float32
 	//	v := NewVec(types.T_array_float32.ToType())
@@ -933,7 +933,7 @@ func TestShrinkByMask(t *testing.T) {
 func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var mask bitmap.Bitmap
-	mask.InitWithSize(3)
+	require.NoError(t, mask.InitWithSize(3, mpool.MustNewZero()))
 	mask.AddMany([]uint64{0, 2})
 
 	t.Run("negate", func(t *testing.T) {
@@ -1912,7 +1912,7 @@ func TestGeometryVarlenPlumbing(t *testing.T) {
 	}, InefficientMustBytesCol(minmax))
 
 	var bm bitmap.Bitmap
-	bm.InitWithSize(2)
+	require.NoError(t, bm.InitWithSize(2, mpool.MustNewZero()))
 	bm.AddMany([]uint64{0, 1})
 	maskVec := NewVec(types.T_geometry.ToType(), mp)
 	err = AppendBytesList(maskVec, [][]byte{
@@ -3525,4 +3525,33 @@ func TestNarrowArrayVectorOps(t *testing.T) {
 	t.Run("uint8", func(t *testing.T) {
 		exerciseNarrowArray(t, types.T_array_uint8, []uint8{1, 2, 3}, []uint8{4, 5, 6})
 	})
+}
+
+// A read-only vector can own its nulls bitmap (DetachNulls). WindowInto
+// would drop that bitmap without freeing it, so it rejects such a target.
+func TestWindowIntoRejectsTargetOwningNulls(t *testing.T) {
+	mp := mpool.MustNewZero()
+	nspMP := mpool.MustNewZero()
+	src := NewVec(types.T_int64.ToType(), mp)
+	for i := 0; i < 8; i++ {
+		require.NoError(t, AppendFixed(src, int64(i), i%2 == 0, mp))
+	}
+	w, err := src.Window(0, 8)
+	require.NoError(t, err)
+	require.True(t, w.IsReadOnly())
+	require.NoError(t, w.DetachNulls(nspMP))
+	require.False(t, w.GetNulls().IsReadOnly())
+	require.Greater(t, nspMP.CurrNB(), int64(0))
+
+	require.Error(t, src.WindowInto(w, 0, 4))
+	require.True(t, w.GetNulls().Contains(0), "the rejected target is unchanged")
+
+	w.Free(nil)
+	require.Zero(t, nspMP.CurrNB())
+	var fresh Vector
+	require.NoError(t, src.WindowInto(&fresh, 0, 4))
+	require.Equal(t, 4, fresh.Length())
+	require.True(t, fresh.GetNulls().Contains(2))
+	src.Free(mp)
+	require.Zero(t, mp.CurrNB())
 }

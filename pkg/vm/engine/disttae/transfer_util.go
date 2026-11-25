@@ -141,7 +141,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	logs = append(logs, zap.Int("origin-tombstoneObjects", len(tombstoneObjects)))
 
 	if tombstoneObjects, err = ioutil.CoarseFilterTombstoneObject(
-		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
+		ctx, deletedObjectsIter, tombstoneObjects, fs, mp); err != nil {
 		return nil, logs, err
 	} else if len(tombstoneObjects) == 0 {
 		return nil, logs, nil

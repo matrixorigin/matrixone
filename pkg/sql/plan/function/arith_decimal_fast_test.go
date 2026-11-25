@@ -187,7 +187,7 @@ func TestD64Add(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
-			n := nulls.NewWithSize(length)
+			n := mustNullsOK(nulls.NewWithSize(length, bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -355,7 +355,7 @@ func TestD64Sub(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
-			n := nulls.NewWithSize(length)
+			n := mustNullsOK(nulls.NewWithSize(length, bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -540,7 +540,7 @@ func TestD64Mul(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := make([]types.Decimal128, len(tc.want))
-			n := nulls.NewWithSize(len(result))
+			n := mustNullsOK(nulls.NewWithSize(len(result), bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -804,7 +804,7 @@ func TestD64Div(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := max(len(tc.x), len(tc.y))
-			mask := nulls.NewWithSize(n)
+			mask := mustNullsOK(nulls.NewWithSize(n, bitmapTestMP))
 			for _, i := range tc.initial {
 				mask.Add(i)
 			}
@@ -892,7 +892,7 @@ func TestD64Mod(t *testing.T) {
 			for i := range rs {
 				rs[i] = decimal(9000 + i)
 			}
-			nul := nulls.NewWithSize(len(rs))
+			nul := mustNullsOK(nulls.NewWithSize(len(rs), bitmapTestMP))
 			for _, i := range tc.initialNulls {
 				nul.Add(i)
 			}
@@ -979,7 +979,7 @@ func BenchmarkD64AddDiffScale_Fast(b *testing.B) {
 		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
 		ys[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64Add(xs, ys, rs, 2, 5, nul)
@@ -995,7 +995,7 @@ func BenchmarkD64SubDiffScale_Fast(b *testing.B) {
 		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
 		ys[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64Sub(xs, ys, rs, 2, 5, nul)
@@ -1016,7 +1016,7 @@ func BenchmarkD64AddDiffScale_FastLarge(b *testing.B) {
 		xs[i] = types.Decimal64(v)
 		ys[i] = types.Decimal64(rng.Int63n(1_000_000) - 500_000) // small so add doesn't overflow
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64Add(xs, ys, rs, 2, 5, nul)
@@ -1051,7 +1051,7 @@ func BenchmarkD64MulScaled_Fast(b *testing.B) {
 		xs[i] = types.Decimal64(rng.Int63n(1_000_000_000) - 500_000_000)
 		ys[i] = types.Decimal64(rng.Int63n(100) + 1)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64Mul(xs, ys, rs, 10, 10, nul)
@@ -1099,7 +1099,7 @@ func BenchmarkD64Div_Fast(b *testing.B) {
 		xs[i] = randD64(rng)
 		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64DivAtScale(xs, ys, rs, 2, 2, 8, nul, true)
@@ -1134,7 +1134,7 @@ func BenchmarkD64Mod_Fast(b *testing.B) {
 		xs[i] = types.Decimal64(rng.Int63())
 		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64Mod(xs, ys, rs, 2, 2, nul, true)
@@ -1150,7 +1150,7 @@ func BenchmarkD64ModDiffScale_Fast(b *testing.B) {
 		xs[i] = types.Decimal64(rng.Int63())
 		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64Mod(xs, ys, rs, 2, 4, nul, true)
@@ -1166,7 +1166,7 @@ func BenchmarkD64IntDiv_Fast(b *testing.B) {
 		xs[i] = types.Decimal64(rng.Int63())
 		ys[i] = types.Decimal64(rng.Int63n(999) + 1)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d64IntDiv(xs, ys, rs, 2, 2, nul, true)
@@ -1402,7 +1402,7 @@ func TestD128Add(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
-			n := nulls.NewWithSize(length)
+			n := mustNullsOK(nulls.NewWithSize(length, bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -1579,7 +1579,7 @@ func TestD128Sub(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
-			n := nulls.NewWithSize(length)
+			n := mustNullsOK(nulls.NewWithSize(length, bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -1623,7 +1623,7 @@ func TestD128SubDiffScaleDecimalMinusIntLiteralCases(t *testing.T) {
 			v1 := []types.Decimal128{types.Decimal128FromInt64(tc.left)}
 			v2 := []types.Decimal128{types.Decimal128FromInt64(tc.right)}
 			rs := make([]types.Decimal128, 1)
-			nul := nulls.NewWithSize(1)
+			nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 
 			idx, err := d128SubDiffScale(v1, v2, rs, 2, 0, nul)
 			require.NoError(t, err)
@@ -1642,7 +1642,7 @@ func TestD128SubDiffScaleDecimalMinusIntLiteralCases(t *testing.T) {
 			types.Decimal128FromInt64(3999),
 		}
 		rs := make([]types.Decimal128, len(v2))
-		nul := nulls.NewWithSize(len(v2))
+		nul := mustNullsOK(nulls.NewWithSize(len(v2), bitmapTestMP))
 		nul.Add(2)
 
 		idx, err := d128SubDiffScale(v1, v2, rs, 2, 0, nul)
@@ -1663,7 +1663,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add same length no null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(1)}
-		nul := nulls.NewWithSize(1)
+		nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 
 		idx := d128AddSameScale([]types.Decimal128{max}, rs, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1671,7 +1671,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add same length with null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(1), types.Decimal128FromInt64(1)}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d128AddSameScale([]types.Decimal128{max, max}, rs, rs, nul)
@@ -1680,7 +1680,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add left scalar no null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(1), types.Decimal128FromInt64(1)}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d128AddSameScale([]types.Decimal128{max}, rs, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1688,7 +1688,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add left scalar with null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(1), types.Decimal128FromInt64(1)}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d128AddSameScale([]types.Decimal128{max}, rs, rs, nul)
@@ -1697,7 +1697,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add right scalar no null", func(t *testing.T) {
 		rs := []types.Decimal128{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d128AddSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(1)}, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1705,7 +1705,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add right scalar with null", func(t *testing.T) {
 		rs := []types.Decimal128{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d128AddSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(1)}, rs, nul)
@@ -1714,7 +1714,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub same length no null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(30100)}
-		nul := nulls.NewWithSize(1)
+		nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 
 		idx := d128SubSameScale([]types.Decimal128{types.Decimal128FromInt64(30000)}, rs, rs, nul)
 		require.Equal(t, -1, idx)
@@ -1723,7 +1723,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub same length with null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(30100), types.Decimal128FromInt64(30100)}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d128SubSameScale(
@@ -1738,7 +1738,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub left scalar no null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(30100), types.Decimal128FromInt64(30100)}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d128SubSameScale([]types.Decimal128{types.Decimal128FromInt64(30000)}, rs, rs, nul)
 		require.Equal(t, -1, idx)
@@ -1747,7 +1747,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub left scalar with null", func(t *testing.T) {
 		rs := []types.Decimal128{types.Decimal128FromInt64(30100), types.Decimal128FromInt64(30100)}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d128SubSameScale([]types.Decimal128{types.Decimal128FromInt64(30000)}, rs, rs, nul)
@@ -1757,7 +1757,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub right scalar no null", func(t *testing.T) {
 		rs := []types.Decimal128{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d128SubSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(-1)}, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1765,7 +1765,7 @@ func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub right scalar with null", func(t *testing.T) {
 		rs := []types.Decimal128{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d128SubSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(-1)}, rs, nul)
@@ -1782,7 +1782,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add same length no null", func(t *testing.T) {
 		rs := []types.Decimal64{one}
-		nul := nulls.NewWithSize(1)
+		nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 
 		idx := d64AddSameScale([]types.Decimal64{max}, rs, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1790,7 +1790,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add same length with null", func(t *testing.T) {
 		rs := []types.Decimal64{one, one}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d64AddSameScale([]types.Decimal64{max, max}, rs, rs, nul)
@@ -1799,7 +1799,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add left scalar no null", func(t *testing.T) {
 		rs := []types.Decimal64{one, one}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d64AddSameScale([]types.Decimal64{max}, rs, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1807,7 +1807,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add left scalar with null", func(t *testing.T) {
 		rs := []types.Decimal64{one, one}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d64AddSameScale([]types.Decimal64{max}, rs, rs, nul)
@@ -1816,7 +1816,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add right scalar no null", func(t *testing.T) {
 		rs := []types.Decimal64{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d64AddSameScale(rs, []types.Decimal64{one}, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1824,7 +1824,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("add right scalar with null", func(t *testing.T) {
 		rs := []types.Decimal64{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d64AddSameScale(rs, []types.Decimal64{one}, rs, nul)
@@ -1833,7 +1833,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub same length no null", func(t *testing.T) {
 		rs := []types.Decimal64{30100}
-		nul := nulls.NewWithSize(1)
+		nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 
 		idx := d64SubSameScale([]types.Decimal64{30000}, rs, rs, nul)
 		require.Equal(t, -1, idx)
@@ -1842,7 +1842,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub same length with null", func(t *testing.T) {
 		rs := []types.Decimal64{30100, 30100}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d64SubSameScale([]types.Decimal64{30000, 30000}, rs, rs, nul)
@@ -1852,7 +1852,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub left scalar no null", func(t *testing.T) {
 		rs := []types.Decimal64{30100, 30100}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d64SubSameScale([]types.Decimal64{30000}, rs, rs, nul)
 		require.Equal(t, -1, idx)
@@ -1861,7 +1861,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub left scalar with null", func(t *testing.T) {
 		rs := []types.Decimal64{30100, 30100}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d64SubSameScale([]types.Decimal64{30000}, rs, rs, nul)
@@ -1871,7 +1871,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub right scalar no null", func(t *testing.T) {
 		rs := []types.Decimal64{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 
 		idx := d64SubSameScale(rs, []types.Decimal64{types.Decimal64(uint64(negOne))}, rs, nul)
 		require.Equal(t, 0, idx)
@@ -1879,7 +1879,7 @@ func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
 
 	t.Run("sub right scalar with null", func(t *testing.T) {
 		rs := []types.Decimal64{max, max}
-		nul := nulls.NewWithSize(2)
+		nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 		nul.Add(0)
 
 		idx := d64SubSameScale(rs, []types.Decimal64{types.Decimal64(uint64(negOne))}, rs, nul)
@@ -2100,7 +2100,7 @@ func TestD128Mul(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			nul := nulls.NewWithSize(len(tc.want))
+			nul := mustNullsOK(nulls.NewWithSize(len(tc.want), bitmapTestMP))
 			for _, i := range tc.masked {
 				nul.Add(i)
 			}
@@ -2753,7 +2753,7 @@ func TestD128Div(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := max(len(tc.x), len(tc.y))
-			mask := nulls.NewWithSize(n)
+			mask := mustNullsOK(nulls.NewWithSize(n, bitmapTestMP))
 			for _, i := range tc.initial {
 				mask.Add(i)
 			}
@@ -2883,7 +2883,7 @@ func TestD128Mod(t *testing.T) {
 			for i := range rs {
 				rs[i] = decimal{B0_63: uint64(9000 + i), B64_127: 99}
 			}
-			nul := nulls.NewWithSize(len(rs))
+			nul := mustNullsOK(nulls.NewWithSize(len(rs), bitmapTestMP))
 			for _, i := range tc.initialNulls {
 				nul.Add(i)
 			}
@@ -2926,7 +2926,7 @@ func BenchmarkD128Add_Fast(b *testing.B) {
 		xs[i] = randD128(rng)
 		ys[i] = randD128(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Add(xs, ys, rs, 2, 2, nul)
@@ -2959,7 +2959,7 @@ func BenchmarkD128AddDiffScale_Fast(b *testing.B) {
 		xs[i] = randD128Small(rng)
 		ys[i] = randD128Small(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Add(xs, ys, rs, 2, 5, nul)
@@ -2975,7 +2975,7 @@ func BenchmarkD128SubDiffScale_Fast(b *testing.B) {
 		xs[i] = randD128Small(rng)
 		ys[i] = randD128Small(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Sub(xs, ys, rs, 2, 5, nul)
@@ -2991,7 +2991,7 @@ func BenchmarkD128AddDiffScale_FastLarge(b *testing.B) {
 		xs[i] = randD128(rng)
 		ys[i] = randD128(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Add(xs, ys, rs, 2, 5, nul)
@@ -3007,7 +3007,7 @@ func BenchmarkD128Mul_Fast(b *testing.B) {
 		xs[i] = randD128Small(rng)
 		ys[i] = randD128Small(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Mul(xs, ys, rs, 2, 3, nul)
@@ -3045,7 +3045,7 @@ func BenchmarkD128Mul_FastLarge(b *testing.B) {
 			ys[i] = ys[i].Minus()
 		}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Mul(xs, ys, rs, 2, 3, nul)
@@ -3081,7 +3081,7 @@ func BenchmarkD128Div_Fast(b *testing.B) {
 		xs[i] = randD128(rng)
 		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128DivAtScale(xs, ys, rs, 2, 2, 8, nul, true)
@@ -3114,7 +3114,7 @@ func BenchmarkD128Mod_Fast(b *testing.B) {
 		xs[i] = randD128(rng)
 		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Mod(xs, ys, rs, 2, 2, nul, true)
@@ -3130,7 +3130,7 @@ func BenchmarkD128ModDiffScale_Fast(b *testing.B) {
 		xs[i] = randD128(rng)
 		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128Mod(xs, ys, rs, 2, 4, nul, true)
@@ -3147,7 +3147,7 @@ func BenchmarkD128IntDiv_Fast(b *testing.B) {
 		xs[i] = types.Decimal128{B0_63: uint64(rng.Int63()), B64_127: 0}
 		ys[i] = types.Decimal128{B0_63: uint64(rng.Int63n(999) + 1), B64_127: 0}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d128IntDiv(xs, ys, rs, 2, 2, nul, true)
@@ -3455,7 +3455,7 @@ func TestD256Add(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
-			n := nulls.NewWithSize(length)
+			n := mustNullsOK(nulls.NewWithSize(length, bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -3762,7 +3762,7 @@ func TestD256Sub(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			length := max(len(tc.left), len(tc.right))
-			n := nulls.NewWithSize(length)
+			n := mustNullsOK(nulls.NewWithSize(length, bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -4037,7 +4037,7 @@ func TestD256Mul(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			nul := nulls.NewWithSize(len(tc.want))
+			nul := mustNullsOK(nulls.NewWithSize(len(tc.want), bitmapTestMP))
 			for _, i := range tc.masked {
 				nul.Add(i)
 			}
@@ -4064,7 +4064,7 @@ func TestD256Mul_Int32ScaleDown(t *testing.T) {
 	y := []types.Decimal256{{B0_63: 1}}
 	want := []types.Decimal256{{}, {B0_63: 1}, {B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0)}}
 	got := make([]types.Decimal256, len(want))
-	nul := nulls.NewWithSize(len(want))
+	nul := mustNullsOK(nulls.NewWithSize(len(want), bitmapTestMP))
 	require.NoError(t, d256Mul(x, y, got, 10, 10, nul, decimalRangeUnknown, decimalRangeUnknown))
 	require.Equal(t, 0, nul.Count())
 	require.Equal(t, want, got)
@@ -4405,7 +4405,7 @@ func TestD256Div(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := max(len(tc.x), len(tc.y))
-			mask := nulls.NewWithSize(n)
+			mask := mustNullsOK(nulls.NewWithSize(n, bitmapTestMP))
 			for _, i := range tc.initial {
 				mask.Add(i)
 			}
@@ -4442,7 +4442,7 @@ func TestD256DivViaD128PreservesWideQuotient(t *testing.T) {
 	require.NoError(t, err)
 
 	got := make([]types.Decimal256, 1)
-	resultNulls := nulls.NewWithSize(1)
+	resultNulls := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 	err = d256DivAtScale([]types.Decimal256{x}, []types.Decimal256{y}, got, 30, 18, 30, resultNulls, true)
 	require.NoError(t, err)
 	require.Equal(t, "333333333333333333.333333333333333333333333333333", got[0].Format(30))
@@ -4454,7 +4454,7 @@ func TestD256DivViaD128PreservesWideQuotient(t *testing.T) {
 	y128, err := types.ParseDecimal128("0.000000000000000003", 38, 18)
 	require.NoError(t, err)
 	got128 := make([]types.Decimal128, 1)
-	err = d128DivAtScale([]types.Decimal128{x128}, []types.Decimal128{y128}, got128, 30, 18, 30, nulls.NewWithSize(1), true)
+	err = d128DivAtScale([]types.Decimal128{x128}, []types.Decimal128{y128}, got128, 30, 18, 30, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true)
 	require.Error(t, err)
 }
 
@@ -4483,12 +4483,12 @@ func TestD256DivViaD128NegativePowerOfTwoDivisor(t *testing.T) {
 		} {
 			t.Run(tc.divisor+"/"+shape.name, func(t *testing.T) {
 				result := make([]types.Decimal256, 2)
-				require.NoError(t, d256DivAtScale(shape.left, shape.right, result, 0, 0, 4, nulls.NewWithSize(2), true))
+				require.NoError(t, d256DivAtScale(shape.left, shape.right, result, 0, 0, 4, mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)), true))
 				for _, got := range result {
 					require.Equal(t, tc.quotient, got.Format(4))
 				}
 				integers := make([]int64, 2)
-				require.NoError(t, d256IntDiv(shape.left, shape.right, integers, 0, 0, nulls.NewWithSize(2), true))
+				require.NoError(t, d256IntDiv(shape.left, shape.right, integers, 0, 0, mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)), true))
 				require.Equal(t, []int64{tc.intQuotient, tc.intQuotient}, integers)
 			})
 		}
@@ -4521,7 +4521,7 @@ func TestDecimalDivisionMaxUint64Rounding(t *testing.T) {
 			y, err := types.ParseDecimal128(yText, 38, 0)
 			require.NoError(t, err)
 			got := make([]types.Decimal128, 1)
-			require.NoError(t, d128DivAtScale([]types.Decimal128{x}, []types.Decimal128{y}, got, 0, 0, 0, nulls.NewWithSize(1), true))
+			require.NoError(t, d128DivAtScale([]types.Decimal128{x}, []types.Decimal128{y}, got, 0, 0, 0, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 			require.Equal(t, want, got[0].Format(0), "numerator=%s divisor=%s", xText, yText)
 		}
 	}
@@ -4549,7 +4549,7 @@ func TestD256DivViaD128AvoidsIntermediateScaleOverflow(t *testing.T) {
 			0,
 			30,
 			30,
-			nulls.NewWithSize(1),
+			mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)),
 			true,
 		)
 		require.NoError(t, err, "negative=%t", negative)
@@ -4567,7 +4567,7 @@ func TestD256DivViaD128AvoidsIntermediateScaleOverflow(t *testing.T) {
 		0,
 		30,
 		30,
-		nulls.NewWithSize(1),
+		mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)),
 		true,
 	))
 }
@@ -4590,7 +4590,7 @@ func TestD256DivViaD128MinInt128Divisor(t *testing.T) {
 		require.NoError(t, err)
 
 		got := make([]types.Decimal256, 1)
-		err = d256DivAtScale([]types.Decimal256{left}, []types.Decimal256{right}, got, 0, 0, 6, nulls.NewWithSize(1), true)
+		err = d256DivAtScale([]types.Decimal256{left}, []types.Decimal256{right}, got, 0, 0, 6, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true)
 		require.NoError(t, err, "negativeNumerator=%t", negativeNumerator)
 		require.Equal(t, want, got[0].Format(6), "negativeNumerator=%t", negativeNumerator)
 	}
@@ -4613,7 +4613,7 @@ func TestD128DivLargeDivisorHalfUp(t *testing.T) {
 			}
 
 			got := make([]types.Decimal128, 1)
-			err := d128DivAtScale([]types.Decimal128{left}, []types.Decimal128{right}, got, 0, 18, 6, nulls.NewWithSize(1), true)
+			err := d128DivAtScale([]types.Decimal128{left}, []types.Decimal128{right}, got, 0, 18, 6, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true)
 			require.NoError(t, err)
 			want := "0.123457"
 			if negativeX != negativeY {
@@ -4629,14 +4629,14 @@ func TestD128DivOneToD256FailurePaths(t *testing.T) {
 	zero := types.Decimal128{}
 
 	t.Run("zero divisor returns error", func(t *testing.T) {
-		nul := nulls.NewWithSize(1)
+		nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 		var dst types.Decimal256
 		err := d128DivOneToD256(x, zero, &dst, 0, nul, 0, true, 0, 0)
 		require.Error(t, err)
 	})
 
 	t.Run("zero divisor sets null", func(t *testing.T) {
-		nul := nulls.NewWithSize(1)
+		nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 		var dst types.Decimal256
 		err := d128DivOneToD256(x, zero, &dst, 0, nul, 0, false, 0, 0)
 		require.NoError(t, err)
@@ -4647,7 +4647,7 @@ func TestD128DivOneToD256FailurePaths(t *testing.T) {
 		numerator := []types.Decimal256{{B0_63: 20}}
 		divisor := []types.Decimal256{{B0_63: 1}}
 		result := make([]types.Decimal256, 1)
-		err := d256DivAtScale(numerator, divisor, result, 0, 76, 6, nulls.NewWithSize(1), true)
+		err := d256DivAtScale(numerator, divisor, result, 0, 76, 6, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "Decimal256 Div overflow")
 	})
@@ -4897,7 +4897,7 @@ func TestD256Mod(t *testing.T) {
 		{name: "high_bits_VS", x: []decimal{{}, {B0_63: 2000000000000000000}, {B0_63: 4000000000000000000}}, y: []decimal{{B64_127: 1 << 62}}, want: []decimal{{}, {B64_127: 0x2eeb4be2e32a2000}, {B64_127: 0x1dd697c5c6544000}}, s1: 0, s2: 58, masked: []uint64{0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			nul := nulls.NewWithSize(len(tc.want))
+			nul := mustNullsOK(nulls.NewWithSize(len(tc.want), bitmapTestMP))
 			for _, i := range tc.masked {
 				nul.Add(i)
 			}
@@ -4936,7 +4936,7 @@ func TestD256Mod_LargeValues(t *testing.T) {
 	y := []decimal{{B0_63: 17}, {B0_63: 31}, {B0_63: 97}, {B0_63: 1000003}}
 	want := []decimal{{B0_63: 1}, {B0_63: 12}, {B0_63: 15}, {B0_63: 791407}}
 	got := make([]decimal, len(want))
-	nul := nulls.NewWithSize(len(want))
+	nul := mustNullsOK(nulls.NewWithSize(len(want), bitmapTestMP))
 	require.NoError(t, d256Mod(x, y, got, 0, 0, nul, true))
 	require.Equal(t, 0, nul.Count())
 	require.Equal(t, want, got)
@@ -4946,7 +4946,7 @@ func TestD256ModHighBitsZeroPolicy(t *testing.T) {
 	values := []types.Decimal256{{B0_63: 2000000000000000000}, {}, {B0_63: 4000000000000000000}}
 	divisors := []types.Decimal256{{}, {}, {B64_127: 1 << 62}}
 	for _, strict := range []bool{false, true} {
-		masked := nulls.NewWithSize(3)
+		masked := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 		masked.Add(1)
 		sentinel := types.Decimal256FromInt64(99)
 		got := []types.Decimal256{sentinel, sentinel, sentinel}
@@ -4979,16 +4979,16 @@ func TestD256IntDivHighMagnitude(t *testing.T) {
 		{types.Decimal256{B192_255: 1 << 63}, x, -2},
 	} {
 		got := make([]int64, 1)
-		require.NoError(t, d256IntDiv([]types.Decimal256{tc.x}, []types.Decimal256{tc.y}, got, 0, 0, nulls.NewWithSize(1), true))
+		require.NoError(t, d256IntDiv([]types.Decimal256{tc.x}, []types.Decimal256{tc.y}, got, 0, 0, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 		require.Equal(t, tc.want, got[0])
 	}
 	got := make([]int64, 1)
-	err := d256IntDiv([]types.Decimal256{x}, []types.Decimal256{types.Decimal256FromInt64(1)}, got, 0, 0, nulls.NewWithSize(1), true)
+	err := d256IntDiv([]types.Decimal256{x}, []types.Decimal256{types.Decimal256FromInt64(1)}, got, 0, 0, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
 	// Decimal128's widening consumer must also terminate and reject a quotient
 	// outside Decimal128, rather than hang in the widened primitive.
 	var widened types.Decimal128
-	err = d128IntDivOne(types.Decimal128{B0_63: 2000000000000000000}, types.Decimal128{B64_127: 1 << 62}, &widened, 58, nulls.NewWithSize(1), 0, true, 0, 58)
+	err = d128IntDivOne(types.Decimal128{B0_63: 2000000000000000000}, types.Decimal128{B64_127: 1 << 62}, &widened, 58, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), 0, true, 0, 58)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
 	require.Contains(t, err.Error(), "Decimal128 IntDiv overflow")
 }
@@ -5003,7 +5003,7 @@ func TestD256ModScaleAlignmentOverflow(t *testing.T) {
 	values := []types.Decimal256{maximum, maximum.Minus(), maximum, maximum.Minus()}
 	divisors := []types.Decimal256{seven, seven, negativeSeven, negativeSeven}
 	results := make([]types.Decimal256, len(values))
-	require.NoError(t, d256Mod(values, divisors, results, 0, 30, nulls.NewWithSize(len(values)), true))
+	require.NoError(t, d256Mod(values, divisors, results, 0, 30, mustNullsOK(nulls.NewWithSize(len(values), bitmapTestMP)), true))
 	for i, want := range []int64{4, -4, 4, -4} {
 		require.Equal(t, types.Decimal256FromInt64(want), results[i], "scale-up remainder[%d]", i)
 	}
@@ -5013,7 +5013,7 @@ func TestD256ModScaleAlignmentOverflow(t *testing.T) {
 	values = []types.Decimal256{seven, negativeSeven, seven, negativeSeven}
 	divisors = []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
 	results = make([]types.Decimal256, len(values))
-	require.NoError(t, d256Mod(values, divisors, results, 30, 0, nulls.NewWithSize(len(values)), true))
+	require.NoError(t, d256Mod(values, divisors, results, 30, 0, mustNullsOK(nulls.NewWithSize(len(values), bitmapTestMP)), true))
 	for i, want := range []int64{7, -7, 7, -7} {
 		require.Equal(t, types.Decimal256FromInt64(want), results[i], "scale-down remainder[%d]", i)
 	}
@@ -5028,7 +5028,7 @@ func BenchmarkD256Add_Fast(b *testing.B) {
 		xs[i] = randD256(rng)
 		ys[i] = randD256(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Add(xs, ys, rs, 2, 2, nul)
@@ -5061,7 +5061,7 @@ func BenchmarkD256AddDiffScale_Fast(b *testing.B) {
 		xs[i] = randD256Small(rng)
 		ys[i] = randD256Small(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Add(xs, ys, rs, 2, 5, nul)
@@ -5094,7 +5094,7 @@ func BenchmarkD256SubDiffScale_Fast(b *testing.B) {
 		xs[i] = randD256Small(rng)
 		ys[i] = randD256Small(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Sub(xs, ys, rs, 2, 5, nul)
@@ -5128,7 +5128,7 @@ func BenchmarkD256Mul_Fast(b *testing.B) {
 		xs[i] = randD256Small(rng)
 		ys[i] = randD256Small(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Mul(xs, ys, rs, 2, 3, nul, decimalRangeUnknown, decimalRangeUnknown)
@@ -5150,7 +5150,7 @@ func BenchmarkD256Mul_FastMixed(b *testing.B) {
 			ys[i] = ys[i].Minus()
 		}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Mul(xs, ys, rs, 2, 3, nul, decimalRangeUnknown, decimalRangeUnknown)
@@ -5166,7 +5166,7 @@ func BenchmarkD256MulScaled_Fast(b *testing.B) {
 		xs[i] = randD256Small(rng)
 		ys[i] = randD256Small(rng)
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Mul(xs, ys, rs, 10, 10, nul, decimalRangeUnknown, decimalRangeUnknown)
@@ -5183,7 +5183,7 @@ func BenchmarkD256Mul_FastLarge(b *testing.B) {
 		xs[i] = types.Decimal256{B0_63: uint64(rng.Int63n(1_000_000_000)), B64_127: uint64(rng.Int63n(100))}
 		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(1_000_000_000))}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Mul(xs, ys, rs, 2, 3, nul, decimalRangeUnknown, decimalRangeUnknown)
@@ -5216,7 +5216,7 @@ func BenchmarkD256Div_Fast(b *testing.B) {
 		xs[i] = randD256(rng)
 		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256DivAtScale(xs, ys, rs, 2, 2, 8, nul, true)
@@ -5251,7 +5251,7 @@ func BenchmarkD256Mod_Fast(b *testing.B) {
 		xs[i] = randD256Small(rng)
 		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Mod(xs, ys, rs, 2, 2, nul, true)
@@ -5267,7 +5267,7 @@ func BenchmarkD256ModDiffScale_Fast(b *testing.B) {
 		xs[i] = randD256Small(rng)
 		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256Mod(xs, ys, rs, 2, 5, nul, true)
@@ -5284,7 +5284,7 @@ func BenchmarkD256IntDiv_Fast(b *testing.B) {
 		xs[i] = types.Decimal256{B0_63: uint64(rng.Int63())}
 		ys[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
 	}
-	nul := nulls.NewWithSize(benchN)
+	nul := mustNullsOK(nulls.NewWithSize(benchN, bitmapTestMP))
 	b.ResetTimer()
 	for iter := 0; iter < b.N; iter++ {
 		_ = d256IntDiv(xs, ys, rs, 2, 2, nul, true)
@@ -5368,7 +5368,7 @@ func TestD64IntDiv(t *testing.T) {
 			for i := range rs {
 				rs[i] = 9000 + int64(i)
 			}
-			nul := nulls.NewWithSize(n)
+			nul := mustNullsOK(nulls.NewWithSize(n, bitmapTestMP))
 			for _, i := range tc.initial {
 				nul.Add(i)
 			}
@@ -5462,7 +5462,7 @@ func TestD128IntDiv(t *testing.T) {
 			for i := range rs {
 				rs[i] = 9000 + int64(i)
 			}
-			nul := nulls.NewWithSize(n)
+			nul := mustNullsOK(nulls.NewWithSize(n, bitmapTestMP))
 			for _, i := range tc.initial {
 				nul.Add(i)
 			}
@@ -5567,7 +5567,7 @@ func TestD256IntDiv(t *testing.T) {
 			for i := range rs {
 				rs[i] = 9000 + int64(i)
 			}
-			nul := nulls.NewWithSize(n)
+			nul := mustNullsOK(nulls.NewWithSize(n, bitmapTestMP))
 			for _, i := range tc.initial {
 				nul.Add(i)
 			}
@@ -5612,7 +5612,7 @@ func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
 	zeroInputs := []types.Decimal256{seven, seven.Minus(), seven, seven.Minus()}
 	zeroDivisors := []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
 	require.NoError(t, d256IntDiv(
-		zeroInputs, zeroDivisors, zeroResults, 30, 0, nulls.NewWithSize(4), true))
+		zeroInputs, zeroDivisors, zeroResults, 30, 0, mustNullsOK(nulls.NewWithSize(4, bitmapTestMP)), true))
 	require.Equal(t, []int64{0, 0, 0, 0}, zeroResults)
 
 	// This distinguishes truncation from the rounded Scale operation:
@@ -5628,7 +5628,7 @@ func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
 	require.NoError(t, d256IntDiv(
 		[]types.Decimal256{truncateNumerator, truncateNumerator.Minus()},
 		[]types.Decimal256{truncateDivisor, truncateDivisor},
-		truncateResults, 30, 0, nulls.NewWithSize(2), true))
+		truncateResults, 30, 0, mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)), true))
 	require.Equal(t, []int64{1, -1}, truncateResults)
 
 	// The positive scale adjustment can also overflow the numerator while the
@@ -5637,12 +5637,12 @@ func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
 	positiveNumerators := []types.Decimal256{maximum, maximum.Minus(), maximum, maximum.Minus()}
 	positiveDivisors := []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
 	require.NoError(t, d256IntDiv(
-		positiveNumerators, positiveDivisors, positiveResults, 0, 12, nulls.NewWithSize(4), true))
+		positiveNumerators, positiveDivisors, positiveResults, 0, 12, mustNullsOK(nulls.NewWithSize(4, bitmapTestMP)), true))
 	require.Equal(t, []int64{1_000_000_000_000, -1_000_000_000_000, -1_000_000_000_000, 1_000_000_000_000}, positiveResults)
 
 	// Preserve the null-row short circuit before division-by-zero handling.
 	nullResults := make([]int64, 2)
-	nullsWithZero := nulls.NewWithSize(2)
+	nullsWithZero := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 	nullsWithZero.Add(1)
 	require.NoError(t, d256IntDiv(
 		[]types.Decimal256{maximum, seven},
@@ -5655,7 +5655,7 @@ func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
 	err = d256IntDiv(
 		[]types.Decimal256{maximum},
 		[]types.Decimal256{seven},
-		make([]int64, 1), 0, 12, nulls.NewWithSize(1), true)
+		make([]int64, 1), 0, 12, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
 }
@@ -5704,7 +5704,7 @@ func TestD128ScaleIntoRs_Coverage(t *testing.T) {
 		{"TwoStepThirtyEight", []types.Decimal128{{B0_63: 0x1}, {B0_63: 0xffffffffffffffff, B64_127: 0xffffffffffffffff}}, 38, nil, []types.Decimal128{{B0_63: 0x98a224000000000, B64_127: 0x4b3b4ca85a86c47a}, {B0_63: 0xf675ddc000000000, B64_127: 0xb4c4b357a5793b85}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n := nulls.NewWithSize(len(tc.input))
+			n := mustNullsOK(nulls.NewWithSize(len(tc.input), bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -5791,7 +5791,7 @@ func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
 		y := []decimal{{B0_63: 1, B64_127: 0}}
 		want := []decimal{{B0_63: 0, B64_127: 0}, {B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 0}, {B0_63: 18446744073709551615, B64_127: 18446744073709551615}}
 		got := make([]decimal, len(want))
-		nul := nulls.NewWithSize(len(want))
+		nul := mustNullsOK(nulls.NewWithSize(len(want), bitmapTestMP))
 		require.NoError(t, d128Mul(x, y, got, 30, 30, nul))
 		require.Equal(t, 0, nul.Count())
 		require.Equal(t, want, got)
@@ -5803,7 +5803,7 @@ func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
 		y := []decimal{{B0_63: 1000000000000000, B64_127: 0}}
 		want := []decimal{{B0_63: 0, B64_127: 0}, {B0_63: 18446744073709551615, B64_127: 18446744073709551615}}
 		got := make([]decimal, len(want))
-		nul := nulls.NewWithSize(len(want))
+		nul := mustNullsOK(nulls.NewWithSize(len(want), bitmapTestMP))
 		require.NoError(t, d128Mul(x, y, got, 30, 30, nul))
 		require.Equal(t, 0, nul.Count())
 		require.Equal(t, want, got)
@@ -5815,7 +5815,7 @@ func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
 		y := []decimal{{B0_63: 1, B64_127: 0, B128_191: 0, B192_255: 0}}
 		want := []decimal{{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 1, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 18446744073709551615, B64_127: 18446744073709551615, B128_191: 18446744073709551615, B192_255: 18446744073709551615}}
 		got := make([]decimal, len(want))
-		nul := nulls.NewWithSize(len(want))
+		nul := mustNullsOK(nulls.NewWithSize(len(want), bitmapTestMP))
 		require.NoError(t, d256Mul(x, y, got, 30, 30, nul, decimalRangeUnknown, decimalRangeUnknown))
 		require.Equal(t, 0, nul.Count())
 		require.Equal(t, want, got)
@@ -5827,7 +5827,7 @@ func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
 		y := []decimal{{B0_63: 1000000000000000, B64_127: 0, B128_191: 0, B192_255: 0}}
 		want := []decimal{{B0_63: 0, B64_127: 0, B128_191: 0, B192_255: 0}, {B0_63: 18446744073709551615, B64_127: 18446744073709551615, B128_191: 18446744073709551615, B192_255: 18446744073709551615}}
 		got := make([]decimal, len(want))
-		nul := nulls.NewWithSize(len(want))
+		nul := mustNullsOK(nulls.NewWithSize(len(want), bitmapTestMP))
 		require.NoError(t, d256Mul(x, y, got, 30, 30, nul, decimalRangeUnknown, decimalRangeUnknown))
 		require.Equal(t, 0, nul.Count())
 		require.Equal(t, want, got)
@@ -5991,7 +5991,7 @@ func TestMiscEdgePaths(t *testing.T) {
 			vec[i] = randD128Small(rng)
 		}
 		rs := make([]int64, 4)
-		nul := nulls.NewWithSize(4)
+		nul := mustNullsOK(nulls.NewWithSize(4, bitmapTestMP))
 		require.Error(t, d128IntDiv(vec, []types.Decimal128{zero128}, rs, 4, 4, nul, true))
 	})
 
@@ -6001,7 +6001,7 @@ func TestMiscEdgePaths(t *testing.T) {
 			vec[i] = types.Decimal256{B0_63: uint64(rng.Int63n(999) + 1)}
 		}
 		rs := make([]int64, 4)
-		nul := nulls.NewWithSize(4)
+		nul := mustNullsOK(nulls.NewWithSize(4, bitmapTestMP))
 		require.Error(t, d256IntDiv(vec, []types.Decimal256{{}}, rs, 4, 4, nul, true))
 	})
 
@@ -6246,7 +6246,7 @@ func TestD256Mod_DivByZeroPaths(t *testing.T) {
 		{name: "scale_39_zero_masked", x: []decimal{{B0_63: 0x6}, {B0_63: 0x2}}, y: []decimal{{}, {B0_63: 0x7}}, want: []decimal{{}, {B0_63: 0x5}}, s1: 0, s2: 39, masked: []uint64{0}, errorCode: 0, permissive: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			nul := nulls.NewWithSize(len(tc.want))
+			nul := mustNullsOK(nulls.NewWithSize(len(tc.want), bitmapTestMP))
 			for _, i := range tc.masked {
 				nul.Add(i)
 			}
@@ -6298,7 +6298,7 @@ func TestD64ScaleIntoRs_ConstPaths(t *testing.T) {
 		{"MaskedOverflowContinues", []types.Decimal64{92233720368547758, 92233720368547759, 18354510353341003858}, 2, []uint64{1}, []types.Decimal64{9223372036854775800, 0, 9223372036854775816}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n := nulls.NewWithSize(len(tc.input))
+			n := mustNullsOK(nulls.NewWithSize(len(tc.input), bitmapTestMP))
 			for _, row := range tc.nullRows {
 				n.Add(row)
 			}
@@ -6337,6 +6337,7 @@ func TestD128DivOneDispatch_Paths(t *testing.T) {
 	t.Run("d128DivOne_DivByZero_ShouldError", func(t *testing.T) {
 		var dst types.Decimal128
 		nul := &nulls.Nulls{}
+		nul.Init(bitmapTestMP)
 		err := d128DivOne(bigX, zero, &dst, 12, nul, 0, true, 2, 2)
 		if err == nil {
 			t.Fatal("expected div-by-zero error")
@@ -6345,16 +6346,19 @@ func TestD128DivOneDispatch_Paths(t *testing.T) {
 	t.Run("d128DivOne_DivByZero_NoError", func(t *testing.T) {
 		var dst types.Decimal128
 		nul := &nulls.Nulls{}
+		nul.Init(bitmapTestMP)
 		_ = d128DivOne(bigX, zero, &dst, 12, nul, 0, false, 2, 2)
 	})
 	t.Run("d128DivOne_NormalPath", func(t *testing.T) {
 		var dst types.Decimal128
 		nul := &nulls.Nulls{}
+		nul.Init(bitmapTestMP)
 		_ = d128DivOne(bigX, smallY, &dst, 6, nul, 0, false, 2, 2)
 	})
 	t.Run("d128DivOneDispatch_ShouldError_DivZero", func(t *testing.T) {
 		var dst types.Decimal128
 		nul := &nulls.Nulls{}
+		nul.Init(bitmapTestMP)
 		// canInline=true, shouldError=true, y=zero
 		err := d128DivOneDispatch(bigX, zero, &dst, 6, types.Pow10[6], true, nul, 0, true, 2, 2)
 		if err == nil {
@@ -6364,6 +6368,7 @@ func TestD128DivOneDispatch_Paths(t *testing.T) {
 	t.Run("d128DivOneDispatch_Inline_Success", func(t *testing.T) {
 		var dst types.Decimal128
 		nul := &nulls.Nulls{}
+		nul.Init(bitmapTestMP)
 		x := types.Decimal128{B0_63: 100}
 		// canInline=true, small x → d128DivInline succeeds
 		err := d128DivOneDispatch(x, smallY, &dst, 6, types.Pow10[6], true, nul, 0, false, 2, 2)
@@ -6374,12 +6379,14 @@ func TestD128DivOneDispatch_Paths(t *testing.T) {
 	t.Run("d128DivOneDispatch_Inline_Fails", func(t *testing.T) {
 		var dst types.Decimal128
 		nul := &nulls.Nulls{}
+		nul.Init(bitmapTestMP)
 		// bigX with large scaleAdj → inline fails, falls back to d128DivOne
 		_ = d128DivOneDispatch(bigX, smallY, &dst, 12, types.Pow10[12], true, nul, 0, false, 2, 2)
 	})
 	t.Run("d128DivOneDispatch_NoInline", func(t *testing.T) {
 		var dst types.Decimal128
 		nul := &nulls.Nulls{}
+		nul.Init(bitmapTestMP)
 		// canInline=false → calls d128DivOne directly
 		_ = d128DivOneDispatch(bigX, smallY, &dst, 20, 0, false, nul, 0, false, 2, 2)
 	})

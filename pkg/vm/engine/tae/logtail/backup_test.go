@@ -115,6 +115,44 @@ func (fs *failingReadFileService) Read(ctx context.Context, vector *fileservice.
 	return fs.FileService.Read(ctx, vector)
 }
 
+func TestBackupShrinksReadOnlyTombstones(t *testing.T) {
+	source := newBackupTombstoneTestBatch(t, types.T_int64, nil)
+	defer source.Clean(common.DebugAllocator)
+	var target, other types.Blockid
+	other[0] = 1
+	remaining := types.NewRowid(&other, 2)
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(source.Vecs[0], 2, remaining))
+
+	loaded, err := source.Window(0, source.RowCount())
+	require.NoError(t, err)
+	defer loaded.Clean(common.DebugAllocator)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	tombstone := &objData{stats: stats, appendable: true, data: []*batch.Batch{loaded}}
+	scan := func(visit func(*objData) (bool, error)) error {
+		_, err := visit(tombstone)
+		return err
+	}
+
+	for _, shrink := range []bool{false, true} {
+		mask := objectio.GetNoReuseBitmap()
+		err := GetTombstonesByBlockId(&target, &mask, scan, shrink)
+		rows := mask.ToI64Array(nil)
+		mask.Release()
+		require.NoError(t, err)
+		require.Equal(t, []int64{0, 1}, rows)
+		if !shrink {
+			require.True(t, loaded.Vecs[0].IsReadOnly())
+			require.Equal(t, 3, loaded.RowCount())
+		}
+	}
+	require.Equal(t, 1, loaded.RowCount())
+	require.Equal(t, remaining, vector.GetFixedAtWithTypeCheck[types.Rowid](loaded.Vecs[0], 0))
+	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](loaded.Vecs[1], 0))
+	require.Equal(t, types.NewRowid(&target, 0), vector.GetFixedAtWithTypeCheck[types.Rowid](source.Vecs[0], 0))
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](source.Vecs[1], 0))
+}
+
 func TestCanonicalizeBackupTombstone(t *testing.T) {
 	for _, test := range []struct {
 		name       string

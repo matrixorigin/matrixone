@@ -4601,7 +4601,7 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int)
 }
 
 func preparedParamValueIsNull(param ParamValue) bool {
-	return param.Value == nil && param.MaterializedValue == ""
+	return param.Value == nil
 }
 
 func preparedGeometrySRIDParamPositionsInExpr(expr *plan.Expr) []int32 {
@@ -5517,7 +5517,7 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	isBinaryProtocol := false
 	if param, ok := AsParamValue(value); ok {
 		value = param.Value
-		kind = param.PrepareParamKind
+		kind = ParamValueKind(param)
 		isBinaryProtocol = param.IsBinaryProtocol
 	}
 	if value == nil {
@@ -5541,15 +5541,14 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 	case uint, uint8, uint16, uint32, uint64, types.MoYear, bool:
 		return true, false
 	case string:
-		if kind == types.StringConversionBoolean {
-			return value == "0" || value == "1", false
-		}
-		// Connector/ODBC converts SQL_INTEGER and SQL_BIGINT values to their
-		// decimal text form and binds them as MYSQL_TYPE_STRING for server-side
-		// prepared statements. Accept that wire representation only when the
-		// value came from COM_STMT_EXECUTE. SQL PREPARE user variables and
-		// other non-binary-protocol text values keep the stricter validation.
-		if kind != types.StringConversionInteger && !isBinaryProtocol {
+		// Integer and Boolean parameters arrive as native values. Text is valid
+		// only in one form: Connector/ODBC converts SQL_INTEGER and SQL_BIGINT
+		// values to their decimal text form and binds them as MYSQL_TYPE_STRING
+		// for server-side prepared statements. Accept that wire representation
+		// only when the value came from COM_STMT_EXECUTE. SQL PREPARE user
+		// variables and other non-binary-protocol text values keep the stricter
+		// validation.
+		if !isBinaryProtocol || kind != types.StringConversionString {
 			return false, false
 		}
 		if strings.HasPrefix(value, "-") {
@@ -5593,20 +5592,8 @@ func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
 		if param.HasSourceType && preparedRuntimeTypeIsNumeric(param.SourceType) {
 			return preparedNumericReprepareType(param.SourceType)
 		}
-		switch param.PrepareParamKind {
-		case types.StringConversionInteger:
-			if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(param.Value))); ok && typ.Oid.IsInteger() {
-				return preparedNumericReprepareType(typ)
-			}
-			// Preserve the protocol domain even for an internally malformed value;
-			// materialization remains responsible for returning the existing error.
-			return types.T_int64.ToType(), true
-		case types.StringConversionFloat:
-			return types.T_float64.ToType(), true
-		case types.StringConversionDecimal:
+		if ParamValueKind(param) == types.StringConversionDecimal {
 			return mysqlPreparedDecimalReprepareType(), true
-		case types.StringConversionBoolean:
-			return types.T_int64.ToType(), true
 		}
 		return PreparedParamValueNumericReprepareType(param.Value)
 	}
@@ -6412,7 +6399,7 @@ func isPositivePreparedInteger(value any) bool {
 	kind := types.StringConversionString
 	if paramValue, ok := AsParamValue(value); ok {
 		value = paramValue.Value
-		kind = paramValue.PrepareParamKind
+		kind = ParamValueKind(paramValue)
 	}
 	if value == nil || kind != types.StringConversionString && kind != types.StringConversionInteger {
 		return false
@@ -6441,12 +6428,6 @@ func isPositivePreparedInteger(value any) bool {
 		return value > 0 && value <= uint64(math.MaxInt64)
 	case types.MoYear:
 		return value > 0
-	case string:
-		if kind != types.StringConversionInteger {
-			return false
-		}
-		parsed, err := strconv.ParseUint(value, 10, 63)
-		return err == nil && parsed > 0
 	default:
 		return false
 	}
@@ -6695,28 +6676,21 @@ func isNonNegativePreparedInteger(value any) bool {
 	kind := types.StringConversionString
 	if paramValue, ok := AsParamValue(value); ok {
 		value = paramValue.Value
-		kind = paramValue.PrepareParamKind
+		kind = ParamValueKind(paramValue)
 	}
 	if value == nil || kind == types.StringConversionFloat || kind == types.StringConversionDecimal {
 		return false
 	}
 	if kind == types.StringConversionBoolean {
-		switch value := value.(type) {
-		case bool:
-			return true
-		case string:
-			return value == "0" || value == "1"
-		default:
-			return false
-		}
+		_, isBool := value.(bool)
+		return isBool
 	}
 	if _, ok := value.(bool); ok {
 		return true
 	}
-	valid, negative := validatePreparedPaginationValue(ParamValue{
-		Value:            value,
-		PrepareParamKind: kind,
-	})
+	// Validate the bare value: the COM_STMT integer-text form accepted for
+	// LIMIT/OFFSET (see validatePreparedPaginationValue) is not accepted here.
+	valid, negative := validatePreparedPaginationValue(value)
 	return valid && !negative
 }
 
@@ -6775,9 +6749,6 @@ func replaceParamValsWithSelection(
 		runtimeStringDomain := types.RuntimeStringInherit
 		if param, ok := AsParamValue(val); ok {
 			val = param.Value
-			if param.MaterializedValue != "" {
-				val = param.MaterializedValue
-			}
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
@@ -6902,7 +6873,7 @@ func replaceParamValsWithSelection(
 			}
 			continue
 		}
-		if param.PrepareParamKind == types.StringConversionBoolean {
+		if ParamValueKind(param) == types.StringConversionBoolean {
 			// database/sql encodes bool as MYSQL_TYPE_TINY. Keep the Boolean
 			// literal for functions such as JSON_SET, but retain its numeric
 			// protocol domain while selecting comparison coercion.
@@ -6932,7 +6903,7 @@ func replaceParamValsWithSelection(
 			}
 			if param.EnableNumericPrefix && numericPrefixPositions[i] {
 				paramRule.numericPrefixParamPositions[i] = true
-				paramRule.numericPrefixParamKinds[i] = param.PrepareParamKind
+				paramRule.numericPrefixParamKinds[i] = ParamValueKind(param)
 				// The numeric-prefix capability is the stronger execute-time
 				// contract only when this position is selected by the
 				// decimal-aware common-type path. Do not also route that marker

@@ -122,6 +122,80 @@ func TestOwnedWindowAndDecodeCopy(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+// A vector's null bitmap comes from the vector's pool and goes back in Free.
+func TestVectorNullsUseVectorPool(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType(), mp)
+	require.Same(t, mp, vec.GetNulls().MPool())
+	for i := range 1000 {
+		require.NoError(t, AppendFixed(vec, int64(i), i%7 == 0, mp))
+	}
+	withNulls := mp.CurrNB()
+	dup, err := vec.Dup(mp)
+	require.NoError(t, err)
+	require.Same(t, mp, dup.GetNulls().MPool())
+	require.Equal(t, vec.GetNulls().ToArray(), dup.GetNulls().ToArray())
+	dup.Free(mp)
+	require.Equal(t, withNulls, mp.CurrNB())
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB(), "Free returns the null bitmap's words")
+}
+
+// A window's nulls are a read-only view of the source's bitmap at any start:
+// nothing is allocated or copied, and writing them panics.
+func TestWindowNullsAreAView(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := NewVec(types.T_int32.ToType(), mp)
+	defer src.Free(mp)
+	for i := range 300 {
+		require.NoError(t, AppendFixed(src, int32(i), i%5 == 0 || i == 299, mp))
+	}
+	allocated := mp.CurrNB()
+	for _, rng := range [][2]int{{0, 300}, {1, 64}, {63, 65}, {64, 128}, {100, 300}, {150, 150}} {
+		w, err := src.Window(rng[0], rng[1])
+		require.NoError(t, err)
+		require.Equal(t, allocated, mp.CurrNB(), "a window allocates nothing")
+		require.True(t, w.GetNulls().IsReadOnly())
+		require.Equal(t, src.GetNulls().CountRange(uint64(rng[0]), uint64(rng[1])), w.GetNulls().Count())
+		for row := range rng[1] - rng[0] {
+			require.Equal(t, src.IsNull(uint64(rng[0]+row)), w.IsNull(uint64(row)))
+		}
+		if !w.GetNulls().IsEmpty() {
+			require.Panics(t, func() { w.GetNulls().Del(w.GetNulls().ToArray()[0]) })
+		}
+		// A copy of the window is owned and exact.
+		c, err := w.CloneWindow(0, w.Length(), mp)
+		require.NoError(t, err)
+		require.Equal(t, w.GetNulls().ToArray(), c.GetNulls().ToArray())
+		c.Free(mp)
+		w.Free(nil)
+	}
+	require.Equal(t, allocated, mp.CurrNB())
+}
+
+// A read-only decode references the encoded null bitmap instead of copying
+// it, and the read-only bitmap refuses writes.
+func TestReadOnlyDecodeSharesNullBitmap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := NewVec(types.T_int64.ToType(), mp)
+	defer src.Free(mp)
+	require.NoError(t, AppendFixedList(src, []int64{1, 2, 3}, []bool{false, true, false}, mp))
+	encoded, err := src.MarshalBinary()
+	require.NoError(t, err)
+
+	ro := NewVec(types.T_any.ToType(), nil)
+	require.NoError(t, ro.UnmarshalBinary(encoded))
+	defer ro.Free(nil)
+	require.True(t, ro.IsNull(1))
+	require.True(t, ro.GetNulls().IsReadOnly())
+	require.Panics(t, func() { ro.GetNulls().Add(0) })
+	require.Panics(t, func() { ro.GetNulls().Del(1) })
+
+	// Clearing the encoded words is visible: the bitmap is not a copy.
+	clear(encoded[len(encoded)-1-8 : len(encoded)-1])
+	require.False(t, ro.IsNull(1))
+}
+
 // Fixtures for tests that allocate vectors through an accounted MPool view.
 // Accounting belongs to mpool; a vector only knows the pool it was created
 // with, so an accounted vector is NewVec(typ, state.view(t, mp)).

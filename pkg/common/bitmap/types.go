@@ -16,6 +16,8 @@
 
 package bitmap
 
+import "github.com/matrixorigin/matrixone/pkg/common/mpool"
+
 type Iterator interface {
 	HasNext() bool
 	Next() uint64
@@ -29,6 +31,15 @@ type Bitmap struct {
 	// never read; words missing from data read as zero.
 	numBits int64
 	data    []uint64
+	// mp owns data. A bitmap with a nil mp is read-only: its words, if any,
+	// belong to someone else (a decoded buffer, the FileService cache, or the
+	// bitmap a view was taken from), and every write panics.
+	mp *mpool.MPool
+	// shift is the bit of data[0] that holds row 0. It is nonzero only for a
+	// read-only view of another bitmap (InitView); row r is bit r+shift of
+	// data. A view's words may hold set bits before shift and at or beyond
+	// shift+numBits, so readers mask at Len.
+	shift uint64
 }
 
 type BitmapIterator struct {

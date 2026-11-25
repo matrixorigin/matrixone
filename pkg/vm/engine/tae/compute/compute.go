@@ -51,37 +51,6 @@ func SortAndDedup[T any](
 	return vals[:pos]
 }
 
-func ShuffleByDeletes(inputDeletes, deletes *nulls.Nulls) (outDeletes *nulls.Nulls) {
-	if deletes.IsEmpty() || inputDeletes.IsEmpty() {
-		return inputDeletes
-	}
-	delIt := inputDeletes.GetBitmap().Iterator()
-	outDeletes = nulls.NewWithSize(1)
-	deleteIt := deletes.GetBitmap().Iterator()
-	deleteCnt := uint64(0)
-	for deleteIt.HasNext() {
-		del := deleteIt.Next()
-		for delIt.HasNext() {
-			row := delIt.PeekNext()
-			if row < del {
-				outDeletes.Add(row - deleteCnt)
-				delIt.Next()
-			} else if row == del {
-				delIt.Next()
-			} else {
-				break
-			}
-		}
-		deleteCnt++
-	}
-	for delIt.HasNext() {
-		row := delIt.Next()
-		outDeletes.Add(row - deleteCnt)
-	}
-
-	return outDeletes
-}
-
 func GetOffsetOfBytes(
 	data *vector.Vector,
 	val []byte,

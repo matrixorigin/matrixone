@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -254,14 +255,23 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	// keys disappeared: a date predicate may retain nearly every part key.
 	// Use the available key NDV bounded by surviving rows, without assuming
 	// uniform key loss from that row predicate.
-	factNDV, domainNDV := float64(-1), float64(-1)
-	if fact.Stats != nil {
-		factNDV = math.Min(getExprNdv(DeepCopyExpr(key), builder), fact.Stats.Outcnt)
+	costDomainRows, wildcardRows, reestimated := builder.aggregateMembershipDomainRows(domain)
+	if !finitePositive(costDomainRows) {
+		return false
 	}
-	if domain.Stats != nil {
-		domainNDV = math.Min(getExprNdv(DeepCopyExpr(domainKey), builder), domain.Stats.Outcnt)
+	domainNDV := getExprNdv(DeepCopyExpr(domainKey), builder)
+	if reestimated && containsAllSQLEqualityCompatiblePKs([]int32{domainKey.GetCol().ColPos}, domain.TableDef) {
+		if !finitePositive(domainNDV) {
+			// Only keep the row bound supplied by match-all LIKE filters
+			// when the remaining predicates lack reliable key statistics.
+			costDomainRows = wildcardRows
+		}
+		// Each estimated candidate row contributes a distinct primary key.
+		domainNDV = costDomainRows
 	}
-	if !aggregateMembershipCostAllows(agg, fact, domain, factNDV, domainNDV, key.Typ, domainKey.Typ) {
+	domainNDV = math.Min(domainNDV, costDomainRows)
+	factNDV := builder.aggregateMembershipFactNDV(fact, key, reestimated)
+	if !aggregateMembershipCostAllows(agg, fact, domain, factNDV, domainNDV, costDomainRows, key.Typ, domainKey.Typ) {
 		return false
 	}
 	copy := DeepCopyNode(domain)
@@ -280,11 +290,252 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	return true
 }
 
-func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domainNDV float64, key, domainKey plan.Type) bool {
+// aggregateMembershipDomainRows estimates the candidate rows and the row bound
+// supplied by positive match-all LIKE conjuncts. A bare LIKE can reject NULLs
+// even when its pattern matches every non-NULL string.
+func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) (rows, wildcardRows float64, reestimated bool) {
+	if domain.Stats == nil {
+		return 0, 0, false
+	}
+	tag := domain.BindingTags[0]
+	conjuncts := splitPlanConjunctions(domain.FilterList)
+	var wildcardCols []*plan.Expr
+	remaining := slices.DeleteFunc(conjuncts, func(expr *plan.Expr) bool {
+		if col := membershipMatchAllLikeColumn(expr, tag); col != nil {
+			wildcardCols = append(wildcardCols, col)
+			return true
+		}
+		return membershipPredicateMatchesAll(expr, tag)
+	})
+	if len(remaining) == len(conjuncts) {
+		return domain.Stats.Outcnt, 0, false
+	}
+	// Use the statistics already cached by the planning pass.
+	cached := builder.getStatsInfoByTableID(domain.TableDef.TblId)
+	if cached == nil {
+		return 0, 0, false
+	}
+	stats := cached.GetStats()
+	if stats == nil || !finitePositive(stats.TableCnt) || stats.TableCnt != domain.Stats.TableCnt {
+		return 0, 0, false
+	}
+
+	wildcardRows = stats.TableCnt
+	published := StatsInfoUsableForCache(stats)
+	if len(wildcardCols) != 0 && published && StatsCacheEligible(builder.compCtx.GetProcess(), domain.ScanSnapshot) {
+		// Inspect only bare top-level conjuncts. Different filters may reject
+		// the same rows, so their row bounds must not be multiplied.
+		for _, col := range wildcardCols {
+			wildcardRows = math.Min(wildcardRows, membershipLikeNonNullRows(col, domain, stats))
+		}
+	}
+	if len(remaining) == 0 {
+		return wildcardRows, wildcardRows, true
+	}
+	remaining = DeepCopyExprList(remaining)
+	if published {
+		for _, expr := range remaining {
+			reestimateMembershipIntegerRanges(expr, domain, stats)
+		}
+	}
+	selectivity := estimateAndSelectivity(remaining, builder, stats)
+	return math.Min(wildcardRows, stats.TableCnt*selectivity), wildcardRows, true
+}
+
+func membershipLikeNonNullRows(expr *plan.Expr, domain *plan.Node, stats *statsinfo.StatsInfo) float64 {
+	ref := expr.GetCol()
+	if expr.Typ.NotNullable || ref.ColPos < 0 || int(ref.ColPos) >= len(domain.TableDef.Cols) {
+		return stats.TableCnt
+	}
+	col := domain.TableDef.Cols[ref.ColPos]
+	if col == nil || col.Typ.NotNullable || col.Typ.Id != expr.Typ.Id || col.Name == "" ||
+		(ref.Name != "" && ref.Name != col.Name) || stats.DataTypeMap[col.Name] != uint64(col.Typ.Id) {
+		return stats.TableCnt
+	}
+	nulls, known := stats.NullCntMap[col.Name]
+	if !known || float64(nulls) > stats.TableCnt {
+		return stats.TableCnt
+	}
+	// Even an all-NULL estimate must go through the positive-row cost gate.
+	return math.Min(stats.TableCnt, math.Max(1, stats.TableCnt-float64(nulls)))
+}
+
+// Refresh one-sided integer estimates only on copied membership predicates.
+// Invalidate cached conjunctions and disjunctions when an input was refreshed.
+func reestimateMembershipIntegerRanges(expr *plan.Expr, domain *plan.Node, stats *statsinfo.StatsInfo) bool {
+	fn := expr.GetF()
+	if fn.GetFunc() == nil {
+		return false
+	}
+	op := fn.Func.ObjName
+	switch op {
+	case "and", "or":
+		changed := false
+		for _, arg := range fn.Args {
+			if reestimateMembershipIntegerRanges(arg, domain, stats) {
+				changed = true
+			}
+		}
+		if changed {
+			expr.Selectivity = 0
+		}
+		return changed
+	case ">", ">=", "<", "<=":
+	default:
+		return false
+	}
+	if len(fn.Args) != 2 {
+		return false
+	}
+	key, threshold := fn.Args[0], fn.Args[1]
+	col := key.GetCol()
+	if col == nil || col.RelPos != domain.BindingTags[0] || col.ColPos < 0 || int(col.ColPos) >= len(domain.TableDef.Cols) {
+		return false
+	}
+	name := domain.TableDef.Cols[col.ColPos].GetName()
+	lo, hasLo := stats.MinValMap[name]
+	hi, hasHi := stats.MaxValMap[name]
+	if !hasLo || !hasHi || stats.DataTypeMap[name] != uint64(key.Typ.Id) || key.Typ.Id != threshold.Typ.Id {
+		return false
+	}
+	selectivity, ok := estimateSingleIntegerRangeSelectivity(op, lo, hi, types.T(key.Typ.Id), threshold.GetLit())
+	if !ok {
+		return false
+	}
+	if !key.Typ.NotNullable {
+		nulls, known := stats.NullCntMap[name]
+		if !known || float64(nulls) > stats.TableCnt {
+			return false
+		}
+		selectivity = math.Max(1e-8, selectivity*(1-float64(nulls)/stats.TableCnt))
+	}
+	expr.Selectivity = selectivity
+	return true
+}
+
+// estimateSingleIntegerRangeSelectivity counts the discrete values that a
+// comparison keeps inside a trusted integer range.
+func estimateSingleIntegerRangeSelectivity(op string, lo, hi float64, typ types.T, lit *plan.Literal) (float64, bool) {
+	span, ok := exactIntegerStatsSpan(typ, lo, hi)
+	if !ok || lit == nil || lit.Isnull || lit.Src != nil {
+		return 0, false
+	}
+	value, ok := getFloat64Value(typ, lit)
+	if !ok || math.Abs(value) > maxExactIntegerStatsEndpoint {
+		return 0, false
+	}
+	switch op {
+	case ">":
+		lo = math.Max(lo, value+1)
+	case ">=":
+		lo = math.Max(lo, value)
+	case "<":
+		hi = math.Min(hi, value-1)
+	case "<=":
+		hi = math.Min(hi, value)
+	default:
+		return 0, false
+	}
+	if lo > hi {
+		return 0.00000001, true
+	}
+	return (hi - lo + 1) / span, true
+}
+
+func (builder *QueryBuilder) aggregateMembershipFactNDV(fact *plan.Node, key *plan.Expr, reestimated bool) float64 {
+	if fact.Stats == nil {
+		return -1
+	}
+	key = DeepCopyExpr(key)
+	ndv := math.Min(getExprNdv(key, builder), fact.Stats.Outcnt)
+	if !reestimated {
+		return ndv
+	}
+	col := key.GetCol()
+	cached := builder.getStatsInfoByCol(col)
+	if cached == nil {
+		return ndv
+	}
+	stats := cached.GetStats()
+	// Transient estimates can borrow older column bounds while including newer rows.
+	if !StatsInfoUsableForCache(stats) || stats.TableCnt != fact.Stats.TableCnt {
+		return ndv
+	}
+	lo, hasLo := stats.MinValMap[col.Name]
+	hi, hasHi := stats.MaxValMap[col.Name]
+	if !hasLo || !hasHi || stats.DataTypeMap[col.Name] != uint64(key.Typ.Id) {
+		return ndv
+	}
+	// An equality SEMI does not match NULL keys.
+	return boundNDVByExactIntegerSpan(ndv, types.T(key.Typ.Id), lo, hi, false)
+}
+
+// membershipMatchAllLikeColumn returns the direct scan input of a two-argument
+// LIKE whose constant pattern consists entirely of percent wildcards.
+func membershipMatchAllLikeColumn(expr *plan.Expr, scanTag int32) *plan.Expr {
+	fn := expr.GetF()
+	if fn.GetFunc() == nil || len(fn.Args) != 2 {
+		return nil
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.LIKE {
+		return nil
+	}
+	input := fn.Args[0]
+	col := input.GetCol()
+	source := types.T(input.Typ.Id)
+	if col == nil || col.RelPos != scanTag || (source != types.T_char && source != types.T_varchar) {
+		return nil
+	}
+	lit := membershipPatternLiteral(fn.Args[1])
+	if lit == nil || lit.Isnull || lit.GetSval() == "" {
+		return nil
+	}
+	pattern := lit.GetSval()
+	for i := range pattern {
+		if pattern[i] != '%' {
+			return nil
+		}
+	}
+	return input
+}
+
+func membershipPredicateMatchesAll(expr *plan.Expr, scanTag int32) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	switch id {
+	case function.LIKE:
+		return membershipMatchAllLikeColumn(expr, scanTag) != nil
+	case function.AND:
+		return len(fn.Args) == 2 && membershipPredicateMatchesAll(fn.Args[0], scanTag) &&
+			membershipPredicateMatchesAll(fn.Args[1], scanTag)
+	case function.OR:
+		return len(fn.Args) == 2 && (membershipPredicateMatchesAll(fn.Args[0], scanTag) ||
+			membershipPredicateMatchesAll(fn.Args[1], scanTag))
+	case function.ISTRUE:
+		return len(fn.Args) == 1 && membershipPredicateMatchesAll(fn.Args[0], scanTag)
+	case function.NOT:
+		// Adjacent negations cancel in SQL three-valued logic. An intervening
+		// IS TRUE can turn NULL into FALSE, so it cannot cancel a negation.
+		if len(fn.Args) == 1 {
+			inner := fn.Args[0].GetF()
+			if inner != nil && inner.Func != nil && len(inner.Args) == 1 {
+				innerID, _ := function.DecodeOverloadID(inner.Func.Obj)
+				return innerID == function.NOT && membershipPredicateMatchesAll(inner.Args[0], scanTag)
+			}
+		}
+	}
+	return false
+}
+
+func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domainNDV, domainRows float64, key, domainKey plan.Type) bool {
 	if agg.Stats == nil || fact.Stats == nil || domain.Stats == nil ||
 		!finitePositive(factNDV) || !finitePositive(domainNDV) || domainNDV >= factNDV ||
 		!finitePositive(fact.Stats.Outcnt) || !finitePositive(agg.Stats.Outcnt) ||
-		!finitePositive(domain.Stats.TableCnt) || !finitePositive(domain.Stats.Outcnt) {
+		!finitePositive(domain.Stats.TableCnt) {
 		return false
 	}
 	groupTypes := make([]plan.Type, 0, len(agg.GroupBy))
@@ -313,7 +564,7 @@ func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domain
 	// aggregate-key traffic and resident hash/state work. Actual executors still
 	// enforce their existing memory account and spill limits.
 	saved := (1 - selectivity) * (fact.Stats.Outcnt*keyWidth + agg.Stats.Outcnt*math.Max(64, stateWidth+32))
-	extra := domain.Stats.TableCnt*domainWidth + domain.Stats.Outcnt*math.Max(32, domainWidth+16) + fact.Stats.Outcnt*domainWidth
+	extra := domain.Stats.TableCnt*domainWidth + domainRows*math.Max(32, domainWidth+16) + fact.Stats.Outcnt*domainWidth
 	return finitePositive(saved) && finitePositive(extra) && saved > extra
 }
 
@@ -357,7 +608,7 @@ func membershipDomainPredicateTotal(expr *plan.Expr) bool {
 	case function.AND, function.OR:
 		return len(fn.Args) == 2 && membershipDomainPredicateTotal(fn.Args[0]) && membershipDomainPredicateTotal(fn.Args[1])
 	case function.LIKE, function.PREFIX_EQ:
-		if len(fn.Args) != 2 || fn.Args[0].GetCol() == nil || !membershipLiteralPattern(fn.Args[1]) {
+		if len(fn.Args) != 2 || fn.Args[0].GetCol() == nil || membershipPatternLiteral(fn.Args[1]) == nil {
 			return false
 		}
 		source, pattern := fn.Args[0].Typ, fn.Args[1].Typ
@@ -370,35 +621,38 @@ func membershipDomainPredicateTotal(expr *plan.Expr) bool {
 	}
 }
 
-func membershipLiteralPattern(expr *plan.Expr) bool {
+func membershipPatternLiteral(expr *plan.Expr) *plan.Literal {
 	if lit := expr.GetLit(); lit != nil {
-		return lit.Src == nil && !lit.IsBin
+		if lit.Src == nil && !lit.IsBin {
+			return lit
+		}
+		return nil
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1].GetT() == nil ||
 		!isSameColumnType(fn.Args[1].Typ, expr.Typ) {
-		return false
+		return nil
 	}
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
 	if id != function.CAST && id != function.CAST_STRICT {
-		return false
+		return nil
 	}
 	source := fn.Args[0]
 	lit := source.GetLit()
 	if lit == nil || lit.Src != nil || lit.IsBin || expr.Typ.Width <= 0 ||
 		types.T(source.Typ.Id) != types.T_varchar || types.T(expr.Typ.Id) != types.T_varchar {
-		return false
+		return nil
 	}
 	value, ok := lit.Value.(*plan.Literal_Sval)
 	if !ok || len(value.Sval) > int(expr.Typ.Width) {
-		return false
+		return nil
 	}
 	// The binder can add a literal-only collation cast. ASCII fits both text
 	// domains unchanged and cannot produce conversion/width diagnostics.
 	for i := range value.Sval {
 		if value.Sval[i] >= 128 {
-			return false
+			return nil
 		}
 	}
-	return true
+	return lit
 }
