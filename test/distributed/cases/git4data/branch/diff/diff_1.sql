@@ -16,6 +16,14 @@ data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"};
 
 drop snapshot sp1;
 drop snapshot sp2;
+
+-- Give one side an explicit declaration without changing its text storage.
+alter table t2 modify column b varchar(10) character set utf8mb4 collate utf8mb4_bin;
+create snapshot sp1 for table test t1;
+create snapshot sp2 for table test t2;
+data branch diff t2{snapshot="sp2"} against t1{snapshot="sp1"} output count;
+drop snapshot sp1;
+drop snapshot sp2;
 drop table t1;
 drop table t2;
 

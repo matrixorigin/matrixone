@@ -544,6 +544,14 @@ SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
 WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
 ➤ CHARACTER_SET_NAME[12,-1,0]  ¦  COLLATION_NAME[12,-1,0]  𝄀
 utf8mb4  ¦  utf8mb4_bin
+ALTER TABLE t_alter CHANGE COLUMN name renamed LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Publish Error Message';
+SELECT HEX(renamed), CHAR_LENGTH(renamed) FROM t_alter;
+➤ HEX(renamed)[12,-1,0]  ¦  CHAR_LENGTH(renamed)[-5,64,0]  𝄀
+F09F9880  ¦  1
+SELECT COLUMN_NAME, CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME IN ('name', 'renamed');
+➤ COLUMN_NAME[12,-1,0]  ¦  CHARACTER_SET_NAME[12,-1,0]  ¦  COLLATION_NAME[12,-1,0]  ¦  COLUMN_COMMENT[12,-1,0]  𝄀
+renamed  ¦  utf8mb4  ¦  utf8mb4_bin  ¦  Publish Error Message
 CREATE TABLE t_index_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100),

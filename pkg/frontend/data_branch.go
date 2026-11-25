@@ -1573,7 +1573,7 @@ func checkDataBranchPrimaryKeyCompatibilityWithResolver(
 
 func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 	return left.Width == right.Width &&
-		left.Scale == right.Scale &&
+		plan2.ColumnStorageScalesEqual(&left, &right) &&
 		types.EnumMembersEqual(left.Enumvalues, left.EnumEncoding, right.Enumvalues, right.EnumEncoding) &&
 		left.AutoIncr == right.AutoIncr &&
 		left.NotNullable == right.NotNullable

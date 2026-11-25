@@ -828,3 +828,19 @@ func TestExplicitUTF8MB4ColumnType(t *testing.T) {
 		})
 	}
 }
+
+func TestColumnStorageScalesEqual(t *testing.T) {
+	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		legacy := plan.Type{Id: int32(oid)}
+		explicit := plan.Type{Id: int32(oid), Scale: utf8mb4BinColumnScale}
+		require.True(t, ColumnStorageScalesEqual(&legacy, &explicit))
+		require.True(t, ColumnStorageScalesEqual(&explicit, &legacy))
+		unknown := plan.Type{Id: int32(oid), Scale: 2}
+		require.False(t, ColumnStorageScalesEqual(&legacy, &unknown))
+		require.False(t, ColumnStorageScalesEqual(&explicit, &unknown))
+	}
+	decimal := plan.Type{Id: int32(types.T_decimal64)}
+	scaledDecimal := plan.Type{Id: int32(types.T_decimal64), Scale: 1}
+	require.False(t, ColumnStorageScalesEqual(&decimal, &scaledDecimal))
+	require.False(t, ColumnStorageScalesEqual(&decimal, &plan.Type{Id: int32(types.T_varchar)}))
+}

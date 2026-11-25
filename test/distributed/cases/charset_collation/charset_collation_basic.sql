@@ -447,6 +447,11 @@ ALTER TABLE t_alter ALGORITHM=COPY, ADD COLUMN extra INT;
 SELECT CHARACTER_SET_NAME, COLLATION_NAME FROM information_schema.COLUMNS
 WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME = 'name';
 
+ALTER TABLE t_alter CHANGE COLUMN name renamed LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT 'Publish Error Message';
+SELECT HEX(renamed), CHAR_LENGTH(renamed) FROM t_alter;
+SELECT COLUMN_NAME, CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = 'charset_test' AND TABLE_NAME = 't_alter' AND COLUMN_NAME IN ('name', 'renamed');
+
 -- @case
 -- @desc: Test index with different collations
 -- @label:bvt
