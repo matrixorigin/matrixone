@@ -1103,6 +1103,34 @@ func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) er
 	return nil
 }
 
+func (s *S3FS) readCoalescedSparseRanges(ctx context.Context, vector *IOVector, plan sparseRangePlan) error {
+	start := 0
+	for group := 0; group <= plan.numCuts; group++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := len(vector.Entries)
+		if group < plan.numCuts {
+			end = plan.cuts[group]
+		}
+		// The group aliases the parent's entries. Results from a partially
+		// completed read remain visible to the caller's error cleanup owner.
+		part := &IOVector{
+			FilePath: vector.FilePath,
+			Entries:  vector.Entries[start:end],
+			ExpireAt: vector.ExpireAt,
+			Policy:   vector.Policy,
+		}
+		// A later 416 is an unexpected EOF only after an earlier lower
+		// range has been validated. Do not recursively split this group.
+		if err := s.readWithSparsePlan(ctx, part, true, group > 0, false); err != nil {
+			return err
+		}
+		start = end
+	}
+	return nil
+}
+
 func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1142,7 +1170,11 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead, laterSparseRange bool) (err error) {
+func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead, laterSparseRange bool) error {
+	return s.readWithSparsePlan(ctx, vector, forceMinimalRangeRead, laterSparseRange, true)
+}
+
+func (s *S3FS) readWithSparsePlan(ctx context.Context, vector *IOVector, forceMinimalRangeRead, laterSparseRange, allowSparsePlan bool) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -1163,9 +1195,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 	// HDFS preserves its envelope read because seeking past EOF returns a
 	// backend-specific error rather than HTTP 416.
-	if !readFullObject {
-		if _, isHDFS := s.rawStorage.(*HDFS); !isHDFS && vector.shouldSplitSparseRead(min, max) {
-			return s.readEntriesIndividually(ctx, vector)
+	if !readFullObject && allowSparsePlan {
+		if _, isHDFS := s.rawStorage.(*HDFS); !isHDFS {
+			if vector.shouldSplitSparseRead(min, max) {
+				return s.readEntriesIndividually(ctx, vector)
+			}
+			if plan, ok := vector.planCoalescedSparseRead(min, max); ok {
+				return s.readCoalescedSparseRanges(ctx, vector, plan)
+			}
 		}
 	}
 

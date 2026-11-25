@@ -3394,7 +3394,7 @@ func TestS3FSOrdinarySparseRangeRead(t *testing.T) {
 		{"above span threshold", []int64{0, minExpensiveRangeReadSpan - 4095}, 2},
 		{"out of order", []int64{16 << 20, 0}, 1},
 		{"four sparse", []int64{0, 16 << 20, 32 << 20, 48 << 20}, 4},
-		{"five sparse", []int64{0, 16 << 20, 32 << 20, 48 << 20, 64 << 20}, 1},
+		{"five sparse", []int64{0, 16 << 20, 32 << 20, 48 << 20, 64 << 20}, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
@@ -3411,7 +3411,16 @@ func TestS3FSOrdinarySparseRangeRead(t *testing.T) {
 			require.NoError(t, fs.Read(ctx, vector))
 			reads := storage.readRanges()
 			require.Len(t, reads, tc.reads)
-			if tc.reads > 1 {
+			if len(tc.offsets) == 5 {
+				for i, read := range reads {
+					require.Equal(t, tc.offsets[i], *read.min)
+					end := tc.offsets[i] + 4096
+					if i == len(reads)-1 {
+						end = tc.offsets[len(tc.offsets)-1] + 4096
+					}
+					require.Equal(t, end, *read.max)
+				}
+			} else if tc.reads > 1 {
 				for i, read := range reads {
 					require.Equal(t, tc.offsets[i], *read.min)
 					require.Equal(t, tc.offsets[i]+4096, *read.max)
@@ -3419,6 +3428,177 @@ func TestS3FSOrdinarySparseRangeRead(t *testing.T) {
 			}
 			for _, entry := range vector.Entries {
 				require.Equal(t, make([]byte, 4096), entry.Data)
+			}
+		})
+	}
+}
+
+type sparseCoalescingStorage struct {
+	dummyObjectStorage
+	ranges []objectStorageReadRange
+	bytes  int64
+	closes int
+}
+
+func (s *sparseCoalescingStorage) Read(_ context.Context, _ string, min, max *int64) (io.ReadCloser, error) {
+	if min == nil || max == nil || *min < 0 || *max <= *min {
+		return nil, errors.New("expected a bounded positive range")
+	}
+	s.ranges = append(s.ranges, objectStorageReadRange{min: cloneInt64Pointer(min), max: cloneInt64Pointer(max)})
+	n := *max - *min
+	s.bytes += n
+	return &readCloser{
+		r: io.LimitReader(sparsePatternReader{value: 7}, n),
+		closeFunc: func() error {
+			s.closes++
+			return nil
+		},
+	}, nil
+}
+
+func TestS3FSCoalescesManySparseMisses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		offsets []int64
+		size    int64
+	}{
+		{name: "five with fourfold envelope", offsets: []int64{0, 16 << 20, 32 << 20, 48 << 20, 64 << 20}, size: 4 << 20},
+		{name: "28 in four clusters", offsets: func() []int64 {
+			var offsets []int64
+			for cluster := range 4 {
+				for entry := range 7 {
+					offsets = append(offsets, int64(cluster)*16<<20+int64(entry)*4096)
+				}
+			}
+			return offsets
+		}(), size: 4096},
+		{name: "29 in five clusters", offsets: func() []int64 {
+			var offsets []int64
+			for cluster := range 5 {
+				count := 6
+				if cluster == 4 {
+					count = 5
+				}
+				for entry := range count {
+					offsets = append(offsets, int64(cluster)*16<<20+int64(entry)*4096)
+				}
+			}
+			return offsets
+		}(), size: 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			storage := &sparseCoalescingStorage{}
+			fs.storage = storage
+			vector := &IOVector{FilePath: "foo", Policy: SkipAllCache}
+			for _, offset := range tc.offsets {
+				vector.Entries = append(vector.Entries, IOEntry{Offset: offset, Size: tc.size})
+			}
+			t.Cleanup(vector.Release)
+			require.NoError(t, fs.Read(ctx, vector))
+			for _, entry := range vector.Entries {
+				require.Len(t, entry.Data, int(tc.size))
+				require.Equal(t, byte(7), entry.Data[0])
+				require.Equal(t, byte(7), entry.Data[len(entry.Data)-1])
+			}
+			require.LessOrEqual(t, len(storage.ranges), 4, "the sparse path must bound request fanout")
+			require.Equal(t, len(storage.ranges), storage.closes)
+			for i, read := range storage.ranges {
+				if i > 0 {
+					require.LessOrEqual(t, *storage.ranges[i-1].max, *read.min)
+				}
+			}
+			for _, entry := range vector.Entries {
+				covered := 0
+				for _, read := range storage.ranges {
+					if *read.min <= entry.Offset && entry.Offset+entry.Size <= *read.max {
+						covered++
+					}
+				}
+				require.Equal(t, 1, covered, "each requested interval needs exactly one range")
+			}
+			envelope := tc.offsets[len(tc.offsets)-1] + tc.size - tc.offsets[0]
+			require.LessOrEqual(t, storage.bytes, envelope/2, "the selected plan must reduce body bytes")
+		})
+	}
+}
+
+func TestS3FSCoalescedSparseReadFailure(t *testing.T) {
+	sentinel := errors.New("conversion failed")
+	for _, tc := range []struct {
+		name      string
+		firstErr  error
+		secondErr error
+		short     bool
+		cancel    bool
+		convert   bool
+		opens     int
+		closes    int
+	}{
+		{name: "first 416", firstErr: rangeStatusError{}, opens: 1},
+		{name: "later 416", secondErr: rangeStatusError{}, opens: 2, closes: 1},
+		{name: "later short body", short: true, opens: 2, closes: 2},
+		{name: "cancel between groups", cancel: true, opens: 1, closes: 1},
+		{name: "later converter failure", convert: true, opens: 2, closes: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "sparse", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{}, nil, true, false)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			storage := &sparseTrackingStorage{firstErr: tc.firstErr, secondErr: tc.secondErr, shortSecond: tc.short}
+			if tc.cancel {
+				storage.cancel = cancel
+			}
+			fs.storage = storage
+			cache := &publicationVectorCache{}
+			releases := 0
+			convertFirst := func(ctx context.Context, r io.Reader, data []byte, allocator CacheDataAllocator) (fscache.Data, error) {
+				d, err := CacheOriginalData(ctx, r, data, allocator)
+				if err != nil {
+					return nil, err
+				}
+				return &sparseReleaseCountingData{Data: d, releases: &releases}, nil
+			}
+			vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}}
+			for i := range 5 {
+				entry := IOEntry{Offset: int64(i) * (16 << 20), Size: 4096}
+				if i == 0 {
+					entry.ToCacheData = convertFirst
+				}
+				if tc.convert && i == 1 {
+					entry.ToCacheData = func(context.Context, io.Reader, []byte, CacheDataAllocator) (fscache.Data, error) {
+						return nil, sentinel
+					}
+				}
+				vector.Entries = append(vector.Entries, entry)
+			}
+			t.Cleanup(vector.Release)
+			err = fs.Read(ctx, vector)
+			switch {
+			case tc.cancel:
+				require.ErrorIs(t, err, context.Canceled)
+			case tc.convert:
+				require.ErrorIs(t, err, sentinel)
+			case tc.firstErr != nil:
+				status, ok := objectStorageStatusCode(err)
+				require.True(t, ok)
+				require.Equal(t, 416, status)
+			default:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF), "%v", err)
+			}
+			require.Equal(t, tc.opens, storage.opens)
+			require.Equal(t, tc.closes, storage.closes)
+			require.Zero(t, cache.updates.Load(), "failed reads must not publish cache updates")
+			vector.ReleaseReadResultOnError()
+			if tc.firstErr == nil {
+				require.Equal(t, 1, releases, "the parent's cleanup must own the first group")
+			} else {
+				require.Zero(t, releases)
 			}
 		})
 	}
@@ -3801,6 +3981,26 @@ func TestS3FSSparsePartialCacheAndStreaming(t *testing.T) {
 		require.Equal(t, 2, storage.opens)
 		require.Equal(t, 2, storage.closes)
 		require.Equal(t, int64(8192), storage.bytes)
+	})
+	t.Run("five misses after a cache hit", func(t *testing.T) {
+		storage := &sparseCoalescingStorage{}
+		fs.storage = storage
+		cache := &sparseFirstEntryCache{}
+		vector := &IOVector{FilePath: "foo", Policy: SkipAllCache, Caches: []IOVectorCache{cache}}
+		for i := range 6 {
+			vector.Entries = append(vector.Entries, IOEntry{Offset: int64(i) * (16 << 20), Size: 4096})
+		}
+		t.Cleanup(vector.Release)
+		require.NoError(t, fs.Read(ctx, vector))
+		require.Equal(t, []byte("cached"), vector.Entries[0].Data)
+		for _, entry := range vector.Entries[1:] {
+			require.Equal(t, byte(7), entry.Data[0])
+		}
+		require.LessOrEqual(t, len(storage.ranges), 4)
+		require.Equal(t, len(storage.ranges), storage.closes)
+		require.LessOrEqual(t, storage.bytes, int64((64<<20+4096)/2))
+		require.Same(t, vector, cache.last)
+		require.EqualValues(t, 1, cache.updates.Load())
 	})
 	t.Run("one remaining miss", func(t *testing.T) {
 		storage := &sparseTrackingStorage{}

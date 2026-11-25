@@ -14,11 +14,17 @@
 
 package fileservice
 
-import "math"
+import (
+	"math"
+	"slices"
+)
 
 const (
 	minExpensiveRangeReadSpan        = int64(8 << 20)
 	maxMinimalRangeReadAmplification = int64(8)
+	maxCoalescedSparseRanges         = 4
+	minCoalescedSparseSavings        = int64(8 << 20)
+	minCoalescedSparseGap            = int64(12 << 20)
 )
 
 func (i *IOVector) allDone() bool {
@@ -194,6 +200,81 @@ func (i *IOVector) shouldSplitSparseRead(min, max *int64) bool {
 	}
 	_, _, expensive := i.expensiveMinimalRangeRead()
 	return expensive
+}
+
+type sparseRangePlan struct {
+	cuts    [maxCoalescedSparseRanges - 1]int
+	numCuts int
+}
+
+// planCoalescedSparseRead cuts the largest gaps between ordered buffered
+// misses. It bounds extra range requests independently of the miss count and
+// leaves the existing 2–4-miss policy unchanged.
+func (i *IOVector) planCoalescedSparseRead(min, max *int64) (plan sparseRangePlan, ok bool) {
+	if len(i.Entries) < 5 || min == nil || max == nil || *min < 0 || *max <= *min ||
+		*max-*min <= minExpensiveRangeReadSpan {
+		return plan, false
+	}
+
+	var largest [maxCoalescedSparseRanges - 1]struct {
+		bytes int64
+		at    int
+	}
+	var previousEnd int64
+	misses := 0
+	for at := range i.Entries {
+		entry := &i.Entries[at]
+		if entry.done {
+			continue
+		}
+		if entry.Offset < 0 || entry.Size <= 0 || entry.Offset > math.MaxInt64-entry.Size ||
+			entry.WriterForRead != nil || entry.ReadCloserForRead != nil {
+			return plan, false
+		}
+		if misses > 0 {
+			if entry.Offset < previousEnd {
+				// Preserve the envelope path for overlapping or unordered ranges.
+				return plan, false
+			}
+			gap := entry.Offset - previousEnd
+			for rank := range largest {
+				if gap <= largest[rank].bytes {
+					continue
+				}
+				for next := len(largest) - 1; next > rank; next-- {
+					largest[next] = largest[next-1]
+				}
+				largest[rank] = struct {
+					bytes int64
+					at    int
+				}{bytes: gap, at: at}
+				break
+			}
+		}
+		previousEnd = entry.Offset + entry.Size
+		misses++
+	}
+	if misses < 5 {
+		return plan, false
+	}
+
+	var saved int64
+	for _, gap := range largest {
+		// Each cut adds a serial request. Do not pay that round trip
+		// merely to skip a small gap alongside a useful large one.
+		if gap.bytes < minCoalescedSparseGap {
+			break
+		}
+		saved += gap.bytes
+		plan.cuts[plan.numCuts] = gap.at
+		plan.numCuts++
+	}
+	span := *max - *min
+	if saved < minCoalescedSparseSavings || saved > span || span-saved > span/2 {
+		return sparseRangePlan{}, false
+	}
+	slices.Sort(plan.cuts[:plan.numCuts])
+	return plan, true
 }
 
 func (i *IOVector) size() *int64 {

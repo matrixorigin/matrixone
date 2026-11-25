@@ -253,3 +253,142 @@ func TestIOVectorExpensiveMinimalRangeRead(t *testing.T) {
 		})
 	}
 }
+
+func TestIOVectorCoalescedSparseReadPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		entries []IOEntry
+		want    bool
+		cuts    []int
+	}{
+		{
+			name: "five sparse below eightfold amplification",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4 << 20}, {Offset: 16 << 20, Size: 4 << 20},
+				{Offset: 32 << 20, Size: 4 << 20}, {Offset: 48 << 20, Size: 4 << 20},
+				{Offset: 64 << 20, Size: 4 << 20},
+			},
+			want: true, cuts: []int{1, 2, 3},
+		},
+		{
+			name: "eight MiB savings below per-gap threshold",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4 << 20}, {Offset: 12 << 20, Size: 1 << 20},
+				{Offset: 13 << 20, Size: 1 << 20}, {Offset: 14 << 20, Size: 1 << 20},
+				{Offset: 15 << 20, Size: 1 << 20},
+			},
+		},
+		{
+			name: "exact twelve MiB gap",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4 << 20}, {Offset: 16 << 20, Size: 1 << 20},
+				{Offset: 17 << 20, Size: 1 << 20}, {Offset: 18 << 20, Size: 1 << 20},
+				{Offset: 19 << 20, Size: 1 << 20},
+			},
+			want: true, cuts: []int{1},
+		},
+		{
+			name: "one large gap does not split three tiny gaps",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+				{Offset: 16<<20 + 8192, Size: 4096},
+				{Offset: 16<<20 + 16384, Size: 4096},
+				{Offset: 16<<20 + 24576, Size: 4096},
+			},
+			want: true, cuts: []int{1},
+		},
+		{
+			name: "saving below eight MiB",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4 << 20}, {Offset: 12<<20 - 1, Size: 1 << 20},
+				{Offset: 13<<20 - 1, Size: 1 << 20}, {Offset: 14<<20 - 1, Size: 1 << 20},
+				{Offset: 15<<20 - 1, Size: 1 << 20},
+			},
+		},
+		{
+			name: "saving below half of envelope",
+			entries: []IOEntry{
+				{Offset: 0, Size: 5 << 20}, {Offset: 13 << 20, Size: 1 << 20},
+				{Offset: 14 << 20, Size: 1 << 20}, {Offset: 15 << 20, Size: 1 << 20},
+				{Offset: 16 << 20, Size: 1 << 20},
+			},
+		},
+		{
+			name: "adjacent",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4 << 20}, {Offset: 4 << 20, Size: 4 << 20},
+				{Offset: 8 << 20, Size: 4 << 20}, {Offset: 12 << 20, Size: 4 << 20},
+				{Offset: 16 << 20, Size: 4 << 20},
+			},
+		},
+		{
+			name: "overlapping",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+				{Offset: 32 << 20, Size: 4096}, {Offset: 48 << 20, Size: 4096},
+				{Offset: 48<<20 + 1, Size: 4096},
+			},
+		},
+		{
+			name: "unordered",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+				{Offset: 32 << 20, Size: 4096}, {Offset: 48 << 20, Size: 4096},
+				{Offset: 8 << 20, Size: 4096},
+			},
+		},
+		{
+			name: "streaming destination",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+				{Offset: 32 << 20, Size: 4096, WriterForRead: io.Discard},
+				{Offset: 48 << 20, Size: 4096}, {Offset: 64 << 20, Size: 4096},
+			},
+		},
+		{
+			name: "only four misses after cache hit",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4096, done: true}, {Offset: 16 << 20, Size: 4096},
+				{Offset: 32 << 20, Size: 4096}, {Offset: 48 << 20, Size: 4096},
+				{Offset: 64 << 20, Size: 4096},
+			},
+		},
+		{
+			name: "read to end",
+			entries: []IOEntry{
+				{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+				{Offset: 32 << 20, Size: 4096}, {Offset: 48 << 20, Size: 4096},
+				{Offset: 64 << 20, Size: -1},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vector := IOVector{Entries: tc.entries}
+			min, max := vector.readMinimalRange()
+			plan, ok := vector.planCoalescedSparseRead(min, max)
+			require.Equal(t, tc.want, ok)
+			if ok {
+				require.Equal(t, tc.cuts, plan.cuts[:plan.numCuts])
+			}
+		})
+	}
+	t.Run("too many equally spaced misses for a useful bounded plan", func(t *testing.T) {
+		vector := IOVector{}
+		for i := range 29 {
+			vector.Entries = append(vector.Entries, IOEntry{Offset: int64(i) * (16 << 20), Size: 4096})
+		}
+		min, max := vector.readMinimalRange()
+		_, ok := vector.planCoalescedSparseRead(min, max)
+		require.False(t, ok)
+	})
+	t.Run("overflowing range", func(t *testing.T) {
+		vector := IOVector{Entries: []IOEntry{
+			{Offset: 0, Size: 4096}, {Offset: 16 << 20, Size: 4096},
+			{Offset: 32 << 20, Size: 4096}, {Offset: 48 << 20, Size: 4096},
+			{Offset: math.MaxInt64 - 1, Size: 2},
+		}}
+		min, max := int64(0), int64(math.MaxInt64)
+		_, ok := vector.planCoalescedSparseRead(&min, &max)
+		require.False(t, ok)
+	})
+}
