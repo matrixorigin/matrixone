@@ -696,6 +696,9 @@ func (jm *JoinMap) FreeMemory() {
 	jm.spillMu.Unlock()
 	_ = payload.Close()
 	jm.sels.Free(jm.mpool)
+	// The join map owns delRows, which the hash builder handed over.
+	jm.delRows.Free()
+	jm.delRows = nil
 	if jm.ihm != nil {
 		jm.ihm.Free()
 		jm.ihm = nil

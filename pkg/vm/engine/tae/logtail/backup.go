@@ -314,6 +314,9 @@ func GetTombstonesByBlockId(
 			// Shrink the tombstone batch, Because the rowid in the tombstone is no longer needed after apply,
 			// it cannot be written to disk
 			if needShrink {
+				if err := oData.data[idx].OwnReadOnlyVectors(common.DebugAllocator); err != nil {
+					return false, err
+				}
 				if err := oData.data[idx].Shrink(deleteRows, true, common.DebugAllocator); err != nil {
 					return false, err
 				}

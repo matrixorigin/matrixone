@@ -1213,9 +1213,6 @@ func specialTemplateForModFunction[
 					}
 				}
 			} else {
-				if rsVec.GetNulls() == nil {
-					rsVec.SetNulls(nulls.NewWithSize(0))
-				}
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
 					v2, _ := p2.GetValue(i)
@@ -1295,9 +1292,6 @@ func specialTemplateForModFunction[
 		return nil
 	}
 
-	if rsVec.GetNulls() == nil {
-		rsVec.SetNulls(nulls.NewWithSize(0))
-	}
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)

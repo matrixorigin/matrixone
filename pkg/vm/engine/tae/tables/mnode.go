@@ -173,6 +173,7 @@ func (node *memoryNode) getDataWindowOnWriteSchema(
 	} else {
 		selection, commitTSVec, abort = node.object.appendMVCC.CollectAppendLocked(start, end, mp)
 	}
+	defer selection.Release()
 	if commitTSVec == nil {
 		return nil
 	}
@@ -453,6 +454,7 @@ func (node *memoryNode) Scan(
 	node.object.RLock()
 	defer node.object.RUnlock()
 	selection, visible, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
+	defer selection.Release()
 	if !visible || err != nil {
 		// blk.RUnlock()
 		return
@@ -496,6 +498,7 @@ func (node *memoryNode) CollectObjectTombstoneInRange(
 	defer node.object.RUnlock()
 	selection, commitTSVec, abort :=
 		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
+	defer selection.Release()
 	if commitTSVec == nil {
 		return nil
 	}
@@ -538,6 +541,7 @@ func (node *memoryNode) FillBlockTombstones(
 	node.object.RLock()
 	defer node.object.RUnlock()
 	selection, visible, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
+	defer selection.Release()
 	if !visible || err != nil {
 		// blk.RUnlock()
 		return err
@@ -552,6 +556,7 @@ func (node *memoryNode) FillBlockTombstones(
 		if types.PrefixCompare(rowID[:], blkID[:]) == 0 {
 			if *deletes == nil {
 				*deletes = &nulls.Nulls{}
+				(*deletes).Init(mp)
 			}
 			offset := rowID.GetRowOffset()
 			(*deletes).Add(uint64(offset) + deleteStartOffset)

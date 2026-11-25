@@ -525,12 +525,21 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 			obj.rt,
 			obj.meta.Load().IsTombstone,
 			uint32(i),
+			mp,
 		)
-		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		if err == nil {
+			sels.Free()
 			continue
+		}
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			// A failed probe (bloom filter load, candidate bitmap
+			// allocation) proves nothing about the block's keys.
+			sels.Free()
+			return err
 		}
 		err = obj.getDuplicateRowsWithLoad(
 			ctx, txn, keys, sels, rowIDs, uint16(i), filterByCommitTS, from, to, mp)
+		sels.Free()
 		if err != nil {
 			return err
 		}
@@ -563,12 +572,21 @@ func (obj *baseObject) persistedContains(
 			obj.rt,
 			true,
 			uint32(i),
+			mp,
 		)
-		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		if err == nil {
+			sels.Free()
 			continue
+		}
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			// A failed probe (bloom filter load, candidate bitmap
+			// allocation) proves nothing about the block's keys.
+			sels.Free()
+			return err
 		}
 		err = obj.containsWithLoad(
 			ctx, txn, keys, sels, uint16(i), isAblk, mp)
+		sels.Free()
 		if err != nil {
 			return err
 		}
@@ -623,6 +641,11 @@ func (obj *baseObject) Scan(
 ) (err error) {
 	node := obj.PinNode()
 	defer node.Unref()
+	// A batch this call creates is closed on error, so a partly built one
+	// (vectors, Deletes) does not leak. A batch the caller passed in stays
+	// the caller's to close.
+	created := *bat == nil
+	defer func() { closeBatchOnError(err, created, bat) }()
 	return node.Scan(
 		ctx, bat, txn, readSchema.(*catalog.Schema), blkID, colIdxes, mp)
 }

@@ -31,8 +31,8 @@ A non-nil `*Nulls` is valid when its bitmap keeps `bitmap.Inv`. The ghost `Has(r
   - `FilterCount(nsp, sels)` counts the entries of `sels` that are NULL rows.
   - `Range(nsp, start, end, bias, b)`: row `i` of `b` is row `i+bias` of `nsp` for `i` in `[start-bias, end-bias)`, and no other row is set. If `nsp` has no rows, `b` is left unchanged.
   - `Filter(nsp, sels, false)`: the length becomes `len(sels)`, and row `i` becomes old row `sels[i]`. `sels` may be in any order and may hold negative or out-of-range entries.
-  - `Filter(nsp, sels, true)` and `FilterInPlaceOrdered`, for strictly increasing, non-negative `sels`: as `bitmap.RemapOrdered`, in place. With `negate == true` the rows named by `sels` are removed and the kept rows are packed at the front. `FilterInPlaceOrdered` with `negate == false` then grows the length to `len(sels)`, matching `Filter`.
-  - `FilterByMask(WithOffset)` and the `InPlace` variants: the same, in place, where the selected rows are `r + offset` for the set rows `r` of the selection bitmap. With `negate == false`, the length becomes `sels.Count()`.
+  - `Filter(nsp, sels, true)` and `FilterInPlaceOrdered`, for strictly increasing, non-negative `sels`: as `bitmap.RemapOrdered`, in place. With `negate == true` the rows named by `sels` are removed and the kept rows are packed at the front. `FilterInPlaceOrdered` with `negate == false` leaves the length at `min(Len, len(sels))`; it does not allocate to grow it, and the rows past it read as clear.
+  - `FilterByMask(WithOffset)` and the `InPlace` variants: the same, in place, where the selected rows are `r + offset` for the set rows `r` of the selection bitmap. With `negate == false`, the length becomes `min(Len, sels.Count())`.
   - `IsSame`: when it returns true, the two have the same rows.
   - Every `Filter*` function leaves a `Nulls` with no rows unchanged.
 
@@ -42,7 +42,9 @@ A non-nil `*Nulls` is valid when its bitmap keeps `bitmap.Inv`. The ghost `Has(r
 - `Range` needs `bias <= start` and `bias <= end`.
 - `Filter` with `negate == true`, and `FilterInPlaceOrdered`, need strictly increasing, non-negative `sels`. Unlike `bitmap.RemapOrdered`, they do not check it.
 - `FilterByMask*` need a non-nil selection bitmap that is not the `Nulls`' own bitmap.
-- Functions that overwrite a `Nulls` (`InitWith`, `InitWithSize`, `Reset`, `Build`) only need the struct, not a valid bitmap. A caller holding a valid one gives it up with the ghost `bitmap.Release`.
+- Functions that overwrite a `Nulls` (`InitWith`, `InitWithSize`, `Reset`, `Build`) need its bitmap `Raw`, not valid: the struct plus the words it owns. A caller holding a valid one gives it up with the ghost `bitmap.Release`; a zero `Nulls` becomes `Raw` with `bitmap.Unowned`. `Reset` also needs a pool.
+- Allocation can fail. `Clone`, `NewWithSize`, `Build`, `InitWith`, `InitWithSize`, `Range`, `Filter` and `TryExpand` return the pool's error; the contracts state what holds then (an `Init*` target is left `Raw`, `Filter` and `TryExpand` leave the `Nulls` unchanged). The in-place writers `Set`, `Add`, `AddRange` and `Or` panic instead, through `mustOK`, which is trusted to return only for a nil error.
+- Read-only `Nulls` (views, or decoded without a pool) are outside the proof; a valid `Nulls` owns its bitmap.
 
 ## What is trusted
 

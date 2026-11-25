@@ -99,15 +99,15 @@ func TestAssertODKUPKMutationErrorTag(t *testing.T) {
 			defer proc.Free()
 			mp := proc.Mp()
 
-			conditionNulls := nulls.NewWithSize(1)
+			conditionNulls := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 			if tc.null {
 				conditionNulls.Add(0)
 			}
 			condition := newVectorByType(mp, types.T_bool.ToType(), []bool{tc.condition}, conditionNulls)
 			defer condition.Free(mp)
-			message := newVectorByType(mp, types.T_varchar.ToType(), []string{"update primary key on duplicate"}, nulls.NewWithSize(1))
+			message := newVectorByType(mp, types.T_varchar.ToType(), []string{"update primary key on duplicate"}, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)))
 			defer message.Free(mp)
-			errorType := newVectorByType(mp, types.T_varchar.ToType(), []string{"odku_pk_mutation"}, nulls.NewWithSize(1))
+			errorType := newVectorByType(mp, types.T_varchar.ToType(), []string{"odku_pk_mutation"}, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)))
 			defer errorType.Free(mp)
 
 			fn, err := GetFunctionByName(proc.Ctx, "assert", []types.Type{
@@ -135,10 +135,10 @@ func TestAssertFKNoReferencedRowErrorTag(t *testing.T) {
 	condition := newVectorByType(mp, types.T_bool.ToType(), []bool{false}, &nulls.Nulls{})
 	defer condition.Free(mp)
 	message := newVectorByType(mp, types.T_varchar.ToType(),
-		[]string{"Cannot add or update a child row: a foreign key constraint fails"}, nulls.NewWithSize(1))
+		[]string{"Cannot add or update a child row: a foreign key constraint fails"}, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)))
 	defer message.Free(mp)
 	errorType := newVectorByType(mp, types.T_varchar.ToType(),
-		[]string{"fk_no_referenced_row"}, nulls.NewWithSize(1))
+		[]string{"fk_no_referenced_row"}, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)))
 	defer errorType.Free(mp)
 
 	fn, err := GetFunctionByName(proc.Ctx, "assert", []types.Type{

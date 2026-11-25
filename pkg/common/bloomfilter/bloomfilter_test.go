@@ -50,7 +50,7 @@ func TestBloomFilter(t *testing.T) {
 		vecs[i] = newVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 
-	boom := New(testCount, testRate)
+	boom := mustNewBF(New(testCount, testRate, bitmapTestMP))
 	defer boom.Free()
 
 	for j := 0; j < vecCount; j++ {
@@ -82,7 +82,7 @@ func TestBloomFilterReset(t *testing.T) {
 	vec := newVector(int(testCount*1.2), types.New(types.T_int64, 0, 0), mp)
 	defer vec.Free(mp)
 
-	boom := New(testCount, testRate)
+	boom := mustNewBF(New(testCount, testRate, bitmapTestMP))
 	defer boom.Free()
 	boom.TestAndAdd(vec, func(_ bool, _ int) {})
 
@@ -108,7 +108,7 @@ func BenchmarkBloomFiltrerAdd(b *testing.B) {
 		vecs[i] = newVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 	for i := 0; i < b.N; i++ {
-		boom := New(testCount, testRate)
+		boom := mustNewBF(New(testCount, testRate, bitmapTestMP))
 		for j := 0; j < vecCount; j++ {
 			boom.Add(vecs[j])
 		}
@@ -126,7 +126,7 @@ func BenchmarkBloomFiltrerAddVarlena(b *testing.B) {
 		vecs[i] = newVector(testCount/vecCount, types.New(types.T_varchar, 0, 0), mp)
 	}
 	for i := 0; i < b.N; i++ {
-		boom := New(testCount, testRate)
+		boom := mustNewBF(New(testCount, testRate, bitmapTestMP))
 		for j := 0; j < vecCount; j++ {
 			boom.Add(vecs[j])
 		}
@@ -150,7 +150,7 @@ func BenchmarkBloomFiltrerTestVector(b *testing.B) {
 	}()
 
 	var boom BloomFilter
-	boom = New(cTestCount, cTestRate)
+	boom = mustNewBF(New(cTestCount, cTestRate, bitmapTestMP))
 	for j := 0; j < cVecCount; j++ {
 		boom.Add(vecs[j])
 	}
@@ -176,7 +176,7 @@ func BenchmarkBloomFiltrerTestVarienaVector(b *testing.B) {
 	}()
 
 	var boom BloomFilter
-	boom = New(cTestCount, cTestRate)
+	boom = mustNewBF(New(cTestCount, cTestRate, bitmapTestMP))
 	for j := 0; j < cVecCount; j++ {
 		boom.Add(vecs[j])
 	}
@@ -196,7 +196,7 @@ func BenchmarkBloomFiltrerTestAndAdd(b *testing.B) {
 		vecs[i] = newVector(testCount/vecCount, types.New(types.T_int64, 0, 0), mp)
 	}
 	for i := 0; i < b.N; i++ {
-		boom := New(testCount, testRate)
+		boom := mustNewBF(New(testCount, testRate, bitmapTestMP))
 		for j := 0; j < vecCount; j++ {
 			boom.TestAndAdd(vecs[j], func(_ bool, _ int) {})
 		}
@@ -214,7 +214,7 @@ func BenchmarkBloomFiltrerTestAndAddVarlena(b *testing.B) {
 		vecs[i] = newVector(testCount/vecCount, types.New(types.T_varchar, 0, 0), mp)
 	}
 	for i := 0; i < b.N; i++ {
-		boom := New(testCount, testRate)
+		boom := mustNewBF(New(testCount, testRate, bitmapTestMP))
 		for j := 0; j < vecCount; j++ {
 			boom.TestAndAdd(vecs[j], func(_ bool, _ int) {})
 		}
@@ -230,7 +230,7 @@ func TestMarshal(t *testing.T) {
 	vec := newVector(testCount, types.New(types.T_int64, 0, 0), mp)
 	defer vec.Free(mp)
 
-	bf := New(testCount, testRate)
+	bf := mustNewBF(New(testCount, testRate, bitmapTestMP))
 	defer bf.Free()
 	bf.Add(vec)
 
@@ -249,7 +249,7 @@ func TestUnmarshal(t *testing.T) {
 	defer vec.Free(mp)
 
 	// Test normal case: marshal and unmarshal
-	bf1 := New(testCount, testRate)
+	bf1 := mustNewBF(New(testCount, testRate, bitmapTestMP))
 	bf1.Add(vec)
 
 	data, err := bf1.Marshal()
@@ -333,7 +333,7 @@ func TestMarshalUnmarshal(t *testing.T) {
 	}()
 
 	// Create and populate original filter
-	bf1 := New(testCount, testRate)
+	bf1 := mustNewBF(New(testCount, testRate, bitmapTestMP))
 	defer bf1.Free()
 	for j := 0; j < vecCount; j++ {
 		bf1.Add(vecs[j])

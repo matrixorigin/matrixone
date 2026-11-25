@@ -712,6 +712,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	if hb.IsDedup && (hb.OnDuplicateAction == plan.Node_IGNORE || dedupBuildKeepLast) {
+		// Every rebuild path frees it first today; freeing here keeps a new
+		// retry path from leaking the previous bitmap.
+		hb.freeIgnoreRows(proc.Mp())
 		hb.IgnoreRows, err = hb.newDedupBitmap(
 			hb.InputBatchRowCount,
 			proc.Mp(),
@@ -1292,8 +1295,8 @@ func (hb *HashmapBuilder) keepDiscardedRowsForDelete(proc *process.Process) erro
 		if err != nil {
 			return err
 		}
-	} else {
-		hb.DelRows.InitWithSize(int64(newRows))
+	} else if err = hb.DelRows.InitWithSize(int64(newRows), hb.DelRows.MPool()); err != nil {
+		return err
 	}
 	for i := range discardedWithDeletes {
 		hb.DelRows.Add(uint64(activeCount + i))
