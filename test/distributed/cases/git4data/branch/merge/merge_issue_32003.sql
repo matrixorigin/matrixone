@@ -141,4 +141,115 @@ data branch pick reinsert_dml into reinsert_dst between snapshot issue32003_rein
 select k,v from reinsert_dst order by k;
 drop snapshot issue32003_reinsert_hi;
 drop snapshot issue32003_reinsert_lo;
+
+-- Resolve column identity at the fork snapshot, not at the end of the physical generation.
+create table swap_src (k int primary key, a int, b int);
+insert into swap_src values (1,10,20),(2,30,40);
+data branch create table swap_dst from swap_src;
+alter table swap_src rename column a to tmpname;
+alter table swap_src rename column b to a;
+alter table swap_src rename column tmpname to b;
+alter table swap_dst rename column a to tmpname;
+alter table swap_dst rename column b to a;
+alter table swap_dst rename column tmpname to b;
+truncate table swap_src;
+insert into swap_src(k,a,b) values (1,10,20),(2,40,30);
+data branch diff swap_src against swap_dst;
+data branch merge swap_src into swap_dst when conflict accept;
+select k,a,b from swap_dst order by k;
+create table rename_src (k int primary key, v int);
+insert into rename_src values (1,10),(2,20);
+data branch create table rename_dst from rename_src;
+alter table rename_src rename column v to w;
+truncate table rename_src;
+insert into rename_src values (1,11);
+data branch merge rename_src into rename_dst when conflict accept;
+select k,v from rename_dst order by k;
+
+-- Keep default introduction metadata at each sibling's physical fork.
+create table layer_root (k int primary key, v int);
+insert into layer_root values (1,10);
+data branch create table layer_dst from layer_root;
+truncate table layer_root;
+insert into layer_root values (1,10);
+data branch create table layer_src from layer_root;
+alter table layer_src add column x int default 0, algorithm=copy;
+alter table layer_dst add column x int default 0, algorithm=copy;
+truncate table layer_src;
+insert into layer_src values (1,10,33);
+data branch pick layer_src into layer_dst keys(1) when conflict accept;
+select k,v,x from layer_dst order by k;
+
+-- An ephemeral intermediate relation does not hide a later clear boundary.
+create table zero_root (k int primary key, v int);
+insert into zero_root values (1,10),(2,20);
+data branch create table zero_dst from zero_root;
+begin;
+data branch create table zero_mid from zero_root;
+data branch create table zero_src from zero_mid;
+drop table zero_mid;
+commit;
+select k,v from zero_src order by k;
+create snapshot issue32003_zero_lo for account sys;
+truncate table zero_src;
+create snapshot issue32003_zero_hi for account sys;
+data branch pick zero_src into zero_dst between snapshot issue32003_zero_lo and issue32003_zero_hi keys(1) when conflict accept;
+select k,v from zero_dst order by k;
+drop snapshot issue32003_zero_hi;
+drop snapshot issue32003_zero_lo;
+
+-- A bounded reinsert conflicts with a target deletion, not with an equal live row.
+create table key_root (k int primary key, v int);
+insert into key_root values (1,10),(2,20),(3,30);
+data branch create table key_src from key_root;
+data branch create table key_dst from key_root;
+data branch create table key_clear from key_root;
+delete from key_src where k>0;
+create snapshot issue32003_key_lo for account sys;
+truncate table key_src;
+insert into key_src values (1,11),(2,22),(3,30),(4,40);
+create snapshot issue32003_key_hi for account sys;
+delete from key_dst where k=1;
+truncate table key_clear;
+-- @regex("conflict: key_src INSERT and key_dst INSERT", true)
+data branch pick key_src into key_dst between snapshot issue32003_key_lo and issue32003_key_hi keys(1) when conflict fail;
+data branch pick key_src into key_dst between snapshot issue32003_key_lo and issue32003_key_hi keys(1) when conflict skip;
+select k,v from key_dst order by k;
+data branch pick key_src into key_dst between snapshot issue32003_key_lo and issue32003_key_hi keys(1) when conflict accept;
+-- @regex("conflict: key_src INSERT and key_dst INSERT", true)
+data branch pick key_src into key_dst between snapshot issue32003_key_lo and issue32003_key_hi keys(2) when conflict fail;
+data branch pick key_src into key_dst between snapshot issue32003_key_lo and issue32003_key_hi keys(2) when conflict skip;
+select k,v from key_dst order by k;
+data branch pick key_src into key_dst between snapshot issue32003_key_lo and issue32003_key_hi keys(2) when conflict accept;
+data branch pick key_src into key_dst between snapshot issue32003_key_lo and issue32003_key_hi keys(3,4) when conflict fail;
+select k,v from key_dst order by k;
+-- @regex("conflict: key_src INSERT and key_clear INSERT", true)
+data branch pick key_src into key_clear between snapshot issue32003_key_lo and issue32003_key_hi keys(1,4) when conflict fail;
+select k,v from key_clear order by k;
+data branch pick key_src into key_clear between snapshot issue32003_key_lo and issue32003_key_hi keys(1,4) when conflict skip;
+select k,v from key_clear order by k;
+data branch pick key_src into key_clear between snapshot issue32003_key_lo and issue32003_key_hi keys(1) when conflict accept;
+select k,v from key_clear order by k;
+drop snapshot issue32003_key_hi;
+drop snapshot issue32003_key_lo;
+
+-- Keep deletion evidence for a row inherited at a later target fork.
+create table later_root (k int primary key, v int);
+data branch create table later_src from later_root;
+insert into later_src values (1,15);
+delete from later_src where k=1;
+insert into later_root values (1,10);
+data branch create table later_dst from later_root;
+insert into later_dst values (2,21);
+delete from later_dst where k>0;
+create snapshot issue32003_later_lo for account sys;
+truncate table later_src;
+insert into later_src values (1,20),(2,22);
+create snapshot issue32003_later_hi for account sys;
+data branch pick later_src into later_dst between snapshot issue32003_later_lo and issue32003_later_hi when conflict skip;
+select k,v from later_dst order by k;
+data branch pick later_src into later_dst between snapshot issue32003_later_lo and issue32003_later_hi when conflict accept;
+select k,v from later_dst order by k;
+drop snapshot issue32003_later_hi;
+drop snapshot issue32003_later_lo;
 drop database issue32003;

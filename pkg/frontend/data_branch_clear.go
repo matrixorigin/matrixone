@@ -21,12 +21,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 // reconcileDataBranchClear consumes matching endpoint rows from data. The
@@ -108,8 +111,18 @@ func reconcileDataBranchClear(
 		fakeKeyIdxes = fakePKVisibleKeyIdxes(tables)
 	}
 	mp := ses.proc.Mp()
+	var pkExpr *plan.Expr
+	if pickKeys != nil {
+		if pickKeys.ItemCount() == 0 {
+			return nil
+		}
+		pkExpr, err = dataBranchClearKeyFilter(ctx, ses, pickKeys, layout.attrs[pkIndex], layout.types[pkIndex])
+		if err != nil {
+			return err
+		}
+	}
 	return scanSnapshotRelationWithPreopened(ctx, "data-branch-truncate-baseline", ses,
-		baseline.rel.GetTableID(ctx), baseline.at, baseline.rel, layout.attrs, layout.types, nil, 1,
+		baseline.rel.GetTableID(ctx), baseline.at, baseline.rel, layout.attrs, layout.types, pkExpr, 1,
 		func(rows *batch.Batch) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -174,6 +187,165 @@ func reconcileDataBranchClear(
 			return reconcileDataBranchBaselineRows(ctx, ses, tables, bat, name, side,
 				expandUpdate, data, fakeKeyIdxes, compareIdxes, unknownColumn, retainMatch, deliver)
 		})
+}
+
+// Small key sets can use the historical PK directly, without expanding a
+// large KEYS subquery into a reader expression. The caller still verifies
+// exact membership, even when the reader only prunes blocks.
+func dataBranchClearKeyFilter(
+	ctx context.Context, ses *Session, keys databranchutils.BranchHashmap, name string, typ types.Type,
+) (*plan.Expr, error) {
+	const maxClearFilterKeys = 1024
+	if keys.ItemCount() > maxClearFilterKeys {
+		return nil, nil
+	}
+	mp := ses.proc.Mp()
+	vec := vector.NewVec(typ, mp)
+	defer vec.Free(mp)
+	err := keys.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		return cursor.ForEach(func(_ []byte, row []byte) error {
+			tuple, _, err := keys.DecodeRow(row)
+			if err != nil {
+				return err
+			}
+			return appendTupleValueToVector(vec, tuple[0], mp)
+		})
+	}, 1)
+	if err != nil {
+		return nil, err
+	}
+	if err := vec.InplaceSort(mp); err != nil {
+		return nil, err
+	}
+	return readutil.ConstructInExpr(ctx, name, vec)
+}
+
+// The final insert pass has already matched destination inserts and updates.
+// Consult the actual destination snapshot for inherited live rows and use
+// remaining deletion evidence to distinguish a delete from an absent key.
+func reconcileBoundedClearPickInserts(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables, destination tableStuff,
+	deletions []databranchutils.BranchHashmap, wrapped batchWithKind, emit emitFunc,
+) (bool, error) {
+	compareIdxes := tables.def.commonIdxes
+	if len(compareIdxes) == 0 {
+		compareIdxes = tables.def.visibleIdxes
+	}
+	upper := tables.tarClearBaseline.upperColumns
+	mp := ses.proc.Mp()
+	var remove []int64
+	for start := 0; start < wrapped.batch.RowCount(); start += maxSqlBatchCnt {
+		end := min(start+maxSqlBatchCnt, wrapped.batch.RowCount())
+		keys, err := wrapped.batch.Vecs[tables.def.pkColIdx].Window(start, end)
+		if err != nil {
+			return false, err
+		}
+		stop, err := func() (bool, error) {
+			keyBatch := batch.NewWithSize(1)
+			keyBatch.Vecs[0] = keys
+			keyBatch.SetRowCount(keys.Length())
+			live, misses, err := probeDataBranchRows(ctx, ses, bh, keyBatch, destination, timestamp.Timestamp{})
+			if err != nil {
+				return false, err
+			}
+			defer tables.retPool.releaseRetBatch(live, false)
+			deleted := make([]bool, keys.Length())
+			for _, rows := range deletions {
+				matches, err := rows.GetByVectors([]*vector.Vector{keys})
+				if err != nil {
+					return false, err
+				}
+				for i, match := range matches {
+					deleted[i] = deleted[i] || match.Exists
+				}
+			}
+			var conflicts, updates *batch.Batch
+			defer func() {
+				for _, b := range []*batch.Batch{conflicts, updates} {
+					if b != nil {
+						tables.retPool.releaseRetBatch(b, false)
+					}
+				}
+			}()
+			add := func(dst **batch.Batch, row int64) error {
+				if *dst == nil {
+					*dst = tables.retPool.acquireRetBatch(tables, false, mp)
+				}
+				return (*dst).UnionOne(wrapped.batch, row, mp)
+			}
+			liveRow := 0
+			for i := range keys.Length() {
+				if err := ctx.Err(); err != nil {
+					return false, err
+				}
+				row := start + i
+				if len(misses) != 0 && int(misses[0]) == i {
+					misses = misses[1:]
+					if deleted[i] {
+						if err := add(&conflicts, int64(row)); err != nil {
+							return false, err
+						}
+					}
+					continue // ACCEPT still inserts a missing key.
+				}
+				remove = append(remove, int64(row)) // Never insert over a live key.
+				equal := true
+				for _, idx := range compareIdxes {
+					if slices.Contains(tables.def.pkColIdxes, idx) || (upper != nil && upper[idx] == nil) {
+						continue
+					}
+					cmp, err := compareSingleValInVector(ctx, ses, row, liveRow, wrapped.batch.Vecs[idx], live.Vecs[idx])
+					if err != nil {
+						return false, err
+					}
+					if cmp != 0 {
+						equal = false
+						break
+					}
+				}
+				liveRow++
+				if equal {
+					continue
+				}
+				if err := add(&conflicts, int64(row)); err != nil {
+					return false, err
+				}
+				if err := add(&updates, int64(row)); err != nil {
+					return false, err
+				}
+			}
+			if conflicts != nil {
+				conflicts.SetRowCount(conflicts.Vecs[0].Length())
+				// The marker applies no DELETE: the target is either already
+				// missing or will be updated directly on ACCEPT.
+				b := batchWithKind{batch: conflicts, side: diffSideBase, kind: diffDelete,
+					name: tables.baseRel.GetTableName(), fromUpdate: true}
+				conflicts = nil
+				if stop, err := emitBatch(emit, b, false, tables.retPool); stop || err != nil {
+					return stop, err
+				}
+			}
+			if updates != nil {
+				updates.SetRowCount(updates.Vecs[0].Length())
+				b := wrapped
+				b.batch, b.fromUpdate = updates, true
+				b.requiresNativeUpdate = len(tables.def.indexedSpecialUpdateIdxes) != 0
+				updates = nil
+				return emitBatch(emit, b, false, tables.retPool)
+			}
+			return false, nil
+		}()
+		if stop || err != nil {
+			return stop, err
+		}
+	}
+	if len(remove) != 0 {
+		if err := wrapped.batch.Shrink(remove, true, mp); err != nil {
+			return false, err
+		}
+	}
+	// The caller still owns this input batch on stop or error.
+	return emit(wrapped)
 }
 
 // reconcileDataBranchBaselineRows matches baseline keys against live rows.

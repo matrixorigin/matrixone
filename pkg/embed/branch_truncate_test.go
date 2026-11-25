@@ -530,6 +530,20 @@ func TestDataBranchAfterTableClear(t *testing.T) {
 		require.ErrorContains(t, err, "fake primary key schema differs")
 		exec("drop database branch_clear_keys")
 	})
+	t.Run("keyed_clear_baseline", func(t *testing.T) {
+		exec, query := branchClearSQL(t, db)
+		exec("create database branch_clear_key_filter")
+		exec("use branch_clear_key_filter")
+		exec("create table dst (k int primary key, v int)")
+		exec("insert into dst select result,result from generate_series(1,32768) g")
+		exec("data branch create table src from dst")
+		exec("truncate table src")
+		exec("data branch pick src into dst keys(7)")
+		require.Equal(t, [][]string{{"32767"}}, query("select count(*) from dst", 1))
+		require.Empty(t, query("select k from dst where k=7", 1))
+		require.Equal(t, [][]string{{"6"}, {"8"}}, query("select k from dst where k between 6 and 8 order by k", 1))
+		exec("drop database branch_clear_key_filter")
+	})
 	t.Run("merge_fixture", func(t *testing.T) {
 		assertBranchClearFixture(t, db, "../../test/distributed/cases/git4data/branch/merge/merge_issue_32003")
 	})
@@ -728,10 +742,23 @@ func assertBranchClearFixture(t *testing.T, db *sql.DB, path string) {
 	require.NoError(t, err)
 	defer resultFile.Close()
 	result := bufio.NewScanner(resultFile)
+	var buffered string
+	var hasBuffered bool
+	peekLine := func() string {
+		if !hasBuffered && result.Scan() {
+			buffered, hasBuffered = strings.TrimSpace(result.Text()), true
+		}
+		if hasBuffered {
+			return buffered
+		}
+		return ""
+	}
 	nextLine := func() string {
 		t.Helper()
-		require.True(t, result.Scan(), "unexpected end of %s", path+".result")
-		return strings.TrimSpace(result.Text())
+		line := peekLine()
+		require.True(t, hasBuffered, "unexpected end of %s", path+".result")
+		hasBuffered = false
+		return line
 	}
 	var sqlText strings.Builder
 	for line := range strings.SplitSeq(string(sqlData), "\n") {
@@ -752,9 +779,8 @@ func assertBranchClearFixture(t *testing.T, db *sql.DB, path string) {
 		}
 		require.Equal(t, strings.Fields(stmt+";"), strings.Fields(strings.Join(lines, " ")))
 		switch {
-		case stmt == "truncate table txn_branch", stmt == "data branch diff dynamic_src against dynamic_dst",
-			strings.HasPrefix(stmt, "data branch pick reinsert_clear ") && strings.HasSuffix(stmt, "when conflict fail"):
-			require.Contains(t, nextLine(), "@regex")
+		case strings.HasPrefix(peekLine(), "-- @regex("):
+			nextLine()
 			want := nextLine()
 			_, err := db.ExecContext(t.Context(), stmt)
 			require.ErrorContains(t, err, want)
@@ -778,6 +804,7 @@ func assertBranchClearFixture(t *testing.T, db *sql.DB, path string) {
 			exec(stmt)
 		}
 	}
-	require.False(t, result.Scan(), "unexpected remaining result line %q", result.Text())
+	line := peekLine()
+	require.False(t, hasBuffered, "unexpected remaining result line %q", line)
 	require.NoError(t, result.Err())
 }

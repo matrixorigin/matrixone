@@ -3168,19 +3168,15 @@ func decideCollectRange(
 		// materializes that intermediate's complete state, including writes made
 		// before the clone. Compare both endpoint histories directly so inherited
 		// rows cancel while those writes remain visible in the diff.
-		tarCollectRange = collectRange{
-			from:        []types.TS{types.MinTs()},
-			end:         []types.TS{tarSp},
-			rel:         []engine.Relation{tables.tarRel},
-			relSnapshot: []types.TS{tarRelSp},
-			idents:      []branchIdentity{tarIdent},
+		// If a committed clear separates two generations, keep its
+		// segment and timestamp for window clipping and state recovery.
+		if !tarCollectRange.crossesClear() {
+			tarCollectRange = dataBranchVisibleRange(tables.tarRel, tarSp, tarIdent)
+			tarCollectRange.relSnapshot = []types.TS{tarRelSp}
 		}
-		baseCollectRange = collectRange{
-			from:        []types.TS{types.MinTs()},
-			end:         []types.TS{baseSp},
-			rel:         []engine.Relation{tables.baseRel},
-			relSnapshot: []types.TS{baseRelSp},
-			idents:      []branchIdentity{baseIdent},
+		if !baseCollectRange.crossesClear() {
+			baseCollectRange = dataBranchVisibleRange(tables.baseRel, baseSp, baseIdent)
+			baseCollectRange.relSnapshot = []types.TS{baseRelSp}
 		}
 		logutil.Info("DataBranch-CollectRange-Fallback-WholeHistory",
 			zap.Bool("target-zero-history", tarHasZeroHistory),
@@ -3258,6 +3254,7 @@ func buildSideCollectRange(
 	tarIdent, baseIdent := tables.endpointIdentities(ctx, ses)
 	tarRelSp, baseRelSp := tables.resolvedRelSnapshots(ses)
 	var previousRel engine.Relation
+	restartWholeHistory := false
 	for i, nodeID := range selfPath {
 		var (
 			rel             engine.Relation
@@ -3298,11 +3295,24 @@ func buildSideCollectRange(
 				ctx, ses, bh, candidates, nodeID, relationSnapshot,
 			); err != nil {
 				historicalErr := err
-				rel, winner, nodeCTS, hasZeroHistory, err = resolveSameTransactionDataBranchRelation(
+				var zeroHistory bool
+				rel, winner, nodeCTS, zeroHistory, err = resolveSameTransactionDataBranchRelation(
 					ctx, ses, bh, candidates, nodeID, relationSnapshot, endpointCTS, historicalErr,
 				)
-				if err != nil || hasZeroHistory {
+				if err != nil {
 					return
+				}
+				if zeroHistory {
+					hasZeroHistory = true
+					if !slices.Contains(selfPathClearsRows, true) {
+						return
+					}
+					// The next committed table materializes all inherited
+					// rows. Skip the ephemeral relation, but continue resolving
+					// later transitions, including the actual clear commit.
+					previousRel = nil
+					restartWholeHistory = true
+					continue
 				}
 				relationSnapshot = endpointCTS
 				nodeCTSResolved = true
@@ -3336,7 +3346,7 @@ func buildSideCollectRange(
 		}
 
 		// Window lower bound.
-		if wholeHistory && i == 0 {
+		if (wholeHistory && i == 0) || restartWholeHistory {
 			windowFrom = types.MinTs()
 		} else {
 			windowFrom = nodeCTS.Next()
@@ -3368,6 +3378,7 @@ func buildSideCollectRange(
 			previousRel = rel
 			continue
 		}
+		restartWholeHistory = false
 		cr.rel = append(cr.rel, rel)
 		cr.relSnapshot = append(cr.relSnapshot, relationSnapshot)
 		cr.from = append(cr.from, windowFrom)

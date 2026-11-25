@@ -1748,25 +1748,30 @@ func hashDiffIfHasLCA(
 				rel: tblStuff.lcaRel, at: branchTS, ident: tblStuff.resolvedLCAIdentity(ctx, ses),
 			}
 			layoutNames := sideStuff.def.lcaColNames
-			defs, names, lineageOnly := tblStuff.tarPathDefs, tblStuff.def.colNames, dagInfo.pathFromLCAToTarLineageOnly
+			path, defs, names, lineageOnly := dagInfo.pathFromLCAToTar,
+				tblStuff.tarPathDefs, tblStuff.def.colNames, dagInfo.pathFromLCAToTarLineageOnly
 			if forBase {
+				path = dagInfo.pathFromLCAToBase
 				defs, names, lineageOnly = tblStuff.basePathDefs, tblStuff.def.baseColNames, dagInfo.pathFromLCAToBaseLineageOnly
-			}
-			if len(defs) != 0 {
-				baseline.columns = resolveDataBranchClearColumns(names, defs, lineageOnly)
 			}
 			if tblStuff.tarClearBaseline != nil && (!forBase || !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory) {
 				baseline = *tblStuff.tarClearBaseline
 				layoutNames = nil
 			} else if baseline.rel != nil {
-				rel, _, _, err := lcaProbeTableDefAtSnapshot(ctx, ses, sideStuff, branchTS)
+				rel, exactDef, _, err := lcaProbeTableDefAtSnapshot(ctx, ses, sideStuff, branchTS)
 				if err != nil {
 					return err
 				}
 				baseline.rel = rel
-				if sideStuff.lcaProbeTableId != 0 {
-					// The per-fork names refer to a different physical generation.
-					baseline.columns = nil
+				if i := slices.Index(path, rel.GetTableID(identityCtx(ctx, baseline.ident))); i >= 0 &&
+					len(defs) == len(path) && len(lineageOnly) == len(path) {
+					// Each cached definition is anchored at the end of its
+					// generation, not necessarily at this side's fork. Walk
+					// from that definition back to the exact snapshot by
+					// physical identity, without dropping introduction defaults.
+					forkDefs := append([]*plan2.TableDef{exactDef}, defs[i:]...)
+					forkEdges := append([]bool{false, false}, lineageOnly[i+1:]...)
+					baseline.columns = resolveDataBranchClearColumns(names, forkDefs, forkEdges)
 				}
 			}
 			var retainMatch func(*batch.Batch) error
@@ -1932,6 +1937,46 @@ func hashDiffIfHasLCA(
 				}
 			}
 			baseUpdates = append(baseUpdates, rows)
+		}
+		if boundedClearPick {
+			var deletions []databranchutils.BranchHashmap
+			if rows := baseClearChanges[clearDelete].rows; rows != nil && rows.ItemCount() != 0 {
+				deletions = append(deletions, rows)
+			}
+			var deletedKeys databranchutils.BranchHashmap
+			defer func() {
+				if deletedKeys != nil {
+					err = errors.Join(err, deletedKeys.Close())
+				}
+			}()
+			for _, deleted := range baseDeleteBatches {
+				if deleted.fromUpdate {
+					continue
+				}
+				if deletedKeys == nil {
+					deletedKeys, err = databranchutils.NewBranchHashmap(
+						databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator))
+					if err != nil {
+						return err
+					}
+					deletions = append(deletions, deletedKeys)
+				}
+				if err = deletedKeys.PutByVectors([]*vector.Vector{deleted.batch.Vecs[tblStuff.def.pkColIdx]}, []int{0}); err != nil {
+					return err
+				}
+			}
+			destination := dataBranchHistoricalProbeStuff(ctx, tblStuff, tblStuff.baseRel)
+			_, baseIdent := tblStuff.endpointIdentities(ctx, ses)
+			destination.lcaIdent = &baseIdent
+			originalEmit := emit
+			emit = func(wrapped batchWithKind) (bool, error) {
+				if wrapped.side == diffSideTarget && wrapped.kind == diffInsert &&
+					!wrapped.fromUpdate && wrapped.batch.RowCount() != 0 {
+					return reconcileBoundedClearPickInserts(ctx, ses, bh, tblStuff, destination,
+						deletions, wrapped, originalEmit)
+				}
+				return originalEmit(wrapped)
+			}
 		}
 	}
 	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap, baseUpdates)
@@ -3239,7 +3284,13 @@ func buildHashmapForTable(
 			// 0 stale data (the original (0,0) is outside the change range).
 			// staleDataCount=0 < totalTombstones=1, so the tombstone stays
 			// and findDeleteAndUpdateBat correctly detects UPDATE on the LCA.
-			if staleDataCount >= totalTombstones {
+			// A bounded clear PICK can collect the destination's inherited
+			// insert from before its fork. That insert does not cancel the
+			// destination's later delete. Let its fork probe distinguish
+			// the inherited row from a genuinely transient insert.
+			keepDestinationDelete := side == "base" && tblStuff.tarClearBaseline != nil &&
+				tblStuff.def.pkKind != fakeKind
+			if staleDataCount >= totalTombstones && !keepDestinationDelete {
 				if _, err3 = cursor.PopByEncodedKeyValue(
 					key, tombstoneRet.Rows[maxIdx], false,
 				); err3 != nil {
