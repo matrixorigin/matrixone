@@ -79,6 +79,10 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		return TerminalBudgetError(proc.Ctx, err)
 	}
 	hashBuild.ctr.hashmapBuilder.setBudget(budget)
+	// This broadcast capability set is produced for HashJoin. Product and
+	// LoopJoin have no hash map, and right DedupJoin retains no build payload.
+	hashBuild.ctr.hashmapBuilder.boundBatchAllocations = !hashBuild.IsShuffle &&
+		hashBuild.NeedHashMap && hashBuild.NeedBatches && !hashBuild.IsDedup
 	if hashBuild.ctr.hashmapBuilder.mapAllocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -118,7 +122,11 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := hashBuild.build(proc, analyzer); err != nil {
+			err := hashBuild.build(proc, analyzer)
+			if err == nil && ctr.hashmapBuilder.boundBatchAllocations {
+				err = ctr.hashmapBuilder.prepareBatchRowEnds(proc)
+			}
+			if err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
 				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err
