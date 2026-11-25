@@ -33,6 +33,9 @@ type prefetchObject interface {
 	eta(now time.Time, lo, hi int64) time.Duration
 	// caches reports whether it caches its bytes.
 	caches() bool
+	// endsCached reports whether its bytes end cached, by it or by the read that started
+	// it: a read that caches its bytes joins only one whose bytes end cached.
+	endsCached() bool
 	// hold keeps its bytes readable for a read until release. Holds are taken while it
 	// is registered.
 	hold()
@@ -62,6 +65,8 @@ func (f *memoryPrefetchObject) span() (int64, int64) { return f.start, f.end }
 func (f *memoryPrefetchObject) joinable() bool { return true }
 
 func (f *memoryPrefetchObject) caches() bool { return !f.skipCache }
+
+func (f *memoryPrefetchObject) endsCached() bool { return !f.skipCache || f.needs.joinsCaching }
 
 func (f *memoryPrefetchObject) use(ctx context.Context, off, n int64, fn func([]byte) error) error {
 	content, ok := f.waitFor(ctx, off+n)
@@ -105,6 +110,8 @@ func (p *filePrefetchObject) eta(_ time.Time, lo, hi int64) time.Duration {
 }
 
 func (p *filePrefetchObject) caches() bool { return true }
+
+func (p *filePrefetchObject) endsCached() bool { return true }
 
 func (p *filePrefetchObject) hold() {
 	p.mu.Lock()
