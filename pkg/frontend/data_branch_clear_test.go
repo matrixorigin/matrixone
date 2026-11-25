@@ -153,7 +153,7 @@ func TestDataBranchTruncateCollectWindow(t *testing.T) {
 				}
 				return nil, nil
 			}
-			_, _, err := constructChangeHandle(ctx, ses, nil, &tables, &info, nil, lo, hi)
+			_, _, err := constructChangeHandle(ctx, ses, nil, &tables, &info, nil, lo, hi, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 			require.Equal(t, tc.baselineID != 0, tables.tarVisibleState)

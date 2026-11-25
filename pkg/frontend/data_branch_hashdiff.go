@@ -1363,14 +1363,9 @@ func hashDiffIfHasLCA(
 			}
 			if restoreBat.Vecs[0].Length() > 0 {
 				restoreBat.SetRowCount(restoreBat.Vecs[0].Length())
-				if stop, e := emitBatch(emit, batchWithKind{
-					batch:          restoreBat,
-					kind:           diffInsert,
-					name:           wrapped.name,
-					side:           wrapped.side,
-					fromUpdate:     true,
-					restoreMissing: true,
-				}, false, tblStuff.retPool); e != nil {
+				out := wrapped
+				out.batch, out.restoreMissing = restoreBat, true
+				if stop, e := emitBatch(emit, out, false, tblStuff.retPool); e != nil {
 					return e
 				} else if stop {
 					return nil
@@ -1381,7 +1376,7 @@ func hashDiffIfHasLCA(
 			if len(keep) == 0 {
 				return nil
 			}
-			if err := wrapped.batch.Shrink(keep, true, ses.proc.Mp()); err != nil {
+			if err := wrapped.batch.Shrink(keep, false, ses.proc.Mp()); err != nil {
 				return err
 			}
 		}
@@ -2178,7 +2173,7 @@ func findDeleteAndUpdateBat(
 			}
 
 			return reconcileDataBranchBaselineRows(
-				ctx, ses, tblStuff, dBat, tblName, side, expandUpdate, dataHashmap, nil, nil, nil, deliver,
+				ctx, ses, tblStuff, dBat, tblName, side, expandUpdate, dataHashmap, nil, nil, "", nil, deliver,
 			)
 		}
 

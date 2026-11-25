@@ -1155,18 +1155,20 @@ func diffMergeAgency(
 	}
 
 	if diffStmt == nil {
-		// The apply owner prepares stages before production and consumes each
-		// batch inline. A retry must never cancel a concurrent LCA probe.
+		// The apply owner prepares stages before opening change handles and
+		// consumes each batch inline. A retry must never cancel a concurrent probe.
 		copt.onlineApply = true
-		produce := func(emit emitFunc) error {
+		produce := func(emit emitFunc, preparePick pickApplySetup) error {
 			wg.Add(1)
 			return diffOnBase(ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit,
-				pkFilter, pickKeyHashmap, betweenFrom, betweenTo)
+				pkFilter, pickKeyHashmap, betweenFrom, betweenTo, preparePick)
 		}
 		if pickStmt != nil {
 			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce)
 		}
-		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
+		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, func(emit emitFunc) error {
+			return produce(emit, nil)
+		})
 	}
 
 	retBatCh = make(chan batchWithKind, 10)
@@ -1203,7 +1205,7 @@ func diffMergeAgency(
 
 	if err = diffOnBase(
 		ctx, ses, bh, wg, dagInfo, tblStuff, copt, emit, pkFilter, pickKeyHashmap,
-		betweenFrom, betweenTo,
+		betweenFrom, betweenTo, nil,
 	); err != nil {
 		// If the DIFF consumer cancelled the context (e.g., an output failure),
 		// wait for it to finish and prefer its real error over context.Canceled.
@@ -1597,6 +1599,7 @@ func diffOnBase(
 	pkFilter *engine.PKFilter,
 	pickKeyHashmap databranchutils.BranchHashmap,
 	betweenFrom, betweenTo *types.TS,
+	preparePick pickApplySetup,
 ) (err error) {
 
 	defer func() {
@@ -1721,7 +1724,7 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
+		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo, preparePick,
 	); err != nil {
 		return
 	}
@@ -2258,6 +2261,7 @@ func constructChangeHandle(
 	branchInfo *branchMetaInfo,
 	pkFilter *engine.PKFilter,
 	betweenFrom, betweenTo *types.TS,
+	preparePick pickApplySetup,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -2353,6 +2357,15 @@ func constructChangeHandle(
 	}
 	if tables.baseVisibleState {
 		baseRange = dataBranchVisibleRange(tables.baseRel, baseSnapshot, baseIdent)
+	}
+	if preparePick != nil {
+		var upperColumns []*plan.ColDef
+		if boundedUpperColumns != nil {
+			upperColumns = boundedUpperColumns.present
+		}
+		if err = preparePick(upperColumns); err != nil {
+			return
+		}
 	}
 	targetDef := tables.tarRel.GetTableDef(ctx)
 	ctx = engine.WithVisibleStateRecoveryResources(

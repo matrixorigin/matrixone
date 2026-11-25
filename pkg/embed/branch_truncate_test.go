@@ -723,7 +723,7 @@ func assertBranchClearFixture(t *testing.T, db *sql.DB, path string) {
 		}
 		require.Equal(t, strings.Fields(stmt+";"), strings.Fields(strings.Join(lines, " ")))
 		switch {
-		case stmt == "truncate table txn_branch":
+		case stmt == "truncate table txn_branch", stmt == "data branch diff dynamic_src against dynamic_dst":
 			require.Contains(t, nextLine(), "@regex")
 			want := nextLine()
 			_, err := db.ExecContext(t.Context(), stmt)

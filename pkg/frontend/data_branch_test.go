@@ -2925,7 +2925,7 @@ func TestDataBranchDiffRejectsSnapshotBeforeLCACreation(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	err := diffOnBase(ctx, ses, nil, &wg, info, tables, compositeOption{}, nil, nil, nil, nil, nil)
+	err := diffOnBase(ctx, ses, nil, &wg, info, tables, compositeOption{}, nil, nil, nil, nil, nil, nil)
 	require.ErrorContains(t, err, "LCA table 1 was created after an endpoint snapshot")
 	// Both the compound-key lookup and the ID fallback miss at the old snapshot.
 	require.Equal(t, []types.TS{old, old, now}, tableScans)
@@ -3034,7 +3034,7 @@ func TestDataBranchDiffSameTableUsesOlderEndpointWhenLCAReopenFails(t *testing.T
 	}
 	// Use the serial hash-diff path so the scan assertions run on this goroutine.
 	err = diffOnBase(ctx, ses, nil, &wg, branchMetaInfo{lcaTableId: tableID}, tables,
-		compositeOption{onlineApply: true}, emit, nil, nil, nil, nil)
+		compositeOption{onlineApply: true}, emit, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), int64(10), "h1"}}}}, emitted)
 }

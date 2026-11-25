@@ -1845,7 +1845,7 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 				pathFromLCAToBase:   []uint64{baseID},
 				pathFromLCAToBaseTS: []types.TS{{}},
 			}
-			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, &tables, info, nil, &betweenFrom, &tc.betweenTo)
+			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, &tables, info, nil, &betweenFrom, &tc.betweenTo, nil)
 			for _, h := range append(targetHandles, baseHandles...) {
 				t.Cleanup(func() { require.NoError(t, h.Close()) })
 			}

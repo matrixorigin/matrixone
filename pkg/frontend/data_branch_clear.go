@@ -74,6 +74,7 @@ func reconcileDataBranchClear(
 		common = tables.def.visibleIdxes
 	}
 	defaults := make(map[int]*vector.Vector)
+	var unknownColumn string
 	for _, idx := range common {
 		if baseline.upperColumns != nil && baseline.upperColumns[idx] == nil {
 			continue
@@ -85,7 +86,7 @@ func reconcileDataBranchClear(
 			expr := col.GetDefault().GetExpr()
 			if expr == nil && !col.NotNull && col.GeneratedCol == nil && !col.Typ.AutoIncr {
 				compareIdxes = append(compareIdxes, idx) // implicit NULL default
-			} else if function.IsConstant(expr, false) {
+			} else if col.GeneratedCol == nil && !col.Typ.AutoIncr && function.IsConstant(expr, false) {
 				value, free, err := colexec.GetReadonlyResultFromExpression(ses.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 				if err != nil {
 					return err
@@ -93,6 +94,8 @@ func reconcileDataBranchClear(
 				defer free()
 				defaults[idx] = value
 				compareIdxes = append(compareIdxes, idx)
+			} else if unknownColumn == "" {
+				unknownColumn = tables.def.colNames[idx]
 			}
 		}
 	}
@@ -169,7 +172,7 @@ func reconcileDataBranchClear(
 			}
 			bat.SetRowCount(count)
 			return reconcileDataBranchBaselineRows(ctx, ses, tables, bat, name, side,
-				expandUpdate, data, fakeKeyIdxes, compareIdxes, retainMatch, deliver)
+				expandUpdate, data, fakeKeyIdxes, compareIdxes, unknownColumn, retainMatch, deliver)
 		})
 }
 
@@ -178,7 +181,7 @@ func reconcileDataBranchClear(
 func reconcileDataBranchBaselineRows(
 	ctx context.Context, ses *Session, tables tableStuff, baseline *batch.Batch,
 	name string, side int, expandUpdate bool, data databranchutils.BranchHashmap,
-	fakeKeyIdxes, compareIdxes []int, retainMatch func(*batch.Batch) error, deliver func(batchWithKind) error,
+	fakeKeyIdxes, compareIdxes []int, unknownColumn string, retainMatch func(*batch.Batch) error, deliver func(batchWithKind) error,
 ) error {
 	if baseline.RowCount() == 0 {
 		return nil
@@ -214,6 +217,9 @@ func reconcileDataBranchBaselineRows(
 			return err
 		}
 		seen[idx] = true
+		if unknownColumn != "" {
+			return moerr.NewNotSupportedNoCtxf("DATA BRANCH cannot establish historical value for column %q across a clear", unknownColumn)
+		}
 		if len(fakeKeyIdxes) != 0 && retainMatch == nil {
 			return nil // the key already compares every visible column
 		}
