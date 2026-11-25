@@ -36,6 +36,11 @@ import (
 // src's words: row r of n is row start+r of src. Nothing is allocated or
 // copied. n's previous words are released first. The view is valid only
 // while src's words are unchanged and alive; it must never outlive src.
+//
+// Rows past src's end read clear. An owned src keeps its words clear past
+// Len, so the view keeps the full length end-start. A read-only src may not
+// (a view shares its last word with the rows after it), so the view stops at
+// src's end: Len is then shorter, and the rows after it still read clear.
 func (n *Bitmap) InitView(src *Bitmap, start, end int64) {
 	if start < 0 || end < start {
 		panic(moerr.NewInternalErrorNoCtxf("invalid bitmap view [%d, %d)", start, end))
@@ -45,6 +50,9 @@ func (n *Bitmap) InitView(src *Bitmap, start, end int64) {
 	if src == nil || end <= start || start >= src.numBits || src.popCount == 0 {
 		n.numBits = end - start
 		return
+	}
+	if src.mp == nil && end > src.numBits {
+		end = src.numBits
 	}
 	bit := uint64(start) + src.shift
 	first := int(bit / 64)

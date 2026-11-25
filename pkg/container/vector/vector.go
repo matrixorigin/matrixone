@@ -194,7 +194,12 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
+	// An owned null bitmap holds pool memory too, and CleanOnlyData keeps it
+	// for reuse; a read-only one references words it does not own.
 	retained := 0
+	if !v.nsp.IsReadOnly() {
+		retained = v.nsp.GetBitmap().CapWords() * 8
+	}
 	return retained + cap(v.data) + cap(v.area)
 }
 
@@ -8346,11 +8351,21 @@ func Union2VectorValen(
 	return nil
 }
 
-func (v *Vector) FillRawPtrLen(dest []uintptr) {
+// FillRawPtrLen writes v's raw (pointer, length) pairs for native code. A
+// read-only null bitmap (a window view) may be shifted, which C cannot read,
+// so it is handed over as a clean copy. The returned slice holds that copy:
+// the caller must keep it alive until the native call returns.
+func (v *Vector) FillRawPtrLen(dest []uintptr) (keepAlive []uint64) {
 	// The null map's first word and its length in bits; (0, 0) when it has
 	// no storage.
 	dest[0], dest[1] = 0, 0
-	if ptr := nulls.Ptr(&v.nsp); ptr != nil {
+	if v.nsp.IsReadOnly() {
+		bm := v.nsp.GetBitmap()
+		if keepAlive = bm.WordsCovering(int(bm.Len())); len(keepAlive) > 0 {
+			dest[0] = uintptr(unsafe.Pointer(&keepAlive[0]))
+			dest[1] = uintptr(bm.Len())
+		}
+	} else if ptr := nulls.Ptr(&v.nsp); ptr != nil {
 		dest[0] = uintptr(unsafe.Pointer(ptr))
 		dest[1] = uintptr(v.nsp.GetBitmap().Len())
 	}
@@ -8363,6 +8378,7 @@ func (v *Vector) FillRawPtrLen(dest []uintptr) {
 		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
 		dest[5] = uintptr(len(v.area))
 	}
+	return keepAlive
 }
 
 // hasBackingStorage reports whether v holds any data, area or bitmap storage.

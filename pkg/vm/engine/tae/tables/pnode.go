@@ -164,13 +164,27 @@ func (node *persistedNode) Scan(
 			(*bat).AddVector(attr, vecs[i])
 		}
 	} else {
-		if (*bat).Deletes == nil && !deletes.IsEmpty() {
-			if (*bat).Deletes, err = nulls.NewWithSize(1024, mp); err != nil {
+		len := (*bat).Length()
+		if !deletes.IsEmpty() {
+			// Reserve every row the merge can set, so the Adds below cannot
+			// fail. Nothing loaded is in the batch yet: on failure close it.
+			need := len + int(deletes.Len())
+			if (*bat).Deletes == nil {
+				(*bat).Deletes, err = nulls.NewWithSize(need, mp)
+			} else {
+				err = (*bat).Deletes.GetBitmap().TryExpandWithSize(need)
+			}
+			if err != nil {
 				deletes.Free()
+				for _, v := range vecs {
+					v.Close()
+				}
+				if release != nil {
+					release()
+				}
 				return err
 			}
 		}
-		len := (*bat).Length()
 		deletes.Foreach(func(i uint64) bool {
 			(*bat).Deletes.Add(i + uint64(len))
 			return true
