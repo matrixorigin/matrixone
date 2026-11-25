@@ -91,7 +91,7 @@ whole-object downloads.
   fills of its own only for the bytes no fill holds, or reads object storage without
   caching, as today.
 - Joining a waiting fill makes it foreground: it orders before every background fill, may
-  take any free token, and is no longer charged to the background bytes. A waiting fill of
+  use any free room, and is no longer charged to the background bytes. A waiting fill of
   a whole object large enough to split starts its first part at the first block the first
   joined read needs.
 - A joined read waits until its own context ends or the fill stops; a fill that is
@@ -131,23 +131,44 @@ or several ranges that together cover its bytes.
 
 ### Every connection from the governor (decision 2026-11-25)
 
-- Every request the file service makes to object storage (reads, writes, listings, deletes,
-  metadata) takes a token from the governor before it opens a connection, and returns it
-  when the connection is released. No request opens a connection any other way.
-- The governor's size is the configured connections per host and storage concurrency, the
-  smaller of the two. More throughput comes from raising them in the configuration, not
-  from reserving pools or letting one kind of request take another's.
-- Waiting requests get tokens in priority order: foreground before background. A request
-  never takes a token another request holds; it waits for one to be returned.
-- Background work holds at most half of the tokens, so foreground requests always find
-  tokens free while background downloads run.
+The governor allows as many requests to object storage at once as the configured
+connections per host or the storage concurrency, whichever is smaller.
+
+- **The governor makes every request.** It offers a fixed set of requests: read a range
+  into a buffer, read a range into a fill's file, write a part from a buffer, read a page
+  of a listing, stat, delete, copy. It waits for room, makes the request itself, and
+  frees the room when the request ends. No other code reaches object storage, and no
+  code is passed to the governor: a request is data, never a function.
+- **Nothing else runs while a request holds room.** A request moves bytes between object
+  storage and memory or a file that were ready before it began. The only thing it calls
+  is a fill's progress record, which notes the bytes written and wakes their readers
+  without waiting. Buffers, files, the registry, paths, eviction, the publisher and the
+  caller's code are dealt with before the request starts or after it ends.
+- **Order.** Waiting requests are admitted foreground first, then background, then in
+  arrival order. Background requests hold at most half of the room. A running request is
+  never stopped to make room.
+- **Every wait ends with the waiter's own context.** A retry waits with no room held.
+
+No deadlock is possible: a request that holds room waits only for object storage, which
+ends with its bytes, an error, its context, or the idle timeout; nothing that holds room
+ever waits for anything else, so nothing can wait in a cycle. This holds for every caller,
+whatever it does while it waits, because a caller never holds room.
+
+Where caller code meets object storage:
+
+| Caller code | How it runs with no room held |
+|---|---|
+| reads a stream (`ReadCloserForRead`) | The stream is a fill read in one request into memory or the file service's own temporary file, by the fill's backing rule; the caller reads it as bytes arrive. |
+| receives bytes (`WriterForRead`, `ToCacheData`) | The range is read first; the caller's writer or decoder runs after the request ends. |
+| supplies a write (`ReaderForWrite`) | Each part is read from the caller into a buffer first; then one request writes it. |
+| handles listed entries (`List`) | One request per page; entries are handed to the caller between pages. |
 
 ### The queue is the waiting fills (decision 2026-11-25)
 
 - A fill is waiting, running or ended, and every fill in any state is in the one registry.
   There is no separate prefetch queue, live queue or worker pool.
 - Each started fill runs on its own. As many fills, or parts of a split fill, run at once
-  as the governor has tokens for; a waiting fill holds no goroutine.
+  as the governor has room for; a waiting fill holds no goroutine.
 - A prefetch makes waiting background fills for the bytes it asks for. A request for bytes a
   waiting fill of the same cache already holds merges into it: the sooner due time, the
   larger share, and both scans. Bytes a running fill holds need nothing more. Other bytes
@@ -174,7 +195,7 @@ or several ranges that together cover its bytes.
 - The publisher's queue is bounded. When it is full, a submission waits for room; it is
   not dropped. A wait for room ends with the submitter's context, and the entry is then not
   cached.
-- A submission waiting for room holds no connection token, buffer or path the publisher
+- A submission waiting for room holds no buffer or path the publisher
   needs, so the publisher never waits on a waiting submitter.
 - The publisher's queue depth and wait times are reported, and long waits are logged at a
   bounded rate.
@@ -203,7 +224,7 @@ startup removes them as stale cache. The cache refills them on use.
 
 Memory-backed fills count against the flight memory budget, file-backed fills against the
 disk cache, waiting background fills against the queue's byte bound, and every
-object-storage request against the governor's tokens. Each bound is charged in one place,
+object-storage request against the governor's room. Each bound is charged in one place,
 because there is one kind of fill and one way to open a connection.
 
 ## Alternatives
