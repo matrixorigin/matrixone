@@ -172,13 +172,15 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
 	}
+	if objstats.GetAppendable() {
+		// A snapshot can see these rows in the coordinator's replay memtable
+		// or in the original object's snapshot file after another CN replays a
+		// later flush. Both representations must be owned by the same reader.
+		return !rsp.IsLocalCN
+	}
 	if rsp.ShuffleByObjectID {
 		objID := objstats.ObjectLocation().ObjectId()
 		return IVFObjectIDHashToRange(objID, uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
-	}
-	if objstats.GetAppendable() {
-		//aobj always shuffle to local CN
-		return !rsp.IsLocalCN
 	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		//shuffle by range
