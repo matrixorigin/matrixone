@@ -27,14 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // CaptureFlushOwnershipRanges is test-only glue for a storage-witness
 // package that cannot import readutil into ivfflat (it would create an import
 // cycle). Capture the actual INDEX_SEARCH_SCAN reader's storage request at
 // Relation.Ranges, without implementing or overriding its ownership policy.
-func CaptureFlushOwnershipRanges(t *testing.T, count, index int32, remote, stable bool) engine.RangesParam {
+func CaptureFlushOwnershipRanges(t *testing.T, count, index int32, remote bool) engine.RangesParam {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
@@ -63,12 +62,6 @@ func CaptureFlushOwnershipRanges(t *testing.T, count, index int32, remote, stabl
 		gomock.Any(), gomock.Any()).Return(nil, nil)
 	spec := &plan.IndexSearchScan{
 		Index: &plan.IndexDef{IndexAlgo: "ivfflat"}, SourceTable: &plan.ObjectRef{},
-	}
-	if stable {
-		// Use the wire field so the same test also runs against a baseline
-		// that does not yet define stable_partition_ownership.
-		wire := protowire.AppendTag(nil, 25, protowire.VarintType)
-		require.NoError(t, spec.Unmarshal(protowire.AppendVarint(wire, 1)))
 	}
 	reader, err := NewPlanReader(proc, spec, searchplugin.Request{Identity: searchplugin.ScanIdentity{
 		PartitionCount: count, PartitionIndex: index, IsRemote: remote,

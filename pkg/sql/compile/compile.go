@@ -1525,9 +1525,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainRequiredIVFWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.constrainPartitionOwnershipWorkers(qry); err != nil {
-		return nil, err
-	}
 	if err = c.constrainRemoteExpressionWorkers(qry); err != nil {
 		return nil, err
 	}
@@ -5629,30 +5626,19 @@ func (c *Compile) compileTableScanWithNode(node *plan.Node, engNode engine.Node,
 	return s, nil
 }
 
-func (c *Compile) canPartitionIndexSearchScan(qry *plan.Query, node *plan.Node) bool {
-	if c.execType != plan2.ExecTypeAP_MULTICN || len(c.cnList) <= 1 ||
-		!plan2.IndexSearchScanPartitioned(node.GetIndexSearchScan()) {
-		return false
-	}
+func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
+	var nodes engine.Nodes
 	var workspace client.Workspace
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		workspace = txnOp.GetWorkspace()
 	}
-	if workspace != nil && !workspace.Readonly() {
-		return false
-	}
+	vectorID, _, _, qualified := plan2.RequiredIVFPlacement(c.pn.GetQuery())
 	required := requiredVectorMembership(node)
-	if !required {
-		return !node.GetStats().GetForceOneCN()
-	}
-	vectorID, _, _, qualified := plan2.RequiredIVFPlacement(qry)
-	return qualified && vectorID == node.NodeId
-}
-
-func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
-	var nodes engine.Nodes
-	partitioned := c.canPartitionIndexSearchScan(c.pn.GetQuery(), node)
-	if partitioned {
+	distributedPRE := required && qualified && vectorID == node.NodeId
+	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
+		plan2.IndexSearchScanPartitioned(node.IndexSearchScan) &&
+		(workspace == nil || workspace.Readonly()) &&
+		((node.Stats == nil || !node.Stats.ForceOneCN) && !required || distributedPRE) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
@@ -5663,9 +5649,20 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
+		requiredVersion, err := c.indexSearchScanProtocolVersion(node.IndexSearchScan)
+		if err != nil {
+			return nil, err
+		}
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, requiredVersion)
+		if err != nil {
+			return nil, err
+		}
+		if !supported {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
+		}
 		// Keep the query's coordinator-first list intact for other scans.
-		// Immutable object owners depend only on the selected identities,
-		// not ingress. Appendable data follows the replay-memory owner.
+		// Immutable object owners depend only on the selected identities, not ingress.
 		slices.SortFunc(nodes, func(a, b engine.Node) int {
 			if n := cmp.Compare(a.Id, b.Id); n != 0 {
 				return n
@@ -5690,9 +5687,6 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 	ss := make([]*Scope, 0, len(nodes))
 	for i := range nodes {
 		nodeCopy := plan2.DeepCopyNode(node)
-		if spec := nodeCopy.GetIndexSearchScan(); spec != nil {
-			spec.StablePartitionOwnership = partitioned
-		}
 		if nodeCopy.Stats != nil {
 			nodeCopy.Stats.Dop = int32(nodes[i].Mcpu)
 		}

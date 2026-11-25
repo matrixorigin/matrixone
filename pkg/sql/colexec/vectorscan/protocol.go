@@ -26,15 +26,8 @@ const IndexSearchScanProtocolVersion = defines.MORPCVersion111
 // IndexSearchScan search knobs internal_topk, max_internal_topk and max_nprobe.
 const SearchKnobsProtocolVersion = defines.MORPCVersion127
 
-// StablePartitionOwnershipProtocolVersion binds the memory and flushed
-// appendable representations to the same owner on every selected worker.
-const StablePartitionOwnershipProtocolVersion = defines.MORPCVersion135
-
 // RequiredProtocolVersion returns the MORPC protocol version a CN needs to run spec.
 func RequiredProtocolVersion(spec *plan.IndexSearchScan) int64 {
-	if spec.GetStablePartitionOwnership() {
-		return StablePartitionOwnershipProtocolVersion
-	}
 	if spec.GetInternalTopk() != 0 || spec.GetMaxInternalTopk() != 0 || spec.GetMaxNprobe() != 0 {
 		return SearchKnobsProtocolVersion
 	}

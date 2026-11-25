@@ -105,14 +105,13 @@ func NewPlanReader(proc *process.Process, spec *plan.IndexSearchScan, req search
 		r.executionStats = new(vectorindex.IvfExecutionDiagnostic)
 	}
 	r.scanner = &relationScanner{
-		proc:            proc,
-		partitionCount:  req.Identity.PartitionCount,
-		partitionIndex:  req.Identity.PartitionIndex,
-		ownsInMemory:    req.Identity.PartitionCount <= 1 || !req.Identity.IsRemote,
-		stableOwnership: req.Identity.PartitionCount <= 1 || spec.GetStablePartitionOwnership(),
-		txnOffset:       req.Identity.TxnOffset,
-		snapshot:        cloneIvfSnapshot(req.Identity.Snapshot),
-		executionStats:  r.executionStats,
+		proc:           proc,
+		partitionCount: req.Identity.PartitionCount,
+		partitionIndex: req.Identity.PartitionIndex,
+		ownsInMemory:   req.Identity.PartitionCount <= 1 || !req.Identity.IsRemote,
+		txnOffset:      req.Identity.TxnOffset,
+		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
+		executionStats: r.executionStats,
 	}
 	if req.Identity.PhysicalAccountID != nil {
 		accountID := *req.Identity.PhysicalAccountID
@@ -734,13 +733,12 @@ type relationScanner struct {
 	accountID  *uint32
 	snapshot   *plan.Snapshot
 	// 只在本 reader 的执行代际内复用；Close 释放 scanner，不写入共享 Process。
-	snapshotTxn     client.TxnOperator
-	partitionCount  int32
-	partitionIndex  int32
-	ownsInMemory    bool
-	stableOwnership bool
-	txnOffset       int
-	executionStats  *vectorindex.IvfExecutionDiagnostic
+	snapshotTxn    client.TxnOperator
+	partitionCount int32
+	partitionIndex int32
+	ownsInMemory   bool
+	txnOffset      int
+	executionStats *vectorindex.IvfExecutionDiagnostic
 }
 
 var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
@@ -801,12 +799,11 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	txnOffset := s.txnOffset
 
 	rsp := &engine.RangesShuffleParam{
-		Node:                    &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef},
-		CNCNT:                   partitionCount,
-		CNIDX:                   partitionIndex,
-		IsLocalCN:               s.ownsInMemory,
-		ShuffleByObjectID:       partitionCount > 1,
-		AppendableOnMemoryOwner: s.stableOwnership,
+		Node:              &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef},
+		CNCNT:             partitionCount,
+		CNIDX:             partitionIndex,
+		IsLocalCN:         s.ownsInMemory,
+		ShuffleByObjectID: partitionCount > 1,
 	}
 	policy := relationScanPolicy(partitionCount, s.ownsInMemory)
 	relData, err := rel.Ranges(ctx, engine.RangesParam{
@@ -1026,8 +1023,8 @@ func (s *relationScanner) recordRelationExecutionStats(
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
 // the coordinator owns in-memory rows independently of its object partition
-// ordinal. In stable mode this also covers the flushed appendable form;
-// remote partitions read immutable objects assigned by object ID.
+// ordinal, including the flushed appendable representation of those rows.
+// Remote partitions read only immutable objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {

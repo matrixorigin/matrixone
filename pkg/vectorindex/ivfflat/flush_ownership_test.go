@@ -67,12 +67,14 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	defer packer.Close()
 	before := logtailreplay.NewPartitionState("pre-apply", false, 1234, false)
 	before.HandleRowsInsert(ctx, proto, 0, packer, mp)
-	mem := before.NewRowsIter(snapshot, nil, false)
-	require.True(t, mem.Next())
-	decoded := mem.Entry().Batch
+	decoded := func() *batch.Batch {
+		mem := before.NewRowsIter(snapshot, nil, false)
+		defer mem.Close()
+		require.True(t, mem.Next())
+		return mem.Entry().Batch
+	}()
 	defer decoded.Clean(mp)
 	require.Equal(t, pk, decoded.Vecs[2].GetStringAt(0))
-	require.NoError(t, mem.Close())
 	after := before.Copy()
 
 	// Reproduce the old appendable object's persisted representation (same ID,
@@ -136,10 +138,9 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	require.Zero(t, after.ApproxInMemRows(), "applied flush removes committed rows from the replay memtable")
 	require.Equal(t, 1, before.ApproxInMemRows(), "other replica still precedes the flush")
 
-	// Exercise the exact wire payload, including the legacy unmarked form.
-	local := ivfflat.CaptureFlushOwnershipRanges(t, 2, 0, false, true)
-	remote := ivfflat.CaptureFlushOwnershipRanges(t, 2, 1, true, true)
-	single := ivfflat.CaptureFlushOwnershipRanges(t, 1, 0, false, false)
+	local := ivfflat.CaptureFlushOwnershipRanges(t, 2, 0, false)
+	remote := ivfflat.CaptureFlushOwnershipRanges(t, 2, 1, true)
+	single := ivfflat.CaptureFlushOwnershipRanges(t, 1, 0, false)
 	require.NotZero(t, local.Policy&engine.Policy_CollectCommittedInmemData)
 	require.Zero(t, remote.Policy&engine.Policy_CollectCommittedInmemData)
 	require.NotZero(t, single.Policy&engine.Policy_CollectCommittedInmemData)
@@ -198,15 +199,6 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	newSnapshot := types.BuildTS(50, 0)
 	require.Empty(t, keys(after, local, newSnapshot, newID))
 	require.Equal(t, []string{pk}, keys(after, remote, newSnapshot, newID))
-
-	// An old coordinator and all its workers must still agree on the
-	// unmarked mode during rollout; no unilateral change on a new worker.
-	legacyLocal := ivfflat.CaptureFlushOwnershipRanges(t, 2, 0, false, false)
-	legacyRemote := ivfflat.CaptureFlushOwnershipRanges(t, 2, 1, true, false)
-	require.Equal(t, []string{pk}, atRetainedSnapshot(before, legacyLocal))
-	require.Empty(t, atRetainedSnapshot(after, legacyLocal))
-	require.Equal(t, []string{pk}, atRetainedSnapshot(after, legacyRemote))
-	require.Empty(t, atRetainedSnapshot(before, legacyRemote))
 }
 
 func objectIDOnSecondPartition(t *testing.T, id types.Objectid) types.Objectid {

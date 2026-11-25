@@ -1058,14 +1058,12 @@ type RangesShuffleParam struct {
 	CNCNT     int32 // number of all cns
 	CNIDX     int32 // cn index , starts from 0
 	IsLocalCN bool
-	// ShuffleByObjectID assigns objects by their complete ObjectID.
-	ShuffleByObjectID bool
-	// AppendableOnMemoryOwner overrides object-ID ownership for appendable
-	// objects only. IsLocalCN must identify the one reader owning replay rows.
-	AppendableOnMemoryOwner bool
-	ShuffleRangeUint64      []uint64
-	ShuffleRangeInt64       []int64
-	Init                    bool
+	// ShuffleByObjectID hashes immutable IVF objects by their full ObjectID.
+	// Appendable objects follow IsLocalCN, the owner of replay rows.
+	ShuffleByObjectID  bool
+	ShuffleRangeUint64 []uint64
+	ShuffleRangeInt64  []int64
+	Init               bool
 }
 
 type RangesParam struct {

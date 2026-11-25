@@ -194,16 +194,14 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
 	}
+	if objstats.GetAppendable() {
+		// A flush may be applied on only some readers of the same snapshot.
+		// Its appendable file must follow the reader that owns replay rows.
+		return !rsp.IsLocalCN
+	}
 	if rsp.ShuffleByObjectID {
-		if rsp.AppendableOnMemoryOwner && objstats.GetAppendable() {
-			return !rsp.IsLocalCN
-		}
 		objID := objstats.ObjectLocation().ObjectId()
 		return IVFObjectIDHashToRange(objID, uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
-	}
-	if objstats.GetAppendable() {
-		//aobj always shuffle to local CN
-		return !rsp.IsLocalCN
 	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		//shuffle by range

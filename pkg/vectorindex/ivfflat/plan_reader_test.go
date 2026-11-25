@@ -2500,9 +2500,6 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 			require.Equal(t, int32(max(1, parallelism)), param.Rsp.CNCNT)
 			require.Equal(t, param.Rsp.CNIDX == 0, param.Rsp.IsLocalCN)
 		}
-		if parallelism > 0 { // NewPlanReaders; the single-reader case injects its scanner.
-			require.True(t, param.Rsp.AppendableOnMemoryOwner)
-		}
 		ranges <- param.Rsp.CNIDX
 		return nil, nil
 	}).Times(max(1, parallelism))
@@ -2581,7 +2578,6 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 		spec.ScanWork = &plan.IndexSearchScanWork{Rows: 2, Blocks: 2, Objects: 2, VectorBytesPerRow: 8}
 		if len(identity) != 0 {
 			r.req.Identity = identity[0]
-			spec.StablePartitionOwnership = true
 		}
 		readers, err = NewPlanReaders(proc, spec, r.req, parallelism)
 		require.NoError(t, err)

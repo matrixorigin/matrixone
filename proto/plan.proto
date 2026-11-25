@@ -1046,10 +1046,6 @@ message IndexSearchScan {
   // Cap on the lists an IVF search probes while it widens (BY RANK option max_nprobe;
   // 0 = unset). Graph indexes ignore it.
   uint64 max_nprobe = 24;
-  // Physical partitions of a distributed scan negotiated one ownership
-  // policy for both replay memory and flushed appendable objects (MORPC 135).
-  // An unset field preserves the legacy distributed policy.
-  bool stable_partition_ownership = 25;
 }
 
 message Node {
