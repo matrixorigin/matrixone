@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
+	"golang.org/x/sync/semaphore"
 )
 
 type commandManager struct {
@@ -34,17 +36,36 @@ type commandManager struct {
 	maxWalSize    int
 	preparedEntry entry.Entry
 	preparedSize  int
+	walBudget     *semaphore.Weighted
 }
 
 // Retain at most 4 KiB of serialized data per queued transaction. Large
 // records are encoded again when they enter the WAL stage.
 const maxRetainedPreflightRecordSize = 4 * 1024
 
+// The append queues admit by count. Bound their additional encoded WAL payload
+// while allowing many small records to be in flight.
+const maxOutstandingEncodedWALBytes = 4 * MaxWalSize
+
+var encodedWALBudget = semaphore.NewWeighted(maxOutstandingEncodedWALBytes)
+
+type largeWALRecordEntry struct {
+	entry.Entry
+	budget *semaphore.Weighted
+	size   int64
+}
+
+func (e *largeWALRecordEntry) Free() {
+	e.Entry.Free()
+	e.budget.Release(e.size)
+}
+
 func newCommandManager(driver wal.Store) *commandManager {
 	return &commandManager{
 		cmd:        txnbase.NewTxnCmd(),
 		driver:     driver,
 		maxWalSize: MaxWalSize,
+		walBudget:  encodedWALBudget,
 	}
 }
 
@@ -143,9 +164,22 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 		mgr.preparedEntry = nil
 		mgr.preparedSize = 0
 	} else {
-		if logEntry, walSize, err = mgr.marshalTxnRecord(store); err != nil {
+		// Reserve the maximum before serialization, then retain only the
+		// actual encoded payload size until the entry is freed after WAL.
+		if err = mgr.walBudget.Acquire(context.Background(), int64(mgr.maxWalSize)); err != nil {
 			return nil, err
 		}
+		if logEntry, walSize, err = mgr.marshalTxnRecord(store); err != nil {
+			mgr.walBudget.Release(int64(mgr.maxWalSize))
+			return nil, err
+		}
+		if walSize > maxRetainedPreflightRecordSize {
+			mgr.walBudget.Release(int64(mgr.maxWalSize - walSize))
+			logEntry = &largeWALRecordEntry{Entry: logEntry, budget: mgr.walBudget, size: int64(walSize)}
+		} else {
+			mgr.walBudget.Release(int64(mgr.maxWalSize))
+		}
+		mgr.preparedSize = 0
 	}
 
 	t2 := time.Now()

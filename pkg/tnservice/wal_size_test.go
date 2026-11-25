@@ -38,17 +38,21 @@ func TestEffectiveMaxWALRecordSize(t *testing.T) {
 	require.Less(t, request.ProtoSize()+len(logservice.NewUserLogRecord(math.MaxUint64, 0).Data), 1024)
 
 	for _, tc := range []struct {
-		configured, clientMax, want int
+		configured, clientMax, receiverMax, want int
 	}{
-		{0, 100 * mpool.MB, logservicedriver.DefaultMaxWALRecordSize},
-		{0, 32 * mpool.MB, 32*mpool.MB - 1024},
-		{50 * mpool.MB, 32 * mpool.MB, 32*mpool.MB - 1024},
-		{20 * mpool.MB, 32 * mpool.MB, 20 * mpool.MB},
+		{0, 100 * mpool.MB, 0, logservicedriver.DefaultMaxWALRecordSize},
+		{0, 32 * mpool.MB, 0, 32*mpool.MB - 1024},
+		{50 * mpool.MB, 32 * mpool.MB, 0, 32*mpool.MB - 1024},
+		{20 * mpool.MB, 32 * mpool.MB, 0, 20 * mpool.MB},
+		{0, 100 * mpool.MB, 32 * mpool.MB, 32*mpool.MB - 1024},
+		{50 * mpool.MB, 100 * mpool.MB, 32 * mpool.MB, 32*mpool.MB - 1024},
 	} {
-		got, err := effectiveMaxWALRecordSize(tc.configured, tc.clientMax)
+		got, err := effectiveMaxWALRecordSize(tc.configured, tc.clientMax, tc.receiverMax)
 		require.NoError(t, err)
 		require.Equal(t, tc.want, got)
 	}
-	_, err := effectiveMaxWALRecordSize(0, 1024)
+	_, err := effectiveMaxWALRecordSize(0, 1024, 0)
+	require.Error(t, err)
+	_, err = effectiveMaxWALRecordSize(0, 100*mpool.MB, 1024)
 	require.Error(t, err)
 }

@@ -62,7 +62,8 @@ func TestDefaulValue(t *testing.T) {
 
 func TestLogServiceMaxWALRecordSizeConfig(t *testing.T) {
 	cfg := Config{}
-	_, err := btoml.Decode("[LogService]\nmax-wal-record-size = '64MiB'", &cfg)
+	_, err := btoml.Decode("[LogService]\nmax-wal-record-size = '64MiB'\nreceiver-max-message-size = '32MiB'", &cfg)
 	assert.NoError(t, err)
 	assert.Equal(t, toml.ByteSize(64*1024*1024), cfg.LogService.MaxWALRecordSize)
+	assert.Equal(t, toml.ByteSize(32*1024*1024), cfg.LogService.ReceiverMaxMessageSize)
 }

@@ -17,12 +17,14 @@ package txnimpl
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 type recordingWALStore struct {
@@ -74,12 +76,16 @@ func TestCommandManagerRejectsExactWALSizeBeforeAppend(t *testing.T) {
 	require.Positive(t, len(encoded))
 
 	mgr.maxWalSize = len(encoded) - 1
+	mgr.walBudget = semaphore.NewWeighted(int64(mgr.maxWalSize))
 	_, err = mgr.ApplyTxnRecord(store)
 	var tooLarge *wal.RecordTooLargeError
 	require.ErrorAs(t, err, &tooLarge)
 	require.Zero(t, w.appends)
+	require.True(t, mgr.walBudget.TryAcquire(int64(mgr.maxWalSize)), "failed serialization must release its reservation")
+	mgr.walBudget.Release(int64(mgr.maxWalSize))
 
 	mgr.maxWalSize = len(encoded)
+	mgr.walBudget = encodedWALBudget
 	e, err := mgr.ApplyTxnRecord(store)
 	require.NoError(t, err)
 	require.Equal(t, 1, w.appends)
@@ -126,6 +132,66 @@ func TestCommandManagerPreflightDoesNotRetainSerializedRecord(t *testing.T) {
 	require.Equal(t, 1, w.appends)
 	e.DoneWithErr(nil)
 	e.Free()
+}
+
+func TestLargeWALRecordsBoundedUntilEntriesFreed(t *testing.T) {
+	const recordLimit = 8 * 1024
+	budget := semaphore.NewWeighted(2 * recordLimit)
+	appendLarge := func(id byte) (entry.Entry, error) {
+		txn := txnbase.NewTxn(nil, &txnbase.NoopTxnStore{}, bytes.Repeat([]byte{id}, 6*1024), types.BuildTS(1, 0), types.TS{})
+		mgr := newCommandManager(&recordingWALStore{})
+		mgr.maxWalSize = recordLimit
+		mgr.walBudget = budget
+		mgr.AddCmd(txnbase.NewTxnStateCmd("state", 0, types.TS{}))
+		return mgr.ApplyTxnRecord(&txnStore{txn: txn})
+	}
+	e1, err := appendLarge('a')
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if e1 != nil {
+			e1.DoneWithErr(nil)
+			e1.Free()
+		}
+	})
+	require.True(t, budget.TryAcquire(recordLimit), "unused reservation must be returned after serialization")
+	budget.Release(recordLimit)
+	e2, err := appendLarge('b')
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		e2.DoneWithErr(nil)
+		e2.Free()
+	})
+	require.False(t, budget.TryAcquire(recordLimit), "two retained records must consume more than half the byte budget")
+
+	type appendResult struct {
+		e   entry.Entry
+		err error
+	}
+	done := make(chan appendResult, 1)
+	go func() {
+		e, err := appendLarge('c')
+		done <- appendResult{e, err}
+	}()
+	select {
+	case result := <-done:
+		if result.e != nil {
+			result.e.DoneWithErr(nil)
+			result.e.Free()
+		}
+		t.Fatal("third large WAL record was admitted while both slots were occupied")
+	default:
+	}
+	e1.DoneWithErr(nil)
+	e1.Free()
+	e1 = nil
+	select {
+	case result := <-done:
+		require.NoError(t, result.err)
+		result.e.DoneWithErr(nil)
+		result.e.Free()
+	case <-time.After(5 * time.Second):
+		t.Fatal("third large WAL record did not advance after a slot was freed")
+	}
 }
 
 func TestCommandManagerRetainsOnlySmallPreflightRecord(t *testing.T) {

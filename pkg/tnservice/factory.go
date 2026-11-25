@@ -95,16 +95,22 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 
 // The Log Service client applies its RPC limit to the complete request. Reserve
 // room for the LogRecord header and request envelope before sizing WAL records.
-func effectiveMaxWALRecordSize(configured, clientMaxMessageSize int) (int, error) {
+func effectiveMaxWALRecordSize(configured, clientMaxMessageSize, receiverMaxMessageSize int) (int, error) {
 	const rpcEnvelopeReserve = 1024
-	if clientMaxMessageSize <= rpcEnvelopeReserve {
-		return 0, moerr.NewBadConfigNoCtx("TN RPC max-message-size is too small for Log Service WAL")
+	if receiverMaxMessageSize == 0 {
+		receiverMaxMessageSize = logservice.DefaultRPCMaxMessageSize
+	}
+	if clientMaxMessageSize <= rpcEnvelopeReserve || receiverMaxMessageSize <= rpcEnvelopeReserve {
+		return 0, moerr.NewBadConfigNoCtx("TN or Log Service RPC max-message-size is too small for WAL")
 	}
 	if configured <= 0 {
 		configured = logservicedriver.DefaultMaxWALRecordSize
 	}
 	if clientLimit := clientMaxMessageSize - rpcEnvelopeReserve; configured > clientLimit {
 		configured = clientLimit
+	}
+	if receiverLimit := receiverMaxMessageSize - rpcEnvelopeReserve; configured > receiverLimit {
+		configured = receiverLimit
 	}
 	return configured, nil
 }
@@ -185,7 +191,8 @@ func (s *store) newTAEStorage(
 	}
 
 	maxWALRecordSize, err := effectiveMaxWALRecordSize(
-		int(s.cfg.LogService.MaxWALRecordSize), int(s.cfg.RPC.MaxMessageSize))
+		int(s.cfg.LogService.MaxWALRecordSize), int(s.cfg.RPC.MaxMessageSize),
+		int(s.cfg.LogService.ReceiverMaxMessageSize))
 	if err != nil {
 		return nil, err
 	}

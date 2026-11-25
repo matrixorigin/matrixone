@@ -50,9 +50,10 @@ const (
 	// The default value for HAKeeper truncate interval.
 	defaultHAKeeperTruncateInterval = 2 * time.Hour
 
-	DefaultListenHost     = "0.0.0.0"
-	DefaultServiceHost    = "127.0.0.1"
-	DefaultLogServicePort = 32001
+	DefaultListenHost        = "0.0.0.0"
+	DefaultServiceHost       = "127.0.0.1"
+	DefaultLogServicePort    = 32001
+	DefaultRPCMaxMessageSize = defaultMaxMessageSize
 
 	defaultRestoreFilePath = "hk_data"
 )
