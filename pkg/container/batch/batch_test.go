@@ -158,19 +158,6 @@ func (shortBatchMarshalWriter) Write(value []byte) (int, error) {
 	return len(value) - 1, nil
 }
 
-type mpoolTrackingReader struct {
-	reader    *bytes.Reader
-	mp        *mpool.MPool
-	maxCurrNB int64
-}
-
-func (r *mpoolTrackingReader) Read(value []byte) (int, error) {
-	if current := r.mp.CurrNB(); current > r.maxCurrNB {
-		r.maxCurrNB = current
-	}
-	return r.reader.Read(value)
-}
-
 func TestMarshalBinarySizeRejectsInvalidBatch(t *testing.T) {
 	var nilBatch *Batch
 	_, err := nilBatch.MarshalBinarySize()

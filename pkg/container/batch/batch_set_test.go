@@ -155,7 +155,7 @@ func TestBatchSetCopiesThroughCallerPool(t *testing.T) {
 	bs := NewBatchSet(4)
 	var inputs []*Batch
 	var inputPools []*mpool.MPool
-	var popped []*Batch
+	popped := make([]*Batch, 0, 1)
 	t.Cleanup(func() {
 		for _, bat := range popped {
 			bat.Clean(bat.Vecs[0].MPool())

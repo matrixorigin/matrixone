@@ -16,7 +16,6 @@ package batch
 
 import (
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,10 +24,11 @@ import (
 
 func requireNotAliased(t *testing.T, a, b *vector.Vector) {
 	t.Helper()
-	require.NotEqual(t,
-		uintptr(unsafe.Pointer(unsafe.SliceData(a.GetData()))),
-		uintptr(unsafe.Pointer(unsafe.SliceData(b.GetData()))),
-	)
+	da, db := a.GetData(), b.GetData()
+	if len(da) == 0 || len(db) == 0 {
+		return
+	}
+	require.False(t, &da[0] == &db[0], "vectors share backing memory")
 }
 
 // Clone, Dup and CloneSelectedColumns copy into the pool they are given:
