@@ -1199,10 +1199,10 @@ func (d *DiskCache) dropCachedRange(ctx context.Context, diskPath string) {
 		return
 	}
 	defer owner.release()
-	d.ranges.remove(diskPath)
 	if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
 		return
 	}
+	d.ranges.remove(diskPath)
 	d.cache.Delete(ctx, diskPath)
 }
 

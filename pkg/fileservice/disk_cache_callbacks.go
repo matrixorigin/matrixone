@@ -110,11 +110,7 @@ func (d *DiskCache) deferWriteCallbacks(ctx context.Context) (_ context.Context,
 	if callbacks == nil || len(callbacks.OnWritten) == 0 {
 		return ctx, func(int64) bool { return true }, func() {}
 	}
-	type written struct {
-		filePath string
-		entry    IOEntry
-	}
-	var entries []written
+	var entries []writtenEntry
 	var reserved int64
 	copies := &d.async.flightCopies
 	reserve = func(n int64) bool {
@@ -133,17 +129,49 @@ func (d *DiskCache) deferWriteCallbacks(ctx context.Context) (_ context.Context,
 	record := &DiskCacheCallbacks{
 		OnWritten: []OnDiskCacheWrittenFunc{func(filePath string, entry IOEntry) {
 			entry.Data = bytes.Clone(entry.Data)
-			entries = append(entries, written{filePath, entry})
+			entries = append(entries, writtenEntry{filePath, entry})
 		}},
 		OnEvict:     callbacks.OnEvict,
 		upstreamCtx: ctx,
 	}
 	return record, reserve, func() {
-		defer copies.Add(-reserved)
-		for _, w := range entries {
-			for i, fn := range callbacks.OnWritten {
-				d.runAsyncUpdateCallback(w.filePath, "", i, fn, w.entry)
-			}
-		}
+		c := &deferredCallbacks{d: d, fns: callbacks.OnWritten, entries: entries,
+			release: func() { copies.Add(-reserved) }}
+		c.run()
 	}
+}
+
+// writtenEntry is an entry written, recorded for the write callbacks.
+type writtenEntry struct {
+	filePath string
+	entry    IOEntry
+}
+
+// deferredCallbacks runs each of fns on each of entries, in order, then release.
+type deferredCallbacks struct {
+	d       *DiskCache
+	fns     []OnDiskCacheWrittenFunc
+	entries []writtenEntry
+	// next is the index of the next call: fns[next%len(fns)] on entries[next/len(fns)].
+	next    int
+	release func()
+}
+
+// run runs the calls from next, then release. A callback that exits its goroutine
+// continues the calls on a new one.
+func (c *deferredCallbacks) run() {
+	exited := true
+	defer func() {
+		if exited {
+			go c.run()
+		}
+	}()
+	for c.next < len(c.entries)*len(c.fns) {
+		k := c.next
+		c.next++
+		w, i := c.entries[k/len(c.fns)], k%len(c.fns)
+		c.d.runAsyncUpdateCallback(w.filePath, "", i, c.fns[i], w.entry)
+	}
+	exited = false
+	c.release()
 }

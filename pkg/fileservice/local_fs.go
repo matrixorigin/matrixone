@@ -999,7 +999,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 		}
 		nativePaths = append(nativePaths, l.toNativeFilePath(path.File))
 	}
-	var errs []error
+	errs := make([]error, 0, len(nativePaths))
 	for _, nativePath := range nativePaths {
 		errs = append(errs, deleteLocalFile(&l.RWMutex, l.dirFiles, nativePath))
 	}

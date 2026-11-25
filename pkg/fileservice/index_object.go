@@ -218,14 +218,14 @@ func (s *S3FS) indexObjectCached(filePath string) (string, bool) {
 }
 
 // indexObjectHeld reports whether the index-file cache holds the object at filePath with
-// its file, so that a fill or prefetch of it has nothing to do.
+// its file as a regular file, so that a fill or prefetch of it has nothing to do.
 func (s *S3FS) indexObjectHeld(filePath string) bool {
 	diskPath, ok := s.indexObjectCached(filePath)
 	if !ok {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(diskPath, IndexObjectFile))
-	return err == nil
+	info, err := os.Stat(filepath.Join(diskPath, IndexObjectFile))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // readIndexObject fills the entries of vector not done from the object's entry in the
@@ -379,7 +379,7 @@ func (s *S3FS) deleteIndexObjects(ctx context.Context, filePaths []string) error
 	if !s.cachesIndexObjects() {
 		return nil
 	}
-	var errs []error
+	errs := make([]error, 0, len(filePaths))
 	for _, filePath := range filePaths {
 		p, err := parseFilePathAtService(filePath, s.name)
 		if err != nil {
