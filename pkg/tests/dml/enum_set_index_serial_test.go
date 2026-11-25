@@ -114,6 +114,27 @@ where t.reldatabase=database() and t.relname='dup' and i.name='ux'`))
 		exec("alter table dup_null add unique key ux(e,v)")
 		checkPublicSerial()
 
+		// The two zeros compare equal even though their index encodings differ.
+		exec("create table dup_float(id int primary key, e enum('new','paid'), f double)")
+		exec("insert into dup_float values (1,'paid',cast('0' as double)),(2,'paid',cast('-0' as double))")
+		require.Equal(t, 2, count("select count(distinct hex(serial(f))) from dup_float"))
+		require.Equal(t, 2, count("select count(*) from dup_float where f=0"))
+		_, err = conn.ExecContext(ctx, "alter table dup_float add unique key ux(e,f)")
+		require.ErrorAs(t, err, &duplicate)
+		require.EqualValues(t, 1062, duplicate.Number)
+		require.Zero(t, count(`select count(*) from mo_catalog.mo_indexes i
+join mo_catalog.mo_tables t on i.table_id=t.rel_id
+where t.reldatabase=database() and t.relname='dup_float' and i.name='ux'`))
+		exec("update dup_float set f=1 where id=2")
+		exec("create unique index ux on dup_float(e,f)")
+
+		// The ENUM error ordinal and an empty member have the same display value.
+		exec("create table distinct_enum(id int primary key, e enum('','a'))")
+		exec("insert ignore into distinct_enum values (1,'invalid'),(2,'')")
+		require.Equal(t, 1, count("select count(distinct hex(serial(e))) from distinct_enum"))
+		require.Equal(t, 2, count("select count(distinct e+0) from distinct_enum"))
+		exec("alter table distinct_enum add unique key ue(e)")
+
 		// UNIQUE keys omit NULL entries. Composite nonunique keys encode NULL
 		// and must still remove the entry when their base row is deleted.
 		exec("create table delete_keys(id int primary key, e enum('new','paid'), n int, unique key ux(e,n), key ix(e,n))")
