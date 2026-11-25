@@ -75,12 +75,14 @@ func (bs *BatchSet) ReadyDelta(src *Batch, mp *mpool.MPool, count int) int {
 		return 0
 	}
 	tailRows := 0
-	if n := len(bs.batches); n > 0 && bs.batches[n-1].rowCount < bs.maxRows {
-		if bs.writableTail(src, mp) == nil {
-			// The partial tail closes; the rows start new batches.
-			return 1 + count/bs.maxRows
+	if n := len(bs.batches); n > 0 {
+		if tail := bs.batches[n-1]; tail.rowCount < bs.maxRows {
+			if !fits(tail, src, mp) {
+				// The partial tail closes; the rows start new batches.
+				return 1 + count/bs.maxRows
+			}
+			tailRows = tail.rowCount
 		}
-		tailRows = bs.batches[n-1].rowCount
 	}
 	return (tailRows+count)/bs.maxRows - tailRows/bs.maxRows
 }
@@ -129,6 +131,16 @@ func (bs *BatchSet) Append(mp *mpool.MPool, src *Batch, offset, count int, reuse
 	if err := requireCompacted("BatchSet.Append", src); err != nil {
 		return false, err
 	}
+	if tail := bs.roomyTail(src, mp, count); tail != nil {
+		for i, vec := range tail.Vecs {
+			if err := vec.UnionBatch(src.Vecs[i], int64(offset), count, nil, mp); err != nil {
+				return false, err
+			}
+			vec.SetSorted(false)
+		}
+		tail.rowCount += count
+		return false, nil
+	}
 	return bs.appendRows(mp, src, offset, count, nil, reuse)
 }
 
@@ -141,6 +153,16 @@ func (bs *BatchSet) AppendSels(mp *mpool.MPool, src *Batch, sels []int32, reuse 
 	}
 	if len(sels) == src.RowCount() {
 		return bs.Append(mp, src, 0, len(sels), reuse)
+	}
+	if tail := bs.roomyTail(src, mp, len(sels)); tail != nil {
+		for i, vec := range tail.Vecs {
+			if err := vec.UnionInt32(src.Vecs[i], sels, mp); err != nil {
+				return false, err
+			}
+			vec.SetSorted(false)
+		}
+		tail.rowCount += len(sels)
+		return false, nil
 	}
 	return bs.appendRows(mp, src, 0, len(sels), sels, reuse)
 }
@@ -167,14 +189,6 @@ func (bs *BatchSet) appendRows(
 	sels []int32,
 	reuse *Batch,
 ) (consumed bool, err error) {
-	if count <= 0 {
-		return false, nil
-	}
-	// Most appends fit in a last batch that already has rows.
-	if tail := bs.writableTail(src, mp); tail != nil && tail.rowCount > 0 &&
-		count <= bs.maxRows-tail.rowCount {
-		return false, copyRows(tail, src, offset, sels, count, mp, false)
-	}
 	for done := 0; done < count; {
 		dst := bs.writableTail(src, mp)
 		fresh := dst == nil || dst.rowCount == 0
@@ -227,6 +241,19 @@ func (bs *BatchSet) writableTail(src *Batch, mp *mpool.MPool) *Batch {
 	}
 	if tail := bs.batches[n-1]; fits(tail, src, mp) {
 		return tail
+	}
+	return nil
+}
+
+// roomyTail returns the last batch if it already has rows and can take count
+// more rows of src through mp: the common append, which Append and AppendSels
+// copy inline. A per-append call chain costs measurably in shuffle.
+func (bs *BatchSet) roomyTail(src *Batch, mp *mpool.MPool, count int) *Batch {
+	if n := len(bs.batches); n > 0 && count > 0 {
+		if tail := bs.batches[n-1]; tail.rowCount > 0 &&
+			count <= bs.maxRows-tail.rowCount && fits(tail, src, mp) {
+			return tail
+		}
 	}
 	return nil
 }

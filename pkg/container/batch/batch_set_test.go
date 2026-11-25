@@ -521,3 +521,43 @@ func BenchmarkBatchSetAppendSels(b *testing.B) {
 	bs.Clean(mp)
 	src.Clean(mp)
 }
+
+// A failed copy into the last batch leaves it owned by the set and freeable.
+func TestBatchSetTailCopyFailure(t *testing.T) {
+	values := make([]int64, 2000)
+	for _, tc := range []struct {
+		name string
+		add  func(bs *BatchSet, mp *mpool.MPool, src *Batch) error
+	}{
+		{name: "range", add: func(bs *BatchSet, mp *mpool.MPool, src *Batch) error {
+			_, err := bs.Append(mp, src, 0, 1000, nil)
+			return err
+		}},
+		{name: "sels", add: func(bs *BatchSet, mp *mpool.MPool, src *Batch) error {
+			_, err := bs.AppendSels(mp, src, seqSels(1000), nil)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+			require.NoError(t, err)
+			account, err := registry.Open(1024)
+			require.NoError(t, err)
+			view, err := mp.WithAccount(account, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
+			require.NoError(t, err)
+			src := newInt64TestBatch(t, mp, values...)
+			bs := NewBatchSet(TestBatchMaxRow)
+			_, err = bs.Append(view, src, 0, 1, nil)
+			require.NoError(t, err)
+			require.Error(t, tc.add(bs, view, src))
+			require.Equal(t, 1, bs.Length())
+			bs.Clean(view)
+			src.Clean(mp)
+			require.Zero(t, account.Seal().Used)
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
