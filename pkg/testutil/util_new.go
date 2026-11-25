@@ -258,7 +258,9 @@ func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch 
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
 		// XXX do we need to init nulls here?   can we be lazy?
-		bat.Vecs[i].GetNulls().InitWithSize(n)
+		if err := bat.Vecs[i].GetNulls().InitWithSize(n, m); err != nil {
+			panic(err)
+		}
 	}
 	return bat
 }
@@ -268,7 +270,9 @@ func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *bat
 	bat.SetRowCount(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
-		bat.Vecs[i].GetNulls().InitWithSize(n)
+		if err := bat.Vecs[i].GetNulls().InitWithSize(n, m); err != nil {
+			panic(err)
+		}
 		nsp := bat.Vecs[i].GetNulls()
 		for j := 0; j < n; j++ {
 			if j%2 == 0 {

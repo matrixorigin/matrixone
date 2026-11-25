@@ -53,12 +53,7 @@ func TestPreparedSpatialDistanceUnitOverload(t *testing.T) {
 
 	numericValues := []any{
 		unitValues[0], unitValues[1],
-		ParamValue{
-			Value:            int64(4326),
-			SourceType:       types.T_varchar.ToType(),
-			HasSourceType:    true,
-			PrepareParamKind: types.StringConversionInteger,
-		},
+		sqlIntParam(4326),
 	}
 	runtimePlan, _, err = FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, numericValues)
 	require.NoError(t, err)

@@ -67,7 +67,7 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	ctr.zvs = []int64{0, 1, 1, 1, 1, 1, 1, 0}
 	ctr.probeTrackBuildMatches = true
 	ctr.rightRowsMatched = new(bitmap.Bitmap)
-	ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize + 2)
+	mustBitmapOK(ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize+2, bitmapTestMP))
 	matched, err := ctr.appendUniqueMatches(arg, proc, 7)
 	require.NoError(t, err)
 	require.Equal(t, 5, matched)
@@ -125,7 +125,7 @@ func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
 			}
 			ctr.probeTrackBuildMatches = true
 			ctr.rightRowsMatched = new(bitmap.Bitmap)
-			ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize + 4)
+			mustBitmapOK(ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize+4, bitmapTestMP))
 			ctr.vs, ctr.zvs = make([]uint64, 16), make([]int64, 16)
 			for row := range 16 {
 				ctr.vs[row], ctr.zvs[row] = uint64(1+row%4+(row%2)*colexec.DefaultBatchSize), 1
@@ -393,7 +393,7 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	arg.ctr.leftBat, arg.ctr.vs, arg.ctr.zvs = left, []uint64{1}, []int64{1}
 	arg.ctr.probeTrackBuildMatches = true
 	arg.ctr.rightRowsMatched = new(bitmap.Bitmap)
-	arg.ctr.rightRowsMatched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.rightRowsMatched.InitWithSize(1, bitmapTestMP))
 	matched, err := arg.ctr.appendUniqueMatches(arg, proc, 1)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, matched)

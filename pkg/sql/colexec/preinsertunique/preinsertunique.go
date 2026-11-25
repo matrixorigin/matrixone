@@ -210,6 +210,9 @@ func (preInsertUnique *PreInsertUnique) Call(proc *process.Process) (vm.CallResu
 		if err != nil {
 			return result, err
 		}
+		// SerialWithCompacted's bitmap is ours; CompactSingleIndexCol's is
+		// the input vector's.
+		defer bitMap.Free()
 	}
 	preInsertUnique.ctr.buf.SetRowCount(preInsertUnique.ctr.buf.Vecs[0].Length())
 

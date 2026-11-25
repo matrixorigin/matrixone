@@ -92,7 +92,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 				return false, err
 			}
 		}
-		filter.PublishSelection.InitWithSize(int64(source.RowCount()))
+		mustBitmapOK(filter.PublishSelection.InitWithSize(int64(source.RowCount()), filter.PublishSelection.MPool()))
 		for _, row := range selected.Sels {
 			filter.PublishSelection.Add(uint64(row))
 		}

@@ -130,7 +130,7 @@ func (v *Vector) Reset(typ types.Type) {
 	}
 
 	v.length = 0
-	v.nsp.Clear()
+	v.clearNulls()
 	v.sorted = false
 }
 
@@ -140,7 +140,8 @@ func (v *Vector) ResetWithSameType() {
 		v.area = v.area[:0]
 	}
 	v.length = 0
-	v.nsp.Reset()
+	// Keep an owned bitmap's words for reuse, like the data capacity.
+	v.clearNulls()
 	v.sorted = false
 }
 
@@ -155,9 +156,19 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp.Clear()
+	v.clearNulls()
 	v.length = 0
 	v.sorted = false
+}
+
+// clearNulls empties the null rows: an owned bitmap keeps its words for
+// reuse, and a read-only one drops the words it references.
+func (v *Vector) clearNulls() {
+	if v.nsp.IsReadOnly() {
+		v.nsp.Free()
+		return
+	}
+	v.nsp.Clear()
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -183,7 +194,12 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
+	// An owned null bitmap holds pool memory too, and CleanOnlyData keeps it
+	// for reuse; a read-only one references words it does not own.
 	retained := 0
+	if !v.nsp.IsReadOnly() {
+		retained = v.nsp.GetBitmap().CapWords() * 8
+	}
 	return retained + cap(v.data) + cap(v.area)
 }
 
@@ -330,8 +346,29 @@ func (v *Vector) GetNulls() *nulls.Nulls {
 	return &v.nsp
 }
 
+// DetachNulls gives v an owned copy of its null bitmap allocated from mp, so
+// that v stops referencing the bitmap of the vector it was windowed from. A
+// read-only window that must outlive its source (its payload being kept
+// alive by a lease) detaches its nulls first; v's payload is unchanged.
+func (v *Vector) DetachNulls(mp *mpool.MPool) error {
+	if !v.nsp.IsReadOnly() {
+		return nil
+	}
+	if v.nsp.IsEmpty() {
+		v.nsp.Free()
+		return nil
+	}
+	var owned nulls.Nulls
+	if err := owned.InitWith(&v.nsp, mp); err != nil {
+		return err
+	}
+	v.nsp.Free()
+	v.nsp = owned
+	return nil
+}
+
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
-	v.nsp.Clear()
+	v.clearNulls()
 	if nsp == nil {
 		return
 	}
@@ -339,7 +376,9 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 }
 
 func (v *Vector) SetAllNulls(length int) {
-	v.nsp.InitWithSize(int(length))
+	if err := v.nsp.InitWithSize(length, v.mp); err != nil {
+		panic(err)
+	}
 	v.nsp.AddRange(0, uint64(length))
 }
 
@@ -464,7 +503,7 @@ func (v *Vector) CleanOnlyData() {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp.Clear()
+	v.clearNulls()
 	v.sorted = false
 }
 
@@ -601,6 +640,7 @@ func (v *Vector) InitVec(typ types.Type, mp *mpool.MPool) {
 		panic(moerr.NewInternalErrorNoCtx("InitVec on a vector that holds memory"))
 	}
 	*v = Vector{typ: typ, class: FLAT, mp: mp}
+	v.nsp.Init(mp)
 }
 
 // MPool returns the pool the vector was created with; nil for a read-only
@@ -1013,7 +1053,9 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.area = nil
 	v.length = 0
 
-	v.nsp.Reset()
+	// Free returns the bitmap's words to its pool (the vector's), or only
+	// drops a read-only vector's reference.
+	v.nsp.Free()
 	v.sorted = false
 }
 
@@ -1494,12 +1536,13 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	if err != nil {
 		return err
 	}
-	// The data and area are read-only references to data, but the null
-	// bitmap is private: null bits set or cleared through GetNulls must never
-	// reach memory the vector does not own (for example the FileService cache).
+	// The data, area and null bitmap are all read-only references to data.
+	// The null bitmap has no pool, so a write to it panics instead of
+	// reaching memory the vector does not own (for example the FileService
+	// cache).
 	var decodedNulls nulls.Nulls
 	if len(layout.nulls) > 0 {
-		if err = decodedNulls.ReadNoCopy(bytes.Clone(layout.nulls)); err != nil {
+		if err = decodedNulls.ReadNoCopy(layout.nulls); err != nil {
 			return err
 		}
 	}
@@ -1688,8 +1731,8 @@ func (v *Vector) unmarshalBinaryCopy(data []byte, validateValues bool, mp *mpool
 		copy(decoded.area, layout.area)
 	}
 	if len(layout.nulls) > 0 {
-		// Nulls.Read aliases its input; the owned vector must not share data.
-		if err = decoded.nsp.Read(bytes.Clone(layout.nulls)); err != nil {
+		// decoded's bitmap has v's pool, so Read copies into it.
+		if err = decoded.nsp.Read(layout.nulls); err != nil {
 			return err
 		}
 	}
@@ -1771,34 +1814,17 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error
 	)
 }
 
-func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
-	if !mp.IsView() {
-		nspLen, err := types.ReadInt32(r)
-		if err != nil {
-			return err
-		}
-		if nspLen < 0 {
-			return moerr.NewInvalidInputNoCtx("negative vector null bitmap size")
-		}
-		if err = validateStreamingReadSize(r, int64(nspLen)); err != nil {
-			return err
-		}
-		if nspLen > 0 {
-			nspBuf := make([]byte, nspLen)
-			if _, err = io.ReadFull(r, nspBuf); err != nil {
-				return err
-			}
-			if err := validateVectorNullBitmap(nspBuf, true); err != nil {
-				return err
-			}
-			return v.nsp.Read(nspBuf)
-		}
-		v.nsp.Reset()
-		return nil
-	}
-
+// readNullsWithReader reads the null bitmap straight into words allocated
+// from the vector's pool: one copy, from the reader into the bitmap.
+func (v *Vector) readNullsWithReader(r io.Reader, _ *mpool.MPool) error {
 	size, err := types.ReadInt32(r)
 	if err != nil {
+		return err
+	}
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative vector null bitmap size")
+	}
+	if err = validateStreamingReadSize(r, int64(size)); err != nil {
 		return err
 	}
 	if size == 0 {
@@ -1819,10 +1845,7 @@ func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
 	if bitLength > int64(math.MaxInt) {
 		return moerr.NewInvalidInputNoCtx("vector null bitmap exceeds platform limit")
 	}
-	payload, err := v.nsp.GetBitmap().PrepareUnmarshal(
-		header[:],
-		int(size),
-	)
+	payload, err := v.nsp.GetBitmap().PrepareUnmarshal(header[:], int(size))
 	if err != nil {
 		return err
 	}
@@ -1830,7 +1853,11 @@ func (v *Vector) readNullsWithReader(r io.Reader, mp *mpool.MPool) error {
 		v.nsp.Reset()
 		return err
 	}
-	return v.nsp.GetBitmap().Validate()
+	if err = v.nsp.GetBitmap().Validate(); err != nil {
+		v.nsp.Reset()
+		return err
+	}
+	return nil
 }
 
 func (v *Vector) ToConst() {
@@ -2111,7 +2138,10 @@ func (v *Vector) dup(mp *mpool.MPool) (*Vector, error) {
 		}
 	}
 	w.length = v.length
-	w.GetNulls().InitWith(v.GetNulls())
+	if err = w.nsp.InitWith(&v.nsp, mp); err != nil {
+		w.Free(mp)
+		return nil, err
+	}
 	copy(w.data, v.data[:dataLen])
 
 	if len(v.area) > 0 {
@@ -6270,8 +6300,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 
 // remapShuffleBitmaps preserves Shuffle's arbitrary-selection semantics.
 func (v *Vector) remapShuffleBitmaps(sels []int64, _ *mpool.MPool) error {
-	nulls.Filter(&v.nsp, sels, false)
-	return nil
+	return nulls.Filter(&v.nsp, sels, false)
 }
 
 // shuffleFixedNoTypeCheckWithBuf permutes elements using a reusable scratch
@@ -6293,10 +6322,13 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
 	preserved, identityProven := shuffleWithSortedProof(vs, ws, sels, v.sorted)
+	// Remap the nulls first: it can fail allocating, and v is still intact.
+	if err := nulls.Filter(&v.nsp, sels, false); err != nil {
+		return err
+	}
 	if !identityProven || byteSlicesOverlap(v.data[:needed], *buf) {
 		copy(v.data[:needed], *buf)
 	}
-	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
 	v.sorted = preserved
 	return nil
@@ -6345,10 +6377,11 @@ func (v *Vector) window(start, end int, logicalRows bool) (*Vector, error) {
 
 // WindowInto is Window into a descriptor the caller already holds: w becomes a
 // read-only reference to [start, end) of v's memory without allocating a new
-// Vector. w must be read-only (a reference or a zero Vector); whatever it
+// Vector. w must be read-only (a reference or a zero Vector) and must not own
+// its nulls bitmap (a read-only vector can, e.g. Arrow validity); whatever it
 // referenced before is dropped.
 func (v *Vector) WindowInto(w *Vector, start, end int) error {
-	if !w.IsReadOnly() {
+	if !w.IsReadOnly() || !w.nsp.IsReadOnly() {
 		return moerr.NewInternalErrorNoCtx("vector window target owns memory")
 	}
 	if !v.validWindowRange(start, end, false) {
@@ -6368,7 +6401,7 @@ func (v *Vector) readOnlyWindow(start, end int) *Vector {
 
 func (v *Vector) readOnlyWindowInto(w *Vector, start, end int) {
 	*w = Vector{typ: v.typ, class: v.class, length: end - start, sorted: v.sorted}
-	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
+	w.nsp.InitView(&v.nsp, start, end)
 	if v.IsConst() {
 		if !v.IsConstNull() {
 			w.data = v.data
@@ -6420,7 +6453,7 @@ func (v *Vector) copyWindowBitmaps(w *Vector, start, end int, mp *mpool.MPool) e
 		if err := w.PreExtendNulls(length, mp); err != nil {
 			return err
 		}
-		nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
+		return nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp, mp)
 	}
 	return nil
 }
@@ -7218,7 +7251,9 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	// bits from them. Expanding those bitmaps would panic even though there is no
 	// row metadata to move (runtime-filter vectors commonly use this layout).
 	if !v.nsp.GetBitmap().IsEmpty() {
-		v.nsp.GetBitmap().TryExpandWithSize(v.length)
+		if err := v.nsp.GetBitmap().TryExpandWithSize(v.length); err != nil {
+			panic(err)
+		}
 	}
 	sort.Stable(vectorMetadataSorter{vector: v, varlena: varlena})
 	newLength := v.length
@@ -8316,11 +8351,21 @@ func Union2VectorValen(
 	return nil
 }
 
-func (v *Vector) FillRawPtrLen(dest []uintptr) {
+// FillRawPtrLen writes v's raw (pointer, length) pairs for native code. A
+// read-only null bitmap (a window view) may be shifted, which C cannot read,
+// so it is handed over as a clean copy. The returned slice holds that copy:
+// the caller must keep it alive until the native call returns.
+func (v *Vector) FillRawPtrLen(dest []uintptr) (keepAlive []uint64) {
 	// The null map's first word and its length in bits; (0, 0) when it has
 	// no storage.
 	dest[0], dest[1] = 0, 0
-	if ptr := nulls.Ptr(&v.nsp); ptr != nil {
+	if v.nsp.IsReadOnly() {
+		bm := v.nsp.GetBitmap()
+		if keepAlive = bm.WordsCovering(int(bm.Len())); len(keepAlive) > 0 {
+			dest[0] = uintptr(unsafe.Pointer(&keepAlive[0]))
+			dest[1] = uintptr(bm.Len())
+		}
+	} else if ptr := nulls.Ptr(&v.nsp); ptr != nil {
 		dest[0] = uintptr(unsafe.Pointer(ptr))
 		dest[1] = uintptr(v.nsp.GetBitmap().Len())
 	}
@@ -8333,17 +8378,19 @@ func (v *Vector) FillRawPtrLen(dest []uintptr) {
 		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
 		dest[5] = uintptr(len(v.area))
 	}
+	return keepAlive
 }
 
 // hasBackingStorage reports whether v holds any data, area or bitmap storage.
 func (v *Vector) hasBackingStorage() bool {
 	return cap(v.data) != 0 ||
 		cap(v.area) != 0 ||
-		v.nsp.GetBitmap().Size() != 0
+		v.nsp.GetBitmap().CapWords() != 0
 }
 
-// Bitmaps always use Go-owned memory. When a vector grows, it reserves room in
-// the bitmaps it uses for all of its rows; a bitmap also grows itself on write.
+// The null bitmap allocates from the vector's pool and is freed with the
+// vector. When a vector grows, it reserves room in the bitmap for all of its
+// rows; a bitmap also grows itself on write.
 
 func validBitmapRows(rows int) error {
 	if rows < 0 || rows > math.MaxInt-63 {
@@ -8356,8 +8403,7 @@ func (v *Vector) ensureNullCapacity(rows int) error {
 	if err := validBitmapRows(rows); err != nil {
 		return err
 	}
-	v.nsp.GetBitmap().Reserve(rows)
-	return nil
+	return v.nsp.GetBitmap().Reserve(rows)
 }
 
 func errVectorReadOnly() error {

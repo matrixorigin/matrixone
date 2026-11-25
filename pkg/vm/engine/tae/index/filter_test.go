@@ -55,14 +55,14 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	query := containers.MockVector2(typ, 2000, 1000)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 2000, positive.Count())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query)
+	_, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	fpRate := float32(positive.Count()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -80,7 +80,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 	query = containers.MockVector2(typ, 40000, 0)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 40000, positive.Count())
 	require.True(t, exist)
@@ -129,7 +129,7 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			var bf bloomFilter
-			bf.Unmarshal(buf)
+			mustBitmapOK(bf.Unmarshal(buf))
 		}
 	})
 
@@ -137,7 +137,7 @@ func BenchmarkHybridBloomFilter(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			var hbf hybridFilter
-			hbf.Unmarshal(hbf_buf)
+			mustBitmapOK(hbf.Unmarshal(hbf_buf))
 		}
 	})
 
@@ -281,14 +281,14 @@ func TestStaticFilterString(t *testing.T) {
 
 	query := containers.MockVector2(typ, 2000, 1000)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 2000, positive.Count())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
 	defer query.Close()
-	_, positive, err = sf.MayContainsAnyKeys(query)
+	_, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	fpRate := float32(positive.Count()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -306,7 +306,7 @@ func TestStaticFilterString(t *testing.T) {
 
 	query = containers.MockVector2(typ, 40000, 0)
 	defer query.Close()
-	exist, positive, err = sf.MayContainsAnyKeys(query)
+	exist, positive, err = sf.MayContainsAnyKeys(query, bitmapTestMP)
 	require.NoError(t, err)
 	require.Equal(t, 40000, positive.Count())
 	require.True(t, exist)

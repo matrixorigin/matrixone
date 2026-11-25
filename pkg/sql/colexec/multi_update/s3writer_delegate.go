@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -72,13 +73,29 @@ type deleteBlockInfo struct {
 	rawRowCount uint64
 }
 
-func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int, mp *mpool.MPool) *deleteBlockData {
+func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int, mp *mpool.MPool) (*deleteBlockData, error) {
+	bm, err := nulls.NewWithSize(int(options.DefaultBlockMaxRows), mp)
+	if err != nil {
+		return nil, err
+	}
 	data := &deleteBlockData{
-		bitmap: nulls.NewWithSize(int(options.DefaultBlockMaxRows)),
+		bitmap: bm,
 		typ:    deletion.DeletionOnCommitted,
 		bat:    newDeleteBatch(inputBatch, pkIdx, mp),
 	}
-	return data
+	return data, nil
+}
+
+// free releases the block's batch and bitmap.
+func (d *deleteBlockData) free(mp *mpool.MPool) {
+	if d == nil {
+		return
+	}
+	if d.bat != nil {
+		d.bat.Clean(mp)
+	}
+	d.bitmap.Free()
+	d.bitmap = nil
 }
 
 type s3WriterDelegate struct {
@@ -454,8 +471,14 @@ func (writer *s3WriterDelegate) append(
 				if checked, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 					return
 				}
-				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
-				if err = checked.ShrinkByMask(nulls, true, 0, mp); err != nil {
+				var nulls *bitmap.Bitmap
+				if nulls, err = checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone(mp); err != nil {
+					checked.Clean(mp)
+					return
+				}
+				err = checked.ShrinkByMask(nulls, true, 0, mp)
+				nulls.Free()
+				if err != nil {
 					checked.Clean(mp)
 					return
 				}
@@ -503,8 +526,14 @@ func (writer *s3WriterDelegate) append(
 			if tableType == UpdateMainTable {
 				nullIdx = mainTablePkProjectIdx
 			}
-			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
-			if err = filtered.ShrinkByMask(nulls, true, 0, mp); err != nil {
+			var nulls *bitmap.Bitmap
+			if nulls, err = filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone(mp); err != nil {
+				filtered.Clean(mp)
+				return
+			}
+			err = filtered.ShrinkByMask(nulls, true, 0, mp)
+			nulls.Free()
+			if err != nil {
 				filtered.Clean(mp)
 				return
 			}
@@ -639,7 +668,11 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 			rowOffset := rowID.GetRowOffset()
 
 			if blockMap[blkid] == nil {
-				blockMap[blkid] = newDeleteBlockData(bat, 1, proc.Mp())
+				block, err := newDeleteBlockData(bat, 1, proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+				blockMap[blkid] = block
 
 				tableId := uint64(0)
 				txnID := []byte(nil)
@@ -696,7 +729,11 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 	deleteBats := batch.NewBatchSet(objectio.BlockMaxRows)
 	defer deleteBats.Clean(proc.GetMPool())
 	for _, blkid := range blkids {
-		bat := blockMap[blkid].bat
+		block := blockMap[blkid]
+		bat := block.bat
+		// The batch moves into deleteBats; the bitmap is done.
+		block.bitmap.Free()
+		block.bitmap = nil
 		delete(blockMap, blkid)
 		err := deleteBats.Push(proc.GetMPool(), bat)
 		if err != nil {
@@ -1132,9 +1169,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	}
 	for _, data := range writer.deleteBlockMap {
 		for k, block := range data {
-			if block != nil && block.bat != nil {
-				block.bat.Clean(proc.Mp())
-			}
+			block.free(proc.Mp())
 			delete(data, k)
 		}
 	}
@@ -1197,9 +1232,7 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 
 	for _, data := range writer.deleteBlockMap {
 		for _, block := range data {
-			if block != nil && block.bat != nil {
-				block.bat.Clean(mp)
-			}
+			block.free(mp)
 		}
 	}
 	writer.deleteBlockMap = nil

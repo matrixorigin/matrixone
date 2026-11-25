@@ -1032,9 +1032,11 @@ func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
 func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	localMatches := new(bitmap.Bitmap)
-	localMatches.InitWithSize(1)
+	localMatches.Init(bitmapTestMP)
+	mustBitmapOK(localMatches.InitWithSize(1, bitmapTestMP))
 	localMatches.Add(0)
-	remoteMatches := localMatches.Clone()
+	remoteMatches, cloneErr := localMatches.Clone(bitmapTestMP)
+	require.NoError(t, cloneErr)
 
 	hashJoin := &HashJoin{
 		JoinType: plan.Node_SINGLE,
@@ -1063,10 +1065,13 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
 
 	matched := new(bitmap.Bitmap)
-	matched.InitWithSize(4)
+
+	matched.Init(bitmapTestMP)
+	mustBitmapOK(matched.InitWithSize(4, bitmapTestMP))
 	matched.Add(0)
 	staleMatches := new(bitmap.Bitmap)
-	staleMatches.InitWithSize(4)
+	staleMatches.Init(bitmapTestMP)
+	mustBitmapOK(staleMatches.InitWithSize(4, bitmapTestMP))
 	staleMatches.Add(1)
 
 	hashJoin := &HashJoin{
@@ -1101,13 +1106,16 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 	// Next generation over the same operator and channel: a clean sync must
 	// only observe this generation's bitmaps.
 	matched2 := new(bitmap.Bitmap)
-	matched2.InitWithSize(4)
+	matched2.Init(bitmapTestMP)
+	mustBitmapOK(matched2.InitWithSize(4, bitmapTestMP))
 	matched2.Add(0)
 	workerMatches1 := new(bitmap.Bitmap)
-	workerMatches1.InitWithSize(4)
+	workerMatches1.Init(bitmapTestMP)
+	mustBitmapOK(workerMatches1.InitWithSize(4, bitmapTestMP))
 	workerMatches1.Add(1)
 	workerMatches2 := new(bitmap.Bitmap)
-	workerMatches2.InitWithSize(4)
+	workerMatches2.Init(bitmapTestMP)
+	mustBitmapOK(workerMatches2.InitWithSize(4, bitmapTestMP))
 	workerMatches2.Add(2)
 
 	hashJoin.Mailbox = NewBitmapMailbox(3)
@@ -1141,10 +1149,13 @@ func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
 	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
 
 	matched := new(bitmap.Bitmap)
-	matched.InitWithSize(4)
+
+	matched.Init(bitmapTestMP)
+	mustBitmapOK(matched.InitWithSize(4, bitmapTestMP))
 	matched.Add(0)
 	remoteMatches := new(bitmap.Bitmap)
-	remoteMatches.InitWithSize(4)
+	remoteMatches.Init(bitmapTestMP)
+	mustBitmapOK(remoteMatches.InitWithSize(4, bitmapTestMP))
 	remoteMatches.Add(1)
 
 	hashJoin := &HashJoin{

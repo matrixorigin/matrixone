@@ -342,10 +342,11 @@ func bindPreparedGeometrySRID(ctx context.Context, name string, args []*Expr) ([
 		return args, nil
 	}
 	last := len(args) - 1
-	value, known := preparedConfigurationValue(ctx, unwrapPreparedImplicitCast(args[last], true))
+	stored, known := preparedConfigurationStoredValue(ctx, unwrapPreparedImplicitCast(args[last], true))
 	if !known {
 		return args, nil
 	}
+	value := preparedProtocolTextValue(stored)
 	var srid uint32
 	isNull := geometrySRIDSourceIsNull(ctx, args[0])
 	if !isNull {

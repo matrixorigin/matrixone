@@ -226,7 +226,7 @@ func (exec *percentRankExec) Flush() ([]*vector.Vector, error) {
 			sn += int64(m)
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 func (exec *percentRankExec) Free() {
@@ -397,7 +397,7 @@ func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 			sn += uint64(m)
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 func (exec *singleWindowExec) flushDenseRank() ([]*vector.Vector, error) {
@@ -421,7 +421,7 @@ func (exec *singleWindowExec) flushDenseRank() ([]*vector.Vector, error) {
 			sn++
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
@@ -441,7 +441,7 @@ func (exec *singleWindowExec) flushRowNumber() ([]*vector.Vector, error) {
 			idx++
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 // ntileWindowExec is a window function executor for NTILE
@@ -675,7 +675,7 @@ func (exec *ntileWindowExec) flushNtile() ([]*vector.Vector, error) {
 			idx++
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 // cumeDistWindowExec is for CUME_DIST window function which returns float64
@@ -837,7 +837,7 @@ func (exec *cumeDistWindowExec) flushCumeDist() ([]*vector.Vector, error) {
 			}
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 // valueWindowExec is a window function executor for LAG, LEAD, FIRST_VALUE, LAST_VALUE, NTH_VALUE

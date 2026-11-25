@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -297,11 +296,11 @@ func bindPreparedCommonValueContextMarkers(ctx context.Context, markers, peers [
 		if !present {
 			return nil, nil
 		}
-		witnesses[i] = makePlan2StringConstExprWithType(fmt.Sprint(value))
+		witnesses[i] = makePlan2StringConstExprWithType(preparedNumericValueSpelling(value))
 		if value == nil {
 			witnesses[i] = makePlan2NullConstExprWithType()
 		}
-		prefixArgs[i], prefixKinds[i] = true, param.PrepareParamKind
+		prefixArgs[i], prefixKinds[i] = true, ParamValueKind(param)
 	}
 	converted, _, err := preparedNumericPrefixArgs(ctx, "coalesce", args, witnesses,
 		prefixArgs, prefixKinds, nil, nil, true)

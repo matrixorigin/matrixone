@@ -78,7 +78,8 @@ func (m *BitmapMailbox) SealAndDrain(mp *mpool.MPool) {
 	m.sealed = true
 	for {
 		select {
-		case <-m.ch:
+		case value := <-m.ch:
+			value.Free()
 		default:
 			m.mu.Unlock()
 			return

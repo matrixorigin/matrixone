@@ -93,6 +93,8 @@ DRBD_KERNEL_FALLBACK="${DRBD_KERNEL_FALLBACK:-auto}"   # auto | never
 # 脚本目录（用于定位随包下发的 OCF agent）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_DIR="${AGENT_DIR:-$SCRIPT_DIR/agents}"
+MO_OCF_PROVIDER=matrixone
+MO_OCF_AGENT="/usr/lib/ocf/resource.d/$MO_OCF_PROVIDER/docker-compose"
 
 # ----------------------------- 工具函数 -------------------------------------
 PASS=0; FAIL=0; WARN=0; CHECK_RC=0
@@ -308,21 +310,16 @@ enable_ha_repo(){
         sed -i '/^\[highavailability\]/,/^\[/ s/^enabled=0/enabled=1/' /etc/yum.repos.d/*.repo"
 }
 
-# 把随包下发的 OCF agent 安装到系统(如 EL9 缺失的 heartbeat/docker-compose)
-ensure_ocf_agents(){
-  local src="$AGENT_DIR/heartbeat"
-  [ -d "$src" ] || return 0
-  run "install -d -m 0755 /usr/lib/ocf/resource.d/heartbeat"
-  local f n
-  for f in "$src"/*; do
-    [ -f "$f" ] || continue
-    n="$(basename "$f")"
-    if [ -f "/usr/lib/ocf/resource.d/heartbeat/$n" ]; then
-      info "OCF agent 已存在: heartbeat/$n"
-    else
-      run "install -m 0755 '$f' /usr/lib/ocf/resource.d/heartbeat/$n"
-    fi
-  done
+# 使用单独的 OCF provider，避免复用或覆盖发行版的 heartbeat 代理。
+install_mo_agent(){
+  [ "$NO_MO" != 1 ] || return 0
+  local src="$AGENT_DIR/heartbeat/docker-compose" dir="${MO_OCF_AGENT%/*}"
+  [ -r "$src" ] || die "缺少随包下发的 MatrixOne OCF agent: $src"
+  runq "install -d -m 0755 '$dir'
+tmp=\$(mktemp '$dir/.docker-compose.XXXXXX')
+trap 'rm -f -- \"\$tmp\"' EXIT
+install -m 0755 '$src' \"\$tmp\"
+mv -f -- \"\$tmp\" '$MO_OCF_AGENT'"
 }
 
 # 从源码构建 DRBD 内核模块(用于 ELRepo 无 aarch64 kmod-drbd 的场景)
@@ -398,11 +395,11 @@ stage_pkg(){
     rpm)
       enable_ha_repo
       runq "$PKG install -y epel-release"
-      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all sbd"
+      pkg_install "drbd-utils drbd-pacemaker pacemaker corosync pcs resource-agents fence-agents-all sbd python3"
       ensure_drbd_module_rpm
       ;;
     deb)
-      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra sbd"
+      pkg_install "drbd-utils pacemaker corosync pcs fence-agents resource-agents-base resource-agents-common resource-agents-extra sbd python3"
       # drbd 内核模块在 linux-modules-extra，必须与当前运行内核版本匹配
       if [ "$DRY_RUN" = 1 ] || ! runq "modprobe drbd"; then
         runq "DEBIAN_FRONTEND=noninteractive apt-get install -y linux-modules-extra-\$(uname -r)"
@@ -411,7 +408,7 @@ stage_pkg(){
       fi
       ;;
   esac
-  ensure_ocf_agents
+  install_mo_agent
   # 两台分别执行 pkg 阶段时都准备代理，故障后任一存活节点均可执行隔离。
   prepare_proxmox_fence
   run "printf 'drbd\n' > /etc/modules-load.d/drbd.conf"
@@ -425,7 +422,7 @@ stage_pkg(){
 # ----------------------------- 阶段 docker ----------------------------------
 compose_wrapper_path(){
   # 放 /usr/local/bin，避免覆盖发行版/第三方提供的 /usr/bin/docker-compose。
-  # ocf:heartbeat:docker-compose 的 binpath 由本脚本显式指定，路径可自选。
+  # MatrixOne OCF 代理的 binpath 由本脚本显式指定，路径可自选。
   echo "/usr/local/bin/docker-compose"
 }
 stage_docker(){
@@ -1115,6 +1112,9 @@ SBD"
 stage_resources() (
   hdr "阶段 resources: DRBD/FS/MatrixOne 资源"
   [ "$BOOTSTRAP" = 1 ] || { info "非引导节点：跳过资源创建"; return 0; }
+  if [ "$NO_MO" != 1 ] && [ "$DRY_RUN" != 1 ] && [ ! -x "$MO_OCF_AGENT" ]; then
+    die "请先在两台节点完成 pkg 阶段，安装 MatrixOne OCF agent"
+  fi
   ha_timeouts
   # Shell 顺序不等于调度事务：所有删除、创建、克隆、约束均只修改离线副本。
   # 子 shell 的 EXIT trap 覆盖成功、错误和中断；CIB 含 fencing 凭据，目录/文件限 root 访问。
@@ -1148,7 +1148,7 @@ stage_resources() (
   cib_cmd "constraint order promote p_drbd-clone then start p_fs"
   if [ "$NO_MO" != 1 ]; then
     runq "mkdir -p $MO_DIR"
-    cib_cmd "resource create p_mo ocf:heartbeat:docker-compose binpath=$(compose_wrapper_path) dirpath=$MO_DIR ymlfile=docker-compose.yaml op monitor interval=30s timeout=60s op start timeout=$MO_START_TIMEOUT interval=0 op stop timeout=120s"
+    cib_cmd "resource create p_mo ocf:$MO_OCF_PROVIDER:docker-compose binpath=$(compose_wrapper_path) dirpath=$MO_DIR ymlfile=docker-compose.yaml op monitor interval=30s timeout=60s op start timeout=$MO_START_TIMEOUT interval=0 op stop timeout=120s"
     cib_cmd "constraint colocation add p_mo with p_fs INFINITY"
     cib_cmd "constraint order start p_fs then start p_mo"
   fi

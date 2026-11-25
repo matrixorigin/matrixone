@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -361,29 +362,28 @@ func scanSnapshotRelationByID(
 	scanParallelism int,
 	onBatch func(*batch.Batch) error,
 ) error {
-	return scanSnapshotRelationByIDWithFallback(
+	return scanSnapshotRelationWithPreopened(
 		ctx, caller, ses, tableID, snapshotTS, nil,
 		attrs, colTypes, filterExpr, scanParallelism, onBatch,
 	)
 }
 
-// scanSnapshotRelationByIDWithFallback prefers current-view ranges, but can
-// fall back to a relation that was already opened at snapshotTS. ALTER drops
-// replaced physical generations from the current catalog, while bounded data
-// branch operations may still need to hydrate rows from such a generation.
+// scanSnapshotRelationWithPreopened uses a relation already resolved by the
+// caller for the requested table ID, owner, and exact snapshot. Without one,
+// it opens the relation by ID at that snapshot.
 //
 // It is a var so unit tests can substitute a deterministic blocked reader
 // (the reopenDataBranchRelationByID precedent) and prove cancellation and
 // owner routing through the LCA scan without a storage engine.
-var scanSnapshotRelationByIDWithFallback = scanSnapshotRelationByIDWithFallbackImpl
+var scanSnapshotRelationWithPreopened = scanSnapshotRelationWithPreopenedImpl
 
-func scanSnapshotRelationByIDWithFallbackImpl(
+func scanSnapshotRelationWithPreopenedImpl(
 	ctx context.Context,
 	caller string,
 	ses *Session,
 	tableID uint64,
 	snapshotTS types.TS,
-	fallbackRangeRel engine.Relation,
+	preopenedRel engine.Relation,
 	attrs []string,
 	colTypes []types.Type,
 	filterExpr *plan.Expr,
@@ -401,13 +401,29 @@ func scanSnapshotRelationByIDWithFallbackImpl(
 		)
 	}
 
-	storage := ses.GetTxnHandler().GetStorage()
-	baseTxnOp := ses.GetTxnHandler().GetTxn()
-	rangeTxnOp := baseTxnOp
-	if !snapshotTS.IsEmpty() {
-		rangeTxnOp = baseTxnOp.CloneSnapshotOp(snapshotTS.ToTimestamp())
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	rangeTS := types.TimestampToTS(rangeTxnOp.SnapshotTS())
+	rangeRel, rangeTS := preopenedRel, snapshotTS
+	if rangeRel == nil {
+		handler := ses.GetTxnHandler()
+		rangeTxnOp := handler.GetTxn()
+		if !snapshotTS.IsEmpty() {
+			rangeTxnOp = rangeTxnOp.CloneSnapshotOp(snapshotTS.ToTimestamp())
+		}
+		rangeTS = types.TimestampToTS(rangeTxnOp.SnapshotTS())
+		var err error
+		_, _, rangeRel, err = handler.GetStorage().GetRelationById(ctx, rangeTxnOp, tableID)
+		if err != nil {
+			return err
+		}
+		if rangeRel == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
+				tableID, rangeTS.ToString(),
+			)
+		}
+	}
 	logutil.Info(
 		"DataBranch-SnapshotScan-Start",
 		zap.String("caller", caller),
@@ -419,26 +435,19 @@ func scanSnapshotRelationByIDWithFallbackImpl(
 		zap.Int("scan-parallelism", scanParallelism),
 	)
 
-	_, _, rangeRel, resolveErr := storage.GetRelationById(ctx, rangeTxnOp, tableID)
-	if resolveErr != nil || rangeRel == nil {
-		if fallbackRangeRel == nil {
-			if resolveErr != nil {
-				return resolveErr
-			}
+	rangeDef := rangeRel.GetTableDef(ctx)
+	for _, attr := range attrs {
+		name := strings.ToLower(attr)
+		// The snapshot reader assigns reserved sequence numbers to these attributes.
+		if objectio.IsPhysicalAddr(name) || name == objectio.DefaultCommitTS_Attr {
+			continue
+		}
+		if rangeDef == nil || dataBranchColumnDefByName(rangeDef, name) == nil {
 			return moerr.NewInternalErrorNoCtxf(
-				"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
-				tableID, rangeTS.ToString(),
+				"scanSnapshotRelationByID: column %q is unavailable for table %d at snapshot %s",
+				attr, tableID, snapshotTS.ToString(),
 			)
 		}
-		logutil.Info(
-			"DataBranch-SnapshotScan-HistoricalRangeFallback",
-			zap.String("caller", caller),
-			zap.Uint64("table-id", tableID),
-			zap.String("snapshot-ts", snapshotTS.ToString()),
-			zap.Error(resolveErr),
-		)
-		rangeRel = fallbackRangeRel
-		rangeTS = snapshotTS
 	}
 
 	rangesParam := engine.DefaultRangesParam

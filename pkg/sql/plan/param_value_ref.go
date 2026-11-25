@@ -14,6 +14,8 @@
 
 package plan
 
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
 // A prepared execution's parameter values are an []any whose elements are
 // *ParamValue pointing into storage the prepared statement owns and rewrites
 // in place every execution (boxing a pointer does not allocate; boxing the
@@ -70,6 +72,14 @@ func (s *ParamValueStore) Reset(n int) []any {
 	return s.values
 }
 
+// Clear drops every stored value, including those past the current length,
+// and keeps the memory for the next Reset.
+func (s *ParamValueStore) Clear() {
+	clear(s.params[:cap(s.params)])
+	clear(s.values[:cap(s.values)])
+	s.params, s.values = s.params[:0], s.values[:0]
+}
+
 // Ref returns parameter i's storage.
 func (s *ParamValueStore) Ref(i int) *ParamValue {
 	return &s.params[i]
@@ -99,4 +109,29 @@ func (s *ParamValueStore) CopyFrom(values []any) []any {
 func CopyParamValues(values []any) []any {
 	var s ParamValueStore
 	return s.CopyFrom(values)
+}
+
+// ParamValueType returns the SQL type a prepared parameter value carries: its
+// protocol RuntimeType (COM_STMT_EXECUTE) or else its SourceType (SQL EXECUTE
+// ... USING). ok is false for a value that carries neither.
+func ParamValueType(p ParamValue) (types.Type, bool) {
+	if p.HasRuntimeType {
+		return p.RuntimeType, true
+	}
+	if p.HasSourceType {
+		return p.SourceType, true
+	}
+	return types.Type{}, false
+}
+
+// ParamValueKind is the conversion kind of a parameter, derived from its type:
+// Integer, Float, Decimal or Boolean for those types, String for text,
+// temporal and other types. A parameter without a type (an untyped NULL) is
+// String: like MySQL, a NULL does not decide how a parameter is planned.
+func ParamValueKind(p ParamValue) types.StringConversionKind {
+	if typ, ok := ParamValueType(p); ok {
+		kind, _ := types.StringConversionKindForType(typ.Oid)
+		return kind
+	}
+	return types.StringConversionString
 }
