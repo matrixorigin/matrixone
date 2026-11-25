@@ -550,10 +550,10 @@ func runISCPTaskIterationConsumers(
 		defer changeHandelWg.Done()
 		defer func() {
 			if pendingInsert != nil {
-				pendingInsert.Close()
+				closePendingTailBatch(pendingInsert)
 			}
 			if pendingDelete != nil {
-				pendingDelete.Close()
+				closePendingTailBatch(pendingDelete)
 			}
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
@@ -770,6 +770,13 @@ func flushFinalJobStatusOnIterationState(
 		DefaultRetryInterval,
 		SubmitRetryDuration,
 	)
+}
+
+// closePendingTailBatch releases a tail batch the producer still holds when
+// the iteration ends. The caller joins the producer, so the iteration returns
+// only after this completes. Tests replace it to hold cleanup open.
+var closePendingTailBatch = func(atomicBatch *AtomicBatch) {
+	atomicBatch.Close()
 }
 
 var FlushJobStatusOnIterationState = func(

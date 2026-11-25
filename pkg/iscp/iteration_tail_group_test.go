@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,8 +193,25 @@ func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
 		t.Run(ending, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
-			// The pending batch's vectors are the observable cleanup step:
-			// they are freed exactly when the batch is cleaned.
+			// Closing the pending tail batch is the observable cleanup step:
+			// it blocks until the test allows it.
+			releaseStarted := make(chan struct{})
+			allowRelease := make(chan struct{})
+			released := make(chan struct{})
+			var startOnce, allowOnce sync.Once
+			t.Cleanup(func() { allowOnce.Do(func() { close(allowRelease) }) })
+			original := closePendingTailBatch
+			t.Cleanup(func() { closePendingTailBatch = original })
+			closePendingTailBatch = func(atomicBatch *AtomicBatch) {
+				startOnce.Do(func() { close(releaseStarted) })
+				<-allowRelease
+				original(atomicBatch)
+				select {
+				case <-released:
+				default:
+					close(released)
+				}
+			}
 			firstBatch := testutil.NewBatchWithVectors([]*vector.Vector{
 				testutil.NewVector(1, types.T_int64.ToType(), mp, false, []int64{1}),
 				testutil.NewVector(1, types.T_TS.ToType(), mp, false, []types.TS{types.BuildTS(1, 0)}),
@@ -227,11 +245,26 @@ func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
 				cancel()
 			}
 			select {
+			case <-releaseStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("pending tail cleanup did not start")
+			}
+			select {
+			case <-done:
+				t.Fatal("iteration returned before pending tail cleanup completed")
+			case <-time.After(time.Second):
+			}
+			allowOnce.Do(func() { close(allowRelease) })
+			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
-				t.Fatal("iteration did not finish")
+				t.Fatal("iteration did not finish after pending tail cleanup")
 			}
-			// The iteration returns only after the pending tail was cleaned.
+			select {
+			case <-released:
+			default:
+				t.Fatal("pending tail cleanup was still running when iteration returned")
+			}
 			require.Zero(t, mp.CurrNB())
 		})
 	}
