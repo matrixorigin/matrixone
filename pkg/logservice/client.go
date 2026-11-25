@@ -148,28 +148,44 @@ func NewClient(
 // to the shard, so an existing writer cannot take back a successor's lease.
 func NewTNWriterClientFactory(sid string, cfg ClientConfig, timeout time.Duration) ClientFactory {
 	cfg.connectWithoutLease = true
-	var claimOnce sync.Once
+	if err := cfg.ValidateClient(); err != nil {
+		return func() (Client, error) { return nil, err }
+	}
+	var claimMu sync.Mutex
+	var claimFinished bool
 	var claimErr error
 	return func() (Client, error) {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseNewLogServiceClient)
 		defer cancel()
-		client, err := NewClient(ctx, sid, cfg)
+		c, err := newClient(ctx, sid, cfg)
 		if err != nil {
 			return nil, moerr.AttachCause(ctx, err)
 		}
 
-		// A timed-out grant may still commit. This factory must not submit
-		// another lease change and then become an active writer.
-		claimOnce.Do(func() {
-			claimErr = moerr.AttachCause(ctx, client.UpdateLeaseholderID(ctx, cfg.TNReplicaID))
-		})
-		if claimErr != nil {
-			if closeErr := client.Close(); closeErr != nil {
+		claimMu.Lock()
+		if claimFinished {
+			err = claimErr
+		} else if ctx.Err() != nil {
+			err = moerr.AttachCause(ctx, ctx.Err())
+		} else {
+			var dispatched bool
+			dispatched, err = c.updateLeaseholderID(ctx, cfg.TNReplicaID)
+			err = moerr.AttachCause(ctx, err)
+			// A missing shard rejects the proposal before enqueueing it.
+			// Otherwise, an RPC accepted for dispatch might have applied
+			// even when the client could not confirm the grant.
+			if dispatched && !errors.Is(err, dragonboat.ErrShardNotFound) {
+				claimFinished, claimErr = true, err
+			}
+		}
+		claimMu.Unlock()
+		if err != nil {
+			if closeErr := c.close(); closeErr != nil {
 				logutil.Error("failed to close the client", zap.Error(closeErr))
 			}
-			return nil, claimErr
+			return nil, err
 		}
-		return client, nil
+		return &managedClient{cfg: cfg, client: c, sid: sid}, nil
 	}
 }
 
@@ -239,7 +255,7 @@ func (c *managedClient) UpdateLeaseholderID(ctx context.Context, leaseholderID u
 		if err := c.prepareClient(ctx); err != nil {
 			return err
 		}
-		err := c.client.updateLeaseholderID(ctx, leaseholderID)
+		_, err := c.client.updateLeaseholderID(ctx, leaseholderID)
 		if err != nil {
 			c.resetClient()
 		}
@@ -711,8 +727,9 @@ func (c *client) close() error {
 	return c.client.Close()
 }
 
-func (c *client) updateLeaseholderID(ctx context.Context, leaseholderID uint64) error {
-	return c.doUpdateLeaseholderID(ctx, leaseholderID)
+func (c *client) updateLeaseholderID(ctx context.Context, leaseholderID uint64) (bool, error) {
+	_, _, dispatched, err := c.requestWithDispatch(ctx, pb.UPDATE_LEASEHOLDER_ID, nil, leaseholderID, 0, time.Time{})
+	return dispatched, err
 }
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
@@ -781,6 +798,15 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 func (c *client) request(ctx context.Context,
 	mt pb.MethodType, payload []byte, lsn Lsn,
 	maxSize uint64, ts time.Time) (pb.Response, []pb.LogRecord, error) {
+	resp, records, _, err := c.requestWithDispatch(ctx, mt, payload, lsn, maxSize, ts)
+	return resp, records, err
+}
+
+// requestWithDispatch reports whether morpc accepted the request into its
+// send queue. After that point a transport failure can hide a committed update.
+func (c *client) requestWithDispatch(ctx context.Context,
+	mt pb.MethodType, payload []byte, lsn Lsn,
+	maxSize uint64, ts time.Time) (pb.Response, []pb.LogRecord, bool, error) {
 	ctx, span := trace.Debug(ctx, "client.request")
 	defer span.End()
 	tnID := c.cfg.TNReplicaID
@@ -804,12 +830,12 @@ func (c *client) request(ctx context.Context,
 	r.payload = payload
 	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
-		return pb.Response{}, nil, err
+		return pb.Response{}, nil, false, err
 	}
 	defer future.Close()
 	msg, err := future.Get()
 	if err != nil {
-		return pb.Response{}, nil, err
+		return pb.Response{}, nil, true, err
 	}
 	response, ok := msg.(*RPCResponse)
 	if !ok {
@@ -823,9 +849,9 @@ func (c *client) request(ctx context.Context,
 	}
 	err = toError(ctx, response.Response)
 	if err != nil {
-		return pb.Response{}, nil, err
+		return pb.Response{}, nil, true, err
 	}
-	return resp, recs.Records, nil
+	return resp, recs.Records, true, nil
 }
 
 func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
@@ -863,11 +889,6 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
 	_, _, err := c.request(ctx, mt, nil, 0, 0, time.Time{})
-	return err
-}
-
-func (c *client) doUpdateLeaseholderID(ctx context.Context, leaseholderID uint64) error {
-	_, _, err := c.request(ctx, pb.UPDATE_LEASEHOLDER_ID, nil, leaseholderID, 0, time.Time{})
 	return err
 }
 

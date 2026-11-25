@@ -443,6 +443,12 @@ func (s *Service) handleUpdateLeaseholderID(ctx context.Context, req pb.Request)
 
 func (s *Service) handleConnect(ctx context.Context, req pb.Request) pb.Response {
 	r := req.LogRequest
+	// Older standby readers connect with a zero TN ID. Their connection
+	// must preserve the TN lease. Unowned standby shards can still accept
+	// writes with no lease.
+	if r.TNID == 0 {
+		return s.handleConnectRO(ctx, req)
+	}
 	resp := getResponse(req)
 	if err := s.store.getOrExtendTNLease(ctx, r.ShardID, r.TNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)

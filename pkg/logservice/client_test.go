@@ -557,6 +557,118 @@ func TestTNWriterReconnectDoesNotReclaimLease(t *testing.T) {
 	})
 }
 
+type failLeaseClaimBeforeSend struct {
+	morpc.RPCClient
+	err error
+}
+
+func (c *failLeaseClaimBeforeSend) Send(ctx context.Context, addr string, req morpc.Message) (*morpc.Future, error) {
+	if req.(*RPCRequest).Request.Method == pb.UPDATE_LEASEHOLDER_ID {
+		return nil, c.err
+	}
+	return c.RPCClient.Send(ctx, addr, req)
+}
+
+func TestTNWriterLeaseClaimFailure(t *testing.T) {
+	t.Run("before dispatch", func(t *testing.T) {
+		RunClientTest(t, false, nil, func(t *testing.T, _ *Service, cfg ClientConfig, _ Client) {
+			sendErr := errors.New("lease request rejected before dispatch")
+			originalConnect := connectToLogServiceAddressFn
+			defer func() { connectToLogServiceAddressFn = originalConnect }()
+			connectToLogServiceAddressFn = func(ctx context.Context, sid string, addr string, cfg ClientConfig) (*client, error) {
+				c, err := originalConnect(ctx, sid, addr, cfg)
+				if err == nil {
+					c.client = &failLeaseClaimBeforeSend{RPCClient: c.client, err: sendErr}
+				}
+				return c, err
+			}
+			cfg.TNReplicaID++
+			factory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+			c, err := factory()
+			require.ErrorIs(t, err, sendErr)
+			require.Nil(t, c)
+
+			connectToLogServiceAddressFn = originalConnect
+			c, err = factory()
+			require.NoError(t, err)
+			defer c.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+			defer cancel()
+			_, err = c.Append(ctx, c.GetLogRecord(8))
+			require.NoError(t, err)
+		})
+	})
+
+	t.Run("after dispatch", func(t *testing.T) {
+		RunClientTest(t, false, nil, func(t *testing.T, service *Service, cfg ClientConfig, incumbent Client) {
+			ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+			defer cancel()
+			originalConnect := connectToLogServiceAddressFn
+			defer func() { connectToLogServiceAddressFn = originalConnect }()
+			applied := make(chan error, 1)
+			connectToLogServiceAddressFn = func(connectCtx context.Context, sid string, addr string, cfg ClientConfig) (*client, error) {
+				opts := morpc.WithBackendFilter(func(msg morpc.Message, _ string) bool {
+					req, ok := msg.(*RPCRequest)
+					if !ok || req.Request.Method != pb.UPDATE_LEASEHOLDER_ID {
+						return true
+					}
+					// Apply the grant in Raft but withhold the response
+					// from the caller waiting on the RPC future.
+					applied <- service.store.getOrExtendTNLease(ctx, req.Request.LogRequest.ShardID, req.Request.LogRequest.TNID)
+					return false
+				})
+				return originalConnect(SetBackendOptions(connectCtx, opts), sid, addr, cfg)
+			}
+			cfg.TNReplicaID++
+			factory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+			c, claimErr := factory()
+			require.Error(t, claimErr)
+			require.Nil(t, c)
+			select {
+			case err := <-applied:
+				require.NoError(t, err)
+			default:
+				t.Fatal("the request did not reach the dispatch fault")
+			}
+			_, err := incumbent.Append(ctx, incumbent.GetLogRecord(8))
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+
+			connectToLogServiceAddressFn = originalConnect
+			cfg.TNReplicaID++
+			successor, err := NewTNWriterClientFactory("", cfg, testIOTimeout)()
+			require.NoError(t, err)
+			defer successor.Close()
+			c, err = factory()
+			require.ErrorIs(t, err, claimErr)
+			require.Nil(t, c)
+			_, err = successor.Append(ctx, successor.GetLogRecord(8))
+			require.NoError(t, err)
+		})
+	})
+}
+
+func TestStandbyWriterWithNoLease(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, service *Service, cfg ClientConfig, _ Client) {
+		const standbyShardID, standbyReplicaID = 3, 3
+		require.NoError(t, service.store.startReplica(standbyShardID, standbyReplicaID,
+			map[uint64]string{standbyReplicaID: service.ID()}, false))
+		ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+		defer cancel()
+		cfg.LogShardID, cfg.TNReplicaID = standbyShardID, 0
+		standby, err := NewStandbyClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer standby.Close()
+		rec := standby.GetLogRecord(8)
+		lsn, err := standby.Append(ctx, rec)
+		require.NoError(t, err)
+		records, _, err := standby.Read(ctx, lsn, math.MaxUint64)
+		require.NoError(t, err)
+		require.Len(t, records, 1)
+		require.Equal(t, pb.UserRecord, records[0].Type)
+		require.Equal(t, rec.Data, records[0].Data)
+	})
+}
+
 func TestClientAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service, cfg ClientConfig, c Client) {
 		rec := c.GetLogRecord(16)

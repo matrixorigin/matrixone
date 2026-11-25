@@ -493,25 +493,39 @@ func TestTimedOutWriterCannotOverwriteReplacementWAL(t *testing.T) {
 	replacementCfg := NewConfig("", WithConfigOptMaxClient(1),
 		WithConfigOptClientFactory(LogServiceClientFactory(newFactory)))
 	replacement := NewLogServiceDriver(&replacementCfg)
+	defer replacement.Close()
 	require.Equal(t, []string{"old-first"}, replay(replacement))
-	newEntry := entry.MockEntryWithPayload([]byte("replacement"))
-	require.NoError(t, replacement.Append(newEntry))
-	require.NoError(t, newEntry.WaitDone())
-	require.Equal(t, uint64(2), newEntry.DSN)
+
+	// An older standby reader uses CONNECT with no TN replica ID.
+	upstreamCtx, cancelUpstream := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelUpstream()
+	upstream, err := logservice.NewStandbyClient(upstreamCtx, "", logservice.ClientConfig{
+		LogShardID:       clientCfg.LogShardID,
+		ServiceAddresses: clientCfg.ServiceAddresses,
+	})
+	require.NoError(t, err)
+	defer upstream.Close()
+	_, err = upstream.GetLatestLsn(upstreamCtx)
+	require.NoError(t, err)
 
 	allowAppend()
-	select {
-	case err := <-failed:
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the old writer was not fenced")
-	}
-	require.True(t, moerr.IsMoErrCode(stale.WaitDone(), moerr.ErrNotLeaseHolder))
 	select {
 	case <-old.ShutdownDone():
 	case <-time.After(5 * time.Second):
 		t.Fatal("old WAL did not finish draining")
 	}
+	assert.True(t, moerr.IsMoErrCode(stale.WaitDone(), moerr.ErrNotLeaseHolder), "the old writer was not fenced")
+	select {
+	case err := <-failed:
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+	default:
+		t.Error("the old writer did not report the lease failure")
+	}
+
+	newEntry := entry.MockEntryWithPayload([]byte("replacement"))
+	require.NoError(t, replacement.Append(newEntry))
+	require.NoError(t, newEntry.WaitDone())
+	require.Equal(t, uint64(2), newEntry.DSN)
 	require.NoError(t, replacement.Close())
 
 	reopened := NewLogServiceDriver(&replacementCfg)
