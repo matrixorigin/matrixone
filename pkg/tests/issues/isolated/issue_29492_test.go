@@ -263,7 +263,6 @@ func TestIssue29492MultiCNCancellationCleanup(t *testing.T) {
 			// Two snapshots distinguish a fixed wait from slow progress. They fire
 			// after the existing drain warning and before the replay deadline.
 			for _, delay := range []time.Duration{45 * time.Second, 50 * time.Second} {
-				delay := delay
 				stopReplayDiagnostics := armIssue29492ReplayDiagnostics(delay, func() {
 					t.Logf("post-cancellation replay remains in flight: mode=%s connection_id=%d elapsed=%s\n%s",
 						name, connectionID, delay, issue29492ReplayDiagnostics(dbs))
