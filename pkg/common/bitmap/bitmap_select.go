@@ -385,3 +385,72 @@ func keepLowBits(w uint64, r int) (res uint64) {
 	// @ pcSame(res, w0, p)
 	return res
 }
+
+// OrShifted sets row dst+k of n for every row src+k of b that is set, for
+// 0 <= k < cnt. When cnt > 0 it first grows n's length to cover dst+cnt. It
+// copies a range of NULLs from one vector to another a word at a time. If
+// growing fails it returns the error and leaves n unchanged.
+// @ requires n.Inv() && acc(b.Inv(), 1/2) && b != n
+// @ requires 0 <= src && 0 <= dst && 0 <= cnt
+// @ ensures n.Inv() && acc(b.Inv(), 1/2) && b.ISeq() == old(b.ISeq()) && b.Len() == old(b.Len())
+// @ ensures err != nil ==> n.Len() == old(n.Len()) && forall r int :: {n.Has(r)} n.Has(r) == old(n.Has(r))
+// @ ensures err == nil ==> n.Len() >= old(n.Len()) && (cnt > 0 ==> n.Len() >= int64(dst+cnt))
+// @ ensures err == nil ==> forall r int :: {n.Has(r)} n.Has(r) == (old(n.Has(r)) || (dst <= r && r < dst+cnt && b.Has(r-dst+src)))
+// @ decreases
+func (n *Bitmap) OrShifted(b *Bitmap, src, dst, cnt int) (err error) {
+	if cnt == 0 {
+		return nil
+	}
+	if err = n.TryExpandWithSize(dst + cnt); err != nil {
+		return err
+	}
+	n.orShiftedIn(b, src, dst, cnt)
+	return nil
+}
+
+// orShiftedIn is OrShifted for a bitmap that already covers dst+cnt rows.
+// Destination word w takes source rows 64w-dst+src.., masked to the rows of
+// [dst, dst+cnt) that fall in word w.
+// @ requires n.Inv() && acc(b.Inv(), 1/2) && b != n
+// @ requires 0 <= src && 0 <= dst && 0 < cnt && int64(dst+cnt) <= n.Len()
+// @ ensures n.Inv() && n.Len() == old(n.Len())
+// @ ensures acc(b.Inv(), 1/2) && b.ISeq() == old(b.ISeq()) && b.Len() == old(b.Len())
+// @ ensures forall r int :: {n.Has(r)} n.Has(r) == (old(n.Has(r)) || (dst <= r && r < dst+cnt && b.Has(r-dst+src)))
+// @ decreases
+func (n *Bitmap) orShiftedIn(b *Bitmap, src, dst, cnt int) {
+	n.mustWrite()
+	end := dst + cnt
+	last := (end - 1) / 64
+	w := dst / 64
+	// @ ghost os := n.ISeq()
+	// @ ghost onb := n.Len()
+	// @ ghost bs := b.ISeq()
+	// @ ghost bnb := b.Len()
+	// @ assert forall r int :: {n.Has(r)} n.Has(r) == HasS(os, onb, r)
+	// @ invariant n.Inv() && n.Len() == onb && acc(b.Inv(), 1/2) && b.ISeq() == bs && b.Len() == bnb
+	// @ invariant dst/64 <= w && w <= last+1 && last < n.Words()
+	// @ invariant forall r int :: {n.Has(r)} n.Has(r) == (HasS(os, onb, r) || (dst <= r && r < end && r < 64*w && HasS(bs, bnb, r-dst+src)))
+	// @ decreases last + 1 - w
+	for w <= last {
+		lo := 0
+		if dst > 64*w {
+			lo = dst - 64*w
+		}
+		hi := 64
+		if end < 64*(w+1) {
+			hi = end - 64*w
+		}
+		mask := (^uint64(0) << uint(lo)) & (^uint64(0) >> uint(64-hi))
+		// @ assert forall k int :: {bits.Bit(mask, k)} 0 <= k && k < 64 ==> bits.Bit(mask, k) == (lo <= k && k < hi)
+		v := b.bitsFrom(int64(64*w-dst+src)) & mask
+		// @ assert forall k int :: {bits.Bit(v, k)} 0 <= k && k < 64 ==> bits.Bit(v, k) == (dst <= 64*w+k && 64*w+k < end && HasS(bs, bnb, 64*w+k-dst+src))
+		// @ ghost if w == n.Words()-1 && n.Len()%64 != 0 {
+		// @ 	assert forall k int :: {bits.Bit(v, k)} int(n.Len()%64) <= k && k < 64 ==> 64*w+k >= int(n.Len()) && !bits.Bit(v, k)
+		// @ }
+		n.orWord(uint64(w), v)
+		// @ assert forall r int :: {n.Has(r)} r/64 == w && 0 <= r ==> r%64 == r-64*w
+		w++
+	}
+	// @ assert forall r int :: {n.Has(r)} dst <= r && r < end ==> r < 64*w
+	// @ assert forall r int :: {b.Has(r)} b.Has(r) == HasS(bs, bnb, r)
+}

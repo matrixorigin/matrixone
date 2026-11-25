@@ -275,3 +275,38 @@ func BenchmarkInitDeposit(b *testing.B) {
 	base.Free()
 	sel.Free()
 }
+
+// OrShifted against a per-row model, with views as sources, unaligned source
+// and destination starts, ranges past the source's length, and growth.
+func TestOrShifted(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(11))
+	for iter := 0; iter < 3000; iter++ {
+		srcRows := randomBools(rng, rng.Intn(300), rng.Float64())
+		dstLen := rng.Intn(300)
+		dstRows := randomBools(rng, dstLen, rng.Float64()*0.3)
+		src := rng.Intn(len(srcRows) + 70)
+		dst := rng.Intn(dstLen + 140)
+		cnt := rng.Intn(300)
+
+		b, freeB := selMaybeView(t, rng, srcRows, mp)
+		n := selOwnedFrom(t, dstRows, mp)
+		require.NoError(t, n.OrShifted(b, src, dst, cnt))
+
+		wantLen := dstLen
+		if cnt > 0 && dst+cnt > wantLen {
+			wantLen = dst + cnt
+		}
+		want := make([]bool, wantLen)
+		copy(want, dstRows)
+		for k := 0; k < cnt; k++ {
+			if s := src + k; s < len(srcRows) && srcRows[s] {
+				want[dst+k] = true
+			}
+		}
+		requireSelRows(t, want, n)
+		n.Free()
+		freeB()
+	}
+	require.Zero(t, mp.CurrNB())
+}

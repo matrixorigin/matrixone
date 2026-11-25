@@ -4590,10 +4590,10 @@ func (v *Vector) unionBatchFlat(w *Vector, offset int64, cnt int, flags []uint8,
 				// Fixed-width NULL slots contain no payload references. Copy the
 				// range once; only their bitmap, not those opaque bytes, is visible.
 				copy(v.data[oldLen*tlen:(oldLen+cnt)*tlen], w.data[int(offset)*tlen:(int(offset)+cnt)*tlen])
-				for i := 0; i < cnt; i++ {
-					if w.nsp.Contains(uint64(offset) + uint64(i)) {
-						v.nsp.Add(uint64(oldLen + i))
-					}
+				// The NULL rows move a word at a time; extendWithBitmaps
+				// reserved the capacity, so this does not allocate.
+				if err := v.nsp.GetBitmap().OrShifted(w.nsp.GetBitmap(), int(offset), oldLen, cnt); err != nil {
+					return err
 				}
 				v.setLengthAfterExtend(oldLen + cnt)
 			} else {

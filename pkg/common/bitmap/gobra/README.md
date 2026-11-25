@@ -59,6 +59,7 @@ For every method in `bitmap.go`:
     - `KeepFirstN(k)`: a row stays set exactly when it was set and fewer than `k` set rows lie below it. `keepLowBits(w, r)` keeps the `r` lowest set bits of a word; the rank argument is the heap-free lemma `keepFirstRows`.
     - `Word(i)`: bit `b` is row `64i+b`. `NumWords()` is `ceil(Len/64)`.
     - `depositBits(w, s)`: bit `b` is set exactly when bit `b` of `w` is set and bit `PcUpTo(w, b)` of `s` is set.
+    - `OrShifted(b, src, dst, cnt)`: row `r` is set exactly when it was set, or `dst <= r < dst+cnt` and `b` has row `r-dst+src`; the length grows to cover `dst+cnt`. The word loop `orShiftedIn` reads each destination word's source rows with one `bitsFrom` and masks them to the range.
 
 The `Init*` constructors and `Reset` take a `Raw` bitmap: the struct plus the words it owns, if it has a pool. The ghost method `Release` turns `Inv` into `Raw`, for callers about to reinitialize or free a bitmap. The ghost `Unowned` makes a pool-less struct (such as a zero `Bitmap`) `Raw`.
 
