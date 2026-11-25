@@ -551,7 +551,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 					return c.txn.addLocks(
 						l.bind.Group,
 						l.bind,
-						[][]byte{key},
+						[][]byte{key}, nil,
 						l.logger, true, c.opts.ExactRows,
 					)
 				},
@@ -653,7 +653,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	err := c.txn.addLocks(l.bind.Group, l.bind, [][]byte{row}, l.logger, true, c.opts.ExactRows)
+	err := c.txn.addLocks(l.bind.Group, l.bind, [][]byte{row}, nil, l.logger, true, c.opts.ExactRows)
 	if err != nil {
 		return err
 	}
@@ -1070,18 +1070,21 @@ func (l *localLockTable) addRangeLockLocked(
 		break
 	}
 
-	mc.commit(l.bind, c.txn, l.mu.store, l.logger)
+	// Admit the replacement before publishing changes to the store or wait queues.
+	err = c.txn.addLocks(
+		l.bind.Group, l.bind, [][]byte{start, end}, mc.mergedLocks, l.logger, true, false,
+	)
+	if err != nil {
+		mc.rollback()
+		return nil, Lock{}, err
+	}
+	mc.commit(l.mu.store, l.logger)
 	startLock, endLock := newRangeLock(l.logger, c)
 
 	wq.resetCommittedAt(l.mu.tableCommittedAt)
 	startLock.waiters = wq
 	endLock.waiters = wq
 
-	// similar to row lock
-	err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
-	if err != nil {
-		return nil, Lock{}, err
-	}
 	c.result.NewLockAdd = true
 
 	l.mu.store.Add(start, startLock)
@@ -1397,8 +1400,6 @@ func (c *mergeContext) mergeLocks(locks [][]byte) {
 }
 
 func (c *mergeContext) commit(
-	bind pb.LockTable,
-	txn *activeTxn,
 	s LockStorage,
 	logger *log.MOLogger,
 ) {
@@ -1406,16 +1407,10 @@ func (c *mergeContext) commit(
 		s.Delete(util.UnsafeStringToBytes(k))
 	}
 
-	txn.lockRemoved(
-		bind.Group,
-		bind.Table,
-		c.mergedLocks,
-	)
-
 	for _, q := range c.mergedWaiters {
 		// release ref in merged waiters. The ref is moved to c.to.
 		q.iter(func(w *waiter) bool {
-			w.close("mergeContext commit", logger)
+			w.unref("mergeContext commit", logger)
 			return true
 		})
 		q.reset()

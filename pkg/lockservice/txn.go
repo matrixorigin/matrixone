@@ -92,29 +92,33 @@ func (txn activeTxn) TypeName() string {
 	return "lockservice.activeTxn"
 }
 
-func (txn *activeTxn) lockRemoved(
-	group uint32,
-	table uint64,
-	removedLocks map[string]struct{}) {
-	h := txn.getHoldLocksLocked(group)
-	v, ok := h.tableKeys[table]
-	if !ok {
-		return
-	}
-	newV, _ := newCowSlice(txn.fsp, nil)
-	s := v.slice()
+// replaceLockKeys builds the post-merge key set privately. A rejected range
+// must leave both the old snapshot and its uncertainty markers intact.
+func (h *tableLockHolder) replaceLockKeys(
+	table uint64, removed map[string]struct{}, added [][]byte,
+) error {
+	old := h.tableKeys[table]
+	next, _ := newCowSlice(old.fsp, nil)
+	next.remoteExactRows = old.remoteExactRows
+	s := old.slice()
 	defer s.unref()
-	s.iter(func(v []byte) bool {
-		if _, ok := removedLocks[util.UnsafeBytesToString(v)]; !ok {
-			// Removal can only shrink the original set, including segmented sets.
-			newV.appendExact([][]byte{v})
+	s.iter(func(key []byte) bool {
+		if _, remove := removed[util.UnsafeBytesToString(key)]; !remove {
+			next.appendExact([][]byte{key})
 		}
 		return true
 	})
-	v.close()
-	h.tableKeys[table] = newV
+	if len(added) > 0 {
+		if err := next.append(added); err != nil {
+			next.close()
+			return err
+		}
+	}
+
+	h.tableKeys[table] = next
+	old.close()
 	if uncertain := h.uncertainLockKeys[table]; len(uncertain) > 0 {
-		for key := range removedLocks {
+		for key := range removed {
 			delete(uncertain, key)
 		}
 		if len(uncertain) == 0 {
@@ -124,6 +128,7 @@ func (txn *activeTxn) lockRemoved(
 			}
 		}
 	}
+	return nil
 }
 
 func (txn *activeTxn) lockAdded(
@@ -132,7 +137,7 @@ func (txn *activeTxn) lockAdded(
 	locks [][]byte,
 	logger *log.MOLogger,
 ) error {
-	return txn.addLocks(group, bind, locks, logger, true, false)
+	return txn.addLocks(group, bind, locks, nil, logger, true, false)
 }
 
 // recordRemoteLocks records requests for wait-for lookups and unlock. The
@@ -149,7 +154,7 @@ func (txn *activeTxn) recordRemoteLocks(
 	h := txn.getHoldLocksLocked(bind.Group)
 	keys := h.tableKeys[bind.Table]
 	segmented := exact || (keys != nil && keys.remoteExactRows)
-	if err := txn.addLocks(bind.Group, bind, locks, logger, confirmed, segmented); err != nil {
+	if err := txn.addLocks(bind.Group, bind, locks, nil, logger, confirmed, segmented); err != nil {
 		return err
 	}
 	if exact {
@@ -162,6 +167,7 @@ func (txn *activeTxn) addLocks(
 	group uint32,
 	bind pb.LockTable,
 	locks [][]byte,
+	removed map[string]struct{},
 	logger *log.MOLogger,
 	confirmed, segmented bool,
 ) error {
@@ -210,7 +216,12 @@ func (txn *activeTxn) addLocks(
 	}
 
 	pending := locks
-	if !ok {
+	if ok && len(removed) > 0 {
+		if err := h.replaceLockKeys(bind.Table, removed, locks); err != nil {
+			return err
+		}
+		pending = nil
+	} else if !ok {
 		first := len(locks)
 		if segmented {
 			first = min(first, txn.fsp.maxSize())

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ func TestRemoteRangeAfterExactRows(t *testing.T) {
 	const limit = 16
 	for _, count := range []int{limit, limit + 1} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			reader := newTestTxnID(1)
+			var readerActive atomic.Bool
 			runLockServiceTestsWithLevel(
 				t, zapcore.ErrorLevel, []string{"owner", "caller"}, 10*time.Second,
 				func(_ *lockTableAllocator, services []*service) {
@@ -39,13 +42,17 @@ func TestRemoteRangeAfterExactRows(t *testing.T) {
 					defer cancel()
 					owner, caller := services[0], services[1]
 					const table = uint64(91)
-					reader, writer := newTestTxnID(1), newTestTxnID(2)
+					writer := newTestTxnID(2)
 					exclusive := newTestRowExclusiveOptions()
 					exclusive.Policy = pb.WaitPolicy_FastFail
 					_, err := owner.Lock(ctx, table, [][]byte{{1}}, writer, exclusive)
 					require.NoError(t, err)
 					require.NoError(t, owner.Unlock(ctx, writer, timestamp.Timestamp{}))
-					defer func() { require.NoError(t, caller.Unlock(ctx, reader, timestamp.Timestamp{})) }()
+					readerActive.Store(true)
+					defer func() {
+						require.NoError(t, caller.Unlock(t.Context(), reader, timestamp.Timestamp{}))
+						readerActive.Store(false)
+					}()
 
 					points := make([][]byte, count)
 					for i := range points {
@@ -60,12 +67,52 @@ func TestRemoteRangeAfterExactRows(t *testing.T) {
 					// capacity check. The covering range can merge the exact keys.
 					_, err = caller.Lock(ctx, table, [][]byte{{40}, {41}}, reader, newTestRangeSharedOptions())
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "%v", err)
+					waiterTxn := newTestTxnID(3)
+					waitCtx, cancelWait := context.WithCancel(ctx)
+					waitDone := make(chan struct{})
+					var waitErr error
+					go func() {
+						defer close(waitDone)
+						_, waitErr = owner.Lock(waitCtx, table, points[:1], waiterTxn, newTestRowExclusiveOptions())
+					}()
+					defer func() {
+						cancelWait()
+						<-waitDone
+						require.NoError(t, owner.Unlock(t.Context(), waiterTxn, timestamp.Timestamp{}))
+					}()
+					waitWaiters(t, owner, table, points[0], 1)
+
+					// Replacing two points with two endpoints fits exactly at the limit.
+					// On rejection, every original point must still have the same owner.
+					_, err = caller.Lock(ctx, table, points[:2], reader, newTestRangeSharedOptions())
+					if count == limit {
+						require.NoError(t, err)
+					} else {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "%v", err)
+						lt, err := owner.getLockTable(ctx, 0, table)
+						require.NoError(t, err)
+						for _, point := range points {
+							holder, found, err := lt.getLockHolder(ctx, point)
+							require.NoError(t, err)
+							require.True(t, found, "point %x", point)
+							require.Equal(t, reader, holder.TxnID)
+						}
+					}
+					waitWaiters(t, owner, table, points[0], 1)
 					_, err = caller.Lock(ctx, table, [][]byte{{1}, {30}}, reader, newTestRangeSharedOptions())
 					require.NoError(t, err)
+					waitWaiters(t, owner, table, []byte{1}, 1)
 					_, err = owner.Lock(ctx, table, points[len(points)-1:], writer, exclusive)
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict), "%v", err)
 					require.NoError(t, owner.Unlock(ctx, writer, timestamp.Timestamp{}))
 					require.NoError(t, caller.Unlock(ctx, reader, timestamp.Timestamp{}))
+					readerActive.Store(false)
+					select {
+					case <-waitDone:
+						require.NoError(t, waitErr)
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
 					_, err = owner.Lock(ctx, table, points[len(points)-1:], writer, exclusive)
 					require.NoError(t, err)
 					require.NoError(t, owner.Unlock(ctx, writer, timestamp.Timestamp{}))
@@ -74,6 +121,14 @@ func TestRemoteRangeAfterExactRows(t *testing.T) {
 					cfg.MaxLockRowCount = 4
 					cfg.MaxFixedSliceSize = limit
 					cfg.EnableRemoteLocalProxy = false
+					if cfg.ServiceID == "caller" {
+						// The owner's orphan check queries the caller while the writer waits.
+						cfg.TxnIterFunc = func(visit func([]byte) bool) {
+							if readerActive.Load() {
+								visit(reader)
+							}
+						}
+					}
 				})
 		})
 	}

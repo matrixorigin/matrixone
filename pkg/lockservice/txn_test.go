@@ -139,9 +139,7 @@ func TestCleanupOnlyLockStateTransitions(t *testing.T) {
 		require.NotContains(t, holder.uncertainLockKeys[bind.Table], string(key1))
 		require.Contains(t, holder.uncertainLockKeys[bind.Table], string(key2))
 
-		txn.lockRemoved(bind.Group, bind.Table, map[string]struct{}{
-			string(key2): {},
-		})
+		require.NoError(t, holder.replaceLockKeys(bind.Table, map[string]struct{}{string(key2): {}}, nil))
 		require.Nil(t, holder.uncertainLockKeys)
 	})
 }
@@ -384,11 +382,11 @@ func TestExactLockKeysAcrossSegments(t *testing.T) {
 		bind := pb.LockTable{Table: 1}
 		logger := getLogger("")
 		keys := [][]byte{{1}, {2}, {3}, {4}, {5}, {6}, {7}}
-		require.NoError(t, txn.addLocks(0, bind, keys[:3], logger, true, true))
+		require.NoError(t, txn.addLocks(0, bind, keys[:3], nil, logger, true, true))
 		h := txn.getHoldLocksLocked(0)
 		early := h.tableKeys[1].slice()
 		defer early.unref()
-		require.NoError(t, txn.addLocks(0, bind, keys[3:], logger, false, true))
+		require.NoError(t, txn.addLocks(0, bind, keys[3:], nil, logger, false, true))
 		require.True(t, moerr.IsMoErrCode(txn.lockAdded(0, bind, [][]byte{{8}}, logger), moerr.ErrLockNeedUpgrade))
 		full := h.tableKeys[1].slice()
 		defer full.unref()
@@ -404,10 +402,17 @@ func TestExactLockKeysAcrossSegments(t *testing.T) {
 		require.Equal(t, keys[:3], visited)
 		require.Len(t, h.uncertainLockKeys[1], 4)
 		for range 10 {
-			require.NoError(t, txn.addLocks(0, bind, keys, logger, false, true))
+			require.NoError(t, txn.addLocks(0, bind, keys, nil, logger, false, true))
 		}
 		require.Equal(t, len(keys), h.tableKeys[1].mustGet().totalLen())
-		txn.lockRemoved(0, 1, map[string]struct{}{string(keys[1]): {}, string(keys[4]): {}})
+		removed := map[string]struct{}{string(keys[1]): {}, string(keys[4]): {}}
+		current := h.tableKeys[1]
+		err := h.replaceLockKeys(bind.Table, removed, [][]byte{{8}, {9}})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
+		require.Same(t, current, h.tableKeys[1])
+		require.Equal(t, keys, current.mustGet().all())
+		require.Contains(t, h.uncertainLockKeys[1], string(keys[4]))
+		require.NoError(t, h.replaceLockKeys(bind.Table, removed, nil))
 		retained := h.tableKeys[1].slice()
 		require.Equal(t, [][]byte{{1}, {3}, {4}, {6}, {7}}, retained.all())
 		retained.unref()
