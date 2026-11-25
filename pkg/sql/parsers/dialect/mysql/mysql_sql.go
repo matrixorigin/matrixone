@@ -25806,7 +25806,7 @@ yydefault:
 		var yyLOCAL *tree.Where
 //line mysql_sql.y:8194
 		{
-			yyLOCAL = &tree.Where{Type: tree.AstWhere, Expr: yyDollar[2].exprUnion()}
+			yyLOCAL = yylex.(*Lexer).whereClause(yyDollar[2].exprUnion(), yyDollar[1].pos, yyrcvr.Lookahead() >= 0)
 		}
 		yyVAL.union = yyLOCAL
 	case 1155:
@@ -31762,6 +31762,18 @@ yydefault:
 			yyLOCAL = tree.ROW_FORMAT_COMPACT
 		}
 		yyVAL.union = yyLOCAL
+	case 1796:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line mysql_sql.y:12301
+		{
+			yyVAL.str = yylex.(*Lexer).rewriteMergeName(yyDollar[1].str)
+		}
+	case 1798:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line mysql_sql.y:12305
+		{
+			yyVAL.str = yylex.(*Lexer).rewriteMergeName(yyDollar[1].str)
+		}
 	case 1800:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		var yyLOCAL tree.TableNames
