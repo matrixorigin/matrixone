@@ -39,13 +39,13 @@ type planAuthorization struct {
 	writeTargets                   []string
 	required, moCtrl, sysWhitelist bool
 	dynamic                        bool
-	createIndexTable               *plan.TableDef
+	indexDDL                       *plan.DataDefinition
 }
 
 func derivePlanAuthorization(ses FeSession, stmt tree.Statement, p *plan.Plan, admission *privilege) planAuthorization {
 	result := planAuthorization{privilege: *admission, moCtrl: hasMoCtrl(p), sysWhitelist: isTargetSysWhiteList(p)}
-	if createIndex := p.GetDdl().GetCreateIndex(); createIndex != nil {
-		result.createIndexTable = createIndex.GetTableDef()
+	if ddl := p.GetDdl(); ddl.GetCreateIndex() != nil || ddl.GetDropIndex() != nil {
+		result.indexDDL = ddl
 	}
 	arr, insertTarget := extractPrivilegeTipsAndInsertTarget(p)
 	if _, ok := stmt.(*tree.Replace); ok {
@@ -112,8 +112,8 @@ func evaluatePlanAuthorization(ctx context.Context, ses *Session, requirement *p
 		return false, stats, err
 	}
 	priv := &requirement.privilege
-	if requirement.createIndexTable != nil {
-		owner, err := indexTargetOwnerInTransaction(ctx, ses, requirement.createIndexTable)
+	if requirement.indexDDL != nil {
+		owner, err := indexTargetOwnerInTransaction(ctx, ses, requirement.indexDDL)
 		if err != nil {
 			return false, stats, err
 		}
@@ -136,14 +136,27 @@ type transactionTableOwner struct {
 // indexTargetOwnerInTransaction reads only the ownership of the plan's new
 // table. Role membership and committed privileges still use the authorization
 // snapshot, and the ordinary privilege cache never records this local grant.
-func indexTargetOwnerInTransaction(ctx context.Context, ses *Session, table *plan.TableDef) (*transactionTableOwner, error) {
+func indexTargetOwnerInTransaction(ctx context.Context, ses *Session, ddl *plan.DataDefinition) (*transactionTableOwner, error) {
 	txn := ses.GetTxnHandler().GetTxn()
 	if txn == nil {
 		return nil, nil
 	}
 	workspace, ok := txn.GetWorkspace().(interface{ IsTableCreatedInTxn(uint64) bool })
+	if !ok {
+		return nil, nil
+	}
+
+	table := ddl.GetCreateIndex().GetTableDef()
+	if dropIndex := ddl.GetDropIndex(); dropIndex != nil {
+		// DROP INDEX plans carry the qualified name of the target.
+		var err error
+		_, table, err = ses.GetTxnCompileCtx().Resolve(dropIndex.GetDatabase(), dropIndex.GetTable(), nil)
+		if err != nil {
+			return nil, err
+		}
+	}
 	physicalID, logicalID := table.GetTblId(), table.GetLogicalId()
-	if !ok || physicalID == 0 || logicalID == 0 ||
+	if physicalID == 0 || logicalID == 0 ||
 		!workspace.IsTableCreatedInTxn(physicalID) || !workspace.IsTableCreatedInTxn(logicalID) {
 		return nil, nil
 	}

@@ -64,6 +64,9 @@ func AddColumn(
 	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
+	// Preserve the supported declaration while retaining ADD's acceptance of
+	// other charset declarations, as with CREATE TABLE.
+	applyColumnCharset(&colType, specNewColumn.Attributes)
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
 		return false, err
 	}
