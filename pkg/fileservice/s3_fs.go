@@ -192,9 +192,8 @@ func NewS3FS(
 			return nil, err
 		}
 		if fs.diskCache != nil {
-			if args.MaxConnsPerHost > 0 {
-				fs.diskCache.conns.max = int64(args.MaxConnsPerHost / 2)
-			}
+			// Downloads hold at most half of the smaller of the connections per host and the storage concurrency.
+			fs.diskCache.conns.max = min(int64(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost)), concurrency) / 2
 			workers := fs.diskCache.prefetchWorkers()
 			fs.prefetcher = newPrefetcher(workers, fs.prefetchQueueLimit(), fs.haveObject, fs.prefetchObject)
 		}

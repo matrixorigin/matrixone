@@ -198,6 +198,10 @@ func (o *ObjectStorageArguments) validateWithRegionProbe(
 		return moerr.NewInvalidInputNoCtxf("max-conns-per-host must be 0 for the default or at least %d, got %d",
 			minMaxConnsPerHost, o.MaxConnsPerHost)
 	}
+	if o.Concurrency < 0 || (o.Concurrency > 0 && o.Concurrency < minConcurrency) {
+		return moerr.NewInvalidInputNoCtxf("concurrency must be 0 for the default or at least %d, got %d",
+			minConcurrency, o.Concurrency)
+	}
 
 	// validate endpoint
 	var endpointURL *url.URL
