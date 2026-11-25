@@ -212,14 +212,8 @@ func lcaProbeColumnLayout(
 		derivedCompositePK := isDataBranchDerivedCompositePKColumn(
 			lcaDef, targetDef, lcaCol, targetCol,
 		)
-		// The probe reads ancestor values using the original storage type.
-		// Normalize only the comparison for equivalent text charset selectors.
-		lcaType := lcaCol.Typ
-		if plan2.ColumnStorageScalesEqual(&lcaType, &targetCol.Typ) {
-			lcaType.Scale = targetCol.Typ.Scale
-		}
 		if lcaCol.Name == catalog.Row_ID ||
-			(!isDataBranchLogicalTypeEquivalent(lcaType, targetCol.Typ) &&
+			(!isDataBranchStorageTypeEquivalent(lcaCol.Typ, targetCol.Typ) &&
 				!(derivedCompositePK && lcaCol.Typ.Id == targetCol.Typ.Id)) {
 			return lcaProbeLayout{}, moerr.NewNotSupportedNoCtxf(
 				"LCA data branch column %s has a different type from the endpoint schema",

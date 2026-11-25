@@ -1699,9 +1699,12 @@ func checkSchemaCompatibilityWithResolver(
 // preserved by an inplace ALTER, so matching column IDs and OIDs alone do not
 // guarantee that values valid on one side can be materialized into the other.
 func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
-	return left.Id == right.Id &&
-		left.Width == right.Width &&
-		left.Scale == right.Scale &&
+	return left.Scale == right.Scale && isDataBranchStorageTypeEquivalent(left, right)
+}
+
+func isDataBranchStorageTypeEquivalent(left, right plan.Type) bool {
+	return left.Width == right.Width &&
+		plan2.ColumnStorageScalesEqual(&left, &right) &&
 		left.Enumvalues == right.Enumvalues &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr

@@ -559,7 +559,8 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 	for i, name := range projectedNames {
 		colDef := outputColDefs[i]
 
-		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
+		typeSQL := plan2.FormatColType(colDef.Typ)
+		columnDef := fmt.Sprintf("%s %s%s", quoteIdentifierForSQL(name), typeSQL, plan2.ColumnCharsetClause(&colDef.Typ))
 		if colDef.Typ.NotNullable && !targetOnly[i] {
 			columnDef += " not null"
 		} else {
@@ -629,7 +630,7 @@ func dataBranchEndpointColumnDef(tableDef *plan2.TableDef, sourceColDef *plan2.C
 	colDef := dataBranchColumnDefByIdentity(tableDef, sourceColDef)
 	if colDef == nil ||
 		isDataBranchUserVisibleColumn(colDef) != isDataBranchUserVisibleColumn(sourceColDef) ||
-		!isDataBranchLogicalTypeEquivalent(colDef.Typ, sourceColDef.Typ) ||
+		!isDataBranchStorageTypeEquivalent(colDef.Typ, sourceColDef.Typ) ||
 		colDef.NotNull != sourceColDef.NotNull {
 		return nil
 	}
