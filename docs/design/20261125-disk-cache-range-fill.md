@@ -146,6 +146,8 @@ or several ranges that together cover its bytes.
 
 - A fill is waiting, running or ended, and every fill in any state is in the one registry.
   There is no separate prefetch queue, live queue or worker pool.
+- Each started fill runs on its own. As many fills, or parts of a split fill, run at once
+  as the governor has tokens for; a waiting fill holds no goroutine.
 - A prefetch makes waiting background fills for the bytes it asks for. A request for bytes a
   waiting fill of the same cache already holds merges into it: the sooner due time, the
   larger share, and both scans. Bytes a running fill holds need nothing more. Other bytes
