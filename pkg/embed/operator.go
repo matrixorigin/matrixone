@@ -56,7 +56,6 @@ type operator struct {
 
 	reset struct {
 		svc        service
-		shutdownC  chan struct{}
 		stopper    *stopper.Stopper
 		rt         runtime.Runtime
 		gossipNode *gossip.Node
@@ -153,7 +152,6 @@ func (op *operator) Close() error {
 		op.reset.fs.Close(context.Background())
 		op.reset.fs = nil
 	}
-	op.reset.shutdownC = nil
 	if err == nil {
 		op.state = stopped
 	}
@@ -234,7 +232,7 @@ func (op *operator) startLogServiceLocked(
 	s, err := logservice.NewService(
 		op.cfg.getLogServiceConfig(),
 		fs,
-		op.reset.shutdownC,
+		nil,
 		logservice.WithRuntime(op.reset.rt),
 		logservice.WithConfigData(commonConfigKVMap),
 	)
@@ -268,7 +266,6 @@ func (op *operator) startTNServiceLocked(
 		&c,
 		op.reset.rt,
 		fs,
-		op.reset.shutdownC,
 		tnservice.WithConfigData(commonConfigKVMap),
 	)
 	if err != nil {
@@ -353,7 +350,6 @@ func (op *operator) initLogger() error {
 }
 
 func (op *operator) initStopper() error {
-	op.reset.shutdownC = make(chan struct{})
 	op.reset.stopper = stopper.NewStopper(
 		fmt.Sprintf("%s/%s", op.serviceType.String(), op.sid),
 		stopper.WithLogger(op.reset.logger),

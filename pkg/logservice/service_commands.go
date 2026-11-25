@@ -43,10 +43,8 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 				s.handleRemoveReplica(cmd)
 			case pb.RemoveNonVotingReplica:
 				s.handleRemoveReplica(cmd)
-			case pb.StartReplica:
+			case pb.StartReplica, pb.StartNonVotingReplica:
 				s.handleStartReplica(cmd)
-			case pb.StartNonVotingReplica:
-				s.handleStartNonVotingReplica(cmd)
 			case pb.StopReplica:
 				s.handleStopReplica(cmd)
 			case pb.StopNonVotingReplica:
@@ -57,7 +55,8 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 				panic(fmt.Sprintf("unknown config change cmd type %d", cmd.ConfigChange.ChangeType))
 			}
 		} else if cmd.GetShutdownStore() != nil {
-			s.handleShutdownStore(cmd)
+			// Ignore teardown commands that may still be queued in HAKeeper.
+			continue
 		} else if cmd.GetCreateTaskService() != nil {
 			s.createTaskService(cmd.CreateTaskService)
 			s.createSQLLogger(cmd.CreateTaskService)
@@ -101,44 +100,37 @@ func (s *Service) handleRemoveReplica(cmd pb.ScheduleCommand) {
 }
 
 func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
-	shardID := cmd.ConfigChange.Replica.ShardID
-	replicaID := cmd.ConfigChange.Replica.ReplicaID
-	join := len(cmd.ConfigChange.InitialMembers) == 0
-	if shardID == hakeeper.DefaultHAKeeperShardID {
-		if err := s.store.startHAKeeperReplica(replicaID,
-			cmd.ConfigChange.InitialMembers, join); err != nil {
-			s.runtime.Logger().Error("failed to start HAKeeper replica", zap.Error(err))
-		}
-	} else {
-		if err := s.store.startReplica(shardID,
-			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
-			s.runtime.Logger().Error("failed to start log replica", zap.Error(err))
-		}
+	change := cmd.ConfigChange
+	shardID, replicaID := change.Replica.ShardID, change.Replica.ReplicaID
+	nonVoting := change.ChangeType == pb.StartNonVotingReplica
+	persisted := s.store.nh.HasNodeInfo(shardID, replicaID)
+	var initialMembers map[uint64]string
+	if cmd.Bootstrapping && cmd.ServiceType == pb.LogService && !nonVoting &&
+		change.Replica.Epoch == 0 && shardID != hakeeper.DefaultHAKeeperShardID && replicaID != 0 &&
+		cmd.UUID == s.ID() && change.Replica.UUID == cmd.UUID && change.InitialMembers[replicaID] == cmd.UUID {
+		initialMembers = change.InitialMembers
 	}
-}
-
-func (s *Service) handleStartNonVotingReplica(cmd pb.ScheduleCommand) {
-	shardID := cmd.ConfigChange.Replica.ShardID
-	replicaID := cmd.ConfigChange.Replica.ReplicaID
-	join := len(cmd.ConfigChange.InitialMembers) == 0
-	if shardID == hakeeper.DefaultHAKeeperShardID {
-		if err := s.store.startHAKeeperNonVotingReplica(replicaID,
-			cmd.ConfigChange.InitialMembers, join); err != nil {
-			s.runtime.Logger().Error("failed to start HAKeeper replica",
-				zap.Uint64("shard ID", shardID),
-				zap.Uint64("replica ID", replicaID),
-				zap.Error(err),
-			)
-		}
-	} else {
-		if err := s.store.startNonVotingReplica(shardID,
-			replicaID, cmd.ConfigChange.InitialMembers, join); err != nil {
-			s.runtime.Logger().Error("failed to start log replica",
-				zap.Uint64("shard ID", shardID),
-				zap.Uint64("replica ID", replicaID),
-				zap.Error(err),
-			)
-		}
+	if !s.store.canStartScheduledReplica(change.Replica, nonVoting, persisted, initialMembers) {
+		s.store.runtime.Logger().Warn("ignoring Start without current replica membership",
+			zap.Uint64("shardID", shardID), zap.Uint64("replicaID", replicaID))
+		return
+	}
+	join := len(change.InitialMembers) == 0 && !persisted
+	var err error
+	switch {
+	case shardID == hakeeper.DefaultHAKeeperShardID && nonVoting:
+		err = s.store.startHAKeeperNonVotingReplica(replicaID, change.InitialMembers, join)
+	case shardID == hakeeper.DefaultHAKeeperShardID:
+		err = s.store.startHAKeeperReplica(replicaID, change.InitialMembers, join)
+	case nonVoting:
+		err = s.store.startNonVotingReplica(shardID, replicaID, change.InitialMembers, join)
+	default:
+		err = s.store.startReplica(shardID, replicaID, change.InitialMembers, join)
+	}
+	if err != nil {
+		s.store.runtime.Logger().Error("failed to start replica",
+			zap.Uint64("shardID", shardID), zap.Uint64("replicaID", replicaID),
+			zap.Bool("non-voting", nonVoting), zap.Error(err))
 	}
 }
 
@@ -155,14 +147,6 @@ func (s *Service) handleKillZombie(cmd pb.ScheduleCommand) {
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	s.handleStopReplica(cmd)
 	s.store.removeMetadata(shardID, replicaID)
-}
-
-func (s *Service) handleShutdownStore(_ pb.ScheduleCommand) {
-	// notify main routine that have received shutdown cmd
-	select {
-	case s.shutdownC <- struct{}{}:
-	default:
-	}
 }
 
 func (s *Service) heartbeatWorker(ctx context.Context) {

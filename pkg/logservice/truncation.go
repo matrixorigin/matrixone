@@ -196,6 +196,16 @@ func (l *store) newestActiveSnapshotIndex(
 func (l *store) cleanupStaleReplica(
 	shardID uint64, replicaID uint64, activeSnapshotIndex uint64,
 ) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// A pending NodeHost claim already owns its metadata and snapshot exports.
+	node, err := l.nh.GetNodeUser(shardID)
+	if err != nil && !errors.Is(err, dragonboat.ErrShardNotFound) {
+		return
+	}
+	if err == nil && node.ReplicaID() == replicaID {
+		return
+	}
 	if err := l.snapshotMgr.RemoveReplica(shardID, replicaID); err != nil {
 		l.runtime.Logger().Error("remove stale exported snapshots failed",
 			zap.Uint64("shardID", shardID),
@@ -210,7 +220,7 @@ func (l *store) cleanupStaleReplica(
 		zap.Uint64("replicaID", replicaID),
 		zap.Uint64("activeSnapshotIndex", activeSnapshotIndex),
 	)
-	l.removeMetadata(shardID, replicaID)
+	l.removeMetadataLocked(shardID, replicaID)
 }
 
 // exportSnapshot just export the snapshot but do NOT truncate logs.
