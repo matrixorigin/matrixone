@@ -427,6 +427,7 @@ func TestCoordinatorRepairsAfterMissingReplicaReport(t *testing.T) {
 	require.False(t, hasChange(changed, pb.StartReplica, 1, "log-b"))
 	require.True(t, hasChange(changed, pb.StartReplica, 1, "log-c"))
 
+	state.LogState.Stores["log-b"] = expired
 	control.Replicas = map[uint64]string{1: "log-a", 3: "log-c"}
 	control.Epoch++
 	state.LogState.Shards[0] = control
