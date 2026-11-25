@@ -88,7 +88,7 @@ func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 		r.Reads, r.Blocks = o.Reads, o.Blocks
 	}
 	if len(r.Ranges) > 0 && len(o.Ranges) > 0 {
-		r.Ranges, r.Size = unionRanges(r.Ranges, o.Ranges, r.Size)
+		r.Ranges, r.Size = unionRanges(r.Ranges, o.Ranges)
 		return r
 	}
 	if len(r.Ranges) > 0 {
@@ -117,16 +117,25 @@ func (r ObjectPrefetch) covers(o ObjectPrefetch) bool {
 	return true
 }
 
-// unionRanges returns a copy of a with the ranges of b not in it, and size plus their bytes.
-func unionRanges(a, b []PrefetchRange, size int64) ([]PrefetchRange, int64) {
-	a = slices.Clone(a)
-	for _, x := range b {
-		if !slices.Contains(a, x) {
-			a = append(a, x)
-			size += x.Size
+// unionRanges returns the ranges holding the bytes of a and of b, in order, those that
+// overlap made one, and their bytes, each counted once.
+func unionRanges(a, b []PrefetchRange) ([]PrefetchRange, int64) {
+	all := slices.Concat(a, b)
+	slices.SortFunc(all, func(x, y PrefetchRange) int { return cmp.Compare(x.Offset, y.Offset) })
+	out := all[:0]
+	var size int64
+	for _, r := range all {
+		if n := len(out); n > 0 && r.Offset < out[n-1].Offset+out[n-1].Size {
+			last := &out[n-1]
+			end := max(last.Offset+last.Size, r.Offset+r.Size)
+			size += end - (last.Offset + last.Size)
+			last.Size = end - last.Offset
+			continue
 		}
+		out = append(out, r)
+		size += r.Size
 	}
-	return a, size
+	return out, size
 }
 
 // share returns, in tenths, the share of the object's blocks the read reads.

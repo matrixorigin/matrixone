@@ -195,7 +195,7 @@ func TestObjectPrefetchMerge(t *testing.T) {
 	id, cat, name := PrefetchRange{Offset: 0, Size: 10}, PrefetchRange{Offset: 100, Size: 20}, PrefetchRange{Offset: 50, Size: 5}
 	columns := ObjectPrefetch{Size: 30, Ranges: []PrefetchRange{id, cat}}
 	got = columns.merge(ObjectPrefetch{Size: 15, Ranges: []PrefetchRange{id, name}})
-	require.Equal(t, []PrefetchRange{id, cat, name}, got.Ranges, "the ranges add up")
+	require.Equal(t, []PrefetchRange{id, name, cat}, got.Ranges, "the ranges add up, in order")
 	require.Equal(t, int64(35), got.Size)
 	require.Equal(t, []PrefetchRange{id, cat}, columns.Ranges)
 

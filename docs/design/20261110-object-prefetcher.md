@@ -366,8 +366,8 @@ way each time.
   do, in one read; each read is cached as it is, so later reads of the columns in any
   block of the object are served from the disk cache, as from a whole object.
 - A request of ranges is skipped while cached ranges cover them or the whole object is
-  cached or downloading. Requests of ranges for one object add up, and a request of the
-  whole object takes over a queued request of ranges.
+  cached or downloading. Requests of ranges for one object add up, the bytes they share
+  counted once, and a request of the whole object takes over a queued request of ranges.
 - The index search keeps whole-object prefetch of its own tables.
 
 ### A scan of some of a table's columns reads column ranges (decision 2026-11-12)
