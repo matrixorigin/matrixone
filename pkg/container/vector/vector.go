@@ -6227,8 +6227,9 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 func keepFixedByMask[T any](vs []T, sels *bitmap.Bitmap, offset uint64) {
 	out := 0
 	words := sels.NumWords()
+	mr := newMaskReader(sels)
 	for i := 0; i < words; i++ {
-		w := sels.Word(i)
+		w := mr.word(i)
 		if w == 0 {
 			continue
 		}
@@ -6253,8 +6254,9 @@ func removeFixedByMask[T any](vs []T, sels *bitmap.Bitmap, offset uint64) {
 	n := len(vs)
 	out, next := 0, 0 // next: first row not yet placed
 	words := sels.NumWords()
+	mr := newMaskReader(sels)
 	for i := 0; i < words; i++ {
-		w := sels.Word(i)
+		w := mr.word(i)
 		base := 64*i + int(offset)
 		for w != 0 {
 			t := bits.TrailingZeros64(w)

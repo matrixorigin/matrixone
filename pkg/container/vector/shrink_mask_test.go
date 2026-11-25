@@ -130,3 +130,98 @@ func benchShrinkDeletes(b *testing.B, byMask bool, p float64) {
 		}
 	}
 }
+
+// BenchmarkUnionBatchNullable appends 8192 int64 rows, one in 17 NULL, as the
+// reader copies a nullable column out of the cache.
+func BenchmarkUnionBatchNullable(b *testing.B) {
+	const n = 8192
+	mp := mpool.MustNewZero()
+	src := NewVec(types.T_int64.ToType(), mp)
+	for i := 0; i < n; i++ {
+		require.NoError(b, AppendFixed(src, int64(i), i%17 == 0, mp))
+	}
+	dst := NewVec(types.T_int64.ToType(), mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dst.CleanOnlyData()
+		require.NoError(b, dst.UnionBatch(src, 0, n, nil, mp))
+	}
+}
+
+// UnionBatch keeps NULLs at unaligned source and destination offsets.
+func TestUnionBatchNullsAtOffsets(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(3))
+	src := unionMaskSource(t, rng, types.T_int32.ToType(), 500, 0.3, mp)
+	for _, pre := range []int{0, 1, 63, 64, 100} {
+		for _, off := range []int{0, 1, 37, 64, 200} {
+			for _, cnt := range []int{1, 63, 64, 65, 300} {
+				dst := unionMaskSource(t, rng, types.T_int32.ToType(), pre, 0.3, mp)
+				want, err := dst.Dup(mp)
+				require.NoError(t, err)
+				for k := 0; k < cnt; k++ {
+					require.NoError(t, want.UnionOne(src, int64(off+k), mp))
+				}
+				require.NoError(t, dst.UnionBatch(src, int64(off), cnt, nil, mp))
+				requireSameRows(t, want, dst)
+				dst.Free(mp)
+				want.Free(mp)
+			}
+		}
+	}
+	src.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+// A read-only, shifted view as the mask goes through Word instead of the
+// owned words; the result matches an owned mask with the same rows.
+func TestMaskGatherWithViewMask(t *testing.T) {
+	mp := mpool.MustNewZero()
+	rng := rand.New(rand.NewSource(5))
+	const n, shift = 300, 13
+	var parent bitmap.Bitmap
+	require.NoError(t, parent.InitWithSize(n+shift+40, mp))
+	for r := 0; r < n+shift+40; r++ {
+		if rng.Intn(3) == 0 {
+			parent.Add(uint64(r))
+		}
+	}
+	var view bitmap.Bitmap
+	view.InitView(&parent, shift, shift+n)
+	require.True(t, view.IsReadOnly())
+	require.Nil(t, view.OwnedWords())
+	var owned bitmap.Bitmap
+	require.NoError(t, owned.InitWithSize(n, mp))
+	for r := 0; r < n; r++ {
+		if view.Contains(uint64(r)) {
+			owned.Add(uint64(r))
+		}
+	}
+	require.NotNil(t, owned.OwnedWords())
+
+	src := unionMaskSource(t, rng, types.T_int64.ToType(), n, 0.2, mp)
+	byView := NewVec(types.T_int64.ToType(), mp)
+	byOwned := NewVec(types.T_int64.ToType(), mp)
+	require.NoError(t, byView.UnionByMask(src, &view, mp))
+	require.NoError(t, byOwned.UnionByMask(src, &owned, mp))
+	requireSameRows(t, byOwned, byView)
+
+	for _, negate := range []bool{false, true} {
+		a, err := src.Dup(mp)
+		require.NoError(t, err)
+		b, err := src.Dup(mp)
+		require.NoError(t, err)
+		require.NoError(t, a.ShrinkByMask(&view, negate, 0, mp))
+		require.NoError(t, b.ShrinkByMask(&owned, negate, 0, mp))
+		requireSameRows(t, b, a)
+		a.Free(mp)
+		b.Free(mp)
+	}
+	byView.Free(mp)
+	byOwned.Free(mp)
+	src.Free(mp)
+	owned.Free()
+	parent.Free()
+	require.Zero(t, mp.CurrNB())
+}

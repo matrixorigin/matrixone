@@ -151,7 +151,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | # | Track | PR | What changes | Measured by |
 | --- | --- | --- | --- | --- |
 | 1 | Bitmap | Primitives | build from bool vector word-wise; `UnionByMask`; compose; take-first-N (`InitWithSize` reuse is already in #33144); all Gobra-verified, in `bitmap_select.go` | bitmap microbenchmarks; filter allocation count per batch; `gobra/verify.sh` |
-| 2 | Bitmap | Storage read path | delete masks via `ShrinkByMask`; search functions and bloom-filter hits fill a bitmap; tombstone chain works on the bitmap; TAE `CompactByBitmap` stops building lists | blockio and readutil benchmarks; TPC-H scan with deletes |
+| 2 | Bitmap | Storage read path | delete masks via `ShrinkByMask`; TAE `CompactByBitmap` stops building lists; `UnionBatch` moves NULLs a word at a time (`OrShifted`); mask loops read owned words directly. Search results stay lists (see "Storage search results stay lists") | shrink, `UnionBatch` and gather microbenchmarks; block read with deletes |
 | 3 | Bitmap | Scan, filter, projection | the selection stays a bitmap from blockio through filter and projection; compaction uses `UnionByMask` | filtered scan benchmark; conversions per batch reach zero |
 | 4 | Bitmap | Expression evaluation | `Eval` takes the bitmap; `evalSelectedRows` gathers and scatters by mask; the `FunctionSelectList` copy goes away | expression benchmarks under partial selection |
 | 5 | Bitmap | Remaining selections | DML operators, join finalize, set operators' `[]uint8` flags, frontend loops; contiguous ranges become window copies | per-operator benchmarks; BVT |
@@ -167,6 +167,28 @@ Every PR follows the same checks:
 - New code allocates its bitmap or RemapList once per owner and frees it once. Tests run the owner on a pool and assert `CurrNB()` returns to zero after `Free`, as the #33144 tests do.
 - Converted call sites assert ascending input under the race build until the list APIs are removed. This assertion is new: `Shrink` and `nulls.FilterInPlaceOrdered` do not check today, so PR 1 adds the check.
 - Unit tests for each package the PR touches, the affected BVT cases, and a before/after benchmark in the PR description.
+
+## Storage search results stay lists
+
+PR 2 measured the storage search chain before converting it, and the search results stay `[]int64`. That covers the PK search functions (`ReadFilterSearchFuncType`), bloom-filter hits, `ApplyTombstones`, and the `ioutil` row loaders.
+
+- **The producers build the list natively.** Sorted searches return a few points or a range. Linear scans and bloom-filter tests append one row per hit, which costs the same as setting one bit.
+- **The consumers gather by list.** The cache row copy, the row-id builder and the TopN loaders take the list. Converting the results to a bitmap would add a conversion at the producer, or a word-wise gather at every consumer.
+- **A mask gather is slower than a gather by an existing list at every density.** Gathering 8192 `int64` rows, with the mask read straight from its words:
+
+| selected rows | `Union(sels)` | `UnionByMask` |
+| --- | --- | --- |
+| 1 | 4 ns | 142 ns |
+| 16 | 8 ns | 197 ns |
+| 256 | 82 ns | 220 ns |
+| 2048 | 634 ns | 973 ns |
+| 4096 | 1.1 µs | 1.9 µs |
+
+The mask loop's `word &= word-1` is a serial dependency, while a list gather's iterations are independent. A mask wins only when it replaces building the list. That is the case for a delete mask, or a predicate result that is already a bitmap, but not for a search result.
+
+- **The tombstone chain stays on the list.** On a list of k hits, each pass costs O(k), and the chain stops as soon as the list is empty. The bitmap form (`GetTombstones`, then AND NOT) always runs every pass.
+
+Decision 1 therefore does not cover storage search results: they are sparse hit lists, and they stay lists.
 
 ## Risks and open questions
 

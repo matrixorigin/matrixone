@@ -85,8 +85,9 @@ func gatherFixedByMask[T any](v, w *Vector, mask *bitmap.Bitmap, rows, out, cnt 
 	dst := toSliceOfLengthNoTypeCheck[T](v, out+cnt)
 	src := toSliceOfLengthNoTypeCheck[T](w, rows)
 	words := maskWords(mask, rows)
+	mr := newMaskReader(mask)
 	for i := 0; i < words; i++ {
-		word := mask.Word(i)
+		word := mr.word(i)
 		if i == words-1 && rows%64 != 0 {
 			word &= ^uint64(0) >> uint(64-rows%64)
 		}
@@ -103,6 +104,31 @@ func gatherFixedByMask[T any](v, w *Vector, mask *bitmap.Bitmap, rows, out, cnt 
 	}
 }
 
+// maskReader reads a selection a word at a time: straight from the words of
+// an owned bitmap, through Word for a read-only view.
+type maskReader struct {
+	mask  *bitmap.Bitmap
+	words []uint64
+}
+
+func newMaskReader(mask *bitmap.Bitmap) maskReader {
+	words := mask.OwnedWords()
+	if len(words) < mask.NumWords() {
+		// Not the shape the invariant promises; read through Word.
+		words = nil
+	}
+	return maskReader{mask: mask, words: words}
+}
+
+// word returns rows 64i..64i+63 of the mask, as mask.Word(i) does, for
+// i < mask.NumWords().
+func (r *maskReader) word(i int) uint64 {
+	if r.words != nil {
+		return r.words[i]
+	}
+	return r.mask.Word(i)
+}
+
 // maskWords is the number of words of mask that cover rows [0, rows).
 func maskWords(mask *bitmap.Bitmap, rows int) int {
 	words := (rows + 63) / 64
@@ -116,8 +142,9 @@ func maskWords(mask *bitmap.Bitmap, rows int) int {
 // mask, a word at a time.
 func forSelectedRows(mask *bitmap.Bitmap, rows int, visit func(r int)) {
 	words := maskWords(mask, rows)
+	mr := newMaskReader(mask)
 	for i := 0; i < words; i++ {
-		word := mask.Word(i)
+		word := mr.word(i)
 		if i == words-1 && rows%64 != 0 {
 			word &= ^uint64(0) >> uint(64-rows%64)
 		}

@@ -122,6 +122,20 @@ func (n *Bitmap) WordsCovering(nbits int) []uint64 {
 	return words
 }
 
+// OwnedWords returns the words of an owned bitmap, for loops that read a
+// selection a word at a time without a call per word; it returns nil for a
+// read-only bitmap, whose words may be shifted or hold stray bits, and the
+// caller then reads through Word. Word i of an owned bitmap is Word(i): the
+// verified invariant (Mem's TailClear) keeps every bit at or beyond Len clear,
+// and words past the slice read as zero. The slice is valid until n is next
+// changed and must not be written.
+func (n *Bitmap) OwnedWords() []uint64 {
+	if n.mp == nil {
+		return nil
+	}
+	return n.data
+}
+
 func (n *Bitmap) ToArray() []uint64 {
 	rows := make([]uint64, 0, n.Count())
 	ToArray(n, &rows)
