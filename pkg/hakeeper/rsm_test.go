@@ -1003,6 +1003,40 @@ func TestLogStartDeliveryUsesCurrentMembership(t *testing.T) {
 	require.Empty(t, rsm.getCommandBatch(store).Data, "ordinary starts are consumed once")
 }
 
+func TestLogBootstrapStartDeliveryChecksLifecycle(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	const store = "bootstrapping-store"
+	start := pb.ScheduleCommand{UUID: store, ServiceType: pb.LogService, Bootstrapping: true,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.StartReplica, InitialMembers: map[uint64]string{2: store},
+			Replica: pb.Replica{UUID: store, ShardID: 1, ReplicaID: 2},
+		}}
+	queued := pb.CommandBatch{Term: 1, Commands: []pb.ScheduleCommand{start}}
+	rsm.state.ScheduleCommands[store] = queued
+	deliver := func() []pb.ScheduleCommand {
+		t.Helper()
+		var batch pb.CommandBatch
+		result := rsm.getCommandBatch(store)
+		require.NoError(t, batch.Unmarshal(result.Data))
+		require.Equal(t, queued, rsm.state.ScheduleCommands[store], "reply preparation must not rewrite the pending command")
+		require.Zero(t, start.ConfigChange.Replica.Epoch)
+		return batch.Commands
+	}
+
+	rsm.state.State = pb.HAKeeperBootstrapCommandsReceived
+	require.Equal(t, []pb.ScheduleCommand{start}, deliver())
+	rsm.state.State = pb.HAKeeperRunning
+	require.Empty(t, deliver())
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 8, Replicas: map[uint64]string{2: store}}
+	confirmed := *start.ConfigChange
+	confirmed.Replica.Epoch = 8
+	reply := start
+	reply.ConfigChange = &confirmed
+	require.Equal(t, []pb.ScheduleCommand{reply}, deliver(), "a known member can still finish starting after bootstrap")
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 9, Replicas: map[uint64]string{3: "replacement"}}
+	require.Empty(t, deliver())
+}
+
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {
 	const (
 		storeID   = "store-1"

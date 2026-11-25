@@ -397,10 +397,10 @@ func (l *store) skippedZombieEpoch(shardID, replicaID uint64) (uint64, bool) {
 
 // A newer local gossip view can correct a stale startup observation. Older
 // views must not let a delayed Start reopen the skipped replica.
-func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persisted bool) bool {
+func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persisted, bootstrap bool) bool {
 	shardID, replicaID := replica.ShardID, replica.ReplicaID
 	epoch, skipped := l.skippedZombieEpoch(shardID, replicaID)
-	if !skipped && replica.Epoch == 0 {
+	if !skipped && replica.Epoch == 0 && !bootstrap {
 		if !persisted {
 			return true
 		}
@@ -419,7 +419,8 @@ func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persiste
 	// A committed heartbeat can confirm an orphan even after quorum is lost.
 	// If local gossip already knows a later configuration, honor that view.
 	// A non-voter can be present at an index where it was absent as a voter.
-	confirmed := replica.Epoch > epoch || nonVoting && replica.Epoch != 0 && replica.Epoch == epoch
+	confirmed := bootstrap && !skipped || replica.Epoch > epoch ||
+		nonVoting && replica.Epoch != 0 && replica.Epoch == epoch
 	registry, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
 		return confirmed

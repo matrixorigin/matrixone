@@ -389,3 +389,94 @@ func TestNonVotingStartReopensDisk(t *testing.T) {
 	require.Equal(t, uint64(2), shards[0].ReplicaID)
 	require.True(t, shards[0].NonVoting)
 }
+
+func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg := getServiceTestConfig()
+	useRecoveryRPCSocket(t, &cfg)
+	cfg.DataDir = t.TempDir()
+	cfg.SnapshotExportDir = filepath.Join(cfg.DataDir, "exported")
+	cfg.FS = vfs.Default
+	cfg.LogDBDisablePrealloc = true
+	cfg.HAKeeperClientConfig.ServiceAddresses = nil
+
+	var service *Service
+	open := func() {
+		t.Helper()
+		var err error
+		service, err = NewService(cfg, newFS(), nil)
+		require.NoError(t, err)
+	}
+	open()
+	t.Cleanup(func() {
+		if service != nil {
+			require.NoError(t, service.Close())
+		}
+	})
+
+	const (
+		control = hakeeper.DefaultHAKeeperShardID
+		shard   = uint64(1)
+		replica = uint64(2)
+	)
+	require.NoError(t, service.store.startHAKeeperReplica(1, map[uint64]string{1: cfg.UUID}, false))
+	var term uint64
+	hasLeader := func() bool {
+		leader, observed, valid, err := service.store.nh.GetLeaderID(control)
+		term = observed
+		return err == nil && valid && leader == 1
+	}
+	require.Eventually(t, hasLeader, 8*time.Second, 25*time.Millisecond)
+	require.NoError(t, service.store.setInitialClusterInfo(1, 1, 1, 100, nil, nil))
+
+	members := map[uint64]string{replica: cfg.UUID}
+	start := pb.ScheduleCommand{
+		UUID: cfg.UUID, ServiceType: pb.LogService, Bootstrapping: true,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.StartReplica, InitialMembers: members,
+			Replica: pb.Replica{UUID: cfg.UUID, ShardID: shard, ReplicaID: replica},
+		},
+	}
+	session := service.store.nh.GetNoOPSession(control)
+	_, err := service.store.nh.SyncPropose(ctx, session, hakeeper.GetUpdateCommandsCmd(term, []pb.ScheduleCommand{start}))
+	require.NoError(t, err)
+
+	// Leave the files produced by Dragonboat before openDataReplica can
+	// save the new replica in MatrixOne's metadata.
+	require.NoError(t, service.store.nh.StartReplica(members, false, newStateMachine, getRaftConfig(shard, replica)))
+	require.Equal(t, int64(-1), service.store.getReplicaID(shard))
+	require.NoError(t, service.Close())
+	service = nil
+	open()
+	require.Eventually(t, hasLeader, 8*time.Second, 25*time.Millisecond)
+	require.True(t, service.store.nh.HasNodeInfo(shard, replica))
+	require.Equal(t, int64(-1), service.store.getReplicaID(shard))
+
+	ordinary := start
+	ordinary.Bootstrapping = false
+	service.handleCommands([]pb.ScheduleCommand{ordinary})
+	_, err = service.store.nh.GetNodeUser(shard)
+	require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+
+	client, err := NewLogHAKeeperClient(ctx, cfg.UUID, HAKeeperClientConfig{
+		ServiceAddresses: []string{cfg.LogServiceServiceAddr()},
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, client.Close()) }()
+	batch, err := client.SendLogHeartbeat(ctx, service.store.getHeartbeatMessage())
+	require.NoError(t, err)
+	require.Equal(t, []pb.ScheduleCommand{start}, batch.Commands)
+	service.handleCommands(batch.Commands)
+	require.Equal(t, int64(replica), service.store.getReplicaID(shard))
+
+	require.Eventually(t, func() bool {
+		attempt, stop := context.WithTimeout(ctx, 300*time.Millisecond)
+		defer stop()
+		_, err := service.store.nh.SyncPropose(attempt, service.store.nh.GetNoOPSession(shard), getTestUserEntry())
+		return err == nil
+	}, 8*time.Second, 25*time.Millisecond)
+	batch, err = client.SendLogHeartbeat(ctx, service.store.getHeartbeatMessage())
+	require.NoError(t, err)
+	require.Empty(t, batch.Commands, "the retained Start is acknowledged by the recovered replica")
+}

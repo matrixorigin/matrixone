@@ -104,7 +104,10 @@ func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	shardID, replicaID := change.Replica.ShardID, change.Replica.ReplicaID
 	nonVoting := change.ChangeType == pb.StartNonVotingReplica
 	persisted := s.store.nh.HasNodeInfo(shardID, replicaID)
-	if !s.store.canStartScheduledReplica(change.Replica, nonVoting, persisted) {
+	bootstrap := cmd.Bootstrapping && cmd.ServiceType == pb.LogService && !nonVoting &&
+		change.Replica.Epoch == 0 && shardID != hakeeper.DefaultHAKeeperShardID && replicaID != 0 &&
+		cmd.UUID == s.ID() && change.Replica.UUID == cmd.UUID && change.InitialMembers[replicaID] == cmd.UUID
+	if !s.store.canStartScheduledReplica(change.Replica, nonVoting, persisted, bootstrap) {
 		s.store.runtime.Logger().Warn("ignoring Start without current replica membership",
 			zap.Uint64("shardID", shardID), zap.Uint64("replicaID", replicaID))
 		return

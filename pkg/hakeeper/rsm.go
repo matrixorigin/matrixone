@@ -501,13 +501,11 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 			if applied {
 				continue
 			}
-			candidate, deliverable := s.logStartForDelivery(cmd)
-			if !deliverable {
-				continue
-			}
-			deliver = append(deliver, candidate)
 			if retryable {
 				pending = append(pending, cmd)
+			}
+			if candidate, ok := s.logStartForDelivery(cmd); ok {
+				deliver = append(deliver, candidate)
 			}
 		}
 
@@ -530,27 +528,25 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 
 }
 
-// logStartForDelivery binds an ordinary Start to the membership seen by
-// this replicated heartbeat. The epoch is carried only in the reply.
+// logStartForDelivery binds a Start reply to known membership or to an
+// active initial bootstrap. It leaves the retained command unchanged.
 func (s *stateMachine) logStartForDelivery(cmd pb.ScheduleCommand) (pb.ScheduleCommand, bool) {
 	change := cmd.ConfigChange
-	if cmd.ServiceType != pb.LogService || cmd.Bootstrapping || change == nil {
+	if cmd.ServiceType != pb.LogService || change == nil {
+		return cmd, true
+	}
+	if change.ChangeType != pb.StartReplica && change.ChangeType != pb.StartNonVotingReplica {
 		return cmd, true
 	}
 	shard, known := s.state.LogState.Shards[change.Replica.ShardID]
 	if !known || shard.Epoch == 0 {
-		return cmd, true
+		return cmd, !cmd.Bootstrapping || s.state.State == pb.HAKeeperBootstrapCommandsReceived
 	}
-	var members map[uint64]string
-	switch change.ChangeType {
-	case pb.StartReplica:
-		members = shard.Replicas
-	case pb.StartNonVotingReplica:
+	members := shard.Replicas
+	if change.ChangeType == pb.StartNonVotingReplica {
 		members = shard.NonVotingReplicas
-	default:
-		return cmd, true
 	}
-	if members[change.Replica.ReplicaID] != cmd.UUID {
+	if target, ok := members[change.Replica.ReplicaID]; !ok || target != cmd.UUID {
 		return cmd, false
 	}
 	confirmed := *change
