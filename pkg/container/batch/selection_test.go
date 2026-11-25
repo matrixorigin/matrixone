@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -207,5 +208,89 @@ func TestBatchReleasesFreeOwnSelection(t *testing.T) {
 			require.False(t, bat.HoldsSelectionMemory())
 			require.Zero(t, mp.CurrNB())
 		})
+	}
+}
+
+// Operations that read or rewrite physical rows as the logical rows reject a
+// selected batch on either side and leave it unchanged: the selection would
+
+// Operations that read or rewrite physical rows as the logical rows reject a
+// selected batch on either side and leave it unchanged: the selection would
+// go stale or the row count would include rows it excludes. One-batch
+// operations still work on an unselected batch.
+func TestBatchRowOpsRejectSelectedBatch(t *testing.T) {
+	ctx := context.Background()
+	ops := map[string]func(dst, src *Batch, mask *bitmap.Bitmap, mp *mpool.MPool) error{
+		"Shrink": func(dst, _ *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error { return dst.Shrink([]int64{0}, false, mp) },
+		"ShrinkByMask": func(dst, _ *Batch, mask *bitmap.Bitmap, mp *mpool.MPool) error {
+			return dst.ShrinkByMask(mask, false, 0, mp)
+		},
+		"Shuffle":     func(dst, _ *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error { return dst.Shuffle([]int64{1, 0}, mp) },
+		"Union":       func(dst, src *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error { return dst.Union(src, []int64{0}, mp) },
+		"UnionWindow": func(dst, src *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error { return dst.UnionWindow(src, 0, 2, mp) },
+		"UnionOne":    func(dst, src *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error { return dst.UnionOne(src, 0, mp) },
+		"CloneTo":     func(dst, src *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error { return src.CloneTo(dst, mp) },
+		"CloneSelectedColumnsTo": func(dst, src *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error {
+			return src.CloneSelectedColumnsTo([]int{0}, dst, mp)
+		},
+		"Append": func(dst, src *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error {
+			_, err := dst.Append(ctx, mp, src)
+			return err
+		},
+		"AppendWithCopy": func(dst, src *Batch, _ *bitmap.Bitmap, mp *mpool.MPool) error {
+			_, err := dst.AppendWithCopy(ctx, mp, src)
+			return err
+		},
+	}
+	oneBatch := map[string]bool{"Shrink": true, "ShrinkByMask": true, "Shuffle": true}
+	for name, op := range ops {
+		for _, side := range []string{"dst", "src"} {
+			t.Run(name+"/"+side, func(t *testing.T) {
+				// Each case has its own pool, so a failure cannot leak into
+				// the next case's accounting.
+				mp := mpool.MustNewZero()
+				newBatch := func(selected bool) *Batch {
+					bat := NewWithSize(1)
+					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+					require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30, 40}, nil, mp))
+					bat.SetRowCount(4)
+					if selected {
+						sel, err := bat.OwnSelection(mp, 4)
+						require.NoError(t, err)
+						sel.AddMany([]uint64{1, 3})
+						bat.SetSelection(sel)
+					}
+					return bat
+				}
+				var mask bitmap.Bitmap
+				mask.Init(mp)
+				require.NoError(t, mask.InitWithSize(4, mp))
+				mask.Add(1)
+				dst, src := newBatch(side == "dst"), newBatch(side == "src")
+				defer func() {
+					dst.Clean(mp)
+					src.Clean(mp)
+					mask.Free()
+					require.Zero(t, mp.CurrNB())
+				}()
+
+				err := op(dst, src, &mask, mp)
+				if oneBatch[name] && side == "src" {
+					// A one-batch operation only reads its unselected receiver.
+					require.NoError(t, err)
+					return
+				}
+				selected := dst
+				if side == "src" {
+					selected = src
+				}
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "selected batch requires compacted rows")
+				require.True(t, selected.HasSelection())
+				require.Equal(t, 2, selected.RowCount())
+				require.Equal(t, 4, selected.Vecs[0].Length())
+				require.Equal(t, []int64{1, 3}, selected.SelectionRows(nil))
+			})
+		}
 	}
 }

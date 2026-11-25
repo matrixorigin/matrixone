@@ -197,3 +197,16 @@ func SelectionMaskOf(sel *bitmap.Bitmap, physicalRows int, mask []bool) []bool {
 func errSelectedBatch() error {
 	return moerr.NewInternalErrorNoCtx("selected batch reached a boundary that requires compacted rows")
 }
+
+// requireCompacted rejects a selected batch in an operation that reads or
+// rewrites physical rows as if they were the logical rows. Such an operation
+// would keep a stale selection or count rows the selection excludes, so it
+// fails loudly instead; the caller compacts first (CompactInto).
+func requireCompacted(op string, bats ...*Batch) error {
+	for _, bat := range bats {
+		if bat.HasSelection() {
+			return moerr.NewInternalErrorNoCtxf("batch %s: selected batch requires compacted rows", op)
+		}
+	}
+	return nil
+}

@@ -1247,6 +1247,9 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 }
 
 func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	if err := requireCompacted("ShrinkByMask", bat); err != nil {
+		return err
+	}
 	if !negate {
 		if sels.Count() == bat.rowCount {
 			return nil
@@ -1268,6 +1271,9 @@ func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, 
 }
 
 func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	if err := requireCompacted("Shrink", bat); err != nil {
+		return err
+	}
 	if !negate {
 		if len(sels) == bat.rowCount {
 			return nil
@@ -1287,6 +1293,9 @@ func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
+	if err := requireCompacted("Shuffle", bat); err != nil {
+		return err
+	}
 	if len(sels) > 0 {
 		mp := make(map[*vector.Vector]uint8)
 		for _, vec := range bat.Vecs {
@@ -1563,6 +1572,9 @@ func (bat *Batch) CloneSelectedColumnsTo(
 	toBat *Batch,
 	mp *mpool.MPool,
 ) (err error) {
+	if err = requireCompacted("CloneSelectedColumnsTo", bat, toBat); err != nil {
+		return err
+	}
 	for idx, sourceIdx := range selectCols {
 		toVec := toBat.Vecs[idx]
 		toVec.ResetWithNewType(bat.Vecs[sourceIdx].GetType())
@@ -1698,6 +1710,9 @@ func (bat *Batch) Clone(mp *mpool.MPool) (*Batch, error) {
 }
 
 func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
+	if err = requireCompacted("CloneTo", bat, toBat); err != nil {
+		return err
+	}
 	for i, srcVec := range bat.Vecs {
 		toVec := toBat.Vecs[i]
 		toVec.ResetWithNewType(srcVec.GetType())
@@ -1720,6 +1735,9 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 }
 
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
+	if err := requireCompacted("Union", bat, bat2); err != nil {
+		return err
+	}
 	for i, vec := range bat.Vecs {
 		if err := vec.Union(bat2.Vecs[i], sels, m); err != nil {
 			return err
@@ -1732,6 +1750,9 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 }
 
 func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
+	if err := requireCompacted("UnionWindow", bat, bat2); err != nil {
+		return err
+	}
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
 			return err
@@ -1742,6 +1763,9 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 }
 
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
+	if err := requireCompacted("UnionOne", bat, bat2); err != nil {
+		return err
+	}
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionOne(bat2.Vecs[i], pos, m); err != nil {
 			return err
@@ -1764,6 +1788,9 @@ func (bat *Batch) PreExtend(mp *mpool.MPool, rows int) error {
 // ensures that the batch structure is consistent and copies all vector data to the target batch.
 // WARING: this function will cause a memory allocation.
 func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
+	if err := requireCompacted("AppendWithCopy", bat, b); err != nil {
+		return nil, err
+	}
 	if bat == nil {
 		return b.Dup(mp)
 	}
@@ -1785,6 +1812,9 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 }
 
 func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
+	if err := requireCompacted("Append", bat, b); err != nil {
+		return nil, err
+	}
 	if bat == nil {
 		return b, nil
 	}
