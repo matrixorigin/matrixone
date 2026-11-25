@@ -47,6 +47,17 @@ insert into rr_src_29222.t values (3, 3);
 -- @session
 select id, tenant from rr_dst_29222.t order by id;
 
+-- A column-restricting role rule must also follow the remapped SHOW target.
+alter role rr_role_29222 drop rule on table rr_src_29222.t;
+alter role rr_role_29222 add rule "select id from rr_src_29222.t where tenant = 1" on table rr_src_29222.t;
+-- @session:id=3&user=sys:rr_user_29222:rr_role_29222&password=123456
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb":{"rr_src_29222":"rr_dst_29222"}}';
+use rr_src_29222;
+desc t;
+show create table rr_src_29222.t;
+-- @session
+
 -- A collision must fail before an INSERT target is changed. INSERT ... SELECT
 -- carries the rewrite option on its read source, so this exercises the public
 -- parser, remap walk, error propagation, and DML execution path together.

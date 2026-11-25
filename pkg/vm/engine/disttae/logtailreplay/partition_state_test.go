@@ -2265,6 +2265,58 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 	assert.Equal(t, 0, stats.TombstoneObjectCnt)
 }
 
+func TestReplayInsertPayloadLifetime(t *testing.T) {
+	const payload = "long enough to use the varchar area"
+	for _, mode := range []string{"received", "local", "keys-only"} {
+		t.Run(mode, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			packer := types.NewPacker()
+			defer packer.Close()
+			row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(1, 0), pk: 42, serial: []byte(payload)}
+			src := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(src) })
+			input := makeClusterReplayBatch(t, src, []clusterRow{row}, []string{"rowid", "time", "pk", clusterTestCompoundAttr})
+			state := NewPartitionState("", mode == "keys-only", 42, false)
+			if mode == "local" {
+				state.HandleRowsInsert(t.Context(), input, 0, packer, mp)
+			} else {
+				msg := api.Entry{EntryType: api.Entry_Insert, TableName: "t", Bat: input}
+				wire, err := msg.Marshal()
+				require.NoError(t, err)
+				var received api.Entry
+				require.NoError(t, received.Unmarshal(wire))
+				clear(wire)
+				state.HandleLogtailEntry(t.Context(), nil, &received, 0, packer, mp)
+				received.Reset()
+			}
+			// The sender (or the local bootstrap caller) can reuse its buffers.
+			clear(input.Vecs[2].Data)
+			clear(input.Vecs[3].Area)
+			old := state.Copy()
+			stats := objectio.NewObjectStatsWithObjectID(row.rowID.BorrowObjectID(), true, false, false)
+			require.NoError(t, objectio.SetObjectStatsSize(stats, 1000))
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+			obj := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: row.ts, DeleteTime: types.BuildTS(2, 0)}
+			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, obj, false))
+			require.Zero(t, state.rows.Len())
+			require.Zero(t, state.rowPrimaryKeyIndex.Len())
+
+			it := old.NewRowsIter(row.ts, nil, false)
+			defer it.Close()
+			require.True(t, it.Next())
+			entry := it.Entry()
+			if mode == "keys-only" {
+				require.Nil(t, entry.Batch)
+			} else {
+				require.Equal(t, row.pk, vector.GetFixedAtWithTypeCheck[int64](entry.Batch.Vecs[2], int(entry.Offset)))
+				require.Equal(t, payload, entry.Batch.Vecs[3].GetStringAt(int(entry.Offset)))
+			}
+			require.Zero(t, mp.CurrNB(), "replay payload cannot require per-row mpool cleanup")
+		})
+	}
+}
+
 func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

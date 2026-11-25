@@ -205,3 +205,68 @@ func TestCOMStmtMixedIntegerComparisonWidths(t *testing.T) {
 		})
 	}
 }
+
+// An execution's bindings live in the prepared statement and allocate nothing
+// after the first execution. Its retry snapshot is an immutable copy: it does
+// not follow later writes to the parameter storage, and costs a constant
+// number of allocations, not one per parameter.
+func TestPreparedExecutionRetryAndBindingsReuseStatementStorage(t *testing.T) {
+	stmt := &PrepareStmt{Sql: "select ?"}
+	cwft := &TxnComputationWrapper{preparedStmt: stmt}
+	bind := func(n int, base int64) {
+		protocolTypes := make([]byte, 0, 2*n)
+		for range n {
+			protocolTypes = append(protocolTypes, byte(defines.MYSQL_TYPE_LONGLONG), 0)
+		}
+		values := stmt.paramValues.Reset(n)
+		for i := range values {
+			*stmt.paramValues.Ref(i) = plan2.ParamValue{
+				Value: base + int64(i), IsBinaryProtocol: true,
+				RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+			}
+		}
+		cwft.paramVals = values
+		var err error
+		cwft.paramBindings, err = preparedExecutionBindingsInto(
+			context.Background(), &stmt.bindings, values, protocolTypes, nil)
+		require.NoError(t, err)
+	}
+
+	bind(10, 0)
+	retry := cwft.preparedExecutionRetry()
+	require.Len(t, retry.paramVals, 10)
+	require.Len(t, retry.bindings, 10)
+	// Rewriting the execution's storage leaves the snapshot alone.
+	bind(10, 40)
+	got, ok := plan2.AsParamValue(retry.paramVals[3])
+	require.True(t, ok)
+	require.Equal(t, int64(3), got.Value)
+	got, _ = plan2.AsParamValue(cwft.preparedExecutionRetry().paramVals[3])
+	require.Equal(t, int64(43), got.Value)
+
+	bindings := stmt.bindings
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		_, err := preparedExecutionBindingsInto(context.Background(), &stmt.bindings, cwft.paramVals,
+			[]byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0,
+				byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0,
+				byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0,
+				byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0,
+				byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0}, nil)
+		require.NoError(t, err)
+	}), "binding an execution allocates nothing after the first")
+	require.Same(t, &bindings[0], &stmt.bindings[0])
+
+	snapshotAllocs := func(n int) float64 {
+		bind(n, 0)
+		return testing.AllocsPerRun(100, func() { cwft.preparedExecutionRetry() })
+	}
+	few, many := snapshotAllocs(2), snapshotAllocs(100)
+	require.Equal(t, few, many, "a snapshot's cost does not grow with the parameter count")
+	require.LessOrEqual(t, many, float64(4))
+
+	// Without parameters there is no snapshot; without bindings, none either.
+	cwft.paramVals, cwft.paramBindings = nil, nil
+	require.Nil(t, cwft.preparedExecutionRetry())
+	cwft.paramVals = stmt.paramValues.Reset(1)
+	require.Nil(t, cwft.preparedExecutionRetry().bindings)
+}

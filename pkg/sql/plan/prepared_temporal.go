@@ -63,12 +63,9 @@ func (state *preparedSourceBindingState) widenTemporal(position int) {
 }
 
 func temporalParamValue(value any) any {
-	if param, ok := value.(ParamValue); ok {
+	if param, ok := AsParamValue(value); ok {
 		if param.Value == nil {
 			return nil
-		}
-		if param.MaterializedValue != "" {
-			return param.MaterializedValue
 		}
 		value = param.Value
 	}

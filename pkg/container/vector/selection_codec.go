@@ -37,38 +37,11 @@ func writeSelectedRowsByte(w io.Writer, value byte, encoded *[4]byte) error {
 	return types.WriteFull(w, encoded[:1])
 }
 
-const (
-	selectedRowsHasNull = byte(1 << 0)
-	// selectedRowsLegacyGrouping marked ROLLUP sentinel rows from older
-	// writers. Such rows always carry selectedRowsHasNull too, so readers
-	// accept and ignore it; writers never set it.
-	selectedRowsLegacyGrouping = byte(1 << 1)
-	selectedRowsKindShift      = 2
-	selectedRowsKindMask       = byte(3 << selectedRowsKindShift)
-	selectedRowsBinaryShift    = 4
-	selectedRowsBinaryMask     = byte(3 << selectedRowsBinaryShift)
-	selectedRowsSourceShift    = 6
-	selectedRowsSourceMask     = byte(3 << selectedRowsSourceShift)
-
-	selectedRowsRowBinary = byte(1 << 2)
-	selectedRowsRowText   = byte(1 << 3)
-
-	// The kind field (bits 2-3) is retired; readers skip what an older writer
-	// put there.
-	selectedRowsKindUniform    = byte(1)
-	selectedRowsKindRows       = byte(2)
-	selectedRowsRetiredKindMax = byte(4)
-
-	selectedRowsBinaryNone    = byte(0)
-	selectedRowsBinaryUniform = byte(1)
-	selectedRowsBinaryRows    = byte(2)
-	selectedRowsBinaryText    = byte(3)
-
-	// The string-source field (bits 6-7) is retired; readers skip what an
-	// older writer put there.
-	selectedRowsSourceUniform = byte(1)
-	selectedRowsSourceRows    = byte(2)
-)
+// selectedRowsHasNull is the only metadata bit: in the header it says the
+// selection has a NULL, so every row carries a one-byte flag; in a row flag it
+// marks that row NULL. The codec only backs query-scoped spill, which the same
+// process writes and reads, so there is no older writer to accept.
+const selectedRowsHasNull = byte(1 << 0)
 
 // selectedFixedRowsWriter lets an execution-owned buffered writer gather a
 // sparse fixed-width selection without paying one io.Writer call per value.
@@ -101,35 +74,6 @@ func (v *Vector) MarshalRowRangeTo(w io.Writer, start, end int) error {
 	return v.marshalSelectedRowsTo(w, end-start, nil, func(i int) int {
 		return start + i
 	})
-}
-
-// MarshalSelectedFlagsTo is the flag-selection form used by aggregate state.
-// It returns the encoded row count so callers can validate their record plan.
-func (v *Vector) MarshalSelectedFlagsTo(w io.Writer, flags []uint8) (int, error) {
-	count := 0
-	for _, selected := range flags {
-		if selected != 0 {
-			count++
-		}
-	}
-	next := 0
-	lastRequest := -1
-	err := v.marshalSelectedRowsTo(w, count, nil, func(i int) int {
-		// marshalSelectedRowsTo makes multiple ordered passes over the selected
-		// rows (metadata, values, and optionally parameter kinds). Reset the
-		// cursor at the start of each pass without materializing row indexes.
-		if i <= lastRequest {
-			next = 0
-		}
-		for next < len(flags) && flags[next] == 0 {
-			next++
-		}
-		row := next
-		next++
-		lastRequest = i
-		return row
-	})
-	return count, err
 }
 
 func (v *Vector) marshalSelectedRowsTo(
@@ -287,35 +231,8 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 	if err != nil {
 		return err
 	}
-	kindMode := (metadata & selectedRowsKindMask) >> selectedRowsKindShift
-	// The binary-string field (bits 4-5) is retired; writers no longer set it.
-	binaryMode := (metadata & selectedRowsBinaryMask) >> selectedRowsBinaryShift
-	sourceMode := (metadata & selectedRowsSourceMask) >> selectedRowsSourceShift
-	if kindMode > selectedRowsKindRows || binaryMode > selectedRowsBinaryText ||
-		sourceMode > selectedRowsSourceRows {
+	if metadata&^selectedRowsHasNull != 0 {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector metadata")
-	}
-	// The kind field is retired: writers no longer set it, and a value from an
-	// older writer is validated and dropped.
-	if kindMode == selectedRowsKindUniform {
-		encoded, err := types.ReadByte(r)
-		if err != nil {
-			return err
-		}
-		if encoded > selectedRowsRetiredKindMax {
-			return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
-		}
-	}
-	// The string-source field is retired: writers no longer set it, and a
-	// value from an older writer is validated and dropped.
-	if sourceMode == selectedRowsSourceUniform {
-		encoded, err := types.ReadByte(r)
-		if err != nil {
-			return err
-		}
-		if source := types.StringSource(encoded); !source.Valid() || source == types.StringSourceExpression {
-			return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
-		}
 	}
 	fixedWidth := v.typ.TypeSize()
 	if !isVarlen {
@@ -347,10 +264,7 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 		}
 	}
 	v.SetLength(count)
-	// Per-row binary/text flags come only from older writers; they are
-	// validated and dropped.
-	withRowFlags := metadata&(selectedRowsHasNull|selectedRowsLegacyGrouping) != 0 ||
-		binaryMode == selectedRowsBinaryRows
+	withRowFlags := metadata&selectedRowsHasNull != 0
 	if !isVarlen && !withRowFlags {
 		// Fixed-width, non-null data is encoded as one dense byte stream. Decode
 		// it in one operation instead of one length read and one value read per
@@ -371,14 +285,7 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 					return err
 				}
 				rowFlags = encoded[0]
-				if rowFlags&^(selectedRowsHasNull|selectedRowsLegacyGrouping|
-					selectedRowsRowBinary|selectedRowsRowText) != 0 ||
-					rowFlags&selectedRowsHasNull != 0 && metadata&selectedRowsHasNull == 0 ||
-					rowFlags&selectedRowsLegacyGrouping != 0 && metadata&selectedRowsLegacyGrouping == 0 ||
-					rowFlags&selectedRowsRowBinary != 0 && binaryMode != selectedRowsBinaryRows ||
-					rowFlags&selectedRowsRowText != 0 && binaryMode != selectedRowsBinaryRows ||
-					rowFlags&selectedRowsRowBinary != 0 && rowFlags&selectedRowsRowText != 0 ||
-					rowFlags&selectedRowsHasNull != 0 && rowFlags&(selectedRowsRowBinary|selectedRowsRowText) != 0 {
+				if rowFlags&^selectedRowsHasNull != 0 {
 					return moerr.NewInvalidInputNoCtx("invalid selected vector row metadata")
 				}
 			}
@@ -398,28 +305,6 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 			}
 			if err := v.readRawBytesAt(r, row, valueSize, mp); err != nil {
 				return err
-			}
-		}
-	}
-	if kindMode == selectedRowsKindRows {
-		for i := 0; i < count; i++ {
-			encoded, err := types.ReadByte(r)
-			if err != nil {
-				return err
-			}
-			if encoded > selectedRowsRetiredKindMax {
-				return moerr.NewInvalidInputNoCtx("invalid selected vector parameter kind")
-			}
-		}
-	}
-	if sourceMode == selectedRowsSourceRows {
-		for i := 0; i < count; i++ {
-			encoded, err := types.ReadByte(r)
-			if err != nil {
-				return err
-			}
-			if !types.StringSource(encoded).Valid() {
-				return moerr.NewInvalidInputNoCtx("invalid selected vector string source")
 			}
 		}
 	}
