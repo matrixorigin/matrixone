@@ -109,7 +109,9 @@ func issue25590MakeRelayBatch(
 		if r.origin != nil {
 			var buf bytes.Buffer
 			var err error
-			val, err = r.origin.MarshalBinaryWithBufferAndNames(&buf, true, issue25590TailNames(r.origin))
+			// Written without names: the recognizer locates the stats
+			// column from the writer's fixed layout, never from the wire.
+			val, err = r.origin.MarshalBinaryWithBuffer(&buf, true)
 			require.NoError(t, err)
 		}
 		require.NoError(t, vector.AppendBytes(
@@ -117,19 +119,6 @@ func issue25590MakeRelayBatch(
 	}
 	out.SetRowCount(out.Vecs[0].Length())
 	return out
-}
-
-// issue25590TailNames returns the names the writer writes into a tail of
-// origin's layout (addBatchToOutput): the S3 result batches are named, any
-// other layout carries no names.
-func issue25590TailNames(origin *batch.Batch) []string {
-	switch {
-	case len(origin.Vecs) == 2 && origin.Vecs[1].GetType().Oid == types.T_binary:
-		return colexec.CNS3ResultAttrs
-	case len(origin.Vecs) == 1 && origin.Vecs[0].GetType().Oid == types.T_binary:
-		return colexec.CNS3TombstoneResultAttrs
-	}
-	return nil
 }
 
 // TestIssue25590RelayS3InfoNameExtraction pins the r23 intake

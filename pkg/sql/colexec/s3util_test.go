@@ -602,3 +602,20 @@ func TestGetSharedFSFromProc(t *testing.T) {
 		require.Nil(t, fs)
 	}
 }
+
+// TestRelayedDeleteAttrs pins that a relayed delete batch is named by its
+// layout: a leading rowid column is a row delete, anything else the
+// tombstone object stats batch.
+func TestRelayedDeleteAttrs(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	rows := batch.NewWithSize(2)
+	rows.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	rows.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
+	defer rows.Clean(mp)
+	require.Equal(t, DeleteRowsAttrs, RelayedDeleteAttrs(rows))
+
+	stats := AllocCNS3ResultBat(true, mp)
+	defer stats.Clean(mp)
+	require.Equal(t, CNS3TombstoneResultAttrs, RelayedDeleteAttrs(stats))
+}

@@ -458,7 +458,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 // identify the layouts by name. Shared; do not modify.
 var (
 	// DelBatchAttrs names makeDelBatch's row-delete batch.
-	DelBatchAttrs = []string{catalog.Row_ID, "pk"}
+	DelBatchAttrs = colexec.DeleteRowsAttrs
 	// TombstoneObjectStatsAttrs names a batch of CN-flushed tombstone
 	// object stats.
 	TombstoneObjectStatsAttrs = []string{catalog.ObjectMeta_ObjectStats}

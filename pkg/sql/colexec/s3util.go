@@ -618,7 +618,20 @@ func (w *CNS3Writer) FillBlockInfoBat(mp *mpool.MPool) (*batch.Batch, error) {
 var (
 	CNS3ResultAttrs          = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
 	CNS3TombstoneResultAttrs = []string{catalog.ObjectMeta_ObjectStats}
+	// DeleteRowsAttrs names a row-delete batch (rowid, pk).
+	DeleteRowsAttrs = []string{catalog.Row_ID, "pk"}
 )
+
+// RelayedDeleteAttrs names a delete batch decoded from a relay blob. Its
+// producer wrote either a row-delete batch (leading rowid column) or a
+// tombstone object-stats batch; the layout tells which. Names an older CN
+// wrote into the blob are never consulted.
+func RelayedDeleteAttrs(bat *batch.Batch) []string {
+	if len(bat.Vecs) > 0 && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		return DeleteRowsAttrs
+	}
+	return CNS3TombstoneResultAttrs
+}
 
 func AllocCNS3ResultBat(
 	isTombstone bool,

@@ -57,7 +57,7 @@ const (
 )
 
 var (
-	DeleteBatchAttrs = []string{catalog.Row_ID, "pk"}
+	DeleteBatchAttrs = colexec.DeleteRowsAttrs
 )
 
 type deleteBlockData struct {

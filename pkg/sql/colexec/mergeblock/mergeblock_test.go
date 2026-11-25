@@ -196,10 +196,9 @@ func makeLegacyBlockInfoBat(
 func newTestArgument() *MergeBlock {
 	return &MergeBlock{
 		container: Container{
-			source:   &mockRelation{},
-			mp:       make(map[int]*batch.Batch),
-			mp2:      make(map[int][]*batch.Batch),
-			mp2Attrs: make(map[int][][]string),
+			source: &mockRelation{},
+			mp:     make(map[int]*batch.Batch),
+			mp2:    make(map[int][]*batch.Batch),
 		},
 		AddAffectedRows: true,
 	}

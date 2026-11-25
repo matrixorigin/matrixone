@@ -41,19 +41,20 @@ type Container struct {
 	// Notice that batches in mp should be free, since the memory of these batches be allocated from mpool.
 	mp map[int]*batch.Batch
 	// mp2 is used to store the normal data batches
-	mp2 map[int][]*batch.Batch
-	// mp2Attrs names the columns of each batch in mp2, read from its
-	// encoding (a batch carries no names).
-	mp2Attrs     map[int][][]string
+	mp2          map[int][]*batch.Batch
 	source       engine.Relation
 	affectedRows uint64
 }
 
 type MergeBlock struct {
 	AddAffectedRows bool
-	Engine          engine.Engine
-	Ref             *plan.ObjectRef
-	container       Container
+	// Attrs names the columns of the legacy in-memory data batches (mp2),
+	// from the plan's table def as the insert producer names them. Names
+	// written on the wire are never read.
+	Attrs     []string
+	Engine    engine.Engine
+	Ref       *plan.ObjectRef
+	container Container
 
 	vm.OperatorBase
 }
@@ -90,6 +91,11 @@ func (mergeBlock *MergeBlock) WithObjectRef(ref *plan.ObjectRef) *MergeBlock {
 
 func (mergeBlock *MergeBlock) WithEngine(eng engine.Engine) *MergeBlock {
 	mergeBlock.Engine = eng
+	return mergeBlock
+}
+
+func (mergeBlock *MergeBlock) WithAttrs(attrs []string) *MergeBlock {
+	mergeBlock.Attrs = attrs
 	return mergeBlock
 }
 
@@ -310,18 +316,10 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, ana
 			if err := newBat.UnmarshalBinary(blob); err != nil {
 				return err
 			}
-			attrs, err := batch.WireNames(blob)
-			if err != nil {
-				return err
-			}
 			if mergeBlock.AddAffectedRows {
 				affectedRowsInc += uint64(newBat.RowCount())
 			}
 			mergeBlock.container.mp2[idx] = append(mergeBlock.container.mp2[idx], newBat)
-			if mergeBlock.container.mp2Attrs == nil {
-				mergeBlock.container.mp2Attrs = make(map[int][][]string)
-			}
-			mergeBlock.container.mp2Attrs[idx] = append(mergeBlock.container.mp2Attrs[idx], attrs)
 		}
 	}
 
@@ -352,7 +350,6 @@ func (mergeBlock *MergeBlock) resetMp(proc *process.Process) {
 			bat.Clean(proc.GetMPool())
 		}
 		mergeBlock.container.mp2[i] = mergeBlock.container.mp2[i][:0]
-		mergeBlock.container.mp2Attrs[i] = mergeBlock.container.mp2Attrs[i][:0]
 	}
 }
 
@@ -368,7 +365,6 @@ func (mergeBlock *MergeBlock) cleanMp(proc *process.Process) {
 		}
 	}
 	mergeBlock.container.mp2 = nil
-	mergeBlock.container.mp2Attrs = nil
 }
 
 func (mergeBlock *MergeBlock) GetAffectedRows() uint64 {

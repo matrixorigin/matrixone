@@ -818,6 +818,11 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 // Batch wire format, without decoding the vectors. It is empty unless the
 // writer used MarshalBinaryWithNames (or is an older version, which always
 // wrote names).
+//
+// It exists for tests that pin what this version writes for older CNs.
+// Production code must not call it: a decoder skips the names, and a
+// consumer takes column names from its plan or its producer's fixed layout,
+// never from the wire.
 func WireNames(data []byte) ([]string, error) {
 	cursor := batchUnmarshalCursor{data: data}
 	if _, err := cursor.readInt64(); err != nil {

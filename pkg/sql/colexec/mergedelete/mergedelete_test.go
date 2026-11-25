@@ -59,12 +59,17 @@ func TestOpType(t *testing.T) {
 func TestMergeDelete(t *testing.T) {
 	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
+	blkId0 := objectio.NewBlockid(objectio.NewSegmentid(), 0, 0)
 	metaLocBat0 := &batch.Batch{
 		Vecs: []*vector.Vector{
-			testutil.MakeInt64Vector([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, nil, proc.Mp()),
+			testutil.MakeRowIdVector([]types.Rowid{
+				objectio.NewRowid(blkId0, 0),
+				objectio.NewRowid(blkId0, 1),
+			}, nil, proc.Mp()),
 		},
 	}
-	bytes, err := metaLocBat0.MarshalBinaryWithNames([]string{catalog.BlockMetaOffset})
+	// Names an older CN wrote on the wire are skipped, never used.
+	bytes, err := metaLocBat0.MarshalBinaryWithNames([]string{"wire-name-ignored"})
 	require.Nil(t, err)
 
 	vcu32, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool())
@@ -153,8 +158,9 @@ func TestMergeDelete(t *testing.T) {
 	_, err = vm.Exec(&argument1, proc)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), argument1.GetAffectedRows())
-	// The blob's own wire names reach Delete: a batch carries none.
-	require.Equal(t, [][]string{{catalog.BlockMetaOffset}},
+	// Delete is named from the blob's layout (a row delete), not from the
+	// names written on the wire.
+	require.Equal(t, [][]string{colexec.DeleteRowsAttrs},
 		argument1.ctr.delSource.(*mockRelation).attrs)
 
 	argument1.Reset(proc, false, err)

@@ -43,6 +43,8 @@
 package multi_update
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -50,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 )
 
 // ProducesRemotePersistedObjectMetadata is the mode-authenticated
@@ -118,13 +121,13 @@ func TryExtractRelayS3InfoObjectNames(
 				// this exact marker for their metadata record.
 				continue
 			}
-			rowNames, tailErr := relayTailObjectNames(inner, mp, batData[i].GetByteSlice(batArea))
+			rowNames, tailErr := relayTailObjectNames(inner, mp, batData[i].GetByteSlice(batArea), colexec.CNS3TombstoneResultAttrs)
 			if tailErr != nil {
 				return nil, false, tailErr
 			}
 			names, seen = mergeNames(names, seen, rowNames)
 		case actionInsert:
-			rowNames, tailErr := relayTailObjectNames(inner, mp, batData[i].GetByteSlice(batArea))
+			rowNames, tailErr := relayTailObjectNames(inner, mp, batData[i].GetByteSlice(batArea), colexec.CNS3ResultAttrs)
 			if tailErr != nil {
 				return nil, false, tailErr
 			}
@@ -144,7 +147,7 @@ func TryExtractRelayS3InfoObjectNames(
 // prove the objects the row claims, so ownership adoption fails
 // closed on it instead of adopting a subset.
 func relayTailObjectNames(
-	inner *batch.Batch, mp *mpool.MPool, blob []byte,
+	inner *batch.Batch, mp *mpool.MPool, blob []byte, attrs []string,
 ) ([]string, error) {
 	if len(blob) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx(
@@ -154,20 +157,10 @@ func relayTailObjectNames(
 	if err := inner.UnmarshalBinaryWithAnyMp(blob, mp); err != nil {
 		return nil, err
 	}
-	// The metadata batch is self-describing: its producer writes the
-	// column names into the blob (MarshalBinaryWithBufferAndNames).
-	innerNames, err := batch.WireNames(blob)
-	if err != nil {
-		return nil, err
-	}
-	statsVec := -1
-	for j, attr := range innerNames {
-		if attr == catalog.ObjectMeta_ObjectStats && j < len(inner.Vecs) {
-			statsVec = j
-			break
-		}
-	}
-	if statsVec < 0 || inner.Vecs[statsVec].Length() == 0 {
+	// The writer's fixed layout for this action (attrs) places the stats
+	// column; names written on the wire are never read.
+	statsVec := slices.Index(attrs, catalog.ObjectMeta_ObjectStats)
+	if statsVec < 0 || statsVec >= len(inner.Vecs) || inner.Vecs[statsVec].Length() == 0 {
 		return nil, moerr.NewInternalErrorNoCtx(
 			"issue #25590: a relayed ownership row's metadata batch carries no object-stats column")
 	}

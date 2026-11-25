@@ -38,6 +38,8 @@
 package deletion
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -122,20 +124,10 @@ func TryExtractRemoteDeleteObjectNames(
 		if err := inner.UnmarshalBinaryWithAnyMp(blob, mp); err != nil {
 			return nil, false, err
 		}
-		// The stats batch is self-describing: its producer writes the
-		// column names into the blob (MarshalBinaryWithNames).
-		innerNames, err := batch.WireNames(blob)
-		if err != nil {
-			return nil, false, err
-		}
-		statsVec := -1
-		for j, attr := range innerNames {
-			if attr == catalog.ObjectMeta_ObjectStats && j < len(inner.Vecs) {
-				statsVec = j
-				break
-			}
-		}
-		if statsVec < 0 || inner.Vecs[statsVec].Length() == 0 {
+		// The producer's fixed layout (TombstoneObjectStatsAttrs) places
+		// the stats column; names written on the wire are never read.
+		statsVec := slices.Index(TombstoneObjectStatsAttrs, catalog.ObjectMeta_ObjectStats)
+		if statsVec >= len(inner.Vecs) || inner.Vecs[statsVec].Length() == 0 {
 			return nil, false, moerr.NewInternalErrorNoCtx(
 				"issue #25590: a flushed tombstone row's stats batch carries no object-stats column")
 		}

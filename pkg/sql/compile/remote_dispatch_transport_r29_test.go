@@ -186,21 +186,22 @@ func r29NewObjectStats(t *testing.T) (objectio.ObjectStats, string) {
 	return *stats, stats.ObjectName().String()
 }
 
-// r29StatsTailBatch marshals the writer's own result batch shape
-// ([BlockMeta_BlockInfo, ObjectMeta_ObjectStats], one serialized
-// ObjectStats row per persisted object) exactly as the recording side
-// serializes an embedded metadata tail.
-func r29StatsTailBytes(t *testing.T, mp *mpool.MPool, stats []objectio.ObjectStats) []byte {
+// r29StatsTailBytes marshals the writer's own result batch shape (data:
+// [BlockMeta_BlockInfo, ObjectMeta_ObjectStats]; tombstone:
+// [ObjectMeta_ObjectStats]), one serialized ObjectStats row per persisted
+// object. It writes no names: the recognizers take the stats column from
+// the producer's fixed layout, never from the wire.
+func r29StatsTailBytes(t *testing.T, mp *mpool.MPool, isTombstone bool, stats []objectio.ObjectStats) []byte {
 	t.Helper()
-	inner := colexec.AllocCNS3ResultBat(false, mp)
+	inner := colexec.AllocCNS3ResultBat(isTombstone, mp)
 	defer inner.Clean(mp)
 	for i := range stats {
 		require.NoError(t, colexec.ExpandObjectStatsToBatch(
-			mp, false, inner, true, stats[i]))
+			mp, isTombstone, inner, true, stats[i]))
 	}
-	inner.SetRowCount(inner.Vecs[1].Length())
+	inner.SetRowCount(inner.Vecs[len(inner.Vecs)-1].Length())
 	var buf bytes.Buffer
-	data, err := inner.MarshalBinaryWithBufferAndNames(&buf, true, colexec.CNS3ResultAttrs)
+	data, err := inner.MarshalBinaryWithBuffer(&buf, true)
 	require.NoError(t, err)
 	return data
 }
@@ -225,7 +226,7 @@ func r29RelayBatch(
 		if malformed {
 			tail = []byte("definitely not a marshaled metadata batch")
 		} else {
-			tail = r29StatsTailBytes(t, mp, []objectio.ObjectStats{stats})
+			tail = r29StatsTailBytes(t, mp, false, []objectio.ObjectStats{stats})
 		}
 		require.NoError(t, vector.AppendFixed(out.Vecs[0], uint8(0), false, mp))
 		require.NoError(t, vector.AppendFixed(out.Vecs[1], uint64(7), false, mp))
@@ -287,7 +288,7 @@ func r29DeleteBatch(
 		names = append(names, name)
 		require.NoError(t, vector.AppendBytes(
 			out.Vecs[0], []byte("segment"), false, mp))
-		tail := r29StatsTailBytes(t, mp, []objectio.ObjectStats{stats})
+		tail := r29StatsTailBytes(t, mp, true, []objectio.ObjectStats{stats})
 		if malformed {
 			tail = []byte("definitely not a marshaled stats batch")
 		}

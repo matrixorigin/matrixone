@@ -120,24 +120,27 @@ func TestIssue25590DeletionRelayObjectNames(t *testing.T) {
 	require.Error(t, err,
 		"a flushed tombstone row whose stats batch cannot decode rejects the ack fail-closed")
 
-	// A stats blob written without names cannot prove its object-stats
-	// column: the row fails closed rather than adopting a guess.
-	unnamedBytes, err := statsBat.MarshalBinary()
-	require.NoError(t, err)
-	unnamed := makeDelRemoteBatch(mp)
-	unnamed.Vecs[4] = vector.NewVec(types.T_uint64.ToType(), mp)
-	defer func() {
-		unnamed.Vecs[4].Free(mp)
-		unnamed.Vecs[4] = nil
-		unnamed.Clean(mp)
-	}()
-	require.NoError(t, vector.AppendBytes(unnamed.Vecs[0], []byte("obj-id"), false, mp))
-	require.NoError(t, vector.AppendBytes(unnamed.Vecs[1], unnamedBytes, false, mp))
-	require.NoError(t, vector.AppendFixed(unnamed.Vecs[2], int8(FlushDeltaLoc), false, mp))
-	require.NoError(t, vector.AppendFixed(unnamed.Vecs[3], int32(0), false, mp))
-	unnamed.SetRowCount(1)
-	_, _, err = TryExtractRemoteDeleteObjectNames(unnamed, mp)
-	require.Error(t, err)
+	// The stats column comes from the producer's fixed layout, never from
+	// names on the wire: a blob with no names, or with misleading ones,
+	// adopts the same objects.
+	for _, wireNames := range [][]string{nil, {"not-object-stats"}} {
+		statsOnlyBytes, err := statsBat.MarshalBinaryWithNames(wireNames)
+		require.NoError(t, err)
+		statsOnly := makeDelRemoteBatch(mp)
+		statsOnly.Vecs[4] = vector.NewVec(types.T_uint64.ToType(), mp)
+		require.NoError(t, vector.AppendBytes(statsOnly.Vecs[0], []byte("obj-id"), false, mp))
+		require.NoError(t, vector.AppendBytes(statsOnly.Vecs[1], statsOnlyBytes, false, mp))
+		require.NoError(t, vector.AppendFixed(statsOnly.Vecs[2], int8(FlushDeltaLoc), false, mp))
+		require.NoError(t, vector.AppendFixed(statsOnly.Vecs[3], int32(0), false, mp))
+		statsOnly.SetRowCount(1)
+		got, ok, err := TryExtractRemoteDeleteObjectNames(statsOnly, mp)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, want, got, "wire names %v", wireNames)
+		statsOnly.Vecs[4].Free(mp)
+		statsOnly.Vecs[4] = nil
+		statsOnly.Clean(mp)
+	}
 
 	// A foreign layout is ordinary data rows: a batch carries no names, so
 	// the producer's vector types are what identify its rows.

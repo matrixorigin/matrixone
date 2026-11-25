@@ -345,12 +345,9 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 				return input, err
 			}
-			// The relayed batch is self-describing: its producer writes
-			// the column names into the blob.
-			attrs, err := batch.WireNames(blob)
-			if err != nil {
-				return input, err
-			}
+			// The blob's layout names it; names written on the wire (by
+			// an older CN) are never read.
+			attrs := colexec.RelayedDeleteAttrs(batBufs[actionDelete])
 			// For REPLACE INTO, we don't count DELETE rows in affected rows
 			// REPLACE INTO should only return the number of INSERT rows
 			name := nameData[i].UnsafeGetString(nameArea)
@@ -379,10 +376,8 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionInsert].UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 				return input, err
 			}
-			attrs, err := batch.WireNames(blob)
-			if err != nil {
-				return input, err
-			}
+			// The writer relays only S3 block-info batches for inserts.
+			attrs := colexec.CNS3ResultAttrs
 
 			// For REPLACE INTO, we need to count INSERT rows based on the actual action
 			// Always count INSERT rows for main table, regardless of update.ctr.action

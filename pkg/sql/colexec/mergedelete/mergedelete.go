@@ -94,12 +94,9 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 		if err := bat.UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 			return input, err
 		}
-		// The deletion producer writes the blob's column names into it
-		// (row delete or tombstone object stats); they tell Delete which.
-		attrs, err := batch.WireNames(blob)
-		if err != nil {
-			return input, err
-		}
+		// A row delete or tombstone object stats batch; its layout tells
+		// Delete which. Names written on the wire are never read.
+		attrs := colexec.RelayedDeleteAttrs(bat)
 		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, attrs, name)
 		if err != nil {
 			return input, err
