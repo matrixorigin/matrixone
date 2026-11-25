@@ -149,6 +149,9 @@ func constructCreateTableSQL(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
+		if hasExplicitUTF8MB4Bin(&col.Typ) {
+			buf.WriteString(" CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+		}
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {

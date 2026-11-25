@@ -148,6 +148,25 @@ select * from child_cascade order by id;
 20  ¦  11  ¦  b  𝄀
 30  ¦  2  ¦  c  𝄀
 40  ¦  11  ¦  a
+create table parent_text_cascade (
+id varchar(10) character set utf8mb4 collate utf8mb4_bin primary key
+);
+create table child_text_cascade (
+id int primary key,
+parent_id varchar(10),
+constraint fk_parent_text_cascade foreign key (parent_id)
+references parent_text_cascade(id) on update cascade
+);
+insert into parent_text_cascade values ('old');
+insert into child_text_cascade values (1, 'old');
+begin;
+update parent_text_cascade set id = 'new' where id = 'old';
+commit;
+select p.id, c.parent_id from parent_text_cascade p cross join child_text_cascade c;
+➤ id[12,-1,0]  ¦  parent_id[12,-1,0]  𝄀
+new  ¦  new
+drop table child_text_cascade;
+drop table parent_text_cascade;
 create table parent_set_null (
 id int primary key
 );
