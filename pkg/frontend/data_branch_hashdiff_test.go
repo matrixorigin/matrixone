@@ -718,8 +718,12 @@ func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 		context.Background(),
 		ses.proc.Mp(),
 		&tblStuff,
-		[]engine.ChangesHandle{&stubEngineChangesHandle{
-			responses: []stubEngineChangesHandleResponse{{data: baseBat}},
+		// The current base relation's handle projects its base-layout rows.
+		[]engine.ChangesHandle{&currentBaseChangesHandle{
+			inner: &stubEngineChangesHandle{
+				responses: []stubEngineChangesHandleResponse{{data: baseBat}},
+			},
+			tblStuff: tblStuff,
 		}},
 		"base",
 		nil,
@@ -728,6 +732,31 @@ func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 	defer func() {
 		require.NoError(t, baseDataHashmap.Close())
 		require.NoError(t, baseTombstoneHashmap.Close())
+	}()
+
+	// A historical base relation's handle already yields the target layout
+	// (here identical to it, so it is not wrapped): its rows must not be
+	// projected again with the current base mapping.
+	histRowID := buildHashDiffRowID(t, 3)
+	histBat := buildIntDataBatch(
+		t, ses.proc.Mp(), []string{catalog.Row_ID, "a", "b", "c"},
+		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType(), types.T_int64.ToType(), types.T_int64.ToType()},
+		[][]any{{histRowID, int64(1), int64(99), int64(0)}},
+	)
+	histDataHashmap, histTombstoneHashmap, err := buildHashmapForTable(
+		context.Background(),
+		ses.proc.Mp(),
+		&tblStuff,
+		[]engine.ChangesHandle{&stubEngineChangesHandle{
+			responses: []stubEngineChangesHandleResponse{{data: histBat}},
+		}},
+		"base",
+		nil,
+	)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, histDataHashmap.Close())
+		require.NoError(t, histTombstoneHashmap.Close())
 	}()
 
 	targetRowID := buildHashDiffRowID(t, 2)
@@ -761,6 +790,16 @@ func TestBuildHashmapForTableProjectsBaseRowsBeforeKeying(t *testing.T) {
 			baseTuple, _, err := baseDataHashmap.DecodeRow(ret.Rows[0])
 			require.NoError(t, err)
 			require.Len(t, baseTuple, 4)
+
+			ret, err = histDataHashmap.PopByEncodedKey(key, false)
+			require.NoError(t, err)
+			require.True(t, ret.Exists, "historical target-layout rows keep their key")
+			require.Len(t, ret.Rows, 1)
+			histTuple, _, err := histDataHashmap.DecodeRow(ret.Rows[0])
+			require.NoError(t, err)
+			require.Len(t, histTuple, 4)
+			require.Equal(t, int64(99), histTuple[2])
+			require.Equal(t, int64(0), histTuple[3], "column c is kept, not projected away")
 			return nil
 		})
 	}, -1))

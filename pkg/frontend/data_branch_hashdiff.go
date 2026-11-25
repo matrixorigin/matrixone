@@ -2966,8 +2966,6 @@ func buildHashmapForTable(
 				return
 			}
 
-			dataBat = projectBaseBatchToTargetIfNeeded(side, dataBat, tblStuff, mp)
-
 			if dataBat != nil && dataBat.RowCount() > 0 {
 				totalRows += int64(dataBat.RowCount())
 				totalBytes += int64(dataBat.Size())
@@ -3577,6 +3575,32 @@ func (h *historicalDataBranchChangesHandle) Next(
 }
 
 func (h *historicalDataBranchChangesHandle) Close() error {
+	return h.inner.Close()
+}
+
+// currentBaseChangesHandle projects batches of the current base relation,
+// read in the base table's layout, into the target layout. Only that
+// relation's handle is wrapped: a historical relation's handle already
+// yields the target layout (projected by historicalDataBranchChangesHandle,
+// or identical to it), and a batch carries no names to tell them apart.
+type currentBaseChangesHandle struct {
+	inner    engine.ChangesHandle
+	tblStuff tableStuff
+}
+
+func (h *currentBaseChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	data, tombstone, hint, err := h.inner.Next(ctx, mp)
+	if err != nil {
+		return data, tombstone, hint, err
+	}
+	data = projectBaseBatchToTargetIfNeeded("base", data, &h.tblStuff, mp)
+	return data, tombstone, hint, nil
+}
+
+func (h *currentBaseChangesHandle) Close() error {
 	return h.inner.Close()
 }
 

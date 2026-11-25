@@ -2492,6 +2492,8 @@ func constructChangeHandle(
 					hydrate: baseRange.rel[i].GetTableID(ctx) !=
 						tables.baseRel.GetTableID(ctx),
 				}
+			} else if baseRange.rel[i].GetTableID(ctx) == tables.baseRel.GetTableID(ctx) {
+				handle = &currentBaseChangesHandle{inner: handle, tblStuff: tables}
 			}
 			baseHandle = append(baseHandle, handle)
 		}
