@@ -81,7 +81,8 @@ func TestHashJoinFinalizeProjection(t *testing.T) {
 			} {
 				want.CleanOnlyData()
 				var bm bitmap.Bitmap
-				bm.InitWithSize(colexec.DefaultBatchSize + 4)
+				bm.Init(bitmapTestMP)
+				mustBitmapOK(bm.InitWithSize(colexec.DefaultBatchSize+4, bitmapTestMP))
 				for _, row := range selected {
 					bm.Add(row)
 					require.NoError(t, want.UnionOne(sources[row/colexec.DefaultBatchSize].Vecs[0], int64(row%colexec.DefaultBatchSize), proc.Mp()))
@@ -154,7 +155,8 @@ func TestHashJoinFinalizeProjectionAllocation(t *testing.T) {
 			})
 			require.NoError(t, arg.SetAllocationAccount(account))
 			var bm bitmap.Bitmap
-			bm.InitWithSize(int64(count))
+			bm.Init(bitmapTestMP)
+			mustBitmapOK(bm.InitWithSize(int64(count), bitmapTestMP))
 			for row := range count {
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(row), false, proc.Mp()))
 				value := "live"

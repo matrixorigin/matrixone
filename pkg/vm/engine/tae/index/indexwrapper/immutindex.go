@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -51,6 +52,7 @@ func (idx ImmutIndex) BatchDedup(
 	rt *dbutils.Runtime,
 	isTombstone bool,
 	blkID uint32,
+	mp *mpool.MPool,
 ) (sels *nulls.Nulls, err error) {
 	var exist bool
 	if keysZM.Valid() {
@@ -94,8 +96,10 @@ func (idx ImmutIndex) BatchDedup(
 		return
 	}
 
-	if exist, sels, err = bfIndex.MayContainsAnyKeys(keys); err != nil {
+	if exist, sels, err = bfIndex.MayContainsAnyKeys(keys, mp); err != nil {
 		// check bloomfilter has some unknown error. return err
+		sels.Free()
+		sels = nil
 		err = TranslateError(err)
 		return
 	} else if !exist {

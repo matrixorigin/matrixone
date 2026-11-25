@@ -161,7 +161,7 @@ func TestIntegerMembershipBitmapAdmission(t *testing.T) {
 			require.NoError(t, vector.AppendFixed(list, tc.last, false, proc.Mp()))
 			list.SetSorted(true)
 			op := newOpOperatorIntegerIn[int64]()
-			require.Equal(t, tc.want, op.initBitmap(list))
+			require.Equal(t, tc.want, op.initBitmap(list, proc.Mp()))
 			if tc.want {
 				require.True(t, op.bits.Contains(uint64(tc.last)-op.lower))
 				require.False(t, op.bits.Contains(uint64(tc.last+1)-op.lower))

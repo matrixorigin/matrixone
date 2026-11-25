@@ -166,7 +166,8 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 							ctr.buildGroupCount = ctr.groupCount
 							if !rightDedupJoin.InputKeysUnique &&
 								!proc.GetTxnOperator().Txn().IsPessimistic() && ctr.buildGroupCount > 0 {
-								ctr.matched, initErr = colexec.NewRowBitmap(int64(ctr.buildGroupCount))
+								ctr.matched.Free()
+								ctr.matched, initErr = colexec.NewRowBitmap(int64(ctr.buildGroupCount), proc.Mp())
 							}
 						case spillutil.BucketEmptyBuild:
 							ctr.mp, initErr = rightDedupJoin.newEmptyJoinMap(proc)
@@ -209,6 +210,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		ctr.mp, err = rightDedupJoin.newEmptyJoinMap(proc)
 		ctr.groupCount = 0
 		ctr.buildGroupCount = 0
+		ctr.matched.Free()
 		ctr.matched = nil
 		return err
 	} else {
@@ -270,7 +272,8 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		if !rightDedupJoin.InputKeysUnique &&
 			!proc.GetTxnOperator().Txn().IsPessimistic() &&
 			ctr.buildGroupCount > 0 {
-			ctr.matched, err = colexec.NewRowBitmap(int64(ctr.buildGroupCount))
+			ctr.matched.Free()
+			ctr.matched, err = colexec.NewRowBitmap(int64(ctr.buildGroupCount), proc.Mp())
 			if err != nil {
 				return err
 			}

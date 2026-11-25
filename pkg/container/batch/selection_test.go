@@ -39,7 +39,9 @@ func TestBatchSelection(t *testing.T) {
 	require.Nil(t, bat.SelectionMask(nil))
 
 	var selection bitmap.Bitmap
-	selection.InitWithSize(6)
+
+	selection.Init(bitmapTestMP)
+	mustBitmapOK(selection.InitWithSize(6, bitmapTestMP))
 	selection.AddMany([]uint64{1, 4, 5})
 	bat.SetSelection(6, &selection)
 	require.Equal(t, []int64{1, 4, 5}, bat.SelectionRows(nil))

@@ -177,7 +177,7 @@ func TestVector3(t *testing.T) {
 
 func TestVector5(t *testing.T) {
 	vecTypes := types.MockColTypes()
-	sels := nulls.NewWithSize(1)
+	sels := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 	sels.Add(uint64(2), uint64(6))
 	for _, vecType := range vecTypes {
 		vec := MockVector(vecType, 10, false, nil)
@@ -218,7 +218,7 @@ func TestVector5(t *testing.T) {
 
 func TestVector6(t *testing.T) {
 	vecTypes := types.MockColTypes()
-	sels := nulls.NewWithSize(1)
+	sels := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
@@ -646,7 +646,7 @@ func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func
 
 func TestForeachSelectBitmap(t *testing.T) {
 	vecTypes := types.MockColTypes()
-	sels := nulls.NewWithSize(1)
+	sels := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)

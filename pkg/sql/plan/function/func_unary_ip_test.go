@@ -304,7 +304,7 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 	makeInput := func(typ types.Type, values any, flags []bool, constant bool) *vector.Vector {
 		var nsp *nulls.Nulls
 		if len(flags) > 0 {
-			nsp = nulls.NewWithSize(len(flags))
+			nsp = mustNullsOK(nulls.NewWithSize(len(flags), bitmapTestMP))
 			for i, isNull := range flags {
 				if isNull {
 					nsp.Add(uint64(i))

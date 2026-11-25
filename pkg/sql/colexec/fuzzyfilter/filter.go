@@ -137,7 +137,11 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 			if err := fuzzyFilter.reserveFilter(proc, bloomfilter.InitialMemoryCapacity(rowCount, probability)); err != nil {
 				return err
 			}
-			ctr.bloomFilter = bloomfilter.New(rowCount, probability)
+			bf, err := bloomfilter.New(rowCount, probability, proc.Mp())
+			if err != nil {
+				return err
+			}
+			ctr.bloomFilter = bf
 		}
 	}
 

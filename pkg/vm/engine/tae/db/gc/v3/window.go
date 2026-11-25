@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
@@ -248,6 +249,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	if err != nil {
 		return nil, "", err
 	}
+	defer bf.Free()
 	// Use a map to deduplicate file names, as the same object may appear
 	// multiple times in vecToGC (e.g., when referenced by multiple tables).
 	// This avoids sending duplicate delete requests to S3.

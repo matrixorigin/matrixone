@@ -215,7 +215,7 @@ func TestSerialDecimal256Encoding(t *testing.T) {
 		require.Equal(t, nullPacker.GetBuf(), fullPackers[1].GetBuf())
 		nullPacker.Close()
 
-		bitmap := nulls.NewWithSize(len(values))
+		bitmap := mustNullsOK(nulls.NewWithSize(len(values), bitmapTestMP))
 		compactPackers := types.NewPackerArray(len(values))
 		defer func() {
 			for _, packer := range compactPackers {
