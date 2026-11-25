@@ -67,6 +67,12 @@ func (bat *Batch) FreeSelection() {
 	bat.ownSel = bitmap.Bitmap{}
 }
 
+// HoldsSelectionMemory reports whether the batch's own selection storage
+// still holds pool words, which Clean or FreeSelection must return.
+func (bat *Batch) HoldsSelectionMemory() bool {
+	return bat != nil && bat.ownSel.CapWords() > 0
+}
+
 // SetSelection publishes the set bits of sel as this batch's logical rows over
 // its physical vectors. sel's length (sel.Len()) must be the vectors' physical
 // row count. sel is either the batch's own storage (OwnSelection) or a bitmap

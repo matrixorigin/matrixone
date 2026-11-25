@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -82,6 +83,10 @@ func TestFilterSelectionOutputMatchesCompactedOutput(t *testing.T) {
 		got, sawSelection := runFilter(t, tc.arg, tc.proc, true)
 		require.Equal(t, want, got, "case %d", i)
 		require.True(t, sawSelection, "case %d keeps a strict subset of rows", i)
+		require.True(t, tc.arg.ctr.selection.view.HoldsSelectionMemory(), "case %d", i)
+		tc.arg.Reset(tc.proc, false, nil)
+		// Reset returns the view's selection words to the pool.
+		require.False(t, tc.arg.ctr.selection.view.HoldsSelectionMemory(), "case %d", i)
 
 		for _, child := range tc.arg.Children {
 			child.Reset(tc.proc, false, nil)
@@ -175,4 +180,29 @@ func TestFilterSelectionEdgeConfiguration(t *testing.T) {
 	parent.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+// The view's selection is memory charged to the filter's account: the
+// account cannot be set or cleared while the view still holds its words.
+func TestFilterAccountGuardsSelectionMemory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	arg := &Filter{}
+	_, err = arg.ctr.selection.view.OwnSelection(mp, 64)
+	require.NoError(t, err)
+	if arg.ActivatesAllocationAccountLifecycle() {
+		require.ErrorIs(t, arg.SetAllocationAccount(account), mpool.ErrAllocationAccountInvariant)
+	}
+	arg.ctr.account = account
+	require.ErrorIs(t, arg.ClearAllocationAccount(account), mpool.ErrAllocationAccountLive)
+
+	arg.ctr.selection.view.FreeSelection()
+	require.NoError(t, arg.ClearAllocationAccount(account))
+	require.Zero(t, mp.CurrNB())
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 }

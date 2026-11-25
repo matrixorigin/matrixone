@@ -269,11 +269,14 @@ func TestTableScanPublishesReaderSelection(t *testing.T) {
 			} else {
 				require.Equal(t, []types.Decimal64{100, 200, 300}, vector.MustFixedColNoTypeCheck[types.Decimal64](out.Vecs[0]))
 			}
+			require.Equal(t, parentAccepts, scan.ctr.buf.HoldsSelectionMemory())
 			result, err = vm.Exec(scan, proc)
 			require.NoError(t, err)
 			require.Nil(t, result.Batch)
 			scan.Reset(proc, false, nil)
 			require.True(t, reader.closed)
+			// Reset returns the published selection's words to the pool.
+			require.False(t, scan.ctr.buf.HoldsSelectionMemory())
 		})
 	}
 }

@@ -269,6 +269,9 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	// operator waits to be reused.
 	if tableScan.ctr.buf != nil {
 		tableScan.ctr.buf.CleanOnlyData()
+		// The reader's published selection words go back to this
+		// execution's pool.
+		tableScan.ctr.buf.FreeSelection()
 	}
 	tableScan.ctr.selection.reset()
 	if tableScan.allocationAccount != nil {

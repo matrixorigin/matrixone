@@ -179,3 +179,33 @@ func TestBatchOwnSelectionPool(t *testing.T) {
 	require.Zero(t, mp2.CurrNB())
 	view.FreeSelection() // idempotent
 }
+
+// Every release of a batch that may own selection storage returns its words:
+// FreeWindow and CleanOwned as well as Clean. A spill view never carries the
+// storage, so it cannot free it.
+func TestBatchReleasesFreeOwnSelection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for name, release := range map[string]func(*Batch){
+		"Clean":      func(b *Batch) { b.Clean(mp) },
+		"FreeWindow": func(b *Batch) { b.FreeWindow() },
+		"CleanOwned": func(b *Batch) { b.CleanOwned() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bat := NewWithSize(0)
+			sel, err := bat.OwnSelection(mp, 128)
+			require.NoError(t, err)
+			sel.Add(3)
+			bat.SetSelection(sel)
+			require.True(t, bat.HoldsSelectionMemory())
+
+			view := bat.spillView()
+			require.False(t, view.HoldsSelectionMemory())
+			require.Same(t, bat.Selection(), view.Selection())
+
+			release(bat)
+			require.False(t, bat.HasSelection())
+			require.False(t, bat.HoldsSelectionMemory())
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}

@@ -1496,6 +1496,7 @@ func (bat *Batch) FreeWindow() {
 	}
 	bat.Vecs = nil
 	bat.Attrs = nil
+	bat.FreeSelection()
 	bat.rowCount = 0
 }
 
@@ -1513,6 +1514,7 @@ func (bat *Batch) CleanOwned() {
 	}
 	bat.Vecs = nil
 	bat.Attrs = nil
+	bat.FreeSelection()
 	bat.rowCount = 0
 }
 
@@ -1624,8 +1626,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.Attrs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
-	bat.ownSel.Free()
-	bat.ownSel = bitmap.Bitmap{}
+	bat.FreeSelection()
 }
 
 func (bat *Batch) Last() bool {
