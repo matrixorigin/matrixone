@@ -541,9 +541,10 @@ func TestProxyLostLastHolderResponseRoutesLateSharerThroughOwner(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, ok)
 			proxy.mu.RLock()
-			_, pending := proxy.mu.pendingLastHolderUnlocks[string(row)]
+			pendingValue, pendingUnlock := proxy.mu.pendingRemoteHolders[string(row)]
 			proxy.mu.RUnlock()
-			require.True(t, pending)
+			require.True(t, pendingUnlock)
+			require.Nil(t, pendingValue)
 
 			// An owner-local exclusive can acquire before the proxy retries.
 			_, err = s1.Lock(ctx, tableID, [][]byte{row}, exclusiveTxn, newTestRowExclusiveOptions())
@@ -567,9 +568,9 @@ func TestProxyLostLastHolderResponseRoutesLateSharerThroughOwner(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, exclusiveTxn, holder.TxnID)
 			proxy.mu.RLock()
-			_, pending = proxy.mu.pendingLastHolderUnlocks[string(row)]
+			_, pendingUnlock = proxy.mu.pendingRemoteHolders[string(row)]
 			proxy.mu.RUnlock()
-			require.False(t, pending)
+			require.False(t, pendingUnlock)
 
 			require.NoError(t, s1.Unlock(ctx, exclusiveTxn, timestamp.Timestamp{}))
 			select {

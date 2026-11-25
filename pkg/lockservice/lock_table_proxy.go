@@ -17,10 +17,10 @@ package lockservice
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -33,10 +33,9 @@ type localLockTableProxy struct {
 
 	mu struct {
 		sync.RWMutex
-		holders                  map[string]*sharedOps // key: row
-		currentHolder            map[string][]byte
-		pendingRemoteHolders     map[string][]byte
-		pendingLastHolderUnlocks map[string]struct{}
+		holders              map[string]*sharedOps // key: row
+		currentHolder        map[string][]byte
+		pendingRemoteHolders map[string][]byte // nil value means a pending last-holder unlock
 	}
 }
 
@@ -53,7 +52,6 @@ func newLockTableProxy(
 	lp.mu.holders = make(map[string]*sharedOps)
 	lp.mu.currentHolder = make(map[string][]byte)
 	lp.mu.pendingRemoteHolders = make(map[string][]byte)
-	lp.mu.pendingLastHolderUnlocks = make(map[string]struct{})
 	return lp
 }
 
@@ -79,7 +77,7 @@ func (lp *localLockTableProxy) lock(
 		return
 	}
 	key := util.UnsafeBytesToString(rows[0])
-	if _, ok := lp.mu.pendingLastHolderUnlocks[key]; ok {
+	if pending, ok := lp.mu.pendingRemoteHolders[key]; ok && len(pending) == 0 {
 		// The owner may already have applied the last-holder Unlock even
 		// though its response was lost. Until the retry confirms that
 		// transition, the stale local holder cannot safely represent a remote
@@ -262,20 +260,14 @@ func (lp *localLockTableProxy) releaseLocks(
 			// the row.
 			remoteReplacement := replacement
 			if pending, ok := lp.mu.pendingRemoteHolders[row]; ok {
-				// A response-lost handoff has already selected the only remote
-				// representative that can be safely retried. Later local sharers
-				// must stay behind that representative until the owner confirms a
-				// transition; otherwise the proxy and owner can publish different
-				// holders for the same shared lock.
+				// A response-lost handoff has already selected its retry target,
+				// including nil when releasing the last remote holder. Keep that
+				// choice until the owner confirms the transition.
 				remoteReplacement = pending
-			} else if _, ok := lp.mu.pendingLastHolderUnlocks[row]; ok {
-				// Preserve the already-selected empty replacement across retries.
-				remoteReplacement = nil
-			} else if len(remoteReplacement) > 0 {
-				lp.mu.pendingRemoteHolders[row] = remoteReplacement
-				newPending = append(newPending, row)
 			} else {
-				lp.mu.pendingLastHolderUnlocks[row] = struct{}{}
+				// A present nil value preserves an already-selected last-holder
+				// release across retries, distinct from no pending handoff.
+				lp.mu.pendingRemoteHolders[row] = remoteReplacement
 				newPending = append(newPending, row)
 			}
 			remoteMutations = append(remoteMutations,
@@ -309,7 +301,6 @@ func (lp *localLockTableProxy) releaseLocks(
 			// completed remotely even when their replies were lost.
 			for _, row := range newPending {
 				delete(lp.mu.pendingRemoteHolders, row)
-				delete(lp.mu.pendingLastHolderUnlocks, row)
 			}
 		}
 		return err
@@ -327,7 +318,6 @@ func (lp *localLockTableProxy) releaseLocks(
 		}
 		if update.clearPendingRemoteHolder {
 			delete(lp.mu.pendingRemoteHolders, update.row)
-			delete(lp.mu.pendingLastHolderUnlocks, update.row)
 		} else if len(update.nextPendingRemoteHolder) > 0 {
 			lp.mu.pendingRemoteHolders[update.row] = update.nextPendingRemoteHolder
 		}
@@ -355,7 +345,7 @@ func (lp *localLockTableProxy) isPendingRemoteHolderLocked(
 	txnID []byte,
 ) bool {
 	pending, ok := lp.mu.pendingRemoteHolders[row]
-	return ok && bytes.Equal(pending, txnID)
+	return ok && len(pending) > 0 && bytes.Equal(pending, txnID)
 }
 
 func (lp *localLockTableProxy) getLock(
