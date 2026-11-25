@@ -184,9 +184,17 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 		},
 	}
 
+	const capacity = 1 << 20
+	candidatePool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(candidatePool)
 	candidates, err := newDuplicatedRowIDs(pool, 1)
 	require.NoError(t, err)
 	defer candidates.Close()
+	// The combined vector can record the delete. Publishing it to the
+	// original candidate requires a separate allocation.
+	candidates.appendable.Close()
+	candidates.appendable = containers.MakeVector(objectio.RowidType, candidatePool)
 	appendableObjectID := objectio.NewObjectid()
 	appendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(appendableObjectID, 0, 0)
 	nonAppendableObjectID := objectio.NewObjectid()
@@ -227,6 +235,15 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 	)
 	entry.AddEntryLocked(first)
 	entry.AddEntryLocked(second)
+
+	t.Run("copyback allocation error takes precedence over conflict", func(t *testing.T) {
+		filler, err := candidatePool.Alloc(capacity-int(candidatePool.CurrNB()), true)
+		require.NoError(t, err)
+		defer candidatePool.Free(filler)
+		err = tbl.findDeletesForCandidates(t.Context(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+		require.False(t, candidates.appendable.IsNull(0))
+	})
 
 	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
