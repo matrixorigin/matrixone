@@ -149,26 +149,47 @@ data branch diff rename_child against rename_parent;
 diff rename_child against rename_parent    flag    a    b
 rename_child    UPDATE    1    new
 create table charset_pk_parent(k varchar(10) primary key, v int);
-insert into charset_pk_parent values ('a',1),('b',2);
+insert into charset_pk_parent values ('a',1),('b',2),('c',3);
 data branch create table charset_pk_child from charset_pk_parent;
 alter table charset_pk_child modify k varchar(10) character set utf8mb4 collate utf8mb4_bin not null, algorithm=inplace;
-update charset_pk_child set v = v + 10;
+update charset_pk_parent set v = 30 where k = 'c';
 data branch diff charset_pk_child against charset_pk_parent output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
-2
+1
+update charset_pk_child set v = v + 10 where k in ('a','b');
+data branch diff charset_pk_child against charset_pk_parent output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+3
 data branch diff charset_pk_parent against charset_pk_child output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
-2
+3
 data branch pick charset_pk_child into charset_pk_parent keys('a');
 select k, v from charset_pk_parent order by k;
 ➤ k[12,-1,0]  ¦  v[4,32,0]  𝄀
 a  ¦  11  𝄀
-b  ¦  2
+b  ¦  2  𝄀
+c  ¦  30
 data branch merge charset_pk_child into charset_pk_parent when conflict accept;
 select k, v from charset_pk_parent order by k;
 ➤ k[12,-1,0]  ¦  v[4,32,0]  𝄀
 a  ¦  11  𝄀
-b  ¦  12
+b  ¦  12  𝄀
+c  ¦  30
+create table charset_history_parent(id int primary key, payload varchar(10));
+insert into charset_history_parent values (0, 'root');
+data branch create table charset_history_child from charset_history_parent;
+insert into charset_history_child values (1, 'before');
+alter table charset_history_child modify payload varchar(10) character set utf8mb4 collate utf8mb4_bin, algorithm=copy;
+insert into charset_history_child values (2, 'after');
+data branch diff charset_history_child against charset_history_parent output count;
+➤ COUNT(*)[-5,0,0]  𝄀
+2
+data branch merge charset_history_child into charset_history_parent when conflict accept;
+select id, payload from charset_history_parent order by id;
+➤ id[4,32,0]  ¦  payload[12,-1,0]  𝄀
+0  ¦  root  𝄀
+1  ¦  before  𝄀
+2  ¦  after
 create table charset_generated_plain(id int primary key, payload varchar(20));
 create table charset_generated_explicit(id int primary key, payload varchar(20));
 insert into charset_generated_plain values (1, 'old');
