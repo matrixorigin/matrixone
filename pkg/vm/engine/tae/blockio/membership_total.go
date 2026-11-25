@@ -138,19 +138,18 @@ func withScopedTotalMembership(ctx context.Context, info *objectio.BlockInfo,
 			}
 			return err
 		}
-		selected := count
-		if !residual.All {
-			selected = len(residual.Sels)
-		}
+		selected := residual.Count(count)
 		if err := validateReaderFilterResult(residual, count, selected); err != nil {
 			return err
 		}
 		if !residual.All {
+			// The physical row map is a list; a mask result becomes one here.
+			survivors := request.RowList(residual)
 			if member.All {
 				// The final callback's rows already use the physical domain.
-				physical = residual.Sels
+				physical = survivors
 			} else {
-				for row, survivor := range residual.Sels {
+				for row, survivor := range survivors {
 					physical[row] = physical[survivor]
 				}
 			}

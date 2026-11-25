@@ -1005,6 +1005,26 @@ func validateReaderFilterResult(
 		}
 		return nil
 	}
+	if result.Mask != nil {
+		if result.Sels != nil {
+			return moerr.NewInvalidInputNoCtx("residual filter returned both a row mask and a row list")
+		}
+		if result.Mask.Len() != int64(inputRows) {
+			return moerr.NewInvalidInputNoCtxf(
+				"residual filter mask covers %d rows for %d input rows",
+				result.Mask.Len(),
+				inputRows,
+			)
+		}
+		if count := result.Mask.Count(); count != outputRows {
+			return moerr.NewInvalidInputNoCtxf(
+				"residual filter returned %d selections for %d output rows",
+				count,
+				outputRows,
+			)
+		}
+		return nil
+	}
 	if len(result.Sels) != outputRows {
 		return moerr.NewInvalidInputNoCtxf(
 			"residual filter returned %d selections for %d output rows",
@@ -1216,10 +1236,7 @@ func blockDataReadWithFilter(
 		if err != nil {
 			return err
 		}
-		selectedRows := liveRows
-		if !filterResult.All {
-			selectedRows = len(filterResult.Sels)
-		}
+		selectedRows := filterResult.Count(liveRows)
 		if err = validateReaderFilterResult(filterResult, liveRows, selectedRows); err != nil {
 			return err
 		}
@@ -1229,13 +1246,13 @@ func blockDataReadWithFilter(
 		publishSelection := applyFilter.PublishSelection != nil && deleteMask.IsEmpty() &&
 			physicalRows == nil
 		if !filterResult.All {
-			if publishSelection && len(filterResult.Sels) > 0 {
-				if err := publishBatchSelection(outputBat, earlyColumns, filterResult.Sels, liveRows, applyFilter); err != nil {
+			if publishSelection && selectedRows > 0 {
+				if err := publishBatchSelection(outputBat, earlyColumns, filterResult, liveRows, applyFilter); err != nil {
 					return err
 				}
 				return loadBorrowedLateColumns(ctx, info, columns, colTypes, earlyColumns, policy, outputBat, mp, fs, applyFilter)
 			}
-			if err = publishReaderSelection(outputBat, earlyColumns, filterResult.Sels, applyFilter, mp); err != nil {
+			if err = publishReaderSelection(outputBat, earlyColumns, filterResult, applyFilter, mp); err != nil {
 				return err
 			}
 		} else if publishSelection {
@@ -1267,12 +1284,18 @@ func blockDataReadWithFilter(
 		return nil
 	}
 
+	// The late columns load by row list (storage search results and loaders
+	// stay lists), so a mask result becomes a list here, once.
+	var filterSels []int64
+	if !filterResult.All {
+		filterSels = applyFilter.RowList(filterResult)
+	}
 	selectedPhysicalRows := physicalRows
 	if physicalRows == nil && !deleteMask.IsEmpty() {
 		// Map only the surviving logical rows back to block offsets. In
 		// particular, a zero-result filter returns above without building an
 		// O(block rows) live-row slice.
-		capacity := len(filterResult.Sels)
+		capacity := len(filterSels)
 		if filterResult.All {
 			capacity = physicalRowCount
 		}
@@ -1284,7 +1307,7 @@ func blockDataReadWithFilter(
 				continue
 			}
 			if filterResult.All ||
-				(nextSelected < len(filterResult.Sels) && filterResult.Sels[nextSelected] == liveRow) {
+				(nextSelected < len(filterSels) && filterSels[nextSelected] == liveRow) {
 				selectedPhysicalRows = append(selectedPhysicalRows, int64(physicalRow))
 				if !filterResult.All {
 					nextSelected++
@@ -1294,11 +1317,11 @@ func blockDataReadWithFilter(
 		}
 	} else if !filterResult.All {
 		if physicalRows == nil {
-			selectedPhysicalRows = filterResult.Sels
+			selectedPhysicalRows = filterSels
 		} else {
 			// A new slice: physicalRows belongs to the caller.
-			selectedPhysicalRows = make([]int64, 0, len(filterResult.Sels))
-			for _, row := range filterResult.Sels {
+			selectedPhysicalRows = make([]int64, 0, len(filterSels))
+			for _, row := range filterSels {
 				selectedPhysicalRows = append(selectedPhysicalRows, physicalRows[row])
 			}
 		}

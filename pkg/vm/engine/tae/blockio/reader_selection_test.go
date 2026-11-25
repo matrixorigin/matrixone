@@ -17,6 +17,7 @@ package blockio
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +26,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The kept rows arrive as a row list or as a mask; both shrink the same way.
 func TestPublishReaderSelectionShrinksInPlace(t *testing.T) {
-	for _, rows := range [][]int64{{1, 3}, nil} {
+	for _, tc := range []struct {
+		rows   []int64
+		asMask bool
+	}{{[]int64{1, 3}, false}, {nil, false}, {[]int64{1, 3}, true}, {nil, true}} {
+		rows := tc.rows
 		mp := mpool.MustNewZero()
 		output := batch.NewWithSize(3)
 		for i := range output.Vecs {
@@ -36,7 +42,13 @@ func TestPublishReaderSelectionShrinksInPlace(t *testing.T) {
 		output.SetRowCount(4)
 		owned, unused := output.Vecs[0], output.Vecs[2]
 		request := &engine.ReaderFilterRequest{ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnOwned, engine.ReaderColumnUnused}}
-		require.NoError(t, publishReaderSelection(output, []int{0, 2}, rows, request, mp))
+		res := engine.ReaderFilterResult{Sels: rows}
+		var mask bitmap.Bitmap
+		if tc.asMask {
+			require.NoError(t, mask.InitWithRows(4, rows, mp))
+			res = engine.ReaderFilterResult{Mask: &mask}
+		}
+		require.NoError(t, publishReaderSelection(output, []int{0, 2}, res, request, mp))
 		require.Equal(t, len(rows), output.RowCount())
 		require.Same(t, owned, output.Vecs[0])
 		require.Same(t, unused, output.Vecs[2])
@@ -48,6 +60,7 @@ func TestPublishReaderSelectionShrinksInPlace(t *testing.T) {
 		}
 		require.Equal(t, 4, output.Vecs[1].Length(), "columns outside positions are untouched")
 		output.Clean(mp)
+		mask.Free()
 		require.Zero(t, mp.CurrNB())
 	}
 }

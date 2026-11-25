@@ -29,12 +29,14 @@ import (
 )
 
 // publishReaderSelection compacts the selected rows of each read column in
-// place. Columns the caller marked unused are cleared instead.
-func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, request *engine.ReaderFilterRequest, mp *mpool.MPool) error {
+// place. Columns the caller marked unused are cleared instead. A mask result
+// is applied by the bitmap itself.
+func publishReaderSelection(output *batch.Batch, positions []int, res engine.ReaderFilterResult, request *engine.ReaderFilterRequest, mp *mpool.MPool) error {
 	width := len(output.Vecs)
+	count := res.Count(output.RowCount())
 	for _, pos := range positions {
 		vec := output.Vecs[pos]
-		if len(rows) == 0 || request.ColumnUse(pos, width) == engine.ReaderColumnUnused {
+		if count == 0 || request.ColumnUse(pos, width) == engine.ReaderColumnUnused {
 			vec.CleanOnlyData()
 			continue
 		}
@@ -46,7 +48,13 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 				owner = request.OutputAllocation
 			}
 			owned := vector.NewVec(*vec.GetType(), owner)
-			if err := owned.Union(vec, rows, owner); err != nil {
+			var err error
+			if res.Mask != nil {
+				err = owned.UnionByMask(vec, res.Mask, owner)
+			} else {
+				err = owned.Union(vec, res.Sels, owner)
+			}
+			if err != nil {
 				owned.Free(owner)
 				return err
 			}
@@ -55,18 +63,24 @@ func publishReaderSelection(output *batch.Batch, positions []int, rows []int64, 
 			output.Vecs[pos] = owned
 			continue
 		}
-		if err := vec.Shrink(rows, false, vec.MPool()); err != nil {
+		var err error
+		if res.Mask != nil {
+			err = vec.ShrinkByMask(res.Mask, false, 0, vec.MPool())
+		} else {
+			err = vec.Shrink(res.Sels, false, vec.MPool())
+		}
+		if err != nil {
 			return err
 		}
 	}
-	output.SetRowCount(len(rows))
+	output.SetRowCount(count)
 	return nil
 }
 
 // publishBatchSelection keeps the read columns' physical rows and publishes
-// rows as output's selection, in the caller-owned request.PublishSelection.
-// Columns the caller marked unused are cleared.
-func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, physicalRows int, request *engine.ReaderFilterRequest) error {
+// the kept rows as output's selection, in the caller-owned
+// request.PublishSelection. Columns the caller marked unused are cleared.
+func publishBatchSelection(output *batch.Batch, positions []int, res engine.ReaderFilterResult, physicalRows int, request *engine.ReaderFilterRequest) error {
 	width := len(output.Vecs)
 	for _, pos := range positions {
 		if request.ColumnUse(pos, width) == engine.ReaderColumnUnused {
@@ -75,7 +89,15 @@ func publishBatchSelection(output *batch.Batch, positions []int, rows []int64, p
 	}
 	// The caller owns sel and gave it its pool.
 	sel := request.PublishSelection
-	if err := sel.InitWithRows(int64(physicalRows), rows, sel.MPool()); err != nil {
+	var err error
+	switch {
+	case res.Mask == sel:
+	case res.Mask != nil:
+		err = sel.InitWith(res.Mask, sel.MPool())
+	default:
+		err = sel.InitWithRows(int64(physicalRows), res.Sels, sel.MPool())
+	}
+	if err != nil {
 		return err
 	}
 	output.SetSelection(physicalRows, sel)

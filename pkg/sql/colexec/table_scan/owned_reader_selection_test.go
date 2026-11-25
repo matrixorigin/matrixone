@@ -72,10 +72,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 			return false, err
 		}
 		require.Equal(r.t, 4, source.RowCount(), "selection callback cannot shrink borrowed input")
-		count = source.RowCount()
-		if !selected.All {
-			count = len(selected.Sels)
-		}
+		count = selected.Count(source.RowCount())
 	} else {
 		if _, err := filter.Apply(source, early); err != nil {
 			return false, err
@@ -93,7 +90,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 			}
 		}
 		mustBitmapOK(filter.PublishSelection.InitWithSize(int64(source.RowCount()), filter.PublishSelection.MPool()))
-		for _, row := range selected.Sels {
+		for _, row := range filter.RowList(selected) {
 			filter.PublishSelection.Add(uint64(row))
 		}
 		out.SetSelection(source.RowCount(), filter.PublishSelection)
@@ -107,7 +104,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 		if selected.All {
 			err = out.Vecs[col].UnionBatch(v, 0, count, nil, mp)
 		} else {
-			err = out.Vecs[col].Union(v, selected.Sels, mp)
+			err = out.Vecs[col].Union(v, filter.RowList(selected), mp)
 		}
 		if err != nil {
 			return false, err

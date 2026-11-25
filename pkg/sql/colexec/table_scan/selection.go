@@ -32,11 +32,15 @@ import (
 // batch owned by the scan's pool. Either way it is valid until the next Call.
 type selectionState struct {
 	// output is set by the parent's preparation (vm.SelectionProducer).
-	output   bool
-	rows     bitmap.Bitmap
-	mask     []bool
-	physical batch.Batch
-	compact  *batch.Batch
+	output bool
+	rows   bitmap.Bitmap
+	// keep, pred and dep evaluate the reader filter's predicate chain over a
+	// block: keep is the result over the block's rows, pred one predicate's
+	// TRUE rows over the rows still kept, and dep the composition of the two.
+	keep, pred, dep bitmap.Bitmap
+	mask            []bool
+	physical        batch.Batch
+	compact         *batch.Batch
 	// uses is the reader column policy for selected reads: the columns the
 	// scan outputs are borrowed (ReaderColumnRetain) instead of copied.
 	uses []engine.ReaderColumnUse
@@ -143,6 +147,9 @@ func (s *selectionState) reset() {
 func (s *selectionState) free(mp *mpool.MPool) {
 	s.uses = nil
 	s.rows.Free()
+	s.keep.Free()
+	s.pred.Free()
+	s.dep.Free()
 	s.freeCompact(mp)
 }
 
