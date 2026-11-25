@@ -3702,7 +3702,8 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	joinConds = []*Expr{condExpr}
-	if indexNeedsOwnerMatch(baseTableDef, indexdef, prefixLengths) {
+	if (baseTableDef != nil && isUK && shouldCheckDeleteIndexEntry(indexdef, typMap)) ||
+		indexNeedsOwnerMatch(baseTableDef, indexdef, prefixLengths) {
 		if rightOwnerPos < 0 {
 			return -1, moerr.NewInternalError(builder.GetContext(), "DELETE index table has no owner column")
 		}
@@ -5557,52 +5558,30 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 		delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-		if !isUpdate && isSK && !isSpatialIndexDef(indexdef) && !delCtx.isDeleteWithoutFilters {
-			requiresEntry := false
-			for _, part := range indexdef.Parts {
-				if typ, ok := typMap[catalog.ResolveAlias(part)]; ok &&
-					(typ.Id == int32(types.T_enum) || typ.Enumvalues != "") {
-					requiresEntry = true
-					break
+		if !delCtx.isDeleteWithoutFilters && shouldCheckDeleteIndexEntry(indexdef, typMap) {
+			projection := builder.qry.Nodes[lastNodeId].ProjectList
+			baseColumn := func(name string) (*Expr, error) {
+				pos, ok := posMap[name]
+				if !ok || pos < 0 || pos >= len(projection) {
+					return nil, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate target column %s", name)
 				}
+				return &plan.Expr{Typ: projection[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(pos)}}}, nil
 			}
-			if requiresEntry {
-				baseRowIDPos, ok := posMap[catalog.Row_ID]
-				if !ok || baseRowIDPos < 0 || baseRowIDPos >= len(builder.qry.Nodes[lastNodeId].ProjectList) {
-					putDeleteNodeInfo(delNodeInfo)
-					return moerr.NewInternalError(builder.GetContext(), "DELETE cannot locate target row ID")
-				}
-				baseRowID := &plan.Expr{Typ: builder.qry.Nodes[lastNodeId].ProjectList[baseRowIDPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(baseRowIDPos)}}}
-				required, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{baseRowID})
-				if err != nil {
-					putDeleteNodeInfo(delNodeInfo)
-					return err
-				}
-				if len(indexdef.Parts) == 1 {
-					part := catalog.ResolveAlias(indexdef.Parts[0])
-					pos, ok := posMap[part]
-					if !ok || pos < 0 || pos >= len(builder.qry.Nodes[lastNodeId].ProjectList) {
-						putDeleteNodeInfo(delNodeInfo)
-						return moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
-					}
-					value := &plan.Expr{Typ: builder.qry.Nodes[lastNodeId].ProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(pos)}}}
-					valueRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
-					if err != nil {
-						putDeleteNodeInfo(delNodeInfo)
-						return err
-					}
-					required, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{required, valueRequired})
-					if err != nil {
-						putDeleteNodeInfo(delNodeInfo)
-						return err
-					}
-				}
-				delNodeInfo.assertIndexEntry = true
-				delNodeInfo.indexEntryRequired = required
-				delNodeInfo.indexEntryRowIDPos = indexEntryRowIDPos
-				delNodeInfo.indexEntryName = indexdef.IndexName
-				delNodeInfo.indexEntryTable = delCtx.tableDef.Name
+			rowID, err := baseColumn(catalog.Row_ID)
+			if err != nil {
+				putDeleteNodeInfo(delNodeInfo)
+				return err
 			}
+			required, err := builder.deleteIndexEntryRequired(indexdef, rowID, baseColumn)
+			if err != nil {
+				putDeleteNodeInfo(delNodeInfo)
+				return err
+			}
+			delNodeInfo.assertIndexEntry = true
+			delNodeInfo.indexEntryRequired = required
+			delNodeInfo.indexEntryRowIDPos = indexEntryRowIDPos
+			delNodeInfo.indexEntryName = indexdef.IndexName
+			delNodeInfo.indexEntryTable = delCtx.tableDef.Name
 		}
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 		putDeleteNodeInfo(delNodeInfo)

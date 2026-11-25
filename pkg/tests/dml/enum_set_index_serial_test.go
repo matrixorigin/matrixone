@@ -309,12 +309,12 @@ where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).S
 
 		// DELETE RETURNING wraps execution errors while aborting its result sink.
 		// The corruption error must still force rollback of prior transaction work.
-		exec("create table returning_rows(id int primary key,e enum('a','b'),n int,key ix(e,n))")
-		exec("insert into returning_rows values(1,'a',null)")
+		exec("create table returning_rows(id int primary key,e enum('a','b'),n int,unique key ix(e,n))")
+		exec("insert into returning_rows values(1,'a',1)")
 		var returningIndexTable string
 		require.NoError(t, conn.QueryRowContext(ctx, "select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname='returning_rows' and i.name='ix'", database).Scan(&returningIndexTable))
 		quotedReturningIndex := string(rune(96)) + strings.ReplaceAll(returningIndexTable, string(rune(96)), string(rune(96))+string(rune(96))) + string(rune(96))
-		exec("update " + quotedReturningIndex + " set __mo_index_idx_col=serial_full('a',null,serial(1)) where __mo_index_pri_col=1")
+		exec("update " + quotedReturningIndex + " set __mo_index_idx_col=serial('a',cast(1 as int)) where __mo_index_pri_col=1")
 		exec("set mo_rollback_txn_on_error=0")
 		exec("begin")
 		exec("insert into delete_side values(3)")
@@ -382,6 +382,54 @@ where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).S
 			}
 		}
 		require.Equal(t, expectedEntries, indexEntries())
+
+		// A unique index match must have both the canonical key and the selected owner.
+		{
+			exec("create table unique_rows(id int primary key,e enum('a','b'),n int,unique key ux(e,n))")
+			exec("insert into unique_rows values(1,'a',1),(2,null,2),(3,'a',null),(4,'b',4)")
+			var hidden string
+			require.NoError(t, conn.QueryRowContext(ctx, "select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname='unique_rows' and i.name='ux'", database).Scan(&hidden))
+			hidden = "`" + strings.ReplaceAll(hidden, "`", "``") + "`"
+			readState := func() (base, entries string) {
+				t.Helper()
+				require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(id order by id) from unique_rows use index()").Scan(&base))
+				require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(concat(hex(__mo_index_idx_col),':',__mo_index_pri_col) order by __mo_index_pri_col) from "+hidden).Scan(&entries))
+				return
+			}
+			expectCorrupt := func(query string) {
+				t.Helper()
+				base, entries := readState()
+				_, err := conn.ExecContext(ctx, query)
+				var sqlErr *mysql.MySQLError
+				require.ErrorAs(t, err, &sqlErr)
+				require.EqualValues(t, 1712, sqlErr.Number)
+				afterBase, afterEntries := readState()
+				require.Equal(t, base, afterBase)
+				require.Equal(t, entries, afterEntries)
+			}
+			// The canonical key exists but belongs to a different base row.
+			exec("update " + hidden + " set __mo_index_pri_col=99 where __mo_index_pri_col=1")
+			expectCorrupt("delete from unique_rows where id=1")
+			expectCorrupt("delete u,s from unique_rows u join delete_side s on u.id=s.id where u.id=1")
+			exec("update " + hidden + " set __mo_index_pri_col=1 where __mo_index_pri_col=99")
+			// Install the display encoding used by v4.2.9 backfill for the old key.
+			exec("update " + hidden + " set __mo_index_idx_col=serial('a',cast(1 as int)) where __mo_index_pri_col=1")
+			expectCorrupt("delete from unique_rows where id=1")
+			expectCorrupt("delete u,s from unique_rows u join delete_side s on u.id=s.id where u.id=1")
+			require.Equal(t, 3, count("select count(*) from delete_side"))
+
+			result := exec("delete from unique_rows where id in (2,4)")
+			deleted, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.EqualValues(t, 2, deleted)
+			result = exec("delete u from unique_rows u join delete_side s on s.id=4 where u.id=3")
+			deleted, err = result.RowsAffected()
+			require.NoError(t, err)
+			require.EqualValues(t, 1, deleted)
+			base, _ := readState()
+			require.Equal(t, "1", base)
+			require.Equal(t, 1, count("select count(*) from "+hidden+" where __mo_index_pri_col=1"))
+		}
 
 		// R-tree indexes omit NULL geometries. An ENUM primary-key owner alias
 		// must not make that intentionally absent entry look corrupt.

@@ -28,7 +28,7 @@ import (
 )
 
 func shouldCheckDeleteIndexEntry(idxDef *plan.IndexDef, partTypes map[string]plan.Type) bool {
-	if idxDef.Unique || !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
+	if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) || isSpatialIndexDef(idxDef) {
 		return false
 	}
 	for _, part := range idxDef.Parts {
@@ -38,6 +38,32 @@ func shouldCheckDeleteIndexEntry(idxDef *plan.IndexDef, partTypes map[string]pla
 		}
 	}
 	return false
+}
+
+// A NULL target row ID comes from the unmatched side of an outer join.
+// UNIQUE keys omit a row with any NULL part. Nonunique serial_full keys
+// encode composite NULL parts, while a single NULL key is omitted.
+func (builder *QueryBuilder) deleteIndexEntryRequired(idxDef *plan.IndexDef, rowID *Expr, keyPart func(string) (*Expr, error)) (*Expr, error) {
+	ctx := builder.GetContext()
+	required, err := BindFuncExprImplByPlanExpr(ctx, "is_not_null", []*Expr{rowID})
+	if err != nil || (!idxDef.Unique && len(idxDef.Parts) != 1) {
+		return required, err
+	}
+	for _, part := range idxDef.Parts {
+		value, err := keyPart(catalog.ResolveAlias(part))
+		if err != nil {
+			return nil, err
+		}
+		present, err := BindFuncExprImplByPlanExpr(ctx, "is_not_null", []*Expr{value})
+		if err != nil {
+			return nil, err
+		}
+		required, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{required, present})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return required, nil
 }
 
 func makeDeleteIndexEntryAssert(builder *QueryBuilder, entryExists, entryRequired *Expr, indexName, tableName string) (*Expr, error) {
@@ -406,7 +432,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 		for j, idxDef := range idxDefs {
 			var partTypes map[string]plan.Type
-			if !idxDef.Unique && catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
+			if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
 				partTypes = make(map[string]plan.Type, len(idxDef.Parts))
 				for _, part := range idxDef.Parts {
 					resolvedPart := catalog.ResolveAlias(part)
@@ -518,7 +544,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				joinType = plan.Node_LEFT
 			}
 			joinConditions := []*plan.Expr{joinCond}
-			if indexNeedsOwnerMatch(tableDef, idxDef, prefixLengths) {
+			if (checkIndexEntry && idxDef.Unique) || indexNeedsOwnerMatch(tableDef, idxDef, prefixLengths) {
 				ownerPos, ok := idxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
 				if !ok || ownerPos < 0 || int(ownerPos) >= len(idxTableDef.Cols) {
 					return 0, moerr.NewInternalError(builder.GetContext(), "DELETE index table has no owner column")
@@ -582,30 +608,20 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 						RelPos: selectNodeTag, ColPos: baseRowIDPos, Name: catalog.Row_ID,
 					}},
 				}
-				entryRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{baseRowID})
-				if err != nil {
-					return 0, err
-				}
-				if len(idxDef.Parts) == 1 {
-					part := catalog.ResolveAlias(idxDef.Parts[0])
+				entryRequired, err := builder.deleteIndexEntryRequired(idxDef, baseRowID, func(part string) (*Expr, error) {
 					colPos, ok := colName2Idx[i][part]
 					if !ok || colPos < 0 || int(colPos) >= len(selectNode.ProjectList) {
-						return 0, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
+						return nil, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate index key column %s", part)
 					}
-					value := &plan.Expr{
+					return &plan.Expr{
 						Typ: selectNode.ProjectList[colPos].Typ,
 						Expr: &plan.Expr_Col{Col: &plan.ColRef{
 							RelPos: selectNodeTag, ColPos: colPos, Name: part,
 						}},
-					}
-					valueRequired, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{value})
-					if err != nil {
-						return 0, err
-					}
-					entryRequired, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{entryRequired, valueRequired})
-					if err != nil {
-						return 0, err
-					}
+					}, nil
+				})
+				if err != nil {
+					return 0, err
 				}
 				assertExpr, err := makeDeleteIndexEntryAssert(builder, entryExists, entryRequired, idxDef.IndexName, tableDef.Name)
 				if err != nil {
