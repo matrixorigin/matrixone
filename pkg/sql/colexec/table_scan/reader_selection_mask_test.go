@@ -39,6 +39,9 @@ func TestSelectReaderFilterMaskMatchesApply(t *testing.T) {
 		"all-true-in-middle": {{">", int32(100)}, {"<", int32(5000)}, {"<", int32(700)}},
 		"all-true":           {{">", int32(-1)}},
 		"none-after-partial": {{">", int32(500)}, {"<", int32(200)}},
+		"const-true":         {{"const", true}, {">", int32(300)}},
+		"const-false-later":  {{">", int32(300)}, {"const", false}},
+		"const-null-first":   {{"null", nil}, {">", int32(300)}},
 	}
 	for name, chain := range chains {
 		t.Run(name, func(t *testing.T) {
@@ -53,8 +56,18 @@ func TestSelectReaderFilterMaskMatchesApply(t *testing.T) {
 			run := func(useSelect bool) ([]int64, bool) {
 				proc := testutil.NewProc(t)
 				var exprs []*pbplan.Expr
+				boolType := types.T_bool.ToType()
 				for _, p := range chain {
-					exprs = append(exprs, lateTestCompare(t, p[0].(string), 0, p[1].(int32)))
+					switch p[0] {
+					case "const", "null":
+						v, _ := p[1].(bool)
+						exprs = append(exprs, &pbplan.Expr{
+							Typ:  plan.MakePlan2Type(&boolType),
+							Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Isnull: p[0] == "null", Value: &pbplan.Literal_Bval{Bval: v}}},
+						})
+					default:
+						exprs = append(exprs, lateTestCompare(t, p[0].(string), 0, p[1].(int32)))
+					}
 				}
 				scan := &TableScan{
 					Attrs:       []string{"a"},

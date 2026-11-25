@@ -64,3 +64,36 @@ func TestPublishReaderSelectionShrinksInPlace(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	}
 }
+
+// maskResult is the filter result that keeps rows of an input of n rows, as
+// a mask; the bitmap is freed when the test ends.
+func maskResult(t testing.TB, rows []int64, n int) engine.ReaderFilterResult {
+	mp := mpool.MustNewZero()
+	mask := new(bitmap.Bitmap)
+	require.NoError(t, mask.InitWithRows(int64(n), rows, mp))
+	t.Cleanup(func() {
+		mask.Free()
+		mpool.DeleteMPool(mp)
+	})
+	return engine.ReaderFilterResult{Mask: mask}
+}
+
+// A mask result must cover exactly the input rows, keep the reported count,
+// and not come with a list.
+func TestValidateReaderFilterResultMask(t *testing.T) {
+	ok := maskResult(t, []int64{1, 3}, 5)
+	require.NoError(t, validateReaderFilterResult(ok, 5, 2))
+	require.Error(t, validateReaderFilterResult(ok, 6, 2), "length differs from the input rows")
+	require.Error(t, validateReaderFilterResult(ok, 5, 3), "count differs from the output rows")
+	both := ok
+	both.Sels = []int64{1, 3}
+	require.Error(t, validateReaderFilterResult(both, 5, 2))
+	require.Equal(t, 2, ok.Count(5))
+	require.Equal(t, []int64{1, 3}, ok.RowList(nil))
+	var request engine.ReaderFilterRequest
+	require.Equal(t, []int64{1, 3}, request.RowList(ok))
+	list := engine.ReaderFilterResult{Sels: []int64{4}}
+	require.Equal(t, []int64{4}, request.RowList(list))
+	require.Equal(t, 1, list.Count(5))
+	require.Equal(t, 5, engine.ReaderFilterResult{All: true}.Count(5))
+}
