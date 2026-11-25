@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -76,15 +74,6 @@ func TestConvRowBasesRemoteFallback(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, physical.Text, peerAddr)
 			var value string
-			require.NoError(t, db.QueryRowContext(ctx, query).Scan(&value))
-			require.Equal(t, "255,10", value)
-			rt := moruntime.ServiceRuntime(peer.ServiceID())
-			oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
-			defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-			physical, err = testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
-			require.NoError(t, err)
-			require.NotContains(t, physical.Text, peerAddr)
 			require.NoError(t, db.QueryRowContext(ctx, query).Scan(&value))
 			require.Equal(t, "255,10", value)
 			stmt, err := db.PrepareContext(ctx, "select conv(?,?,?)")

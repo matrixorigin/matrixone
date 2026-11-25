@@ -62,7 +62,7 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 		{Insert: &pipeline.Insert{TableDef: &pb.TableDef{Indexes: []*pb.IndexDef{{KeyFormat: 1}}}}},
 	} {
 		wireOwner := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{instruction}}
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, wireOwner), "disabled")
+		require.ErrorContains(t, validateRemoteExpressionPipeline(nil, wireOwner), "disabled")
 		data, err := wireOwner.Marshal()
 		require.NoError(t, err)
 		_, err = decodeScope(data, c.proc, true, nil)
@@ -105,7 +105,7 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	require.ErrorContains(t, err, "disabled")
 	require.Nil(t, defs)
 	require.Nil(t, extra)
-	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &pipeline.Pipeline{
+	require.NoError(t, validateRemoteExpressionPipeline(c.proc, &pipeline.Pipeline{
 		InstructionList: []*pipeline.Instruction{{Agg: &pipeline.Group{Types: []pb.Type{{Id: int32(types.T_varchar), Charset: 3}}}}},
 	}))
 	// The transport codec can retain a known domain without admitting it.

@@ -54,7 +54,6 @@ func TestStampSessionKnobs(t *testing.T) {
 	require.Zero(t, spec.InternalTopk)
 	require.Zero(t, spec.MaxInternalTopk)
 	require.Zero(t, spec.MaxNprobe)
-	require.Equal(t, int64(IndexSearchScanProtocolVersion), RequiredProtocolVersion(spec))
 
 	// no resolver (a CN without a session) and unset variables leave spec as is
 	spec = &plan.IndexSearchScan{Index: ivfflat}
@@ -165,13 +164,4 @@ func TestApplySearchKnobsInternalTopKLimit(t *testing.T) {
 
 	// hnsw has no limit
 	require.NoError(t, ApplySearchKnobs(&searchplugin.Request{ResultLimit: 10}, &plan.IndexSearchScan{Index: hnsw, InternalTopk: 20000}, resolve))
-}
-
-func TestRequiredProtocolVersion(t *testing.T) {
-	require.Equal(t, IndexSearchScanProtocolVersion, RequiredProtocolVersion(&plan.IndexSearchScan{}))
-	require.Equal(t, IndexSearchScanProtocolVersion, RequiredProtocolVersion(nil))
-	for _, spec := range []*plan.IndexSearchScan{{InternalTopk: 1}, {MaxInternalTopk: 1}, {MaxNprobe: 1}} {
-		require.Equal(t, SearchKnobsProtocolVersion, RequiredProtocolVersion(spec))
-	}
-	require.Greater(t, SearchKnobsProtocolVersion, IndexSearchScanProtocolVersion)
 }

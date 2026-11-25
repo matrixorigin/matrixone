@@ -598,16 +598,6 @@ func containsVarExprInExpressionGetters(value any) bool {
 
 type remoteFunctionPredicate func(functionID, overloadID int32) bool
 
-func pipelineContainsPadSpaceCast(p *pipeline.Pipeline) bool {
-	return pipelineContainsFunction(p, func(functionID, overloadID int32) bool {
-		return functionID == function.CAST && (overloadID == 2 || overloadID == 3)
-	})
-}
-
-func pipelineContainsFunction(p *pipeline.Pipeline, predicate remoteFunctionPredicate) bool {
-	return containsFunctionInValue(reflect.ValueOf(p), nil, predicate)
-}
-
 func containsFunctionInExpr(
 	expr *plan.Expr,
 	seen map[uintptr]struct{},

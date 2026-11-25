@@ -492,13 +492,9 @@ func (c *Compile) bindPlanSnapshotForCompile() {
 }
 
 // captureStringShuffleHashAlgorithm starts a new execution owner-mapping
-// generation. MOProtocolVersion is consulted exactly once; operators consume
-// only the frozen Process value afterwards.
+// generation; operators consume only the frozen Process value afterwards.
 func (c *Compile) captureStringShuffleHashAlgorithm() {
-	c.stringShuffleHashAlgorithm = process.StringShuffleHashLegacy
-	if supportsStableStringShuffleHash(c.proc.GetService()) {
-		c.stringShuffleHashAlgorithm = process.StringShuffleHashComplete
-	}
+	c.stringShuffleHashAlgorithm = process.StringShuffleHashComplete
 	c.stringShuffleHashAlgorithmFrozen = true
 	c.applyStringShuffleHashAlgorithm()
 }
@@ -522,16 +518,6 @@ func (c *Compile) bindStringShuffleHashAlgorithmForCompile() {
 		return
 	}
 	c.applyStringShuffleHashAlgorithm()
-}
-
-func supportsStableStringShuffleHash(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	protocolVersion, valid := version.(int64)
-	return ok && valid && protocolVersion >= defines.MORPCVersion33
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -1528,9 +1514,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainRemoteExpressionWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.constrainStrictWriteWorkers(); err != nil {
-		return nil, err
-	}
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
@@ -2134,8 +2117,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		} else if canPreserveParallelUnionAllBranches(childNode) &&
 			c.canCompileParallelUnionAllAggregate(node) {
 			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
-		} else if isLocalPreAggregationGroup(node, childNode) &&
-			!c.hasUnsupportedRemoteGroupWire(node) {
+		} else if isLocalPreAggregationGroup(node, childNode) {
 			ss, err = c.compileLocalPreAggregationScope(step, curNodeIdx, nodes)
 		} else {
 			ss, err = c.compilePlanScope(step, childNodeID, nodes)
@@ -3493,12 +3475,6 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 			return moerr.NewNotSupported(c.proc.Ctx, "MongoDB MVP requires __mo_query = <constant>")
 		}
 		scan.IncludeQueryColumn = mongoQueryColumnUsed(node, node.ProjectList)
-		if mongoScanUsesV44Payload(scan) && !supportsRemoteMongoUserQuery(c.proc.GetService()) {
-			return moerr.NewNotSupported(
-				c.proc.Ctx,
-				"MongoDB query semantics require MORPC protocol version 44",
-			)
-		}
 		return nil
 	}
 
@@ -3512,12 +3488,6 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 		mongoQueryColumnUsed(node, node.ProjectList)
 	if len(queryList) == 0 {
 		scan.EmptyResult = true
-		if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
-			return moerr.NewNotSupported(
-				c.proc.Ctx,
-				"MongoDB query semantics require MORPC protocol version 44",
-			)
-		}
 		return nil
 	}
 	if len(queryList) != 1 {
@@ -3526,12 +3496,6 @@ func (c *Compile) configureMongoUserQuery(node *plan.Node) error {
 	query, err := sqlmongodb.ParseUserQuery(c.proc.Ctx, queryList[0])
 	if err != nil {
 		return err
-	}
-	if !supportsRemoteMongoUserQuery(c.proc.GetService()) {
-		return moerr.NewNotSupported(
-			c.proc.Ctx,
-			"MongoDB explicit queries require MORPC protocol version 44",
-		)
 	}
 	// The planner retains the selector as a local filter around an opaque
 	// aggregation pipeline. Keep the hidden carrier available even when it is
@@ -5649,18 +5613,6 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		requiredVersion, err := c.indexSearchScanProtocolVersion(node.IndexSearchScan)
-		if err != nil {
-			return nil, err
-		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, requiredVersion)
-		if err != nil {
-			return nil, err
-		}
-		if !supported {
-			return nil, moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
-		}
 		// Keep the query's coordinator-first list intact for other scans.
 		// Immutable object owners depend only on the selected identities, not ingress.
 		slices.SortFunc(nodes, func(a, b engine.Node) int {
@@ -6180,7 +6132,7 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
 	if (!nodeHasUserLevelLockFunction(node) && !nodeHasCoordinatorSessionFunction(node) &&
-		!c.needsCoordinatorIgnoreCheck(node) && !c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
+		!c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
@@ -6205,44 +6157,6 @@ func containsStatementInvariantDiagnosticInList(proc *process.Process, exprs []*
 		}
 	}
 	return false
-}
-
-// statementIgnoreEnabled is defensive because a few compile/serialization
-// tests construct a Process shell without its shared BaseProcess.  The normal
-// execution path always has both objects, but a protocol gate must not turn a
-// malformed/incomplete process into a panic while handling an error path.
-func statementIgnoreEnabled(proc *process.Process) bool {
-	return proc != nil && proc.Base != nil && proc.GetStmtProfile().GetStatementIgnore()
-}
-
-// An older CN resolves the same CHECK function ID but throws instead of
-// filtering invalid INSERT IGNORE rows. Keep only this filter local while
-// upgrading; ordinary CHECKs and fully upgraded clusters remain distributed.
-func (c *Compile) needsCoordinatorIgnoreCheck(node *plan.Node) bool {
-	if node == nil || len(node.FilterList) == 0 || !statementIgnoreEnabled(c.proc) ||
-		supportsRemoteIgnoreCheck(c.proc.GetService()) {
-		return false
-	}
-	for _, expr := range node.FilterList {
-		if containsFunctionInExpr(expr, nil, isCheckConstraintFunction) {
-			return true
-		}
-	}
-	return false
-}
-
-func isCheckConstraintFunction(functionID, _ int32) bool {
-	return functionID == function.CHECK_CONSTRAINT_ASSERT
-}
-
-func supportsRemoteIgnoreCheck(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, versionOK := value.(int64)
-	return ok && versionOK && version >= defines.MORPCVersion63
 }
 
 func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
@@ -6709,7 +6623,6 @@ func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
 func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
 	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
 		!hasQuantileExactWeighted(node) &&
-		!c.hasUnsupportedRemoteGroupWire(node) &&
 		!plan2.RequiresSingleStageDistinctAgg(node)
 }
 
@@ -7819,11 +7732,7 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
-	partitionTopNSupported := c.supportsRemotePartitionTopN()
-	if node.PartitionTopNWithTies {
-		partitionTopNSupported = c.supportsRemotePartitionTopNWithTies()
-	}
-	if node.Limit != nil && partitionTopNSupported {
+	if node.Limit != nil {
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			op := constructPartition(node)
@@ -7841,7 +7750,7 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		c.anal.isFirst = false
 		return []*Scope{rs}
 	}
-	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH && c.supportsRemoteHashPartition() {
+	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
 		rs := c.newMergeScope(ss)
 		arg := constructPartition(node)
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
@@ -7866,12 +7775,6 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
-	if node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
-		// A mixed-version cluster cannot understand the HASH pipeline field.
-		// Keep both its prerequisite local orders and its coordinator algorithm
-		// on the legacy path.
-		arg.Algorithm = plan.Node_PARTITION_ALGORITHM_SORT
-	}
 	if node.PartitionByCount > 0 {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
@@ -8094,8 +7997,7 @@ func shouldUseDistributedOrderedTop(
 }
 
 func (c *Compile) compileTop(node *plan.Node, topN *plan.Expr, ss []*Scope) []*Scope {
-	useOrderedStreams := supportsDistributedOrderedTop(c.proc.GetService()) &&
-		hasMaterializedTopOrderColumns(node.OrderBy) &&
+	useOrderedStreams := hasMaterializedTopOrderColumns(node.OrderBy) &&
 		shouldUseDistributedOrderedTop(node, topN, ss)
 	// use topN TO make scope.
 	if c.IsSingleScope(ss) {
@@ -8452,8 +8354,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
-		hasQuantileExactWeighted(node) ||
-		c.hasUnsupportedRemoteGroupWire(node) {
+		hasQuantileExactWeighted(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
 	if c.IsSingleScope(ss) {
@@ -8461,17 +8362,6 @@ func (c *Compile) compileGroupWithoutShuffle(
 	}
 	return c.compileMergeGroup(
 		node, ss, ns, distinctRequiresSingleStage)
-}
-
-func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
-	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
-		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
-		(canonicalHLLAddRequiredVersion(node) > c.remoteProtocolVersion()) ||
-		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
-		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
-		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) ||
-		(hasQuantileExactWeighted(node) && !c.supportsQuantileExactWeightedDispatch())
 }
 
 // Local reduction may replace a complete child only when the parent establishes
@@ -8756,27 +8646,6 @@ func hasQuantileExactWeighted(node *plan.Node) bool {
 	return false
 }
 
-func hasApproxPercentile(node *plan.Node) bool {
-	for _, agg := range node.AggList {
-		if fn := agg.GetF(); fn != nil && fn.Func.ObjName == plan2.NameApproxPercentile {
-			return true
-		}
-	}
-	return false
-}
-
-func hasHLLAggregate(node *plan.Node) bool {
-	for _, agg := range node.AggList {
-		if fn := agg.GetF(); fn != nil {
-			switch fn.Func.ObjName {
-			case "approx_count", "approx_count_distinct", "hll_add_agg", "hll_merge_agg":
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func hasCanonicalHLLAddAggregate(node *plan.Node) bool {
 	return canonicalHLLAddRequiredVersion(node) != 0
 }
@@ -8916,19 +8785,6 @@ func hasLegacyFloatDistinctKeyWire(node *plan.Node) bool {
 	return false
 }
 
-func hasVarianceAggregate(node *plan.Node) bool {
-	for _, agg := range node.AggList {
-		if fn := agg.GetF(); fn != nil {
-			switch int64(uint64(fn.Func.Obj) & function.DistinctMask) {
-			case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
-				aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // hasWidenedDecimalSum reports SUM expressions whose public result is
 // Decimal256. Before MORPC v73, a new CN can still exchange the legacy
 // Decimal128 partial state with an old CN, but a final shuffle Group evaluates
@@ -8955,516 +8811,9 @@ func hasWidenedDecimalSum(node *plan.Node) bool {
 	return false
 }
 
-func (c *Compile) supportsRemoteOrderedAggregates() bool {
-	return supportsRemoteOrderedAggregates(c.proc.GetService())
-}
-
-func (c *Compile) supportsRemoteOrderedSetAggregates() bool {
-	return supportsRemoteOrderedSetAggregates(c.proc.GetService())
-}
-
-func (c *Compile) supportsRemoteApproxPercentile() bool {
-	return supportsRemoteApproxPercentile(c.proc.GetService())
-}
-
-func (c *Compile) supportsRemoteHLL() bool {
-	return supportsRemoteHLL(c.proc.GetService())
-}
-
-func (c *Compile) supportsRemoteCanonicalHLLAdd() bool {
-	return c.remoteProtocolVersion() >= defines.MORPCVersion88
-}
-
-func (c *Compile) supportsRemoteCanonicalTextHLLAdd() bool {
-	return c.remoteProtocolVersion() >= defines.MORPCVersion91
-
-}
-
-func (c *Compile) supportsRemoteCanonicalFloatHLLAdd() bool {
-	return c.remoteProtocolVersion() >= defines.MORPCVersion92
-}
-
-func (c *Compile) remoteProtocolVersion() int64 {
-	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return 0
-	}
-	protocolVersion, _ := version.(int64)
-	return protocolVersion
-}
-
-func (c *Compile) supportsRemoteGroupHashString() bool {
-	return supportsRemoteGroupHashString(c.proc.GetService())
-}
-
-func (c *Compile) supportsRemoteCanonicalDistinctKeyWire() bool {
-	return supportsRemoteCanonicalDistinctKeyWire(c.proc.GetService())
-}
-
-func supportsRemoteOrderedAggregates(service string) bool {
-	// MOProtocolVersion is the service-local deployment rollout gate.
-	// Deployment orchestration raises it after participating receivers
-	// understand Aggregate.config_type and lowers it before rollback.
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion6
-}
-
-func supportsRemoteOrderedSetAggregates(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion17
-}
-
-func supportsRemoteOrderedSetExtendedTypes(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion84
-}
-
-func supportsRemoteApproxPercentile(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion76
-}
-
-func supportsRemoteHLL(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion77
-}
-
-func supportsRemoteCanonicalHLLAdd(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion88
-}
-
-func supportsRemoteCanonicalTextHLLAdd(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion91
-}
-
-func supportsRemoteCanonicalFloatHLLAdd(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion92
-}
-
-func supportsRemoteGroupHashString(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion78
-}
-
-func supportsRemoteCanonicalDistinctKeyWire(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion79
-}
-
-func (c *Compile) supportsRemoteVarianceAggregates() bool {
-	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion35
-}
-
-func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
-	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion73
-}
-
-func (c *Compile) supportsRemotePartitionTopN() bool {
-	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion19
-}
-
-func (c *Compile) supportsRemotePartitionTopNWithTies() bool {
-	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion69
-}
-
-func (c *Compile) supportsRemoteHashPartition() bool {
-	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion47
-}
-
-func supportsRemoteTextCollationAggregates(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion14
-}
-
-func supportsRemoteAsofJoin(service string) bool {
-	version, ok := moruntime.ServiceRuntime(service).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion27
-}
-
-// supportsRemoteMongoUserQuery guards the MongoScan payload that carries
-// validated BSON. An older CN would ignore these protobuf fields and silently
-// execute the legacy unfiltered Find path, so explicit queries must wait until
-// deployment has raised the cluster's oldest-live protocol version.
-func supportsRemoteMongoUserQuery(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion44
-}
-
-// mongoScanUsesV44Payload reports whether a scan uses any field introduced by
-// the MongoDB query protocol. Older receivers ignore all three fields, so each
-// one must be rejected during a mixed-version rollout.
-func mongoScanUsesV44Payload(scan *plan.MongoScan) bool {
-	return scan != nil && (scan.UserQueryKind != 0 || scan.IncludeQueryColumn || scan.EmptyResult)
-}
-
-func supportsRemoteTargetAwareUpdate(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion20
-}
-
-func supportsRemoteRightDedupInputKeysUnique(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion21
-}
-
-func supportsRemoteAffectedRowsSelectors(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion24
-}
-
-func supportsRemoteODKUAffectedRows(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion50
-}
-
-func supportsRemoteODKUActionRows(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion51
-}
-
-func supportsRemoteCrossDomainStringLiterals(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion23
-}
-
-func remoteMORPCProtocolVersion(service string) (int64, bool) {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return 0, false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return 0, false
-	}
-	protocolVersion, ok := version.(int64)
-	return protocolVersion, ok
-}
-
-func supportsRemoteStatementLastInsertID(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion26
-}
-
-func supportsRemoteODKUResultTracking(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion134
-}
-
-func supportsRemoteAutoIncrementSessionOptions(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion56
-}
-
-func supportsRemoteUpdateChangedRows(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion25
-}
-
-func supportsRemotePadSpaceSemantics(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion40
-}
-
-func supportsRemoteViewDefinitionFunction(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion126
-}
-
-func supportsRemoteParquetWholeFileFanout(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion45
-}
-
-func supportsRemoteGroupingSetExpansion(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion49
-}
-
-func supportsDistributedOrderedTop(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion53
-}
-
-func supportsRemoteArrowLoadPipeline(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion57
-}
-
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
-		node.Stats.HashmapStats.Shuffle &&
-		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
-		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
-		(!hasQuantileExactWeighted(node) || c.supportsQuantileExactWeightedDispatch()) &&
-		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
-		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
-		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
-		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
-		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
-		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
-		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
-		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum()) &&
-		(!hasJSONMinMaxAggregate(node) || c.remoteProtocolVersion() >=
-			requiredExpressionContractProtocolVersion(plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}))
-}
-
-// supportsQuantileExactWeightedDispatch is the compile-time fast-fail layer of
-// the design's D10 mixed-version gate: the exact weighted percentile aggregate
-// is distributed only when the coordinator AND every CN in the cluster
-// inventory advertise the protocol capability (an incomplete inventory counts
-// as unsupported). The destination is additionally verified by the
-// requiredProtocol floor raised during remote-scope encoding and confirmed on
-// the live stream before the pipeline is delivered.
-func (c *Compile) supportsQuantileExactWeightedDispatch() bool {
-	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion131)
-	return err == nil && supported
-}
-
-// supportsRemoteQuantileExactWeighted supplies only the coordinator-side
-// self-gate and its coherent not-supported message; destination capability is
-// verified by AllCNsSupportProtocol, the encoded requiredProtocol floor and
-// the send-time stream confirmation.
-func supportsRemoteQuantileExactWeighted(service string) bool {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return false
-	}
-	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return false
-	}
-	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion131
+		node.Stats.HashmapStats.Shuffle
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
