@@ -178,19 +178,38 @@ func (c *Compile) constrainPartitionOwnershipWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN || len(c.cnList) <= 1 {
 		return nil
 	}
+	var scanFloor int64
 	for _, node := range qry.GetNodes() {
 		if node.GetNodeType() != plan.Node_INDEX_SEARCH_SCAN ||
 			!c.canPartitionIndexSearchScan(qry, node) {
 			continue
 		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList,
-			vectorscan.StablePartitionOwnershipProtocolVersion)
-		if err != nil || supported {
+		if scanFloor == 0 {
+			supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList,
+				vectorscan.StablePartitionOwnershipProtocolVersion)
+			if err != nil || supported {
+				return err
+			}
+		}
+		// Ownership is optional; the underlying scan and its session knobs
+		// are not. Check the entire query before changing its placement.
+		spec, err := remoteIndexSearchScan(node.IndexSearchScan, c.proc)
+		if err != nil {
 			return err
 		}
-		c.execType = plan2.ExecTypeAP_ONECN
-		c.cnList, err = c.scheduleQueryWorkers()
+		scanFloor = max(scanFloor, vectorscan.RequiredProtocolVersion(spec))
+	}
+	if scanFloor == 0 {
+		return nil
+	}
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, scanFloor)
+	if err != nil {
 		return err
 	}
-	return nil
+	if !supported {
+		return moerr.NewNotSupportedNoCtxf("index search scan requires MORPC protocol version %d on every CN", scanFloor)
+	}
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.cnList, err = c.scheduleQueryWorkers()
+	return err
 }

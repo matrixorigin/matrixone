@@ -111,10 +111,12 @@ func TestVectorScanProtocolCheckReportsReceivingInstanceVersion(t *testing.T) {
 
 func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 	workers := engine.Nodes{{Id: "b", Addr: "b:6001"}, {Id: "a", Addr: "a:6001"}}
-	for _, mode := range []string{"supported", "old worker", "old coordinator", "unknown worker", "probe failure", "probe deadline", "canceled", "cancel during probe", "forced local", "excluded ingress"} {
+	for _, mode := range []string{"supported", "old worker", "old coordinator", "below scan floor", "below session knobs", "later scan needs knobs", "unknown worker", "probe failure", "probe deadline", "canceled", "cancel during probe", "forced local", "excluded ingress"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, workers)
 			node := vectorPlacementNode()
+			q := &plan.Query{Nodes: []*plan.Node{node}, Steps: []int32{0}}
+			var rejectedFloor int64
 			switch mode {
 			case "old worker":
 				client.version = defines.MORPCVersion134
@@ -122,6 +124,27 @@ func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 				moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
 			case "unknown worker":
 				client.customResponse = true
+				rejectedFloor = vectorscan.IndexSearchScanProtocolVersion
+			case "below scan floor":
+				rejectedFloor = vectorscan.IndexSearchScanProtocolVersion
+				client.version = rejectedFloor - 1
+			case "below session knobs":
+				rejectedFloor = vectorscan.SearchKnobsProtocolVersion
+				client.version = rejectedFloor - 1
+				c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+					if name == vectorscan.SessionVarITopK {
+						return int64(8), nil
+					}
+					return nil, nil
+				})
+			case "later scan needs knobs":
+				rejectedFloor = vectorscan.SearchKnobsProtocolVersion
+				client.version = rejectedFloor - 1
+				second := vectorPlacementNode()
+				second.NodeId = 1
+				second.IndexSearchScan.InternalTopk = 8
+				q.Nodes = append(q.Nodes, second)
+				q.Steps = append(q.Steps, second.NodeId)
 			case "probe failure":
 				client.customResponse, client.sendErr = true, errors.New("unavailable")
 			case "probe deadline":
@@ -142,9 +165,15 @@ func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 					Explicit: true, CurrentCNPolicy: schedule.CurrentCNExcluded,
 				})
 			}
-			q := &plan.Query{Nodes: []*plan.Node{node}, Steps: []int32{0}}
 			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
 			err := c.constrainPartitionOwnershipWorkers(q)
+			if rejectedFloor != 0 {
+				require.ErrorContains(t, err, fmt.Sprintf("index search scan requires MORPC protocol version %d on every CN", rejectedFloor))
+				require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+				require.Equal(t, workers, c.cnList)
+				require.Zero(t, node.IndexSearchScan.InternalTopk, "negotiation must not mutate the reusable plan")
+				return
+			}
 			if mode == "canceled" || mode == "cancel during probe" {
 				require.ErrorIs(t, err, context.Canceled)
 				return
@@ -404,6 +433,11 @@ func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 			}
 			require.NoError(t, c.constrainRequiredIVFWorkers(q))
 			err := c.constrainPartitionOwnershipWorkers(q)
+			if mode == "unknown" {
+				require.ErrorContains(t, err, fmt.Sprintf("index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion))
+				require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+				return
+			}
 			if mode == "canceled" {
 				require.ErrorIs(t, err, context.Canceled)
 				return
@@ -416,7 +450,7 @@ func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 			}
 			require.NoError(t, err)
 			if mode != "supported" && (mode != "device" || brute_force.DispatchesToDevice[float32](true)) {
-				// Older/inaccessible cohort or a device path localizes the whole query.
+				// A scan-compatible older cohort or a device path localizes the whole query.
 				require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 				require.Len(t, c.cnList, 1)
 				require.Equal(t, c.addr, c.cnList[0].Addr)
