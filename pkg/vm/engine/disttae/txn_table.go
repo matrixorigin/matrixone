@@ -2237,8 +2237,20 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
-	// 1. delete old table metadata
-	if err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
+	// Replacing the catalog row must preserve the original object identity
+	// and ownership. Read it alongside the row ID needed by the delete.
+	var ownership tableCatalogOwnership
+	readOwnership := &ownership
+	if replaceDefReq != nil && replaceDefReq.GetReplaceDef().GetPreserveOwnership() {
+		replacement := replaceDefReq.GetReplaceDef()
+		ownership = tableCatalogOwnership{
+			creator:     replacement.GetPreservedCreator(),
+			owner:       replacement.GetPreservedOwner(),
+			createdTime: types.Timestamp(replacement.GetPreservedCreatedTime()),
+		}
+		readOwnership = nil
+	}
+	if err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn, readOwnership); err != nil {
 		return err
 	}
 
@@ -2248,20 +2260,12 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
-	var preservedOwnership *tableCatalogOwnership
-	if replaceDefReq != nil && replaceDefReq.GetReplaceDef().GetPreserveOwnership() {
-		preservedOwnership = &tableCatalogOwnership{
-			creator:     replaceDefReq.GetReplaceDef().GetPreservedCreator(),
-			owner:       replaceDefReq.GetReplaceDef().GetPreservedOwner(),
-			createdTime: types.Timestamp(replaceDefReq.GetReplaceDef().GetPreservedCreatedTime()),
-		}
-	}
 	// deleteTable(forAlter=true) deliberately leaves the logical-ID index row for
 	// the recreation to replace. Pass that intent explicitly: inferring it from
 	// the hidden-table name would leave the old row and insert a duplicate.
 	if err := tbl.db.createWithID(
 		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
-		tbl.defs, !createdInTxn, tbl.extraInfo, preservedOwnership,
+		tbl.defs, !createdInTxn, tbl.extraInfo, &ownership,
 	); err != nil {
 		return err
 	}

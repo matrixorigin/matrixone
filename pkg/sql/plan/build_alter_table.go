@@ -1542,6 +1542,12 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
+	if slices.ContainsFunc(stmt.Options, func(option tree.AlterTableOption) bool {
+		_, rename := option.(*tree.AlterTableRenameIndexClause)
+		return rename
+	}) {
+		return buildAlterRenameIndexes(ctx.GetContext(), stmt, schemaName, tableDef)
+	}
 	pureAddColumns := pureAlterAddColumns(stmt.Options)
 	bindings := analyzeAlterColumnBindings(tableDef, stmt.Options)
 	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options, bindings)

@@ -2013,6 +2013,27 @@ func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTableDumpManifestCreateSQLUsesLiveIndexName(t *testing.T) {
+	def := &plan.TableDef{
+		Name:      "source",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(v int, KEY old_name(v))",
+		Cols: []*plan.ColDef{{
+			Name:    "v",
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{NullAbility: true},
+		}},
+		Indexes: []*plan.IndexDef{{IndexName: "new_name", Parts: []string{"v"}}},
+	}
+	ddl, err := tableDumpManifestCreateSQL(t.Context(), def, nil)
+	require.NoError(t, err)
+	require.NotContains(t, ddl, "old_name")
+	require.Contains(t, ddl, "`new_name`")
+	stmt, err := mysql.ParseOne(t.Context(), ddl, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+}
+
 func TestTableDumpManifestCreateSQLPreservesLegacyUnboundedBlob(t *testing.T) {
 	def := &plan.TableDef{
 		Name:      "source",

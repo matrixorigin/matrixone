@@ -1091,6 +1091,12 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: AddFk,
 				}
+			case *plan.AlterTable_Action_RenameIndex:
+				rename := *act.RenameIndex
+				rename.XXX_unrecognized = slices.Clone(rename.XXX_unrecognized)
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_RenameIndex{RenameIndex: &rename},
+				}
 			case *plan.AlterTable_Action_AlterAutoIncrement:
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AlterAutoIncrement{

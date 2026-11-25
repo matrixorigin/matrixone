@@ -2232,6 +2232,11 @@ message AlterTableAlterIndex {
   bool visible = 4;
 }
 
+message AlterTableRenameIndex {
+  string old_name = 1;
+  string new_name = 2;
+}
+
 message AlterTableAlterReIndex {
   string db_name = 1;
   string table_name = 2;
@@ -2323,6 +2328,7 @@ message AlterTable {
       AlterRenameColumn alter_rename_column = 12;
       AlterTableAlterAutoUpdate alter_auto_update = 13;
       AlterTableAutoIncrement alter_auto_increment = 14;
+      AlterTableRenameIndex rename_index = 15;
     }
   }
   string database = 1;
