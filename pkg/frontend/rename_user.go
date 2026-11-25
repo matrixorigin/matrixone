@@ -194,7 +194,7 @@ func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err
 	}
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true, internalExecution: true})
 	defer bh.Close()
-	if err = bh.Exec(ctx, "begin;"); err != nil {
+	if err = beginPrincipalNamespaceTxn(ctx, ses, bh); err != nil {
 		return err
 	}
 	defer func() { err = finishTxn(ctx, bh, err) }()

@@ -968,17 +968,21 @@ func TestCancellableBackgroundTxnCreationUsesRequestContext(t *testing.T) {
 
 func TestPrincipalNamespaceDDLBoundsTxnCreation(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		run  func(context.Context, *Session) error
+		name                 string
+		rollbackOnBeginError bool
+		run                  func(context.Context, *Session) error
 	}{
-		{"create user", func(ctx context.Context, ses *Session) error {
+		{"create user", true, func(ctx context.Context, ses *Session) error {
 			return InitUser(ctx, ses, ses.GetTenantInfo(), &createUser{Users: []*user{{Username: "new_user"}}})
 		}},
-		{"create role", func(ctx context.Context, ses *Session) error {
+		{"create role", true, func(ctx context.Context, ses *Session) error {
 			return InitRole(ctx, ses, ses.GetTenantInfo(), &tree.CreateRole{Roles: []*tree.Role{{UserName: "new_role"}}})
 		}},
-		{"alter role", func(ctx context.Context, ses *Session) error {
+		{"alter role", true, func(ctx context.Context, ses *Session) error {
 			return doAlterRole(ctx, ses, &tree.AlterRole{OldName: "old_role", NewName: "new_role"})
+		}},
+		{"rename user", false, func(ctx context.Context, ses *Session) error {
+			return doRenameUser(ctx, ses, renameStatement("old_user", "new_user"))
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1001,14 +1005,15 @@ func TestPrincipalNamespaceDDLBoundsTxnCreation(t *testing.T) {
 			var opts *BackgroundExecOption
 			stubSetDefaultRoleBackgroundExec(t, bh, &opts)
 			started := time.Now()
-			gomock.InOrder(
-				bh.EXPECT().Exec(gomock.Any(), "begin;").DoAndReturn(func(ctx context.Context, _ string) error {
-					beginCtx = ctx
-					return wantErr
-				}),
-				bh.EXPECT().Exec(reqCtx, "rollback;").Return(nil),
-				bh.EXPECT().Close(),
-			)
+			lastCall := bh.EXPECT().Exec(gomock.Any(), "begin;").DoAndReturn(func(ctx context.Context, _ string) error {
+				beginCtx = ctx
+				return wantErr
+			})
+			// RENAME USER only installs its rollback after BEGIN succeeds.
+			if tc.rollbackOnBeginError {
+				lastCall = bh.EXPECT().Exec(reqCtx, "rollback;").Return(nil).After(lastCall)
+			}
+			bh.EXPECT().Close().After(lastCall)
 
 			require.ErrorIs(t, tc.run(reqCtx, ses), wantErr)
 			require.True(t, opts.cancelTxnCreateWithRequest)
