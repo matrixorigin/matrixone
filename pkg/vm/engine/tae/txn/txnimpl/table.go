@@ -1578,21 +1578,29 @@ func (tbl *txnTable) findDeletesForCandidates(
 	}
 	appendCandidates(candidates.appendable, candidates.appendableByKey)
 	appendCandidates(candidates.nonAppendable, candidates.nonAppendableByKey)
-	copyBack := func() {
+	copyBack := func() error {
 		for i, ref := range refs {
 			if combined.IsNull(i) {
-				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, ref.rows.GetAllocator())
+				if err := containers.MarkNull(ref.rows.GetDownstreamVector(), uint32(ref.index)); err != nil {
+					return err
+				}
 			} else {
 				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, ref.rows.GetAllocator())
 			}
 		}
+		return nil
 	}
 	err := tbl.findDeletes(ctx, combined, from, to, metricPhase)
 	// findDeletes may have completed filtering for earlier tombstones before
 	// returning a WW conflict from a later one. Preserve that partial result so
 	// callers that intentionally tolerate the conflict do not resurrect a stale
 	// candidate from the unfiltered vectors.
-	copyBack()
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+		return err
+	}
+	if copyErr := copyBack(); copyErr != nil {
+		return copyErr
+	}
 	return err
 }
 
