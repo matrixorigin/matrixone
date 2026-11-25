@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -50,8 +48,6 @@ func mockSchema(colCnt int, pkIdx int) ([]string, []types.Type, []uint16) {
 
 func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	data := types.EncodeSlice([]int64{7})
-	lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
-	require.NoError(t, err)
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 1, data, nil, nil), error(nil)
 	require.NoError(t, err)
 	bat := batch.New([]string{"v"})
@@ -63,8 +59,7 @@ func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	require.ErrorContains(t, err, "unique-owned vector backing")
 	require.True(t, vec.IsReadOnly())
 	bat.Clean(nil)
-	lease.Release() // the lender releases what it lent
-	require.Nil(t, lease.Bytes())
+	require.Equal(t, []int64{7}, types.DecodeSlice[int64](data), "the lender's backing is untouched")
 }
 
 func TestNewSinker(t *testing.T) {

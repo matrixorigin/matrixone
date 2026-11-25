@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -137,5 +136,5 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 }
 
 func heldPins(request *engine.ReaderFilterRequest) int {
-	return request.Pins().(*bufferlease.Holder).Len()
+	return request.Pins().Len()
 }

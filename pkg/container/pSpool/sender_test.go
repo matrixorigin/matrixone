@@ -21,8 +21,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
-
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -33,17 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// poisonedLease models a lender's backing that is reused once its last
-// reference goes: the release overwrites the bytes, so any read through a
-// stale alias observes garbage.
-func poisonedLease(t *testing.T, backing []byte) *bufferlease.RefCounted {
-	lease, err := bufferlease.NewRefCounted(backing, int64(cap(backing)), func() {
-		for i := range backing {
-			backing[i] = 0xFF
-		}
-	})
-	require.NoError(t, err)
-	return lease
+// poison models a lender reusing its backing at its next call: it overwrites
+// the bytes, so any read through a stale alias observes garbage.
+func poison(backing []byte) {
+	for i := range backing {
+		backing[i] = 0xFF
+	}
 }
 
 // The spool copies an aliased producer batch: the copy must stay valid after
@@ -51,7 +44,6 @@ func poisonedLease(t *testing.T, backing []byte) *bufferlease.RefCounted {
 func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	mp := mpool.MustNewZero()
 	data := types.EncodeSlice([]int64{11, 22})
-	lease := poisonedLease(t, data)
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 2, data, nil, nil), error(nil)
 	require.NoError(t, err)
 	source := batch.New([]string{"v"})
@@ -68,8 +60,7 @@ func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	)
 	require.False(t, copied.Vecs[0].IsReadOnly())
 	source.Clean(mp)
-	lease.Release() // the producer's next call releases what it lent
-	require.Nil(t, lease.Bytes())
+	poison(data) // the producer's next call reuses what it lent
 	require.Equal(t, []int64{11, 22}, vector.MustFixedColNoTypeCheck[int64](copied.Vecs[0]))
 
 	cache.put(copied, aliased)
@@ -82,7 +73,6 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	first := []byte("first payload longer than twenty three bytes")
 	second := []byte("second payload longer than twenty three bytes")
 	area := append(append([]byte(nil), first...), second...)
-	lease := poisonedLease(t, area)
 
 	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vec.PreExtend(2, mp))
@@ -112,8 +102,7 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	require.False(t, copied.Vecs[0].IsReadOnly())
 
 	source.Clean(mp)
-	lease.Release() // the producer's next call releases what it lent
-	require.Nil(t, lease.Bytes())
+	poison(area) // the producer's next call reuses what it lent
 	require.Equal(t, string(first), copied.Vecs[0].GetStringAt(0))
 	require.Equal(t, string(second), copied.Vecs[0].GetStringAt(1))
 

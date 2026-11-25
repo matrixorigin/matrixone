@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1018,7 +1017,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		}, ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnUnused}, Select: func(b *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			require.Equal(t, 8, b.RowCount())
 			require.Equal(t, 8, b.Vecs[1].Length())
-			require.Zero(t, request.Pins().(*bufferlease.Holder).Len(), "owned/unused demand must avoid cache pins")
+			require.Zero(t, request.Pins().Len(), "owned/unused demand must avoid cache pins")
 			require.True(t, b.Vecs[1].IsReadOnly(), "validated varlen input should stay pinned only in the callback")
 			return engine.ReaderFilterResult{Sels: []int64{1, 3, 5}}, nil
 		}}

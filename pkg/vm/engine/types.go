@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -1350,7 +1349,7 @@ type ReaderFilterRequest struct {
 	// request's owner is the lender, not the output batch. A reader releases
 	// the pins before it reuses the output batch for the next block, and the
 	// owner releases them when it is done with the batch (ReleasePins).
-	pins bufferlease.Holder
+	pins objectio.CachePins
 	// Select evaluates the same ordered predicate chain without shrinking its
 	// input. Sels uses the original live-row domain and is borrowed until the
 	// next callback. A supporting reader gathers that mapping once; unsupported
@@ -1475,8 +1474,8 @@ func (r *ReaderFilterRequest) BorrowColumns(positions []int, width int) []bool {
 	return r.borrowColumns
 }
 
-// Pins is the keeper of the cache entries that borrowed output columns alias.
-func (r *ReaderFilterRequest) Pins() bufferlease.Keeper { return &r.pins }
+// Pins holds the cache entries that borrowed output columns alias.
+func (r *ReaderFilterRequest) Pins() *objectio.CachePins { return &r.pins }
 
 // ReleasePins drops every pin. The caller guarantees that no output column
 // still aliases a pinned entry: the batch is being reused, freed, or is no

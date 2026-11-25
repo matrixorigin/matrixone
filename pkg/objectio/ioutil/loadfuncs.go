@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -204,12 +203,12 @@ func LoadColumnsDataIntoReadonly(
 // LoadColumnsDataIntoBorrowed borrows only entries with ObjectIO's immutable
 // validation capability and an admitted per-column borrow policy. A nil policy
 // preserves full borrowing; an incompatible policy conservatively copies owned.
-// keeper holds the cache pins of every borrowed destination for the lender,
-// the producer that published the destinations (for a scan, its reader
-// request): the producer releases them when it reuses or drops those vectors.
-// A nil keeper copies every column.
-func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool, keeper bufferlease.Keeper) (bool, error) {
-	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, keeper, allowBorrow)
+// pins takes the cache pins of every borrowed destination for the lender, the
+// producer that published the destinations (for a scan, its reader request):
+// the producer releases them when it reuses or drops those vectors. Nil pins
+// copy every column.
+func LoadColumnsDataIntoBorrowed(ctx context.Context, columns []uint16, typs []types.Type, fs fileservice.FileService, location objectio.Location, destinations []*vector.Vector, m *mpool.MPool, policy fileservice.Policy, allowBorrow []bool, pins *objectio.CachePins) (bool, error) {
+	_, hit, err := loadColumnsDataInto(ctx, columns, typs, fs, location, destinations, nil, nil, m, policy, false, pins, allowBorrow)
 	return hit, err
 }
 
@@ -239,7 +238,7 @@ func loadColumnsDataInto(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 	readonlyArea bool,
-	keeper bufferlease.Keeper,
+	pins *objectio.CachePins,
 	allowBorrow []bool,
 ) (deleteMask objectio.Bitmap, fromCache bool, err error) {
 	if len(columns) != len(destinations) {
@@ -350,9 +349,9 @@ func loadColumnsDataInto(
 		// destination (a column borrowed by an earlier block) becomes an owned
 		// vector of m again.
 		dm := destinationMP(destinations[i], m)
-		if keeper != nil && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
+		if pins != nil && (allowBorrow == nil || len(allowBorrow) == len(columns) && allowBorrow[i]) {
 			var borrowed bool
-			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, dm, keeper)
+			borrowed, err = objectio.TryBorrowCachedVector(destinations[i], ioVectors.Entries[i].CachedData, dm, pins)
 			if err != nil {
 				return
 			}

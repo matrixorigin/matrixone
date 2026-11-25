@@ -117,7 +117,7 @@ Both rules need `InitWithSize` to reuse capacity the way `InitWithRows` already 
 
 | Lender | What it lends | How it keeps it alive |
 | --- | --- | --- |
-| table_scan via blockio | columns borrowed from the FileService cache | the scan's `ReaderFilterRequest` holds the cache pins (`Pins`). The reader releases them before it reuses the output batch for the next block; the scan releases them in `Reset` and `Free`. Borrowing is opt-in: only columns the request explicitly retains (`ColumnUses`) are borrowed, so a caller that keeps batches (ivfflat) gets owned copies. |
+| table_scan via blockio | columns borrowed from the FileService cache | the scan's `ReaderFilterRequest` holds the cache pins in an `objectio.CachePins` (`Pins`), a plain list of cache entries and their capacity reservations. The reader releases them before it reuses the output batch for the next block; the scan releases them in `Reset` and `Free`. Borrowing is opt-in: only columns the request explicitly retains (`ColumnUses`) are borrowed, so a caller that keeps batches (ivfflat) gets owned copies. |
 | Arrow external reader | columns aliasing its record batch | retains the record it published from until `ReleaseBatch`; varlen descriptors live in its reusable `arrowbridge.Descriptors` scratch |
 | sirius | columns aliasing the native result window | nothing: the window stays valid for the callback that consumes and cleans the batch |
 
@@ -184,7 +184,7 @@ func (r *RemapList) Invert(srcRows int, dst []int32) []int32 // old→new with -
 
 ## Implementation plan
 
-Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup. Moving the selection's storage into the batch and the pins out of it comes first, in the `Batch` cleanup PR (#33184, issue #33182). For the selection, it adds `OwnSelection`, makes blockio and filter fill their output batch's own selection, turns `ReaderFilterRequest.PublishSelection` into a flag, and removes the producers' own selection bitmaps; projection and evalProjection already borrow and do not change. For pins, it removes `Batch.leases`: the scan's request holds the cache pins, the Arrow reader retains its record and owns its descriptor scratch, and sirius needs none.
+Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a duplicate and each measured with its own benchmark. The tracks are independent until the last cleanup. Moving the selection's storage into the batch and the pins out of it comes first, in the `Batch` cleanup PR (#33184, issue #33182). For the selection, it adds `OwnSelection`, makes blockio and filter fill their output batch's own selection, turns `ReaderFilterRequest.PublishSelection` into a flag, and removes the producers' own selection bitmaps; projection and evalProjection already borrow and do not change. For pins, it removes `Batch.leases`: the scan's request holds the cache pins, the Arrow reader retains its record and owns its descriptor scratch, and sirius needs none. With no lender left that needs a shared ref-counted lease, it also removes `pkg/container/bufferlease`: the runtime-filter `KeyPayload` keeps a private reference count, and cache pins are an `objectio.CachePins` list.
 
 | # | Track | PR | What changes | Measured by |
 | --- | --- | --- | --- | --- |

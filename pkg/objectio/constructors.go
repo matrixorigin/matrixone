@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -1033,14 +1032,13 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 }
 
 // TryBorrowCachedVector turns the empty dst into a read-only reference vector
-// (nil pool) over a privately validated cache column. keeper (held for the lender
-// that published dst, for a scan its reader request) holds the cache pin and, through
-// an accounted view mp, a reservation of the full pinned capacity, until it
-// drops or reuses its columns. dst must never be mutated; a consumer that
+// (nil pool) over a privately validated cache column. pins, the lender's
+// (for a scan, its reader request's), takes the cache pin and, through an
+// accounted view mp, a reservation of the full pinned capacity, until the
+// lender drops or reuses dst. dst must never be mutated; a consumer that
 // needs to write copies it first.
-func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPool, keeper bufferlease.Keeper) (bool, error) {
-	marked, ok := data.(validatedVectorCacheDataMarker)
-	if !ok || keeper == nil || mp == nil || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 || dst.GetType().Oid == types.T_json {
+func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPool, pins *CachePins) (bool, error) {
+	if !isValidatedVectorCacheData(data) || pins == nil || mp == nil || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 || dst.GetType().Oid == types.T_json {
 		return false, nil
 	}
 	var source vector.Vector
@@ -1076,24 +1074,10 @@ func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPoo
 		}
 	}
 	data.Retain()
-	lease, err := bufferlease.NewRefCounted(marked.validatedVectorBackingForScope(), data.Capacity(), func() {
-		data.Release()
-		pin.Release()
-	})
-	if err != nil {
-		data.Release()
-		pin.Release()
-		return false, err
-	}
-	// The keeper takes its own reference; ours is dropped on return, so the
-	// keeper's release is the last one.
-	defer lease.Release()
-	if err = keeper.HoldLease(lease); err != nil {
-		return false, err
-	}
+	pins.add(data, pin)
 	view, err := source.Window(0, source.Length())
 	if err != nil {
-		// The keeper keeps the pin until its next release; dst holds nothing.
+		// pins keeps the pin until the lender's next release; dst holds nothing.
 		return false, err
 	}
 	*dst = *view

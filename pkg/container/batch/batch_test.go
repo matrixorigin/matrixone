@@ -20,8 +20,6 @@ import (
 	"io"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1833,9 +1831,7 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
 			values := []int64{1, 2, 3}
 			data := types.EncodeSlice(values)
-			lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
-			require.NoError(t, err)
-			t.Cleanup(lease.Release)
+			var err error
 			bat.Vecs[1], err = vector.NewVecWithData(types.T_int64.ToType(), len(values), data, nil, nil), error(nil)
 			require.NoError(t, err)
 			bat.SetRowCount(3)
