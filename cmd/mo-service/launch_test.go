@@ -121,7 +121,6 @@ func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 		_ context.Context,
 		cfg *Config,
 		_ *stopper.Stopper,
-		_ chan struct{},
 	) error {
 		started = append(started, cfg)
 		return nil
@@ -131,7 +130,7 @@ func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 		return nil
 	}
 
-	if err := startCluster(context.Background(), nil, nil); err != nil {
+	if err := startCluster(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(started) != 6 {
@@ -153,7 +152,7 @@ func TestStartClusterStartsBuiltinProxyWithoutProxyService(t *testing.T) {
 	)
 	*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
 	*withProxy = false
-	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+	launchStartService = func(context.Context, *Config, *stopper.Stopper) error {
 		return nil
 	}
 	proxy := &testProxy{}
@@ -162,7 +161,7 @@ func TestStartClusterStartsBuiltinProxyWithoutProxyService(t *testing.T) {
 		return proxy
 	}
 
-	if err := startCluster(context.Background(), nil, nil); err != nil {
+	if err := startCluster(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if !proxy.started || proxy.address != "0.0.0.0:6001" {
@@ -183,12 +182,11 @@ func TestStartClusterDynamicAndInvalidLaunch(t *testing.T) {
 			context.Context,
 			*LaunchConfig,
 			*stopper.Stopper,
-			chan struct{},
 		) error {
 			called = true
 			return errors.New("dynamic")
 		}
-		if err := startCluster(context.Background(), nil, nil); err == nil || !called {
+		if err := startCluster(context.Background(), nil); err == nil || !called {
 			t.Fatalf("startCluster() = %v, dynamic called = %t", err, called)
 		}
 	})
@@ -200,12 +198,12 @@ func TestStartClusterDynamicAndInvalidLaunch(t *testing.T) {
 				t.Fatal("startCluster did not panic")
 			}
 		}()
-		_ = startCluster(context.Background(), nil, nil)
+		_ = startCluster(context.Background(), nil)
 	})
 	t.Run("unreadable launch", func(t *testing.T) {
 		setLaunchTestHooks(t)
 		*launchFile = filepath.Join(t.TempDir(), "missing.toml")
-		if err := startCluster(context.Background(), nil, nil); err == nil {
+		if err := startCluster(context.Background(), nil); err == nil {
 			t.Fatal("startCluster unexpectedly succeeded")
 		}
 	})
@@ -223,11 +221,11 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 		start   func([]string) error
 		emptyOK bool
 	}{
-		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil, nil) }, false},
-		{"tn", func(files []string) error { return startTNServiceCluster(ctx, files, nil, nil) }, false},
-		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil) }, false},
-		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil, nil) }, false},
-		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil, nil) }, true},
+		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil) }, false},
+		{"tn", func(files []string) error { return startTNServiceCluster(ctx, files, nil) }, false},
+		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil) }, false},
+		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil) }, false},
+		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil) }, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -241,7 +239,7 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 			if err := test.start([]string{invalid}); err == nil {
 				t.Fatal("invalid config unexpectedly succeeded")
 			}
-			launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+			launchStartService = func(context.Context, *Config, *stopper.Stopper) error {
 				return startError
 			}
 			if err := test.start([]string{valid}); !errors.Is(err, startError) {
@@ -254,11 +252,11 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	setLaunchTestHooks(t)
 	valid := writeLaunchTestFile(t, "cn.toml", "")
-	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+	launchStartService = func(context.Context, *Config, *stopper.Stopper) error {
 		return nil
 	}
 	*withProxy = false
-	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil); err != nil {
+	if err := startCNServiceCluster(context.Background(), []string{valid}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +264,7 @@ func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	launchNewProxy = func(string, *zap.Logger) goetty.Proxy {
 		return &testProxy{startErr: startError}
 	}
-	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil); !errors.Is(err, startError) {
+	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil); !errors.Is(err, startError) {
 		t.Fatalf("startCNServiceCluster() = %v, want %v", err, startError)
 	}
 }

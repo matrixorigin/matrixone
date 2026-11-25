@@ -267,13 +267,12 @@ func (l *store) mustSaveMetadata() {
 }
 
 func (l *store) addMetadata(shardID uint64, replicaID uint64, nonVoting bool) {
-	rec := metadata.LogShard{}
-	rec.ShardID = shardID
-	rec.ReplicaID = replicaID
-	rec.NonVoting = nonVoting
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.addMetadataLocked(shardID, replicaID, nonVoting)
+}
 
+func (l *store) addMetadataLocked(shardID uint64, replicaID uint64, nonVoting bool) {
 	for _, rec := range l.mu.metadata.Shards {
 		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
 			l.runtime.Logger().Info(fmt.Sprintf("addMetadata for shardID %d, "+
@@ -282,6 +281,10 @@ func (l *store) addMetadata(shardID uint64, replicaID uint64, nonVoting bool) {
 		}
 	}
 
+	rec := metadata.LogShard{}
+	rec.ShardID = shardID
+	rec.ReplicaID = replicaID
+	rec.NonVoting = nonVoting
 	l.mu.metadata.Shards = append(l.mu.metadata.Shards, rec)
 	l.mustSaveMetadata()
 }
@@ -289,7 +292,10 @@ func (l *store) addMetadata(shardID uint64, replicaID uint64, nonVoting bool) {
 func (l *store) removeMetadata(shardID uint64, replicaID uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.removeMetadataLocked(shardID, replicaID)
+}
 
+func (l *store) removeMetadataLocked(shardID uint64, replicaID uint64) {
 	shards := make([]metadata.LogShard, 0)
 	for _, rec := range l.mu.metadata.Shards {
 		if rec.ShardID != shardID || rec.ReplicaID != replicaID {
@@ -297,7 +303,6 @@ func (l *store) removeMetadata(shardID uint64, replicaID uint64) {
 		}
 	}
 	l.mu.metadata.Shards = shards
-	delete(l.mu.skippedZombies, zombieKey{shardID: shardID, replicaID: replicaID})
 	l.mustSaveMetadata()
 }
 
