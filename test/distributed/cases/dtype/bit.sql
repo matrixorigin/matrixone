@@ -156,4 +156,11 @@ WHERE table_schema = DATABASE()
 ORDER BY ordinal_position;
 SELECT id, value FROM issue_28685_bit64_ctas ORDER BY id;
 DROP TABLE issue_28685_bit64_ctas;
+
+-- BIT inequality in projections and filters.
+SELECT l.id, l.b <> r.b AS different_columns
+FROM issue_28685_bit64 AS l CROSS JOIN issue_28685_bit64 AS r
+WHERE r.id = 3 ORDER BY l.id;
+SELECT id FROM issue_28685_bit64
+WHERE b != CAST(9223372036854775808 AS BIT(64)) ORDER BY id;
 DROP TABLE issue_28685_bit64;
