@@ -369,37 +369,19 @@ func TestShouldSkipObjByShuffle(t *testing.T) {
 	ShouldSkipObjByShuffle(rsp, stats)
 }
 
-func TestShouldSkipAppendableObjByShuffleKeepsDefaultLocalBehavior(t *testing.T) {
+func TestShouldSkipAppendableObjByShuffleUsesReplayMemoryOwner(t *testing.T) {
 	row := types.RandomRowid()
 	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), true, false, true)
 	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
 
-	for cnidx := int32(0); cnidx < 3; cnidx++ {
-		rsp := &engine.RangesShuffleParam{Node: node, CNCNT: 3, CNIDX: cnidx}
-		require.True(t, ShouldSkipObjByShuffle(rsp, stats))
-		rsp.IsLocalCN = true
-		require.False(t, ShouldSkipObjByShuffle(rsp, stats))
-	}
-}
-
-func TestShouldSkipAppendableObjByShuffleCanAssignUniqueObjectOwner(t *testing.T) {
-	row := types.RandomRowid()
-	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), true, false, true)
-	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
-	owners := 0
-
-	for cnidx := int32(0); cnidx < 3; cnidx++ {
-		rsp := &engine.RangesShuffleParam{
-			Node:              node,
-			CNCNT:             3,
-			CNIDX:             cnidx,
-			ShuffleByObjectID: true,
-		}
-		if !ShouldSkipObjByShuffle(rsp, stats) {
-			owners++
+	for _, byObjectID := range []bool{false, true} {
+		for cnidx := int32(0); cnidx < 3; cnidx++ {
+			rsp := &engine.RangesShuffleParam{Node: node, CNCNT: 3, CNIDX: cnidx, ShuffleByObjectID: byObjectID}
+			require.True(t, ShouldSkipObjByShuffle(rsp, stats))
+			rsp.IsLocalCN = true
+			require.False(t, ShouldSkipObjByShuffle(rsp, stats))
 		}
 	}
-	require.Equal(t, 1, owners)
 }
 
 func productionShapedObjectID(rng *rand.Rand, sequence uint64) types.Objectid {
@@ -452,7 +434,7 @@ func TestIVFObjectIDShuffleAssignsExactlyOneOwner(t *testing.T) {
 	require.Equal(t, 1, owners)
 }
 
-func TestIVFObjectIDShuffleUsesSameOwnerForPersistedAndAppendable(t *testing.T) {
+func TestIVFObjectIDShuffleKeepsImmutableHashWhenReplayOwnerDiffers(t *testing.T) {
 	rng := rand.New(rand.NewSource(44))
 	objectID := productionShapedObjectID(rng, 29)
 	persisted := objectio.NewObjectStatsWithObjectID(&objectID, false, false, true)
@@ -460,17 +442,19 @@ func TestIVFObjectIDShuffleUsesSameOwnerForPersistedAndAppendable(t *testing.T) 
 	node := &plan.Node{TableDef: &plan.TableDef{}, Stats: DefaultStats()}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 
-	for cnidx := int32(0); cnidx < 4; cnidx++ {
+	const count = 4
+	hashOwner := int32(IVFObjectIDHashToRange(objectID, count))
+	memoryOwner := (hashOwner + 1) % count
+	for cnidx := int32(0); cnidx < count; cnidx++ {
 		rsp := &engine.RangesShuffleParam{
 			Node:              node,
-			CNCNT:             4,
+			CNCNT:             count,
 			CNIDX:             cnidx,
+			IsLocalCN:         cnidx == memoryOwner,
 			ShuffleByObjectID: true,
 		}
-		require.Equal(t,
-			ShouldSkipObjByShuffle(rsp, persisted),
-			ShouldSkipObjByShuffle(rsp, appendable),
-		)
+		require.Equal(t, cnidx != hashOwner, ShouldSkipObjByShuffle(rsp, persisted))
+		require.Equal(t, cnidx != memoryOwner, ShouldSkipObjByShuffle(rsp, appendable))
 	}
 }
 

@@ -384,6 +384,14 @@ func TestPrimaryKeyGroupEliminationRequiresTotalResolvedComparisons(t *testing.T
 			wantAgg: true,
 		},
 		{
+			name: "BIT inequality in one domain remains eligible",
+			sql:  "select empno, count(*) from constraint_test.emp where sal <> comm group by empno limit 1",
+			columnTypes: map[string]planpb.Type{
+				"sal":  {Id: int32(types.T_bit), Width: 8},
+				"comm": {Id: int32(types.T_bit), Width: 64},
+			},
+		},
+		{
 			name: "json comparison in one domain remains eligible",
 			sql:  "select empno, count(*) from constraint_test.emp where ename = job group by empno limit 1",
 			columnTypes: map[string]planpb.Type{
@@ -649,7 +657,7 @@ func TestPredicateOperatorEvaluationTotality(t *testing.T) {
 		{"malformed decimal metadata", function.EQUAL, decimal(77, 0), decimal(77, 0), false},
 		{"enum equality has executor", function.EQUAL, typ(types.T_enum), typ(types.T_enum), true},
 		{"enum inequality lacks executor", function.NOT_EQUAL, typ(types.T_enum), typ(types.T_enum), false},
-		{"bit inequality executor mismatch", function.NOT_EQUAL, typ(types.T_bit), typ(types.T_bit), false},
+		{"bit inequality", function.NOT_EQUAL, typ(types.T_bit), typ(types.T_bit), true},
 		{"geometry ordering unsupported", function.GREAT_THAN, typ(types.T_geometry), typ(types.T_geometry), false},
 		{"unknown comparison function", function.ABS, typ(types.T_int64), typ(types.T_int64), false},
 	}
