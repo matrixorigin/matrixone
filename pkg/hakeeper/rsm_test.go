@@ -1008,8 +1008,8 @@ func TestLogBootstrapStartDeliveryChecksLifecycle(t *testing.T) {
 	const store = "bootstrapping-store"
 	start := pb.ScheduleCommand{UUID: store, ServiceType: pb.LogService, Bootstrapping: true,
 		ConfigChange: &pb.ConfigChange{
-			ChangeType: pb.StartReplica, InitialMembers: map[uint64]string{2: store},
-			Replica: pb.Replica{UUID: store, ShardID: 1, ReplicaID: 2},
+			ChangeType: pb.StartReplica, InitialMembers: map[uint64]string{1: "first", 2: "second", 3: store},
+			Replica: pb.Replica{UUID: store, ShardID: 1, ReplicaID: 3},
 		}}
 	queued := pb.CommandBatch{Term: 1, Commands: []pb.ScheduleCommand{start}}
 	rsm.state.ScheduleCommands[store] = queued
@@ -1025,15 +1025,22 @@ func TestLogBootstrapStartDeliveryChecksLifecycle(t *testing.T) {
 
 	rsm.state.State = pb.HAKeeperBootstrapCommandsReceived
 	require.Equal(t, []pb.ScheduleCommand{start}, deliver())
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 1, Replicas: map[uint64]string{1: "first"}}
+	require.Equal(t, []pb.ScheduleCommand{start}, deliver(), "the first initial entry does not exclude later voters")
 	rsm.state.State = pb.HAKeeperRunning
-	require.Empty(t, deliver())
-	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 8, Replicas: map[uint64]string{2: store}}
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 2, Replicas: map[uint64]string{1: "first", 2: "second"}}
+	require.Equal(t, []pb.ScheduleCommand{start}, deliver(), "a reported majority may finish bootstrap before the last voter reports")
+	delete(rsm.state.LogState.Shards, 1)
+	require.Empty(t, deliver(), "unknown membership cannot authorize an initial Start after bootstrap")
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 1, Replicas: map[uint64]string{3: store}}
+	require.Empty(t, deliver(), "an out-of-order membership is not an initial prefix")
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 8, Replicas: map[uint64]string{3: store}}
 	confirmed := *start.ConfigChange
 	confirmed.Replica.Epoch = 8
 	reply := start
 	reply.ConfigChange = &confirmed
 	require.Equal(t, []pb.ScheduleCommand{reply}, deliver(), "a known member can still finish starting after bootstrap")
-	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 9, Replicas: map[uint64]string{3: "replacement"}}
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{ShardID: 1, Epoch: 9, Replicas: map[uint64]string{4: "replacement"}}
 	require.Empty(t, deliver())
 }
 

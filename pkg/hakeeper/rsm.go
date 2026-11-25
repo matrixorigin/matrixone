@@ -542,6 +542,12 @@ func (s *stateMachine) logStartForDelivery(cmd pb.ScheduleCommand) (pb.ScheduleC
 	if !known || shard.Epoch == 0 {
 		return cmd, !cmd.Bootstrapping || s.state.State == pb.HAKeeperBootstrapCommandsReceived
 	}
+	if cmd.Bootstrapping && change.ChangeType == pb.StartReplica &&
+		shard.Epoch < uint64(len(change.InitialMembers)) {
+		// A majority can be reported before the last initial AddNode.
+		active := s.state.State == pb.HAKeeperBootstrapCommandsReceived || s.state.State == pb.HAKeeperRunning
+		return cmd, active && pb.IsInitialMembershipPrefix(change.InitialMembers, shard.Replicas, shard.NonVotingReplicas, shard.Epoch)
+	}
 	members := shard.Replicas
 	if change.ChangeType == pb.StartNonVotingReplica {
 		members = shard.NonVotingReplicas

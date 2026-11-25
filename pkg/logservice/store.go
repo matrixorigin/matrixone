@@ -397,10 +397,11 @@ func (l *store) skippedZombieEpoch(shardID, replicaID uint64) (uint64, bool) {
 
 // A newer local gossip view can correct a stale startup observation. Older
 // views must not let a delayed Start reopen the skipped replica.
-func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persisted, bootstrap bool) bool {
+func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persisted bool, initialMembers map[uint64]string) bool {
 	shardID, replicaID := replica.ShardID, replica.ReplicaID
 	epoch, skipped := l.skippedZombieEpoch(shardID, replicaID)
-	if !skipped && replica.Epoch == 0 && !bootstrap {
+	initialSize := uint64(len(initialMembers))
+	if !skipped && replica.Epoch == 0 && initialSize == 0 {
 		if !persisted {
 			return true
 		}
@@ -419,7 +420,18 @@ func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persiste
 	// A committed heartbeat can confirm an orphan even after quorum is lost.
 	// If local gossip already knows a later configuration, honor that view.
 	// A non-voter can be present at an index where it was absent as a voter.
-	confirmed := bootstrap && !skipped || replica.Epoch > epoch ||
+	initialConfirmed := initialSize != 0
+	if skipped && initialConfirmed {
+		// Dragonboat applies the initial AddNode entries in replica ID order.
+		rank := uint64(1)
+		for id := range initialMembers {
+			if id < replicaID {
+				rank++
+			}
+		}
+		initialConfirmed = epoch < rank
+	}
+	confirmed := initialConfirmed || replica.Epoch > epoch ||
 		nonVoting && replica.Epoch != 0 && replica.Epoch == epoch
 	registry, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
@@ -429,6 +441,10 @@ func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persiste
 	if !ok || shard.ConfigChangeIndex < replica.Epoch ||
 		shard.ConfigChangeIndex < epoch || shard.ConfigChangeIndex == epoch && !nonVoting {
 		return confirmed
+	}
+	if shard.ConfigChangeIndex < initialSize {
+		return pb.IsInitialMembershipPrefix(initialMembers, shard.Nodes, shard.NonVotingNodes, shard.ConfigChangeIndex) &&
+			(confirmed || shard.Nodes[replicaID] == l.id())
 	}
 	members := shard.Nodes
 	if nonVoting {

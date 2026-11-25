@@ -474,9 +474,17 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	refuses(wrong)
 
 	key := zombieKey{shardID: shard, replicaID: replica}
-	service.store.mu.Lock()
-	service.store.mu.skippedZombies[key] = 8
-	service.store.mu.Unlock()
+	markAbsent := func(epoch uint64) {
+		service.store.mu.Lock()
+		service.store.mu.skippedZombies[key] = epoch
+		service.store.mu.Unlock()
+	}
+	threeVoters := map[uint64]string{1: "first", replica: cfg.UUID, 3: "third"}
+	markAbsent(1)
+	require.True(t, service.store.canStartScheduledReplica(start.ConfigChange.Replica, false, true, threeVoters))
+	markAbsent(2)
+	require.False(t, service.store.canStartScheduledReplica(start.ConfigChange.Replica, false, true, threeVoters))
+	markAbsent(8)
 	refuses(start)
 	service.store.mu.Lock()
 	delete(service.store.mu.skippedZombies, key)
