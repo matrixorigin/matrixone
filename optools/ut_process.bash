@@ -125,18 +125,20 @@ function remove_ut_report_file(){
 }
 
 # Populate the caller's sources array with the authoritative representation of
-# one helper report. Both the report appender and the heartbeat use this rule.
+# one helper report. Prebuilt snapshot sources accept only the base and
+# numeric, non-symlink shards.
 function collect_ut_report_sources(){
     local report=$1
-    local partial=""
+    local partial="" mode=${2:-normal}
     sources=()
 
     # Select one authoritative representation.  A ready marker is meaningful
     # only when its complete base file is still present; silently treating a
     # missing base as success would allow the caller to delete the marker and
     # lose the only diagnostic source.
-    if [[ -f "${report}.ready" ]]; then
-        if [[ ! -f "${report}" ]]; then
+    if [[ -f "${report}.ready" ]] &&
+        { [[ "${mode}" != prebuilt-snapshot ]] || [[ ! -L "${report}.ready" ]]; }; then
+        if [[ ! -f "${report}" ]] || [[ "${mode}" == prebuilt-snapshot && -L "${report}" ]]; then
             echo "UT report marker exists without its base report: ${report}" >&2
             return 1
         fi
@@ -148,9 +150,14 @@ function collect_ut_report_sources(){
             # A hard kill can leave a previous transactional staging file.  It
             # is not a report shard and must never be consumed as one.
             [[ "${partial}" == "${report}.tmp."* ]] && continue
+            if [[ "${mode}" == prebuilt-snapshot ]] &&
+                { [[ -L "${partial}" ]] || ! [[ "${partial#"${report}".}" =~ ^[0-9]+$ ]]; }; then
+                continue
+            fi
             sources+=("${partial}")
         done
-        if (( ${#sources[@]} == 0 )) && [[ -f "${report}" ]]; then
+        if (( ${#sources[@]} == 0 )) && [[ -f "${report}" ]] &&
+            { [[ "${mode}" != prebuilt-snapshot ]] || [[ ! -L "${report}" ]]; }; then
             # This covers a helper that failed before it could create the
             # marker and left only a diagnostic base file.
             sources=("${report}")

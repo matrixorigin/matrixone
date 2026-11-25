@@ -36,6 +36,15 @@ select id, tenant from rr_dst_29222.t order by id;
 1  ¦  1  𝄀
 2  ¦  2  𝄀
 3  ¦  3
+alter role rr_role_29222 drop rule on table rr_src_29222.t;
+alter role rr_role_29222 add rule "select id from rr_src_29222.t where tenant = 1" on table rr_src_29222.t;
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb":{"rr_src_29222":"rr_dst_29222"}}';
+use rr_src_29222;
+desc t;
+internal error: do not have privilege to execute the statement
+show create table rr_src_29222.t;
+internal error: do not have privilege to execute the statement
 set enable_remap_hint = 1;
 set remap_rewrites = '{"remapdb":{"rr_collision_a_29222":"rr_collision_dst_29222","rr_collision_b_29222":"rr_collision_dst_29222"},"rewrites":{"rr_collision_a_29222.t":"select id, v from rr_collision_a_29222.t","rr_collision_b_29222.t":"select id, v from rr_collision_b_29222.t"}}';
 insert into rr_collision_dst_29222.t select id, v from rr_collision_a_29222.t;

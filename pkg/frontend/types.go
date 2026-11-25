@@ -984,8 +984,10 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 		return
 	}
 	prepareStmt.clearBinaryParamState(prepareStmt.proc)
-	// An explicit reset also returns the statement's parameter storage, which
-	// every execution otherwise keeps for the next one.
+	// An explicit reset also drops the previous execution's planner values,
+	// which can hold a large string payload, and returns the statement's
+	// parameter storage, which every execution otherwise keeps for the next one.
+	prepareStmt.paramValues.Clear()
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.paramsMP)
 		prepareStmt.params, prepareStmt.paramsMP = nil, nil
