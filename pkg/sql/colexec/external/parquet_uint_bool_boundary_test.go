@@ -73,7 +73,7 @@ func TestParquetUint64ToBoolBoundary(t *testing.T) {
 				{parquet.ValueOf(uint64(math.MaxUint64)).Level(0, 0, 0)},
 			})
 
-			vec := vector.NewVec(types.T_bool.ToType())
+			vec := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
@@ -109,7 +109,7 @@ func TestParquetUint64ToBoolPreservesNull(t *testing.T) {
 				{parquet.ValueOf(uint64(math.MaxUint64)).Level(0, 1, 0)},
 			})
 
-			vec := vector.NewVec(types.T_bool.ToType())
+			vec := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: false})
@@ -137,7 +137,7 @@ func TestParquetUint32ToBoolUnsigned(t *testing.T) {
 		{parquet.ValueOf(uint32(math.MaxUint32)).Level(0, 0, 0)},
 	})
 
-	vec := vector.NewVec(types.T_bool.ToType())
+	vec := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
@@ -156,7 +156,7 @@ func TestParquetSignedInt64ToBoolNonzero(t *testing.T) {
 		{parquet.Int64Value(math.MaxInt64).Level(0, 0, 0)},
 	})
 
-	vec := vector.NewVec(types.T_bool.ToType())
+	vec := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
@@ -177,7 +177,7 @@ func TestParquetBoolFromTextRejectsInvalidRow(t *testing.T) {
 		{parquet.ByteArrayValue([]byte("surely-not-a-bool")).Level(0, 0, 0)},
 	})
 
-	vec := vector.NewVec(types.T_bool.ToType())
+	vec := vector.NewVec(types.T_bool.ToType(), proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})

@@ -178,6 +178,7 @@ func (c *cluster) Start() (err error) {
 	c.logTestSetup("port-lease", time.Since(phaseStarted), nil)
 
 	if c.options.testing {
+		useTestProcessMemoryLimit()
 		if c.testAdmission != nil {
 			return moerr.NewInvalidStateNoCtx(
 				"embedded test cluster cleanup is incomplete",

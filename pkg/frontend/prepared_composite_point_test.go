@@ -94,7 +94,8 @@ func setPreparedCompositePointParams(t *testing.T, prepared *PrepareStmt, cw *Tx
 	if prepared.params != nil {
 		prepared.params.Free(cw.proc.Mp())
 	}
-	prepared.params = vector.NewVec(types.T_text.ToType())
+	prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepared.paramsMP = cw.proc.Mp()
 	prepared.ParamTypes = nil
 	for _, value := range values {
 		var data []byte
@@ -138,7 +139,8 @@ func TestPreparedCompositePointRetryKeepsBindings(t *testing.T) {
 		ses.Close()
 	})
 	values := []string{"tenant", "s1", "r1", "s2", "r2"}
-	prepared.params = vector.NewVec(types.T_text.ToType())
+	prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepared.paramsMP = cw.proc.Mp()
 	for _, value := range values {
 		require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), false, cw.proc.Mp()))
 		prepared.ParamTypes = append(prepared.ParamTypes, byte(defines.MYSQL_TYPE_VAR_STRING), 0)

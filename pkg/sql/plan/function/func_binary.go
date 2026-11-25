@@ -1347,7 +1347,7 @@ func coalesceCheckTypes(overloads []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithCast(i, castTypes)
 		}
 	}
-	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
+	if target, hasVector, ok := commonVectorType(inputs); hasVector {
 		if !ok {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
@@ -1650,7 +1650,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			return err
 		}
 	}
-	return setConcatWsStringResultDomain(ivecs, result, proc)
+	return nil
 }
 
 func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2597,7 +2597,7 @@ func dateInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
 	rsNull := rsVec.GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 
@@ -2768,7 +2768,7 @@ func timestampInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		loc = time.Local
 	}
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2884,7 +2884,7 @@ func timeInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	values := vector.MustFixedColNoTypeCheck[types.Time](rsv)
 	nullsVec := rsv.GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(nullsVec, 0, uint64(length))
+		nullsVec.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -2941,7 +2941,7 @@ func timeIntervalRaw(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	values := vector.MustFixedColNoTypeCheck[types.Time](rs.GetResultVector())
 	nullsVec := rs.GetResultVector().GetNulls()
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(nullsVec, 0, uint64(length))
+		nullsVec.AddRange(0, uint64(length))
 		return nil
 	}
 	for i := uint64(0); i < uint64(length); i++ {
@@ -3028,7 +3028,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}
 	vec := result.GetResultVector()
 	if vec.GetType().Oid != typ.Oid {
-		if err := vec.SetTypeAndFixData(typ, proc.Mp()); err != nil {
+		if err := vec.SetTypeAndFixData(typ, resultMPool(result, proc)); err != nil {
 			return err
 		}
 	} else if hasTime {
@@ -5010,7 +5010,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				return err
 			}
 		} else if stringsInput != nil && len(value) == 0 {
-			if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+			if !result.ArgumentIsBin(0) && isTemporalTextSource(ivecs[0].GetType().Oid) {
 				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
 			}
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -5029,7 +5029,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 					d, err = types.ParseDatetime(text, 6)
 					if err != nil {
 						if isTemporalLexicalConversionError(err) {
-							if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+							if !result.ArgumentIsBin(0) && isTemporalTextSource(ivecs[0].GetType().Oid) {
 								appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
 							}
 							if err = rs.AppendBytes(nil, true); err != nil {
@@ -7576,7 +7576,7 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -7593,12 +7593,12 @@ func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		binary := uniformBinary
 		if err = rs.AppendBytes(substringByDomain(v, s, 0, false, binary), false); err != nil {
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 // Binary SUBSTRING uses byte offsets. Routing binary values through the text
@@ -7697,7 +7697,7 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -7715,12 +7715,12 @@ func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		binary := uniformBinary
 		if err = rs.AppendBytes(substringByDomain(v, s, l, true, binary), false); err != nil {
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func substringByDomain(value []byte, start, length int64, withLength, binary bool) []byte {
@@ -7858,7 +7858,7 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -8706,30 +8706,126 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 		return opTernaryStrFixedStrToFixed[uint64, Tr](ivecs, result, proc, length, findSetMember, selectList)
 	}
 
-	findInStrList := func(str, strlist string) Tr {
-		if strlist == "" {
-			return toResult(0)
+	// FIND_IN_SET honors the resolved collation of its string-list (container)
+	// operand: utf8mb4_general_ci compares per-character weights and the
+	// unicode_ci family compares the same collation keys as =/IN, so
+	// membership agrees with LIKE and with equality (issue #31175). A binary
+	// needle or list row keeps the byte-wise membership test, matching
+	// INSTR's domain routing and MySQL's both-argument comparison resolution.
+	fold := likeFoldModeFor(ivecs[1].GetType().Charset)
+	listType := *ivecs[1].GetType()
+	needleBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
+	listBinary := isBinaryStringVector(ivecs[1], result.ArgumentIsBin(1))
+	needles := vector.GenerateFunctionStrParameter(ivecs[0])
+	lists := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err = rs.Append(toResult(0), true); err != nil {
+				return err
+			}
+			continue
 		}
-		for position := uint64(1); ; position++ {
-			member, rest, more := strings.Cut(strlist, ",")
-			if member == str {
-				return toResult(position)
+		strBytes, null1 := needles.GetStrValue(row)
+		listBytes, null2 := lists.GetStrValue(row)
+		if null1 || null2 {
+			if err = rs.Append(toResult(0), true); err != nil {
+				return err
 			}
-			if !more {
-				return toResult(0)
+			continue
+		}
+		rowFold := fold != likeFoldNone &&
+			!needleBinary &&
+			!listBinary
+		// The needle's comparison representation is row-invariant: prepare
+		// it once and reuse it across every list member instead of folding
+		// or keying the needle again per member (issue #31175 review).
+		var needleKey, foldedNeedle []byte
+		if rowFold {
+			if fold == likeFoldUnicodeCI {
+				needleKey = types.CollationKeyOrOriginal(listType.Charset,
+					appendFindInSetSentinel(strBytes))
+			} else {
+				foldedNeedle = generalCILikeFold(strBytes)
 			}
-			strlist = rest
+		}
+		position := uint64(0)
+		if len(listBytes) != 0 {
+			// Walk members with Cut so the scan never materializes a member
+			// slice per row, matching the upstream no-allocation iteration.
+			j := 0
+			for rest := listBytes; ; {
+				member, r, more := bytes.Cut(rest, commaSeparator)
+				if j&findInSetMemberScanCancelMask == findInSetMemberScanCancelMask {
+					// A long member scan must stay cancellable, exactly
+					// like the other extended scans in this package.
+					if err = proc.Ctx.Err(); err != nil {
+						return err
+					}
+				}
+				if bytes.Equal(member, strBytes) ||
+					(rowFold && findInSetMemberEqual(fold, listType, member, needleKey, foldedNeedle)) {
+					position = uint64(j + 1)
+					break
+				}
+				if !more {
+					break
+				}
+				rest = r
+				j++
+			}
+		}
+		if err = rs.Append(toResult(position), false); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	return opBinaryStrStrToFixed[Tr](ivecs, result, proc, length, findInStrList, nil)
+var commaSeparator = []byte{','}
+
+// findInSetMemberScanCancelMask paces the cancellation checks inside one
+// row's member scan: the context is probed every 1024 members, so a
+// pathologically long list stays interruptible without taxing short lists.
+const findInSetMemberScanCancelMask = 1023
+
+// findInSetMemberEqual compares one list member with the needle under the
+// list operand's resolved collation: the unicode_ci family compares the same
+// collation keys as =/IN, while utf8mb4_general_ci compares per-character
+// weight runes (issue #31175). The needle side arrives already prepared for
+// the row (its sentinel-appended collation key or its fold), so the member
+// loop pays the needle transformation once per row instead of once per
+// member (issue #31175 review).
+func findInSetMemberEqual(fold likeFoldMode, listType types.Type, member, needleKey, foldedNeedle []byte) bool {
+	if fold == likeFoldUnicodeCI {
+		// MySQL tests list membership with the unpadded my_strnncoll, so
+		// trailing spaces stay significant even under a PAD SPACE
+		// collation. Appending one weighted non-space character makes
+		// every trailing space non-trailing, keeping the whole-key
+		// comparison (and its expansion semantics) intact while the key
+		// builder's PAD SPACE trimming can no longer equate 'a ' with 'a'
+		// (issue #31175 review).
+		return bytes.Equal(types.CollationKeyOrOriginal(listType.Charset,
+			appendFindInSetSentinel(member)), needleKey)
+	}
+	return bytes.Equal(generalCILikeFold(member), foldedNeedle)
+}
+
+// appendFindInSetSentinel appends the weighted non-space character that
+// keeps trailing spaces significant in FIND_IN_SET membership. '0' has a
+// real UCA 4.0.0 weight distinct from SPACE, and the pinned table has no
+// contractions, so key(x+'0') is exactly key(x) followed by key('0').
+func appendFindInSetSentinel(value []byte) []byte {
+	out := make([]byte, 0, len(value)+1)
+	out = append(out, value...)
+	return append(out, '0')
 }
 
 func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	haystacks := vector.GenerateFunctionStrParameter(ivecs[0])
 	needles := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 	caseInsensitive := types.IsCaseInsensitiveCollation(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
@@ -8746,7 +8842,7 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		rs.AppendMustValue(locateString(needle, haystack, 1, binary, caseInsensitive))
 	}
 	return nil
@@ -8756,7 +8852,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8774,7 +8870,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			continue
 		}
 		var value []byte
-		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+		if uniformBinary {
 			value = v1[:prefixLength(len(v1), v2)]
 		} else {
 			value = functionUtil.QuickStrToBytes(evalLeft(functionUtil.QuickBytesToStr(v1), v2))
@@ -8783,7 +8879,7 @@ func Left(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func prefixLength(total int, requested int64) int {
@@ -8811,7 +8907,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
@@ -8829,7 +8925,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			continue
 		}
 		var value []byte
-		if binaryStringAt(ivecs[0], int(i), uniformBinary, perRow) {
+		if uniformBinary {
 			count := prefixLength(len(v1), v2)
 			value = v1[len(v1)-count:]
 		} else {
@@ -8839,7 +8935,7 @@ func Right(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func evalRight(str string, length int64) string {
@@ -8858,8 +8954,25 @@ func evalRight(str string, length int64) string {
 }
 
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// MatrixOne treats numeric domain/overflow failures as row-local NULLs.
-	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+	// Overflow/underflow and NaN/Inf-input results stay row-local NULLs (#28375).
+	// A finite negative base with a finite non-integer exponent has no real
+	// value, so an evaluated row rejects with the DOUBLE out-of-range error
+	// (MySQL 1690, SQLSTATE 22003) instead of a silent NULL: the #28375
+	// contract's domain-shaped exception for the #31155 Expected. NULL
+	// inputs, skipped rows and all other results keep the #28375 contract.
+	// A zero-length batch evaluates no rows: the constant/constant template
+	// shape still invokes the callback once, so the domain check stays off
+	// for length 0 (colexec passes empty-batch row counts).
+	var domainErr error
+	err := opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](ivecs, result, proc, length, func(v1, v2 float64) (float64, error) {
+		if length > 0 && v1 < 0 && !math.IsInf(v1, 0) &&
+			!math.IsNaN(v2) && !math.IsInf(v2, 0) && v2 != math.Trunc(v2) {
+			if domainErr == nil {
+				domainErr = moerr.NewOutOfRangeNoCtxf(
+					"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", v1, v2)
+			}
+			return 0, nil
+		}
 		res := math.Pow(v1, v2)
 		if math.IsNaN(res) || math.IsInf(res, 0) {
 			return 0, moerr.NewOutOfRangeNoCtxf(
@@ -8867,6 +8980,10 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		}
 		return res, nil
 	}, selectList)
+	if domainErr != nil {
+		return domainErr
+	}
+	return err
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -9516,9 +9633,8 @@ func makeTimeDecimal256IntegerGetter(vec *vector.Vector) func(uint64) (int64, bo
 	}
 }
 
-func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+func makeTimeStringIntegerGetter(vec *vector.Vector, isBinary bool) func(uint64) (int64, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
@@ -9675,9 +9791,8 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 		uint32(totalMicroseconds % types.MicroSecsPerSec), false
 }
 
-func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32, bool) {
+func makeTimeStringSecondGetter(vec *vector.Vector, isBinary bool) func(uint64) (int64, uint32, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, uint32, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
@@ -9699,7 +9814,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	var getSecondValue func(uint64) (int64, uint32, bool)
 
 	if ivecs[0].GetType().Oid.IsMySQLString() {
-		getHourValue = makeTimeStringIntegerGetter(ivecs[0])
+		getHourValue = makeTimeStringIntegerGetter(ivecs[0], result.ArgumentIsBin(0))
 	} else if ivecs[0].GetType().Oid == types.T_decimal128 {
 		getHourValue = makeTimeDecimal128IntegerGetter(ivecs[0])
 	} else if ivecs[0].GetType().Oid == types.T_decimal256 {
@@ -9733,7 +9848,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	if ivecs[1].GetType().Oid.IsMySQLString() {
-		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1])
+		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1], result.ArgumentIsBin(1))
 	} else if ivecs[1].GetType().Oid == types.T_decimal128 {
 		getMinuteValue = makeTimeDecimal128IntegerGetter(ivecs[1])
 	} else if ivecs[1].GetType().Oid == types.T_decimal256 {
@@ -9764,7 +9879,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	if ivecs[2].GetType().Oid.IsMySQLString() {
-		getSecondValue = makeTimeStringSecondGetter(ivecs[2])
+		getSecondValue = makeTimeStringSecondGetter(ivecs[2], result.ArgumentIsBin(2))
 	} else if getter, ok := makeTimeIntegerGetter(ivecs[2]); ok {
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			value, null := getter(i)
@@ -10441,7 +10556,7 @@ func Replace(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 func writeReplaceBytes(dst, src, needle, replacement []byte) {
 	if len(needle) == 0 {
@@ -10515,7 +10630,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	p3 := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 	p4 := vector.GenerateFunctionStrParameter(ivecs[3])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err = rs.AppendBytes(nil, true); err != nil {
@@ -10533,7 +10648,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			}
 			continue
 		}
-		binary := binaryStringAt(ivecs[0], int(i), uniformBinary, perRow)
+		binary := uniformBinary
 		size, start, end, raw := insertResultLayout(v1, pos, remove, v4)
 		if binary {
 			size, start, end, raw = insertBinaryResultLayout(v1, pos, remove, v4)
@@ -10563,7 +10678,7 @@ func Insert(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func insertBinaryResultLayout(source []byte, pos, remove int64, replacement []byte) (size, start, end int, raw bool) {
@@ -10622,7 +10737,7 @@ func Trim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[2], result, proc)
+	return nil
 }
 
 func trimBoth(src, cuts string) string {
@@ -10684,7 +10799,7 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func SplitSingle(str, sep string, cnt uint32) (string, bool) {

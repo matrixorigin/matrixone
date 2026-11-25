@@ -49,6 +49,16 @@ class _Vecf16Type(VectorType):
         super().__init__(dimension=dimension, precision='f16')
 
 
+class _Vecf8Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='f8')
+
+
+class _Vecf4Type(VectorType):
+    def __init__(self, dimension=None):
+        super().__init__(dimension=dimension, precision='f4')
+
+
 class _Vecbf16Type(VectorType):
     def __init__(self, dimension=None):
         super().__init__(dimension=dimension, precision='bf16')
@@ -69,6 +79,8 @@ _mo_ischema_names = mysql_ischema_names.copy()
 _mo_ischema_names["vecf32"] = _Vecf32Type
 _mo_ischema_names["vecf64"] = _Vecf64Type
 _mo_ischema_names["vecf16"] = _Vecf16Type
+_mo_ischema_names["vecf8"] = _Vecf8Type
+_mo_ischema_names["vecf4"] = _Vecf4Type
 _mo_ischema_names["vecbf16"] = _Vecbf16Type
 _mo_ischema_names["vecint8"] = _Vecint8Type
 _mo_ischema_names["vecuint8"] = _Vecuint8Type

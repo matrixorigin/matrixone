@@ -192,7 +192,7 @@ func localRankBatch(mp *mpool.MPool, rows int, vecs ...*vector.Vector) *batch.Ba
 }
 
 func appendFixedVec[T any](t *testing.T, mp *mpool.MPool, oid types.T, vals []T, nulls []bool) *vector.Vector {
-	vec := vector.NewVec(oid.ToType())
+	vec := vector.NewVec(oid.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, vals, nulls, mp))
 	return vec
 }
@@ -214,7 +214,7 @@ func float64RankVec(t *testing.T, mp *mpool.MPool, vals []float64, nulls []bool)
 }
 
 func decimal64RankVec(t *testing.T, mp *mpool.MPool, raw []float64) *vector.Vector {
-	vec := vector.NewVec(types.T_decimal64.ToType())
+	vec := vector.NewVec(types.T_decimal64.ToType(), mp)
 	for _, f := range raw {
 		d, err := types.Decimal64FromFloat64(f, 10, 2)
 		require.NoError(t, err)
@@ -224,7 +224,7 @@ func decimal64RankVec(t *testing.T, mp *mpool.MPool, raw []float64) *vector.Vect
 }
 
 func datetimeRankVec(t *testing.T, mp *mpool.MPool, vals ...types.Datetime) *vector.Vector {
-	vec := vector.NewVec(types.T_datetime.ToType())
+	vec := vector.NewVec(types.T_datetime.ToType(), mp)
 	for _, d := range vals {
 		require.NoError(t, vector.AppendFixed(vec, d, false, mp))
 	}
@@ -232,7 +232,7 @@ func datetimeRankVec(t *testing.T, mp *mpool.MPool, vals ...types.Datetime) *vec
 }
 
 func dateRankVec(t *testing.T, mp *mpool.MPool, vals ...types.Date) *vector.Vector {
-	vec := vector.NewVec(types.T_date.ToType())
+	vec := vector.NewVec(types.T_date.ToType(), mp)
 	for _, d := range vals {
 		require.NoError(t, vector.AppendFixed(vec, d, false, mp))
 	}
@@ -240,7 +240,7 @@ func dateRankVec(t *testing.T, mp *mpool.MPool, vals ...types.Date) *vector.Vect
 }
 
 func timestampRankVec(t *testing.T, mp *mpool.MPool, vals ...types.Timestamp) *vector.Vector {
-	vec := vector.NewVec(types.T_timestamp.ToType())
+	vec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	for _, ts := range vals {
 		require.NoError(t, vector.AppendFixed(vec, ts, false, mp))
 	}
@@ -580,7 +580,7 @@ func TestLocalRankValueTypes(t *testing.T) {
 	fixture("datetime values", 5, func(mp *mpool.MPool) *vector.Vector {
 		// Datetimes rank chronologically, not by int64 payload: the same
 		// 2,2,4,NULL,7 profile over Jan1, Jan1, Jan2, NULL, Jan3.
-		vec := vector.NewVec(types.T_datetime.ToType())
+		vec := vector.NewVec(types.T_datetime.ToType(), mp)
 		for i, day := range []uint8{1, 1, 2, 1, 3} {
 			val := types.DatetimeFromClock(2026, 1, day, 0, 0, 0, 0)
 			require.NoError(t, vector.AppendFixed(vec, val, sharedValueNulls[i], mp))
@@ -919,7 +919,7 @@ func TestLocalRankTmrankCalendarMonth(t *testing.T) {
 // current row.
 func TestLocalRankTmrankNullArithmetic(t *testing.T) {
 	mp := mpool.MustNewZero()
-	keys := vector.NewVec(types.T_datetime.ToType())
+	keys := vector.NewVec(types.T_datetime.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(keys,
 		types.DatetimeFromClock(2026, 1, 1, 0, 0, 0, 0), true, mp))
 	require.NoError(t, vector.AppendFixed(keys,
@@ -958,7 +958,7 @@ func TestLocalRankTmrankNullArithmetic(t *testing.T) {
 // equal-instant rows); see window_local_rank.sql.
 func TestLocalRankTmrankNullKeysWithEqualTimestampPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
-	keys := vector.NewVec(types.T_datetime.ToType())
+	keys := vector.NewVec(types.T_datetime.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(keys,
 		types.DatetimeFromClock(2026, 1, 1, 0, 0, 0, 0), true, mp))
 	require.NoError(t, vector.AppendFixed(keys,
@@ -1638,7 +1638,6 @@ func TestValidateIntervalFrameBoundsCoversTmrankWidths(t *testing.T) {
 func TestLocalRankAdapterDistinguishesTypedWidths(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	defer proc.Free()
 	proc.GetSessionInfo().TimeZone = time.UTC
 
 	decBits, decErr := types.Decimal64FromFloat64(1.5, 10, 1)
@@ -1671,6 +1670,7 @@ func TestLocalRankAdapterDistinguishesTypedWidths(t *testing.T) {
 	_, _ = MaterializeLocalRankWindowInterval(proc, textSource, unitDay)
 	require.Equal(t, decBefore, decSource.String())
 	require.Equal(t, textBefore, textSource.String())
+	proc.Free()
 	require.Zero(t, mp.CurrNB())
 }
 

@@ -84,6 +84,35 @@ func TestSQLFileAccessAuthorization(t *testing.T) {
 		mustExec(t, admin, fmt.Sprintf("insert into %s.file_paths values (1, cast('file://%s' as datalink))", dbName, input))
 		mustExec(t, admin, fmt.Sprintf("grant select on table %s.file_paths to public", dbName))
 
+		t.Run("insert select checks source and target", func(t *testing.T) {
+			sourceTable := dbName + ".insert_select_source"
+			targetTable := dbName + ".insert_select_target"
+			mustExec(t, admin, fmt.Sprintf("create table %s (id int)", sourceTable))
+			mustExec(t, admin, fmt.Sprintf("insert into %s values (11)", sourceTable))
+			mustExec(t, admin, fmt.Sprintf("create table %s (id int)", targetTable))
+			mustExec(t, admin, fmt.Sprintf("grant select on table %s to public", sourceTable))
+			mustExec(t, admin, fmt.Sprintf("grant insert on table %s to public", targetTable))
+
+			_, err := publicDB.Exec("insert into " + targetTable + " select id from " + sourceTable)
+			require.NoError(t, err)
+			var count int
+			require.NoError(t, admin.QueryRow("select count(*) from "+targetTable).Scan(&count))
+			require.Equal(t, 1, count)
+
+			mustExec(t, admin, fmt.Sprintf("revoke insert on table %s from public", targetTable))
+			_, err = publicDB.Exec("insert into " + targetTable + " select id from " + sourceTable)
+			require.ErrorContains(t, err, "do not have privilege")
+			require.NoError(t, admin.QueryRow("select count(*) from "+targetTable).Scan(&count))
+			require.Equal(t, 1, count)
+
+			mustExec(t, admin, fmt.Sprintf("grant insert on table %s to public", targetTable))
+			mustExec(t, admin, fmt.Sprintf("revoke select on table %s from public", sourceTable))
+			_, err = publicDB.Exec("insert into " + targetTable + " select id from " + sourceTable)
+			require.ErrorContains(t, err, "do not have privilege")
+			require.NoError(t, admin.QueryRow("select count(*) from "+targetTable).Scan(&count))
+			require.Equal(t, 1, count)
+		})
+
 		t.Run("file TVF admission", func(t *testing.T) {
 			var line string
 			err := publicDB.QueryRow("select * from parse_jsonl_file(" + sqlquote.String(input) + ") t").Scan(&line)
@@ -216,7 +245,11 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		mustExec(t, tenant, "use "+dbName)
 		mustExec(t, tenant, fmt.Sprintf("create stage sql_file_access_local_stage URL='file://%s'", dir))
 		defer func() { _, _ = tenant.Exec("drop stage if exists sql_file_access_local_stage") }()
-		remoteObjects := map[string][]byte{"/bucket/content.txt": []byte("matrixone stage content"), "/bucket/json.txt": []byte("[1]")}
+		remoteObjects := map[string][]byte{
+			"/bucket/content.txt":       []byte("matrixone stage content"),
+			"/bucket/json.txt":          []byte("[1]"),
+			"/bucket/external-auth.csv": []byte("7,seven\n"),
+		}
 		for _, name := range []string{"mo.pdf", "chinese.pdf", "file-sample_100kB.docx"} {
 			data, err := os.ReadFile(filepath.Join("..", "..", "test", "distributed", "resources", "fulltext", name))
 			require.NoError(t, err)
@@ -285,7 +318,45 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		defer server.Close()
 		mustExec(t, tenant, fmt.Sprintf("create stage sql_file_access_stage URL='s3://bucket/' CREDENTIALS={'AWS_KEY_ID'='id','AWS_SECRET_KEY'='secret','AWS_REGION'='us-east-1','PROVIDER'='amazon','ENDPOINT'='%s'}", server.URL))
 		defer func() { _, _ = tenant.Exec("drop stage if exists sql_file_access_stage") }()
-		t.Run("async source admission and local TEXT CDC", func(t *testing.T) { testAsyncDatalinkSourceAdmission(t, c, admin, server.URL, dir) })
+
+		t.Run("external table grant and revoke", func(t *testing.T) {
+			const username = "external_table_auth_user"
+			const password = "external-table-auth-test"
+			mustExec(t, tenant, "create external table external_auth (id int, label varchar(32)) URL s3option {'endpoint'="+sqlquote.String(server.URL)+",'bucket'='bucket','region'='us-east-1','access_key_id'='id','secret_access_key'='secret','filepath'='external-auth.csv','format'='csv'} fields terminated by ',' lines terminated by '\\n'")
+			mustExec(t, tenant, "create table external_auth_control (id int)")
+			mustExec(t, tenant, "insert into external_auth_control values (1)")
+			mustExec(t, tenant, "grant select on table external_auth_control to public")
+			mustExec(t, tenant, fmt.Sprintf("create user %s identified by '%s' default role public", username, password))
+			defer func() { _, _ = tenant.Exec("drop user if exists " + username) }()
+
+			publicDB, err := sql.Open("mysql", fmt.Sprintf("%s#%s#public:%s@tcp(127.0.0.1:%d)/%s", account, username, password, cn.GetServiceConfig().CN.Frontend.Port, dbName))
+			require.NoError(t, err)
+			defer publicDB.Close()
+			require.NoError(t, publicDB.PingContext(t.Context()))
+
+			var controlID, id int
+			var label string
+			require.NoError(t, publicDB.QueryRow("select id from external_auth_control").Scan(&controlID))
+			require.Equal(t, 1, controlID)
+			err = publicDB.QueryRow("select id, label from external_auth").Scan(&id, &label)
+			require.ErrorContains(t, err, "do not have privilege")
+
+			mustExec(t, tenant, "grant select on table external_auth to public")
+			require.NoError(t, publicDB.QueryRow("select id, label from external_auth").Scan(&id, &label))
+			require.Equal(t, 7, id)
+			require.Equal(t, "seven", label)
+
+			mustExec(t, tenant, "revoke select on table external_auth from public")
+			err = publicDB.QueryRow("select id, label from external_auth").Scan(&id, &label)
+			require.ErrorContains(t, err, "do not have privilege")
+			require.NoError(t, publicDB.QueryRow("select id from external_auth_control").Scan(&controlID))
+			require.Equal(t, 1, controlID)
+		})
+		if !t.Run("async source admission and local TEXT CDC", func(t *testing.T) {
+			testAsyncDatalinkSourceAdmission(t, c, admin, server.URL, dir)
+		}) {
+			return
+		}
 
 		t.Run("file TVF and Hive planning admission", func(t *testing.T) {
 			remote := fileservice.JoinPath("s3-opts,endpoint="+server.URL+",bucket=bucket,region=us-east-1,key=id,secret=secret", "content.txt")
@@ -476,10 +547,11 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		var mutationStore string
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name='mutation_ftidx' and algo_table_type='ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='mutation_documents') limit 1").Scan(&mutationStore))
 		tailSQL := fmt.Sprintf("select coalesce(max(chunk_id),-1) from `%s`.`%s` where index_id='cdc_tail' and tag=1", dbName, mutationStore)
-		var forbiddenTail int64
-		require.ErrorContains(t, tenant.QueryRow(tailSQL).Scan(&forbiddenTail), "privilege")
-		// Durable index progress is a privileged test observation; tenant SQL
-		// must not acquire direct access to the physical fulltext store.
+		// An accountadmin may inspect its own physical index through a read-only
+		// SELECT. Keep using the internal executor below for the durable CDC
+		// progress oracle, which waits for committed log application.
+		var observedTail int64
+		require.NoError(t, tenant.QueryRow(tailSQL).Scan(&observedTail))
 		var tailAccountID uint32
 		require.NoError(t, admin.QueryRow("select account_id from mo_catalog.mo_account where account_name='"+account+"'").Scan(&tailAccountID))
 		tailCtx, tailCancel := context.WithTimeout(defines.AttachAccountId(t.Context(), tailAccountID), 2*time.Minute)
@@ -628,9 +700,11 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_hidx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_vectors') limit 1").Scan(&hnswMeta))
 		var filesz int64
 		filesizeSQL := fmt.Sprintf("select filesize from `%s`.`%s` limit 1", dbName, hnswMeta)
-		require.ErrorContains(t, tenant.QueryRow(filesizeSQL).Scan(&filesz), "privilege")
+		var tenantFilesz int64
+		require.NoError(t, tenant.QueryRow(filesizeSQL).Scan(&tenantFilesz))
 		require.NoError(t, readPhysical(filesizeSQL, &filesz))
 		require.Greater(t, filesz, int64(0))
+		require.Equal(t, filesz, tenantFilesz)
 
 		t.Run("HNSW loaded IDs remain data during persistence", func(t *testing.T) {
 			var hnswStore string

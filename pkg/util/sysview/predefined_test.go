@@ -318,14 +318,17 @@ func TestInformationSchemaColumnsDDL_UnsignedDecimalAncientConstructs(t *testing
 	// The frozen-template rule: the decoration composes only concat, upper,
 	// like, case, the two-argument mo_show_visible_bin and one outer
 	// cast-as-varchar width pin, so a persisted definition never depends on a
-	// builtin introduced after the historical template fence. The historical
-	// templates themselves already carry cast-as-varchar (TABLE_SCHEMA,
-	// TABLE_NAME, EXTRA, GENERATION_EXPRESSION), so the width pin is fence
-	// safe; it exists because a bare concat of the varchar(65535) base with
-	// the suffix promotes to TEXT and the UNION would widen the public
-	// COLUMN_TYPE header away from main's.
+	// builtin introduced after the historical template fence. The
+	// physical-BOOL tinyint(1) left arm (issue #31749) composes inside the
+	// same concat from upper/case/string literals only, keeping the rule.
+	// The historical templates themselves already carry cast-as-varchar
+	// (TABLE_SCHEMA, TABLE_NAME, EXTRA, GENERATION_EXPRESSION), so the width
+	// pin is fence safe; it exists because a bare concat of the
+	// varchar(65535) base with the suffix promotes to TEXT and the UNION
+	// would widen the public COLUMN_TYPE header away from main's.
 	current := InformationSchemaColumnsDDL
-	start := strings.Index(current, "cast(concat((case when length(mc.attr_enum)")
+	start := strings.Index(current,
+		"cast(concat(case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'tinyint(1)' else (case when length(mc.attr_enum)")
 	require.NotEqual(t, -1, start)
 	end := strings.Index(current[start:], "as COLUMN_TYPE,")
 	require.NotEqual(t, -1, end)

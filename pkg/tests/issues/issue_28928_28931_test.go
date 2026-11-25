@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -158,6 +159,16 @@ func TestIssue28931StaleUpdatePlanCannotBypassNewIndex(t *testing.T) {
 			execSQLRequire(t, ctx, writerDB, "update "+table+" set payload = 'changed' where id = 1")
 			release()
 			require.NoError(t, <-ddlDone)
+
+			// CREATE INDEX returned on the ddl CN. Wait until the writer CN has
+			// applied that commit before issuing index-hinted queries there.
+			writerCN, err := cluster.GetCNService(0)
+			require.NoError(t, err)
+			ddlCN, err := cluster.GetCNService(1)
+			require.NoError(t, err)
+			commitTS := ddlCN.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+			require.False(t, commitTS.IsEmpty())
+			testutils.WaitLogtailApplied(t, commitTS, writerCN)
 
 			var scannedCount, scannedSum, indexedCount, indexedSum int
 			require.NoError(t, writerDB.QueryRowContext(ctx,

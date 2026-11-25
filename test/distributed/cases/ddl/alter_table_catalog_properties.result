@@ -1,0 +1,54 @@
+drop database if exists alter_table_catalog_properties;
+create database alter_table_catalog_properties;
+use alter_table_catalog_properties;
+create table parents (id int primary key);
+insert into parents values (1);
+create table events (
+id int primary key,
+parent_id int,
+payload int,
+u int,
+unique key uk_u(u),
+key idx_parent(parent_id),
+constraint fk_parent foreign key (parent_id) references parents(id)
+) comment = 'catalog properties';
+insert into events values (1,1,12,101);
+alter table events modify payload varchar(25) not null;
+alter table events modify payload varchar(25) not null;
+set @constraint_bytes = (select length(`constraint`) from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'events');
+alter table events modify payload varchar(25) not null;
+alter table events modify payload varchar(25) not null;
+select length(`constraint`) = @constraint_bytes as bounded_properties,
+relkind = 'r' as ordinary_table,
+rel_comment = 'catalog properties' as preserved_comment
+from mo_catalog.mo_tables where reldatabase = database() and relname = 'events';
+➤ bounded_properties[-6,8,0]  ¦  ordinary_table[-6,8,0]  ¦  preserved_comment[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+show create table events;
+➤ Table[12,6,0]  ¦  Create Table[12,365,0]  𝄀
+events  ¦  CREATE TABLE `events` (
+  `id` int NOT NULL,
+  `parent_id` int DEFAULT NULL,
+  `payload` varchar(25) NOT NULL,
+  `u` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_u` (`u`),
+  KEY `idx_parent` (`parent_id`),
+  CONSTRAINT `fk_parent` FOREIGN KEY (`parent_id`) REFERENCES `parents` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) COMMENT='catalog properties'
+select id, parent_id, payload, u from events where parent_id = 1 and u = 101;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  payload[12,25,0]  ¦  u[4,32,0]  𝄀
+1  ¦  1  ¦  12  ¦  101
+insert into events values (1,1,'duplicate primary',102);
+Duplicate entry '1' for key 'id'
+insert into events values (2,1,'duplicate unique',101);
+Duplicate entry '101' for key 'u'
+insert into events values (2,999,'missing parent',102);
+Cannot add or update a child row: a foreign key constraint fails
+delete from parents where id = 1;
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, parent_id, payload, u from events order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  payload[12,25,0]  ¦  u[4,32,0]  𝄀
+1  ¦  1  ¦  12  ¦  101
+drop database alter_table_catalog_properties;

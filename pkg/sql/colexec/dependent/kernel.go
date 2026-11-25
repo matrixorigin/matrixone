@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -142,7 +141,7 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 	}
 	for _, op := range k.operators {
 		if binder, ok := op.(interface {
-			BindDependent(colexec.DependentProgramFactory, *vector.AllocationAccountSelection)
+			BindDependent(colexec.DependentProgramFactory, *mpool.MPool)
 		}); ok {
 			binder.BindDependent(execution, execution.allocation)
 		}
@@ -160,6 +159,7 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 			return k, err
 		}
 	}
+	vm.ConfigureSelectionEdges(k.root)
 	return k, nil
 }
 func (k *nativeKernel) read() (*batch.Batch, int, vm.Continuation, error) {
@@ -201,11 +201,11 @@ func (k *nativeKernel) close(cause error) error {
 	}
 	var err error
 	reset := func(_ vm.Operator, op vm.Operator) error {
-		op.Reset(k.proc, cause != nil, cause)
+		vm.Reset(op, k.proc, cause != nil, cause)
 		return nil
 	}
 	free := func(_ vm.Operator, op vm.Operator) error {
-		op.Free(k.proc, cause != nil, cause)
+		vm.Free(op, k.proc, cause != nil, cause)
 		if owner, ok := op.(interface {
 			ClearAllocationAccount(*mpool.AllocationAccount) error
 		}); ok {

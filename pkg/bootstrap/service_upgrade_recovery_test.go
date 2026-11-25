@@ -817,7 +817,7 @@ func TestV407ReadySourceDoesNotCreateAnotherRoute(t *testing.T) {
 				return executor.Result{}, nil
 			}
 		}, &testTxnOperator{})
-		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, (*service).initUpgrade)
 		t.Cleanup(s.stopper.Stop)
 		require.NoError(t, s.doCheckUpgrade(t.Context()))
 		require.Empty(t, routes, "a completed current catalog must not create another route")

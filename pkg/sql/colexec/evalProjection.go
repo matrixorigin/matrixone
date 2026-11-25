@@ -15,13 +15,15 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Projection struct {
+	jsonFrame        *ProjectionJSONFrame
+	inputAllocation  *mpool.MPool
 	projectBat       *batch.Batch
 	ProjectList      []*plan.Expr
 	ProjectExecutors []ExpressionExecutor
@@ -37,21 +39,22 @@ func (projection *Projection) PrepareProjection(proc *process.Process) (err erro
 // preserves the legacy unaccounted behavior.
 func (projection *Projection) PrepareProjectionWithAllocation(
 	proc *process.Process,
-	selection *vector.AllocationAccountSelection,
+	selection *mpool.MPool,
 ) (err error) {
 	if len(projection.ProjectList) == 0 {
 		return
 	}
+	projection.inputAllocation = selection
 	projection.ProjectAllocSize = 0
 	if projection.ProjectExecutors == nil {
-		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+		projection.ProjectExecutors, projection.jsonFrame, err = NewProjectionExecutors(
 			proc, projection.ProjectList, selection)
 		if err != nil {
 			return
 		}
 	}
 	if projection.projectBat == nil {
-		projection.projectBat = batch.NewOffHeapWithSize(len(projection.ProjectList))
+		projection.projectBat = batch.NewWithSize(len(projection.ProjectList))
 	}
 
 	return
@@ -69,6 +72,10 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 		return bat, nil
 	}
 
+	if projection.jsonFrame != nil && !bat.HasSelection() {
+		projection.jsonFrame.Begin(bat)
+		defer projection.jsonFrame.End()
+	}
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
 
 	for i := range projection.ProjectExecutors {
@@ -88,6 +95,34 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 	return projection.projectBat, nil
 }
 
+// EvalProjectionSelected evaluates the projection of a selected bat on its
+// physical rows (physical, a PhysicalView of bat), masked to the selection,
+// so filtered-out rows are not evaluated. The result carries bat's selection
+// and borrows it: it is valid until bat changes.
+func (projection *Projection) EvalProjectionSelected(bat, physical *batch.Batch, mask []bool, proc *process.Process) (*batch.Batch, error) {
+	if !bat.HasSelection() {
+		return projection.EvalProjection(bat, proc)
+	}
+	if len(projection.ProjectExecutors) == 0 || bat.IsEmpty() || bat.Last() {
+		return bat, nil
+	}
+	if projection.jsonFrame != nil {
+		projection.jsonFrame.Begin(physical)
+		defer projection.jsonFrame.End()
+	}
+	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
+	for i := range projection.ProjectExecutors {
+		vec, err := projection.ProjectExecutors[i].Eval(proc, []*batch.Batch{physical}, mask)
+		if err != nil {
+			return nil, err
+		}
+		projection.projectBat.Vecs[i] = vec
+	}
+	projection.ProjectAllocSize = max(projection.ProjectAllocSize, int64(projection.projectBat.Size()))
+	projection.projectBat.SetSelection(bat.PhysicalRowCount(), bat.Selection())
+	return projection.projectBat, nil
+}
+
 func (projection *Projection) ResetProjection(proc *process.Process) {
 	for i := range projection.ProjectExecutors {
 		if projection.ProjectExecutors[i] != nil {
@@ -104,9 +139,12 @@ func (projection *Projection) FreeProjection(proc *process.Process) {
 		}
 	}
 	projection.ProjectExecutors = nil
+	projection.jsonFrame = nil
 
 	if projection.projectBat != nil {
-		// allways call batch.Clean, even if there is no data
+		// Vectors are borrowed from the child/expression executors. Retire
+		// only the wrapper; each payload has its own effective owner.
+		clear(projection.projectBat.Vecs)
 		projection.projectBat.Clean(proc.Mp())
 		projection.projectBat = nil
 	}

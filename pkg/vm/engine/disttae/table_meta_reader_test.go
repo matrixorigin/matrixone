@@ -85,7 +85,7 @@ func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 }
 
 func TestInMemTombstonePKVector(t *testing.T) {
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero())
 	compact := &logtailreplay.RowEntry{Batch: batch.NewWithSize(1)}
 	compact.Batch.Vecs[0] = pkVec
 	require.Same(t, pkVec, inMemTombstonePKVector(compact))
@@ -121,13 +121,13 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 		Name2ColIndex: map[string]int32{"a": 0},
 	}
 	mp := mpool.MustNewZero()
-	dataBat := colexec.AllocCNS3ResultBat(false)
+	dataBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer dataBat.Clean(mp)
 	end, err := reader.Read(context.Background(), nil, nil, mp, dataBat)
 	require.NoError(t, err)
 	require.False(t, end)
 	require.Equal(t, 1, dataBat.RowCount())
-	tombstoneBat := colexec.AllocCNS3ResultBat(true)
+	tombstoneBat := colexec.AllocCNS3ResultBat(true, mp)
 	defer tombstoneBat.Clean(mp)
 	end, err = reader.Read(context.Background(), nil, nil, mp, tombstoneBat)
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 	limited, err := NewImmutableTableMetaReader(context.Background(), tbl, 1)
 	require.NoError(t, err)
 	limited.(*TableMetaReader).objectCount = 1
-	limitedBat := colexec.AllocCNS3ResultBat(false)
+	limitedBat := colexec.AllocCNS3ResultBat(false, mp)
 	defer limitedBat.Clean(mp)
 	_, err = limited.Read(context.Background(), nil, nil, mp, limitedBat)
 	require.Error(t, err)
@@ -157,7 +157,7 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 	})
 	appendableReader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
 	require.NoError(t, err)
-	appendableOut := colexec.AllocCNS3ResultBat(false)
+	appendableOut := colexec.AllocCNS3ResultBat(false, mp)
 	defer appendableOut.Clean(mp)
 	_, err = appendableReader.Read(context.Background(), nil, nil, mp, appendableOut)
 	require.Error(t, err)
@@ -193,7 +193,7 @@ func TestImmutableTableMetaReaderDoesNotRetainCloneFilesAcrossStatements(t *test
 		txn.StartStatement()
 		reader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
 		require.NoError(t, err)
-		dataBat := colexec.AllocCNS3ResultBat(false)
+		dataBat := colexec.AllocCNS3ResultBat(false, mp)
 		_, err = reader.Read(context.Background(), nil, nil, mp, dataBat)
 		require.NoError(t, err)
 		dataBat.Clean(mp)
@@ -614,7 +614,7 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 		},
 		op:              txnOp,
 		tablesInVain:    map[uint64]int{42: 1},
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
+		deletedBlocks:   &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txnOp.AddWorkspace(txn)
@@ -625,7 +625,7 @@ func TestCloneTxnTablesInVainGCDeletesUnreferencedTxnLocalSharedObject(t *testin
 	require.NoError(t, writeObjectToFS(ctx, fs, name))
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
 
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:      INSERT,
 		tableId:  42,
 		fileName: name,
@@ -661,7 +661,7 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 		},
 		op:              txnOp,
 		tablesInVain:    map[uint64]int{42: 1},
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
+		deletedBlocks:   &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txnOp.AddWorkspace(txn)
@@ -673,13 +673,13 @@ func TestCloneTxnTablesInVainGCKeepsLiveTxnLocalSharedObject(t *testing.T) {
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
 
 	liveBat := cloneObjectStatsBatchForTest(t, proc.Mp(), stats...)
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:      INSERT,
 		tableId:  42,
 		fileName: name,
 		bat:      cloneObjectStatsBatchForTest(t, proc.Mp(), stats...),
 	})
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:      INSERT,
 		tableId:  43,
 		fileName: name,
@@ -717,7 +717,7 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 		},
 		op:              txnOp,
 		tablesInVain:    make(map[uint64]int),
-		deletedBlocks:   &deletedBlocks{offsets: map[types.Blockid][]int64{}},
+		deletedBlocks:   &deletedBlocks{offsets: map[uint64]map[types.Blockid][]int64{}},
 		batchSelectList: make(map[*batch.Batch][]int64),
 	}
 	txnOp.AddWorkspace(txn)
@@ -727,7 +727,7 @@ func TestCloneTxnUnknownCommitReleasesLocalStateWithoutObjectGC(t *testing.T) {
 	name := stats[0].ObjectName().String()
 	require.NoError(t, writeObjectToFS(ctx, fs, name))
 	txn.engine.cloneTxnCache.AddTxnLocalSharedFile(txn.op.Txn().ID, name)
-	txn.appendWorkspaceEntryLocked(Entry{
+	appendWorkspaceEntryForTest(t, txn, Entry{
 		typ:      INSERT,
 		tableId:  42,
 		fileName: name,
@@ -748,8 +748,8 @@ func cloneObjectStatsBatchForTest(
 	statsList ...objectio.ObjectStats,
 ) *batch.Batch {
 	bat := batch.New([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
-	bat.SetVector(0, vector.NewVec(types.T_varchar.ToType()))
-	bat.SetVector(1, vector.NewVec(types.T_varchar.ToType()))
+	bat.SetVector(0, vector.NewVec(types.T_varchar.ToType(), mp))
+	bat.SetVector(1, vector.NewVec(types.T_varchar.ToType(), mp))
 	for i := range statsList {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("block-info"), false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[1], statsList[i].Marshal(), false, mp))

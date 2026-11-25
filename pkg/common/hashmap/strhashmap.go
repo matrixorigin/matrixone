@@ -121,19 +121,11 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		return nil
 	}
 	for _, vec := range vecs {
-		withDomain := itr.mp.hasNull || itr.mp.groupingAware
 		prefix := 0
-		if withDomain {
+		if itr.mp.hasNull {
 			prefix = 1
 		}
-		if vec.IsGrouping() {
-			for i := 0; i < count; i++ {
-				if err := add(i, 1); err != nil {
-					return err
-				}
-			}
-			continue
-		}
+
 		if vec.IsConstNull() {
 			if itr.mp.hasNull {
 				for i := 0; i < count; i++ {
@@ -177,8 +169,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		// Most join keys are flat and non-null. Size them from the physical
 		// representation directly, avoiding repeated type/null/const dispatch
 		// before the encoder's required value pass.
-		hasGrouping := withDomain && vec.HasGrouping()
-		if !hasGrouping && !vec.GetNulls().Any() {
+		if !vec.GetNulls().Any() {
 			if vec.GetType().IsFixedLen() {
 				size := prefix + vec.GetType().TypeSize()
 				if size < 0 || uniformRowSize > maxInt-size {
@@ -232,12 +223,6 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		}
 		for i := 0; i < count; i++ {
 			row := start + i
-			if withDomain && vec.GetGrouping().Contains(uint64(row)) {
-				if err := add(i, 1); err != nil {
-					return err
-				}
-				continue
-			}
 			if vec.GetNulls().Contains(uint64(row)) {
 				if itr.mp.hasNull {
 					if err := add(i, 1); err != nil {
@@ -329,18 +314,6 @@ func (m *StrHashMap) HasNull() bool {
 	return m.hasNull
 }
 
-// SetGroupingAware selects a collision-free key domain for maps that may see
-// GROUPING rows. It must be set before the
-// first insert. Ordinary columns receive a 0 domain byte and GROUPING columns
-// receive 2, so no raw fixed-width value can alias the sentinel.
-func (m *StrHashMap) SetGroupingAware() error {
-	if m == nil || m.rows != 0 {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	m.groupingAware = true
-	return nil
-}
-
 func (m *StrHashMap) Free() {
 	if m == nil || m.hashMap == nil {
 		return
@@ -383,17 +356,18 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		return
 	}
 	for _, vec := range vecs {
+
 		if isFlatCharStringHashKey(vec) {
 			fillFlatCharStringHashKey(itr, vec, count, start)
 			continue
 		}
-		if itr.mp.groupingAware || itr.mp.hasNull {
+		if itr.mp.hasNull {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
 				types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
-				fillCanonicalGroupingAwareVarlena(itr, vec, count, start)
+				fillCanonicalNullableVarlena(itr, vec, count, start)
 			default:
-				fillGroupingAwareStr(itr, vec, count, start)
+				fillNullableStr(itr, vec, count, start)
 			}
 			continue
 		}
@@ -452,13 +426,13 @@ func (itr *strHashmapIterator) encodeFlatFixedKeyRows(vecs []*vector.Vector, sta
 		width int
 	}
 	var columns [16]fixedKeyColumn
-	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	withDomain := itr.mp.hasNull
 	keySize := 0
 	for i, vec := range vecs {
 		typ := vec.GetType()
 		// typeswitch:partial bf16/float16/float8/float4 zeros are stored as +0 (CanonicalLowPrecFloat), so their bytes are the key
 		if !typ.IsFixedLen() || typ.Oid == types.T_float32 || typ.Oid == types.T_float64 ||
-			vec.IsConst() || vec.HasGrouping() || vec.GetNulls().Any() {
+			vec.IsConst() || vec.GetNulls().Any() {
 			return false
 		}
 		width := typ.TypeSize()
@@ -490,7 +464,7 @@ func (itr *strHashmapIterator) encodeFlatFixedKeyRows(vecs []*vector.Vector, sta
 }
 
 func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
-	// MySQL string vectors use fillStringGroupStr/fillGroupingAwareVarlena,
+	// MySQL string vectors use fillStringGroupStr/fillNullableVarlena,
 	// which carry the resolved type into canonicalVarlenaHashValueForType.
 	// This helper is retained for JSON/array varlena encodings only; keeping a
 	// second Unicode branch here would be unreachable and would make the two
@@ -539,25 +513,16 @@ func appendFramedVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte
 	return dst
 }
 
-func fillCanonicalGroupingAwareVarlena(
+func fillCanonicalNullableVarlena(
 	itr *strHashmapIterator,
 	vec *vector.Vector,
 	n int,
 	start int,
 ) {
 	keys := itr.keys
-	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
-			keys[i] = append(keys[i], byte(2))
-		}
-		return
-	}
 	if vec.IsConstNull() {
 		for i := 0; i < n; i++ {
-			row := start + i
-			if vec.GetGrouping().Contains(uint64(row)) {
-				keys[i] = append(keys[i], byte(2))
-			} else if itr.mp.hasNull {
+			if itr.mp.hasNull {
 				keys[i] = append(keys[i], byte(1))
 			} else {
 				itr.zValues[i] = 0
@@ -568,10 +533,6 @@ func fillCanonicalGroupingAwareVarlena(
 
 	for i := 0; i < n; i++ {
 		row := start + i
-		if vec.GetGrouping().Contains(uint64(row)) {
-			keys[i] = append(keys[i], byte(2))
-			continue
-		}
 		if vec.GetNulls().Contains(uint64(row)) {
 			if itr.mp.hasNull {
 				keys[i] = append(keys[i], byte(1))
@@ -597,12 +558,6 @@ func fillCanonicalStringGroupStr(
 	start int,
 ) {
 	keys := itr.keys
-	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
-			keys[i] = append(keys[i], byte(2))
-		}
-		return
-	}
 	if vec.IsConstNull() {
 		for i := 0; i < n; i++ {
 			itr.zValues[i] = 0
@@ -646,12 +601,6 @@ func fillCanonicalStringGroupStr(
 
 func fillFloat32GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
 	keys := itr.keys
-	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
-			keys[i] = append(keys[i], byte(2))
-		}
-		return
-	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -694,13 +643,10 @@ func fillFloat32GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start i
 	}
 
 	nsp := vec.GetNulls()
-	gsp := vec.GetGrouping()
 	for i := 0; i < n; i++ {
 		row := i + start
 		if itr.mp.hasNull {
-			if gsp.Contains(uint64(row)) {
-				keys[i] = append(keys[i], byte(2))
-			} else if nsp.Contains(uint64(row)) {
+			if nsp.Contains(uint64(row)) {
 				keys[i] = append(keys[i], byte(1))
 			} else {
 				keys[i] = append(keys[i], byte(0))
@@ -716,26 +662,24 @@ func fillFloat32GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start i
 	}
 }
 
-// CHAR and Unicode collations need canonicalization. Const and grouping
-// vectors also retain their existing representation/domain handling.
+// CHAR and Unicode collations need canonicalization. Const vectors also
+// retain their existing representation/domain handling.
 func isFlatRawStringHashKey(vec *vector.Vector) bool {
 	typ := vec.GetType()
 	return typ.Oid.IsMySQLString() && typ.Oid != types.T_char &&
-		!types.IsUnicodeCollation(typ.Charset) && !vec.IsConst() && !vec.HasGrouping()
+		!types.IsUnicodeCollation(typ.Charset) && !vec.IsConst()
 }
 
 func (itr *strHashmapIterator) sizeCanonicalStringKeys(vec *vector.Vector, start, n, prefix int) error {
 	values, area := vector.MustVarlenaRawData(vec)
 	typ := vec.GetType()
-	nsp, gsp := vec.GetNulls(), vec.GetGrouping()
-	hasNulls, hasGrouping := nsp.Any(), prefix != 0 && vec.HasGrouping()
+	nsp := vec.GetNulls()
+	hasNulls := nsp.Any()
 	const maxInt = int(^uint(0) >> 1)
 	if types.IsUnicodeCollation(typ.Charset) {
 		for i := 0; i < n; i++ {
 			row, size := start+i, 0
-			if hasGrouping && gsp.Contains(uint64(row)) {
-				size = 1
-			} else if hasNulls && nsp.Contains(uint64(row)) {
+			if hasNulls && nsp.Contains(uint64(row)) {
 				if itr.mp.hasNull {
 					size = 1
 				}
@@ -751,9 +695,7 @@ func (itr *strHashmapIterator) sizeCanonicalStringKeys(vec *vector.Vector, start
 	} else {
 		for i := 0; i < n; i++ {
 			row, size := start+i, 0
-			if hasGrouping && gsp.Contains(uint64(row)) {
-				size = 1
-			} else if hasNulls && nsp.Contains(uint64(row)) {
+			if hasNulls && nsp.Contains(uint64(row)) {
 				if itr.mp.hasNull {
 					size = 1
 				}
@@ -771,18 +713,18 @@ func (itr *strHashmapIterator) sizeCanonicalStringKeys(vec *vector.Vector, start
 }
 
 // CHAR cannot use the raw-string path: its byte domain removes trailing ASCII
-// spaces. Unicode keys, constants and GROUPING rows keep their existing path.
+// spaces. Unicode keys and constants keep their existing path.
 func isFlatCharStringHashKey(vec *vector.Vector) bool {
 	typ := vec.GetType()
 	return typ.Oid == types.T_char && !types.IsUnicodeCollation(typ.Charset) &&
-		!vec.IsConst() && !vec.HasGrouping()
+		!vec.IsConst()
 }
 
 func fillFlatCharStringHashKey(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
 	values, area := vector.MustVarlenaRawData(vec)
 	nsp := vec.GetNulls()
 	hasNulls := nsp.Any()
-	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	withDomain := itr.mp.hasNull
 	for i := 0; i < n; i++ {
 		row := start + i
 		if hasNulls && nsp.Contains(uint64(row)) {
@@ -803,7 +745,7 @@ func fillFlatCharStringHashKey(itr *strHashmapIterator, vec *vector.Vector, n, s
 	}
 }
 
-func fillFlatRawStringGroupingAwareStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
+func fillFlatRawStringNullableStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
 	values, area := vector.MustVarlenaRawData(vec)
 	nsp := vec.GetNulls()
 	hasNulls := nsp.Any()
@@ -825,7 +767,7 @@ func fillFlatRawStringGroupingAwareStr(itr *strHashmapIterator, vec *vector.Vect
 	}
 }
 
-func fillGroupingAwareStr(
+func fillNullableStr(
 	itr *strHashmapIterator,
 	vec *vector.Vector,
 	n int,
@@ -833,30 +775,20 @@ func fillGroupingAwareStr(
 ) {
 	keys := itr.keys
 	if isFlatRawStringHashKey(vec) {
-		fillFlatRawStringGroupingAwareStr(itr, vec, n, start)
+		fillFlatRawStringNullableStr(itr, vec, n, start)
 		return
 	}
-	// Nullable and grouping-aware maps use a domain byte before every ordinary
-	// value. Most batches contain neither NULL nor GROUPING rows, though. Keep
+	// Nullable maps use a domain byte before every ordinary
+	// value. Most batches contain no NULL rows, though. Keep
 	// that common case on flat vector data so the hot path does not probe two
 	// bitmaps and redispatch the vector representation for every row.
-	if vec.GetType().IsFixedLen() && !vec.IsConstNull() &&
-		!vec.HasGrouping() && !vec.GetNulls().Any() {
-		fillFlatFixedGroupingAwareStr(keys, vec, n, start)
-		return
-	}
-	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
-			keys[i] = append(keys[i], byte(2))
-		}
+	if vec.GetType().IsFixedLen() && !vec.IsConstNull() && !vec.GetNulls().Any() {
+		fillFlatFixedNullableStr(keys, vec, n, start)
 		return
 	}
 	if vec.IsConstNull() {
 		for i := 0; i < n; i++ {
-			row := start + i
-			if vec.GetGrouping().Contains(uint64(row)) {
-				keys[i] = append(keys[i], byte(2))
-			} else if itr.mp.hasNull {
+			if itr.mp.hasNull {
 				keys[i] = append(keys[i], byte(1))
 			} else {
 				itr.zValues[i] = 0
@@ -867,10 +799,6 @@ func fillGroupingAwareStr(
 	float32Codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
 	for i := 0; i < n; i++ {
 		row := start + i
-		if vec.GetGrouping().Contains(uint64(row)) {
-			keys[i] = append(keys[i], byte(2))
-			continue
-		}
 		if vec.GetNulls().Contains(uint64(row)) {
 			if itr.mp.hasNull {
 				keys[i] = append(keys[i], byte(1))
@@ -910,7 +838,7 @@ func fillGroupingAwareStr(
 	}
 }
 
-func fillFlatFixedGroupingAwareStr(
+func fillFlatFixedNullableStr(
 	keys [][]byte,
 	vec *vector.Vector,
 	n int,
@@ -958,12 +886,6 @@ func fillFlatFixedGroupingAwareStr(
 
 func fillFloat64GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
 	keys := itr.keys
-	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
-			keys[i] = append(keys[i], byte(2))
-		}
-		return
-	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -1006,13 +928,10 @@ func fillFloat64GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start i
 	}
 
 	nsp := vec.GetNulls()
-	gsp := vec.GetGrouping()
 	for i := 0; i < n; i++ {
 		row := i + start
 		if itr.mp.hasNull {
-			if gsp.Contains(uint64(row)) {
-				keys[i] = append(keys[i], byte(2))
-			} else if nsp.Contains(uint64(row)) {
+			if nsp.Contains(uint64(row)) {
 				keys[i] = append(keys[i], byte(1))
 			} else {
 				keys[i] = append(keys[i], byte(0))
@@ -1034,13 +953,7 @@ func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, 
 	length := uint32(len(bytes))
 	// can't be const null
 	if itr.mp.hasNull {
-		gsp := vec.GetGrouping()
 		for i := 0; i < n; i++ {
-			hasGrouping := gsp.Contains(uint64(i + start))
-			if hasGrouping {
-				keys[i] = append(keys[i], byte(2))
-				continue
-			}
 			// for "a"，"bc" and "ab","c", we need to distinct
 			// this is not null value
 			keys[i] = append(keys[i], 0)
@@ -1069,12 +982,6 @@ func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, 
 // for one col, just give the value bytes
 func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, start int, lenCols int) {
 	keys := itr.keys
-	if vec.IsGrouping() {
-		for i := 0; i < lenV; i++ {
-			keys[i] = append(keys[i], byte(2))
-		}
-		return
-	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < lenV; i++ {
@@ -1094,16 +1001,10 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
-			gsp := vec.GetGrouping()
 			va, area := vector.MustVarlenaRawData(vec)
 			if area == nil {
 				for i := 0; i < lenV; i++ {
 					bytes := canonicalVarlenaHashValueForType(*vec.GetType(), va[i+start].ByteSlice())
-					hasGrouping := gsp.Contains(uint64(i + start))
-					if hasGrouping {
-						keys[i] = append(keys[i], byte(2))
-						continue
-					}
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// this is not null value
 					keys[i] = append(keys[i], 0)
@@ -1116,11 +1017,6 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 			} else {
 				for i := 0; i < lenV; i++ {
 					bytes := canonicalVarlenaHashValueForType(*vec.GetType(), va[i+start].GetByteSlice(area))
-					hasGrouping := gsp.Contains(uint64(i + start))
-					if hasGrouping {
-						keys[i] = append(keys[i], byte(2))
-						continue
-					}
 					// for "a"，"bc" and "ab","c", we need to distinct
 					// this is not null value
 					keys[i] = append(keys[i], 0)
@@ -1157,16 +1053,12 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 		}
 	} else {
 		nsp := vec.GetNulls()
-		rsp := vec.GetGrouping()
 		va, area := vector.MustVarlenaRawData(vec)
 		if area == nil {
 			for i := 0; i < lenV; i++ {
 				hasNull := nsp.Contains(uint64(i + start))
-				hasGrouping := rsp.Contains(uint64(i + start))
 				if itr.mp.hasNull {
-					if hasGrouping {
-						keys[i] = append(keys[i], byte(2))
-					} else if hasNull {
+					if hasNull {
 						keys[i] = append(keys[i], byte(1))
 					} else {
 						bytes := canonicalVarlenaHashValueForType(*vec.GetType(), va[i+start].ByteSlice())
@@ -1196,11 +1088,8 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 		} else {
 			for i := 0; i < lenV; i++ {
 				hasNull := nsp.Contains(uint64(i + start))
-				hasGrouping := rsp.Contains(uint64(i + start))
 				if itr.mp.hasNull {
-					if hasGrouping {
-						keys[i] = append(keys[i], byte(2))
-					} else if hasNull {
+					if hasNull {
 						keys[i] = append(keys[i], byte(1))
 					} else {
 						bytes := canonicalVarlenaHashValueForType(*vec.GetType(), va[i+start].GetByteSlice(area))
@@ -1233,12 +1122,6 @@ func fillStringGroupStr(itr *strHashmapIterator, vec *vector.Vector, lenV int, s
 
 func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, start int, scale int32, lenCols int) {
 	keys := itr.keys
-	if vec.IsGrouping() {
-		for i := 0; i < n; i++ {
-			keys[i] = append(keys[i], byte(2))
-		}
-		return
-	}
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -1281,14 +1164,10 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		}
 	} else {
 		nsp := vec.GetNulls()
-		gsp := vec.GetGrouping()
 		for i := 0; i < n; i++ {
 			isNull := nsp.Contains(uint64(i + start))
-			isGrouping := gsp.Contains(uint64(i + start))
 			if itr.mp.hasNull {
-				if isGrouping {
-					keys[i] = append(keys[i], 2)
-				} else if isNull {
+				if isNull {
 					keys[i] = append(keys[i], 1)
 				} else {
 					bytes := data[(i+start)*sz : (i+start+1)*sz]
@@ -1342,13 +1221,12 @@ func (m *StrHashMap) WriteTo(w io.Writer) (int64, error) {
 	var n int64
 
 	// The low three bits retain the key grammar. Historical payloads used only
-	// bit zero, so 0/1 remain backward-compatible.
+	// bit zero, so 0/1 remain backward-compatible. Bit one marked the retired
+	// grouping-aware grammar, which writes a domain byte per column exactly as
+	// a nullable map does; it is never written now.
 	flags := byte(0)
 	if m.hasNull {
 		flags |= 1
-	}
-	if m.groupingAware {
-		flags |= 2
 	}
 	if m.rejectNaN {
 		flags |= 4
@@ -1389,8 +1267,8 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 	if b[0]&^byte(7) != 0 {
 		return 0, mpool.ErrAllocationAccountInvalid
 	}
-	m.hasNull = b[0]&1 != 0
-	m.groupingAware = b[0]&2 != 0
+	// A legacy grouping-aware map shares the nullable key grammar.
+	m.hasNull = b[0]&3 != 0
 	m.rejectNaN = b[0]&4 != 0
 
 	// Deserialize rows

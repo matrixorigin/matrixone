@@ -1372,6 +1372,29 @@ func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
 	})
 }
 
+func TestCommitJoinedTxnUnknownDoesNotRollback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = eng
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{ID: []byte{1, 2, 3, 4}, Status: txn.TxnStatus_Active}
+	unknown := moerr.NewTxnUnknown(ctx, "test")
+	txnOp.commitErr = errors.Join(moerr.NewInternalErrorNoCtx("cleanup"), unknown)
+	ses.txnHandler.txnOp, ses.txnHandler.txnCtx = txnOp, ctx
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.ses, ec.stmt, ec.txnOpt = ses, &tree.Insert{}, FeTxnOption{autoCommit: true}
+	err := finishTxnFunc(ses, nil, ec)
+	require.Same(t, unknown, moerr.FindTxnUnknown(err))
+	require.Equal(t, 1, txnOp.commitCalls)
+	require.Zero(t, txnOp.rollbackCalls)
+	require.Nil(t, ses.GetTxnHandler().GetTxn())
+}
+
 func TestFinishTxnPreservesEOFOnRollback(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := defines.AttachAccountId(context.Background(), sysAccountID)

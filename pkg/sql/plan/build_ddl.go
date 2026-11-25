@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -226,6 +225,13 @@ func inferViewColumns(
 	viewName string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
+	if !forAuthoring {
+		// Description and regeneration rebind a stored definition, not the
+		// caller's SQL namespace. Authoring must still reject temporary sources.
+		previous := ctx.GetContext()
+		ctx.SetContext(defines.WithPersistentViewBinding(previous))
+		defer ctx.SetContext(previous)
+	}
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	dependencyCapture.metadataBudget = !forAuthoring
 	ctx = dependencyCapture
@@ -281,14 +287,14 @@ func inferViewColumns(
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true,
-			objectkey.Encode(viewDatabase, viewName), nil)
+			objectkey.Encode(viewDatabase, viewName), zeroScalarValidateOnly, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1647,6 +1653,7 @@ func genAsSelectCols(
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -2006,8 +2013,7 @@ func buildCTASDefaultFromOrigin(
 	if err = validateUnsignedDecimalStrictConstantDefault(ctx.GetContext(), ctx.GetProcess(), typ, srcExpr, colNameOrigin); err != nil {
 		return nil, err
 	}
-	defaultExpr, err = ConstantFold(
-		batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), ctx.GetProcess(), false, true)
+	defaultExpr, err = foldBoundConstant(bindCtx, DeepCopyExpr(defaultExpr), ctx.GetProcess())
 	if err != nil {
 		return nil, err
 	}
@@ -3995,7 +4001,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.generated != nil {
 					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
 				} else {
-					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess())
+					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(replay, colName))
 				}
 				if err != nil {
 					return err
@@ -4057,7 +4063,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 							}
 							defaultDef = &copy
 						}
-						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), defaultDef, colType, ctx.GetProcess(), allColDefs)
+						defaultValue, err = buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetContext()), defaultDef, colType, ctx.GetProcess(), allColDefs, crc32CopyColumn(replay, colName))
 					}
 				}
 				if err != nil {
@@ -4918,12 +4924,17 @@ func appendCheckDef(
 	if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
 		return err
 	}
+	checkName := name
+	if checkName == "" {
+		checkName = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
 	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil {
-		checkName := name
-		if checkName == "" {
-			checkName = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
-		}
 		if preserved := replay.checks[strings.ToLower(checkName)]; preserved != nil {
+			if containsLegacyCRC32(preserved.Check) {
+				if err := RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), preserved.Check); err != nil {
+					return err
+				}
+			}
 			for _, check := range tableDef.Checks {
 				if strings.EqualFold(check.Name, checkName) {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", checkName)
@@ -4935,6 +4946,16 @@ func appendCheckDef(
 			}
 			tableDef.Checks = append(tableDef.Checks, copy)
 			return nil
+		}
+	}
+	if replay := ddlReplayForTable(ctx.GetContext(), tableDef.Name); replay != nil && replay.target != nil {
+		for _, check := range replay.target.Checks {
+			if strings.EqualFold(check.Name, checkName) && containsLegacyCRC32(check.Check) {
+				// Raw catalog coordinates belong to the old schema. Only replay
+				// can preserve them after a reorder and verify input compatibility.
+				// Neither copying them nor rebinding display SQL is a safe fallback.
+				return moerr.NewNotSupported(ctx.GetContext(), "changing a legacy CRC32 JSON check constraint requires an explicit table rebuild")
+			}
 		}
 	}
 	colNames := make([]string, 0, len(tableDef.Cols))
@@ -6184,9 +6205,12 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		}
 
 		// TRUNCATE has historically been a silent no-op for generic read-only
-		// external tables. MongoDB mappings, however, have an explicit read-only
-		// DML contract, so fail closed with the same stable error as other direct
-		// mutations. Keep the existing behavior for other generic mappings.
+		// external tables. A read-only file mapping (CSV/JSONLINE/Parquet) has no
+		// truncate semantics — the table does not own the stage's files — so fail
+		// closed with an explicit not-supported error (issue #31920). MongoDB
+		// mappings keep their explicit read-only DML contract; writable and
+		// envelope-backed mappings keep their own contracts; other generic
+		// mappings keep the existing behavior.
 		if tableDef.TableType == catalog.SystemExternalRel {
 			isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
 			if err != nil {
@@ -6203,8 +6227,10 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "truncate Iceberg table mapping '%v'", truncateTable.Table)
 			}
 			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
-				return nil, moerr.NewNotSupportedf(ctx.GetContext(),
-					"truncate writable external table '%v'; its files in the stage are not managed by the table", truncateTable.Table)
+				return nil, RejectTruncateWritableFileExternal(ctx.GetContext(), truncateTable.Table)
+			}
+			if err := RejectFileExternalTruncate(ctx.GetContext(), tableDef, truncateTable.Table); err != nil {
+				return nil, err
 			}
 		}
 
@@ -6679,7 +6705,12 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	switch stmt.IndexCat {
 	case tree.INDEX_CATEGORY_UNIQUE:
 		uIdx = &tree.UniqueIndex{
-			Name:        indexName,
+			Name: indexName,
+			// Parser-consistent typed construction: ALTER's own AST
+			// records only whether an explicit USING index type was
+			// present on a unique index, not which one. Serialize the
+			// same shape so the delegable default form roundtrips.
+			Empty:       stmt.IndexOption.IType == tree.INDEX_TYPE_INVALID,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
 		}
@@ -6721,6 +6752,65 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 		}
 	default:
 		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	}
+	// Partitioned tables: the dedicated CREATE INDEX executor publishes each
+	// physical partition child only and never the logical parent, so SHOW
+	// INDEX, SHOW CREATE TABLE and index hints — all resolved from the
+	// logical table id — cannot observe the index even though the statement
+	// succeeds (issue #32211). MySQL defines CREATE INDEX ON t (...) as
+	// ALTER TABLE t ADD INDEX (...), so plan the qualified ordinary and
+	// unique forms through the ALTER route: its executor publishes the
+	// logical parent and re-runs the same ADD INDEX on every partition child
+	// child inside one transaction. Eligibility is bounded to the forms whose typed
+	// AST survives the executor's RawSQL serialize → reparse → per-child
+	// re-serialize loop losslessly: the default and explicit-BTREE ordinary and
+	// unique forms, keeping quoted identifiers and the
+	// serializable KEY_BLOCK_SIZE/comment/visibility options intact. Every
+	// other family — the vector/plugin and other explicit index algos,
+	// non-BTREE USING unique indexes, functional, fulltext and spatial forms —
+	// keeps its dedicated CREATE INDEX planning path and original errors.
+	if tableDef.Partition != nil || features.IsPartitioned(tableDef.FeatureFlag) {
+		switch stmt.IndexCat {
+		case tree.INDEX_CATEGORY_UNIQUE:
+			if (stmt.IndexOption.IType == tree.INDEX_TYPE_INVALID ||
+				stmt.IndexOption.IType == tree.INDEX_TYPE_BTREE) &&
+				indexOptionDelegable(stmt.IndexOption) {
+				return buildAlterTable(&tree.AlterTable{
+					Table: stmt.Table,
+					Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: &tree.UniqueIndex{
+						// Build the delegable form exactly as ALTER's own
+						// parser carries it: Empty records that no USING
+						// index type was declared, and the option survives
+						// only when something renders (KEY_BLOCK_SIZE,
+						// comment, visibility) — keeping the per-partition
+						// RawSQL reparse/rewrite loop lossless and
+						// byte-idempotent.
+						KeyParts:    stmt.KeyParts,
+						Name:        indexName,
+						Empty:       true,
+						IndexOption: alterNativeIndexOption(stmt.IndexOption),
+					}}},
+				}, ctx)
+			}
+		case tree.INDEX_CATEGORY_NONE:
+			if (sIdx.KeyType == tree.INDEX_TYPE_INVALID || sIdx.KeyType == tree.INDEX_TYPE_BTREE) &&
+				indexOptionDelegable(stmt.IndexOption) {
+				return buildAlterTable(&tree.AlterTable{
+					Table: stmt.Table,
+					Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: &tree.Index{
+						// Same typed data as the parsed CREATE INDEX AST;
+						// the raw option is normalized to the shape ALTER's
+						// own parser produces (nil when nothing renders) so
+						// the per-partition RawSQL reparse/rewrite loop
+						// stays lossless and byte-idempotent.
+						Name:        indexName,
+						KeyParts:    stmt.KeyParts,
+						KeyType:     sIdx.KeyType,
+						IndexOption: alterNativeIndexOption(stmt.IndexOption),
+					}}},
+				}, ctx)
+			}
+		}
 	}
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
@@ -6770,6 +6860,70 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+// indexOptionDelegable reports whether an index's parsed options can ride
+// the partitioned CREATE INDEX → ALTER ADD INDEX delegation losslessly.
+// KEY_BLOCK_SIZE, comment and visibility serialize through the established
+// IndexOption formatter and reparse through the index_option grammar. Every
+// other field — the parser name, the engine attributes, and the vector and
+// fulltext parameters the CREATE INDEX grammar also accepts — either has no
+// serialized form or would not reparse as this ALTER option list, so indexes
+// carrying them keep the dedicated CREATE INDEX planning path.
+func indexOptionDelegable(option *tree.IndexOption) bool {
+	if option == nil {
+		return true
+	}
+	return option.ParserName == "" &&
+		option.EngineAttribute == "" &&
+		option.SecondaryEngineAttribute == "" &&
+		option.AlgoParamList == 0 &&
+		option.AlgoParamVectorOpType == "" &&
+		option.AlgoParamM == 0 &&
+		option.HnswEfConstruction == 0 &&
+		option.HnswEfSearch == 0 &&
+		option.BitsPerCode == 0 &&
+		!option.Async &&
+		!option.ForceSync &&
+		!option.Merge &&
+		!option.AutoUpdate &&
+		option.Day == 0 &&
+		option.Hour == 0 &&
+		option.Second == 0 &&
+		option.IntermediateGraphDegree == 0 &&
+		option.GraphDegree == 0 &&
+		option.Quantization == "" &&
+		option.DistributionMode == "" &&
+		option.ITopkSize == 0 &&
+		option.KmeansTrainPercent == 0 &&
+		option.KmeansMaxIteration == 0 &&
+		option.MaxIndexCapacity == 0 &&
+		option.MaxBadRecords == 0 &&
+		!option.MaxBadRecordsSet &&
+		option.MaxPostingsCapacity == 0 &&
+		!option.PositionFree &&
+		!option.PositionFreeSet &&
+		option.QuantizerTrainLimit == 0 &&
+		len(option.IncludeColumns) == 0 &&
+		len(option.TokenFilters) == 0
+}
+
+// alterNativeIndexOption returns the option exactly as ALTER's own parser
+// would carry it: the CREATE INDEX grammar always materializes a non-nil
+// option with defaults, while ALTER's grammar yields nil for an empty
+// option list. Serializing that shape keeps the delegated RawSQL
+// byte-idempotent across the per-partition reparse/rewrite loop. It is
+// called only after indexOptionDelegable bounded every other field to
+// zero, so "empty" reduces to the three whitelisted serializable slots;
+// the global formatter contract for other option families stays untouched.
+func alterNativeIndexOption(option *tree.IndexOption) *tree.IndexOption {
+	if option == nil ||
+		(option.KeyBlockSize == 0 &&
+			option.Comment == "" &&
+			option.Visible == tree.VISIBLE_TYPE_INVALID) {
+		return nil
+	}
+	return option
 }
 
 func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
@@ -7108,7 +7262,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		// drops through ALTER so the rebind SQL travels in the same DDL
 		// transaction, exactly as functional-index drops do below.
 		survivingDef := DeepCopyTableDef(tableDef, true)
-		survivingDef.Indexes = RemoveIf(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
+		survivingDef.Indexes = slices.DeleteFunc(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
 			return indexDef.IndexName == resolvedIndexName
 		})
 		var droppedColumns []string
@@ -7515,7 +7669,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if !name_not_found {
 					delete(currentIndexNames, indexNameKey(constraintName))
 					droppedIndexNames[indexNameKey(constraintName)] = true
-					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+					currentTableDef.Indexes = slices.DeleteFunc(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
 						return indexDef.IndexName == constraintName
 					})
 				} else {
@@ -7540,7 +7694,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if !name_not_found {
 					delete(currentForeignKeyNames, constraintName)
 					droppedForeignKeyNames[constraintName] = true
-					currentTableDef.Fkeys = RemoveIf(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
+					currentTableDef.Fkeys = slices.DeleteFunc(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 						return fk.Name == constraintName
 					})
 				} else {

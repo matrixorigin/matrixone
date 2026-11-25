@@ -606,7 +606,7 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 			rowsBatch = batch.New(attrs)
 			rowsBatch.Attrs = attrs
 			for i := 0; i < len(rowsBatch.Attrs); i++ {
-				rowsBatch.Vecs[i] = vector.NewVec(colTypes[i])
+				rowsBatch.Vecs[i] = vector.NewVec(colTypes[i], mp)
 			}
 		}
 		if err = vector.AppendFixed(rowsBatch.Vecs[0], rowid, false, mp); err != nil {
@@ -706,7 +706,7 @@ func readWriteHelper(
 		dataBatch = batch.New(attrs)
 		dataBatch.Attrs = attrs
 		for i := 0; i < len(dataBatch.Attrs); i++ {
-			dataBatch.Vecs[i] = vector.NewVec(colTypes[i])
+			dataBatch.Vecs[i] = vector.NewVec(colTypes[i], mp)
 		}
 
 		for {
@@ -731,7 +731,7 @@ func readWriteHelper(
 		return
 	}
 
-	if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
+	if tmpBat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
 		return
 	}
 

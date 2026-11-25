@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,8 +29,7 @@ func ToFixedColNoTypeCheck[T any](v *Vector, ret *[]T) {
 	if v.class == CONSTANT {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
-		ToSliceNoTypeCheck(v, ret)
-		*ret = (*ret)[:v.length]
+		*ret = toSliceOfLengthNoTypeCheck[T](v, v.length)
 	}
 }
 
@@ -42,8 +42,10 @@ func ToFixedCol[T any](v *Vector, ret *[]T) {
 	if v.class == CONSTANT {
 		*ret = toSliceOfLengthNoTypeCheck[T](v, 1)
 	} else {
-		ToSlice(v, ret)
-		*ret = (*ret)[:v.length]
+		checkType[T](v)
+		// Preserve a backed empty physical view. The logical unchecked
+		// helper intentionally returns nil for every zero-row vector.
+		*ret = util.UnsafeSliceCastToLength[T](v.data, v.length)
 	}
 }
 
@@ -201,7 +203,7 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
-	return extendWithBitmaps(v, rows, m, false, false)
+	return extendWithBitmaps(v, rows, m, false)
 }
 
 func extendWithBitmaps(
@@ -209,17 +211,9 @@ func extendWithBitmaps(
 	rows int,
 	m *mpool.MPool,
 	needNulls bool,
-	needGrouping bool,
 ) error {
-	// COW may replace data and shrink spare capacity. Complete it before
-	// admitting rows or handing descriptor slices to append callers.
-	if v.HasBorrowedBacking() {
-		if err := v.MaterializeOwned(m); err != nil {
-			return err
-		}
-	}
-	if m != nil && v.prepareParamKinds == nil {
-		v.prepareParamKindsMP = m
+	if err := v.checkMP(m); err != nil {
+		return err
 	}
 	if rows <= 0 {
 		// we will at least extent by 1.
@@ -228,17 +222,8 @@ func extendWithBitmaps(
 	}
 
 	tgtLen := v.length + rows
-	switch {
-	case needNulls && needGrouping:
-		if err := v.ensureBitmapCapacity(tgtLen, m); err != nil {
-			return err
-		}
-	case needNulls:
-		if err := v.ensureNullCapacity(tgtLen, m); err != nil {
-			return err
-		}
-	case needGrouping:
-		if err := v.ensureGroupingCapacity(tgtLen, m); err != nil {
+	if needNulls {
+		if err := v.ensureNullCapacity(tgtLen); err != nil {
 			return err
 		}
 	}
@@ -250,21 +235,6 @@ func extendWithBitmaps(
 		}
 		v.data = ndata
 	}
-	if v.prepareParamKinds != nil {
-		if err := v.preExtendPrepareParamKinds(tgtLen, m); err != nil {
-			return err
-		}
-	}
-	if v.stringSources != nil {
-		if err := v.preExtendStringSources(tgtLen, m); err != nil {
-			return err
-		}
-	}
-	if v.binaryStringRowsActive {
-		if err := v.ensureBinaryStringCapacity(tgtLen, m); err != nil {
-			return err
-		}
-	}
 	v.data = v.data[:cap(v.data)]
 	return nil
 }
@@ -275,6 +245,13 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 		return
 	}
 	sz := vec.typ.TypeSize()
+	physicalRows := vec.length
+	if vec.IsConst() {
+		physicalRows = min(physicalRows, 1)
+		if vec.IsConstNull() {
+			physicalRows = 0
+		}
+	}
 	return api.Vector{
 		Nsp:      nsp,
 		Nullable: true,
@@ -283,34 +260,39 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 		Len:      uint32(vec.length),
 		Type:     TypeToProtoType(vec.typ),
 		// Data:     vec.data,
-		Data: vec.data[:vec.length*sz],
+		Data: vec.data[:physicalRows*sz],
 	}, nil
 }
 
-func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
+// ProtoVectorToVector copies vec into a new vector allocated from mp. With a
+// nil mp the result is a read-only reference to vec's buffers.
+func ProtoVectorToVector(vec api.Vector, mp *mpool.MPool) (*Vector, error) {
 	typ, err := types.TypeFromPlan(vec.Type)
 	if err != nil {
 		return nil, err
 	}
-	rvec := NewVecFromReuse()
-	rvec.area = vec.Area
-	rvec.length = int(vec.Len)
-	rvec.typ = typ
-	rvec.cantFreeData = true
-	rvec.cantFreeArea = true
-
+	var decoded Vector
+	decoded.area = vec.Area
+	decoded.length = int(vec.Len)
+	decoded.typ = typ
 	if vec.IsConst {
-		rvec.class = CONSTANT
+		decoded.class = CONSTANT
 	} else {
-		rvec.class = FLAT
+		decoded.class = FLAT
 	}
-	if err := rvec.nsp.Read(vec.Nsp); err != nil {
+	if err := decoded.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
-	if rvec.IsConst() && rvec.nsp.Contains(0) {
-		return rvec, nil
+	if !decoded.IsConst() || !decoded.nsp.Contains(0) {
+		decoded.data = vec.Data
 	}
-	rvec.data = vec.Data
+	if mp == nil {
+		return &decoded, nil
+	}
+	rvec := NewVec(typ, mp)
+	if err := rvec.copyDecoded(&decoded); err != nil {
+		return nil, err
+	}
 	return rvec, nil
 }
 

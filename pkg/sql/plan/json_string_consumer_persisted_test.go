@@ -52,7 +52,7 @@ func TestPersistedJSONConsumersReplayPredecessorPlan(t *testing.T) {
 	defer proc.Free()
 	b := batch.NewWithSize(1)
 	defer b.Clean(proc.Mp())
-	b.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	b.Vecs[0] = vector.NewVec(types.T_json.ToType(), proc.Mp())
 	docs := []string{`"a\nb"`, `["` + strings.Repeat("a", 65536) + `"]`}
 	for _, doc := range docs {
 		bj, err := types.ParseStringToByteJson(doc)

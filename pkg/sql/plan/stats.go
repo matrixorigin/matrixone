@@ -600,6 +600,60 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return ndv
 }
 
+// Keep the outer-count estimate on its original set of small integer types.
+func boundNDVByIntegerSpan(ndv float64, keyType types.T, lo, hi float64, includeNull bool) float64 {
+	if keyType == types.T_int64 || keyType == types.T_uint64 {
+		return ndv
+	}
+	return boundNDVByExactIntegerSpan(ndv, keyType, lo, hi, includeNull)
+}
+
+// Exactly represented min/max values cap NDV overestimates from overlapping objects.
+func boundNDVByExactIntegerSpan(ndv float64, keyType types.T, lo, hi float64, includeNull bool) float64 {
+	span, ok := exactIntegerStatsSpan(keyType, lo, hi)
+	if !ok || !finitePositive(ndv) {
+		return ndv
+	}
+	if includeNull {
+		span++
+	}
+	return math.Min(ndv, span)
+}
+
+// With endpoints strictly within ±2^52, their inclusive span and an optional
+// NULL group also fit exactly in the float64 statistics representation.
+const maxExactIntegerStatsEndpoint = 1<<52 - 1
+
+func exactIntegerStatsSpan(keyType types.T, lo, hi float64) (float64, bool) {
+	var lower, upper float64
+	switch keyType {
+	case types.T_int8:
+		lower, upper = math.MinInt8, math.MaxInt8
+	case types.T_int16:
+		lower, upper = math.MinInt16, math.MaxInt16
+	case types.T_int32:
+		lower, upper = math.MinInt32, math.MaxInt32
+	case types.T_uint8:
+		upper = math.MaxUint8
+	case types.T_uint16:
+		upper = math.MaxUint16
+	case types.T_uint32:
+		upper = math.MaxUint32
+	case types.T_int64:
+		lower, upper = -maxExactIntegerStatsEndpoint, maxExactIntegerStatsEndpoint
+	case types.T_uint64:
+		upper = maxExactIntegerStatsEndpoint
+	default:
+		return 0, false
+	}
+	// UpdateStatsInfo uses [0,0] for an uninitialized zone map.
+	if !(lo >= lower && lo <= hi && hi <= upper) ||
+		math.Trunc(lo) != lo || math.Trunc(hi) != hi || lo == 0 && hi == 0 {
+		return 0, false
+	}
+	return hi - lo + 1, true
+}
+
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
 	switch exprImpl := arg.Expr.(type) {
 	case *plan.Expr_Col:
@@ -1071,6 +1125,15 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 		}
 	case *plan.Expr_Lit:
 		ret = 1.0
+		// Contradiction folding (normalizeColumnDomain) and constant folding can
+		// reduce a whole filter list to one boolean literal. Its row fraction is
+		// exact: TRUE keeps every row, while FALSE and NULL keep none. Estimating
+		// the always-empty case as 1.0 sized scans and the operators above them
+		// for the full table behind an always-empty filter (#32068). This floor
+		// matches the impossible-interval estimate in estimateIntervalSelectivity.
+		if IsFalseExpr(expr) || exprImpl.Lit.GetIsnull() {
+			ret = 0.00000001
+		}
 	}
 	ret = clampSelectivity(ret, 1)
 	expr.Selectivity = ret
@@ -1567,7 +1630,14 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.Selectivity = selectivity_out
 			node.Stats.BlockNum = leftStats.BlockNum
 
-		case plan.Node_SEMI, plan.Node_INDEX:
+		case plan.Node_SEMI:
+			node.Stats.Outcnt = estimateSemiJoinOutcnt(node, builder, node.Children[0], node.Children[1], leftStats, rightStats)
+			node.Stats.Cost = leftStats.Cost + rightStats.Cost
+			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+			node.Stats.Selectivity = leftSelectivity * safeSelectivityRatio(node.Stats.Outcnt, leftStats.Outcnt)
+			node.Stats.BlockNum = leftStats.BlockNum
+
+		case plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
@@ -1844,8 +1914,8 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 		node.Stats.Selectivity = preservedStats.Selectivity
 	case plan.Node_SEMI:
 		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
-		node.Stats.Outcnt = preservedStats.Outcnt * estimateJoinSelectivity(
-			clampSelectivity(preservedStats.Selectivity, 1), clampSelectivity(matchingStats.Selectivity, 1))
+		node.Stats.Outcnt = estimateSemiJoinOutcnt(node, builder, node.Children[1], node.Children[0], preservedStats, matchingStats)
+		node.Stats.Selectivity = clampSelectivity(preservedStats.Selectivity, 1) * safeSelectivityRatio(node.Stats.Outcnt, preservedStats.Outcnt)
 		node.Stats.BlockNum = preservedStats.BlockNum
 	case plan.Node_ANTI:
 		matchingStats := builder.qry.Nodes[node.Children[0]].Stats
@@ -1869,6 +1939,29 @@ func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive boo
 // clamped inputs. After a physical swap, the preserved input still comes first.
 func estimateJoinSelectivity(preservedSelectivity, matchingSelectivity float64) float64 {
 	return clampSelectivity(math.Pow(matchingSelectivity, math.Pow(preservedSelectivity, 0.2)), 1)
+}
+
+// Filtering within the matching input is not the probability that a preserved
+// key has a match. Use the same overlap uncertainty as ANTI, rather than applying
+// the matching input's source-filter ratio a second time.
+func estimateSemiJoinOutcnt(node *plan.Node, builder *QueryBuilder, preservedID, matchingID int32, preserved, matching *Stats) float64 {
+	rows := math.Max(0, finiteOr(preserved.Outcnt, 0))
+	if rows == 0 || matching.Outcnt <= 0 {
+		return 0
+	}
+	if len(node.OnList) == 0 {
+		return rows
+	}
+	// A filtered unique-key dimension has no duplicate-key amplification.
+	// Retain the existing dimension-domain estimate for this proven case.
+	if antiJoinLeftKeysArePrimaryKey(node, builder, matchingID, preservedID) {
+		outcnt := rows * estimateJoinSelectivity(clampSelectivity(preserved.Selectivity, 1), clampSelectivity(matching.Selectivity, 1))
+		if antiJoinLeftKeysArePrimaryKey(node, builder, preservedID, matchingID) {
+			outcnt = math.Min(outcnt, math.Max(0, finiteOr(matching.Outcnt, 0)))
+		}
+		return outcnt
+	}
+	return rows - estimateAntiJoinOutcnt(node, builder, preservedID, matchingID, preserved, matching)
 }
 
 // estimateAntiJoinOutcnt estimates how many logical-left rows survive an ANTI
@@ -2189,7 +2282,7 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	fn := expr.GetF()
 	argCount := 2
 	switch fn.GetFunc().GetObjName() {
-	case "=", "<", "<=", ">", ">=":
+	case "=", "<", "<=", ">", ">=", "in":
 	case "between":
 		argCount = 3
 	case "in_range":
@@ -2199,6 +2292,12 @@ func isSimpleZoneMapFilter(expr *plan.Expr) bool {
 	}
 	if !hasNonNilFunctionArgs(fn, argCount) {
 		return false
+	}
+	if fn.GetFunc().GetObjName() == "in" {
+		// IN 的操作数不可交换；列表在常量折叠前后分别表示为 List/Vec。
+		return fn.Args[0].GetCol() != nil &&
+			(fn.Args[1].GetList() != nil || fn.Args[1].GetVec() != nil) &&
+			isRuntimeConstExpr(fn.Args[1])
 	}
 	if fn.Args[0].GetCol() == nil {
 		return argCount == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
@@ -2491,10 +2590,20 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.IsRightJoin = false
 			break
 		}
+		leftBuildRows := leftChild.Stats.Outcnt
+		if node.JoinType == plan.Node_ANTI && leftChild.NodeType == plan.Node_JOIN && leftChild.JoinType == plan.Node_INNER {
+			if selectivity, known := builder.getJoinActiveDomainSelectivity(leftChild.NodeId); known {
+				// The legacy INNER estimate can apply a dimension's historical
+				// filter fraction instead of its coverage of the fact key domain.
+				// Do not choose a wide ANTI build solely from that lower estimate.
+				leftBuildRows = max(leftBuildRows, builder.qry.Nodes[leftChild.Children[0]].Stats.Outcnt*selectivity)
+				node.IsRightJoin = false
+			}
+		}
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
-		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt {
+		} else if builder.IsEquiJoin(node) && leftBuildRows*1.2 < rightChild.Stats.Outcnt {
 			node.IsRightJoin = true
 		}
 
@@ -3239,6 +3348,9 @@ func orSelectivity(s1, s2 float64) float64 {
 
 func HasShuffleInPlan(qry *plan.Query) bool {
 	for _, node := range qry.GetNodes() {
+		if IsValidationPrivilegeCarrier(node) {
+			continue
+		}
 		if node.NodeType != plan.Node_TABLE_SCAN && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
 			return true
 		}
@@ -3350,6 +3462,9 @@ func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	qry := p.GetQuery()
 	if typ == ExecTypeTP || ncpu == 1 {
 		for i := range qry.Nodes {
+			if IsValidationPrivilegeCarrier(qry.Nodes[i]) {
+				continue
+			}
 			qry.Nodes[i].Stats.Dop = 1
 		}
 		return
@@ -3416,7 +3531,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	vectorID, _, localIndexScans, distributedPRE := RequiredIVFPlacement(qry)
 	deferredOnly := adaptiveDeferredOnlyNodes(qry)
 	for id, node := range qry.GetNodes() {
-		if node == nil {
+		if node == nil || IsValidationPrivilegeCarrier(node) {
 			continue
 		}
 		if _, deferred := deferredOnly[int32(id)]; deferred {
@@ -3463,7 +3578,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
 	for id, node := range qry.GetNodes() {
-		if node == nil {
+		if node == nil || IsValidationPrivilegeCarrier(node) {
 			continue
 		}
 		if _, deferred := deferredOnly[int32(id)]; deferred {

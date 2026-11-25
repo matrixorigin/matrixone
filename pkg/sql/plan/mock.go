@@ -467,6 +467,19 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 		pks: []int{0},
 	}
+	// Float-point fixture for cast-shape planner tests: the DOUBLE and FLOAT
+	// columns let explicit float(M,D) casts reach scan filters with their
+	// declaration widths, which ordinary fixtures without float columns
+	// cannot exercise.
+	tpchSchema["fpts"] = &Schema{
+		cols: []col{
+			{"f_id", types.T_int32, false, 0, 0},
+			{"f", types.T_float64, false, 0, 0},
+			{"g", types.T_float32, false, 0, 0},
+			rowIDColumn,
+		},
+		pks: []int{0},
+	}
 	tpchSchema["lineitem"] = &Schema{
 		cols: []col{
 			{"l_orderkey", types.T_int64, false, 0, 0},

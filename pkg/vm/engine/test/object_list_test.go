@@ -152,7 +152,7 @@ func TestCollectObjectListFromCheckpointStaleRead(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		resultBat := logtailreplay.CreateObjectListBatch()
+		resultBat := logtailreplay.CreateObjectListBatch(mp)
 		defer resultBat.Clean(mp)
 
 		// Try to collect object list from t1.Prev() (which is before checkpoint range)

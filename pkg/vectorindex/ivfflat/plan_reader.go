@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -727,10 +728,12 @@ func (r *planReader) sortAndLimit(candidateLimit uint64) {
 // relationScanner executes typed hidden-table reads in the caller's current
 // transaction. It is the direct-engine replacement for sqlexec.RunSql.
 type relationScanner struct {
-	proc           *process.Process
-	generation     *planSearchGeneration
-	accountID      *uint32
-	snapshot       *plan.Snapshot
+	proc       *process.Process
+	generation *planSearchGeneration
+	accountID  *uint32
+	snapshot   *plan.Snapshot
+	// 只在本 reader 的执行代际内复用；Close 释放 scanner，不写入共享 Process。
+	snapshotTxn    client.TxnOperator
 	partitionCount int32
 	partitionIndex int32
 	ownsInMemory   bool
@@ -758,12 +761,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	} else if s.snapshot != nil && s.snapshot.TS != nil &&
 		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
 		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
-		clone := s.proc.GetCloneTxnOperator()
-		if clone == nil {
-			clone = txn.CloneSnapshotOp(*s.snapshot.TS)
-			s.proc.SetCloneTxnOperator(clone)
+		if s.snapshotTxn == nil {
+			s.snapshotTxn = txn.CloneSnapshotOp(*s.snapshot.TS)
 		}
-		txn = clone
+		txn = s.snapshotTxn
 	}
 	db, err := s.proc.GetSessionInfo().StorageEngine.Database(ctx, req.Schema, txn)
 	if err != nil {
@@ -880,7 +881,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 			reader.SetIndexParam(req.IndexParam)
 		}
 		for {
-			bat, makeErr := makeRelationScanBatch(tableDef, req.Columns)
+			bat, makeErr := makeRelationScanBatch(tableDef, req.Columns, res.Mp)
 			if makeErr != nil {
 				return res, makeErr
 			}
@@ -1022,7 +1023,8 @@ func (s *relationScanner) recordRelationExecutionStats(
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
 // the coordinator owns in-memory rows independently of its object partition
-// ordinal. Remote partitions read only persisted objects assigned by object ID.
+// ordinal, including the flushed appendable representation of those rows.
+// Remote partitions read only immutable objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
@@ -1263,7 +1265,7 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 	out := batch.NewWithSize(len(first.Vecs))
 	out.Attrs = append(out.Attrs, first.Attrs...)
 	for i, src := range first.Vecs {
-		out.Vecs[i] = vector.NewVec(*src.GetType())
+		out.Vecs[i] = vector.NewVec(*src.GetType(), res.Mp)
 	}
 	for _, selected := range rows {
 		src := res.Batches[selected.batch]
@@ -1287,7 +1289,7 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 	return nil
 }
 
-func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Batch, error) {
+func makeRelationScanBatch(tableDef *plan.TableDef, columns []string, mp *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(columns))
 	bat.Attrs = append(bat.Attrs, columns...)
 	for i, name := range columns {
@@ -1300,7 +1302,7 @@ func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Ba
 			return nil, moerr.NewInternalErrorNoCtxf("ivfflat hidden column %q not found in %s", name, tableDef.Name)
 		}
 		colType := tableDef.Cols[pos].Typ
-		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale), mp)
 	}
 	return bat, nil
 }

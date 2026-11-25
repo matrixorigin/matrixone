@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -367,6 +368,82 @@ func TestCDCCreateTaskOptionsPreservePatternValidationError(t *testing.T) {
 	)
 	require.EqualError(t, err, expected)
 	require.NotContains(t, err.Error(), "invalid level")
+}
+
+// setupCDCTimestampCompileTest stubs the sink/source connection probe and the
+// catalog executor so option validation reaches the StartTs/EndTs handling,
+// and returns a CreateCDC plan builder that always carries a valid table level.
+func setupCDCTimestampCompileTest(t *testing.T) (c *Compile, newPlan func(option ...string) *plan.CreateCDC) {
+	proc := testutil.NewProcess(t)
+
+	// Level validation runs before the timestamp options and queries the
+	// catalog for the source pattern; admit db1.t1 with a visible primary key
+	// and a valid PITR so the assertions reach the StartTs/EndTs handling.
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, catalog.MO_TABLES) {
+			return cdcCandidateTestResult(t, proc.Mp(), cdcCandidateRow{"db1", "t1", nil, true}), nil
+		}
+		return cdcPitrTestResult(t, proc.Mp()), nil
+	}}
+	setCDCOptionTestExecutor(t, proc.GetService(), exec)
+	c = NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	t.Cleanup(c.Release)
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, dbErr := sqlmock.New()
+		if dbErr != nil {
+			return nil, dbErr
+		}
+		mock.ExpectClose()
+		return db, nil
+	})
+	t.Cleanup(stubOpenDbConn.Reset)
+
+	levelOpt := []string{cdc.CDCRequestOptions_Level, cdc.CDCPitrGranularity_Table}
+	return c, func(option ...string) *plan.CreateCDC {
+		return &plan.CreateCDC{
+			TaskName:  "task1",
+			SourceUri: "mysql://root:111@127.0.0.1:6001",
+			SinkType:  cdc.CDCSinkType_MySQL,
+			SinkUri:   "mysql://root:111@127.0.0.1:3306",
+			Tables:    "db1.t1:db1.t1",
+			Option:    append(levelOpt, option...),
+		}
+	}
+}
+
+// TestCDCCreateTaskOptionsStartTsEndTsFractionalPrecision locks the documented
+// persistence contract in the compile option-validation path: fractional
+// RFC3339 boundaries persist at full precision for both options.
+func TestCDCCreateTaskOptionsStartTsEndTsFractionalPrecision(t *testing.T) {
+	c, newPlan := setupCDCTimestampCompileTest(t)
+
+	var opts CDCCreateTaskOptions
+	require.NoError(t, opts.ValidateAndFill(context.Background(), c, newPlan(
+		cdc.CDCRequestOptions_StartTs, "2026-11-06T03:02:35.123Z",
+		cdc.CDCRequestOptions_EndTs, "2026-11-07T03:02:35.123456789Z",
+	)))
+	require.Equal(t, "2026-11-06T03:02:35.123Z", opts.StartTs)
+	require.Equal(t, "2026-11-07T03:02:35.123456789Z", opts.EndTs)
+}
+
+// TestCDCCreateTaskOptionsStartTsEndTsZoneDisclosureError locks the documented
+// diagnostic contract in the compile option-validation path: an invalid
+// StartTs or EndTs value fails with an error that discloses the
+// session-time-zone interpretation of the unzoned format.
+func TestCDCCreateTaskOptionsStartTsEndTsZoneDisclosureError(t *testing.T) {
+	c, newPlan := setupCDCTimestampCompileTest(t)
+
+	var opts CDCCreateTaskOptions
+	err := opts.ValidateAndFill(context.Background(), c, newPlan(
+		cdc.CDCRequestOptions_StartTs, "123456",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
+
+	err = opts.ValidateAndFill(context.Background(), c, newPlan(
+		cdc.CDCRequestOptions_EndTs, "not-a-time",
+	))
+	require.ErrorContains(t, err, "interpreted in the session time zone")
 }
 
 func TestCDCCreateTaskDetailsPreserveIdentity(t *testing.T) {

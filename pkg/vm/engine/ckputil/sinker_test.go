@@ -157,7 +157,7 @@ func Test_Sinker1(t *testing.T) {
 	require.NoError(t, err)
 	mp := proc.Mp()
 
-	bat := NewObjectListBatch()
+	bat := NewObjectListBatch(mp)
 	accountId := uint32(1)
 	mapping := map[uint64][]uint64{
 		1: {41, 31, 21, 11, 1},

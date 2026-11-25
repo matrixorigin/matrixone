@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
@@ -190,6 +190,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 			op.ShuffleIdx = t.ShuffleIdx
 		}
 		op.RuntimeFilterSpec = t.RuntimeFilterSpec
+		op.OptionalRuntimeFilterMaxKeyBytes = t.OptionalRuntimeFilterMaxKeyBytes
 		op.SpillThreshold = t.SpillThreshold
 		op.IsDedup = t.IsDedup
 		op.DedupBuildKeepLast = t.DedupBuildKeepLast
@@ -197,6 +198,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupKeyExprs = t.DedupKeyExprs
 		op.DedupColName = t.DedupColName
+		op.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -322,6 +324,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
 		op.VectorOpType = t.VectorOpType
+		op.Ignored = t.Ignored
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -329,6 +332,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := projection.NewArgument()
 		op.ProjectList = t.ProjectList
 		op.GroupingSetCount = t.GroupingSetCount
+		op.ValuesWarningRow = t.ValuesWarningRow
 		op.GroupingFlags = t.GroupingFlags
 		op.SetInfo(&info)
 		return op
@@ -643,6 +647,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.LocalDomainBuilds = t.LocalDomainBuilds
+		op.LocalDomainProbes = t.LocalDomainProbes
 		op.ReadPolicy = t.ReadPolicy
 		op.SetInfo(&info)
 		return op
@@ -722,6 +728,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.DedupKeyExprs = t.DedupKeyExprs
+		op.AuxiliaryRowIdColIdx = t.AuxiliaryRowIdColIdx
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.HasODKUAffectedRows = t.HasODKUAffectedRows
@@ -914,23 +921,7 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 		attrs = append(attrs, col.GetOriginCaseName())
 	}
 
-	ctx := proc.GetTopContext()
-	txnOp := proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(proc.GetTxnOperator().Txn().SnapshotTS) {
-			if proc.GetCloneTxnOperator() != nil {
-				txnOp = proc.GetCloneTxnOperator()
-			} else {
-				txnOp = proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx := scanSnapshotTxn(proc.GetTopContext(), proc.GetTxnOperator(), node.ScanSnapshot)
 
 	if preCtx.Ref.SchemaName != "" {
 		_, err := eng.Database(ctx, preCtx.Ref.SchemaName, txnOp)
@@ -1436,6 +1427,7 @@ func buildExternalInsertArg(
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
+	arg.ValuesWarningRow = node.ValuesWarningRow()
 	if count, ok := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
 		arg.GroupingSetCount = count
 		arg.GroupingFlags = node.GroupingFlag
@@ -1691,6 +1683,9 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
+		if node.DedupJoinCtx.AuxiliaryRowIdCol != nil {
+			arg.AuxiliaryRowIdColIdx = node.DedupJoinCtx.AuxiliaryRowIdCol.ColPos + 1
+		}
 		if node.DedupJoinCtx.AffectedRowsCol != nil && node.DedupJoinCtx.PhysicalChangedRowsCol != nil {
 			arg.HasODKUAffectedRows = true
 			arg.AffectedRowsResultPos = findJoinResultPos(result, node.DedupJoinCtx.AffectedRowsCol)
@@ -2245,6 +2240,21 @@ func constructEwmConfig(
 		if err != nil {
 			return nil, nil, err
 		}
+		// The §7 signature tables the half-life as a numeric constant: the
+		// bind-time literal rows reject a boolean there (the window
+		// binder's literal validator), and a decay that resolves to the
+		// tag per execution — a deferred conditional such as
+		// CASE WHEN ? > 0 THEN 'halflife' ELSE 'x' END — must not widen
+		// that rule with the shared evaluator's boolean-as-0/1 view, or a
+		// `TRUE` behind the tag would silently become HalfLife=1. The
+		// isBool bit keeps the resolved domain visible before the
+		// collapse; string-typed prepared markers keep the numeric-text
+		// parse below, and booleans behind a NON-tag decay remain the
+		// adjust/ignoreNA policies they always were.
+		if hArg.isBool {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
 		if hArg.isString {
 			// h prepared markers resolve to text like decay markers do.
 			v, perr := strconv.ParseFloat(strings.TrimSpace(hArg.str), 64)
@@ -2321,12 +2331,15 @@ func constructEwmConfig(
 
 // ewmEvaluatedArg carries one evaluated decay/policy constant: the
 // string view (the 'halflife' tag), the numeric view (booleans arrive as
-// 0/1) and the NULL bit.
+// 0/1) and the NULL bit. isBool keeps the resolved value's own domain
+// visible before that boolean/numeric collapse, so slots with a
+// numeric-only contract can reject a genuine boolean.
 type ewmEvaluatedArg struct {
 	isString bool
 	str      string
 	num      float64
 	isNull   bool
+	isBool   bool
 }
 
 // ewmEvaluateConstantVector materializes one semantically constant decay
@@ -2367,6 +2380,7 @@ func ewmEvaluateConstantArg(
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
+		out.isBool = true
 		out.num = 0.0
 		if vector.MustFixedColWithTypeCheck[bool](vec)[0] {
 			out.num = 1.0
@@ -3143,7 +3157,8 @@ func constructProductL2(node *plan.Node, proc *process.Process) *productl2.Produ
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
-	arg.VectorOpType = node.ExtraOptions
+	opt, _ := tree.ParseCentroidxOption(node.ExtraOptions)
+	arg.VectorOpType = opt.OpType
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(node.OnList)
 	for i := range node.SendMsgList {
@@ -3293,6 +3308,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DedupKeyExprs = arg.DedupKeyExprs
+		ret.AuxiliaryRowIdColIdx = arg.AuxiliaryRowIdColIdx
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
@@ -3364,6 +3380,7 @@ func constructShuffleHashBuild(node *plan.Node, op vm.Operator, proc *process.Pr
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
 		ret.DedupKeyExprs = arg.DedupKeyExprs
+		ret.AuxiliaryRowIdColIdx = arg.AuxiliaryRowIdColIdx
 		ret.DelColIdx = arg.DelColIdx
 		ret.DedupDeleteMarkerColIdx = arg.DedupDeleteMarkerColIdx
 		ret.DedupDeleteKeepColIdxList = arg.DedupDeleteKeepColIdxList
@@ -3473,14 +3490,29 @@ func constructTableScan(node *plan.Node) *table_scan.TableScan {
 	return table_scan.NewArgument().WithTypes(types)
 }
 
-func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*vector.AllocationAccountSelection) (*value_scan.ValueScan, error) {
+func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*mpool.MPool) (*value_scan.ValueScan, error) {
 	op := value_scan.NewArgument()
+	if len(allocations) > 0 {
+		op.Allocation = allocations[0]
+	}
 	if node == nil {
 		return op, nil
 	}
 	op.NodeType = node.NodeType
 	if node.RowsetData == nil {
 		return op, nil
+	}
+
+	if node.ExtraOptions == plan.ValuesWarningOrdinalScan {
+		i := slices.IndexFunc(node.TableDef.Cols, func(col *plan.ColDef) bool {
+			return col.Name == plan.ValuesWarningOrdinalColumn
+		})
+		if i < 0 || i >= len(node.RowsetData.Cols) || node.TableDef.Cols[i].Typ.Id != int32(types.T_int64) ||
+			len(node.RowsetData.Cols[i].Data) != len(node.RowsetData.Cols[0].Data) {
+			op.Release()
+			return nil, moerr.NewInternalError(proc.Ctx, "missing or invalid VALUES warning ordinal column")
+		}
+		op.ValuesWarningOrdinalColumn = i + 1
 	}
 
 	op.ColCount = len(node.TableDef.Cols)
@@ -3496,22 +3528,26 @@ func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*
 
 	for i, col := range node.RowsetData.Cols {
 		typ := plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ)
-		var vec *vector.Vector
-		if len(allocations) > 0 && allocations[0] != nil {
-			var err error
-			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, allocations[0])
-			if err != nil {
-				op.Free(proc, true, err)
-				op.Release()
-				return nil, err
-			}
+		// An accounted value batch folds constants into unaccounted scratch
+		// and copies them into an off-heap vector through the view.
+		vec := vector.NewVec(typ, proc.Mp())
+		var accounted *vector.Vector
+		if op.Allocation != nil {
+			accounted = vector.NewVec(typ, op.Allocation)
+			op.Batchs[0].Vecs[i] = accounted
 		} else {
-			vec = vector.NewVec(typ)
+			op.Batchs[0].Vecs[i] = vec
 		}
-		op.Batchs[0].Vecs[i] = vec
 		for j, rowsetExpr := range col.Data {
 			get, err := rule.GetConstantValue2(proc, rowsetExpr.Expr, vec)
+			if err == nil && i+1 == op.ValuesWarningOrdinalColumn &&
+				(!get || vec.IsNull(uint64(j)) || vector.GetFixedAtNoTypeCheck[int64](vec, j) < 0) {
+				err = moerr.NewInternalError(proc.Ctx, "invalid VALUES warning ordinal")
+			}
 			if err != nil {
+				if accounted != nil {
+					vec.Free(proc.Mp())
+				}
 				op.Free(proc, true, err)
 				op.Release()
 				return nil, err
@@ -3520,6 +3556,15 @@ func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*
 				bound := *rowsetExpr
 				bound.RowPos = int32(j)
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &bound)
+			}
+		}
+		if accounted != nil {
+			err := accounted.UnionBatch(vec, 0, vec.Length(), nil, op.Allocation)
+			vec.Free(proc.Mp())
+			if err != nil {
+				op.Free(proc, true, err)
+				op.Release()
+				return nil, err
 			}
 		}
 	}

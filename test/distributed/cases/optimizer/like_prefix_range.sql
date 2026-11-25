@@ -1,9 +1,12 @@
 -- Literal prefix access uses analyzed candidate frequency, never NDV or a
 -- guessed LIKE selectivity. Duplicate names match the reported distribution.
+-- The prefix rewrite applies only to a byte-ordered string domain: a
+-- case-insensitive collation keeps the folding LIKE predicate (issue #31175),
+-- so this costing test pins the column to utf8mb4_bin.
 drop database if exists like_prefix_range;
 create database like_prefix_range;
 use like_prefix_range;
-create table names(id int primary key, name varchar(20), payload int, key ix(name));
+create table names(id int primary key, name varchar(20) collate utf8mb4_bin, payload int, key ix(name));
 insert into names
 select result, case result%10 when 0 then 'apple' when 1 then 'apply' when 2 then 'apricot' when 3 then 'banana' when 4 then 'band' when 5 then 'bank' when 6 then 'zebra' when 7 then 'zoo' when 8 then 'orange' else 'pear' end, result*2 from generate_series(0,499) g;
 -- @regex("Index Table Scan",false)

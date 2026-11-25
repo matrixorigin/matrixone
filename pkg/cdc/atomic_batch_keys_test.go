@@ -39,8 +39,8 @@ func TestAtomicBatchRetainsEncodedKeysAcrossPackerReuse(t *testing.T) {
 				bat.Clean(mp)
 			}
 		})
-		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
+		bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
 			require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.BuildTS(1, 0), false, mp))

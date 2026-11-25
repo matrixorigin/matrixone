@@ -461,7 +461,10 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 	require.NoError(t, err)
 	createdPitr = true
 	uri := fmt.Sprintf("mysql://cdc_generation_probe#admin:111@127.0.0.1:%d", port)
-	_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_task '%s' 'matrixone' '%s' 'cdc_generation_src:cdc_generation_dst' {'Level'='database'}", uri, uri))
+	// A mysql URI must recognize an MO target before the MySQL InnoDB probe.
+	// The first two tasks create absent targets; the final task below starts
+	// with an existing target table.
+	_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_task '%s' 'mysql' '%s' 'cdc_generation_src:cdc_generation_dst' {'Level'='database'}", uri, uri))
 	require.NoError(t, err)
 	createdTask = true
 	readRows := func(target string) []int {
@@ -565,7 +568,7 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 	require.Equal(t, oldEpochs, newEpochs)
 
 	// A replacement with the same schema must not inherit acknowledged progress.
-	_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_target_task '%s' 'matrixone' '%s' 'cdc_generation_src:cdc_generation_dst2' {'Level'='database'}", uri, uri))
+	_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_target_task '%s' 'mysql' '%s' 'cdc_generation_src:cdc_generation_dst2' {'Level'='database'}", uri, uri))
 	require.NoError(t, err)
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -613,6 +616,34 @@ func testCDCGenerationReplacementOnMO(t *testing.T, cluster Cluster) {
 			"WHERE t.task_name = 'cdc_generation_target_task' AND w.db_name = 'cdc_generation_src' AND w.table_name = 't'").Scan(&replacementError, &persistedIdentity))
 	require.Contains(t, replacementError, "was replaced; explicit rebuild")
 	require.Equal(t, replacementIdentity, persistedIdentity)
+
+	// Full snapshots intentionally reject an existing target. NoFull admits
+	// one and proves the mysql URI also works for incremental replication.
+	_, err = account.ExecContext(ctx, "CREATE DATABASE cdc_generation_dst3")
+	require.NoError(t, err)
+	_, err = account.ExecContext(ctx, "CREATE TABLE cdc_generation_dst3.t (id INT PRIMARY KEY, v INT)")
+	require.NoError(t, err)
+	_, err = account.ExecContext(ctx, "INSERT INTO cdc_generation_dst3.t VALUES (3,30),(4,40)")
+	require.NoError(t, err)
+	_, err = account.ExecContext(ctx, fmt.Sprintf("CREATE CDC cdc_generation_existing_task '%s' 'mysql' '%s' 'cdc_generation_src:cdc_generation_dst3' {'Level'='database','NoFull'='true'}", uri, uri))
+	require.NoError(t, err)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if _, cleanupErr := account.ExecContext(cleanupCtx, "DROP CDC TASK cdc_generation_existing_task"); cleanupErr != nil {
+			t.Errorf("drop existing-target CDC task: %v", cleanupErr)
+		}
+	}()
+	_, err = account.ExecContext(ctx, "INSERT INTO cdc_generation_src.t VALUES (6,60)")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return reflect.DeepEqual(readRows("cdc_generation_dst3"), []int{3, 4, 6}) }, 90*time.Second, 250*time.Millisecond)
+	var existingIdentity, existingError string
+	require.NoError(t, root.QueryRowContext(ctx,
+		"SELECT w.target_identity, w.err_msg FROM mo_catalog.mo_cdc_watermark AS w "+
+			"JOIN mo_catalog.mo_cdc_task AS t ON t.account_id = w.account_id AND t.task_id = w.task_id "+
+			"WHERE t.task_name = 'cdc_generation_existing_task' AND w.db_name = 'cdc_generation_src' AND w.table_name = 't'").Scan(&existingIdentity, &existingError))
+	require.True(t, strings.HasPrefix(existingIdentity, "mo:"))
+	require.Empty(t, existingError)
 }
 
 func testCDCFirstAckHoldsSourceGenerationAcrossCN(t *testing.T, cluster Cluster) {

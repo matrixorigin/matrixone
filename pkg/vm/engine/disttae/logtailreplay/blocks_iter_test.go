@@ -489,17 +489,17 @@ func TestFilterBatchCase2InsertThenDelete(t *testing.T) {
 	dataBatch.Vecs = make([]*vector.Vector, 3)
 
 	// Primary key column
-	pkVec := vector.NewVec(types.T_int32.ToType())
+	pkVec := vector.NewVec(types.T_int32.ToType(), mp)
 	vector.AppendFixed(pkVec, pkValue, false, mp) // Insert at ts=100
 	dataBatch.Vecs[0] = pkVec
 
 	// Data column
-	col1Vec := vector.NewVec(types.T_int64.ToType())
+	col1Vec := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixed(col1Vec, int64(100), false, mp)
 	dataBatch.Vecs[1] = col1Vec
 
 	// Timestamp column (last column)
-	tsVec := vector.NewVec(types.T_TS.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 	vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp) // Insert at ts=100
 	dataBatch.Vecs[2] = tsVec
 	dataBatch.SetRowCount(1)
@@ -509,12 +509,12 @@ func TestFilterBatchCase2InsertThenDelete(t *testing.T) {
 	tombstoneBatch.Vecs = make([]*vector.Vector, 2)
 
 	// Primary key column
-	tombstonePkVec := vector.NewVec(types.T_int32.ToType())
+	tombstonePkVec := vector.NewVec(types.T_int32.ToType(), mp)
 	vector.AppendFixed(tombstonePkVec, pkValue, false, mp) // Delete at ts=200
 	tombstoneBatch.Vecs[0] = tombstonePkVec
 
 	// Timestamp column
-	tombstoneTsVec := vector.NewVec(types.T_TS.ToType())
+	tombstoneTsVec := vector.NewVec(types.T_TS.ToType(), mp)
 	vector.AppendFixed(tombstoneTsVec, types.BuildTS(200, 0), false, mp) // Delete at ts=200 (last)
 	tombstoneBatch.Vecs[1] = tombstoneTsVec
 	tombstoneBatch.SetRowCount(1)
@@ -570,17 +570,17 @@ func TestFilterBatchCase2InsertThenDeleteMultiple(t *testing.T) {
 	dataBatch := batch.New([]string{"pk", "col1", "ts"})
 	dataBatch.Vecs = make([]*vector.Vector, 3)
 
-	pkVec := vector.NewVec(types.T_int32.ToType())
+	pkVec := vector.NewVec(types.T_int32.ToType(), mp)
 	vector.AppendFixed(pkVec, pkValue, false, mp) // Insert at ts=100
 	vector.AppendFixed(pkVec, pkValue, false, mp) // Insert at ts=200
 	dataBatch.Vecs[0] = pkVec
 
-	col1Vec := vector.NewVec(types.T_int64.ToType())
+	col1Vec := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixed(col1Vec, int64(100), false, mp)
 	vector.AppendFixed(col1Vec, int64(200), false, mp)
 	dataBatch.Vecs[1] = col1Vec
 
-	tsVec := vector.NewVec(types.T_TS.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType(), mp)
 	vector.AppendFixed(tsVec, types.BuildTS(100, 0), false, mp)
 	vector.AppendFixed(tsVec, types.BuildTS(200, 0), false, mp)
 	dataBatch.Vecs[2] = tsVec
@@ -590,12 +590,12 @@ func TestFilterBatchCase2InsertThenDeleteMultiple(t *testing.T) {
 	tombstoneBatch := batch.New([]string{"pk", "ts"})
 	tombstoneBatch.Vecs = make([]*vector.Vector, 2)
 
-	tombstonePkVec := vector.NewVec(types.T_int32.ToType())
+	tombstonePkVec := vector.NewVec(types.T_int32.ToType(), mp)
 	vector.AppendFixed(tombstonePkVec, pkValue, false, mp) // Delete at ts=300
 	vector.AppendFixed(tombstonePkVec, pkValue, false, mp) // Delete at ts=400
 	tombstoneBatch.Vecs[0] = tombstonePkVec
 
-	tombstoneTsVec := vector.NewVec(types.T_TS.ToType())
+	tombstoneTsVec := vector.NewVec(types.T_TS.ToType(), mp)
 	vector.AppendFixed(tombstoneTsVec, types.BuildTS(300, 0), false, mp)
 	vector.AppendFixed(tombstoneTsVec, types.BuildTS(400, 0), false, mp) // Last operation
 	tombstoneBatch.Vecs[1] = tombstoneTsVec
@@ -625,8 +625,8 @@ func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
 
 	data := batch.New([]string{"pk", "ts"})
 	data.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int32.ToType()),
-		vector.NewVec(types.T_TS.ToType()),
+		vector.NewVec(types.T_int32.ToType(), mp),
+		vector.NewVec(types.T_TS.ToType(), mp),
 	}
 	require.NoError(t, vector.AppendFixed(data.Vecs[0], int32(7), false, mp))
 	require.NoError(t, vector.AppendFixed(data.Vecs[0], int32(7), false, mp))
@@ -637,8 +637,8 @@ func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
 
 	tombstone := batch.New([]string{"pk", "ts"})
 	tombstone.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int32.ToType()),
-		vector.NewVec(types.T_TS.ToType()),
+		vector.NewVec(types.T_int32.ToType(), mp),
+		vector.NewVec(types.T_TS.ToType(), mp),
 	}
 	require.NoError(t, vector.AppendFixed(tombstone.Vecs[0], int32(7), false, mp))
 	require.NoError(t, vector.AppendFixed(tombstone.Vecs[1], types.BuildTS(20, 0), false, mp))
@@ -649,4 +649,53 @@ func TestChangeHandlerCoalesceBatchPreservesAllVersions(t *testing.T) {
 	require.NoError(t, h.coalesceBatch(data, tombstone, mp))
 	require.Equal(t, 2, data.RowCount())
 	require.Equal(t, 1, tombstone.RowCount())
+}
+
+func TestFilterBatchPreservesReplacementAtSameCommit(t *testing.T) {
+	for _, skipDeletes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skipDeletes=%t", skipDeletes), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			data := batch.NewWithSize(3)
+			deletes := batch.NewWithSize(3)
+			defer data.Clean(mp)
+			defer deletes.Clean(mp)
+
+			oldRow := types.Rowid{1}
+			newRow := types.Rowid{2}
+			otherRow := types.Rowid{3}
+			ts := types.BuildTS(100, 0)
+			key := []byte("customer-long-primary-key")
+			otherKey := []byte("another-long-primary-key")
+			for _, b := range []*batch.Batch{data, deletes} {
+				b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+				b.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+				b.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
+			}
+			for _, row := range []struct {
+				id  types.Rowid
+				key []byte
+			}{{newRow, key}, {otherRow, otherKey}} {
+				require.NoError(t, vector.AppendFixed(data.Vecs[0], row.id, false, mp))
+				require.NoError(t, vector.AppendBytes(data.Vecs[1], row.key, false, mp))
+				require.NoError(t, vector.AppendFixed(data.Vecs[2], ts, false, mp))
+			}
+			data.SetRowCount(2)
+			require.NoError(t, vector.AppendFixed(deletes.Vecs[0], oldRow, false, mp))
+			require.NoError(t, vector.AppendBytes(deletes.Vecs[1], key, false, mp))
+			require.NoError(t, vector.AppendFixed(deletes.Vecs[2], ts, false, mp))
+			deletes.SetRowCount(1)
+
+			require.NoError(t, filterBatch(data, deletes, 0, skipDeletes, false, mp))
+			require.Equal(t, []types.Rowid{newRow, otherRow}, vector.MustFixedColWithTypeCheck[types.Rowid](data.Vecs[0]))
+			require.Equal(t, key, data.Vecs[1].GetBytesAt(0))
+			if skipDeletes {
+				require.Empty(t, vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0]))
+			} else {
+				require.Equal(t, []types.Rowid{oldRow}, vector.MustFixedColWithTypeCheck[types.Rowid](deletes.Vecs[0]))
+				require.Equal(t, key, deletes.Vecs[1].GetBytesAt(0))
+				require.Equal(t, ts, vector.GetFixedAtNoTypeCheck[types.TS](deletes.Vecs[2], 0))
+			}
+		})
+	}
 }

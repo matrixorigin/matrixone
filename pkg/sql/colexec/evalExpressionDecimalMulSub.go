@@ -210,9 +210,6 @@ func decimalMulSubLiteralValue(planExpr *plan.Expr, executor ExpressionExecutor,
 }
 
 func decimalMulSubSource(v *vector.Vector, column *ColumnExpressionExecutor, n int) bool {
-	if !v.GetGrouping().IsEmpty() {
-		return false
-	}
 	// Generic column evaluation normalizes ordinary constant NULLs to the bound
 	// column type without reading a value payload.
 	if v.IsConstNull() {
@@ -238,6 +235,7 @@ func (e *decimalMulSubExecutor) Eval(proc *process.Process, batches []*batch.Bat
 	if !decimalMulSubSource(x, e.x, n) || !decimalMulSubSource(y, e.y, n) {
 		return e.root.Eval(proc, batches, selected)
 	}
+
 	e.root.resetResultType(e.root.resultVector)
 	if err := e.root.resultVector.PreExtendAndReset(n); err != nil {
 		return nil, err

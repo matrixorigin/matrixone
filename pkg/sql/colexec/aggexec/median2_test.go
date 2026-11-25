@@ -23,11 +23,100 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMedianDecimal38UsesWideExactResult(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scale int32
+		input []string
+		want  string
+	}{
+		{"large even", 0, []string{"99999999999999999999999999999999999997", "99999999999999999999999999999999999999"}, "99999999999999999999999999999999999998.0"},
+		{"large singleton", 0, []string{"99999999999999999999999999999999999999"}, "99999999999999999999999999999999999999.0"},
+		{"negative even", 0, []string{"-99999999999999999999999999999999999999", "-99999999999999999999999999999999999997"}, "-99999999999999999999999999999999999998.0"},
+		{"scale 6 even", 6, []string{"99999999999999999999999999999999.999997", "99999999999999999999999999999999.999999"}, "99999999999999999999999999999999.9999980"},
+		{"scale 38 even", 38, []string{"0.10000000000000000000000000000000000000", "0.20000000000000000000000000000000000000"}, "0.150000000000000000000000000000000000000"},
+		{"scale 38 singleton", 38, []string{"0.20000000000000000000000000000000000000"}, "0.200000000000000000000000000000000000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.New(types.T_decimal128, 38, tc.scale)
+			resultType := MedianReturnType([]types.Type{typ})
+			require.Equal(t, types.New(types.T_decimal256, 39, tc.scale+1), resultType)
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			input := vector.NewVec(typ, mp)
+			defer input.Free(mp)
+			for _, value := range tc.input {
+				decimal, err := types.ParseDecimal128(value, 38, tc.scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(input, decimal, false, mp))
+			}
+			exec, err := MakeAgg(mp, AggIdOfMedian, false, typ)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			results, err := exec.Flush()
+			for _, result := range results {
+				if result != nil {
+					defer result.Free(mp)
+				}
+			}
+			require.NoError(t, err)
+			require.Equal(t, resultType, *results[0].GetType())
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(resultType.Scale))
+		})
+	}
+}
+
+func TestMedianDecimal256ResultComposes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	inputType := types.New(types.T_decimal128, 38, 0)
+	input := vector.NewVec(inputType, mp)
+	t.Cleanup(func() { input.Free(mp) })
+	for _, value := range []string{"1", "2", "3", "4"} {
+		decimal, err := types.ParseDecimal128(value, 38, 0)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendFixed(input, decimal, false, mp))
+	}
+	inner, err := MakeAgg(mp, AggIdOfMedian, false, inputType)
+	require.NoError(t, err)
+	t.Cleanup(inner.Free)
+	require.NoError(t, inner.GroupGrow(2))
+	require.NoError(t, inner.BatchFill(0, []uint64{1, 1, 2, 2}, []*vector.Vector{input}))
+	innerResults, err := inner.Flush()
+	for _, result := range innerResults {
+		if result != nil {
+			r := result
+			t.Cleanup(func() { r.Free(mp) })
+		}
+	}
+	require.NoError(t, err)
+	require.Equal(t, types.New(types.T_decimal256, 39, 1), *innerResults[0].GetType())
+
+	outer, err := MakeAgg(mp, AggIdOfMedian, false, *innerResults[0].GetType())
+	require.NoError(t, err)
+	t.Cleanup(outer.Free)
+	require.NoError(t, outer.GroupGrow(1))
+	require.NoError(t, outer.BulkFill(0, innerResults))
+	outerResults, err := outer.Flush()
+	for _, result := range outerResults {
+		if result != nil {
+			r := result
+			t.Cleanup(func() { r.Free(mp) })
+		}
+	}
+	require.NoError(t, err)
+	require.Equal(t, types.New(types.T_decimal256, 40, 2), *outerResults[0].GetType())
+	require.Equal(t, "2.50", vector.GetFixedAtNoTypeCheck[types.Decimal256](outerResults[0], 0).Format(2))
+}
 
 func TestMedianExecAcrossSupportedTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -163,7 +252,7 @@ func TestMedianMultipleGroupsAndNullHandling(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, exec.GroupGrow(3))
 
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(vec, []int64{1, 2, 10, 20, 0, 0, 100}, []bool{false, false, false, false, true, true, false}, mp))
 	defer vec.Free(mp)
 
@@ -313,10 +402,6 @@ func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, resident, 1)
 			require.Len(t, spilled, 1)
-			require.True(t, vector.AllocationAccountSelectionsEqual(
-				allocation.vectorSelection(), resident[0].AllocationAccountSelection()))
-			require.True(t, vector.AllocationAccountSelectionsEqual(
-				allocation.vectorSelection(), spilled[0].AllocationAccountSelection()))
 			for row, want := range []float64{5, 5, 0} {
 				if row == 2 {
 					require.True(t, resident[0].IsNull(uint64(row)))
@@ -332,8 +417,8 @@ func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
 					vector.GetFixedAtNoTypeCheck[float64](spilled[0], row))
 			}
 
-			resident[0].Free(mp)
-			spilled[0].Free(mp)
+			freeAccountedVector(t, account, resident[0], mp)
+			freeAccountedVector(t, account, spilled[0], mp)
 			input.Free(mp)
 			exec.Free()
 			restored.Free()
@@ -459,8 +544,8 @@ func TestAccountedMedianRetainsOrdinaryInputWithoutSavedArgumentIndex(t *testing
 	require.NoError(t, err)
 	require.Equal(t, float64(rows+1)/2,
 		vector.GetFixedAtNoTypeCheck[float64](restoredResult[0], 0))
-	result[0].Free(mp)
-	restoredResult[0].Free(mp)
+	result[0].Free(result[0].MPool())
+	restoredResult[0].Free(restoredResult[0].MPool())
 	input.Free(mp)
 	exec.Free()
 	restored.Free()
@@ -510,7 +595,7 @@ func TestGroupedAccountedMedianDoesNotMaterializePerGroupVectors(t *testing.T) {
 	require.Equal(t, []float64{2, 6},
 		vector.MustFixedColNoTypeCheck[float64](results[0]))
 
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	input.Free(mp)
 	exec.Free()
 	require.NoError(t, owner.ClearAllocationAccount(allocation))
@@ -586,7 +671,7 @@ func TestAccountedMedianDirectFillAndMergeMethods(t *testing.T) {
 	require.NoError(t, rightExec.BatchFill(
 		0, []uint64{1, 1}, []*vector.Vector{constant}))
 	require.NoError(t, rightExec.Fill(0, 3, []*vector.Vector{constant}))
-	nullable := vector.NewVec(types.T_int64.ToType())
+	nullable := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(
 		nullable, []int64{7, 0}, []bool{false, true}, mp))
 	require.ErrorIs(t, leftExec.(BatchCapacityPreflight).PreflightBatchFill(
@@ -634,7 +719,7 @@ func TestAccountedMedianDirectFillAndMergeMethods(t *testing.T) {
 	require.Equal(t, 125.0,
 		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	bulk.Free(mp)
 	constant.Free(mp)
 	nullable.Free(mp)
@@ -700,7 +785,7 @@ func TestSingleGroupMedianChunkIntermediateRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5.0,
 		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	input.Free(mp)
 	source.Free()
 	target.Free()
@@ -717,7 +802,7 @@ func TestVectorsPreExtendBoundaries(t *testing.T) {
 	require.ErrorIs(t, (*Vectors[int64])(nil).PreExtend(1, mp),
 		mpool.ErrAllocationAccountInvalid)
 
-	preextended := NewVectors[int64](types.T_int64.ToType())
+	preextended := NewVectors[int64](types.T_int64.ToType(), mp)
 	require.NoError(t, preextended.PreExtend(0, mp))
 	require.NoError(t, preextended.vecs[0].PreExtend(MaxVectorLength, mp))
 	preextended.vecs[0].SetLength(MaxVectorLength)
@@ -725,7 +810,7 @@ func TestVectorsPreExtendBoundaries(t *testing.T) {
 	require.Len(t, preextended.vecs, 2)
 	preextended.Free(mp)
 
-	appended := NewVectors[int64](types.T_int64.ToType())
+	appended := NewVectors[int64](types.T_int64.ToType(), mp)
 	require.NoError(t, appended.vecs[0].PreExtend(MaxVectorLength, mp))
 	appended.vecs[0].SetLength(MaxVectorLength)
 	require.NoError(t, AppendMultiFixed(appended, int64(7), false, 1, mp))
@@ -791,20 +876,31 @@ func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
 			typ:    types.New(types.T_decimal128, 20, 2),
 			values: mustDecimal128s(t, "1.00", "3.00", "2.00", "4.00", "6.00"),
 		},
+		{
+			name:   "decimal128_widened",
+			typ:    types.New(types.T_decimal128, 38, 2),
+			values: mustDecimal128s(t, "1.00", "3.00", "2.00", "4.00", "6.00"),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 			registry, account, allocation := newTestAggregateAllocation(t)
+			t.Cleanup(func() { finishTestAggregateAllocation(t, registry, account) })
 			exec, err := MakeSingleGroupAgg(
 				mp, AggIdOfMedian, false, nil, nil, tc.typ)
 			require.NoError(t, err)
+			t.Cleanup(exec.Free)
 			owner := exec.(AllocationAccountOwner)
 			require.NoError(t, owner.SetAllocationAccount(allocation))
 			SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
 			switch typed := exec.(type) {
-			case *medianColumnDecimalExec[types.Decimal64]:
+			case *medianColumnDecimalExec[types.Decimal64, types.Decimal128]:
 				require.True(t, typed.usesDenseAccountedState())
-			case *medianColumnDecimalExec[types.Decimal128]:
+			case *medianColumnDecimalExec[types.Decimal128, types.Decimal128]:
+				require.True(t, typed.usesDenseAccountedState())
+			case *medianColumnDecimalExec[types.Decimal128, types.Decimal256]:
 				require.True(t, typed.usesDenseAccountedState())
 			default:
 				t.Fatalf("unexpected median type %T", exec)
@@ -812,6 +908,7 @@ func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
 			require.NoError(t, exec.GroupGrow(1))
 
 			input := medianTestVector(t, mp, tc.typ, tc.values)
+			t.Cleanup(func() { input.Free(mp) })
 			groups := []uint64{1, 1, 1, 1, 1}
 			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
 				0, groups, []*vector.Vector{input}))
@@ -819,17 +916,21 @@ func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
 				0, groups, []*vector.Vector{input}))
 
 			results, err := exec.Flush()
+			t.Cleanup(func() {
+				for _, vec := range results {
+					vec.Free(vec.MPool())
+				}
+			})
 			require.NoError(t, err)
-			require.Equal(t, "3.000",
-				vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0).
-					Format(results[0].GetType().Scale))
-
-			results[0].Free(mp)
-			input.Free(mp)
-			exec.Free()
-			require.NoError(t, owner.ClearAllocationAccount(allocation))
-			finishTestAggregateAllocation(t, registry, account)
-			require.Zero(t, mp.CurrNB())
+			resultType := results[0].GetType()
+			require.Equal(t, int32(3), resultType.Scale)
+			if tc.typ.Width == 38 {
+				require.Equal(t, types.T_decimal256, resultType.Oid)
+				require.Equal(t, "3.000", vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(resultType.Scale))
+			} else {
+				require.Equal(t, types.T_decimal128, resultType.Oid)
+				require.Equal(t, "3.000", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0).Format(resultType.Scale))
+			}
 		})
 	}
 }
@@ -869,7 +970,7 @@ func TestAccountedMedianPreservesFloatNaNSemantics(t *testing.T) {
 		math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](accountedResult[0], 0)))
 
 	legacyResult[0].Free(mp)
-	accountedResult[0].Free(mp)
+	accountedResult[0].Free(accountedResult[0].MPool())
 	input.Free(mp)
 	legacy.Free()
 	accounted.Free()
@@ -896,7 +997,7 @@ func TestMedianExecInt64ExtremeMidpoint(t *testing.T) {
 		require.Len(t, result, 1)
 		require.Equal(t, math.Float64bits(-0.5), math.Float64bits(
 			vector.GetFixedAtNoTypeCheck[float64](result[0], 0)))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		input.Free(mp)
 	}
 
@@ -984,8 +1085,7 @@ func TestAccountedMedianFinalizationExactCap(t *testing.T) {
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(
 			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-				VectorData: 1, VectorArea: 2, VectorNulls: 3,
-				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 			})
 		require.NoError(t, err)
 
@@ -1015,7 +1115,7 @@ func TestAccountedMedianFinalizationExactCap(t *testing.T) {
 		}
 		peak := account.Snapshot().Peak
 		for _, result := range results {
-			result.Free(mp)
+			result.Free(result.MPool())
 		}
 		input.Free(mp)
 		exec.Free()
@@ -1103,7 +1203,7 @@ func TestMedianStableIntermediateCompatibilityAcrossAllocationModes(t *testing.T
 					}
 
 					for _, result := range results {
-						result.Free(mp)
+						result.Free(result.MPool())
 					}
 					input.Free(mp)
 					source.Free()
@@ -1147,7 +1247,7 @@ func TestAccountedMedianChunkIntermediateCompatibility(t *testing.T) {
 	require.Equal(t, 5.0,
 		vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
 
-	results[0].Free(mp)
+	results[0].Free(results[0].MPool())
 	input.Free(mp)
 	source.Free()
 	target.Free()
@@ -1294,9 +1394,6 @@ func TestMedianNumericValsFloatMidpointBoundaries(t *testing.T) {
 }
 
 func TestMedianNumericMidpointReusesScratch(t *testing.T) {
-	if util.RaceDetectorEnabled {
-		t.Skip("allocation counts include race-detector instrumentation")
-	}
 	var arithmetic percentileArithmeticScratch
 	for range 4 {
 		_ = medianNumericMidpoint(
@@ -1448,7 +1545,7 @@ func TestMedianFailedUnmarshalPreservesOwnedState(t *testing.T) {
 	require.Equal(t, 99.0,
 		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	fresh.Free(mp)
 	old.Free(mp)
 	source.Free()
@@ -1481,7 +1578,7 @@ func TestMedianEmptyIntermediateRoundTripReplacesState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 7.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	fresh.Free(mp)
 	old.Free(mp)
 	target.Free()
@@ -1537,7 +1634,7 @@ func TestSelectKthFuncHandlesDuplicateHeavyInput(t *testing.T) {
 
 func medianTestVector(t *testing.T, mp *mpool.MPool, typ types.Type, values any) *vector.Vector {
 	t.Helper()
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 	switch typ.Oid {
 	case types.T_bit, types.T_uint64:
 		require.NoError(t, vector.AppendFixedList(v, values.([]uint64), nil, mp))
@@ -1577,11 +1674,13 @@ func accountedMedianTestVectors[T numeric | types.Decimal64 | types.Decimal128](
 	segments [][]T,
 ) *Vectors[T] {
 	t.Helper()
-	ret := &Vectors[T]{allocation: allocation.vectorSelection()}
+	view, err := allocation.VectorMP(mp)
+	require.NoError(t, err)
+	ret := &Vectors[T]{allocation: view}
 	for _, values := range segments {
-		vec, err := allocation.newVector(typ)
+		vec, err := allocation.newVector(typ, view)
 		require.NoError(t, err)
-		require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+		require.NoError(t, vector.AppendFixedList(vec, values, nil, view))
 		ret.vecs = append(ret.vecs, vec)
 	}
 	ret.appendAt = len(ret.vecs) - 1

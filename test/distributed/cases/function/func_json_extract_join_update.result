@@ -1,0 +1,40 @@
+drop database if exists issue32691_json_projection;
+create database issue32691_json_projection;
+use issue32691_json_projection;
+create table docs (id int primary key, doc longtext);
+create table tasks (id int primary key, a varchar(32), b varchar(32));
+insert into docs values (1, '{"a":null,"b":"ready"}'), (2, '{"b":"missing-a"}'),
+(3, null), (4, '{bad');
+insert into tasks values (1, 'before', 'before'), (2, 'before', 'before'),
+(3, 'before', 'before'), (4, 'before', 'before');
+select id, json_extract(doc, '$.a') is null as a_is_sql_null,
+json_unquote(json_extract(doc, '$.a')) = 'null' as a_is_json_null,
+json_unquote(json_extract(doc, '$.b')) as b
+from docs where id < 4 order by id;
+➤ id[4,32,0]  ¦  a_is_sql_null[-6,8,0]  ¦  a_is_json_null[-6,8,0]  ¦  b[12,65535,0]  𝄀
+1  ¦  0  ¦  1  ¦  ready  𝄀
+2  ¦  1  ¦  null  ¦  missing-a  𝄀
+3  ¦  1  ¦  null  ¦  null
+update tasks t join docs d on t.id = d.id
+set t.a = case when d.id < 4 then json_unquote(json_extract(d.doc, '$.a')) else t.a end,
+t.b = case when d.id < 4 then json_unquote(json_extract(d.doc, '$.b')) else t.b end;
+select id, a, a is null as a_is_sql_null, b, b is null as b_is_sql_null
+from tasks order by id;
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  a_is_sql_null[-6,8,0]  ¦  b[12,32,0]  ¦  b_is_sql_null[-6,8,0]  𝄀
+1  ¦  null  ¦  0  ¦  ready  ¦  0  𝄀
+2  ¦  null  ¦  1  ¦  missing-a  ¦  0  𝄀
+3  ¦  null  ¦  1  ¦  null  ¦  1  𝄀
+4  ¦  before  ¦  0  ¦  before  ¦  0
+update tasks t join docs d on t.id = d.id
+set t.a = concat('retry:', json_unquote(json_extract(d.doc, '$.a'))),
+t.b = concat('retry:', json_unquote(json_extract(d.doc, '$.b')));
+invalid input: json text {bad
+use issue32691_json_projection;
+select id, a, a is null as a_is_sql_null, b, b is null as b_is_sql_null
+from tasks order by id;
+➤ id[4,32,0]  ¦  a[12,32,0]  ¦  a_is_sql_null[-6,8,0]  ¦  b[12,32,0]  ¦  b_is_sql_null[-6,8,0]  𝄀
+1  ¦  null  ¦  0  ¦  ready  ¦  0  𝄀
+2  ¦  null  ¦  1  ¦  missing-a  ¦  0  𝄀
+3  ¦  null  ¦  1  ¦  null  ¦  1  𝄀
+4  ¦  before  ¦  0  ¦  before  ¦  0
+drop database issue32691_json_projection;

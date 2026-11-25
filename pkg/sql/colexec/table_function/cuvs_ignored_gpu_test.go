@@ -145,7 +145,7 @@ func TestCuvsIgnoredRowsLimit(t *testing.T) {
 		return nil
 	}))
 	require.Equal(t, []string{fmt.Sprintf(
-		"REPLACE INTO `db`.`ign` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (1, %d, 9), (2, %d, 9)",
+		"REPLACE INTO `db`.`ign` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_reason`, `__mo_index_ts`) VALUES (1, %d, NULL, 9), (2, %d, NULL, 9)",
 		moerr.ErrIndexVectorOutOfRange, moerr.ErrIndexVectorOutOfRange)}, sqls)
 }
 

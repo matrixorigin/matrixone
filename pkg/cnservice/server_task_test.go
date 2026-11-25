@@ -200,6 +200,8 @@ type testTS struct {
 	created   chan struct{}
 }
 
+func (*testTS) SQLTaskService() taskservice.TaskService { return nil }
+
 type controlledCronTaskService struct {
 	*testTS
 	create func(context.Context, task.TaskMetadata, string) error

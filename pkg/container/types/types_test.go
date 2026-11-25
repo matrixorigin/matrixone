@@ -68,6 +68,16 @@ func TestTSMarshalAndUnmarshal(t *testing.T) {
 	require.Equal(t, ts, ret)
 }
 
+func TestTSNextResetsLogicalAtPhysicalRollover(t *testing.T) {
+	before := BuildTS(29, math.MaxUint32)
+	after := BuildTS(30, 0)
+	require.Equal(t, after, before.Next())
+	require.Equal(t, before, after.Prev())
+
+	max := MaxTs()
+	require.Equal(t, max, max.Next())
+}
+
 func TestDecimal64MarshalAndUnmarshal(t *testing.T) {
 	d := Decimal64(100)
 	data, err := d.Marshal()
@@ -162,6 +172,11 @@ func TestType_Eq(t *testing.T) {
 }
 
 func TestT_ToType(t *testing.T) {
+	unknown := T(255)
+	_, ok := unknown.TryToType()
+	require.False(t, ok)
+	require.PanicsWithValue(t, "Unknown type", func() { unknown.ToType() })
+
 	require.Equal(t, int32(1), T_int8.ToType().Size)
 	require.Equal(t, int32(2), T_int16.ToType().Size)
 	require.Equal(t, int32(4), T_int32.ToType().Size)

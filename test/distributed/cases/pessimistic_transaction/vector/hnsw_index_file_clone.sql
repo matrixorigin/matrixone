@@ -14,7 +14,8 @@ create table t (id bigint primary key, v vecf32(8));
 insert into t select result, concat('[', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ',', rand(), ']')
 from generate_series(1, 2000) g;
 insert into t values (1000001, '[50,50,50,50,50,50,50,50]');
-create index ix using hnsw on t(v) op_type 'vector_l2_ops';
+-- ef_search covers every row, so each search finds its target point
+create index ix using hnsw on t(v) op_type 'vector_l2_ops' ef_search = 4096;
 select id from t order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
 
 -- a CN that did not run a sync sees its new models on its freshness sweep; shorten it so a

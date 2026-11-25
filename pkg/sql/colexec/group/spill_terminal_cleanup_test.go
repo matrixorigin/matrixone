@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +86,7 @@ func TestGroupTerminalDiscardedBuckets(t *testing.T) {
 			generation, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)
 			ctr := container{mp: proc.Mp(), budget: generation}
-			t.Cleanup(ctr.free)
+			t.Cleanup(func() { ctr.free(proc.Mp()) })
 			fault.blocked = true
 			if path == "sort_run_error" {
 				controller := &distinctSpillController{ctr: &ctr, rootName: "cleanup-sort"}
@@ -110,15 +109,14 @@ func TestGroupTerminalDiscardedBuckets(t *testing.T) {
 					freeDistinctWave(&wave)
 					require.Nil(t, wave[0])
 				} else {
-					ctr.spillBkts = list.New[*spillBucket]()
-					ctr.spillBkts.PushBack(bucket)
+					ctr.spillBkts = append(ctr.spillBkts, bucket)
 					_, err = ctr.loadSpilledData(proc, process.NewAnalyzer(0, false, false, "cleanup"), nil)
 					if path == "reload_error" {
 						require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 					} else {
 						require.ErrorIs(t, err, groupUnlinkFailure)
 					}
-					require.Zero(t, ctr.spillBkts.Len())
+					require.Empty(t, ctr.spillBkts)
 				}
 				require.Nil(t, bucket.diskToken)
 				require.Nil(t, bucket.fileFS)
@@ -147,7 +145,7 @@ func TestGroupTerminalEmptyCurrentBucketRemovalFailure(t *testing.T) {
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	ctr := container{mp: proc.Mp(), budget: generation}
-	t.Cleanup(ctr.free)
+	t.Cleanup(func() { ctr.free(proc.Mp()) })
 	bucket := &spillBucket{name: "empty-current"}
 	require.NoError(t, ctr.openSpillBucket(proc, view, bucket))
 	ctr.currentSpillBkt = []*spillBucket{bucket}
@@ -179,7 +177,7 @@ func TestGroupTerminalDistinctMergeIntermediate(t *testing.T) {
 			_ = bucket.free()
 		}
 		controller.close()
-		ctr.free()
+		ctr.free(proc.Mp())
 	})
 	newRun := func(name string, malformed bool) *spillBucket {
 		b := &spillBucket{name: name, cnt: 1}

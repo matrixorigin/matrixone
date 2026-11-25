@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
@@ -4566,63 +4565,75 @@ var gSysVarsDefs = map[string]SystemVariable{
 }
 
 func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, name string, val interface{}) error {
-	originalTzStr := val.(string)
+	stored, loc, err := resolveTimeZone(ctx, val)
+	if err != nil {
+		return err
+	}
+	sv.Set(name, stored)
+	sess.SetTimeZone(loc)
+	return nil
+}
+
+// resolveTimeZone validates a time_zone value and returns the spelling to
+// store and its location. SET GLOBAL uses it too, so an unknown zone is
+// rejected before it is persisted for every new session.
+func resolveTimeZone(ctx context.Context, val interface{}) (string, *time.Location, error) {
+	originalTzStr, ok := val.(string)
+	if !ok {
+		return "", nil, moerr.NewWrongDatetimeSpec(ctx, fmt.Sprintf("%v", val))
+	}
 	originalTzStr = strings.TrimSpace(originalTzStr)
 	tzStr := strings.ToLower(originalTzStr)
 	if tzStr == "system" {
-		sv.Set(name, "SYSTEM")
-		sess.SetTimeZone(time.Local)
+		return "SYSTEM", time.Local, nil
 	} else if len(tzStr) > 0 && (tzStr[0] == '-' || tzStr[0] == '+') {
 		if len(tzStr) != 5 && len(tzStr) != 6 {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 
 		minIdx := 3
 		if tzStr[1] < '0' || tzStr[1] > '9' {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		hour := int(tzStr[1] - '0')
 		if tzStr[2] != ':' {
 			if tzStr[2] < '0' || tzStr[2] > '9' {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+				return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 			}
 			hour = hour*10 + int(tzStr[2]-'0')
 			minIdx = 4
 			if tzStr[3] != ':' {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+				return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 			}
 		}
 
 		if minIdx != len(tzStr)-2 {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		if tzStr[minIdx] < '0' || tzStr[minIdx] > '9' {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		minute := int(tzStr[minIdx]-'0') * 10
 		if tzStr[minIdx+1] < '0' || tzStr[minIdx+1] > '9' {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 		minute += int(tzStr[minIdx+1] - '0')
 		if minute >= 60 {
-			return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 		}
 
 		minute += hour * 60
 
 		if tzStr[0] == '-' {
 			if minute >= 14*60 {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
+				return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
 			}
-			sess.SetTimeZone(time.FixedZone("FixedZone", -minute*60))
-		} else {
-			if minute > 14*60 {
-				return moerr.NewWrongDatetimeSpec(ctx, tzStr)
-			}
-			sess.SetTimeZone(time.FixedZone("FixedZone", minute*60))
+			return tzStr, time.FixedZone("FixedZone", -minute*60), nil
 		}
-
-		sv.Set(name, tzStr)
+		if minute > 14*60 {
+			return "", nil, moerr.NewWrongDatetimeSpec(ctx, tzStr)
+		}
+		return tzStr, time.FixedZone("FixedZone", minute*60), nil
 	} else {
 		// Handle common timezone aliases first
 		// These work even when timezone database is not available
@@ -4632,7 +4643,7 @@ func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, nam
 			// UTC is a special case - Go's time.LoadLocation("UTC") works without timezone database
 			// but time.LoadLocation("utc") requires it. Use time.UTC directly to avoid dependency.
 			loc = time.UTC
-			sv.Set(name, "UTC")
+			return "UTC", loc, nil
 		default:
 			// Try to load from system timezone database
 			// IANA timezone names are case-sensitive (e.g., "Asia/Shanghai", "America/New_York")
@@ -4640,14 +4651,11 @@ func updateTimeZone(ctx context.Context, sess *Session, sv *SystemVariables, nam
 			var err error
 			loc, err = time.LoadLocation(originalTzStr)
 			if err != nil {
-				return err
+				return "", nil, err
 			}
-			sv.Set(name, originalTzStr)
+			return originalTzStr, loc, nil
 		}
-		sess.SetTimeZone(loc)
 	}
-
-	return nil
 }
 
 func getSystemTimeZone() string {
@@ -4678,11 +4686,19 @@ type UserDefinedVar struct {
 	// needed by unsized binary CAST compatibility. It never supplies the
 	// ordinary SQL or prepared-parameter conversion type of a NULL value.
 	RegexpStringResult  bool
-	PrepareParamKind    vector.PrepareParamKind
 	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool
+}
+
+// prepareParamKind is the conversion kind the variable's value has as a
+// prepared parameter, derived from its type.
+func (v *UserDefinedVar) prepareParamKind() types.StringConversionKind {
+	if v.Type.Id != 0 {
+		return prepareParamKindFromType(types.T(v.Type.Id))
+	}
+	return prepareParamKindFromValue(v.Value)
 }
 
 // userVariableRegexpStringResult models MySQL's user-variable result category,
@@ -4760,35 +4776,35 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 	return planpb.Type{Id: int32(oid)}
 }
 
-func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {
+func prepareParamKindFromType(oid types.T) types.StringConversionKind {
 	switch oid {
 	case types.T_bit, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_year:
-		return vector.PrepareParamInteger
+		return types.StringConversionInteger
 	case types.T_float32, types.T_float64, types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
-		return vector.PrepareParamFloat
+		return types.StringConversionFloat
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		return vector.PrepareParamDecimal
+		return types.StringConversionDecimal
 	case types.T_bool:
-		return vector.PrepareParamBoolean
+		return types.StringConversionBoolean
 	default:
-		return vector.PrepareParamNone
+		return types.StringConversionString
 	}
 }
 
-func prepareParamKindFromValue(value any) vector.PrepareParamKind {
+func prepareParamKindFromValue(value any) types.StringConversionKind {
 	switch value.(type) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, types.MoYear:
-		return vector.PrepareParamInteger
+		return types.StringConversionInteger
 	case float32, float64:
-		return vector.PrepareParamFloat
+		return types.StringConversionFloat
 	case types.Decimal64, types.Decimal128, types.Decimal256:
-		return vector.PrepareParamDecimal
+		return types.StringConversionDecimal
 	case bool:
-		return vector.PrepareParamBoolean
+		return types.StringConversionBoolean
 	default:
-		return vector.PrepareParamNone
+		return types.StringConversionString
 	}
 }
 

@@ -389,14 +389,16 @@ func TestDynamicCNControlHTTPRoutesRequests(t *testing.T) {
 	})
 	http.DefaultServeMux = http.NewServeMux()
 	*httpListenAddr = "127.0.0.1:bad"
-	serverDone := make(chan struct{})
-	dynamicListenAndServe = func(string, http.Handler) error {
-		close(serverDone)
+	controlAddr := "127.0.0.1:16000"
+	listenAddress := make(chan string, 1)
+	dynamicListenAndServe = func(addr string, _ http.Handler) error {
+		listenAddress <- addr
 		return nil
 	}
-	require.NoError(t, startDynamicCtlHTTPServer("127.0.0.1:bad"))
+	require.NoError(t, startDynamicCtlHTTPServer(controlAddr))
 	select {
-	case <-serverDone:
+	case got := <-listenAddress:
+		require.Equal(t, controlAddr, got, "dynamic control must use ctl-address, not debug-http")
 	case <-time.After(time.Second):
 		t.Fatal("dynamic control server did not start")
 	}

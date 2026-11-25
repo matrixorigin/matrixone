@@ -39,7 +39,12 @@ func BuildIgnoredTableDefs(
 	if err != nil {
 		return nil, nil, err
 	}
-	pkTyp := pk.Typ
+	return indexDef, IgnoredTableDef(indexTableName, pk.Typ), nil
+}
+
+// IgnoredTableDef returns the TableDef of the ignored table named indexTableName of an index
+// whose source primary key has type pkTyp.
+func IgnoredTableDef(indexTableName string, pkTyp plan.Type) *plan.TableDef {
 	pkTyp.AutoIncr = false
 	pkTyp.NotNullable = true
 	tableDef := &plan.TableDef{
@@ -84,5 +89,5 @@ func BuildIgnoredTableDefs(
 			}},
 		},
 	})
-	return indexDef, tableDef, nil
+	return tableDef
 }

@@ -1,0 +1,411 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package embed
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/stretchr/testify/require"
+)
+
+func startPublicationAccountLockCluster(t *testing.T, lockBudget toml.ByteSize) Cluster {
+	t.Helper()
+	// This fixture needs a small row-lock threshold. Release any idle shared
+	// fixture before starting a cluster with that configuration.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
+	c, err := StartTestCluster(WithCNCount(2), WithTestAdmissionContext(t.Context()), WithPreStart(func(s ServiceOperator) {
+		adjustBasicClusterService(s)
+		if s.ServiceType() == metadata.ServiceType_CN {
+			s.Adjust(func(cfg *ServiceConfig) {
+				cfg.CN.LockService.MaxLockRowCount = lockBudget
+				// The tests commit on one CN and check the catalog on the
+				// other. With freshness sacrificed (the default), a new
+				// transaction starts at its CN's latest applied logtail and
+				// may miss the other CN's commit, so a positive check fails
+				// and a zero check passes vacuously. Start every
+				// transaction at the current time instead.
+				cfg.CN.Txn.EnableSacrificingFreshness = -1
+			})
+		}
+	}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	return c
+}
+
+func TestCreatePublicationExplicitTargetLockScope(t *testing.T) {
+	// Keep the budget small while testing more targets than one lock batch.
+	const lockBudget = 4
+	c := startPublicationAccountLockCluster(t, lockBudget)
+	fixture := newPublicationAccountSQL(t, c)
+	defer fixture.stopStatements()
+	fixture.exec(fixture.left, "create database pub_lock_src")
+	fixture.createAccount("pub_lock_first")
+	// The unrelated account falls inside the span of the wide list, so a
+	// covering range and a full table lock both fail the DROP oracle.
+	fixture.createAccount("pub_lock_unrelated_wide")
+	targets := []string{"pub_lock_first"}
+	for i := 1; i <= lockBudget; i++ {
+		name := fmt.Sprintf("pub_lock_target_%02d", i)
+		fixture.createAccount(name)
+		targets = append(targets, name)
+	}
+	fixture.createAccount("pub_lock_unrelated_single")
+	accountID := func(name string) int {
+		return fixture.number(fixture.left, "select account_id from mo_catalog.mo_account where account_name=?", name)
+	}
+	unrelatedID := accountID("pub_lock_unrelated_wide")
+	require.Less(t, accountID(targets[0]), unrelatedID)
+	require.Less(t, unrelatedID, accountID(targets[1]))
+
+	t.Run("existing publication during recipient drop", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		defer f.stopStatements()
+		f.exec(f.left, "create publication pub_lock_existing database pub_lock_src account pub_lock_first")
+		f.createAccount("pub_lock_unused")
+		id := f.number(f.left, "select account_id from mo_catalog.mo_account where account_name='pub_lock_unused'")
+		gate, err := f.left.BeginTx(f.ctx, nil)
+		require.NoError(t, err)
+		defer gate.Rollback()
+		var locked int
+		ctx, cancel := f.statementContext(publicationStatementTimeout)
+		err = gate.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_id=? for update", id).Scan(&locked)
+		cancel()
+		require.NoError(t, err)
+		require.Equal(t, id, locked)
+		drop := f.start(f.left, "drop account pub_lock_unused")
+		waited, err := f.waitForLockOrResult(drop, 0, "mo_account")
+		require.NoError(t, err)
+		require.True(t, waited)
+
+		noop := f.start(f.right, "create publication if not exists pub_lock_existing database pub_lock_src account pub_lock_unused")
+		waited, err = f.waitForLockOrResult(noop, 1, "mo_account")
+		require.NoError(t, err)
+		require.False(t, waited, "an existing publication must return before the recipient DROP is unblocked")
+		require.NoError(t, gate.Rollback())
+		require.NoError(t, <-drop)
+		require.Equal(t, 1, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_name='pub_lock_existing' and sub_account_name='pub_lock_first' and status=0"))
+		require.Zero(t, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_name='pub_lock_existing' and sub_account_id=?", id))
+	})
+
+	t.Run("publication dropped before source table becomes valid", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		defer f.stopStatements()
+		const create = "create publication if not exists pub_recheck database pub_new_src table t account pub_lock_target_01"
+		const publications = "select count(*) from mo_catalog.mo_pubs where account_id=0 and pub_name='pub_recheck'"
+		const grants = "select count(*) from mo_catalog.mo_subs where pub_account_id=0 and pub_name='pub_recheck'"
+		f.exec(f.left, "create database pub_new_src")
+		f.exec(f.left, "create publication pub_recheck database pub_lock_src account pub_lock_first")
+
+		// Pause after the shared source lock is granted. An exclusive lock as a
+		// barrier would itself force this statement to retry before validation.
+		cn, err := c.GetCNService(1)
+		require.NoError(t, err)
+		tc := runtime.MustGetTestingContext(cn.ServiceID())
+		previous := tc.GetAdjustLockResultFunc()
+		defer tc.SetAdjustLockResultFunc(previous)
+		reached, resume := make(chan struct{}), make(chan struct{})
+		release := sync.OnceFunc(func() { close(resume) })
+		defer release()
+		pause := sync.OnceFunc(func() {
+			close(reached)
+			select {
+			case <-resume:
+			case <-f.ctx.Done():
+			}
+		})
+		tc.SetAdjustLockResultFunc(func(id []byte, tableID uint64, result *lock.Result) {
+			previous(id, tableID, result)
+			if tableID == catalog.MO_DATABASE_ID {
+				pause()
+			}
+		})
+		publishing := f.start(f.right, create)
+		select {
+		case <-reached:
+		case err := <-publishing:
+			t.Fatalf("CREATE finished before obtaining its source lock: %v", err)
+		case <-f.ctx.Done():
+			t.Fatal(f.ctx.Err())
+		}
+		f.exec(f.left, "drop publication pub_recheck")
+		f.exec(f.left, "create table pub_new_src.t (id int primary key)")
+		release()
+
+		err = <-publishing
+		require.Zero(t, f.number(f.left, publications))
+		require.Zero(t, f.number(f.left, grants))
+		var wire *mysql.MySQLError
+		require.ErrorAs(t, err, &wire, "a missing publication needs a fresh attempt with recipient locks")
+		require.EqualValues(t, moerr.ErrTxnNeedRetry, wire.Number)
+		f.exec(f.right, create)
+		require.Equal(t, 1, f.number(f.left, publications+" and database_name='pub_new_src' and table_list='t'"))
+		require.Equal(t, 1, f.number(f.left, grants))
+		require.Equal(t, 1, f.number(f.left, grants+" and sub_account_name='pub_lock_target_01' and status=0"))
+	})
+
+	for _, tc := range []struct {
+		name      string
+		create    string
+		targets   []string
+		unrelated string
+	}{
+		{name: "wide", create: "create publication", targets: targets, unrelated: "pub_lock_unrelated_wide"},
+		{name: "singleton", create: "create publication if not exists", targets: targets[:1], unrelated: "pub_lock_unrelated_single"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPublicationAccountSQL(t, c)
+			defer f.stopStatements()
+
+			// Drop the last target in each case. The first also belongs to the
+			// singleton case, so keep it alive through the wide case.
+			target := tc.targets[len(tc.targets)-1]
+			targetID := f.number(f.left, "select account_id from mo_catalog.mo_account where account_name=?", target)
+			gate := f.holdSourceDatabase("pub_lock_src")
+			defer gate.Rollback()
+			pub := "pub_lock_" + tc.name
+			publishing := f.start(f.right, tc.create+" "+pub+" database pub_lock_src account "+strings.Join(tc.targets, ","))
+			waited, err := f.waitForLockOrResult(publishing, 1, "mo_database")
+			require.NoError(t, err)
+			require.True(t, waited, "publication must retain its target locks while waiting on the source database")
+
+			// A CN-wide wait sample can belong to another transaction. Commit the
+			// unrelated DROP while the publication is still held at the source.
+			f.exec(f.left, "drop account "+tc.unrelated)
+			require.Zero(t, f.number(f.left, "select count(*) from mo_catalog.mo_account where account_name=?", tc.unrelated))
+
+			dropping := f.start(f.left, "drop account "+target)
+			waited, err = f.waitForLockOrResult(dropping, 0, "mo_account")
+			require.NoError(t, err)
+			require.True(t, waited, "target DROP must wait for the publication")
+			require.NoError(t, gate.Rollback())
+			require.NoError(t, <-publishing)
+			require.NoError(t, <-dropping)
+			require.Zero(t, f.number(f.left, "select count(*) from mo_catalog.mo_account where account_id=?", targetID))
+			require.Zero(t, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_account_id=0 and pub_name=? and sub_account_id=?", pub, targetID))
+			require.Equal(t, len(tc.targets)-1, f.number(f.left, "select count(*) from mo_catalog.mo_subs where pub_account_id=0 and pub_name=? and status=0", pub))
+			t.Logf("target DROP waited and committed after publication; no grants remain for its former account ID")
+		})
+	}
+}
+
+type publicationAccountSQL struct {
+	t           *testing.T
+	ctx         context.Context
+	cancel      context.CancelFunc
+	cluster     Cluster
+	left, right *sql.DB
+	running     sync.WaitGroup
+}
+
+const (
+	publicationStatementTimeout = 90 * time.Second
+	publicationFixtureTimeout   = 5 * time.Minute
+)
+
+func newPublicationAccountSQL(t *testing.T, cluster Cluster) *publicationAccountSQL {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), publicationFixtureTimeout)
+	t.Cleanup(cancel)
+	f := &publicationAccountSQL{t: t, ctx: ctx, cancel: cancel, cluster: cluster}
+	f.left, f.right = f.open(0, "dump"), f.open(1, "dump")
+	return f
+}
+
+func (f *publicationAccountSQL) statementContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(f.ctx, timeout)
+}
+
+func (f *publicationAccountSQL) open(index int, user string) *sql.DB {
+	f.t.Helper()
+	cn, err := f.cluster.GetCNService(index)
+	require.NoError(f.t, err)
+	cfg := mysql.NewConfig()
+	cfg.User = user
+	cfg.Passwd = "111"
+	cfg.Net = "tcp"
+	cfg.Addr = fmt.Sprintf("127.0.0.1:%d", cn.GetServiceConfig().CN.Frontend.Port)
+	db, err := sql.Open("mysql", cfg.FormatDSN())
+	require.NoError(f.t, err)
+	f.t.Cleanup(func() { require.NoError(f.t, db.Close()) })
+	return db
+}
+
+func (f *publicationAccountSQL) stopStatements() {
+	f.cancel()
+	f.running.Wait()
+}
+
+func (f *publicationAccountSQL) exec(db *sql.DB, stmt string) {
+	f.execWithTimeout(db, stmt, publicationStatementTimeout)
+}
+
+func (f *publicationAccountSQL) execWithTimeout(db *sql.DB, stmt string, timeout time.Duration) {
+	f.t.Helper()
+	ctx, cancel := f.statementContext(timeout)
+	defer cancel()
+	_, err := db.ExecContext(ctx, stmt)
+	require.NoError(f.t, err, stmt)
+}
+
+func (f *publicationAccountSQL) createAccount(name string) {
+	f.t.Helper()
+	f.exec(f.left, "create account "+name+" admin_name 'admin' identified by '111'")
+}
+
+func (f *publicationAccountSQL) number(db *sql.DB, query string, args ...any) int {
+	f.t.Helper()
+	var number int
+	ctx, cancel := f.statementContext(publicationStatementTimeout)
+	defer cancel()
+	require.NoError(f.t, db.QueryRowContext(ctx, query, args...).Scan(&number), query)
+	return number
+}
+
+func (f *publicationAccountSQL) holdSourceDatabase(name string) *sql.Tx {
+	f.t.Helper()
+	tx, err := f.left.BeginTx(f.ctx, nil)
+	require.NoError(f.t, err)
+	f.t.Cleanup(func() { _ = tx.Rollback() })
+	var id uint64
+	ctx, cancel := f.statementContext(publicationStatementTimeout)
+	defer cancel()
+	require.NoError(f.t, tx.QueryRowContext(ctx, `select dat_id from mo_catalog.mo_database
+		where account_id=0 and datname=? for update`, name).Scan(&id))
+	return tx
+}
+
+func (f *publicationAccountSQL) start(db *sql.DB, stmt string) <-chan error {
+	result := make(chan error, 1)
+	f.running.Go(func() {
+		ctx, cancel := f.statementContext(publicationStatementTimeout)
+		defer cancel()
+		_, err := db.ExecContext(ctx, stmt)
+		result <- err
+	})
+	return result
+}
+
+// waitForLockOrResult observes a real lock wait on the DDL's CN or collects its
+// terminal result. Only the DDL runs on that CN against the given catalog tables.
+func (f *publicationAccountSQL) waitForLockOrResult(result <-chan error, index int, tables ...string) (bool, error) {
+	f.t.Helper()
+	cn, err := f.cluster.GetCNService(index)
+	require.NoError(f.t, err)
+	ctx, cancel := context.WithTimeout(f.ctx, 15*time.Second)
+	defer cancel()
+	args := make([]any, 1+len(tables))
+	args[0] = cn.ServiceID()
+	for i, table := range tables {
+		args[i+1] = table
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(tables)), ",")
+	query := `select count(*) from mo_transactions() t where cn_id=? and table_id in
+		(select cast(rel_id as char) from mo_catalog.mo_tables where account_id=0 and
+		 reldatabase='mo_catalog' and relname in (` + placeholders + "))"
+	ticker := time.NewTicker(30 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			return false, err
+		default:
+		}
+		var count int
+		err := f.left.QueryRowContext(ctx, query, args...).Scan(&count)
+		require.NoError(f.t, err)
+		if count > 0 {
+			return true, nil
+		}
+		select {
+		case err := <-result:
+			return false, err
+		case <-ticker.C:
+		case <-ctx.Done():
+			f.t.Fatalf("CN %d neither finished nor waited on %v: %v", index, tables, ctx.Err())
+		}
+	}
+}
+
+func TestPublicationAccountCoveringRange(t *testing.T) {
+	c := startPublicationAccountLockCluster(t, 4)
+	setup := newPublicationAccountSQL(t, c)
+	setup.exec(setup.left, "create database pub_range_db")
+	setup.exec(setup.left, "create table pub_range_db.t (id int primary key)")
+	// ACCOUNT ALL with five subscribers crosses the row budget.
+	for _, name := range []string{"range_a", "range_b", "range_c", "range_d", "range_e"} {
+		setup.createAccount(name)
+	}
+	const active = "select count(*) from mo_catalog.mo_subs where pub_account_id=0 and status=0 and pub_name=?"
+
+	t.Run("foreign range", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		defer f.stopStatements()
+		tx, err := f.left.BeginTx(f.ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		ctx, cancel := f.statementContext(publicationStatementTimeout)
+		defer cancel()
+		rows, err := tx.QueryContext(ctx, "select account_id from mo_catalog.mo_account for share")
+		require.NoError(t, err)
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			var id int
+			require.NoError(t, rows.Scan(&id))
+			n++
+		}
+		require.NoError(t, rows.Err())
+		require.Greater(t, n, 4)
+		require.NoError(t, rows.Close())
+		publishing := f.start(f.right, "create publication range_foreign database pub_range_db account range_a,range_e")
+		waited, err := f.waitForLockOrResult(publishing, 1, "mo_account")
+		require.NoError(t, err)
+		require.True(t, waited)
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, <-publishing)
+		require.Equal(t, 2, f.number(f.left, active, "range_foreign"))
+		require.Equal(t, 2, f.number(f.left, active+" and sub_account_name in ('range_a','range_e')", "range_foreign"))
+		f.exec(f.left, "drop publication range_foreign")
+	})
+	t.Run("restore owned range", func(t *testing.T) {
+		f := newPublicationAccountSQL(t, c)
+		f.exec(f.left, "create publication a_range_all database pub_range_db account all")
+		f.exec(f.left, "create publication z_range_named database pub_range_db account range_a,range_e")
+		f.exec(f.left, "create snapshot pub_range_snap for cluster")
+		f.exec(f.left, "drop publication a_range_all")
+		f.exec(f.left, "drop publication z_range_named")
+		f.execWithTimeout(f.right, "restore cluster {snapshot='pub_range_snap'}", 4*time.Minute)
+		require.Equal(t, 5, f.number(f.left, active, "a_range_all"))
+		require.Equal(t, 2, f.number(f.left, active, "z_range_named"))
+		require.Equal(t, 2, f.number(f.left, active+" and sub_account_name in ('range_a','range_e')", "z_range_named"))
+	})
+}

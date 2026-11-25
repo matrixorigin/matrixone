@@ -60,7 +60,7 @@ func (e *fulltext2FlushSQLExecutor) Exec(_ context.Context, sql string, _ execut
 	upper := strings.ToUpper(strings.TrimSpace(sql))
 	if strings.HasPrefix(upper, "SELECT GREATEST") {
 		b := batch.NewWithSize(1)
-		b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[0] = vector.NewVec(types.T_int64.ToType(), e.mp)
 		if err := vector.AppendFixed[int64](b.Vecs[0], e.nextChunk, false, e.mp); err != nil {
 			return executor.Result{}, err
 		}

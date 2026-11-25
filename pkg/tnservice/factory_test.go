@@ -17,6 +17,7 @@ package tnservice
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateLogServiceClient(t *testing.T) {
@@ -34,6 +36,24 @@ func TestCreateLogServiceClient(t *testing.T) {
 	v, err := s.createLogServiceClient(metadata.TNShard{})
 	assert.NoError(t, err)
 	assert.NotNil(t, v)
+}
+
+func TestWALClientFactoryUsesCallerCancellation(t *testing.T) {
+	s := &store{cfg: &Config{}}
+	s.cfg.LogService.ConnectTimeout.Duration = time.Minute
+	shard := metadata.TNShard{LogShardID: 1, ReplicaID: 1}
+	factory := s.createWALContextClientFactory(shard)
+	require.NotNil(t, factory)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client, err := factory(ctx)
+	require.Nil(t, client)
+	require.ErrorIs(t, err, context.Canceled)
+
+	s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+		return mem.NewMemLog(), nil
+	}
+	require.Nil(t, s.createWALContextClientFactory(shard))
 }
 
 func TestCreateTxnStorage(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -127,4 +128,11 @@ func TestIgnoredReasonSql(t *testing.T) {
 	for _, code := range []uint16{moerr.ErrIndexVectorDimension, moerr.ErrIndexVectorNonFinite, moerr.ErrIndexVectorOutOfRange} {
 		require.Contains(t, sql, fmt.Sprintf(" WHEN %d THEN '%s'", code, moerr.MessageOf(code)))
 	}
+}
+
+func TestIgnoredPkSql(t *testing.T) {
+	require.Equal(t, "CAST(`__mo_index_pk` AS VARCHAR)", ignoredPkSql(&TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}))
+	require.Equal(t, "CAST(`__mo_index_pk` AS VARCHAR)", ignoredPkSql(&TableDef{}))
+	def := &TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"a", "b"}}}
+	require.Equal(t, "CONCAT('X''', HEX(`__mo_index_pk`), '''')", ignoredPkSql(def))
 }

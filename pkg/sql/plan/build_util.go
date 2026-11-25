@@ -176,6 +176,24 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return ret, nil
 }
 
+// rawEnumDomainKey marks a replayed ENUM declaration whose labels must be kept
+// exactly as stored rather than normalized as a new declaration.
+type rawEnumDomainKey struct{}
+
+// replayedEnumDomainUnchanged reports whether column re-declares, during
+// persisted DDL replay, the exact ENUM domain its source column already stores.
+func replayedEnumDomainUnchanged(column *tree.ColumnTableDef, astType *tree.T, replay *persistedDDLReplay) bool {
+	if replay == nil || astType == nil ||
+		defines.MysqlType(astType.InternalType.Oid) != defines.MYSQL_TYPE_ENUM {
+		return false
+	}
+	preserved := replay.columns[strings.ToLower(column.Name.ColName())]
+	if preserved == nil || preserved.columnType.Id != int32(types.T_enum) {
+		return false
+	}
+	return preserved.columnType.Enumvalues == strings.Join(astType.InternalType.EnumValues, ",")
+}
+
 // getColumnTypeFromAst resolves a DDL declaration before applying its charset's
 // byte budget. Expression and CAST types deliberately keep their wider domain.
 func getColumnTypeFromAst(
@@ -196,7 +214,15 @@ func getColumnTypeFromAst(
 		bounded.InternalType.DisplayWith = types.MaxVarcharLen
 		parseType = &bounded
 	}
-	typ, err := getTypeFromAst(ctx, parseType)
+	typCtx := ctx
+	if replayedEnumDomainUnchanged(column, astType, replay) {
+		// LIKE/CLONE/COPY replay of an existing column renders its stored labels
+		// verbatim. Keep that authoritative domain and its ordinals instead of
+		// applying the CREATE-time trimming, which can reject or renumber
+		// definitions stored before trimming existed (e.g. ENUM(' ','red','')).
+		typCtx = context.WithValue(ctx, rawEnumDomainKey{}, true)
+	}
+	typ, err := getTypeFromAst(typCtx, parseType)
 	if err != nil {
 		return plan.Type{}, err
 	}
@@ -478,7 +504,14 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{}, moerr.NewNYI(ctx, "enum type length err")
 			}
 
-			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			if raw, _ := ctx.Value(rawEnumDomainKey{}).(bool); raw {
+				return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			}
+			enumValues, err := types.NormalizeEnumValues(ctx, n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
+			}
+			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(enumValues, ",")}, nil
 		case defines.MYSQL_TYPE_SET:
 			setValues, err := types.EncodeSetValues(n.InternalType.EnumValues)
 			if err != nil {
@@ -934,7 +967,22 @@ func buildDefaultExprWithColumns(
 	typ plan.Type,
 	proc *process.Process,
 	columns []*ColDef,
+	sources ...*ColDef,
 ) (*plan.Default, error) {
+	if source := crc32SourceColumn(sources); source != nil && preserveCRC32Default(source.Default) {
+		value := *source.Default
+		value.Expr = DeepCopyExpr(value.Expr)
+		// A retained DEFAULT may hash a referenced column. Its bound ColRef
+		// types must still describe that column, or COPY would publish a
+		// legacy CRC32 overload against a converted input representation.
+		if err := validateLegacyCRC32ExprInputs(bindCtx, value.Expr, columns, "default expression"); err != nil {
+			return nil, err
+		}
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	return buildDefaultExprWithColumnsObserved(bindCtx, col, typ, proc, columns, defaultExprForDDL, nil)
 }
 
@@ -1190,7 +1238,7 @@ func buildDefaultExprWithColumnsForceDomain(
 	}
 
 	// try to calculate default value, return err if fails
-	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
+	newExpr, err := foldBoundConstant(bindCtx, DeepCopyExpr(defaultExpr), proc)
 	// cast_assign remains an executable expression because its behavior depends
 	// on sql_mode, so function.IsConstant rejects the outer function. Validate when
 	// its source value is constant, without eagerly evaluating volatile defaults.
@@ -1202,6 +1250,7 @@ func buildDefaultExprWithColumnsForceDomain(
 	}
 	if constantMediumIntDefault {
 		cast := newExpr.GetF()
+		proc := processForBoundExpr(bindCtx, cast.Args[0], proc)
 		strictExpr, strictErr := forceAssignmentCastExprWithName(
 			bindCtx, cast.Args[0], typ, "cast_strict")
 		if strictErr != nil {
@@ -1378,7 +1427,49 @@ func getColumnNullAbility(col *tree.ColumnTableDef) bool {
 	return true
 }
 
-func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+// Identity preservation must not bypass the existing generated-column
+// attribute contract or silently discard an illegal DEFAULT/ON UPDATE clause.
+func validateGeneratedColumnAttributes(bindCtx context.Context, col *tree.ColumnTableDef) error {
+	colNameOrigin := col.Name.ColNameOrigin()
+	// Validate: generated column cannot have DEFAULT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeDefault); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have a default value", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have ON UPDATE
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
+		}
+	}
+	// Validate: generated column cannot have AUTO_INCREMENT
+	for _, attr := range col.Attributes {
+		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+			return moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
+		}
+	}
+	return nil
+}
+
+func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process, sources ...*ColDef) (*plan.GeneratedCol, error) {
+	if source := crc32SourceColumn(sources); source != nil && source.GeneratedCol != nil && containsLegacyCRC32(source.GeneratedCol.Expr) {
+		if err := validateGeneratedColumnAttributes(bindCtx, col); err != nil {
+			return nil, err
+		}
+		if err := validateLegacyCRC32GeneratedInputs(bindCtx, source.GeneratedCol.Expr, existingCols); err != nil {
+			return nil, err
+		}
+		if err := checkGeneratedExprReferences(bindCtx, source.GeneratedCol.Expr, col.Name.ColNameOrigin(), existingCols, make(map[int32]bool)); err != nil {
+			return nil, err
+		}
+		value := *source.GeneratedCol
+		value.Expr = DeepCopyExpr(value.Expr)
+		if err := RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, value.Expr); err != nil {
+			return nil, err
+		}
+		return &value, nil
+	}
 	var genAttr *tree.AttributeGeneratedAlways
 	for _, attr := range col.Attributes {
 		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {
@@ -1392,23 +1483,8 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 
 	colNameOrigin := col.Name.ColNameOrigin()
 
-	// Validate: generated column cannot have DEFAULT
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeDefault); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have a default value", colNameOrigin)
-		}
-	}
-	// Validate: generated column cannot have ON UPDATE
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeOnUpdate); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have ON UPDATE", colNameOrigin)
-		}
-	}
-	// Validate: generated column cannot have AUTO_INCREMENT
-	for _, attr := range col.Attributes {
-		if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
-			return nil, moerr.NewInvalidInputf(bindCtx, "generated column '%s' cannot have AUTO_INCREMENT", colNameOrigin)
-		}
+	if err := validateGeneratedColumnAttributes(bindCtx, col); err != nil {
+		return nil, err
 	}
 
 	// Collect column names and types from existing (non-generated or already-defined generated) columns
@@ -1663,6 +1739,7 @@ func validateUnsignedDecimalStrictConstantDefault(ctx context.Context, proc *pro
 	if err != nil {
 		return err
 	}
+	proc = processForBoundExpr(ctx, strictExpr, proc)
 	executor, err := colexec.NewExpressionExecutor(proc, strictExpr)
 	if err != nil {
 		return err

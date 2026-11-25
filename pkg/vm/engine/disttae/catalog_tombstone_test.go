@@ -57,10 +57,10 @@ func newCatalogTombstoneFixture(t testing.TB, rows int, cn bool) (*process.Proce
 	}
 	writer := ioutil.ConstructTombstoneWriter(selection, fs)
 	bat := batch.NewWithSize(columns)
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(pkType)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(pkType, mp)
 	if !cn {
-		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	}
 	t.Cleanup(func() { bat.Clean(mp) })
 	objectID := objectio.NewObjectid()
@@ -129,7 +129,7 @@ func TestCatalogTombstonePKCheck(t *testing.T) {
 			tbl.tableId = tc.id
 			for _, keyCount := range []int{1, 9} {
 				t.Run(fmt.Sprintf("keys=%d", keyCount), func(t *testing.T) {
-					key := vector.NewVec(pkType)
+					key := vector.NewVec(pkType, mp)
 					defer key.Free(mp)
 					for i := 1; i < keyCount; i++ {
 						require.NoError(t, vector.AppendBytes(key, []byte(fmt.Sprintf("missing-%d", i)), false, mp))
@@ -151,7 +151,7 @@ func TestCatalogTombstonePKCheck(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel()
 		tbl.tableId = catalog.MO_TABLES_ID
-		key := vector.NewVec(pkType)
+		key := vector.NewVec(pkType, mp)
 		defer key.Free(mp)
 		require.NoError(t, vector.AppendBytes(key, []byte("target"), false, mp))
 		_, err := tbl.PKPersistedBetween(cancelCtx, state, types.BuildTS(10, 0), types.BuildTS(30, 0), key, true)
@@ -183,7 +183,7 @@ func (ctx *tombstoneWaitContext) Done() <-chan struct{} {
 func TestCatalogTombstoneCancellationAndFailure(t *testing.T) {
 	proc, fs, state := newCatalogTombstoneFixture(t, 1, false)
 	mp := proc.Mp()
-	key := vector.NewVec(types.T_varchar.ToType())
+	key := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer key.Free(mp)
 	require.NoError(t, vector.AppendBytes(key, []byte("target"), false, mp))
 	check := func(ctx context.Context, fs fileservice.FileService) (bool, string, error) {
@@ -252,7 +252,7 @@ func TestCatalogTombstoneCancellationAndFailure(t *testing.T) {
 
 func TestCatalogCNTombstonePKCheck(t *testing.T) {
 	proc, fs, state := newCatalogTombstoneFixture(t, 50001, true)
-	key := vector.NewVec(types.T_varchar.ToType())
+	key := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer key.Free(proc.Mp())
 	for _, value := range []string{"target", "other-00001"} {
 		key.CleanOnlyData()
@@ -269,7 +269,7 @@ func BenchmarkCatalogTombstoneMultiKeyCheck(b *testing.B) {
 	proc, fs, state := newCatalogTombstoneFixture(b, 50001, false)
 	for _, count := range []int{1, 64, 1024, 4096} {
 		b.Run(fmt.Sprintf("keys=%d", count), func(b *testing.B) {
-			keys := vector.NewVec(types.T_varchar.ToType())
+			keys := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer keys.Free(proc.Mp())
 			for key := 0; key < count; key++ {
 				if err := vector.AppendBytes(keys, []byte(fmt.Sprintf("probe-%05d", key)), false, proc.Mp()); err != nil {
@@ -293,7 +293,7 @@ func BenchmarkCatalogTombstonePKCheck(b *testing.B) {
 	for _, rows := range []int{1, 50000, 50001, 100000} {
 		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
 			proc, fs, state := newCatalogTombstoneFixture(b, rows, false)
-			key := vector.NewVec(types.T_varchar.ToType())
+			key := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 			defer key.Free(proc.Mp())
 			require.NoError(b, vector.AppendBytes(key, []byte("target"), false, proc.Mp()))
 			b.ReportAllocs()

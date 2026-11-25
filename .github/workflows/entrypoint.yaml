@@ -3,7 +3,8 @@ name: MatrixOne ALL CI
 on:
   pull_request_target:
     types: [ opened, synchronize, reopened, ready_for_review ]
-    branches: [ main, 4.2-dev, '[0-9]+.[0-9]+*' ]
+    # pull_request_target reads this entrypoint from the default branch.
+    branches: [ main, 4.2-dev, v4.2.8-hotfix, '[0-9]+.[0-9]+*' ]
 
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
@@ -134,7 +135,12 @@ jobs:
     name: Matrixone UT Coverage execution
     needs: [preflight]
     if: ${{ needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope == 'full' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@main
+    # Only the GitHub-hosted single-group dispatcher uses actions:write.
+    # The pinned reusable workflow narrows every test/collection job to read.
+    permissions:
+      contents: read
+      actions: write
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@ec682772f13e21df189a0a2a4c0b4edbc66d3c46
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
     secrets: inherit

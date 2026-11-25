@@ -19,7 +19,7 @@ const { category, immutableChanges } = require('./change-scope.cjs');
 
 // Emit one bounded record per main-module package/variant. Go owns import and
 // build-tag resolution, including test-only importers; no source import parser.
-const inventoryFields = 'Name,ImportPath,Dir,Module,Imports,TestImports,XTestImports,' +
+const inventoryFields = 'Name,ImportPath,Dir,Module,Imports,' +
   'GoFiles,CgoFiles,TestGoFiles,XTestGoFiles';
 
 // go list emits adjacent JSON objects rather than an array. Frame the objects;
@@ -49,7 +49,6 @@ function inventory(text) {
           const generatedMain = p.Name === 'main' && p.ImportPath.endsWith('.test') &&
             p.GoFiles?.length && p.GoFiles.every(file => path.isAbsolute(file));
           records.push({ id: p.ImportPath, dir: p.Dir, imports: p.Imports || [],
-            testImports: p.TestImports || [], xTestImports: p.XTestImports || [],
             sources: [...(generatedMain ? [] : p.GoFiles || []), ...(p.CgoFiles || []),
               ...(p.TestGoFiles || []), ...(p.XTestGoFiles || [])] });
         }
@@ -95,41 +94,75 @@ function selectPackages(files, records, root, report = () => {}) {
     owners.set(relative, owner);
     variants.set(record.id, owner);
   }
+  // Imports already resolves production, internal-test and external-test
+  // variants. Keep those identities until traversal ends: a test importer does
+  // not make its owner's unchanged production consumers affected.
   for (const record of records) {
-    const owner = variants.get(record.id);
-    for (const imported of [...(record.imports || []), ...(record.testImports || []),
-      ...(record.xTestImports || [])]) {
-      const dependency = variants.get(imported);
-      if (!dependency) {
+    for (const imported of record.imports || []) {
+      if (!variants.has(imported)) {
         // A main-module test variant missing from discovery is not a known
         // external dependency. Do not guess how its package ID maps.
         if (imported.includes(' [')) return full('test variant is missing from the verified graph');
         continue;
       }
-      if (!reverse.has(dependency)) reverse.set(dependency, new Set());
-      reverse.get(dependency).add(owner);
+      if (!reverse.has(imported)) reverse.set(imported, new Set());
+      reverse.get(imported).add(record.id);
     }
   }
   const selected = new Set();
-  const production = [];
+  const production = new Set();
   for (const file of changed) {
     const owner = owners.get(path.posix.dirname(file));
     if (!owner) return full('changed package is missing from the verified graph');
     selected.add(owner);
-    if (!file.endsWith('_test.go')) production.push(owner);
+    if (!file.endsWith('_test.go')) production.add(owner);
   }
-  const seen = new Set(production);
-  for (let i = 0; i < production.length; i++) {
-    for (const consumer of reverse.get(production[i]) || []) {
-      selected.add(consumer);
+  // A changed production source belongs to every active variant of its owner.
+  const pending = [];
+  for (const [id, owner] of variants) {
+    if (production.has(owner)) pending.push(id);
+  }
+  const seen = new Set(pending);
+  for (let i = 0; i < pending.length; i++) {
+    for (const consumer of reverse.get(pending[i]) || []) {
+      selected.add(variants.get(consumer));
       if (!seen.has(consumer)) {
         seen.add(consumer);
-        production.push(consumer);
+        pending.push(consumer);
       }
     }
   }
   return selected.size && selected.size < owners.size / 2 ? [...selected].sort() :
     full(`affected closure reaches full-scan threshold (${selected.size}/${owners.size} packages)`);
+}
+
+// Local developer mode: compare the working tree, including staged, unstaged
+// and untracked inputs, with its merge base against a named ref. Unlike the PR
+// event comparison this is deliberately mutable; it never gates CI.
+function localChanges({ cwd = process.cwd(), base, git, report = () => {} } = {}) {
+  const full = reason => { report(reason); return null; };
+  git ||= args => execFileSync('git', args, {
+    cwd, encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  try {
+    const mergeBase = git(['merge-base', base, 'HEAD']).trim();
+    const raw = git(['diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none',
+      '--name-status', '-z', mergeBase]);
+    const fields = raw.split('\0');
+    if (fields.pop() !== '' || fields.length % 2) return full('malformed local diff');
+    const files = [];
+    for (let i = 0; i < fields.length; i += 2) {
+      if (!['A', 'M', 'D', 'T'].includes(fields[i])) return full('unsupported local diff entry');
+      files.push({ status: fields[i], filename: fields[i + 1] });
+    }
+    for (const filename of git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0')) {
+      if (filename) files.push({ status: 'A', filename });
+    }
+    return files;
+  } catch {
+    return full(`local merge base with ${JSON.stringify(base)} or diff unavailable`);
+  }
 }
 
 function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {}) {
@@ -141,8 +174,11 @@ function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {
   });
   const records = inventory(text);
   const report = reason => console.error(`SCA full-scan reason: ${reason}`);
-  let files = env.SCA_FULL === '1' ? null : immutableChanges({ cwd, env, report });
+  const local = env.SCA_LOCAL_BASE;
+  let files = null;
   if (env.SCA_FULL === '1') report('SCA_FULL=1');
+  else if (local) files = localChanges({ cwd, base: local, report });
+  else files = immutableChanges({ cwd, env, report });
   if (files) {
     // Git status omits ignored files, but Go still compiles an ignored .go
     // file inside a package. Require every real source input to be committed
@@ -156,6 +192,8 @@ function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {
         const match = /^100(?:644|755) [0-9a-f]+ 0\t([\s\S]+)$/.exec(entry);
         return match ? [match[1]] : [];
       }));
+      // Local mode already reports untracked, non-ignored inputs as changes.
+      if (local) for (const f of files) if (f.status === 'A') tracked.add(f.filename);
       if (records.some(p => p.sources.some(source =>
         !tracked.has(path.relative(cwd, path.resolve(p.dir, source)).split(path.sep).join('/'))))) {
         report('Go graph contains untracked, generated or nonregular source inputs');
@@ -180,4 +218,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { goChanges, inventoryFields, inventory, selectPackages, plan };
+module.exports = { goChanges, inventoryFields, inventory, localChanges, selectPackages, plan };

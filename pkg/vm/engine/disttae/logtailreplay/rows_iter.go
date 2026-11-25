@@ -219,10 +219,13 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 	}
 
 	first := true
-	cnt := 3
+	finished := false
 	spec := PrimaryKeyMatchSpec{
 		Name: "Exact",
 		moveInner: func(p *primaryKeyIter) bool {
+			if finished {
+				return false
+			}
 			var ok bool
 			if first {
 				first = false
@@ -236,27 +239,7 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 
 			} else {
 				ok = p.iter.Next()
-
-				if !p.specHint.isDelIter {
-					cnt--
-				}
-
-				// Note that:
-				// delete a pk may happen twice, means there may have two deletes
-				// for one pk both pushed to CN, and they have different TS.
-				// this happened when an update or delete commit to TN during flush,
-				// the delete target is transferred to a new object, so the extra delete was generated.
-				// the new delete may have bigger TS than the older one.
-				//
-				// update case:
-				//    delete pk  t1
-				//    insert pk  t1
-				//
-				//    flush ----> transfer delete ---> delete pk t2
-				//
-				// if the Exact only consider the latest one records, it may miss the insert!
-				//
-				if !ok || cnt <= 0 {
+				if !ok {
 					return false
 				}
 			}
@@ -272,12 +255,22 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 				return false
 			}
 
-			if p.specHint.isDelIter != p.iter.Item().Deleted {
+			item := p.iter.Item()
+			if !bytes.Equal(item.Bytes, key) {
+				finished = true
+				return false
+			}
+			if p.specHint.isDelIter != item.Deleted {
 				continue
 			}
 
-			item := p.iter.Item()
-			return bytes.Equal(item.Bytes, key)
+			// Transferred deletes can precede the current insertion without a
+			// fixed count limit. For a unique PK, only the newest insertion at
+			// or before ts can be live; isPKItemValid still checks its RowID's
+			// visibility. Older insertions cannot become live again if it was
+			// deleted. Delete iterators must keep visiting all physical RowIDs.
+			finished = !p.specHint.isDelIter
+			return true
 		}
 	}
 

@@ -21,6 +21,7 @@ import (
 	"math"
 	goruntime "runtime"
 	godebug "runtime/debug"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,7 +55,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -86,7 +87,7 @@ import (
 func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
 	ctx := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
 	proc := ctx.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -354,7 +355,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
 					return ^uint64(0), nil
@@ -382,7 +382,7 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			proc.ReplaceTopCtx(ctx)
 
 			want := []byte{'A', 'B', 0, 0}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, want, false, proc.Mp()))
 			proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
 
@@ -392,7 +392,12 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 					return nil
 				}
 				require.Len(t, bat.Vecs, 1)
-				require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
+				// Vectors carry no binary flag; the consumer derives it from the
+				// final projection and the execution's parameter metadata.
+				query := pn.GetQuery()
+				isBin, err := colexec.ExprIsBinLiteral(proc, query.Nodes[query.Steps[query.MainOutputStep()]].ProjectList[0])
+				require.NoError(t, err)
+				require.True(t, isBin, "binary semantics were lost on evaluation %d", evaluations+1)
 				require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
 				evaluations++
 				if evaluations <= 2 {
@@ -421,8 +426,148 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 			}
 			c.Release()
 			proc.Free()
-			proc.GetSessionInfo().Buf.Free()
 
+		})
+	}
+}
+
+func TestCompileRunPartialAnalysisPreparedReuse(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+	compilerCtx.SetContext(ctx)
+
+	const sql = "select 1"
+	stmts, err := mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false, nil)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	defer func() {
+		c.FreeOperator()
+		c.SetIsPrepare(false)
+		c.Release()
+	}()
+	c.SetIsPrepare(true)
+
+	var outputErr error
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			return outputErr
+		}
+		return nil
+	}
+	require.NoError(t, c.Compile(ctx, pn, fill))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.NotNil(t, c.anal.GetPhyPlan())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	aborted, cancel := context.WithCancel(ctx)
+	cancel()
+	proc.ReplaceTopCtx(aborted)
+	_, err = c.Run(0)
+	require.Error(t, err)
+	require.Nil(t, c.anal.GetPartialExecutionQuery())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+	require.Nil(t, c.anal.GetPhyPlan().Resource)
+
+	proc.ReplaceTopCtx(ctx)
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	outputErr = moerr.NewInvalidInputNoCtx("test output failure")
+	_, err = c.Run(0)
+	require.ErrorIs(t, err, outputErr)
+	partial, observed := c.anal.GetPhyPlan(), c.anal.GetPartialExecutionQuery()
+	require.NotNil(t, observed)
+	require.True(t, partial.Partial.Interrupted)
+	require.Zero(t, partial.Partial.Attempt)
+	require.NotEmpty(t, partial.LocalScope)
+	require.True(t, slices.ContainsFunc(observed.Nodes, func(n *plan.Node) bool {
+		return n.AnalyzeInfo != nil && n.AnalyzeInfo.OutputRows > 0
+	}))
+
+	outputErr = nil
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Nil(t, c.anal.GetPartialExecutionQuery())
+	require.False(t, c.anal.GetPhyPlan().Partial.Interrupted)
+	require.True(t, partial.Partial.Interrupted)
+	require.True(t, slices.ContainsFunc(observed.Nodes, func(n *plan.Node) bool {
+		return n.AnalyzeInfo != nil && n.AnalyzeInfo.OutputRows > 0
+	}))
+}
+
+func TestCompileRunPartialAnalysisRetryGeneration(t *testing.T) {
+	for _, rebuildFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rebuild fails=%t", rebuildFails), func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.Base.TxnClient, proc.Base.TxnOperator = newTier2AutocommitRCTxn(t)
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+			compilerCtx := plan2.NewEmptyCompilerContext(newPlanTestProcess(t))
+			compilerCtx.SetContext(ctx)
+			const sql = "select 1"
+			stmts, err := mysql.Parse(ctx, sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			optimizer := plan2.NewPrepareOptimizer(compilerCtx)
+			initial, err := optimizer.Optimize(stmts[0], false, nil)
+			require.NoError(t, err)
+
+			c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+			defer c.Release()
+			terminalErr := moerr.NewInvalidInputNoCtx("terminal retry error")
+			var values []int64
+			require.NoError(t, c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: initial}}, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+				if bat == nil {
+					return nil
+				}
+				value := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])[0]
+				values = append(values, value)
+				if value == 1 {
+					return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+				}
+				return terminalErr
+			}))
+			var rebuilt *plan.Query
+			c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) {
+				if rebuildFails {
+					return nil, terminalErr
+				}
+				fresh, err := mysql.Parse(ctx, "select 2", 1)
+				if err != nil {
+					return nil, err
+				}
+				defer fresh[0].Free()
+				rebuilt, err = plan2.NewPrepareOptimizer(compilerCtx).Optimize(fresh[0], false, nil)
+				return &plan.Plan{Plan: &plan.Plan_Query{Query: rebuilt}}, err
+			})
+
+			_, err = c.Run(0)
+			require.ErrorIs(t, err, terminalErr)
+			observed := c.anal.GetPartialExecutionQuery()
+			if rebuildFails {
+				require.Equal(t, []int64{1}, values)
+				require.Nil(t, observed, "retry build failure has no current-generation operators")
+				return
+			}
+			require.Equal(t, []int64{1, 2}, values)
+			require.NotNil(t, observed)
+			require.True(t, c.anal.GetPhyPlan().Partial.Interrupted)
+			require.EqualValues(t, 1, c.anal.GetPhyPlan().Partial.Attempt)
+			root := observed.Steps[0]
+			require.Equal(t, rebuilt.Nodes[root].ProjectList, observed.Nodes[root].ProjectList)
+			require.NotEqual(t, initial.Nodes[initial.Steps[0]].ProjectList, observed.Nodes[root].ProjectList)
+			require.EqualValues(t, 1, observed.Nodes[root].GetAnalyzeInfo().GetOutputRows())
 		})
 	}
 }
@@ -431,10 +576,8 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.ApplySQLSelectLimit = true
-	proc.GetSessionInfo().Buf = buffer.New()
 	t.Cleanup(func() {
 		proc.Free()
-		proc.GetSessionInfo().Buf.Free()
 	})
 	limitValue := uint64(1)
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
@@ -542,10 +685,8 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			proc.Base.SessionInfo.ApplySQLSelectLimit = true
-			proc.GetSessionInfo().Buf = buffer.New()
 			t.Cleanup(func() {
 				proc.Free()
-				proc.GetSessionInfo().Buf.Free()
 			})
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == plan2.SQLSelectLimitVariable {
@@ -1001,7 +1142,6 @@ func TestResultWriterCapturesExecutionGeneration(t *testing.T) {
 func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
 			return ^uint64(0), nil
@@ -1057,7 +1197,6 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 
 	c.Release()
 	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
 }
 
 func TestApplyExecutorLockWaitTimeout(t *testing.T) {
@@ -2628,7 +2767,6 @@ func TestLockMeta_doLock(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	eng := mock_frontend.NewMockEngine(ctrl)
 
@@ -2678,7 +2816,7 @@ func TestCompileClearReleasesLockMetaBeforeProcess(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	c := allocateNewCompile(proc)
 	c.lockMeta = NewLockMeta()
-	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType())}
+	c.lockMeta.lockMetaVecs = []*vector.Vector{vector.NewVec(types.T_uint32.ToType(), proc.Mp())}
 
 	require.NotPanics(t, c.clear)
 	require.Nil(t, c.proc)
@@ -2731,12 +2869,16 @@ func TestCompilePreparedApproxPercentilePreflightsBeforeChildScope(t *testing.T)
 			nodes := []*plan.Node{child, aggregate}
 
 			compileWithParam := func(param []byte, isNull bool) ([]*Scope, error) {
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), c.proc.Mp())
 				require.NoError(t, vector.AppendBytes(params, param, isNull, c.proc.Mp()))
 				c.proc.SetPrepareParams(params)
 				baseline := c.proc.Mp().CurrNB()
 				scopes, compileErr := c.compilePlanScope(0, 1, nodes)
-				require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				if compileErr != nil {
+					// A rejected compile owns nothing; a compiled scope retains
+					// its value-scan batch until ReleaseScopes.
+					require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				}
 				c.proc.SetPrepareParams(nil)
 				params.Free(c.proc.Mp())
 				return scopes, compileErr
@@ -3550,6 +3692,33 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 
 	require.Len(t, result, 1,
 		"reusing an existing probe partition must keep the single local fast path")
+}
+
+func TestCompileRecursiveProbeJoinUsesUnshuffledBroadcast(t *testing.T) {
+	nodes := engine.Nodes{
+		{Addr: "cn1:6001", Mcpu: 1},
+		{Addr: "cn2:6001", Mcpu: 1},
+	}
+	c := newCompileForShuffleJoinTest(t, nodes)
+	c.execType = plan2.ExecTypeAP_MULTICN
+
+	node := newShuffleJoinTestNode(1)
+	node.Stats.HashmapStats.Shuffle = false
+	node.Stats.HashmapStats.ShuffleColIdx = -1
+	left := &plan.Node{Stats: &plan.Stats{Outcnt: 10}}
+	right := &plan.Node{Stats: &plan.Stats{Outcnt: 20}}
+
+	probe := newShuffleJoinTestScope(t, nodes[0], 1)
+	probe.setRootOperator(mergerecursive.NewArgument())
+	build := newShuffleJoinTestScope(t, nodes[1], 1)
+
+	result := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+	t.Cleanup(func() { ReleaseScopes(result) })
+
+	require.Len(t, result, 1)
+	require.Same(t, probe, result[0], "broadcast join keeps the recursive probe scope")
+	require.True(t, scopesContainOperator(result, vm.MergeRecursive))
+	require.False(t, scopesContainOperator(result, vm.Shuffle))
 }
 
 func TestCompileLocalShuffleJoinOnlySkipsProvenProbeShuffle(t *testing.T) {

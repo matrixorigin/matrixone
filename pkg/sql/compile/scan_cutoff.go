@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -41,9 +42,21 @@ func remoteOrderScanCutoffBound(expr *plan.Expr) (uint64, bool) {
 	return value.U64Val, true
 }
 
+// cutoffPlacementMismatch reports whether two leading order specs resolve to
+// different effective NULL placements; such a scope cannot share one
+// witness rule and must fail closed, mirroring the DESC-bit check.
+func cutoffPlacementMismatch(a, b *plan.OrderBySpec) bool {
+	if a == nil || b == nil {
+		return true
+	}
+	return readutil.OrderHeadNullsLead(a.Flag) != readutil.OrderHeadNullsLead(b.Flag)
+}
+
 // paginationCutoffScan reuses the planner's Top-to-scan lineage and its
-// expression-safety proof. The physical table definition must independently
-// prove that unread blocks cannot contain NULLs for the leading key.
+// expression-safety proof. The leading key may be nullable: the reader
+// consults the block's physical column null count whenever NULLs may lead
+// the requested head, and Observe certifies NULL rows structurally only
+// under that placement, so the nullable domain is safe to admit.
 func (c *Compile) paginationCutoffScan(node *plan.Node) (*plan.Node, int32) {
 	if c == nil || c.pn == nil || statementHasSQLCalcFoundRows(c.stmt) || c.foundRowsOwnerNode != nil ||
 		// A prepared TP physical pipeline can be reused for new parameter
@@ -66,6 +79,7 @@ func (c *Compile) paginationCutoffScan(node *plan.Node) (*plan.Node, int32) {
 				input.TableDef.Partition != nil || input.TableDef.FeatureFlag != 0 || input.TableDef.IsTemporary || input.ClusterTable != nil ||
 				!sameScanCutoffType(node.OrderBy[0].Expr.Typ, input.OrderBy[0].Expr.Typ) ||
 				(node.OrderBy[0].Flag&plan.OrderBySpec_DESC) != (input.OrderBy[0].Flag&plan.OrderBySpec_DESC) ||
+				cutoffPlacementMismatch(node.OrderBy[0], input.OrderBy[0]) ||
 				!scanCutoffPhysicalColumn(input.TableDef, input.OrderBy[0].Expr) {
 				return nil, 0
 			}
@@ -165,12 +179,14 @@ func initScanCutoff(s *Scope) int32 {
 				o.OrderBySpec[0].Expr.GetCol().ColPos < 0 ||
 				!sameScanCutoffType(o.OrderBySpec[0].Expr.Typ, s.DataSource.OrderBy[0].Expr.Typ) ||
 				(o.OrderBySpec[0].Flag&plan.OrderBySpec_DESC) != (s.DataSource.OrderBy[0].Flag&plan.OrderBySpec_DESC) ||
+				cutoffPlacementMismatch(o.OrderBySpec[0], s.DataSource.OrderBy[0]) ||
 				o.NumChildren() != 1 || !scanCutoffInputMatches(o.GetChildren(0)) {
 				return 0
 			}
 			o.ScanCutoff = order.NewScanCutoff(o.ScanCutoffLimit,
 				types.MustTypeFromPlan(o.OrderBySpec[0].Expr.Typ),
-				o.OrderBySpec[0].Flag&plan.OrderBySpec_DESC != 0)
+				o.OrderBySpec[0].Flag&plan.OrderBySpec_DESC != 0,
+				readutil.OrderHeadNullsLead(o.OrderBySpec[0].Flag))
 			return header.MsgTag
 		}
 		switch op.OpType() {

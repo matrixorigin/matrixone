@@ -199,10 +199,11 @@ func newDiskCache(
 	}
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
-		ret.preloads.cached(path)
-		if o := ret.download(path); o != nil {
+		o := ret.download(path)
+		ret.preloads.cachedDownload(path, o)
+		if o != nil {
 			if n := o.takeServed(); n > 0 {
-				ret.preloads.read(path, n)
+				ret.preloads.readDownload(path, o, n)
 			}
 		}
 		inuseBytes.Add(float64(size))
@@ -618,7 +619,6 @@ func (d *DiskCache) Read(
 
 	for i := range vector.Entries {
 		if err := fillEntry(&vector.Entries[i]); err != nil {
-			// ignore error
 			numError++
 			logutil.Warn(
 				"read disk cache error",
@@ -626,6 +626,11 @@ func (d *DiskCache) Read(
 				zap.Any("path", vector.FilePath),
 				zap.Any("entry", vector.Entries[i]),
 			)
+			// A process allocation failure is not a cache miss; falling back
+			// can immediately fail another allocation in the storage path.
+			if errors.Is(err, syscall.ENOMEM) {
+				return err
+			}
 		}
 	}
 

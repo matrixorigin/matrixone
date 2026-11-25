@@ -15,7 +15,9 @@
 package fileservice
 
 import (
+	"io"
 	"math"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -56,11 +58,16 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	var pinReleases atomic.Int32
 	var doneReleaseData atomic.Int32
 	var undoneReleaseData atomic.Int32
+	var doneReader io.ReadCloser = io.NopCloser(strings.NewReader("owned"))
+	var undoneReader io.ReadCloser = io.NopCloser(strings.NewReader("unfinished"))
+	var callerReader io.ReadCloser = io.NopCloser(strings.NewReader("caller-owned"))
 
 	vector := IOVector{
 		Entries: []IOEntry{
 			{
-				CachedData: &releaseCountingData{releases: &cacheReleases},
+				Data:              []byte("owned"),
+				ReadCloserForRead: &doneReader,
+				CachedData:        &releaseCountingData{releases: &cacheReleases},
 				releaseCachedData: func() {
 					pinReleases.Add(1)
 				},
@@ -71,7 +78,9 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 				fromCache: &MemCache{},
 			},
 			{
-				CachedData: &releaseCountingData{releases: &cacheReleases},
+				Data:              []byte("unfinished"),
+				ReadCloserForRead: &undoneReader,
+				CachedData:        &releaseCountingData{releases: &cacheReleases},
 				releaseCachedData: func() {
 					pinReleases.Add(1)
 				},
@@ -79,6 +88,11 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 					undoneReleaseData.Add(1)
 				},
 				fromCache: &MemCache{},
+			},
+			{
+				Data:              []byte("caller-owned"),
+				ReadCloserForRead: &callerReader,
+				done:              true,
 			},
 		},
 	}
@@ -92,13 +106,19 @@ func TestIOVectorReleaseReadResultOnErrorSkipsUndoneReleaseData(t *testing.T) {
 	require.Nil(t, vector.Entries[0].CachedData)
 	require.Nil(t, vector.Entries[0].releaseCachedData)
 	require.Nil(t, vector.Entries[0].releaseData)
+	require.Nil(t, vector.Entries[0].Data)
+	require.Nil(t, doneReader)
 	require.False(t, vector.Entries[0].done)
 	require.Nil(t, vector.Entries[0].fromCache)
 	require.Nil(t, vector.Entries[1].CachedData)
 	require.Nil(t, vector.Entries[1].releaseCachedData)
 	require.NotNil(t, vector.Entries[1].releaseData)
+	require.Equal(t, []byte("unfinished"), vector.Entries[1].Data)
+	require.NotNil(t, undoneReader)
 	require.False(t, vector.Entries[1].done)
 	require.Nil(t, vector.Entries[1].fromCache)
+	require.Equal(t, []byte("caller-owned"), vector.Entries[2].Data)
+	require.NotNil(t, callerReader)
 }
 
 func TestIOVectorReadRangeDoesNotMutateReadToEndEntry(t *testing.T) {
@@ -120,6 +140,27 @@ func TestIOVectorReadRangeDoesNotMutateReadToEndEntry(t *testing.T) {
 	require.Equal(t, int64(4), *min)
 	require.Nil(t, max)
 	require.Equal(t, int64(-1), vector.Entries[0].Size)
+}
+
+func TestIOVectorMinimalRangeBoundsAreIndependentOfEntries(t *testing.T) {
+	vector := IOVector{Entries: []IOEntry{
+		{Offset: 4, Size: -1, done: true},
+		{Offset: 16, Size: 8},
+		{Offset: 8, Size: 4},
+	}}
+	minOffset, maxOffset := vector.readMinimalRange()
+	require.Equal(t, int64(8), *minOffset)
+	require.Equal(t, int64(24), *maxOffset)
+
+	vector.Entries[2].Offset = 2
+	*maxOffset = 3
+	require.Equal(t, int64(8), *minOffset)
+	require.Equal(t, int64(8), vector.Entries[1].Size)
+
+	vector.Entries[1].Size = -1
+	minOffset, maxOffset = vector.readMinimalRange()
+	require.Equal(t, int64(2), *minOffset)
+	require.Nil(t, maxOffset)
 }
 
 func TestIOVectorIOMergeKeyDoesNotMutateReadToEndEntry(t *testing.T) {

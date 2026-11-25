@@ -29,6 +29,8 @@ var _ vm.Operator = new(Projection)
 type Projection struct {
 	ctr         container
 	ProjectList []*plan.Expr
+	// ValuesWarningRow is the statement row for a singleton VALUES projection.
+	ValuesWarningRow uint64
 
 	// GroupingSetCount and GroupingFlags turn this projection into a
 	// vector-level grouping-set expander. The first len(flags)/count columns are
@@ -73,6 +75,7 @@ func (projection *Projection) Release() {
 }
 
 type container struct {
+	jsonFrame     *colexec.ProjectionJSONFrame
 	buf           *batch.Batch
 	expandBuf     *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
@@ -81,6 +84,7 @@ type container struct {
 	hasInput      bool
 	inputSeen     bool
 	childDone     bool
+	selection     selectionState
 }
 
 func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -109,6 +113,8 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		}
 	}
 	projection.ctr.projExecutors = nil
+	projection.ctr.selection.free(proc.Mp())
+	projection.ctr.jsonFrame = nil
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }

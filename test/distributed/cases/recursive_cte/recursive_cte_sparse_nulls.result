@@ -1,0 +1,77 @@
+drop database if exists cte_sparse_nulls;
+create database cte_sparse_nulls;
+use cte_sparse_nulls;
+create table industry_domain (
+id int not null primary key,
+name varchar(50),
+father_id int,
+is_root smallint,
+level int
+);
+insert into industry_domain values
+(1,'汽车整车',null,1,0),(2,'汽车零部件',null,1,0),(3,'新能源汽车',null,1,0),
+(4,'机械装备',null,1,0),(5,'电子信息',null,1,0),
+(11,'乘用车',1,0,1),(12,'商用车',1,0,1),(13,'特种车',1,0,1),
+(21,'发动机',2,0,1),(22,'底盘',2,0,1),(23,'车身',2,0,1),(24,'电子电气',2,0,1),
+(31,'动力电池',3,0,1),(32,'电驱动',3,0,1),(33,'智能驾驶',3,0,1),
+(41,'机床',4,0,1),(51,'半导体',5,0,1),
+(111,'轿车',11,0,2),(112,'SUV',11,0,2),(113,'MPV',11,0,2),
+(121,'卡车',12,0,2),(122,'客车',12,0,2),(131,'消防车',13,0,2),
+(211,'汽油机',21,0,2),(212,'柴油机',21,0,2),(213,'混动发动机',21,0,2),
+(221,'悬挂',22,0,2),(222,'制动',22,0,2),(223,'转向',22,0,2),
+(231,'冲压件',23,0,2),(232,'焊接件',23,0,2),
+(241,'ECU',24,0,2),(242,'传感器',24,0,2),(243,'线束',24,0,2),
+(311,'三元锂',31,0,2),(312,'磷酸铁锂',31,0,2),(313,'固态电池',31,0,2),
+(321,'电机',32,0,2),(322,'电控',32,0,2),
+(331,'感知',33,0,2),(332,'决策',33,0,2),(333,'执行',33,0,2),
+(1111,'A级轿车',111,0,3),(1112,'B级轿车',111,0,3),
+(1121,'紧凑型SUV',112,0,3),(3111,'方形电芯',311,0,3),
+(999,null,1,0,1),(998,'',2,0,1);
+with recursive filtered_tree as (
+select id, name, father_id, level from industry_domain
+where is_root = 1 and name like '%汽车%'
+union all
+select d.id, d.name, d.father_id, d.level from industry_domain d
+inner join filtered_tree ft on d.father_id = ft.id
+where ft.level < 3 and d.name is not null
+)
+select count(*) as full_tree_rows from filtered_tree;
+➤ full_tree_rows[-5,64,0]  𝄀
+43
+insert into industry_domain
+select result, concat('sibling', result - 2000), 1, 0, 1
+from generate_series(2000,2029,1) g;
+with recursive filtered_tree as (
+select id, name, father_id, level from industry_domain
+where is_root = 1 and name like '%汽车%'
+union all
+select d.id, d.name, d.father_id, d.level from industry_domain d
+inner join filtered_tree ft on d.father_id = ft.id
+where ft.level < 3 and d.name is not null
+)
+select count(*) as wide_tree_rows, sum(father_id is null) as roots from filtered_tree;
+➤ wide_tree_rows[-5,64,0]  ¦  roots[-5,64,0]  𝄀
+73  ¦  3
+with recursive filtered_tree as (
+select id, name, father_id, level from industry_domain
+where is_root = 1 and name like '%汽车%'
+union all
+select d.id, d.name, d.father_id, d.level from industry_domain d
+inner join filtered_tree ft on d.father_id = ft.id
+where ft.level < 3 and d.name is not null
+)
+select id, name, father_id, level from filtered_tree order by id limit 12;
+➤ id[4,32,0]  ¦  name[12,50,0]  ¦  father_id[4,32,0]  ¦  level[4,32,0]  𝄀
+1  ¦  汽车整车  ¦  null  ¦  0  𝄀
+2  ¦  汽车零部件  ¦  null  ¦  0  𝄀
+3  ¦  新能源汽车  ¦  null  ¦  0  𝄀
+11  ¦  乘用车  ¦  1  ¦  1  𝄀
+12  ¦  商用车  ¦  1  ¦  1  𝄀
+13  ¦  特种车  ¦  1  ¦  1  𝄀
+21  ¦  发动机  ¦  2  ¦  1  𝄀
+22  ¦  底盘  ¦  2  ¦  1  𝄀
+23  ¦  车身  ¦  2  ¦  1  𝄀
+24  ¦  电子电气  ¦  2  ¦  1  𝄀
+31  ¦  动力电池  ¦  3  ¦  1  𝄀
+32  ¦  电驱动  ¦  3  ¦  1
+drop database cte_sparse_nulls;

@@ -15,14 +15,11 @@
 package plan
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -46,7 +43,7 @@ func TestUpdateChangedRowsPredicateCastsMixedNumericRHS(t *testing.T) {
 		for _, project := range node.ProjectList {
 			require.NoError(t, planpb.VisitExprTree(project, func(expr *planpb.Expr) error {
 				fn := expr.GetF()
-				if fn != nil && fn.Func.GetObjName() == "cast" && expr.Typ.Id == int32(types.T_int32) && exprContainsFunc(expr, "case") {
+				if fn != nil && (fn.Func.GetObjName() == "cast" || fn.Func.GetObjName() == "cast_assign") && expr.Typ.Id == int32(types.T_int32) && exprContainsFunc(expr, "case") {
 					foundCast = true
 				}
 				if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "<=>" || len(fn.Args) != 2 {
@@ -512,7 +509,6 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 		updateCols      map[string]tree.Expr
 		wantInline      int
 		wantUnsupported bool
-		wantReject      bool
 	}{
 		{
 			name:       "synchronous ivfflat indexed part",
@@ -569,10 +565,16 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 			wantInline: 1,
 		},
 		{
-			name:       "synchronous fulltext primary key remains rejected",
+			name:       "synchronous fulltext primary key uses old-key maintenance",
 			tableDef:   newTableDef(newIndex("ft", catalog.MOIndexFullTextAlgo.ToString(), "", "body")),
 			updateCols: map[string]tree.Expr{"id": nil},
-			wantReject: true,
+			wantInline: 1,
+		},
+		{
+			name:       "synchronous ivfflat primary key uses old-key maintenance",
+			tableDef:   newTableDef(newIndex("ivf", catalog.MoIndexIvfFlatAlgo.ToString(), "", "vec")),
+			updateCols: map[string]tree.Expr{"id": nil},
+			wantInline: 1,
 		},
 		{
 			name:       "async primary key stays modern",
@@ -602,16 +604,8 @@ func TestClassifyIrregularIndexesForUpdate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inline, unsupported, err := classifyIrregularIndexesForUpdate(
-				context.Background(), tt.tableDef, tt.updateCols,
+				tt.tableDef, tt.updateCols,
 			)
-			if tt.wantReject {
-				require.Error(t, err)
-				var routeErr *updatePlannerRouteError
-				require.True(t, errors.As(err, &routeErr))
-				require.Equal(t, updatePlannerRejected, routeErr.route)
-				require.True(t, moerr.IsMoErrCode(routeErr.err, moerr.ErrUnsupportedDML))
-				return
-			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantUnsupported, unsupported)
 			require.Len(t, inline, tt.wantInline)
@@ -643,6 +637,39 @@ func TestCoalesceRepeatedPhysicalTargetIndexes(t *testing.T) {
 	coalesceRepeatedPhysicalTargetIrregularIndexes(dmlCtx, irregularIndexes)
 	require.Equal(t, []*IndexDef{irregular}, irregularIndexes[0])
 	require.Empty(t, irregularIndexes[1])
+}
+
+func TestCoalesceRepeatedPhysicalTargetUniqueChecks(t *testing.T) {
+	uniqueA := &IndexDef{IndexName: "uk_a", IndexTableName: "uk_a_table", Unique: true}
+	uniqueB := &IndexDef{IndexName: "uk_b", IndexTableName: "uk_b_table", Unique: true}
+	regular := &IndexDef{IndexName: "idx", IndexTableName: "idx_table"}
+	indexes := []*IndexDef{uniqueA, uniqueB, regular}
+	dmlCtx := &DMLContext{
+		aliases: []string{"a", "b", "c"},
+		tableDefs: []*TableDef{
+			{TblId: 100, Indexes: indexes},
+			{TblId: 100, Indexes: indexes},
+			{TblId: 200, Indexes: indexes},
+		},
+		updateCol2Expr: []map[string]tree.Expr{
+			{"x": nil},
+			{"x": nil},
+			{"x": nil},
+		},
+	}
+
+	checks := [][]bool{
+		{false, false, false},
+		{true, true, true},
+		{true, false, false},
+	}
+	coalesceRepeatedPhysicalTargetUniqueChecks(dmlCtx, checks)
+
+	// All unique checks for one physical table are evaluated once by its owner.
+	require.Equal(t, []bool{true, true, false}, checks[0])
+	require.Equal(t, []bool{false, false, true}, checks[1])
+	// Another physical table keeps its own independent check.
+	require.Equal(t, []bool{true, false, false}, checks[2])
 }
 
 func TestPrimaryKeyUpdatedDetectsSingleAndCompositeKeys(t *testing.T) {

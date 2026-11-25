@@ -36,7 +36,8 @@ import (
 // payload types are always candidates.
 const lateMaterializationMinVarlenBlockBytes = 768 << 10
 
-func isLateMaterializationCandidate(typ plan.Type) bool {
+// IsLateMaterializationCandidate reports whether a column can benefit from selected-row reads.
+func IsLateMaterializationCandidate(typ plan.Type) bool {
 	switch types.T(typ.Id) {
 	case types.T_text,
 		types.T_blob,
@@ -61,7 +62,8 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 	}
 }
 
-func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
+// CollectFilterColumnPositions records the input columns needed to evaluate a filter.
+func CollectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -81,7 +83,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 			return false
 		}
 		for _, arg := range item.F.Args {
-			if !collectFilterColumnPositions(arg, columns) {
+			if !CollectFilterColumnPositions(arg, columns) {
 				return false
 			}
 		}
@@ -91,7 +93,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 			return false
 		}
 		for _, arg := range item.List.List {
-			if !collectFilterColumnPositions(arg, columns) {
+			if !CollectFilterColumnPositions(arg, columns) {
 				return false
 			}
 		}
@@ -100,7 +102,7 @@ func collectFilterColumnPositions(expr *plan.Expr, columns []bool) bool {
 		if item.Lit == nil {
 			return false
 		}
-		return collectFilterColumnPositions(item.Lit.Src, columns)
+		return CollectFilterColumnPositions(item.Lit.Src, columns)
 	case *plan.Expr_P:
 		return item.P != nil
 	case *plan.Expr_V:
@@ -136,12 +138,12 @@ func (tableScan *TableScan) configureLateMaterialization() {
 
 	filterColumns := make([]bool, len(tableScan.Types))
 	for _, expr := range tableScan.RuntimeFilterExprs {
-		if !collectFilterColumnPositions(expr, filterColumns) {
+		if !CollectFilterColumnPositions(expr, filterColumns) {
 			return
 		}
 	}
 	for _, expr := range tableScan.FilterExprs {
-		if !collectFilterColumnPositions(expr, filterColumns) {
+		if !CollectFilterColumnPositions(expr, filterColumns) {
 			return
 		}
 	}
@@ -150,7 +152,7 @@ func (tableScan *TableScan) configureLateMaterialization() {
 	}
 
 	for pos, typ := range tableScan.Types {
-		if !filterColumns[pos] && isLateMaterializationCandidate(typ) {
+		if !filterColumns[pos] && IsLateMaterializationCandidate(typ) {
 			tableScan.ctr.lateColumns = append(tableScan.ctr.lateColumns, pos)
 		} else {
 			tableScan.ctr.earlyColumns = append(tableScan.ctr.earlyColumns, pos)
@@ -183,12 +185,49 @@ func (tableScan *TableScan) batchColumnView(
 }
 
 func (tableScan *TableScan) recordFilterInput(bat *batch.Batch, loadedColumns []int) {
-	view := tableScan.batchColumnView(bat, loadedColumns, bat.RowCount())
-	tableScan.OpAnalyzer.InputBlock()
+	var view *batch.Batch
+	if tableScan.ctr.membershipApplied {
+		// Membership already counted rows and key bytes. Build a private
+		// metadata view even for eager callbacks, which pass loadedColumns=nil.
+		if tableScan.ctr.metricView == nil {
+			tableScan.ctr.metricView = batch.NewWithSize(len(tableScan.Types))
+		}
+		view = tableScan.ctr.metricView
+		view.Vecs = view.Vecs[:0]
+		for column, v := range bat.Vecs {
+			if (loadedColumns == nil || slices.Contains(loadedColumns, column)) &&
+				!slices.Contains(tableScan.ctr.readerFilter.Membership.Columns, column) {
+				view.Vecs = append(view.Vecs, v)
+			}
+		}
+		view.SetRowCount(0)
+	} else {
+		view = tableScan.batchColumnView(bat, loadedColumns, bat.RowCount())
+		tableScan.OpAnalyzer.InputBlock()
+	}
 	tableScan.OpAnalyzer.Input(view)
 	tableScan.OpAnalyzer.ScanBytes(view)
 	tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, bat.Size())
 	tableScan.ctr.filterReadMetrics = true
+}
+
+// Generic membership follows the original predicates. Count only key columns
+// not already read by that stage, without adding the same rows or block twice.
+func (tableScan *TableScan) recordMembershipKeyInput(bat *batch.Batch, loaded, predicates []int) {
+	if tableScan.ctr.metricView == nil {
+		tableScan.ctr.metricView = batch.NewWithSize(len(tableScan.Types))
+	}
+	view := tableScan.ctr.metricView
+	view.Vecs = view.Vecs[:0]
+	for _, column := range loaded {
+		if !slices.Contains(predicates, column) {
+			view.Vecs = append(view.Vecs, bat.Vecs[column])
+		}
+	}
+	view.SetRowCount(0)
+	tableScan.OpAnalyzer.Input(view)
+	tableScan.OpAnalyzer.ScanBytes(view)
+	tableScan.ctr.maxAllocSize = max(tableScan.ctr.maxAllocSize, bat.Size())
 }
 
 func (tableScan *TableScan) recordLateInput(bat *batch.Batch) {
@@ -223,13 +262,32 @@ func (tableScan *TableScan) readBatch(
 	lateReader, ok := tableScan.Reader.(engine.LateMaterializationReader)
 	// Reader summaries require the complete pre-filter batch.
 	readerSummaryEnabled := ctx.Value(defines.ReaderSummaryKey{}) != nil
+	if tableScan.ctr.readerFilter != nil {
+		tableScan.prepareColumnUses()
+		tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.columnUses
+		tableScan.ctr.readerFilter.PublishSelection = nil
+		if tableScan.publishesSelection() {
+			// The reader fills rows from the scan's pool; selection.free
+			// releases it.
+			rows := &tableScan.ctr.selection.rows
+			if mp := tableScan.mp(proc); rows.MPool() != mp {
+				rows.Free()
+				rows.Init(mp)
+			}
+			tableScan.ctr.readerFilter.PublishSelection = &tableScan.ctr.selection.rows
+			tableScan.ctr.readerFilter.ColumnUses = tableScan.ctr.selection.borrowedUses(tableScan.ctr.columnUses)
+		}
+	}
+	// The reader allocates through proc's pool, so its internal buffers are
+	// not charged to the statement account. The output batch it fills is
+	// charged by a capacity lease once Call is about to emit it.
 	if !ok || tableScan.ctr.readerFilter == nil || readerSummaryEnabled {
 		return process.MeasureFilesystemWait(tableScan.OpAnalyzer, func() (bool, error) {
 			return tableScan.Reader.Read(
 				ctx,
 				tableScan.Attrs,
 				nil,
-				proc.Mp(),
+				tableScan.mp(proc),
 				tableScan.ctr.buf,
 			)
 		})
@@ -244,7 +302,7 @@ func (tableScan *TableScan) readBatch(
 				tableScan.Attrs,
 				tableScan.ctr.earlyColumns,
 				tableScan.ctr.readerFilter,
-				proc.Mp(),
+				tableScan.mp(proc),
 				tableScan.ctr.buf,
 			)
 		},

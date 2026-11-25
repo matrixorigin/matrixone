@@ -194,13 +194,14 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
 	}
+	if objstats.GetAppendable() {
+		// A flush may be applied on only some readers of the same snapshot.
+		// Its appendable file must follow the reader that owns replay rows.
+		return !rsp.IsLocalCN
+	}
 	if rsp.ShuffleByObjectID {
 		objID := objstats.ObjectLocation().ObjectId()
 		return IVFObjectIDHashToRange(objID, uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
-	}
-	if objstats.GetAppendable() {
-		//aobj always shuffle to local CN
-		return !rsp.IsLocalCN
 	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
 		//shuffle by range
@@ -958,6 +959,14 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	node.Stats.HashmapStats.ShuffleColIdx = -1
 	resetShuffleStrategy(node.Stats.HashmapStats)
 	if node.NodeType != plan.Node_JOIN {
+		return
+	}
+	// Recursive members exchange a complete frontier each round. A shuffle
+	// dispatch can forward its Last marker while partial bucket batches are
+	// still buffered, letting a member completion overtake its rows. Keep the
+	// recursive subtree on the join's broadcast path so the round marker remains
+	// ordered after all frontier data.
+	if builder.hasRecursiveScan(node) {
 		return
 	}
 

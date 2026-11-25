@@ -200,7 +200,6 @@ func NewIteratorAllocation(
 //	each time a new key is inserted, the hashtable returns a last-value+1 or, if the old key is inserted, the value corresponding to that key
 type StrHashMap struct {
 	hasNull            bool
-	groupingAware      bool
 	rejectNaN          bool
 	rows               uint64
 	hashMap            *hashtable.StringHashMap

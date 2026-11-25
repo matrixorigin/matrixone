@@ -93,6 +93,11 @@ Keep all other guards, including the five-million build-row guard, exact
 encoding checks, hints and actual runtime IN budget. The proven bound must fit
 that budget and itself pass both selectivity conditions. Use the bound itself,
 not the minimum of that bound and a possibly underestimated late HashmapSize.
+For a proven complete index PK with a known table cardinality, the selectivity
+estimate uses the larger of that cardinality and the sampled NDV. A distinct
+lookup key can match at most one visible index row, so an underestimated NDV
+alone should not veto the lookup. Keep the existing estimate when table
+cardinality is unknown.
 Do not admit a known above-budget collection merely to return PASS.
 An additional pair must not apply `recalcStatsByRuntimeFilter`: preserve the
 baseline access-path, cardinality, placement and earlier filter decisions.

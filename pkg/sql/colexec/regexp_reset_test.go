@@ -60,7 +60,7 @@ func TestRegexpExecutorResetUsesFreshState(t *testing.T) {
 					bat := batch.NewWithSize(2)
 					defer bat.Clean(proc.Mp())
 					for i, value := range []string{input.value, input.pattern} {
-						bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+						bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 						require.NoError(t, vector.AppendBytes(bat.Vecs[i], []byte(value), false, proc.Mp()))
 					}
 					bat.SetRowCount(1)

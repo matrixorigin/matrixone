@@ -59,6 +59,12 @@ func (g *ExecutionResourceGeneration) RegisterMemoryGrowthParticipant() (
 }
 
 func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
+	return b.refreshMemoryHeadroom(0)
+}
+
+// A positive request confirms a low sample before denying an allocation. The
+// initial sample and at most one confirmation share the same cache window.
+func (b *ExecutionResourceBudget) refreshMemoryHeadroom(request uint64) (uint64, bool) {
 	if b == nil || b.memoryHeadroomProvider == nil {
 		return 0, false
 	}
@@ -69,14 +75,20 @@ func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
 		now = func() time.Time { return time.Now() }
 	}
 	current := now()
-	if b.memoryHeadroomCached && b.memoryHeadroomTTL > 0 &&
-		current.Sub(b.memoryHeadroomAt) < b.memoryHeadroomTTL {
-		b.mu.Lock()
-		bytes, measured := b.memoryHeadroomBytes, b.memoryHeadroomMeasured
-		b.mu.Unlock()
-		return bytes, measured
-	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	cached := b.memoryHeadroomCached && b.memoryHeadroomTTL > 0 &&
+		current.Sub(b.memoryHeadroomAt) < b.memoryHeadroomTTL
+	if request > 0 {
+		if !b.memoryHeadroomNeedsConfirmationLocked(request) {
+			return b.memoryHeadroomBytes, b.memoryHeadroomMeasured
+		}
+		b.memoryHeadroomConfirmed = true
+	} else if cached {
+		return b.memoryHeadroomBytes, b.memoryHeadroomMeasured
+	} else {
+		b.memoryHeadroomConfirmed = false
+	}
 	// Observe committed backing BEFORE reading the OS. An allocator may finish
 	// while the sample is read; counting it twice for this sample is safe, but
 	// reading backing after the OS could omit it from both observations. The
@@ -90,13 +102,29 @@ func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
 	// observations would be absent from both the sampled usage and the cached
 	// growth delta, allowing the same bytes twice.
 	bytes, measured := b.memoryHeadroomProvider()
+	if request > 0 && !measured {
+		// Failure to confirm pressure cannot erase a measured low sample or
+		// move its accounting checkpoint.
+		return b.memoryHeadroomBytes, b.memoryHeadroomMeasured
+	}
 	b.memoryHeadroomBytes = bytes
 	b.memoryHeadroomMeasured = measured
 	b.memoryHeadroomBacking = backing
-	b.memoryHeadroomAt = current
+	if request == 0 {
+		b.memoryHeadroomAt = current
+	}
 	b.memoryHeadroomCached = true
-	b.mu.Unlock()
 	return bytes, measured
+}
+
+// b.mu must be held. The sample may expire while another caller queues for
+// confirmation. The next ordinary refresh still owns starting a new window.
+func (b *ExecutionResourceBudget) memoryHeadroomNeedsConfirmationLocked(request uint64) bool {
+	if b.closed || b.memoryHeadroomTTL <= 0 || b.memoryHeadroomConfirmed {
+		return false
+	}
+	available, measured, _ := b.physicalGrowthHeadroomLocked()
+	return measured && request > available
 }
 
 // memoryHeadroomRefreshNeededLocked keeps the allocation hot path on the
@@ -120,23 +148,21 @@ func (b *ExecutionResourceBudget) memoryHeadroomRefreshNeededLocked() bool {
 // process working set while preserving the runtime safety margin. It adjusts a
 // cached OS sample by all charged bytes not backed before that sample. Freed
 // backing loses its credit even if a new allocation replaces it. b.mu must be held.
-func (b *ExecutionResourceBudget) physicalGrowthHeadroomLocked() (uint64, bool) {
+func (b *ExecutionResourceBudget) physicalGrowthHeadroomLocked() (available uint64, measured bool, unbacked uint64) {
 	if b == nil || !b.memoryHeadroomMeasured {
-		return 0, false
+		return 0, false, 0
 	}
 	remaining := b.memoryHeadroomBytes
 	committed := b.memoryHeadroomBacking.RetainedCapacity()
-	if b.aggregateUsed > committed {
-		growth := b.aggregateUsed - committed
-		if growth >= remaining {
-			return 0, true
-		}
-		remaining -= growth
+	unbacked = b.aggregateUsed - min(b.aggregateUsed, committed)
+	if unbacked >= remaining {
+		return 0, true, unbacked
 	}
+	remaining -= unbacked
 	if remaining <= b.memoryHeadroomSafety {
-		return 0, true
+		return 0, true, unbacked
 	}
-	return remaining - b.memoryHeadroomSafety, true
+	return remaining - b.memoryHeadroomSafety, true, unbacked
 }
 
 // RetainedLimit reports current retained bytes and returns this participant's
@@ -210,7 +236,7 @@ func (p *ExecutionMemoryGrowthParticipant) RetainedLimit(
 	cnLimit := cnPool / b.memoryGrowthParticipants
 	limit := min(queryLimit, cnLimit)
 	if physicalMeasured {
-		growthHeadroom, _ := b.physicalGrowthHeadroomLocked()
+		growthHeadroom, _, _ := b.physicalGrowthHeadroomLocked()
 		physicalShare := growthHeadroom / b.memoryGrowthParticipants
 		physicalLimit := current
 		if physicalShare > ^uint64(0)-physicalLimit {

@@ -193,13 +193,13 @@ create table t1(a binary(2) primary key);
 insert into t1 values(null);
 constraint violation: Column 'a' cannot be null
 select * from t1;
-➤ a[12,6,0]
+➤ a[-2,2,0]
 insert into t1 values("时");
+Data truncation: Can't cast '时' to BINARY type. Src length 3 is larger than Dest length 2
 select * from t1;
-➤ a[12,6,0]  𝄀
-æ¶
+➤ a[-2,2,0]
 insert into t1 values(rpad("1", 500, "1"));
-internal error: Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' from VARCHAR type to BINARY type. Src length 500 is larger than Dest length 2
+Data truncation: Can't cast '1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...' to BINARY type. Src length 500 is larger than Dest length 2
 delete from t1 where a="时";
 insert into t1 values("6");
 insert into t1 values("66");

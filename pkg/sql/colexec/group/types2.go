@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,16 +61,16 @@ const (
 	GroupAllocationSiteHashIterator
 	GroupAllocationSiteKeyData
 	GroupAllocationSiteKeyArea
-	GroupAllocationSiteKeyNulls
-	GroupAllocationSiteKeyGrouping
+	_ // reserved: was GroupAllocationSiteKeyNulls
+	_ // reserved: was GroupAllocationSiteKeyGrouping
 	GroupAllocationSiteExpressionData
 	GroupAllocationSiteExpressionArea
-	GroupAllocationSiteExpressionNulls
-	GroupAllocationSiteExpressionGrouping
+	_ // reserved: was GroupAllocationSiteExpressionNulls
+	_ // reserved: was GroupAllocationSiteExpressionGrouping
 	GroupAllocationSiteAggregateData
 	GroupAllocationSiteAggregateArea
-	GroupAllocationSiteAggregateNulls
-	GroupAllocationSiteAggregateGrouping
+	_ // reserved: was GroupAllocationSiteAggregateNulls
+	_ // reserved: was GroupAllocationSiteAggregateGrouping
 	GroupAllocationSiteAggregateArgumentCount
 	GroupAllocationSiteAggregateArgumentArena
 	GroupAllocationSitePartialOutput
@@ -262,18 +261,23 @@ type container struct {
 	mp     *mpool.MPool
 	budget *process.ExecutionResourceGeneration
 
-	allocationAccount    *mpool.AllocationAccount
-	hashAllocation       *hashtable.AllocationAccountSelection
-	hashIterator         *hashmap.IteratorAllocation
-	groupByAllocation    *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	hashAllocation    *hashtable.AllocationAccountSelection
+	hashIterator      *hashmap.IteratorAllocation
+	// groupByAllocation, rollupAllocation and spillGroupByAllocation are
+	// accounted views of ctr.mp; expressionAllocation is an accounted view of
+	// the process pool used by expression executors and the projection. All
+	// are rebuilt by bindAllocationViews for each execution generation.
+	groupByAllocation    *mpool.MPool
+	expressionAllocation *mpool.MPool
+	rollupAllocation     *mpool.MPool
 	aggregateAllocation  *aggexec.AllocationAccount
 
 	recoveryCapacity         *process.ExecutionRecoveryCapacity
 	recoveryCapacityClass    mpool.AllocationCapacityClass
 	recoveryCapacityActive   bool
 	recoveryCapacityFloor    uint64
-	spillGroupByAllocation   *vector.AllocationAccountSelection
+	spillGroupByAllocation   *mpool.MPool
 	spillAggregateAllocation *aggexec.AllocationAccount
 
 	inputDone    bool
@@ -290,9 +294,6 @@ type container struct {
 	// legacyH8CharSemantics keeps pre-v78 CHAR bytes intact when this
 	// container must merge a short variable-length H8 partial.
 	legacyH8CharSemantics bool
-	// groupingAware selects the collision-free HStr key grammar whenever a
-	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
-	groupingAware bool
 
 	// x, y of `group by x, y`.
 	groupByEvaluate colexec.ExprEvalVector
@@ -300,13 +301,16 @@ type container struct {
 	aggArgEvaluate []colexec.ExprEvalVector
 
 	// group by columns
-	groupByTypes                 []types.Type
-	groupByBatches               []*batch.Batch
-	groupByStandby               *batch.Batch
-	groupingRollup               []*vector.Vector
-	groupByHashKey               []int32
-	hashKeyVecs                  []*vector.Vector
-	groupKeyStringSourceMetadata bool
+	groupByTypes   []types.Type
+	groupByBatches []*batch.Batch
+	groupByStandby *batch.Batch
+	// groupByPreflights holds, for the current (last) group-by batch and the
+	// standby batch, each column's SelectedBatchPreflight for the next
+	// append into that batch.
+	groupByPreflights [2]groupByPreflight
+	groupingRollup    []*vector.Vector
+	groupByHashKey    []int32
+	hashKeyVecs       []*vector.Vector
 
 	// MergeGroup locks the partial wire metadata on the first input. It must
 	// survive resident spills, because later partials and queued spill records
@@ -325,8 +329,7 @@ type container struct {
 	warningRetentionSet         bool
 	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
 	sortRollup                  *sortRollupState
-	prepareParamKind            aggexec.PrepareParamKindStates
-	prepareParamKindWireV1      bool
+	rowMetadataTrailerWire      bool
 	legacyTextMinMax            bool
 	legacyVarianceState         bool
 	legacyDecimalSumState       bool
@@ -354,7 +357,7 @@ type container struct {
 	autoSpill               bool
 	memoryGrowthParticipant *process.ExecutionMemoryGrowthParticipant
 	spillAggList            []aggexec.GroupAggFuncExec
-	spillBkts               list.Deque[*spillBucket]
+	spillBkts               []*spillBucket
 	currentSpillBkt         []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
@@ -412,38 +415,14 @@ func (ctr *container) setAllocationAccount(
 	if err != nil {
 		return err
 	}
-	groupByAllocation, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerGroup,
-		GroupAllocationSiteKeyData,
-		GroupAllocationSiteKeyArea,
-		GroupAllocationSiteKeyNulls,
-		GroupAllocationSiteKeyGrouping,
-	)
-	if err != nil {
-		return err
-	}
-	expressionAllocation, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerGroup,
-		GroupAllocationSiteExpressionData,
-		GroupAllocationSiteExpressionArea,
-		GroupAllocationSiteExpressionNulls,
-		GroupAllocationSiteExpressionGrouping,
-	)
-	if err != nil {
-		return err
-	}
 	aggregateAllocation, err := aggexec.NewAllocationAccount(
 		account,
 		mpool.AllocationOwnerGroup,
 		aggexec.AllocationAccountSites{
-			VectorData:     GroupAllocationSiteAggregateData,
-			VectorArea:     GroupAllocationSiteAggregateArea,
-			VectorNulls:    GroupAllocationSiteAggregateNulls,
-			VectorGrouping: GroupAllocationSiteAggregateGrouping,
-			ArgumentCount:  GroupAllocationSiteAggregateArgumentCount,
-			ArgumentArena:  GroupAllocationSiteAggregateArgumentArena,
+			VectorData:    GroupAllocationSiteAggregateData,
+			VectorArea:    GroupAllocationSiteAggregateArea,
+			ArgumentCount: GroupAllocationSiteAggregateArgumentCount,
+			ArgumentArena: GroupAllocationSiteAggregateArgumentArena,
 		},
 	)
 	if err != nil {
@@ -462,28 +441,14 @@ func (ctr *container) setAllocationAccount(
 		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
 		return cause
 	}
-	spillGroupByAllocation, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		mpool.AllocationOwnerGroup,
-		GroupAllocationSiteKeyData,
-		GroupAllocationSiteKeyArea,
-		GroupAllocationSiteKeyNulls,
-		GroupAllocationSiteKeyGrouping,
-		recoveryClass,
-	)
-	if err != nil {
-		return rollbackRecovery(err)
-	}
 	spillAggregateAllocation, err := aggexec.NewAllocationAccountWithCapacityClass(
 		account,
 		mpool.AllocationOwnerGroup,
 		aggexec.AllocationAccountSites{
-			VectorData:     GroupAllocationSiteAggregateData,
-			VectorArea:     GroupAllocationSiteAggregateArea,
-			VectorNulls:    GroupAllocationSiteAggregateNulls,
-			VectorGrouping: GroupAllocationSiteAggregateGrouping,
-			ArgumentCount:  GroupAllocationSiteAggregateArgumentCount,
-			ArgumentArena:  GroupAllocationSiteAggregateArgumentArena,
+			VectorData:    GroupAllocationSiteAggregateData,
+			VectorArea:    GroupAllocationSiteAggregateArea,
+			ArgumentCount: GroupAllocationSiteAggregateArgumentCount,
+			ArgumentArena: GroupAllocationSiteAggregateArgumentArena,
 		},
 		recoveryClass,
 	)
@@ -494,14 +459,136 @@ func (ctr *container) setAllocationAccount(
 	ctr.allocationAccount = account
 	ctr.hashAllocation = hashAllocation
 	ctr.hashIterator = hashIterator
-	ctr.groupByAllocation = groupByAllocation
-	ctr.expressionAllocation = expressionAllocation
 	ctr.aggregateAllocation = aggregateAllocation
 	ctr.recoveryCapacity = recoveryCapacity
 	ctr.recoveryCapacityClass = recoveryClass
-	ctr.spillGroupByAllocation = spillGroupByAllocation
 	ctr.spillAggregateAllocation = spillAggregateAllocation
 	return nil
+}
+
+// bindAllocationViews builds the accounted MPool views of the bound account
+// for the current execution generation. The key, rollup and recovery views
+// are views of the private ctr.mp; the expression view is a view of the
+// process pool, from which expression executors allocate.
+func (ctr *container) bindAllocationViews(proc *process.Process) error {
+	ctr.unbindAllocationViews()
+	if ctr.allocationAccount == nil {
+		return nil
+	}
+	if ctr.mp == nil || proc == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	account := ctr.allocationAccount
+	groupBy, err := ctr.mp.WithAccount(account, mpool.AllocationOwnerGroup,
+		GroupAllocationSiteKeyData, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	rollup, err := ctr.mp.WithAccount(account, mpool.AllocationOwnerGroup,
+		GroupAllocationSiteExpressionData, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	expression, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerGroup,
+		GroupAllocationSiteExpressionData, mpool.AllocationCapacityClassDefault)
+	if err != nil {
+		return err
+	}
+	var spillGroupBy *mpool.MPool
+	if ctr.recoveryCapacity != nil {
+		spillGroupBy, err = ctr.mp.WithAccount(account, mpool.AllocationOwnerGroup,
+			GroupAllocationSiteKeyData, ctr.recoveryCapacityClass)
+		if err != nil {
+			return err
+		}
+	}
+	ctr.groupByAllocation = groupBy
+	ctr.rollupAllocation = rollup
+	ctr.expressionAllocation = expression
+	ctr.spillGroupByAllocation = spillGroupBy
+	return nil
+}
+
+// unbindAllocationViews drops the views of ctr.mp. The expression view is
+// kept: executors built from it may outlive the private pool generation.
+func (ctr *container) unbindAllocationViews() {
+	ctr.groupByAllocation = nil
+	ctr.rollupAllocation = nil
+	ctr.spillGroupByAllocation = nil
+}
+
+// ownPool returns the operator pool vec belongs to: the private pool or one
+// of its accounted views. A vector of any other pool is returned ctr.mp, so
+// freeing it reports the mismatch.
+func (ctr *container) ownPool(vec *vector.Vector) *mpool.MPool {
+	mp := vec.MPool()
+	if mp == nil {
+		return ctr.mp
+	}
+	switch mp {
+	case ctr.mp, ctr.groupByAllocation, ctr.rollupAllocation, ctr.spillGroupByAllocation:
+		return mp
+	}
+	if ctr.aggregateAllocation.OwnsVectorMP(mp) || ctr.spillAggregateAllocation.OwnsVectorMP(mp) {
+		return mp
+	}
+	return ctr.mp
+}
+
+// freeGroupVector frees a vector of the operator's buffered data.
+func (ctr *container) freeGroupVector(vec *vector.Vector) {
+	if vec != nil {
+		vec.Free(ctr.ownPool(vec))
+	}
+}
+
+// cleanGroupBatch frees a batch of the operator's buffered data. After the
+// final flush a group-by batch holds key vectors of the group-by view and
+// aggregate results of the aggregates' pool; each is freed with its own.
+func (ctr *container) cleanGroupBatch(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	seen := make(map[*vector.Vector]struct{}, len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if _, ok := seen[vec]; !ok {
+			seen[vec] = struct{}{}
+			ctr.freeGroupVector(vec)
+		}
+		bat.Vecs[i] = nil
+	}
+	// Every vector is released; Clean drops the batch's remaining state.
+	bat.Clean(ctr.mp)
+}
+
+// groupByMP returns the pool through which resident group-by key storage
+// allocates and grows.
+func (ctr *container) groupByMP() *mpool.MPool {
+	if ctr.groupByAllocation != nil {
+		return ctr.groupByAllocation
+	}
+	return ctr.mp
+}
+
+// spillGroupByMP returns the pool through which recovery-class group-by
+// key storage allocates and grows.
+func (ctr *container) spillGroupByMP() *mpool.MPool {
+	if ctr.spillGroupByAllocation != nil {
+		return ctr.spillGroupByAllocation
+	}
+	return ctr.mp
+}
+
+// rollupMP returns the pool through which expression-scaled storage owned by
+// the private pool (rollup constants, sort-rollup keys) allocates.
+func (ctr *container) rollupMP() *mpool.MPool {
+	if ctr.rollupAllocation != nil {
+		return ctr.rollupAllocation
+	}
+	return ctr.mp
 }
 
 func (ctr *container) installRecoveryCapacity() error {
@@ -510,7 +597,7 @@ func (ctr *container) installRecoveryCapacity() error {
 	}
 	if ctr.recoveryCapacity == nil ||
 		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault ||
-		ctr.spillGroupByAllocation == nil || ctr.spillAggregateAllocation == nil {
+		ctr.spillAggregateAllocation == nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if ctr.recoveryCapacityActive {
@@ -580,7 +667,7 @@ func (ctr *container) releaseFinalRecoveryCapacity() error {
 		return nil
 	}
 	if ctr.currentSpillBkt != nil ||
-		ctr.spillBkts != nil && ctr.spillBkts.Len() != 0 {
+		len(ctr.spillBkts) != 0 {
 		return nil
 	}
 	ctr.releaseMemoryGrowthParticipant()
@@ -621,6 +708,7 @@ func (ctr *container) clearAllocationAccount(
 	ctr.hashIterator = nil
 	ctr.groupByAllocation = nil
 	ctr.expressionAllocation = nil
+	ctr.rollupAllocation = nil
 	ctr.aggregateAllocation = nil
 	return nil
 }
@@ -691,20 +779,17 @@ func (ctr *container) freeSpillAggList() {
 func (ctr *container) freeSpillReloadStaging() {
 	ctr.freeSpillAggList()
 	if ctr.spillGbBatch != nil {
-		ctr.spillGbBatch.Clean(ctr.mp)
+		ctr.cleanGroupBatch(ctr.spillGbBatch)
 		ctr.spillGbBatch = nil
 	}
 }
 
 func (ctr *container) freeSpillBkts() {
 	// free all spill buckets.
-	if ctr.spillBkts != nil {
-		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-			bkt.free()
-			return true
-		})
-		ctr.spillBkts.Clear()
+	for _, bkt := range ctr.spillBkts {
+		bkt.free()
 	}
+	ctr.spillBkts = nil
 
 	for _, bkt := range ctr.currentSpillBkt {
 		bkt.free()
@@ -715,17 +800,53 @@ func (ctr *container) freeSpillBkts() {
 func (ctr *container) freeGroupByBatches() {
 	for i := range ctr.groupByBatches {
 		if ctr.groupByBatches[i] != nil {
-			ctr.groupByBatches[i].Clean(ctr.mp)
+			ctr.cleanGroupBatch(ctr.groupByBatches[i])
 			ctr.groupByBatches[i] = nil
 		}
 	}
 	ctr.groupByBatches = nil
-	ctr.groupKeyStringSourceMetadata = false
 	if ctr.groupByStandby != nil {
-		ctr.groupByStandby.Clean(ctr.mp)
+		ctr.cleanGroupBatch(ctr.groupByStandby)
 		ctr.groupByStandby = nil
 	}
+	ctr.clearGroupByPreflights()
 	ctr.currBatchIdx = 0
+}
+
+// groupByPreflight is the per-column preflight of one group-by batch.
+type groupByPreflight struct {
+	batch *batch.Batch
+	vecs  []vector.SelectedBatchPreflight
+}
+
+func (p *groupByPreflight) reset(b *batch.Batch) {
+	p.batch = b
+	if b == nil {
+		p.vecs = p.vecs[:0]
+		return
+	}
+	if cap(p.vecs) < len(b.Vecs) {
+		p.vecs = make([]vector.SelectedBatchPreflight, len(b.Vecs))
+		return
+	}
+	p.vecs = p.vecs[:len(b.Vecs)]
+	clear(p.vecs)
+}
+
+// groupByPreflightsFor returns the preflights retained for batch b, or nil.
+func (ctr *container) groupByPreflightsFor(b *batch.Batch) []vector.SelectedBatchPreflight {
+	for i := range ctr.groupByPreflights {
+		if p := &ctr.groupByPreflights[i]; b != nil && p.batch == b {
+			return p.vecs
+		}
+	}
+	return nil
+}
+
+func (ctr *container) clearGroupByPreflights() {
+	for i := range ctr.groupByPreflights {
+		ctr.groupByPreflights[i].reset(nil)
+	}
 }
 
 func (ctr *container) freeGroupingRollups() {
@@ -734,14 +855,14 @@ func (ctr *container) freeGroupingRollups() {
 	}
 	for i := range ctr.groupingRollup {
 		if ctr.groupingRollup[i] != nil {
-			ctr.groupingRollup[i].Free(ctr.mp)
+			ctr.freeGroupVector(ctr.groupingRollup[i])
 			ctr.groupingRollup[i] = nil
 		}
 	}
 	ctr.groupingRollup = nil
 }
 
-func (ctr *container) free() {
+func (ctr *container) free(expressionMP *mpool.MPool) {
 	// free container stuff, WTH is the Free0?
 	ctr.releaseMemoryGrowthParticipant()
 	ctr.inputDone = false
@@ -758,14 +879,13 @@ func (ctr *container) free() {
 	ctr.freeGroupByBatches()
 	ctr.freeGroupingRollups()
 	if ctr.sortRollup != nil {
-		ctr.sortRollup.free(ctr.mp)
+		ctr.sortRollup.free(ctr)
 		ctr.sortRollup = nil
 	}
 	ctr.freeAggList()
 	ctr.groupConcatWarnings.Reset()
-	ctr.prepareParamKind.Reset(nil)
 	ctr.aggExprs = nil
-	ctr.prepareParamKindWireV1 = false
+	ctr.rowMetadataTrailerWire = false
 	ctr.freeSpillReloadStaging()
 	ctr.freeSpillBkts()
 	if ctr.distinctSpill != nil {
@@ -794,6 +914,7 @@ func (ctr *container) free() {
 	ctr.legacyDistinctFloatKeys = false
 	ctr.budget = nil
 
+	ctr.unbindAllocationViews()
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
 }
@@ -814,8 +935,8 @@ func (ctr *container) refreshGroupConcatSourceRowTrust() {
 	}
 }
 
-func (ctr *container) reset() {
-	ctr.free()
+func (ctr *container) reset(expressionMP *mpool.MPool) {
+	ctr.free(expressionMP)
 }
 
 func (ctr *container) resetForSpill() {
@@ -888,6 +1009,7 @@ func (ctr *container) hashKeyVectors(vs []*vector.Vector) []*vector.Vector {
 
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
+
 	group.ctr.freeGroupingRollups()
 
 	// group.
@@ -911,16 +1033,11 @@ func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.
 	// grouping flag
 	for i, flag := range group.GroupingFlag {
 		if !flag {
-			rollup, err := vector.NewRollupConstWithAllocation(
+			rollup := vector.NewConstNull(
 				group.ctr.groupByEvaluate.Typ[i],
 				group.ctr.groupByEvaluate.Vec[i].Length(),
-				group.ctr.mp,
-				group.ctr.expressionAllocation,
+				group.ctr.rollupMP(),
 			)
-			if err != nil {
-				group.ctr.freeGroupingRollups()
-				return err
-			}
 			if group.ctr.groupingRollup == nil {
 				group.ctr.groupingRollup = make([]*vector.Vector, len(group.GroupingFlag))
 			}
@@ -953,7 +1070,7 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 	if !pipelineFailed && err == nil && proc != nil {
 		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	group.ctr.free()
+	group.ctr.free(proc.Mp())
 	// free projection stuff,
 	group.FreeProjection(proc)
 }
@@ -963,7 +1080,7 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 	if !pipelineFailed && err == nil && proc != nil {
 		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	group.ctr.reset()
+	group.ctr.reset(proc.Mp())
 	if group.ctr.allocationAccount != nil {
 		// Account selections are immutable per execution attempt, and function
 		// projections retain result capacity across ResetForNextQuery. Destroy
@@ -1071,9 +1188,9 @@ type MergeGroup struct {
 	Aggs []aggexec.AggFuncExecExpression
 
 	GroupByHashKey []int32
-	// GroupingAware is fixed by the producer plan, not inferred from one
-	// partial's data. Dynamic grouping streams can legally alternate partials
-	// with and without an actual rollup sentinel.
+	// GroupingAware declares, from the producer plan, that partials carry
+	// grouping-set rows. Dynamic grouping streams can legally alternate partials
+	// with and without an actual rolled-up key.
 	GroupingAware bool
 	// EmptyGroupingSet declares that a legacy/static all-rolled branch must
 	// produce one row even when no partial reaches this final merge boundary.
@@ -1099,7 +1216,7 @@ func (mergeGroup *MergeGroup) Reset(proc *process.Process, pipelineFailed bool, 
 	if !pipelineFailed && err == nil && proc != nil {
 		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	mergeGroup.ctr.reset()
+	mergeGroup.ctr.reset(proc.Mp())
 	if mergeGroup.ctr.allocationAccount != nil {
 		mergeGroup.FreeProjection(proc)
 	} else {
@@ -1111,7 +1228,7 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, e
 	if !pipelineFailed && err == nil && proc != nil {
 		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	}
-	mergeGroup.ctr.free()
+	mergeGroup.ctr.free(proc.Mp())
 	mergeGroup.FreeProjection(proc)
 }
 
@@ -1159,14 +1276,18 @@ func (mergeGroup *MergeGroup) Release() {
 	}
 }
 
+func newGroupArgument() *Group {
+	return &Group{}
+}
+
+func resetGroupArgument(a *Group) {
+	*a = Group{}
+}
+
 func init() {
 	reuse.CreatePool(
-		func() *Group {
-			return &Group{}
-		},
-		func(a *Group) {
-			*a = Group{}
-		},
+		newGroupArgument,
+		resetGroupArgument,
 		reuse.DefaultOptions[Group]().
 			WithEnableChecker(),
 	)

@@ -31,8 +31,13 @@ import (
 	"go.uber.org/zap"
 )
 
+type memoryCacheBacking interface {
+	fscache.DataCache
+	EvictForPressure(context.Context, int64) (used int64, removed bool)
+}
+
 type MemCache struct {
-	cache       fscache.DataCache
+	cache       memoryCacheBacking
 	counterSets []*perfcounter.CounterSet
 	callbacksMu [256]sync.Mutex
 	postGet     []CacheCallbackFunc
@@ -517,10 +522,18 @@ func (m *MemCache) recycleReservedCacheData(data *Bytes, backingSize int) bool {
 // They already count against reservedBytes, so this must run before FIFO
 // eviction under allocation pressure and at explicit reclamation boundaries.
 func (m *MemCache) releaseIdleCacheData() int {
+	return m.releaseIdleCacheDataBeforeCancel(context.Background())
+}
+
+func (m *MemCache) releaseIdleCacheDataBeforeCancel(ctx context.Context) int {
 	released := 0
 	m.idleCacheData.Range(func(_, value any) bool {
 		pool := value.(*memoryCacheIdlePool)
 		pool.mu.Lock()
+		if fscache.PressureEvictionCanceled(ctx) {
+			pool.mu.Unlock()
+			return false
+		}
 		for {
 			select {
 			case data := <-pool.data:
@@ -644,6 +657,48 @@ func (m *MemCache) scheduleAllocatorMetricsRefresh(delay time.Duration) {
 			m.refreshAllocatorMetrics(true)
 		}
 	})
+}
+
+// TryReadMemoryCache looks up the extents in a fresh vector for an optional
+// observation. It only uses the backend's memory cache and bypasses read
+// callbacks. A missing extent or a busy shard ends the observation. The caller
+// must release any acquired results even when this returns false.
+func TryReadMemoryCache(ctx context.Context, fs FileService, vector *IOVector) bool {
+	var mem *MemCache
+	var serviceName string
+	switch fs := fs.(type) {
+	case *LocalFS:
+		mem, serviceName = fs.memCache, fs.name
+	case *S3FS:
+		mem, serviceName = fs.memCache, fs.name
+	default:
+		return false
+	}
+	if mem == nil || len(vector.Entries) == 0 || vector.Policy.Any(SkipMemoryCacheReads) {
+		return false
+	}
+	cache, ok := mem.cache.(*s3fifo.DataCache)
+	if !ok {
+		return false
+	}
+	path, err := parseFilePathAtService(vector.FilePath, serviceName)
+	if err != nil {
+		return false
+	}
+	for i := range vector.Entries {
+		if ctx.Err() != nil {
+			return false
+		}
+		entry := &vector.Entries[i]
+		data, ok := cache.TryGet(fscache.CacheKey{Path: path.File, Offset: entry.Offset, Sz: entry.Size})
+		if !ok {
+			return false
+		}
+		entry.CachedData = data
+		entry.done = true
+		entry.fromCache = mem
+	}
+	return ctx.Err() == nil
 }
 
 func (m *MemCache) Read(
@@ -871,18 +926,32 @@ func (m *MemCache) EvictToTarget(ctx context.Context, target int64) int64 {
 }
 
 func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) int64 {
-	if percent < 0 {
-		percent = 0
+	if m.closed.Load() || fscache.PressureEvictionCanceled(ctx) {
+		return m.cache.Used()
 	}
-	if percent > 100 {
-		percent = 100
+	percent = min(max(percent, 0), 100)
+	target := memoryCachePercentTarget(m.cache.Capacity(), percent)
+	return m.evictForPressure(ctx, target, percent < 100)
+}
+
+func memoryCachePercentTarget(capacity, percent int64) int64 {
+	return capacity/100*percent + capacity%100*percent/100
+}
+
+func (m *MemCache) evictForPressure(ctx context.Context, target int64, drainIdle bool) int64 {
+	if m.closed.Load() || fscache.PressureEvictionCanceled(ctx) {
+		return m.cache.Used()
 	}
-	if percent < 100 {
-		m.releaseIdleCacheData()
+	idleReleased := false
+	if drainIdle {
+		idleReleased = m.releaseIdleCacheDataBeforeCancel(ctx) > 0
 	}
-	target := m.cache.Capacity() * percent / 100
-	used := m.EvictToTarget(ctx, target)
-	m.reclaimAllocator()
+	used, removed := m.cache.EvictForPressure(ctx, target)
+	// Cancellation stops new work. Purging a live arena completes work
+	// already admitted, including idle buffers released before FIFO eviction.
+	if !m.closed.Load() && (removed || idleReleased || !fscache.PressureEvictionCanceled(ctx)) {
+		m.reclaimAllocator()
+	}
 	return used
 }
 

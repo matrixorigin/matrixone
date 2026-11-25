@@ -182,7 +182,7 @@ func TestGenRowsGeometry(t *testing.T) {
 
 	bat := batch.NewWithSize(1)
 	bat.Attrs = []string{"g"}
-	vec := vector.NewVec(types.T_geometry.ToType())
+	vec := vector.NewVec(types.T_geometry.ToType(), mp)
 	require.NoError(t, vector.AppendBytesList(vec, [][]byte{
 		[]byte("POINT(1 1)"),
 		[]byte("POINT(2 2)"),
@@ -251,14 +251,14 @@ func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
 		{"short data", func(e *api.Entry) { e.Bat.Vecs[2].Data = nil }},
 		{"uneven vectors", func(e *api.Entry) { e.Bat.Vecs[3].Len = 2 }},
 		{"constant vector", func(e *api.Entry) { e.Bat.Vecs[2].IsConst = true }},
-		{"null database id", func(e *api.Entry) { e.Bat.Vecs[2].Nsp, _ = nulls.Build(1, 0).Show() }},
+		{"null database id", func(e *api.Entry) { e.Bat.Vecs[2].Nsp, _ = mustNullsOK(nulls.Build(1, bitmapTestMP, 0)).Show() }},
 		{"invalid later row", func(e *api.Entry) {
 			for i := range e.Bat.Vecs {
 				v := &e.Bat.Vecs[i]
 				v.Data = append(v.Data, v.Data...)
 				v.Len = 2
 			}
-			e.Bat.Vecs[3].Nsp, _ = nulls.Build(2, 1).Show()
+			e.Bat.Vecs[3].Nsp, _ = mustNullsOK(nulls.Build(2, bitmapTestMP, 1)).Show()
 		}},
 		{"invalid varlen area", func(e *api.Entry) {
 			nameIdx := MO_DATABASE_DAT_NAME_IDX

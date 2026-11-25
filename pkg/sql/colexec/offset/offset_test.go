@@ -97,21 +97,21 @@ func TestOffset(t *testing.T) {
 	}
 }
 
-func TestOffsetResetReleasesCopiedAllocationAccountData(t *testing.T) {
+func TestOffsetCopyDoesNotRetainUpstreamAccount(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 
-	input := batch.NewOffHeapWithSize(1)
-	input.SetVector(0, vector.NewOffHeapVecWithType(types.T_int64.ToType()))
-	require.NoError(t, input.SetAllocationAccount(selection))
+	input := batch.NewWithSize(1)
+	input.SetVector(0, vector.NewVec(types.T_int64.ToType(), view))
 	for i := range 32 {
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, view))
 	}
+	require.Positive(t, account.Snapshot().Used)
 	input.SetRowCount(32)
 
 	arg := NewArgument().WithOffset(plan2.MakePlan2Uint64ConstExprWithType(1))
@@ -122,11 +122,13 @@ func TestOffsetResetReleasesCopiedAllocationAccountData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 31, result.Batch.RowCount())
 
-	input.Clean(proc.Mp())
-	require.Positive(t, account.Snapshot().Used)
-	arg.Reset(proc, false, nil)
-	require.Nil(t, arg.ctr.buf)
+	// The copy is charged to the operator's own pool: once the producer
+	// releases its accounted batch, nothing remains charged to its account
+	// even though the operator still holds the copy.
+	input.Clean(view)
 	require.Zero(t, account.Snapshot().Used)
+	require.NotNil(t, arg.ctr.buf)
+	arg.Reset(proc, false, nil)
 	_, _, err = registry.CompleteTerminal(account)
 	require.NoError(t, err)
 

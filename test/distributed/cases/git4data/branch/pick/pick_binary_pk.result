@@ -1,0 +1,117 @@
+drop database if exists test;
+create database test;
+use test;
+create table t0 (id binary(4), val int, primary key(id));
+insert into t0 values ('aa', 1), ('ab', 2);
+data branch create table t1s from t0;
+data branch create table t1n from t0;
+data branch create table t1x from t0;
+data branch create table t1p from t0;
+data branch create table t2 from t0;
+insert into t2 values (x'61', 11), ('0x61', 12), ('cd', 13);
+data branch pick t2 into t1s keys('a');
+select hex(id), octet_length(id), val from t1s order by val;
+➤ hex(id)[12,8,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+61610000  ¦  4  ¦  1  𝄀
+61620000  ¦  4  ¦  2  𝄀
+61000000  ¦  4  ¦  11
+data branch pick t2 into t1n keys(0x61);
+select hex(id), octet_length(id), val from t1n order by val;
+➤ hex(id)[12,8,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+61610000  ¦  4  ¦  1  𝄀
+61620000  ¦  4  ¦  2  𝄀
+61000000  ¦  4  ¦  11
+data branch pick t2 into t1x keys(x'61');
+select hex(id), octet_length(id), val from t1x order by val;
+➤ hex(id)[12,8,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+61610000  ¦  4  ¦  1  𝄀
+61620000  ¦  4  ¦  2  𝄀
+61000000  ¦  4  ¦  11
+prepare ps from 'data branch pick t2 into t1p keys(?)';
+set @k = 'a';
+execute ps using @k;
+select hex(id), octet_length(id), val from t1p order by val;
+➤ hex(id)[12,8,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+61610000  ¦  4  ¦  1  𝄀
+61620000  ¦  4  ¦  2  𝄀
+61000000  ¦  4  ¦  11
+set @k = '0x61';
+execute ps using @k;
+select hex(id), octet_length(id), val from t1p order by val;
+➤ hex(id)[12,8,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+61610000  ¦  4  ¦  1  𝄀
+61620000  ¦  4  ¦  2  𝄀
+61000000  ¦  4  ¦  11  𝄀
+30783631  ¦  4  ¦  12
+deallocate prepare ps;
+select hex(id), octet_length(id), val from t2 order by val;
+➤ hex(id)[12,8,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+61610000  ¦  4  ¦  1  𝄀
+61620000  ¦  4  ¦  2  𝄀
+61000000  ¦  4  ¦  11  𝄀
+30783631  ¦  4  ¦  12  𝄀
+63640000  ¦  4  ¦  13
+drop table t0;
+drop table t1s;
+drop table t1n;
+drop table t1x;
+drop table t1p;
+drop table t2;
+create table v0 (id varbinary(8), val int, primary key(id));
+insert into v0 values ('za', 1), ('a\0', 2);
+data branch create table v1 from v0;
+data branch create table v2 from v0;
+insert into v2 values ('a', 11), ('0x61', 12), ('ba\0', 13);
+data branch pick v2 into v1 keys(x'61');
+select hex(id), octet_length(id), val from v1 order by val;
+➤ hex(id)[12,16,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+7A61  ¦  2  ¦  1  𝄀
+6100  ¦  2  ¦  2  𝄀
+61  ¦  1  ¦  11
+data branch pick v2 into v1 keys('0x61');
+select hex(id), octet_length(id), val from v1 order by val;
+➤ hex(id)[12,16,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+7A61  ¦  2  ¦  1  𝄀
+6100  ¦  2  ¦  2  𝄀
+61  ¦  1  ¦  11  𝄀
+30783631  ¦  4  ¦  12
+data branch pick v2 into v1 keys(x'626100');
+select hex(id), octet_length(id), val from v1 order by val;
+➤ hex(id)[12,16,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+7A61  ¦  2  ¦  1  𝄀
+6100  ¦  2  ¦  2  𝄀
+61  ¦  1  ¦  11  𝄀
+30783631  ¦  4  ¦  12  𝄀
+626100  ¦  3  ¦  13
+select hex(id), octet_length(id), val from v2 order by val;
+➤ hex(id)[12,16,0]  ¦  octet_length(id)[-5,64,0]  ¦  val[4,32,0]  𝄀
+7A61  ¦  2  ¦  1  𝄀
+6100  ¦  2  ¦  2  𝄀
+61  ¦  1  ¦  11  𝄀
+30783631  ¦  4  ¦  12  𝄀
+626100  ¦  3  ¦  13
+drop table v0;
+drop table v1;
+drop table v2;
+create table c0 (a int, b binary(3), val int, primary key(a, b));
+insert into c0 values (1, 'a', 1), (1, 'b', 2);
+data branch create table c1 from c0;
+data branch create table c2 from c0;
+insert into c2 values (2, x'63', 3), (3, 'dd', 4);
+data branch pick c2 into c1 keys((2, 'c'), (3, x'6464'));
+select a, hex(b), octet_length(b), val from c1 order by val;
+➤ a[4,32,0]  ¦  hex(b)[12,6,0]  ¦  octet_length(b)[-5,64,0]  ¦  val[4,32,0]  𝄀
+1  ¦  610000  ¦  3  ¦  1  𝄀
+1  ¦  620000  ¦  3  ¦  2  𝄀
+2  ¦  630000  ¦  3  ¦  3  𝄀
+3  ¦  646400  ¦  3  ¦  4
+select a, hex(b), val from c2 order by val;
+➤ a[4,32,0]  ¦  hex(b)[12,6,0]  ¦  val[4,32,0]  𝄀
+1  ¦  610000  ¦  1  𝄀
+1  ¦  620000  ¦  2  𝄀
+2  ¦  630000  ¦  3  𝄀
+3  ¦  646400  ¦  4
+drop table c0;
+drop table c1;
+drop table c2;
+drop database test;

@@ -15,19 +15,20 @@
 package colexec
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestDependentSlotPreservesNativeValueAndLifetime(t *testing.T) {
 	proc, allocation, _ := dependentTestAllocation(t)
 	typ := types.T_varbinary.ToType()
 	typ.Width = 4
-	source := vector.NewVec(typ)
+	source := vector.NewVec(typ, proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(source, []byte{0, 255, 1}, false, proc.Mp()))
 	child, err := proc.NewDependentProcess(3, []*vector.Vector{source}, 0)

@@ -38,33 +38,26 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	ctr := &arg.ctr
 	ctr.leftBat = left
 	ctr.resBat = batch.NewWithSize(2)
-	ctr.resBat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	ctr.resBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	ctr.resBatMP = proc.Mp()
+	ctr.resBat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	ctr.resBat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	t.Cleanup(func() {
 		left.Clean(proc.Mp())
 		for _, bat := range ctr.rightBats {
 			bat.Clean(proc.Mp())
 		}
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 	for source, values := range [][]string{{"a", "b"}, {"c", "d"}} {
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		ctr.rightBats = append(ctr.rightBats, bat)
 		for row, value := range values {
 			require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), source == 0 && row == 1, proc.Mp()))
 		}
-		origin := types.StringSourceLiteral
-		if source == 1 {
-			origin = types.StringSourceExpression
-			bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
-			bat.Vecs[0].SetIsBinaryString(true)
-		} else {
-			bat.Vecs[0].GetGrouping().Add(1)
-		}
-		require.NoError(t, bat.Vecs[0].SetStringSource(origin))
 		bat.SetRowCount(2)
 	}
 	// The helper's input is resolved global build ordinals, with the existing
@@ -74,7 +67,7 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	ctr.zvs = []int64{0, 1, 1, 1, 1, 1, 1, 0}
 	ctr.probeTrackBuildMatches = true
 	ctr.rightRowsMatched = new(bitmap.Bitmap)
-	ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize + 2)
+	mustBitmapOK(ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize+2, bitmapTestMP))
 	matched, err := ctr.appendUniqueMatches(arg, proc, 7)
 	require.NoError(t, err)
 	require.Equal(t, 5, matched)
@@ -86,18 +79,89 @@ func TestHashJoinUniqueProjectionPreservesSelectionMetadata(t *testing.T) {
 	payload := ctr.resBat.Vecs[1]
 	for row, value := range []string{"a", "", "c", "d", "a"} {
 		require.Equal(t, row == 1, payload.IsNull(uint64(row)))
-		require.Equal(t, row == 1, payload.GetGrouping().Contains(uint64(row)))
-		origin, kind := types.StringSourceLiteral, vector.PrepareParamNone
-		binary := row == 2 || row == 3
-		if binary {
-			origin, kind = types.StringSourceExpression, vector.PrepareParamInteger
-		}
-		require.Equal(t, origin, payload.GetStringSourceAt(row))
 		if row != 1 {
 			require.Equal(t, value, string(payload.GetBytesAt(row)))
-			require.Equal(t, kind, payload.GetPrepareParamKindAt(row))
-			require.Equal(t, binary, payload.GetIsBinaryStringAt(row))
 		}
+	}
+}
+
+func TestHashJoinUniqueProjectionFixedScattered(t *testing.T) {
+	{
+		t.Run("scattered", func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			arg := &HashJoin{ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}}}
+			ctr := &arg.ctr
+			ctr.leftBat = makeInt32Batch(proc, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
+			ctr.resBat = batch.NewWithSize(4)
+			ctr.resBatMP = proc.Mp()
+			want := batch.NewWithSize(4)
+			t.Cleanup(func() {
+				want.Clean(proc.Mp())
+				ctr.leftBat.Clean(proc.Mp())
+				for _, bat := range ctr.rightBats {
+					bat.Clean(proc.Mp())
+				}
+				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			for _, bat := range []*batch.Batch{ctr.resBat, want} {
+				for col, typ := range []types.Type{types.T_int32.ToType(), types.T_int32.ToType(), types.T_decimal128.ToType(), types.T_varchar.ToType()} {
+					bat.Vecs[col] = vector.NewVec(typ, proc.Mp())
+				}
+			}
+			for source := range 2 {
+				bat := batch.NewWithSize(3)
+				ctr.rightBats = append(ctr.rightBats, bat)
+				bat.Vecs[0], bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp()), vector.NewVec(types.T_decimal128.ToType(), proc.Mp())
+				bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
+				for row := range 4 {
+					require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(source*10+row), row == 2, proc.Mp()))
+					require.NoError(t, vector.AppendFixed(bat.Vecs[1], types.Decimal128{B0_63: uint64(source*10 + row)}, row == 1, proc.Mp()))
+					require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte(fmt.Sprintf("%d-%d", source, row)), row == 2, proc.Mp()))
+				}
+				bat.SetRowCount(4)
+			}
+			ctr.probeTrackBuildMatches = true
+			ctr.rightRowsMatched = new(bitmap.Bitmap)
+			mustBitmapOK(ctr.rightRowsMatched.InitWithSize(colexec.DefaultBatchSize+4, bitmapTestMP))
+			ctr.vs, ctr.zvs = make([]uint64, 16), make([]int64, 16)
+			for row := range 16 {
+				ctr.vs[row], ctr.zvs[row] = uint64(1+row%4+(row%2)*colexec.DefaultBatchSize), 1
+			}
+			ctr.zvs[5], ctr.vs[6] = 0, 0
+			for row, match := range ctr.vs {
+				if ctr.zvs[row] == 0 || match == 0 {
+					continue
+				}
+				r := int64(match - 1)
+				require.NoError(t, want.Vecs[0].UnionOne(ctr.leftBat.Vecs[0], int64(row), proc.Mp()))
+				for col := range 3 {
+					require.NoError(t, want.Vecs[col+1].UnionOne(ctr.rightBats[r/colexec.DefaultBatchSize].Vecs[col], r%colexec.DefaultBatchSize, proc.Mp()))
+				}
+			}
+			matched, err := ctr.appendUniqueMatches(arg, proc, 16)
+			require.NoError(t, err)
+			require.Equal(t, 14, matched)
+			require.EqualValues(t, 4, ctr.rightRowsMatched.Count())
+			for col, expected := range want.Vecs {
+				actual := ctr.resBat.Vecs[col]
+				require.Equal(t, expected.Length(), actual.Length())
+				for row := range matched {
+					require.Equal(t, expected.IsNull(uint64(row)), actual.IsNull(uint64(row)))
+					if !expected.IsNull(uint64(row)) {
+						if col < 2 {
+							require.Equal(t, vector.GetFixedAtNoTypeCheck[int32](expected, row), vector.GetFixedAtNoTypeCheck[int32](actual, row))
+						} else if col == 2 {
+							require.Equal(t, vector.GetFixedAtNoTypeCheck[types.Decimal128](expected, row), vector.GetFixedAtNoTypeCheck[types.Decimal128](actual, row))
+						} else {
+							require.Equal(t, expected.GetBytesAt(row), actual.GetBytesAt(row))
+						}
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -109,15 +173,17 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			ctr := &arg.ctr
 			ctr.leftBat = batch.NewWithSize(1)
 			ctr.resBat = batch.NewWithSize(1)
+			ctr.resBatMP = proc.Mp()
 			typ := types.T_varbinary.ToType()
-			source := vector.NewVec(typ)
+			source := vector.NewVec(typ, proc.Mp())
 			ctr.leftBat.Vecs[0] = source
-			ctr.resBat.Vecs[0] = vector.NewVec(typ)
-			want := vector.NewVec(typ)
+			ctr.resBat.Vecs[0] = vector.NewVec(typ, proc.Mp())
+			want := vector.NewVec(typ, proc.Mp())
 			t.Cleanup(func() {
 				want.Free(proc.Mp())
 				ctr.leftBat.Clean(proc.Mp())
 				arg.Free(proc, false, nil)
+				freeTestChildren(arg)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
 			})
@@ -127,18 +193,11 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			if shape == "constant" {
 				source.ToConst()
 				source.SetLength(6)
-				source.SetPrepareParamKind(vector.PrepareParamFloat)
-				source.SetIsBinaryString(true)
-				require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
 			} else {
 				source.SetNull(2)
 				physical, _ := vector.MustVarlenaRawData(source)
 				physical[2].SetOffsetLen(1<<30, 65536) // NULL payload must not be read.
-				require.NoError(t, source.SetPrepareParamKindAtWithMP(1, vector.PrepareParamInteger, proc.Mp()))
-				require.NoError(t, source.SetStringSourceAtWithMP(1, types.StringSourceLiteral, proc.Mp()))
-				require.NoError(t, source.SetRuntimeStringDomainAtWithMP(4, types.RuntimeStringBinary, proc.Mp()))
 			}
-			source.GetGrouping().Add(3)
 			ctr.leftBat.SetRowCount(6)
 			for _, target := range []*vector.Vector{want, ctr.resBat.Vecs[0]} {
 				require.NoError(t, vector.AppendBytes(target, []byte("existing-prefix"), false, proc.Mp()))
@@ -158,10 +217,6 @@ func TestHashJoinUniqueProjectionProbeRange(t *testing.T) {
 			require.Equal(t, want.Length(), got.Length())
 			for row := range want.Length() {
 				require.Equal(t, want.IsNull(uint64(row)), got.IsNull(uint64(row)))
-				require.Equal(t, want.GetGrouping().Contains(uint64(row)), got.GetGrouping().Contains(uint64(row)))
-				require.Equal(t, want.GetPrepareParamKindAt(row), got.GetPrepareParamKindAt(row))
-				require.Equal(t, want.GetStringSourceAt(row), got.GetStringSourceAt(row))
-				require.Equal(t, want.GetRuntimeStringDomainAt(row), got.GetRuntimeStringDomainAt(row))
 				if !want.IsNull(uint64(row)) {
 					require.Equal(t, want.GetBytesAt(row), got.GetBytesAt(row))
 				}
@@ -183,7 +238,9 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.arg)
 		tc.barg.Free(tc.proc, false, nil)
+		freeTestChildren(tc.barg)
 		for _, input := range inputs {
 			input.Clean(tc.proc.Mp())
 		}
@@ -214,7 +271,7 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 		probe.Vecs[0].GetNulls().Add(0)
 		inputs = append(inputs, probe, build)
 		for side, input := range []*batch.Batch{probe, build} {
-			payload := vector.NewVec(types.T_decimal128.ToType())
+			payload := vector.NewVec(types.T_decimal128.ToType(), tc.proc.Mp())
 			input.Vecs = append(input.Vecs, payload)
 			for row := range input.RowCount() {
 				require.NoError(t, vector.AppendFixed(payload,
@@ -271,7 +328,7 @@ func TestHashJoinUniqueProjectionSkipsDeadProbeArea(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.T_varchar.ToType()
 	left := batch.NewWithSize(1)
-	left.Vecs[0] = vector.NewVec(typ)
+	left.Vecs[0] = vector.NewVec(typ, proc.Mp())
 	arg := &HashJoin{
 		LeftTypes: []types.Type{typ}, ResultCols: []colexec.ResultPos{{Rel: 0, Pos: 0}},
 	}
@@ -292,9 +349,10 @@ func TestHashJoinUniqueProjectionSkipsDeadProbeArea(t *testing.T) {
 	require.NoError(t, arg.SetAllocationAccount(account))
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		require.NoError(t, arg.ClearAllocationAccount(account))
 	})
-	require.NoError(t, arg.resetResultBat())
+	require.NoError(t, arg.resetResultBat(proc))
 	require.NoError(t, vector.AppendBytes(left.Vecs[0], make([]byte, 128<<10), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(left.Vecs[0], []byte("live"), false, proc.Mp()))
 	left.Vecs[0].SetNull(0)
@@ -321,6 +379,7 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	t.Cleanup(func() {
 		arg.Reset(proc, true, nil)
 		arg.Free(proc, true, nil)
+		freeTestChildren(arg)
 		left.Clean(proc.Mp())
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -330,11 +389,11 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 	account, err := registry.Open(1)
 	require.NoError(t, err)
 	require.NoError(t, arg.SetAllocationAccount(account))
-	require.NoError(t, arg.resetResultBat())
+	require.NoError(t, arg.resetResultBat(proc))
 	arg.ctr.leftBat, arg.ctr.vs, arg.ctr.zvs = left, []uint64{1}, []int64{1}
 	arg.ctr.probeTrackBuildMatches = true
 	arg.ctr.rightRowsMatched = new(bitmap.Bitmap)
-	arg.ctr.rightRowsMatched.InitWithSize(1)
+	mustBitmapOK(arg.ctr.rightRowsMatched.InitWithSize(1, bitmapTestMP))
 	matched, err := arg.ctr.appendUniqueMatches(arg, proc, 1)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, matched)
@@ -372,6 +431,7 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 	ctr := &arg.ctr
 	ctr.leftBat = batch.NewWithSize(4)
 	ctr.resBat = batch.NewWithSize(8)
+	ctr.resBatMP = proc.Mp()
 	for range 2 {
 		ctr.rightBats = append(ctr.rightBats, batch.NewWithSize(4))
 	}
@@ -381,11 +441,12 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 			bat.Clean(proc.Mp())
 		}
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		proc.Free()
 	})
 	for col := range 8 {
 		arg.ResultCols = append(arg.ResultCols, colexec.ResultPos{Rel: int32(col / 4), Pos: int32(col % 4)})
-		ctr.resBat.Vecs[col] = vector.NewVec(typ)
+		ctr.resBat.Vecs[col] = vector.NewVec(typ, proc.Mp())
 	}
 	for _, bat := range append([]*batch.Batch{ctr.leftBat}, ctr.rightBats...) {
 		rows := hashmap.UnitLimit
@@ -393,7 +454,7 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 			rows += 2 // Measure a Find window inside a larger probe batch.
 		}
 		for col := range 4 {
-			bat.Vecs[col] = vector.NewVec(typ)
+			bat.Vecs[col] = vector.NewVec(typ, proc.Mp())
 			for row := range rows {
 				isNull := nullable && row%4 == 0
 				switch typ.Oid {
@@ -435,7 +496,11 @@ func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bo
 									continue
 								}
 								idx := int64(match - 1)
-								if err := ctr.appendOneMatch(arg, proc, int64(ctr.lastIdx+row), idx/colexec.DefaultBatchSize, idx%colexec.DefaultBatchSize); err != nil {
+								selected := outputRow{
+									left: ctr.leftBat, leftRow: int64(ctr.lastIdx + row),
+									right: ctr.rightBats[idx/colexec.DefaultBatchSize], rightRow: idx % colexec.DefaultBatchSize,
+								}
+								if err := ctr.appendOutputRow(arg, proc, selected); err != nil {
 									b.Fatal(err)
 								}
 							}

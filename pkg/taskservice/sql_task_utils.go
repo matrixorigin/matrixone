@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -27,9 +28,13 @@ import (
 )
 
 var (
-	ErrSQLTaskOverlap        = moerr.NewInternalErrorNoCtx("sql task is already running")
-	ErrSQLTaskNotFound       = moerr.NewInternalErrorNoCtx("sql task not found")
-	ErrSQLTaskAccountMissing = moerr.NewInternalErrorNoCtx("sql task account not found")
+	ErrSQLTaskOverlap           = moerr.NewInternalErrorNoCtx("sql task is already running")
+	ErrSQLTaskNotFound          = moerr.NewInternalErrorNoCtx("sql task not found")
+	ErrSQLTaskAccountMissing    = moerr.NewInternalErrorNoCtx("sql task account not found")
+	ErrSQLTaskSequenceExhausted = moerr.NewInvalidStateNoCtx("sql task trigger sequence exhausted")
+	ErrSQLTaskClaimed           = moerr.NewInvalidStateNoCtx("sql task firing already has an execution owner")
+	ErrSQLTaskStaleFiring       = moerr.NewInvalidStateNoCtx("sql task firing is stale or no longer owned")
+	ErrSQLTaskRecoveryCapacity  = moerr.NewInvalidStateNoCtx("sql task recovery capacity is temporarily full; retry later")
 )
 
 func BuildSQLTaskCronSpec(cronExpr, timezone string) string {
@@ -100,7 +105,7 @@ func DefinerOpts(sqlTask SQLTask) ie.SessionOverrideOptions {
 func BuildSQLTaskMetadata(ctx *task.SQLTaskContext) task.TaskMetadata {
 	data, _ := ctx.Marshal()
 	return task.TaskMetadata{
-		ID:       fmt.Sprintf("sql-task:%d:%d", ctx.TaskId, ctx.TriggerCount),
+		ID:       fmt.Sprintf("sqltask2:%d:%020d", ctx.TaskId, ctx.TriggerCount),
 		Executor: task.TaskCode_SQLTask,
 		Context:  data,
 		Options: task.TaskOptions{
@@ -109,4 +114,22 @@ func BuildSQLTaskMetadata(ctx *task.SQLTaskContext) task.TaskMetadata {
 			Concurrency:   1,
 		},
 	}
+}
+
+func validateSQLTaskTriggerSequence(sequence uint64) error {
+	if sequence > math.MaxInt64 {
+		return ErrSQLTaskSequenceExhausted
+	}
+	if sequence == 0 {
+		return moerr.NewInvalidStateNoCtx("sql task trigger sequence must be positive")
+	}
+	return nil
+}
+
+func nextSQLTaskInvalidationSequence(sqlTask SQLTask) (uint64, error) {
+	sequence := max(sqlTask.TriggerCount, sqlTask.ScheduleGeneration)
+	if sequence >= math.MaxInt64 {
+		return 0, ErrSQLTaskSequenceExhausted
+	}
+	return sequence + 1, nil
 }

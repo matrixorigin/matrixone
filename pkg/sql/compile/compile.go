@@ -85,6 +85,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -383,6 +384,13 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.retryTimes = 0
 	c.resultMetadataFrozen.Store(false)
 	c.anal.Reset(c.isPrepare, c.IsTpQuery())
+	// Prepare can fail or stop before visiting every reused operator. Clear
+	// their previous calls before admitting this execution generation.
+	forEachLocalOperator(c.scopes, c.addr, func(op vm.Operator) {
+		if analyzer := op.GetOperatorBase().OpAnalyzer; analyzer != nil {
+			analyzer.Reset()
+		}
+	})
 
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
@@ -543,6 +551,7 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	c.productL2IgnoredOf = nil
 	// Materialized sources own allocation-account-backed retained and decoded
 	// batches but are not VM operators. Close their compile-owned safety nets
 	// before sealing the execution account, especially on partial-run failures
@@ -551,6 +560,10 @@ func (c *Compile) clear() {
 		source.Close()
 		delete(c.materializedSources, k)
 	}
+	for _, domain := range c.localRuntimeDomains {
+		domain.Close()
+	}
+	c.localRuntimeDomains = nil
 	// The attempt owns references to allocation-aware operators. Finalize it
 	// before Scope.release returns those operators to reuse pools; otherwise a
 	// defensive cleanup path could clear an already-reset or reused owner.
@@ -631,6 +644,7 @@ func (c *Compile) clear() {
 	c.temporaryDropRetryStage = nil
 	c.temporaryDropRetryActive = false
 	c.resourceAttemptOwnerEligible = false
+	c.lockingReadPlan = false
 	c.allocationAccountRegistry = nil
 	c.allocationAccountLimit = 0
 	c.allocationControllerProvider = nil
@@ -798,8 +812,9 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err   error
-	scope *Scope
+	err            error
+	scope          *Scope
+	recoveredPanic bool
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
@@ -1068,8 +1083,8 @@ func (r *materializedSpillDiskReservation) Grow(size uint64) error {
 	return nil
 }
 
-// run once
-func (c *Compile) runOnce() (err error) {
+// runOnce returns whether local pipeline scopes joined a known terminal state.
+func (c *Compile) runOnce() (quiesced bool, err error) {
 	//c.printPipeline()
 
 	// defer cleanup at the end of runOnce()
@@ -1084,7 +1099,7 @@ func (c *Compile) runOnce() (err error) {
 	if query != nil && len(query.GetDetectSqls()) != 0 {
 		if err = validateForeignKeyParentTxnMode(
 			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
-			return err
+			return quiesced, err
 		}
 	}
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
@@ -1093,7 +1108,7 @@ func (c *Compile) runOnce() (err error) {
 				continue
 			} else if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
 				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
-					return err
+					return quiesced, err
 				}
 			} else if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
@@ -1102,13 +1117,13 @@ func (c *Compile) runOnce() (err error) {
 					// errors (syntax, permissions, network, txn conflicts) so
 					// they are not masked.
 					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
-						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
+						return false, moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
 					}
-					return err
+					return quiesced, err
 				}
 			} else if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")); err != nil {
-					return err
+					return quiesced, err
 				}
 			}
 		}
@@ -1119,15 +1134,18 @@ func (c *Compile) runOnce() (err error) {
 	// local source is still blocked before vm.Prepare reaches its Dispatch.
 	registrations, err := registerLocalDispatchReceivers(c.scopes, c.addr)
 	if err != nil {
-		return err
+		return quiesced, err
 	}
 	defer registrations.cleanup()
 
 	if c.IsTpQuery() && len(c.scopes) == 1 {
-		if err = c.run(c.scopes[0]); err != nil {
-			return err
+		err = c.run(c.scopes[0])
+		quiesced = true
+		if err != nil {
+			return quiesced, err
 		}
 	} else {
+		quiesced = true
 		errC := make(chan scopeRunResult, len(c.scopes))
 		for i := range c.scopes {
 			scope := c.scopes[i]
@@ -1138,7 +1156,9 @@ func (c *Compile) runOnce() (err error) {
 						c.proc.Error(c.proc.Ctx, "panic in run",
 							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
-						errC <- newScopeRunResult(err, scope)
+						result := newScopeRunResult(err, scope)
+						result.recoveredPanic = true
+						errC <- result
 					}
 				}()
 				errC <- newScopeRunResult(c.run(scope), scope)
@@ -1157,6 +1177,7 @@ func (c *Compile) runOnce() (err error) {
 		}
 		for i := 0; i < cap(errC); i++ {
 			result := <-errC
+			quiesced = quiesced && !result.recoveredPanic
 			if !c.auxiliaryProductScopes[result.scope] {
 				primaryRemaining--
 				if primaryRemaining == 0 {
@@ -1184,7 +1205,7 @@ func (c *Compile) runOnce() (err error) {
 		close(errC)
 
 		if resultToThrowOut.err != nil {
-			return resultToThrowOut.err
+			return quiesced, resultToThrowOut.err
 		}
 	}
 
@@ -1192,7 +1213,7 @@ func (c *Compile) runOnce() (err error) {
 		err = c.runSql(sql)
 		if err != nil {
 			c.debugLogFor19288(err, sql)
-			return err
+			return quiesced, err
 		}
 	}
 
@@ -1204,7 +1225,7 @@ func (c *Compile) runOnce() (err error) {
 			}
 			err = f.backgroundSQLCheck(c)
 			if err != nil {
-				return err
+				return quiesced, err
 			}
 		}
 	}
@@ -1236,7 +1257,7 @@ func (c *Compile) runOnce() (err error) {
 			err = detectFkSelfRefer(c, alterTable.GetDetectSqls())
 		}
 	}
-	return err
+	return quiesced, err
 }
 
 func validateForeignKeyParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
@@ -1513,9 +1534,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
-	if err = c.validateGroupingTransportPlacement(qry); err != nil {
-		return nil, err
-	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -1562,10 +1580,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		return nil, err
 	}
 	c.validateDeepRuntimeFilterTopology(deepTags, deepLogicalSafe, steps)
-	if queryNeedsGroupingTransport(qry) {
-		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
-	}
+	c.bindLocalRuntimeFilterDomains(qry, steps)
 
+	c.installMarkScanGuard(qry, steps)
 	return steps, err
 }
 
@@ -2110,7 +2127,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if canPreserveParallelUnionAllBranches(childNode) &&
+		preserveDistinctOwners := canPreserveParallelUnionDistinctOwners(node, childNode) &&
+			c.canCompileParallelUnionAllAggregate(node) && !c.canCompileShuffleGroup(node)
+		if preserveDistinctOwners {
+			ss, err = c.compileUnionInput(step, childNodeID, nodes, true)
+		} else if canPreserveParallelUnionAllBranches(childNode) &&
 			c.canCompileParallelUnionAllAggregate(node) {
 			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
 		} else if isLocalPreAggregationGroup(node, childNode) &&
@@ -2128,6 +2149,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+		if preserveDistinctOwners && len(ss) > 1 && node.SpillMem > 0 {
+			// Preserve the explicit stage threshold rather than multiplying it by
+			// the number of DISTINCT owners. The logical node remains unchanged.
+			localNode := *node
+			localNode.SpillMem /= int64(len(ss))
+			node = &localNode
+		}
 		if plan2.IsSortRollupOption(node.ExtraOptions) {
 			// The child SORT performs the global k-way merge when the input is
 			// distributed, so the ordered rollup aggregate must run once on the
@@ -2218,6 +2246,18 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		left = c.ensureCoordinatorOnlyFunctions(node, left)
 		right = c.ensureCoordinatorOnlyFunctions(node, right)
+		if node.JoinType == plan.Node_L2 {
+			ig, err := c.productL2Ignored(node)
+			if err != nil {
+				return nil, err
+			}
+			if ig != nil {
+				if c.productL2IgnoredOf == nil {
+					c.productL2IgnoredOf = make(map[*plan.Node]*productl2.Ignored)
+				}
+				c.productL2IgnoredOf[node] = ig
+			}
+		}
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -2246,21 +2286,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compilePartition(node, ss)))
 		return ss, nil
 	case plan.Node_UNION:
-		left, err = c.compilePlanScope(step, node.Children[0], nodes)
-		if err != nil {
-			return nil, err
-		}
-		right, err = c.compilePlanScope(step, node.Children[1], nodes)
-		if err != nil {
-			return nil, err
-		}
-
-		c.setAnalyzeCurrent(left, int(curNodeIdx))
-		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileUnion(node, left, right)
-		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
-		ss = c.compileSort(node, ss)
-		return ss, nil
+		return c.compileUnionInput(step, curNodeIdx, nodes, false)
 	case plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
@@ -5636,7 +5662,7 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
 		}
 		// Keep the query's coordinator-first list intact for other scans.
-		// Object owners depend only on the selected identities, not ingress.
+		// Immutable object owners depend only on the selected identities, not ingress.
 		slices.SortFunc(nodes, func(a, b engine.Node) int {
 			if n := cmp.Compare(a.Id, b.Id); n != 0 {
 				return n
@@ -5723,21 +5749,7 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	if err != nil {
 		return nil, nil, err
 	}
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx = scanSnapshotTxn(ctx, txnOp, node.ScanSnapshot)
 
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
@@ -6090,6 +6102,16 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	}
 
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	if node.ValuesWarningRow() != 0 {
+		// The session warning sink lives on the coordinator. Only the final
+		// singleton assignment projection needs it; its child keeps its placement.
+		if !c.scopesRunOnCoordinator(ss) {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
+		c.setProjection(node, ss[0])
+		c.anal.isFirst = false
+		return ss
+	}
 	if _, groupingSetExpand := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
 		for i := range ss {
 			c.setProjection(node, ss[i])
@@ -6157,7 +6179,7 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasCoordinatorSessionFunction(node) &&
 		!c.needsCoordinatorIgnoreCheck(node) && !c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
@@ -6262,32 +6284,32 @@ func nodeHasUserLevelLockFunction(node *plan.Node) bool {
 	return false
 }
 
-func nodeHasFoundRowsFunction(node *plan.Node) bool {
+func nodeHasCoordinatorSessionFunction(node *plan.Node) bool {
 	if node == nil {
 		return false
 	}
-	if hasFoundRowsFunction(node.ProjectList) ||
-		hasFoundRowsFunction(node.OnList) ||
-		hasFoundRowsFunction(node.FilterList) ||
-		hasFoundRowsFunction(node.GroupBy) ||
-		hasFoundRowsFunction(node.AggList) ||
-		hasFoundRowsFunction(node.WinSpecList) ||
-		orderBySpecsHaveFoundRowsFunction(node.OrderBy) ||
-		exprHasFoundRowsFunction(node.Limit) ||
-		exprHasFoundRowsFunction(node.Offset) ||
-		hasFoundRowsFunction(node.TblFuncExprList) ||
-		hasFoundRowsFunction(node.BlockFilterList) ||
-		exprHasFoundRowsFunction(node.Interval) ||
-		exprHasFoundRowsFunction(node.Sliding) ||
-		exprHasFoundRowsFunction(node.Timestamp) ||
-		exprHasFoundRowsFunction(node.WEnd) ||
-		hasFoundRowsFunction(node.FillVal) ||
-		hasFoundRowsFunction(node.OnUpdateExprs) {
+	if hasCoordinatorSessionFunction(node.ProjectList) ||
+		hasCoordinatorSessionFunction(node.OnList) ||
+		hasCoordinatorSessionFunction(node.FilterList) ||
+		hasCoordinatorSessionFunction(node.GroupBy) ||
+		hasCoordinatorSessionFunction(node.AggList) ||
+		hasCoordinatorSessionFunction(node.WinSpecList) ||
+		orderBySpecsHaveCoordinatorSessionFunction(node.OrderBy) ||
+		exprHasCoordinatorSessionFunction(node.Limit) ||
+		exprHasCoordinatorSessionFunction(node.Offset) ||
+		hasCoordinatorSessionFunction(node.TblFuncExprList) ||
+		hasCoordinatorSessionFunction(node.BlockFilterList) ||
+		exprHasCoordinatorSessionFunction(node.Interval) ||
+		exprHasCoordinatorSessionFunction(node.Sliding) ||
+		exprHasCoordinatorSessionFunction(node.Timestamp) ||
+		exprHasCoordinatorSessionFunction(node.WEnd) ||
+		hasCoordinatorSessionFunction(node.FillVal) ||
+		hasCoordinatorSessionFunction(node.OnUpdateExprs) {
 		return true
 	}
 	if node.IndexReaderParam != nil {
-		return orderBySpecsHaveFoundRowsFunction(node.IndexReaderParam.OrderBy) ||
-			exprHasFoundRowsFunction(node.IndexReaderParam.Limit)
+		return orderBySpecsHaveCoordinatorSessionFunction(node.IndexReaderParam.OrderBy) ||
+			exprHasCoordinatorSessionFunction(node.IndexReaderParam.Limit)
 	}
 	return false
 }
@@ -6301,16 +6323,16 @@ func hasUserLevelLockFunction(exprs []*plan.Expr) bool {
 	return false
 }
 
-func hasFoundRowsFunction(exprs []*plan.Expr) bool {
+func hasCoordinatorSessionFunction(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if exprHasFoundRowsFunction(expr) {
+		if exprHasCoordinatorSessionFunction(expr) {
 			return true
 		}
 	}
 	return false
 }
 
-func exprHasFoundRowsFunction(expr *plan.Expr) bool {
+func exprHasCoordinatorSessionFunction(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -6321,22 +6343,22 @@ func exprHasFoundRowsFunction(expr *plan.Expr) bool {
 		}
 		if e.F.Func != nil {
 			fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
-			if fid == function.FOUND_ROWS {
+			if fid == function.FOUND_ROWS || fid == function.MO_ASSERT_SNAPSHOT_AFTER {
 				return true
 			}
 		}
-		return hasFoundRowsFunction(e.F.Args)
+		return hasCoordinatorSessionFunction(e.F.Args)
 	case *plan.Expr_List:
-		return e.List != nil && hasFoundRowsFunction(e.List.List)
+		return e.List != nil && hasCoordinatorSessionFunction(e.List.List)
 	case *plan.Expr_W:
 		if e.W == nil {
 			return false
 		}
-		if exprHasFoundRowsFunction(e.W.WindowFunc) || hasFoundRowsFunction(e.W.PartitionBy) {
+		if exprHasCoordinatorSessionFunction(e.W.WindowFunc) || hasCoordinatorSessionFunction(e.W.PartitionBy) {
 			return true
 		}
 		for _, orderBy := range e.W.OrderBy {
-			if orderBy != nil && exprHasFoundRowsFunction(orderBy.Expr) {
+			if orderBy != nil && exprHasCoordinatorSessionFunction(orderBy.Expr) {
 				return true
 			}
 		}
@@ -6344,9 +6366,9 @@ func exprHasFoundRowsFunction(expr *plan.Expr) bool {
 	return false
 }
 
-func orderBySpecsHaveFoundRowsFunction(specs []*plan.OrderBySpec) bool {
+func orderBySpecsHaveCoordinatorSessionFunction(specs []*plan.OrderBySpec) bool {
 	for _, spec := range specs {
-		if spec != nil && exprHasFoundRowsFunction(spec.Expr) {
+		if spec != nil && exprHasCoordinatorSessionFunction(spec.Expr) {
 			return true
 		}
 	}
@@ -6425,13 +6447,35 @@ func (c *Compile) setProjection(node *plan.Node, s *Scope) {
 	s.setRootOperator(op)
 }
 
-func (c *Compile) compileUnion(node *plan.Node, left []*Scope, right []*Scope) []*Scope {
+func (c *Compile) compileUnion(node *plan.Node, left, right []*Scope, preserveOwners bool) []*Scope {
 	left = c.mergeShuffleScopesIfNeeded(left, false)
 	right = c.mergeShuffleScopesIfNeeded(right, false)
 	if keys, dop := c.parallelUnionDistinct(node, left, right); dop > 1 {
-		return c.compileParallelUnionDistinct(node, left, right, keys, dop)
+		owners := c.compileParallelUnionDistinctOwners(node, left, right, keys, dop)
+		if preserveOwners {
+			return owners
+		}
+		return []*Scope{c.newMergeScope(owners)}
 	}
 	return c.mergeDistinctSetScopes(node, append(left, right...), c.anal.isFirst)
+}
+
+func (c *Compile) compileUnionInput(step, nodeID int32, nodes []*plan.Node, preserveOwners bool) ([]*Scope, error) {
+	node := nodes[nodeID]
+	left, err := c.compilePlanScope(step, node.Children[0], nodes)
+	if err != nil {
+		return nil, err
+	}
+	right, err := c.compilePlanScope(step, node.Children[1], nodes)
+	if err != nil {
+		ReleaseScopes(left)
+		return nil, err
+	}
+	c.setAnalyzeCurrent(left, int(nodeID))
+	c.setAnalyzeCurrent(right, int(nodeID))
+	ss := c.compileUnion(node, left, right, preserveOwners)
+	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
+	return c.compileSort(node, ss), nil
 }
 
 // mergeDistinctSetScopes applies the global distinct phase required after a
@@ -7328,6 +7372,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, c.proc)
+			op.Ignored = c.productL2IgnoredOf[node]
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 			if rs[i].NodeInfo.Mcpu != 1 {
@@ -8387,7 +8432,7 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(op)
-		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.ProducesGroupingSets())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[0].setRootOperator(arg)
 	} else {
@@ -8622,7 +8667,7 @@ func (c *Compile) compileMergeGroup(
 		rs := c.newMergeScope([]*Scope{mergeToGroup})
 
 		currentFirstFlag = c.anal.isFirst
-		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.UsesGroupingAwareHash())
+		arg := constructMergeGroup(node, ns[node.Children[0]], op.Aggs, op.ProducesGroupingSets())
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs.setRootOperator(arg)
 		c.anal.isFirst = false
@@ -8640,7 +8685,7 @@ func (c *Compile) compileMergeGroup(
 
 			if i == 0 {
 				aggs = op.Aggs
-				groupingAware = op.UsesGroupingAwareHash()
+				groupingAware = op.ProducesGroupingSets()
 			}
 		}
 		c.anal.isFirst = false
@@ -10070,16 +10115,21 @@ func (c *Compile) validateNonBlockingLockTargets(targets []*plan.LockTarget) err
 	return nil
 }
 
-func (c *Compile) validateNonBlockingLockPlan(logicalPlan *plan.Plan) error {
-	if logicalPlan == nil || logicalPlan.GetQuery() == nil {
+func (c *Compile) validateLockPlan(logicalPlan *plan.Plan) error {
+	c.lockingReadPlan = false
+	query := logicalPlan.GetQuery()
+	if query == nil {
 		return nil
 	}
-	for _, node := range logicalPlan.GetQuery().GetNodes() {
+	for _, node := range query.GetNodes() {
 		if node == nil {
 			continue
 		}
 		if err := c.validateNonBlockingLockTargets(node.GetLockTargets()); err != nil {
 			return err
+		}
+		if node.NodeType == plan.Node_LOCK_OP && query.StmtType == plan.Query_SELECT {
+			c.lockingReadPlan = true
 		}
 	}
 	return nil
@@ -10992,21 +11042,7 @@ func collectTombstones(
 	var tombstone engine.Tombstoner
 
 	//-----------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		zeroTS := timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}
-		snapTS := c.proc.GetTxnOperator().Txn().SnapshotTS
-		if !node.ScanSnapshot.TS.Equal(zeroTS) && node.ScanSnapshot.TS.Less(snapTS) {
-			if c.proc.GetCloneTxnOperator() == nil {
-				txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	ctx, _ := scanSnapshotContext(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
 	//-----------------------------------------------------------------------------------------------------
 
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
@@ -11018,7 +11054,8 @@ func collectTombstones(
 	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, c.proc.GetCloneTxnOperator())
+	// 读取事务由 rel 持有，不能把其他扫描的 clone 当作本次读取点记录。
+	logCatalogSnapshotScan("compile.collect-tombstones", node, ctx, nil)
 
 	tombstone, err = rel.CollectTombstones(ctx, c.TxnOffset, policy)
 	if err != nil {
@@ -11124,24 +11161,7 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
-	ctx := c.proc.GetTopContext()
-	txnOp = c.proc.GetTxnOperator()
-	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
-		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-			node.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-
-			if c.proc.GetCloneTxnOperator() != nil {
-				txnOp = c.proc.GetCloneTxnOperator()
-			} else {
-				txnOp = c.proc.GetTxnOperator().CloneSnapshotOp(*node.ScanSnapshot.TS)
-				c.proc.SetCloneTxnOperator(txnOp)
-			}
-
-			if node.ScanSnapshot.Tenant != nil {
-				ctx = context.WithValue(ctx, defines.TenantIDKey{}, node.ScanSnapshot.Tenant.TenantID)
-			}
-		}
-	}
+	txnOp, ctx := scanSnapshotTxn(c.proc.GetTopContext(), c.proc.GetTxnOperator(), node.ScanSnapshot)
 	//-------------------------------------------------------------------------------------------------------------
 	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)

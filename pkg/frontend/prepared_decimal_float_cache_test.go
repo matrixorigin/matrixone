@@ -61,7 +61,8 @@ func TestPreparedDecimalFloatSingleSlotCache(t *testing.T) {
 				if prepared.params != nil {
 					prepared.params.Free(cw.proc.Mp())
 				}
-				prepared.params = vector.NewVec(types.T_text.ToType())
+				prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+				prepared.paramsMP = cw.proc.Mp()
 				require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), null, cw.proc.Mp()))
 				prepared.ParamTypes = []byte{byte(source), 0}
 			}

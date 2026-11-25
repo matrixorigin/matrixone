@@ -31,8 +31,60 @@ type selectedRowsOneShotShortWriter struct {
 
 type selectedRowsFastBuffer struct {
 	bytes.Buffer
-	fastCalls int
-	short     bool
+	fastCalls    int
+	varlenaCalls int
+	short        bool
+}
+
+func (w *selectedRowsFastBuffer) WriteSelectedVarlenaRows(values []types.Varlena, area []byte, rows []int32) (int, error) {
+	w.varlenaCalls++
+	start := w.Len()
+	for _, row := range rows {
+		value := values[row].GetByteSlice(area)
+		if err := types.WriteInt32(&w.Buffer, int32(len(value))); err != nil {
+			return w.Len() - start, err
+		}
+		if _, err := w.Buffer.Write(value); err != nil {
+			return w.Len() - start, err
+		}
+	}
+	written := w.Len() - start
+	if w.short && written > 0 {
+		written--
+	}
+	return written, nil
+}
+
+func TestSelectedRowsVarlenaWriterMatchesReference(t *testing.T) {
+	pool := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType(), pool)
+	t.Cleanup(func() { source.Free(pool); require.Zero(t, pool.CurrNB()) })
+	require.NoError(t, AppendStringList(source, []string{"", "short", string(bytes.Repeat([]byte("long"), 20))}, nil, pool))
+	rows := []int32{2, 0, 1, 2}
+	for _, tc := range []struct {
+		name   string
+		modify func()
+		fast   bool
+	}{
+		{name: "plain", fast: true},
+		{name: "null fallback", modify: func() { source.SetNull(1) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				source.GetNulls().Clear()
+			})
+			if tc.modify != nil {
+				tc.modify()
+			}
+			var reference bytes.Buffer
+			require.NoError(t, source.MarshalSelectedRowsTo(&reference, rows))
+			fast := &selectedRowsFastBuffer{}
+			require.NoError(t, source.MarshalSelectedRowsTo(fast, rows))
+			require.Equal(t, reference.Bytes(), fast.Bytes())
+			require.Equal(t, tc.fast, fast.varlenaCalls == 1)
+		})
+	}
+	require.ErrorIs(t, source.MarshalSelectedRowsTo(&selectedRowsFastBuffer{short: true}, rows), io.ErrShortWrite)
 }
 
 func (w *selectedRowsFastBuffer) WriteSelectedFixedRows(
@@ -64,38 +116,10 @@ func (w *selectedRowsOneShotShortWriter) Write(value []byte) (int, error) {
 	return len(value), nil
 }
 
-func TestSelectedFlagsCodecResetsEachStreamingPass(t *testing.T) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int64.ToType())
-	defer source.Free(mp)
-	values := make([]int64, 300)
-	for i := range values {
-		values[i] = int64(i * 7)
-	}
-	require.NoError(t, AppendFixedList(source, values, nil, mp))
-
-	flags := make([]uint8, len(values))
-	for _, row := range []int{1, 256, 299} {
-		flags[row] = 1
-	}
-	var encoded bytes.Buffer
-	written, err := source.MarshalSelectedFlagsTo(&encoded, flags)
-	require.NoError(t, err)
-	require.Equal(t, 3, written)
-	require.Equal(t, 4+1+4+3*types.T_int64.TypeLen(), encoded.Len())
-
-	destination := NewOffHeapVecWithType(types.T_int64.ToType())
-	defer destination.Free(mp)
-	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 3, mp))
-	require.Equal(t, []int64{7, 1792, 2093},
-		MustFixedColWithTypeCheck[int64](destination))
-	require.Zero(t, encoded.Len())
-}
-
 func TestSelectedRowsCodecPreservesFixedWidthMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int64.ToType())
-	destination := NewOffHeapVecWithType(types.T_int64.ToType())
+	source := NewVec(types.T_int64.ToType(), mp)
+	destination := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() {
 		destination.Free(mp)
 		source.Free(mp)
@@ -103,19 +127,14 @@ func TestSelectedRowsCodecPreservesFixedWidthMetadata(t *testing.T) {
 	})
 	require.NoError(t, AppendFixedList(source, []int64{10, 20, 30, 40}, nil, mp))
 	source.SetNull(1)
-	source.GetGrouping().Add(1, 3)
-	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
-		PrepareParamInteger, PrepareParamDecimal, PrepareParamNone, PrepareParamBoolean,
-	}, mp))
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 1, 0}))
 	expected := []byte{
-		3, 0, 0, 0, 0x0b, 8, 0, 0, 0, // count, NULL/group/kind flags, fixed width
-		2, 40, 0, 0, 0, 0, 0, 0, 0, // grouped value 40
-		3,                          // grouped NULL: no value bytes
+		3, 0, 0, 0, 0x01, 8, 0, 0, 0, // count, NULL flag, fixed width
+		0, 40, 0, 0, 0, 0, 0, 0, 0, // ordinary value 40
+		1,                          // NULL: no value bytes
 		0, 10, 0, 0, 0, 0, 0, 0, 0, // ordinary value 10
-		byte(PrepareParamBoolean), byte(PrepareParamNone), byte(PrepareParamInteger),
 	}
 	require.Equal(t, expected, encoded.Bytes())
 	state := newTestVectorAllocationAccount(t, 1024, 4)
@@ -128,19 +147,32 @@ func TestSelectedRowsCodecPreservesFixedWidthMetadata(t *testing.T) {
 	require.Equal(t, expected, primitive.Bytes())
 	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 3, mp))
 	require.Equal(t, []int64{40, 0, 10}, MustFixedColWithTypeCheck[int64](destination))
+	require.False(t, destination.IsNull(0))
 	require.True(t, destination.IsNull(1))
-	require.True(t, destination.GetGrouping().Contains(0))
-	require.True(t, destination.GetGrouping().Contains(1))
-	require.False(t, destination.GetGrouping().Contains(2))
-	require.Equal(t, PrepareParamBoolean, destination.GetPrepareParamKindAt(0))
-	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(1))
-	require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(2))
+	require.False(t, destination.IsNull(2))
 	require.Zero(t, encoded.Len())
+
+	// NULL is the only defined bit. Any other header bit is rejected before
+	// decoding starts, leaving the destination untouched; any other row-flag
+	// bit is rejected mid-decode, leaving it empty.
+	for bit := 1; bit < 8; bit++ {
+		before := destination.Length()
+		bad := append([]byte(nil), expected...)
+		bad[4] |= 1 << bit
+		require.ErrorContains(t, destination.UnmarshalSelectedRowsFrom(
+			bytes.NewReader(bad), 3, mp), "invalid selected vector metadata", "header bit %d", bit)
+		require.Equal(t, before, destination.Length())
+		bad = append([]byte(nil), expected...)
+		bad[18] |= 1 << bit
+		require.ErrorContains(t, destination.UnmarshalSelectedRowsFrom(
+			bytes.NewReader(bad), 3, mp), "row metadata", "row bit %d", bit)
+		require.Zero(t, destination.Length())
+	}
 }
 
 func TestSelectedRowsCodecFixedWidthWriterFastPathMatchesWire(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int64.ToType())
+	source := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() {
 		source.Free(mp)
 		require.Zero(t, mp.CurrNB())
@@ -182,60 +214,41 @@ func TestSelectedRowsCodecFixedWidthWriterFastPathMatchesWire(t *testing.T) {
 }
 
 func TestSelectedRowsCodecUniformMetadata(t *testing.T) {
-	for _, kind := range []struct {
-		name  string
-		seen  bool
-		value PrepareParamKind
-	}{
-		{"unobserved", false, PrepareParamNone},
-		{"none", true, PrepareParamNone},
-		{"decimal", true, PrepareParamDecimal},
-	} {
-		t.Run(kind.name, func(t *testing.T) {
-			mp := mpool.MustNewZero()
-			source := NewVec(types.T_int64.ToType())
-			defer func() { source.Free(mp); require.Zero(t, mp.CurrNB()) }()
-			require.NoError(t, AppendFixedList(source, []int64{7, 8, 9, 10}, nil, mp))
-			source.resetPrepareParamKind()
-			if kind.seen {
-				source.SetPrepareParamKind(kind.value)
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType(), mp)
+	defer func() { source.Free(mp); require.Zero(t, mp.CurrNB()) }()
+	require.NoError(t, AppendFixedList(source, []int64{7, 8, 9, 10}, nil, mp))
+	for _, rows := range [][]int32{{}, {0, 2, 3}, {3, 0, 3, 1}} {
+		func() {
+			selected := NewVec(types.T_int64.ToType(), mp)
+			defer selected.Free(mp)
+			require.NoError(t, selected.UnionInt32(source, rows, mp))
+			all := make([]int32, len(rows))
+			for i := range all {
+				all[i] = int32(i)
 			}
-			for _, rows := range [][]int32{{}, {0, 2, 3}, {3, 0, 3, 1}} {
-				func() {
-					selected := NewVec(types.T_int64.ToType())
-					defer selected.Free(mp)
-					require.NoError(t, selected.UnionInt32(source, rows, mp))
-					selected.resetPrepareParamKind()
-					if kind.seen {
-						selected.SetPrepareParamKind(kind.value)
-					}
-					flags := make([]uint8, len(rows))
-					for i := range flags {
-						flags[i] = 1
-					}
-					var got, want bytes.Buffer
-					require.NoError(t, source.MarshalSelectedRowsTo(&got, rows))
-					_, err := selected.MarshalSelectedFlagsTo(&want, flags)
-					require.NoError(t, err)
-					require.Equal(t, want.Bytes(), got.Bytes())
-				}()
-			}
-			require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{-1}))
-			require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{4}))
-			var encoded bytes.Buffer
-			require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 0}))
-			for cut := 0; cut < encoded.Len(); cut++ {
-				require.Error(t, source.MarshalSelectedRowsTo(
-					&failSelectedRowsWriter{remaining: cut}, []int32{3, 0}), "cut=%d", cut)
-			}
-		})
+			// Encoding a selection equals encoding its materialized copy.
+			var got, want bytes.Buffer
+			require.NoError(t, source.MarshalSelectedRowsTo(&got, rows))
+			require.NoError(t, selected.MarshalSelectedRowsTo(&want, all))
+			require.Equal(t, want.Bytes(), got.Bytes())
+		}()
 	}
+	require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{-1}))
+	require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{4}))
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 0}))
+	for cut := 0; cut < encoded.Len(); cut++ {
+		require.Error(t, source.MarshalSelectedRowsTo(
+			&failSelectedRowsWriter{remaining: cut}, []int32{3, 0}), "cut=%d", cut)
+	}
+
 }
 
 func TestSelectedRowsCodecFixedWidthEmptyAndAllNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int64.ToType())
-	destination := NewOffHeapVecWithType(types.T_int64.ToType())
+	source := NewVec(types.T_int64.ToType(), mp)
+	destination := NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() {
 		destination.Free(mp)
 		source.Free(mp)
@@ -257,97 +270,35 @@ func TestSelectedRowsCodecFixedWidthEmptyAndAllNull(t *testing.T) {
 	require.Zero(t, encoded.Len())
 }
 
-func TestSelectedRowsCodecMatchesFlagSelectionWire(t *testing.T) {
+// A sparse selection (256 of 8192 rows) encodes in proportion to the
+// selection, not the source.
+func BenchmarkSelectedRowsSparse(b *testing.B) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_varchar.ToType())
-	defer func() {
-		source.Free(mp)
-		require.Zero(t, mp.CurrNB())
-	}()
-	for _, value := range []string{"zero", "one", "two", "three", "four", "five", "six", "seven"} {
-		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
-	}
-	source.SetNull(4)
-	source.GetGrouping().Add(1, 7)
-	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
-		PrepareParamNone, PrepareParamInteger, PrepareParamNone, PrepareParamNone,
-		PrepareParamDecimal, PrepareParamNone, PrepareParamNone, PrepareParamBoolean,
-	}, mp))
-	require.NoError(t, source.SetBinaryStringRowsWithMP(
-		[]bool{false, true, false, false, false, false, false, true}, mp))
-
-	flags := make([]uint8, source.Length())
-	rows := []int32{1, 4, 7}
-	for _, row := range rows {
-		flags[row] = 1
-	}
-	var fromFlags, fromRows bytes.Buffer
-	written, err := source.MarshalSelectedFlagsTo(&fromFlags, flags)
-	require.NoError(t, err)
-	require.Equal(t, len(rows), written)
-	require.NoError(t, source.MarshalSelectedRowsTo(&fromRows, rows))
-	require.Equal(t, fromFlags.Bytes(), fromRows.Bytes())
-}
-
-func TestSelectedRowsCodecPreservesStringSource(t *testing.T) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_varchar.ToType())
-	require.NoError(t, AppendBytesList(source, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, nil, mp))
-	require.NoError(t, source.SetStringSourcesWithMP([]types.StringSource{
-		types.StringSourceLiteral, types.StringSourceSQLPrepare, types.StringSourceCOMStmt,
-	}, mp))
-	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 2}))
-	destination := NewVec(types.T_varchar.ToType())
-	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
-	require.Equal(t, [][]byte{[]byte("a"), []byte("c")}, InefficientMustBytesCol(destination))
-	require.Equal(t, []types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}, destination.GetStringSources())
-	destination.Free(mp)
-	source.Free(mp)
-	require.Zero(t, mp.CurrNB())
-}
-
-func BenchmarkSelectedRowsCodecAvoidsSparseFlagScans(b *testing.B) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int64.ToType())
+	source := NewVec(types.T_int64.ToType(), mp)
 	values := make([]int64, 8192)
 	for i := range values {
 		values[i] = int64(i)
 	}
 	require.NoError(b, AppendFixedList(source, values, nil, mp))
-	flags := make([]uint8, len(values))
 	rows := make([]int32, 0, 256)
 	for row := 0; row < len(values); row += len(values) / 256 {
-		flags[row] = 1
 		rows = append(rows, int32(row))
 	}
 	b.Cleanup(func() {
 		source.Free(mp)
 		require.Zero(b, mp.CurrNB())
 	})
-
-	b.Run("flags", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			_, err := source.MarshalSelectedFlagsTo(io.Discard, flags)
-			if err != nil {
-				b.Fatal(err)
-			}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := source.MarshalSelectedRowsTo(io.Discard, rows); err != nil {
+			b.Fatal(err)
 		}
-	})
-	b.Run("rows", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			if err := source.MarshalSelectedRowsTo(io.Discard, rows); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	}
 }
 
 func BenchmarkSelectedRowsFixedWidth(b *testing.B) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_int64.ToType())
+	source := NewVec(types.T_int64.ToType(), mp)
 	values := make([]int64, 8192)
 	rows := make([]int32, 0, len(values)/2)
 	for i := range values {
@@ -379,7 +330,7 @@ func BenchmarkSelectedRowsFixedWidth(b *testing.B) {
 		b.ReportMetric(float64(output.Len()), "encoded-B")
 	})
 	b.Run("decode", func(b *testing.B) {
-		destination := NewOffHeapVecWithType(types.T_int64.ToType())
+		destination := NewVec(types.T_int64.ToType(), mp)
 		defer destination.Free(mp)
 		reader := bytes.NewReader(payload)
 		b.ReportAllocs()
@@ -424,11 +375,12 @@ func BenchmarkSelectedRowsVarlenaDecode(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/rows_%d", tc.name, rows), func(b *testing.B) {
 				mp := mpool.MustNewZero()
 				b.Cleanup(func() { mpool.DeleteMPool(mp) })
-				source := NewVec(tc.typ)
+				source := NewVec(tc.typ, mp)
 				account := newTestVectorAllocationAccount(b, 16<<20, 64)
-				destination := newAccountedTestVector(b, tc.typ, account.selection)
+				dmp := account.view(b, mp)
+				destination := NewVec(tc.typ, dmp)
 				b.Cleanup(func() {
-					destination.Free(mp)
+					destination.Free(dmp)
 					source.Free(mp)
 					finalizeTestVectorAllocationAccount(b, account)
 					require.Zero(b, mp.CurrNB())
@@ -444,13 +396,13 @@ func BenchmarkSelectedRowsVarlenaDecode(b *testing.B) {
 				reader := bytes.NewReader(payload)
 				// Warm the reusable, accounted destination before measuring the
 				// per-record codec cost; setup and capacity growth are separate.
-				require.NoError(b, destination.UnmarshalSelectedRowsFrom(reader, rows, mp))
+				require.NoError(b, destination.UnmarshalSelectedRowsFrom(reader, rows, dmp))
 				b.ReportAllocs()
 				b.SetBytes(int64(len(payload)))
 				b.ResetTimer()
 				for b.Loop() {
 					reader.Reset(payload)
-					if err := destination.UnmarshalSelectedRowsFrom(reader, rows, mp); err != nil {
+					if err := destination.UnmarshalSelectedRowsFrom(reader, rows, dmp); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -493,11 +445,12 @@ func TestSelectedRowsVarlenaDecodeInlineBoundaryAndReuse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
-			source := NewVec(tc.typ)
+			source := NewVec(tc.typ, mp)
 			account := newTestVectorAllocationAccount(t, 1<<20, 64)
-			destination := newAccountedTestVector(t, tc.typ, account.selection)
+			dmp := account.view(t, mp)
+			destination := NewVec(tc.typ, dmp)
 			t.Cleanup(func() {
-				destination.Free(mp)
+				destination.Free(dmp)
 				source.Free(mp)
 				finalizeTestVectorAllocationAccount(t, account)
 				require.Zero(t, mp.CurrNB())
@@ -509,7 +462,7 @@ func TestSelectedRowsVarlenaDecodeInlineBoundaryAndReuse(t *testing.T) {
 			for _, selected := range [][]int32{{0, 1, 2, 3, 4}, {3, 2, 1, 0, 4}} {
 				var encoded bytes.Buffer
 				require.NoError(t, source.MarshalSelectedRowsTo(&encoded, selected))
-				require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, len(selected), mp))
+				require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, len(selected), dmp))
 				require.Zero(t, encoded.Len())
 				descriptors := MustFixedColNoTypeCheck[types.Varlena](destination)
 				for row, input := range selected {
@@ -533,7 +486,7 @@ func TestSelectedRowsVarlenaDecodeInlineBoundaryAndReuse(t *testing.T) {
 func TestSelectedRowsVarlenaDecodeAccountCapacityAndReuse(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	source := NewVec(types.T_varchar.ToType())
+	source := NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() {
 		source.Free(mp)
 		require.Zero(t, mp.CurrNB())
@@ -548,16 +501,17 @@ func TestSelectedRowsVarlenaDecodeAccountCapacityAndReuse(t *testing.T) {
 	run := func(t *testing.T, limit uint64, rejected bool) uint64 {
 		t.Helper()
 		account := newTestVectorAllocationAccount(t, limit, 64)
-		destination := newAccountedTestVector(t, source.typ, account.selection)
+		dmp := account.view(t, mp)
+		destination := NewVec(source.typ, dmp)
 		t.Cleanup(func() {
-			destination.Free(mp)
+			destination.Free(dmp)
 			finalizeTestVectorAllocationAccount(t, account)
 		})
-		err := destination.UnmarshalSelectedRowsFrom(bytes.NewReader(encoded.Bytes()), 2, mp)
+		err := destination.UnmarshalSelectedRowsFrom(bytes.NewReader(encoded.Bytes()), 2, dmp)
 		if rejected {
 			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 			require.Zero(t, destination.Length(), "the earlier inline row must not be published")
-			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(recovery.Bytes()), 1, mp))
+			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(recovery.Bytes()), 1, dmp))
 			require.Equal(t, []byte("inline"), destination.GetBytesAt(0))
 		} else {
 			require.NoError(t, err)
@@ -575,7 +529,7 @@ func TestSelectedRowsVarlenaDecodeAccountCapacityAndReuse(t *testing.T) {
 func TestSelectedRowsVarlenaDecodeRejectsInvalidLength(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType(), mp)
 	t.Cleanup(func() {
 		destination.Free(mp)
 		require.Zero(t, mp.CurrNB())
@@ -602,139 +556,32 @@ func TestSelectedRowsVarlenaDecodeRejectsInvalidLength(t *testing.T) {
 	}
 }
 
-func TestSelectedRowsVarlenaDecodeMaterializesBorrowedDestination(t *testing.T) {
-	mp := mpool.MustNewZero()
-	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	source := NewVec(types.T_varchar.ToType())
-	destination := NewOffHeapVecWithType(source.typ)
-	t.Cleanup(func() {
-		destination.Free(mp)
-		source.Free(mp)
-		require.Zero(t, mp.CurrNB())
-	})
-	require.NoError(t, AppendBytesList(source, [][]byte{
-		bytes.Repeat([]byte{'x'}, 80), []byte("inline"),
-	}, nil, mp))
-	borrowedData, borrowedArea := bytes.Clone(source.GetData()), bytes.Clone(source.GetArea())
-	wantData, wantArea := bytes.Clone(borrowedData), bytes.Clone(borrowedArea)
-	dataLease, err := NewRefCountedBufferLease(borrowedData, int64(cap(borrowedData)), nil)
-	require.NoError(t, err)
-	t.Cleanup(dataLease.Release)
-	areaLease, err := NewRefCountedBufferLease(borrowedArea, int64(cap(borrowedArea)), nil)
-	require.NoError(t, err)
-	t.Cleanup(areaLease.Release)
-	require.NoError(t, destination.InstallBorrowedData(borrowedData, dataLease))
-	require.NoError(t, destination.InstallBorrowedArea(borrowedArea, areaLease))
-	destination.SetLength(2)
-	require.True(t, destination.HasBorrowedBacking())
-	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{1, 0}))
-	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
-	require.False(t, destination.HasBorrowedBacking())
-	require.Equal(t, []byte("inline"), destination.GetBytesAt(0))
-	require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(1))
-	require.Equal(t, wantData, borrowedData, "decode must not mutate the borrowed producer")
-	require.Equal(t, wantArea, borrowedArea)
-}
-
 func TestSelectedRowsCodecPreservesMetadataAndVarlena(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_varchar.ToType())
+	source := NewVec(types.T_varchar.ToType(), mp)
 	defer source.Free(mp)
 	require.NoError(t, AppendBytes(source, []byte("zero"), false, mp))
 	require.NoError(t, AppendBytes(source, nil, true, mp))
 	require.NoError(t, AppendBytes(source, bytes.Repeat([]byte("x"), 80), false, mp))
 	require.NoError(t, AppendBytes(source, []byte("three"), false, mp))
-	source.GetGrouping().Add(1, 3)
-	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
-		PrepareParamInteger,
-		PrepareParamNone,
-		PrepareParamDecimal,
-		PrepareParamBoolean,
-	}, mp))
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 1, 0}))
-	destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType(), mp)
 	defer destination.Free(mp)
 	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 3, mp))
 
 	require.Equal(t, "three", string(destination.GetBytesAt(0)))
 	require.True(t, destination.IsNull(1))
 	require.Equal(t, "zero", string(destination.GetBytesAt(2)))
-	require.True(t, destination.GetGrouping().Contains(0))
-	require.True(t, destination.GetGrouping().Contains(1))
-	require.False(t, destination.GetGrouping().Contains(2))
-	require.Equal(t, PrepareParamBoolean, destination.GetPrepareParamKindAt(0))
-	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(1))
-	require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(2))
+	require.False(t, destination.IsNull(0))
+	require.False(t, destination.IsNull(2))
 	require.Zero(t, encoded.Len())
-}
-
-func TestSelectedRowsCodecPreservesBinaryStringProvenance(t *testing.T) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_text.ToType())
-	defer source.Free(mp)
-	for _, value := range []string{"binary-zero", "null", "text-two", "binary-three"} {
-		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
-	}
-	source.SetNull(1)
-	require.NoError(t, source.SetBinaryStringRowsWithMP(
-		[]bool{true, false, false, true}, mp))
-
-	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(
-		&encoded, []int32{2, 1, 3, 0}))
-	destination := NewOffHeapVecWithType(types.T_text.ToType())
-	defer destination.Free(mp)
-	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 4, mp))
-
-	require.Equal(t, []bool{false, false, true, true}, []bool{
-		destination.GetBinaryStringMetadataAt(0),
-		destination.GetBinaryStringMetadataAt(1),
-		destination.GetBinaryStringMetadataAt(2),
-		destination.GetBinaryStringMetadataAt(3),
-	})
-	require.True(t, destination.IsNull(1))
-	require.True(t, destination.HasBinaryStringRows())
-	require.Zero(t, encoded.Len())
-
-	uniform := NewOffHeapVecWithType(types.T_text.ToType())
-	defer uniform.Free(mp)
-	source.SetIsBinaryString(true)
-	encoded.Reset()
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1, 3}))
-	require.NoError(t, uniform.UnmarshalSelectedRowsFrom(&encoded, 3, mp))
-	require.True(t, uniform.GetBinaryStringMetadataAt(0))
-	require.False(t, uniform.GetBinaryStringMetadataAt(1))
-	require.True(t, uniform.GetBinaryStringMetadataAt(2))
-	require.False(t, uniform.HasBinaryStringRows())
-}
-
-func TestSelectedRowsCodecPreservesUniformExplicitText(t *testing.T) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_varbinary.ToType())
-	destination := NewVec(types.T_varbinary.ToType())
-	t.Cleanup(func() {
-		destination.Free(mp)
-		source.Free(mp)
-		require.Zero(t, mp.CurrNB())
-	})
-	require.NoError(t, AppendBytesList(source, [][]byte{[]byte("a"), []byte("b")}, nil, mp))
-	require.NoError(t, source.SetSelectedValueBinaryStringRowsWithMP([]bool{false, false}, mp))
-
-	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1}))
-	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp))
-	for row := 0; row < destination.Length(); row++ {
-		require.Equal(t, types.RuntimeStringText, destination.GetRuntimeStringDomainAt(row))
-		require.False(t, destination.GetIsBinaryStringAt(row))
-	}
 }
 
 func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {
 	mp := mpool.MustNewZero()
-	destination := NewOffHeapVecWithType(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType(), mp)
 	defer destination.Free(mp)
 	var nilVector *Vector
 	require.Error(t, nilVector.MarshalSelectedRowsTo(io.Discard, nil))
@@ -746,7 +593,7 @@ func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {
 	require.Error(t, destination.UnmarshalSelectedRowsFrom(nil, 0, mp))
 	require.Error(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(nil), 0, nil))
 	require.Error(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(nil), -1, mp))
-	constant := NewOffHeapVecWithType(types.T_int64.ToType())
+	constant := NewVec(types.T_int64.ToType(), mp)
 	constant.ToConst()
 	defer constant.Free(mp)
 	require.ErrorContains(t,
@@ -759,7 +606,7 @@ func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {
 		destination.UnmarshalSelectedRowsFrom(&wrongCount, 1, mp),
 		"does not match")
 
-	source := NewVec(types.T_int64.ToType())
+	source := NewVec(types.T_int64.ToType(), mp)
 	defer source.Free(mp)
 	require.NoError(t, AppendFixedList(source, []int64{42}, nil, mp))
 	var encoded bytes.Buffer
@@ -779,7 +626,7 @@ func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {
 
 func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.T) {
 	mp := mpool.MustNewZero()
-	destination := NewOffHeapVecWithType(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType(), mp)
 	defer destination.Free(mp)
 
 	tests := []struct {
@@ -796,44 +643,20 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 			want: "metadata",
 		},
 		{
-			name: "invalid-uniform-kind",
+			name: "undefined-vector-metadata-bit",
 			payload: func(buf *bytes.Buffer) {
 				require.NoError(t, types.WriteInt32(buf, 1))
-				require.NoError(t, buf.WriteByte(selectedRowsKindUniform<<selectedRowsKindShift))
-				require.NoError(t, buf.WriteByte(0xff))
+				require.NoError(t, buf.WriteByte(1<<2))
 			},
-			want: "parameter kind",
+			want: "metadata",
 		},
 		{
-			name: "undeclared-row-flag",
+			name: "undefined-row-flag-bit",
 			payload: func(buf *bytes.Buffer) {
 				require.NoError(t, types.WriteInt32(buf, 1))
 				require.NoError(t, buf.WriteByte(selectedRowsHasNull))
 				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
-				require.NoError(t, buf.WriteByte(selectedRowsHasGrouping))
-			},
-			want: "row metadata",
-		},
-		{
-			name: "undeclared-binary-row-flag",
-			payload: func(buf *bytes.Buffer) {
-				require.NoError(t, types.WriteInt32(buf, 1))
-				require.NoError(t, buf.WriteByte(selectedRowsHasNull))
-				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
-				require.NoError(t, buf.WriteByte(selectedRowsRowBinary))
-			},
-			want: "row metadata",
-		},
-		{
-			name: "null-row-carries-binary-provenance",
-			payload: func(buf *bytes.Buffer) {
-				require.NoError(t, types.WriteInt32(buf, 1))
-				require.NoError(t, buf.WriteByte(
-					selectedRowsHasNull|
-						selectedRowsBinaryRows<<selectedRowsBinaryShift))
-				require.NoError(t, types.WriteInt32(buf, int32(types.T_int64.TypeLen())))
-				require.NoError(t, buf.WriteByte(
-					selectedRowsHasNull|selectedRowsRowBinary))
+				require.NoError(t, buf.WriteByte(selectedRowsHasNull|1<<1))
 			},
 			want: "row metadata",
 		},
@@ -870,41 +693,37 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 
 func TestSelectedRowsCodecEveryWireBoundaryIsAtomic(t *testing.T) {
 	mp := mpool.MustNewZero()
-	source := NewVec(types.T_varchar.ToType())
+	source := NewVec(types.T_varchar.ToType(), mp)
 	defer func() {
 		source.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 	require.NoError(t, AppendBytes(source, bytes.Repeat([]byte("x"), 80), false, mp))
 	require.NoError(t, AppendBytes(source, []byte("ordinary"), false, mp))
-	source.GetGrouping().Add(0)
-	require.NoError(t, source.SetPrepareParamKindsWithMP(
-		[]PrepareParamKind{PrepareParamDecimal, PrepareParamNone}, mp))
-	require.NoError(t, source.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+	require.NoError(t, AppendBytes(source, nil, true, mp))
 
 	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1}))
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1, 2}))
+	// The NULL row makes every row carry a flag byte; every cut is rejected
+	// atomically.
 	payload := encoded.Bytes()
 	for cut := 0; cut < len(payload); cut++ {
 		func() {
-			destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+			destination := NewVec(types.T_varchar.ToType(), mp)
 			defer destination.Free(mp)
 			require.Error(t, destination.UnmarshalSelectedRowsFrom(
-				bytes.NewReader(payload[:cut]), 2, mp), "cut=%d", cut)
+				bytes.NewReader(payload[:cut]), 3, mp), "cut=%d", cut)
 			require.Zero(t, destination.Length(), "cut=%d", cut)
-			require.False(t, destination.HasBinaryStringMetadata(), "cut=%d", cut)
 			// Reuse the same storage after a partially decoded descriptor or area.
-			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(payload), 2, mp))
+			require.NoError(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(payload), 3, mp))
 			require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
 			require.Equal(t, source.GetBytesAt(1), destination.GetBytesAt(1))
-			require.True(t, destination.GetGrouping().Contains(0))
-			require.True(t, destination.GetBinaryStringMetadataAt(0))
-			require.Equal(t, PrepareParamDecimal, destination.GetPrepareParamKindAt(0))
+			require.True(t, destination.IsNull(2))
 		}()
 	}
 	for cut := 0; cut < len(payload); cut++ {
 		require.Error(t, source.MarshalSelectedRowsTo(
-			&failSelectedRowsWriter{remaining: cut}, []int32{0, 1}), "cut=%d", cut)
+			&failSelectedRowsWriter{remaining: cut}, []int32{0, 1, 2}), "cut=%d", cut)
 	}
 }
 

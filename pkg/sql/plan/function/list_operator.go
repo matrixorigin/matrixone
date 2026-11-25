@@ -62,6 +62,12 @@ func integerComparisonDomain(inputs []types.Type) (types.Type, bool) {
 }
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
+	if left.Oid.IsArray() && right.Oid.IsArray() && left.Oid != right.Oid {
+		if target, _, ok := commonVectorType([]types.Type{left, right}); ok {
+			return true, target, target
+		}
+		return false, left, right
+	}
 	if target, ok := integerComparisonDomain([]types.Type{left, right}); ok {
 		return left.Oid != target.Oid || right.Oid != target.Oid, target, target
 	}
@@ -1003,8 +1009,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint8]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint8](false)
 				},
 			},
 			{
@@ -1013,8 +1019,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint16]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint16](false)
 				},
 			},
 			{
@@ -1023,8 +1029,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint32]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint32](false)
 				},
 			},
 			{
@@ -1033,8 +1039,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint64]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint64](false)
 				},
 			},
 			{
@@ -1043,8 +1049,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int8]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int8](false)
 				},
 			},
 			{
@@ -1053,8 +1059,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int16]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int16](false)
 				},
 			},
 			{
@@ -1063,8 +1069,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int32]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int32](false)
 				},
 			},
 			{
@@ -1073,8 +1079,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int64]().operatorIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int64](false)
 				},
 			},
 			{
@@ -1356,8 +1362,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint8]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint8](true)
 				},
 			},
 			{
@@ -1366,8 +1372,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint16]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint16](true)
 				},
 			},
 			{
@@ -1376,8 +1382,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint32]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint32](true)
 				},
 			},
 			{
@@ -1386,8 +1392,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[uint64]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[uint64](true)
 				},
 			},
 			{
@@ -1396,8 +1402,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int8]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int8](true)
 				},
 			},
 			{
@@ -1406,8 +1412,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int16]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int16](true)
 				},
 			},
 			{
@@ -1416,8 +1422,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int32]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int32](true)
 				},
 			},
 			{
@@ -1426,8 +1432,8 @@ var supportedOperators = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
-				newOp: func() executeLogicOfOverload {
-					return newOpOperatorIntegerIn[int64]().operatorNotIn
+				newOpWithFree: func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload) {
+					return newIntegerInWithFree[int64](true)
 				},
 			},
 			{
@@ -2317,10 +2323,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `unary_tilde`
 	{
-		functionId: UNARY_TILDE,
-		class:      plan.Function_STRICT,
-		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    unaryTildeTypeMatch,
+		functionId:        UNARY_TILDE,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter, keepsOperandBinding: true}},
+		class:             plan.Function_STRICT,
+		layout:            UNARY_ARITHMETIC_OPERATOR,
+		checkFn:           unaryTildeTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2930,6 +2937,15 @@ var supportedOperators = []FuncNew{
 				retType:         func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:           func() executeLogicOfOverload { return NewTemporalCastInteger },
 			},
+			{
+				// Internal prepared BIT_COUNT string-to-latched-numeric conversion.
+				// User-written CAST and every other prepared consumer keep their
+				// existing conversion and diagnostic ownership.
+				overloadId:           int(PreparedBitCountCastOverload),
+				rowScopedDiagnostics: true,
+				retType:              func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:                func() executeLogicOfOverload { return NewPreparedBitCountCast },
+			},
 		},
 	},
 
@@ -3332,10 +3348,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `&`
 	{
-		functionId: OP_BIT_AND,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_AND,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3401,10 +3418,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `|`
 	{
-		functionId: OP_BIT_OR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_OR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3470,10 +3488,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `^`
 	{
-		functionId: OP_BIT_XOR,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		functionId:        OP_BIT_XOR,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3539,10 +3558,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `<<`
 	{
-		functionId: OP_BIT_SHIFT_LEFT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_LEFT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3638,10 +3658,11 @@ var supportedOperators = []FuncNew{
 
 	// operator `>>`
 	{
-		functionId: OP_BIT_SHIFT_RIGHT,
-		class:      plan.Function_STRICT,
-		layout:     COMPARISON_OPERATOR,
-		checkFn:    bitShiftTypeMatch,
+		functionId:        OP_BIT_SHIFT_RIGHT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}, {position: 1, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            COMPARISON_OPERATOR,
+		checkFn:           bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{

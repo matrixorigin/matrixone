@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -130,7 +132,9 @@ func (m magicType) String() string {
 
 // Source contains information of a relation which will be used in execution.
 type Source struct {
-	isConst bool
+	// markGuard exists only on a locally compiled, non-serialized scan.
+	markGuard *markScanGuard
+	isConst   bool
 
 	PushdownId      uint64
 	PushdownAddr    string
@@ -402,7 +406,10 @@ type Compile struct {
 
 	materializedSinkScanNodes map[int32][]int32
 	materializedSources       map[int32]*materialized.Source
-	materializedReaderIDs     map[[2]int32]int
+	// productL2IgnoredOf holds, by product_l2 join node, how it treats the rows its IVF-FLAT index
+	// cannot store.
+	productL2IgnoredOf    map[*plan.Node]*productl2.Ignored
+	materializedReaderIDs map[[2]int32]int
 
 	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
@@ -436,6 +443,7 @@ type Compile struct {
 	// Non-owning, compileQuery-generation evidence for optional deep filters.
 	deepRuntimeFilterTags           map[int32]bool
 	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
+	localRuntimeDomains             []*runtimefilter.LocalDomain
 
 	needLockMeta bool
 	needBlock    bool
@@ -457,6 +465,8 @@ type Compile struct {
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
+	// lockingReadPlan belongs to the compiled plan and survives prepared Reset.
+	lockingReadPlan              bool
 	allocationAccountRegistry    *mpool.AllocationAccountRegistry
 	allocationAccountLimit       uint64
 	allocationControllerProvider func() (mpool.AllocationCapacityController, error)

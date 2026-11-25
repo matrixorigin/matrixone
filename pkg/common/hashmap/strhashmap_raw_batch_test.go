@@ -28,16 +28,14 @@ import (
 
 func TestStrHashMapFlatFixedCompositeKeyGrammar(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		hasNull       bool
-		groupingAware bool
-		wide          bool
-		many          bool
+		name    string
+		hasNull bool
+		wide    bool
+		many    bool
 	}{
 		{name: "join-padded"},
 		{name: "nullable-padded", hasNull: true},
 		{name: "nullable-mixed-width", hasNull: true, wide: true},
-		{name: "grouping-domain-mixed-width", groupingAware: true, wide: true},
 		{name: "max-fixed-columns", hasNull: true, many: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,19 +44,16 @@ func TestStrHashMapFlatFixedCompositeKeyGrammar(t *testing.T) {
 			m, err := NewStrHashMap(tc.hasNull, mp)
 			require.NoError(t, err)
 			t.Cleanup(m.Free)
-			if tc.groupingAware {
-				require.NoError(t, m.SetGroupingAware())
-			}
 			first := []int32{99, 1, 2, 1, 3}
 			second := []int32{99, 10, 20, 10, 30}
 			third := []int64{999, 100, 200, 100, 300}
-			vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int32.ToType())}
+			vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mp), vector.NewVec(types.T_int32.ToType(), mp)}
 			if tc.wide {
-				vecs = append(vecs, vector.NewVec(types.T_int64.ToType()))
+				vecs = append(vecs, vector.NewVec(types.T_int64.ToType(), mp))
 			}
 			if tc.many {
 				for len(vecs) < 16 {
-					vecs = append(vecs, vector.NewVec(types.T_int32.ToType()))
+					vecs = append(vecs, vector.NewVec(types.T_int32.ToType(), mp))
 				}
 			}
 			for _, vec := range vecs {
@@ -79,16 +74,16 @@ func TestStrHashMapFlatFixedCompositeKeyGrammar(t *testing.T) {
 			require.True(t, itr.encodeFlatFixedKeyRows(vecs, 1, 4))
 			for row := 0; row < 4; row++ {
 				var want []byte
-				if tc.hasNull || tc.groupingAware {
+				if tc.hasNull {
 					want = append(want, 0)
 				}
 				want = binary.NativeEndian.AppendUint32(want, uint32(first[row+1]))
-				if tc.hasNull || tc.groupingAware {
+				if tc.hasNull {
 					want = append(want, 0)
 				}
 				want = binary.NativeEndian.AppendUint32(want, uint32(second[row+1]))
 				if tc.wide {
-					if tc.hasNull || tc.groupingAware {
+					if tc.hasNull {
 						want = append(want, 0)
 					}
 					want = binary.NativeEndian.AppendUint64(want, uint64(third[row+1]))
@@ -129,7 +124,7 @@ func TestStrHashMapFlatFixedCompositeKeyGrammar(t *testing.T) {
 		m, err := NewStrHashMap(true, mp)
 		require.NoError(t, err)
 		t.Cleanup(m.Free)
-		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int32.ToType())}
+		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType(), mp), vector.NewVec(types.T_int32.ToType(), mp)}
 		for _, vec := range vecs {
 			t.Cleanup(func() { vec.Free(mp) })
 		}
@@ -161,21 +156,18 @@ func TestStrHashMapFlatFixedCompositeKeyGrammar(t *testing.T) {
 }
 
 func TestStrHashMapFlatFixedCompositeFallbacks(t *testing.T) {
-	for _, shape := range []string{"null-in-range", "null-outside", "constant", "grouping", "float", "varlen", "single", "wide"} {
+	for _, shape := range []string{"null-in-range", "null-outside", "constant", "float", "varlen", "single", "wide"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
 			m, err := NewStrHashMap(true, mp)
 			require.NoError(t, err)
 			t.Cleanup(m.Free)
-			if shape == "grouping" {
-				require.NoError(t, m.SetGroupingAware())
-			}
-			first := vector.NewVec(types.T_int32.ToType())
+			first := vector.NewVec(types.T_int32.ToType(), mp)
 			if shape == "float" {
-				first = vector.NewVec(types.T_float64.ToType())
+				first = vector.NewVec(types.T_float64.ToType(), mp)
 			} else if shape == "varlen" {
-				first = vector.NewVec(types.T_varchar.ToType())
+				first = vector.NewVec(types.T_varchar.ToType(), mp)
 			} else if shape == "constant" {
 				first, err = vector.NewConstFixed(types.T_int32.ToType(), int32(1), 3, mp)
 				require.NoError(t, err)
@@ -197,8 +189,6 @@ func TestStrHashMapFlatFixedCompositeFallbacks(t *testing.T) {
 				first.GetNulls().Add(0)
 			} else if shape == "null-outside" {
 				first.GetNulls().Add(2)
-			} else if shape == "grouping" {
-				first.GetGrouping().Add(0)
 			}
 			columnCount := 2
 			if shape == "single" {
@@ -207,7 +197,7 @@ func TestStrHashMapFlatFixedCompositeFallbacks(t *testing.T) {
 				columnCount = 17
 			}
 			for len(vecs) < columnCount {
-				vec := vector.NewVec(types.T_int32.ToType())
+				vec := vector.NewVec(types.T_int32.ToType(), mp)
 				t.Cleanup(func() { vec.Free(mp) })
 				require.NoError(t, vector.AppendFixedList(vec, []int32{7, 7, 7}, nil, mp))
 				vecs = append(vecs, vec)
@@ -221,7 +211,7 @@ func TestStrHashMapFlatFixedCompositeFallbacks(t *testing.T) {
 			ids, zs, err := itr.Insert(0, 2, vecs)
 			require.NoError(t, err)
 			want := []uint64{1, 1}
-			if shape == "null-in-range" || shape == "grouping" {
+			if shape == "null-in-range" {
 				want = []uint64{1, 2}
 			}
 			require.Equal(t, want, ids)
@@ -238,18 +228,15 @@ func TestStrHashMapFlatRawStringBatchGrammar(t *testing.T) {
 	for _, tc := range []struct {
 		name                    string
 		char                    bool
-		hasNull, groupingAware  bool
+		hasNull                 bool
 		nullInside, nullOutside bool
 	}{
 		{name: "join-composite-offset"},
 		{name: "nullable-bitmap-outside", hasNull: true, nullOutside: true},
 		{name: "nullable-inside-outside", hasNull: true, nullInside: true, nullOutside: true},
 		{name: "join-null-skip", nullInside: true},
-		{name: "grouping-aware-null-skip", groupingAware: true, nullInside: true},
-		{name: "nullable-grouping-aware", hasNull: true, groupingAware: true, nullInside: true},
 		{name: "char-join-composite-offset", char: true},
 		{name: "char-nullable-inside-outside", char: true, hasNull: true, nullInside: true, nullOutside: true},
-		{name: "char-grouping-aware-null-skip", char: true, groupingAware: true, nullInside: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -257,9 +244,6 @@ func TestStrHashMapFlatRawStringBatchGrammar(t *testing.T) {
 			m, err := NewStrHashMap(tc.hasNull, mp)
 			require.NoError(t, err)
 			t.Cleanup(m.Free)
-			if tc.groupingAware {
-				require.NoError(t, m.SetGroupingAware())
-			}
 			wide := strings.Repeat("w", 65536)
 			values := []string{"prefix", "", "a\x00b  ", strings.Repeat("i", 23), strings.Repeat("a", 24), wide, wide, "last", "suffix"}
 			oid := types.T_varchar
@@ -267,7 +251,7 @@ func TestStrHashMapFlatRawStringBatchGrammar(t *testing.T) {
 				oid = types.T_char
 				values = []string{"prefix", "   ", " a\x00b  ", strings.Repeat("i", 23) + " ", strings.Repeat("a", 24) + "  ", wide + "   ", wide, "last\t ", "suffix"}
 			}
-			vecs := []*vector.Vector{vector.NewVec(oid.ToType()), vector.NewVec(types.T_binary.ToType())}
+			vecs := []*vector.Vector{vector.NewVec(oid.ToType(), mp), vector.NewVec(types.T_binary.ToType(), mp)}
 			for column, vec := range vecs {
 				t.Cleanup(func() { vec.Free(mp) })
 				for _, value := range values {
@@ -301,7 +285,7 @@ func TestStrHashMapFlatRawStringBatchGrammar(t *testing.T) {
 						}
 						continue
 					}
-					if tc.hasNull || tc.groupingAware {
+					if tc.hasNull {
 						want = append(want, 0)
 					}
 					value := values[row+1]
@@ -361,11 +345,11 @@ func TestStrHashMapFlatRawStringBatchGrammar(t *testing.T) {
 }
 
 func TestStrHashMapFlatCharFallbacks(t *testing.T) {
-	for _, shape := range []string{"const", "grouping", "unicode"} {
+	for _, shape := range []string{"const", "unicode"} {
 		t.Run(shape, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
-			vec := vector.NewVec(types.T_char.ToType())
+			vec := vector.NewVec(types.T_char.ToType(), mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			values := []string{"A ", "A", "B "}
 			want := []uint64{1, 1, 2}
@@ -383,9 +367,6 @@ func TestStrHashMapFlatCharFallbacks(t *testing.T) {
 			if shape == "const" {
 				vec.ToConst()
 				vec.SetLength(3)
-			} else if shape == "grouping" {
-				vec.GetGrouping().Add(1)
-				want = []uint64{1, 2, 3}
 			}
 			m, err := NewStrHashMap(true, mp)
 			require.NoError(t, err)
@@ -427,7 +408,7 @@ func BenchmarkNullableStrHashEncodeFlatString(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer m.Free()
-			vec := vector.NewVec(tc.oid.ToType())
+			vec := vector.NewVec(tc.oid.ToType(), mp)
 			defer vec.Free(mp)
 			value := []byte(tc.value)
 			if tc.value == "" {

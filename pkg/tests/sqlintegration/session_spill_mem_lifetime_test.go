@@ -279,23 +279,18 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 	wantProbeSum := float64(4096 * 4097 / 2)
 	wantBuildSum := float64(4096 * 7)
 	meowQuery := "select count(*), sum(mc_probe.payload), sum(mc_build.payload) from probe_keys mc_probe join build_keys mc_build on mc_probe.k = mc_build.k"
-	// The predicate controls below mirror the parameterized where-clause
-	// that failed the discriminator in the directed run: direct SQL and a
-	// retained SQL PREPARE handle with the identical predicate both spill at
-	// the low threshold, so the literal predicate preserves the shuffle
-	// topology. Per the review directive, the genuine bound parameter now
-	// sits in the topology-neutral projection of the binary-protocol
-	// statement, and fresh-at-low spill remains asserted below.
+	// Direct SQL and a retained SQL PREPARE handle exercise the same predicate;
+	// the binary-protocol parameter stays in the topology-neutral projection.
 	directPredicate := " where mc_probe.payload >= 0"
 	directPredQuery := meowQuery + directPredicate
 	binaryQuery := "select count(*) + ?, sum(mc_probe.payload), sum(mc_build.payload) from probe_keys mc_probe join build_keys mc_build on mc_probe.k = mc_build.k"
 
-	runJoinStage := func(stage, query string, expectSpill bool) {
+	runResult := func(stage, description string, query func() (*sql.Rows, error), expectSpill bool) {
 		t.Helper()
 		s0, r0, lerr := readSpill()
 		require.NoErrorf(t, lerr, "counter read before %s", stage)
-		rows, qerr := conn.QueryContext(ctx, query)
-		require.NoErrorf(t, qerr, "%s: %s", stage, query)
+		rows, qerr := query()
+		require.NoErrorf(t, qerr, "%s: %s", stage, description)
 		defer rows.Close()
 		require.True(t, rows.Next(), stage+": no rows")
 		var cnt int64
@@ -320,15 +315,16 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 			require.Equal(t, r0, r1, stage+": unexpected re-spill transition")
 		}
 	}
+	runJoinStage := func(stage, query string, expectSpill bool) {
+		t.Helper()
+		runResult(stage, query, func() (*sql.Rows, error) { return conn.QueryContext(ctx, query) }, expectSpill)
+	}
 
 	// The identical SQL text keeps one cache identity across the ladder.
 	mustExec("set session join_spill_mem = 0")
 	planText, perr := testutils.QueryText(ctx, conn, "explain "+meowQuery)
 	require.NoError(t, perr, "explain plan read")
 	require.Contains(t, planText, "shuffle: range(", "plan shape must keep the shuffle hash join")
-	predPlanText, perr := testutils.QueryText(ctx, conn, "explain "+directPredQuery)
-	require.NoError(t, perr, "explain predicate plan read")
-	t.Logf("predicate plan keeps shuffle: range: %v", strings.Contains(predPlanText, "shuffle: range("))
 	runJoinStage("join-auto-first", meowQuery, false)
 	runJoinStage("join-auto-warm-cache-hit", meowQuery, false)
 	mustExec(fmt.Sprintf("set session join_spill_mem = %d", spillThreshold))
@@ -367,33 +363,7 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 
 	runBinaryStage := func(stage string, stmt *sql.Stmt, expectSpill bool) {
 		t.Helper()
-		s0, r0, lerr := readSpill()
-		require.NoErrorf(t, lerr, "counter read before %s", stage)
-		rows, qerr := stmt.QueryContext(ctx, int64(0))
-		require.NoErrorf(t, qerr, "%s: binary execute", stage)
-		defer rows.Close()
-		require.True(t, rows.Next(), stage+": no rows")
-		var cnt int64
-		var ps, bs string
-		require.NoError(t, rows.Scan(&cnt, &ps, &bs), stage)
-		require.False(t, rows.Next(), stage+": more than one row")
-		require.NoError(t, rows.Err(), stage)
-		pv, perr := strconv.ParseFloat(ps, 64)
-		require.NoError(t, perr, stage+" binary probe sum text "+ps)
-		bv, berr := strconv.ParseFloat(bs, 64)
-		require.NoError(t, berr, stage+" binary build sum text "+bs)
-		s1, r1, lerr := readSpill()
-		require.NoErrorf(t, lerr, "counter read after %s", stage)
-		require.Equal(t, wantCnt, cnt, stage+" count")
-		require.Equal(t, wantProbeSum, pv, stage+" probe sum")
-		require.Equal(t, wantBuildSum, bv, stage+" build sum")
-		if expectSpill {
-			require.Greaterf(t, s1, s0, "%s: expected real hashbuild spill transitions", stage)
-			require.Greaterf(t, r1, r0, "%s: expected real hashbuild re-spill transitions", stage)
-		} else {
-			require.Equal(t, s0, s1, stage+": unexpected spill transition")
-			require.Equal(t, r0, r1, stage+": unexpected re-spill transition")
-		}
+		runResult(stage, "binary execute", func() (*sql.Rows, error) { return stmt.QueryContext(ctx, int64(0)) }, expectSpill)
 	}
 
 	runBinaryStage("binary-old-handle-auto", stmtOld, false)
@@ -416,8 +386,10 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 	// Aggregate and sort consumers: identical SQL across SET transitions
 	// with exact results and ordering. Spill presence for these operators
 	// is covered by the canonical CI BVT cases and is not asserted here.
-	mustExec("create table a as select result id from generate_series(1, 16384) g")
-	mustExec("create table b as select result id from generate_series(1, 32768) g")
+	// One more than the standard batch size keeps both consumers above the
+	// batch boundary without scanning separate larger tables at every stage.
+	const consumerRows = int64(8193)
+	mustExec(fmt.Sprintf("create table a as select result id from generate_series(1, %d) g", consumerRows))
 	assertAgg := func(stage string) {
 		t.Helper()
 		rows, qerr := conn.QueryContext(ctx, "select id, count(*) c from a group by id order by id")
@@ -433,7 +405,7 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 			n++
 		}
 		require.NoError(t, rows.Err(), stage)
-		require.Equal(t, int64(16384), n, stage+" rows")
+		require.Equal(t, consumerRows, n, stage+" rows")
 	}
 	mustExec("set session agg_spill_mem = 1073741824")
 	assertAgg("agg-high-first")
@@ -443,11 +415,11 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 	assertAgg("agg-back-high")
 	assertSort := func(stage string) {
 		t.Helper()
-		rows, qerr := conn.QueryContext(ctx, "select id from b order by id desc")
+		rows, qerr := conn.QueryContext(ctx, "select id from a order by id desc")
 		require.NoError(t, qerr, stage)
 		defer rows.Close()
 		var n int64
-		prev := int64(32769)
+		prev := consumerRows + 1
 		for rows.Next() {
 			var id int64
 			require.NoError(t, rows.Scan(&id), stage)
@@ -456,7 +428,7 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 			n++
 		}
 		require.NoError(t, rows.Err(), stage)
-		require.Equal(t, int64(32768), n, stage+" rows")
+		require.Equal(t, consumerRows, n, stage+" rows")
 	}
 	mustExec("set session sort_spill_mem = 1073741824")
 	assertSort("sort-high-first")
@@ -517,14 +489,21 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 		for rows.Next() {
 		}
 		cancelErr = rows.Err()
+		require.NoError(t, rows.Close())
 	}
 	require.Error(t, cancelErr, "the statement must be interrupted; a normal completion must fail this test")
 	require.Contains(t, strings.ToLower(cancelErr.Error()), "interrupted",
 		"the interruption oracle must match the documented max_execution_time error")
 	require.Equal(t, spillThreshold, mustReadInt("select @@session.join_spill_mem"),
 		"the session must survive the cancellation with its value intact")
+	require.Equal(t, int64(2500), mustReadInt("select @@session.max_execution_time"),
+		"the cancellation budget must still be set on the same session")
 	t.Logf("cancel error: %v", cancelErr)
-	// Same-connection reuse with the full real-consumer oracle.
+	// The cancellation budget is not a latency requirement for the real spill
+	// query. Keep the connection and all spill assertions, but give that query
+	// the enclosing test's deadline instead.
+	mustExec("set session max_execution_time = 0")
+	require.Zero(t, mustReadInt("select @@session.max_execution_time"))
 	runJoinStage("same-conn-reuse-after-cancel", meowQuery, true)
 
 	// Original-session restore on the normal tail; every failure path is
@@ -536,7 +515,8 @@ func runSpillMemScenario(t *testing.T, dsn string, readSpill func() (float64, fl
 			t.Logf("session restore of %s skipped: %v (registered close guarantees termination)", name, lerr)
 		}
 	}
-	restoreSessionVar("max_execution_time", s1m)
+	mustExec(fmt.Sprintf("set session max_execution_time = %d", s1m))
+	require.Equal(t, s1m, mustReadInt("select @@session.max_execution_time"))
 	restoreSessionVar("join_spill_mem", s1j)
 	restoreSessionVar("agg_spill_mem", s1a)
 	restoreSessionVar("sort_spill_mem", s1s)

@@ -619,7 +619,7 @@ func makeInExpr(colPos int32, values []int32) *plan.Expr {
 func makeFoldInExprInt32(t *testing.T, colPos int32, nullFirst bool) *plan.Expr {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
-	vec := vector.NewVec(types.T_int32.ToType())
+	vec := vector.NewVec(types.T_int32.ToType(), mp)
 	appendValue := func(value int32, isNull bool) {
 		require.NoError(t, vector.AppendFixed(vec, value, isNull, mp))
 	}
@@ -1194,7 +1194,7 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 						IsConst: false,
 						Data: func() []byte {
 							mp := mpool.MustNewZeroNoFixed()
-							vec := vector.NewVec(types.T_int64.ToType())
+							vec := vector.NewVec(types.T_int64.ToType(), mp)
 							require.NoError(t, vector.AppendFixed[int64](vec, int64(1), false, mp))
 							data, err := vec.MarshalBinary()
 							require.NoError(t, err)
@@ -1211,7 +1211,7 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 						Len: 1,
 						Data: func() []byte {
 							mp := mpool.MustNewZeroNoFixed()
-							vec := vector.NewVec(types.T_int64.ToType())
+							vec := vector.NewVec(types.T_int64.ToType(), mp)
 							require.NoError(t, vector.AppendFixed[int64](vec, int64(1), false, mp))
 							require.NoError(t, vec.InplaceSortAndCompact(mp))
 							data, err := vec.MarshalBinary()
@@ -1305,7 +1305,7 @@ func TestConvertFoldExprToNormalRejectsInvalidVectors(t *testing.T) {
 
 	t.Run("payload type mismatch", func(t *testing.T) {
 		mp := mpool.MustNewZeroNoFixed()
-		vec := vector.NewVec(types.T_int64.ToType())
+		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(vec, int64(1), false, mp))
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
@@ -1336,7 +1336,7 @@ func TestConvertFoldExprToNormalFailsOpenOnNullableVectors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZeroNoFixed()
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			appendValue := func(isNull bool) {
 				if tc.typ.Oid == types.T_varchar {
 					require.NoError(t, vector.AppendBytes(vec, []byte("keep"), isNull, mp))
@@ -1772,7 +1772,7 @@ func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 func TestFoldConversionAllocationFailureModes(t *testing.T) {
 	setup := mpool.MustNewZero()
 	defer mpool.DeleteMPool(setup)
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), setup)
 	require.NoError(t, vector.AppendFixedList(vec, []int64{2, 1}, nil, setup))
 	data, err := vec.MarshalBinary()
 	require.NoError(t, err)

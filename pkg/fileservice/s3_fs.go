@@ -588,6 +588,20 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	return err
 }
 
+// canReplayWriteEntries only admits contiguous in-memory input. Streaming
+// readers and gaps keep the original upload-capture path.
+func canReplayWriteEntries(entries []IOEntry) bool {
+	var offset int64
+	for _, entry := range entries {
+		if entry.ReaderForWrite != nil || entry.Size < 0 || entry.Offset != offset ||
+			int64(len(entry.Data)) != entry.Size || entry.Size > math.MaxInt64-offset {
+			return false
+		}
+		offset += entry.Size
+	}
+	return true
+}
+
 func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, err error) {
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
@@ -602,25 +616,27 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		return cmp.Compare(a.Offset, b.Offset)
 	})
 
-	// reader
-	var reader io.Reader
-	reader = newIOEntriesReader(ctx, vector.Entries)
-	var n atomic.Int64
-	reader = &countingReader{
-		R: reader,
-		C: &n,
-	}
-
-	// disk cache
+	// A validated in-memory vector can be read with a cursor for both the
+	// upload and the cache fill, without cloning or mutating its entries.
+	size := vector.size()
 	writeDiskCache := s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites)
+	replayDiskCache := writeDiskCache && vector.Policy.Any(ReplayDataForDiskCache) && size != nil && canReplayWriteEntries(vector.Entries)
+	var reader io.Reader
+	if replayDiskCache {
+		reader = &replayDataReader{ctx: ctx, entries: vector.Entries, remaining: *size}
+	} else {
+		reader = newIOEntriesReader(ctx, vector.Entries)
+	}
+	var n atomic.Int64
+	reader = &countingReader{R: reader, C: &n}
+
 	var diskCacheBuf *bytes.Buffer
-	if writeDiskCache {
+	if writeDiskCache && !replayDiskCache {
 		diskCacheBuf = new(bytes.Buffer)
 		reader = io.TeeReader(reader, diskCacheBuf)
 	}
 
 	// some SDKs can't handle unknown reader type
-	size := vector.size()
 	if size != nil {
 		reader = io.LimitReader(reader, *size)
 	}
@@ -674,10 +690,18 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 
 	// write to disk cache
 	if writeDiskCache {
-		content := diskCacheBuf.Bytes()
 		diskCacheStart := time.Now()
-		if err := s.diskCache.setFileContent(ctx, vector.FilePath, content, s.asyncUpdate); err != nil {
-			return 0, err
+		var cacheErr error
+		if replayDiskCache {
+			consumed := n.Load()
+			cacheErr = s.diskCache.fillFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(&replayDataReader{ctx: context.Background(), entries: vector.Entries, remaining: consumed}), nil
+			}, s.asyncUpdate, contentFill)
+		} else {
+			cacheErr = s.diskCache.setFileContent(ctx, vector.FilePath, diskCacheBuf.Bytes(), s.asyncUpdate)
+		}
+		if cacheErr != nil {
+			return 0, cacheErr
 		}
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
 	}
@@ -706,8 +730,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}()
 	defer finishFill()
 	// A merge leader must not wake its waiters until caller-visible cache work
-	// has completed. Cache updates are deferred below, so register this defer
-	// first and let their later defers run before the merge is marked done.
+	// has completed. Successful reads publish cache updates before returning,
+	// so this defer marks the merge done only after those updates finish.
 	// Async disk finalization is intentionally outside this generation: the
 	// foreground read only admits that bounded work, and subsequent disk-cache
 	// readers use their own bounded wait before falling back to object storage.
@@ -745,30 +769,39 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
+	// Run queued IOVectorCache updates only after read work succeeds. Deferring
+	// them in registration order runs them in reverse; if one panics or calls
+	// runtime.Goexit, the remaining registered updates still run.
+	var updatesBuf [4]func()
+	cacheUpdates := updatesBuf[:0]
+	finishCacheUpdates := func() error {
+		for _, update := range cacheUpdates {
+			defer update()
+		}
+		return nil
+	}
+
 	for _, cache := range vector.Caches {
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_vector_Caches_begin)
-		err := readCache(ctx, cache, vector)
+		cacheReadErr := readCache(ctx, cache, vector)
 		LogEvent(ctx, str_read_vector_Caches_end)
 		metric.FSReadDurationReadVectorCache.Observe(time.Since(t0).Seconds())
-		if err != nil {
-			return err
+		if cacheReadErr != nil {
+			return cacheReadErr
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 
-		defer func() {
-			if err != nil {
-				return
-			}
+		cacheUpdates = append(cacheUpdates, func() {
 			t0 := time.Now()
 			LogEvent(ctx, str_update_vector_Caches_begin)
-			err = cache.Update(ctx, vector, false)
+			_ = cache.Update(ctx, vector, false)
 			LogEvent(ctx, str_update_vector_Caches_end)
 			metric.FSReadDurationUpdateVectorCache.Observe(time.Since(t0).Seconds())
-		}()
+		})
 	}
 
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
@@ -780,26 +813,23 @@ read_memory_cache:
 
 		t0 := time.Now()
 		LogEvent(ctx, str_read_memory_cache_Caches_begin)
-		err := readCache(ctx, s.memCache, vector)
+		cacheReadErr := readCache(ctx, s.memCache, vector)
 		LogEvent(ctx, str_read_memory_cache_Caches_end)
 		metric.FSReadDurationReadMemoryCache.Observe(time.Since(t0).Seconds())
-		if err != nil {
-			return err
+		if cacheReadErr != nil {
+			return cacheReadErr
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 
-		defer func() {
-			if err != nil {
-				return
-			}
+		cacheUpdates = append(cacheUpdates, func() {
 			t0 := time.Now()
 			LogEvent(ctx, str_update_memory_cache_begin)
-			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
+			_ = s.memCache.Update(ctx, vector, s.asyncUpdate)
 			LogEvent(ctx, str_update_memory_cache_end)
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
-		}()
+		})
 	}
 
 read_disk_cache:
@@ -821,7 +851,7 @@ read_disk_cache:
 				return err
 			}
 			if vector.allDone() {
-				return nil
+				return finishCacheUpdates()
 			}
 			if fillTicket != nil && !fillTicket.leader {
 				// This request did not receive an admitted disk-cache fill. Do
@@ -839,12 +869,12 @@ read_disk_cache:
 		for i, entry := range vector.Entries {
 			undoneBefore[i] = !entry.done
 		}
-		err := readCache(ctx, s.diskCache, vector)
+		cacheReadErr := readCache(ctx, s.diskCache, vector)
 		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
-		if err != nil {
+		if cacheReadErr != nil {
 			finishFill()
-			return err
+			return cacheReadErr
 		}
 		// Count bytes actually read from disk cache (entries that became done and from disk cache)
 		var actualDiskReadBytes int64
@@ -860,21 +890,18 @@ read_disk_cache:
 			})
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 
 		// try to cache IOEntry if not caching the full file
 		if vector.Policy.CacheIOEntry() {
-			defer func() {
-				if err != nil {
-					return
-				}
+			cacheUpdates = append(cacheUpdates, func() {
 				t0 := time.Now()
 				LogEvent(ctx, str_update_disk_cache_Caches_begin)
-				err = s.diskCache.Update(ctx, vector, s.asyncUpdate)
+				_ = s.diskCache.Update(ctx, vector, s.asyncUpdate)
 				LogEvent(ctx, str_update_disk_cache_Caches_end)
 				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
-			}()
+			})
 		}
 		finishFill()
 
@@ -890,7 +917,7 @@ read_disk_cache:
 			return err
 		}
 		if vector.allDone() {
-			return nil
+			return finishCacheUpdates()
 		}
 	}
 
@@ -1029,7 +1056,7 @@ read_s3:
 	if forcePerEntryRangeRead {
 		err = s.readEntriesIndividually(ctx, vector)
 	} else {
-		err = s.read(ctx, vector, forceMinimalRangeRead)
+		err = s.read(ctx, vector, forceMinimalRangeRead, false)
 	}
 	if err != nil {
 		return err
@@ -1042,12 +1069,15 @@ read_s3:
 		})
 	}
 
-	return nil
+	return finishCacheUpdates()
 }
 
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
 	// Read exact entry ranges when a full-object cache fill cannot serve this
 	// request, without fetching the potentially much larger sparse envelope.
+	// Only a fully consumed and validated buffered entry proves that later
+	// offsets are beyond an otherwise readable object.
+	firstValidatedOffset := int64(math.MaxInt64)
 	for i := range vector.Entries {
 		if vector.Entries[i].done {
 			continue
@@ -1061,10 +1091,14 @@ func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) er
 			ExpireAt: vector.ExpireAt,
 			Policy:   vector.Policy,
 		}
-		if err := s.read(ctx, single, true); err != nil {
+		if err := s.read(ctx, single, true, single.Entries[0].Offset > firstValidatedOffset); err != nil {
 			return err
 		}
 		vector.Entries[i] = single.Entries[0]
+		entry := &vector.Entries[i]
+		if entry.WriterForRead == nil && entry.ReadCloserForRead == nil {
+			firstValidatedOffset = min(firstValidatedOffset, entry.Offset)
+		}
 	}
 	return nil
 }
@@ -1108,7 +1142,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	return nil
 }
 
-func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead bool) (err error) {
+func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead, laterSparseRange bool) (err error) {
 	if vector.allDone() {
 		// all cache hit
 		return nil
@@ -1125,6 +1159,14 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	if readFullObject && (forceMinimalRangeRead || s.diskCache == nil) {
 		min, max = vector.readMinimalRange()
 		readFullObject = false
+	}
+
+	// HDFS preserves its envelope read because seeking past EOF returns a
+	// backend-specific error rather than HTTP 416.
+	if !readFullObject {
+		if _, isHDFS := s.rawStorage.(*HDFS); !isHDFS && vector.shouldSplitSparseRead(min, max) {
+			return s.readEntriesIndividually(ctx, vector)
+		}
 	}
 
 	// A range read is timed only when this function drains it.
@@ -1150,6 +1192,11 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		key := s.pathToKey(path.File)
 		r, err := s.storage.Read(ctx, key, min, max)
 		if err != nil {
+			// The earliest range has already succeeded, so a later 416 is a
+			// short object, just as it is for the original envelope read.
+			if status, ok := objectStorageStatusCode(err); laterSparseRange && ok && status == 416 {
+				return nil, moerr.NewUnexpectedEOFNoCtx(path.File)
+			}
 			return nil, err
 		}
 		return &readCloser{
@@ -1517,19 +1564,24 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		stopOnClose = context.AfterFunc(closing, cancelFill)
 	}
 	diskPath := s.diskCache.pathForFile(file)
-	started := make(chan *objectDownload, 1)
+	type admittedDownload struct {
+		download *objectDownload
+		file     io.ReaderAt
+	}
+	started := make(chan admittedDownload, 1)
 	setDone := make(chan error, 1)
 	go func() {
 		setDone <- s.diskCache.setFile(fillCtx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
+			var admitted admittedDownload
 			download := s.diskCache.download(diskPath)
 			if download != nil {
-				if _, ok := download.acquire(); !ok {
-					download = nil
+				if f, ok := download.acquire(); ok {
+					admitted = admittedDownload{download: download, file: f}
 				}
 			}
-			started <- download
+			started <- admitted
 			return getReader(fillCtx, ptrTo[int64](0), nil)
 		}, s.asyncUpdate)
 	}()
@@ -1544,18 +1596,18 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return setErr
 	}
 
-	var download *objectDownload
+	var admitted admittedDownload
 	select {
-	case download = <-started:
+	case admitted = <-started:
 	case setErr = <-setDone:
 		setFinished = true
 		// A download that started and already ended still has the bytes it wrote.
 		select {
-		case download = <-started:
+		case admitted = <-started:
 		default:
 		}
 	}
-	if download == nil {
+	if admitted.download == nil {
 		if err := waitSet(); err != nil {
 			return true, err
 		}
@@ -1563,13 +1615,22 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		// The caller must fall back without assuming a cache file is readable.
 		return false, nil
 	}
-	defer download.release()
+	download := admitted.download
+	defer func() {
+		defer download.release()
+		read.finish(download, done && err == nil)
+	}()
 
-	captured := read.capture(ctx, download)
+	captured, captureErr := read.capture(ctx, download, admitted.file, file)
 	if err := ctx.Err(); err != nil {
 		cancelFill()
 		_ = waitSet()
 		return true, err
+	}
+	if captureErr != nil {
+		cancelFill()
+		_ = waitSet()
+		return true, captureErr
 	}
 	if captured && s.asyncUpdate {
 		select {
@@ -1590,7 +1651,14 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return true, err
 	}
 	if !captured {
-		if !read.capture(ctx, download) && !download.isComplete() {
+		captured, captureErr = read.capture(ctx, download, admitted.file, file)
+		if err := ctx.Err(); err != nil {
+			return true, err
+		}
+		if captureErr != nil {
+			return true, captureErr
+		}
+		if !captured && !download.isComplete() {
 			// SetFile did not consume the whole reader. Keep the original read path so
 			// the caller still gets data without trusting a partial download.
 			return false, nil
@@ -1606,6 +1674,7 @@ var backgroundFills = make(chan struct{}, 8)
 type fullObjectDiskCacheReader struct {
 	vector   *IOVector
 	captures []fullObjectEntryCapture
+	toServe  int64
 }
 
 type fullObjectEntryCapture struct {
@@ -1614,7 +1683,6 @@ type fullObjectEntryCapture struct {
 	size   int64
 	data   bytes.Buffer
 	read   bool
-	served bool
 }
 
 func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
@@ -1635,10 +1703,11 @@ func newFullObjectDiskCacheReader(vector *IOVector) *fullObjectDiskCacheReader {
 	return ret
 }
 
-// capture reads each capture's range from download once it is written, a capture to the
-// end of the object once the whole object is. It returns whether every capture holds its
-// range; a capture that cannot complete holds what the download wrote of it.
-func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objectDownload) bool {
+// capture reads available ranges from the request's admitted file. An incomplete
+// object may leave a range partial; a file read error is returned to the caller.
+func (r *fullObjectDiskCacheReader) capture(
+	ctx context.Context, download *objectDownload, source io.ReaderAt, file string,
+) (bool, error) {
 	all := true
 	for i := range r.captures {
 		c := &r.captures[i]
@@ -1655,31 +1724,36 @@ func (r *fullObjectDiskCacheReader) capture(ctx context.Context, download *objec
 			if c.size >= 0 {
 				want = min(want, c.size)
 			}
-			if ok && want > 0 && !c.served {
-				// The bytes count before they are read, as readFromDownload counts them.
-				download.serve(want)
-				c.served = true
-			}
-			if want > 0 && !r.readRange(download, c, want) {
-				all = false
-				continue
+			if want > 0 {
+				c.data.Reset()
+				n, err := io.Copy(&c.data, io.NewSectionReader(source, c.offset, want))
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return false, ctxErr
+				}
+				if err != nil {
+					return false, err
+				}
+				if n != want {
+					return false, moerr.NewUnexpectedEOFNoCtx(file)
+				}
+				if ok {
+					r.toServe += n
+				}
 			}
 			c.read = ok
 		}
 		all = all && c.read
 	}
-	return all
+	return all, nil
 }
 
-func (r *fullObjectDiskCacheReader) readRange(download *objectDownload, c *fullObjectEntryCapture, n int64) bool {
-	f, ok := download.acquire()
-	if !ok {
-		return false
+// finish charges captured bytes once, while the request still holds the file.
+func (r *fullObjectDiskCacheReader) finish(download *objectDownload, success bool) {
+	n := r.toServe
+	r.toServe = 0
+	if success && n > 0 {
+		download.serve(n)
 	}
-	defer download.release()
-	c.data.Reset()
-	_, err := io.Copy(&c.data, io.NewSectionReader(f, c.offset, n))
-	return err == nil
 }
 
 func (r *fullObjectDiskCacheReader) fillVector(

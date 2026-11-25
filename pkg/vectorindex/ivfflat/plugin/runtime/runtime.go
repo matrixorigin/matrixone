@@ -54,21 +54,23 @@ func MaintenanceOperands(cfg vectorindex.IndexTableConfig) []vectorindex.Mainten
 }
 
 // HiddenTableTypes — IVF-FLAT uses three hidden tables (metadata,
-// centroids, entries) vs two for HNSW/CAGRA/IVF-PQ. Order is irrelevant;
-// downstream code keys into the map by name.
+// centroids, entries), and an ignored table for an index created with one.
+// Order is irrelevant; downstream code keys into the map by name.
 func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.SystemSI_IVFFLAT_TblType_Metadata,
 		catalog.SystemSI_IVFFLAT_TblType_Centroids,
 		catalog.SystemSI_IVFFLAT_TblType_Entries,
+		catalog.IndexIgnored_TblType,
 	}
 }
 
-// ShouldTruncateHiddenTable — only entries are reset; metadata and
-// centroids preserve the k-means model across TRUNCATE so a subsequent
-// ALTER REINDEX is cheap.
+// ShouldTruncateHiddenTable — only entries and ignored rows are reset;
+// metadata and centroids preserve the k-means model across TRUNCATE so a
+// subsequent ALTER REINDEX is cheap.
 func (CatalogHooks) ShouldTruncateHiddenTable(algoTableType string) bool {
-	return algoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries
+	return algoTableType == catalog.SystemSI_IVFFLAT_TblType_Entries ||
+		algoTableType == catalog.IndexIgnored_TblType
 }
 
 // AlterTableCloneBehavior — IVF-FLAT seeds all three hidden tables
@@ -90,9 +92,11 @@ func (CatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehav
 			catalog.SystemSI_IVFFLAT_TblType_Metadata,
 			catalog.SystemSI_IVFFLAT_TblType_Centroids,
 			catalog.SystemSI_IVFFLAT_TblType_Entries,
+			catalog.IndexIgnored_TblType,
 		},
 		SkipWhenAsync: []string{
 			catalog.SystemSI_IVFFLAT_TblType_Entries,
+			catalog.IndexIgnored_TblType,
 		},
 	}
 }
@@ -317,6 +321,10 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 			return nil, err
 		}
 		res[catalog.IncludedColumns] = encoded
+	}
+
+	if idx.IndexOption.MaxBadRecordsSet {
+		res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
 	}
 	return res, nil
 }

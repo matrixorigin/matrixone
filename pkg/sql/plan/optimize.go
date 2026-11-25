@@ -42,8 +42,9 @@ func NewBaseOptimizer(ctx CompilerContext) *BaseOptimizer {
 
 func NewPrepareOptimizer(ctx CompilerContext) *BaseOptimizer {
 	return &BaseOptimizer{
-		ctx:   ctx,
-		rules: prepareRules,
+		ctx:              ctx,
+		rules:            prepareRules,
+		skipLocalDomains: true,
 	}
 }
 
@@ -61,6 +62,9 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool, inpu
 		panic(moerr.NewInternalError(opt.ctx.GetContext(), pn.String()))
 	}
 	opt.qry = qry.Query
+	skipLocalDomains := opt.skipLocalDomains
+	opt.skipLocalDomains = skipLocalDomains || isPrepareStmt
+	defer func() { opt.skipLocalDomains = skipLocalDomains }()
 	return opt.optimize()
 }
 
@@ -92,6 +96,9 @@ func (opt *BaseOptimizer) optimize() (*Query, error) {
 	}
 
 	opt.pruneUsedNodes(opt.qry)
+	if !opt.skipLocalDomains && opt.qry.StmtType == plan.Query_SELECT {
+		opt.qry.LocalRuntimeFilterDomains = deriveFoldedLocalDomains(opt.qry, opt.ctx)
+	}
 
 	return opt.qry, nil
 }
@@ -107,7 +114,21 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 	}
 }
 
+func appendWindowValidationPrivilegeCarriers(oldNodes []*plan.Node, nodes *[]*plan.Node) {
+	for _, node := range oldNodes {
+		if !IsValidationPrivilegeCarrier(node) {
+			continue
+		}
+		if id := node.NodeId; id >= 0 && int(id) < len(*nodes) && (*nodes)[id] == node {
+			continue
+		}
+		node.NodeId = int32(len(*nodes))
+		*nodes = append(*nodes, node)
+	}
+}
+
 func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
+	oldNodes := qry.Nodes
 	newSteps := make([]int32, 0, len(qry.Steps))
 	newNodes := make([]*plan.Node, 0, len(qry.Nodes))
 
@@ -115,8 +136,10 @@ func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
 		newSteps = append(newSteps, opt.compactPlanTree(qry, step, &newNodes))
 	}
 
+	appendWindowValidationPrivilegeCarriers(oldNodes, &newNodes)
 	qry.Steps = newSteps
 	qry.Nodes = newNodes
+	remapLocalRuntimeFilterDomains(qry, oldNodes)
 }
 
 func (opt *BaseOptimizer) compactPlanTree(qry *plan.Query, nodeID int32, nodes *[]*plan.Node) int32 {

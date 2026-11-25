@@ -221,7 +221,7 @@ func TestCompositePointCandidate(t *testing.T) {
 		node.FilterList[0] = stringEq(0, param)
 		node.NodeType = pb.Node_TABLE_SCAN
 		proc := ctx.GetProcess()
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 		defer params.Free(proc.Mp())
 		require.NoError(t, vector.AppendBytes(params, []byte("a"), false, proc.Mp()))
 		proc.SetPrepareParams(params)
@@ -363,7 +363,7 @@ func TestCompositePointPreparedValueBudget(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := newPlanTestProcess(t)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer params.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, tc.value, tc.null, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -510,7 +510,7 @@ func TestCompositePointFrozenSources(t *testing.T) {
 				bind("or", bind("and", eq(1, cast), eq(2, selectedParam)), bind("and", eq(1, param(2)), eq(2, param(3)))),
 			}}
 			proc := ctx.GetProcess()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer params.Free(proc.Mp())
 			bindings := make([]PreparedSourceBinding, 4)
 			values := make([]any, 4)
@@ -576,7 +576,7 @@ func TestCompositePointRejectsFallibleUnselectedEquality(t *testing.T) {
 	}{{"abc", true}, {"abcd", false}} {
 		t.Run(tc.value, func(t *testing.T) {
 			proc := newPlanTestProcess(t)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer params.Free(proc.Mp())
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
 			proc.SetPrepareParams(params)
@@ -638,7 +638,7 @@ func TestCompositePointFallbackPreservesPreparedPlanCache(t *testing.T) {
 			typ := types.T_varchar.ToType()
 			bindings := make([]PreparedSourceBinding, tc.params)
 			values := make([]any, tc.params)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer params.Free(proc.Mp())
 			for i := range bindings {
 				value := "abc"

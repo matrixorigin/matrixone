@@ -353,9 +353,9 @@ def _protocol_schema(cursor):
                 dtype = factory()
         elif code in (ft.DECIMAL, ft.NEWDECIMAL):
             precision = f.length - (0 if f.flags & FLAG.UNSIGNED else 1) - (1 if f.scale else 0)
-            if not 1 <= precision <= 38:
-                raise TypeError("Decimal protocol precision is outside Arrow Decimal128")
-            dtype = pa.decimal128(precision, f.scale)
+            if not 1 <= precision <= 76:
+                raise TypeError("Decimal protocol precision is outside Arrow decimal range")
+            dtype = (pa.decimal128 if precision <= 38 else pa.decimal256)(precision, f.scale)
         elif code == ft.FLOAT:
             dtype = pa.float32()
         elif code == ft.DOUBLE:

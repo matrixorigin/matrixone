@@ -92,3 +92,33 @@ func TestCDCStrToTimeFormatsAndTimezone(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.IsZero())
 }
+
+// TestCDCStrToTimeZoneContract locks the documented StartTs/EndTs time zone
+// contract: unzoned DateTime values follow the supplied (session) time zone,
+// while RFC3339 values with an explicit offset denote the same absolute
+// instant in every session. See pkg/cdc/CDC_USER_GUIDE.md "Time Range
+// Options".
+func TestCDCStrToTimeZoneContract(t *testing.T) {
+	utc := time.UTC
+	cst := time.FixedZone("CST", 8*60*60)
+
+	// Equivalent RFC3339 inputs produce the identical absolute boundary
+	// regardless of the session time zone.
+	a, err := CDCStrToTime("2025-01-02T03:04:05Z", utc)
+	require.NoError(t, err)
+	b, err := CDCStrToTime("2025-01-02T11:04:05+08:00", cst)
+	require.NoError(t, err)
+	require.True(t, a.Equal(b), "zoned inputs must be zone-independent: %v vs %v", a, b)
+
+	// The same unzoned input resolves 8 hours apart under the two sessions;
+	// this is the documented session-time-zone interpretation.
+	u, err := CDCStrToTime("2025-01-02 03:04:05", utc)
+	require.NoError(t, err)
+	c, err := CDCStrToTime("2025-01-02 03:04:05", cst)
+	require.NoError(t, err)
+	require.Equal(t, 8*time.Hour, u.Sub(c))
+
+	// The persisted form carries the offset, so the stored boundary identifies
+	// the absolute instant the creating session computed.
+	require.Equal(t, "2025-01-02T03:04:05+08:00", c.Format(time.RFC3339))
+}

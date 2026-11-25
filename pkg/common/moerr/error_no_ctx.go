@@ -553,3 +553,11 @@ func NewIndexTooManyBadRecordsNoCtx(limit int64, pk string, detail string) *Erro
 func NewIndexAllRowsBadNoCtx(rows int64, pk string, detail string) *Error {
 	return newError(Context(), ErrIndexAllRowsBad, rows, pk, detail)
 }
+
+func NewIndexInvalidJSONNoCtx(detail string) *Error {
+	return newError(Context(), ErrIndexInvalidJSON, detail)
+}
+
+func NewIndexDatalinkNoCtx(detail string) *Error {
+	return newError(Context(), ErrIndexDatalink, detail)
+}

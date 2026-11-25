@@ -16,10 +16,13 @@ package group
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
+	"math"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -378,6 +381,90 @@ func (w *groupSpillWriter) WriteSelectedFixedRows(
 		}
 		written += chunkBytes
 		rows = rows[chunkRows:]
+	}
+	return written, nil
+}
+
+// WriteSelectedVarlenaRows gathers a sparse string selection into the existing
+// accounted coalescer. The reference framing (length followed by value) is
+// unchanged; no per-row buffer or additional payload allocation is needed.
+func (w *groupSpillWriter) WriteSelectedVarlenaRows(
+	values []types.Varlena,
+	area []byte,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	for _, row := range rows {
+		if row < 0 || int(row) >= len(values) {
+			return 0, mpool.ErrAllocationAccountInvalid
+		}
+		if !values[row].IsSmall() {
+			_, length := values[row].OffsetLen()
+			if length > math.MaxInt32 {
+				return 0, mpool.ErrAllocationAccountInvalid
+			}
+		}
+	}
+	if w.failed != nil {
+		return 0, w.failed
+	}
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := w.ensureBuffer(); err != nil {
+		return 0, err
+	}
+	written := 0
+	for len(rows) > 0 {
+		if err := w.ctx.Err(); err != nil {
+			return written, err
+		}
+		if !w.disabled {
+			start := w.buffer.Len()
+			end := start
+			output := w.buffer.Bytes()[:spillWrBufSize]
+			for len(rows) > 0 {
+				value := values[rows[0]].GetByteSlice(area)
+				if len(value) > len(output)-end-4 {
+					break
+				}
+				binary.LittleEndian.PutUint32(output[end:], uint32(len(value)))
+				end += 4
+				end += copy(output[end:], value)
+				rows = rows[1:]
+			}
+			if err := w.buffer.Resize(end); err != nil {
+				return written, err
+			}
+			written += end - start
+			if len(rows) == 0 {
+				break
+			}
+			if end > 0 {
+				if err := w.Flush(); err != nil {
+					return written, err
+				}
+				continue
+			}
+		}
+		// A value larger than the coalescer, or failed optional buffer
+		// admission, keeps the ordinary bounded/cancellable write path.
+		value := values[rows[0]].GetByteSlice(area)
+		var length [4]byte
+		binary.LittleEndian.PutUint32(length[:], uint32(len(value)))
+		n, err := w.Write(length[:])
+		written += n
+		if err != nil {
+			return written, err
+		}
+		n, err = w.Write(value)
+		written += n
+		if err != nil {
+			return written, err
+		}
+		rows = rows[1:]
 	}
 	return written, nil
 }

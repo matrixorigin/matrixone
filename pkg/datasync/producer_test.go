@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProducer_Enqueue(t *testing.T) {
@@ -56,30 +57,34 @@ func TestProducer_EnqueueFull1(t *testing.T) {
 
 func TestProducer_EnqueueFull2(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	writeLsn := &atomic.Uint64{}
-	p := newProducer(common{}, 10, writeLsn)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	q := p.(*producer).dataQ
+	payload, err := payloadData()
+	require.NoError(t, err)
+	require.NotEmpty(t, payload)
 	items := make([]*wrappedData, 20)
 	for i := range items {
-		payload, err := payloadData()
-		assert.NoError(t, err)
-		assert.NotNil(t, payload)
 		items[i] = newWrappedData(genRecord(payload, 0).Data, 0, nil)
 	}
 
-	firstBatchDone := make(chan struct{})
-	secondBatchStarted := make(chan struct{})
+	writeLsn := &atomic.Uint64{}
+	p := newProducer(common{}, 10, writeLsn)
+	q := p.(*producer).dataQ.(*dataQueue)
+	full := make(chan bool, 1)
+	mayIgnore := q.mayIgnore
+	q.mayIgnore = func(item *wrappedData) bool {
+		ignored := mayIgnore(item)
+		select {
+		case full <- ignored:
+		default:
+		}
+		return ignored
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	for _, item := range items[:10] {
+		p.Enqueue(ctx, item)
+	}
 	done := make(chan struct{})
 	go func() {
-		for _, item := range items[:10] {
-			p.Enqueue(ctx, item)
-		}
-		close(firstBatchDone)
-
-		// the queue is already full
-		close(secondBatchStarted)
 		for _, item := range items[10:] {
 			p.Enqueue(ctx, item)
 		}
@@ -90,28 +95,27 @@ func TestProducer_EnqueueFull2(t *testing.T) {
 		select {
 		case <-done:
 			p.Close()
-		case <-time.After(time.Second):
+		case <-time.After(5 * time.Second):
 			t.Error("enqueue worker did not stop")
 		}
 	}()
-	for _, event := range []<-chan struct{}{firstBatchDone, secondBatchStarted} {
-		select {
-		case <-event:
-		case <-ctx.Done():
-			t.Fatal("enqueue phase notification missing")
-		}
+	select {
+	case ignored := <-full:
+		require.False(t, ignored, "a record containing a location must not be dropped")
+	case <-ctx.Done():
+		t.Fatal("enqueue did not reach the full queue")
 	}
-	for i := 0; i < 20; i++ {
+	for _, item := range items {
 		w, err := q.dequeue(ctx)
-		assert.NoError(t, err)
-		assert.NotNil(t, w)
+		require.NoError(t, err)
+		require.Same(t, item, w)
 	}
 	select {
 	case <-done:
 	case <-ctx.Done():
 		t.Fatal("enqueue did not complete")
 	}
-	assert.Equal(t, 0, len(q.(*dataQueue).queue))
+	assert.Empty(t, q.queue)
 }
 
 func withProducerStarted(

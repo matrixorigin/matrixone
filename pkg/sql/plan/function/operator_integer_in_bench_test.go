@@ -38,9 +38,9 @@ func BenchmarkIntegerMembership(b *testing.B) {
 				for _, build := range []bool{false, true} {
 					b.Run(fmt.Sprintf("%s/set%d/rows%d/build%t", shape, n, rows, build), func(b *testing.B) {
 						proc := testutil.NewProcess(b)
-						list := vector.NewVec(types.T_int32.ToType())
+						list := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 						defer list.Free(proc.Mp())
-						input := vector.NewVec(types.T_int32.ToType())
+						input := vector.NewVec(types.T_int32.ToType(), proc.Mp())
 						defer input.Free(proc.Mp())
 						stride := 2
 						if strings.HasPrefix(shape, "sparse") {

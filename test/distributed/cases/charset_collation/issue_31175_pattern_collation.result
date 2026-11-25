@@ -1,0 +1,1127 @@
+DROP DATABASE IF EXISTS issue_31175;
+CREATE DATABASE issue_31175;
+USE issue_31175;
+SELECT COLLATION('abc');
+➤ COLLATION(abc)[12,65535,0]  𝄀
+utf8mb4_general_ci
+SELECT 'a' LIKE 'A', 'ABC' LIKE 'abc';
+➤ a like A[-6,8,0]  ¦  ABC like abc[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'abc' REGEXP 'ABC', 'abc' REGEXP '[A-Z]+';
+➤ abc reg_match ABC[-6,8,0]  ¦  abc reg_match [A-Z]+[-6,8,0]  𝄀
+1  ¦  1
+SELECT LOCATE('A', 'abc'), INSTR('abc', 'A'), POSITION('B' IN 'abc');
+➤ LOCATE(A, abc)[-5,64,0]  ¦  INSTR(abc, A)[-5,64,0]  ¦  POSITION(B in abc)[-5,64,0]  𝄀
+1  ¦  1  ¦  2
+SELECT FIND_IN_SET('A', 'a,b'), FIND_IN_SET('B', 'a,b'), FIND_IN_SET('z', 'a,b');
+➤ FIND_IN_SET(A, a,b)[-5,3,0]  ¦  FIND_IN_SET(B, a,b)[-5,3,0]  ¦  FIND_IN_SET(z, a,b)[-5,3,0]  𝄀
+1  ¦  2  ¦  0
+SELECT 'a' NOT LIKE 'A', 'abc' NOT REGEXP 'ABC';
+➤ a not like A[-6,8,0]  ¦  abc not reg_match ABC[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'ς' LIKE 'Σ', 'σ' LIKE 'ς', 'Σ' LIKE 'σ';
+➤ ς like Σ[-6,8,0]  ¦  σ like ς[-6,8,0]  ¦  Σ like σ[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'ς' LIKE 'Σ%', 'xσ' LIKE 'Σ%', 'σxς' LIKE '%Σ%';
+➤ ς like Σ%[-6,8,0]  ¦  xσ like Σ%[-6,8,0]  ¦  σxς like %Σ%[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'σ_ς' LIKE 'Σ!_Σ' ESCAPE '!', 'σxς' LIKE 'Σ!_Σ' ESCAPE '!';
+➤ σ_ς like Σ!_Σ escape ![-6,8,0]  ¦  σxς like Σ!_Σ escape ![-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ς' REGEXP 'Σ', 'σ' REGEXP 'ς';
+➤ ς reg_match Σ[-6,8,0]  ¦  σ reg_match ς[-6,8,0]  𝄀
+1  ¦  1
+SELECT FIND_IN_SET('ς', 'σ,Σ'), LOCATE('ς', 'σΣ');
+➤ FIND_IN_SET(ς, σ,Σ)[-5,3,0]  ¦  LOCATE(ς, σΣ)[-5,64,0]  𝄀
+1  ¦  1
+CREATE TABLE ci1 (name VARCHAR(30));
+INSERT INTO ci1 VALUES ('Alice'), ('BOB'), ('carol'), ('DAVE');
+SELECT COUNT(*) FROM ci1 WHERE name LIKE 'alice%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM ci1 WHERE name REGEXP '^alice';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT name FROM ci1 WHERE name LIKE 'ALICE%' ORDER BY name;
+➤ name[12,30,0]  𝄀
+Alice
+SELECT name FROM ci1 WHERE name NOT LIKE 'alice%' ORDER BY name;
+➤ name[12,30,0]  𝄀
+BOB  𝄀
+carol  𝄀
+DAVE
+SELECT name FROM ci1 WHERE name REGEXP '^[a-c]' ORDER BY name;
+➤ name[12,30,0]  𝄀
+Alice  𝄀
+BOB  𝄀
+carol
+CREATE TABLE uci2 (s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
+INSERT INTO uci2 VALUES ('Alice'), ('BOB');
+SELECT COUNT(*) FROM uci2 WHERE s = 'alice';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE s IN ('alice');
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE s LIKE 'alice%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE s LIKE 'ALICE%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE s REGEXP '^alice';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT s FROM uci2 WHERE s LIKE 'bob' ORDER BY s;
+➤ s[12,20,0]  𝄀
+BOB
+SELECT 'Apple' = 'apple' COLLATE utf8mb4_unicode_ci;
+➤ Apple = (apple) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1
+SELECT 'Apple' LIKE 'apple' COLLATE utf8mb4_unicode_ci;
+➤ Apple like (apple) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1
+SELECT 'Apple' REGEXP 'apple' COLLATE utf8mb4_unicode_ci;
+➤ Apple reg_match (apple) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1
+SELECT 'Apple' LIKE 'apple%' COLLATE utf8mb4_unicode_ci;
+➤ Apple like (apple%) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1
+SELECT 'a' LIKE 'A' COLLATE utf8mb4_bin;
+➤ a like (A) collate utf8mb4_bin[-6,8,0]  𝄀
+0
+SELECT 'abc' REGEXP 'ABC' COLLATE utf8mb4_bin;
+➤ abc reg_match (ABC) collate utf8mb4_bin[-6,8,0]  𝄀
+0
+SELECT REGEXP_LIKE('abc', 'ABC');
+➤ REGEXP_LIKE(abc, ABC)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('abc', 'ABC', 'c');
+➤ REGEXP_LIKE(abc, ABC, c)[-6,8,0]  𝄀
+0
+SELECT REGEXP_LIKE('abc', 'ABC', 'i');
+➤ REGEXP_LIKE(abc, ABC, i)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('ABC', '^abc', 'm');
+➤ REGEXP_LIKE(ABC, ^abc, m)[-6,8,0]  𝄀
+1
+SELECT _binary 'a' LIKE _binary 'A', _binary 'abc' REGEXP _binary 'ABC';
+➤ a like A[-6,8,0]  ¦  abc reg_match ABC[-6,8,0]  𝄀
+0  ¦  0
+SELECT CAST('a' AS BINARY) LIKE CAST('A' AS BINARY);
+➤ cast(a as binary) like cast(A as binary)[-6,8,0]  𝄀
+0
+SELECT 'a' LIKE 'A' ESCAPE ('!' COLLATE utf8mb4_bin);
+➤ a like A escape ((!) collate utf8mb4_bin)[-6,8,0]  𝄀
+0
+SELECT 'a' LIKE 'A' ESCAPE ('!' COLLATE utf8mb4_general_ci);
+➤ a like A escape ((!) collate utf8mb4_general_ci)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('a' COLLATE utf8mb4_unicode_ci, 'A', 'i' COLLATE utf8mb4_bin);
+➤ REGEXP_LIKE((a) collate utf8mb4_unicode_ci, A, (i) collate utf8mb4_bin)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('a' COLLATE utf8mb4_unicode_ci, 'A', 'm' COLLATE utf8mb4_bin);
+➤ REGEXP_LIKE((a) collate utf8mb4_unicode_ci, A, (m) collate utf8mb4_bin)[-6,8,0]  𝄀
+1
+SELECT _binary 'abc' REGEXP 'ABC';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to reg_match.
+SELECT _binary 'abc' REGEXP ('ABC' COLLATE utf8mb4_general_ci);
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to reg_match.
+SELECT ('ABC' COLLATE utf8mb4_unicode_ci) REGEXP _binary 'abc';
+Character set 'utf8mb4_unicode_ci' cannot be used in conjunction with 'binary' in call to reg_match.
+SELECT REGEXP_LIKE(_binary 'abc', 'ABC' COLLATE utf8mb4_general_ci);
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT _binary 'abc' LIKE ('ABC%' COLLATE utf8mb4_general_ci);
+➤ abc like ((ABC%) collate utf8mb4_general_ci)[-6,8,0]  𝄀
+1
+SELECT ('abc' COLLATE utf8mb4_general_ci) LIKE _binary 'ABC%';
+➤ ((abc) collate utf8mb4_general_ci) like ABC%[-6,8,0]  𝄀
+1
+SELECT _binary 'abc' LIKE ('ABC%' COLLATE utf8mb4_unicode_ci);
+➤ abc like ((ABC%) collate utf8mb4_unicode_ci)[-6,8,0]  𝄀
+1
+SELECT ('abc' COLLATE utf8mb4_unicode_ci) LIKE _binary 'ABC%';
+➤ ((abc) collate utf8mb4_unicode_ci) like ABC%[-6,8,0]  𝄀
+1
+SELECT _binary 'abc' LIKE 'ABC%', _binary 'abc' LIKE ('ABC%' COLLATE utf8mb4_bin);
+➤ abc like ABC%[-6,8,0]  ¦  abc like ((ABC%) collate utf8mb4_bin)[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'abc' LIKE _binary 'ABC%';
+➤ abc like ABC%[-6,8,0]  𝄀
+0
+SELECT _binary 'abc' LIKE ('abc%' COLLATE utf8mb4_general_ci), _binary 'xbc' LIKE ('ABC%' COLLATE utf8mb4_general_ci);
+➤ abc like ((abc%) collate utf8mb4_general_ci)[-6,8,0]  ¦  xbc like ((ABC%) collate utf8mb4_general_ci)[-6,8,0]  𝄀
+1  ¦  0
+SELECT FIND_IN_SET(_binary 'A', 'a,b'), FIND_IN_SET('A', _binary 'a,b');
+➤ FIND_IN_SET(A, a,b)[-5,3,0]  ¦  FIND_IN_SET(A, a,b)[-5,3,0]  𝄀
+0  ¦  0
+SELECT FIND_IN_SET(_binary 'a', 'a,b'), FIND_IN_SET('a', _binary 'a,b');
+➤ FIND_IN_SET(a, a,b)[-5,3,0]  ¦  FIND_IN_SET(a, a,b)[-5,3,0]  𝄀
+1  ¦  1
+SELECT FIND_IN_SET(_binary 'A', 'a,b' COLLATE utf8mb4_general_ci);
+➤ FIND_IN_SET(A, (a,b) collate utf8mb4_general_ci)[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET('A' COLLATE utf8mb4_general_ci, _binary 'a,b');
+➤ FIND_IN_SET((A) collate utf8mb4_general_ci, a,b)[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET(_binary 'A', 'a,b' COLLATE utf8mb4_unicode_ci);
+➤ FIND_IN_SET(A, (a,b) collate utf8mb4_unicode_ci)[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET('A' COLLATE utf8mb4_unicode_ci, _binary 'a,b');
+➤ FIND_IN_SET((A) collate utf8mb4_unicode_ci, a,b)[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET(_binary 'z', 'a,b' COLLATE utf8mb4_general_ci), FIND_IN_SET(_binary 'A', 'A,b' COLLATE utf8mb4_bin);
+➤ FIND_IN_SET(z, (a,b) collate utf8mb4_general_ci)[-5,3,0]  ¦  FIND_IN_SET(A, (A,b) collate utf8mb4_bin)[-5,3,0]  𝄀
+0  ¦  1
+SELECT FIND_IN_SET('a' COLLATE utf8mb4_unicode_ci, 'A,b');
+➤ FIND_IN_SET((a) collate utf8mb4_unicode_ci, A,b)[-5,3,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE s LIKE _binary 'alice%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE _binary 'alice' LIKE s;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE FIND_IN_SET(_binary 'ALICE', s) > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE FIND_IN_SET(s, _binary 'alice,bob') > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM ci1 WHERE name LIKE _binary 'alice%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM ci1 WHERE FIND_IN_SET(_binary 'CAROL', name) > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+CREATE TABLE mix1 (s VARCHAR(30) COLLATE utf8mb4_general_ci, p VARCHAR(30) COLLATE utf8mb4_bin);
+INSERT INTO mix1 VALUES ('A', 'a'), ('Alice', 'Alice');
+SELECT s LIKE p, p LIKE s FROM mix1 ORDER BY s;
+➤ s like p[-6,8,0]  ¦  p like s[-6,8,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1
+SELECT s REGEXP p, p REGEXP s FROM mix1 ORDER BY s;
+➤ s reg_match p[-6,8,0]  ¦  p reg_match s[-6,8,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1
+SELECT s = p, p = s FROM mix1 ORDER BY s;
+➤ s = p[-6,8,0]  ¦  p = s[-6,8,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1
+CREATE TABLE mix2 (bn VARCHAR(30) COLLATE utf8mb4_bin, gl VARCHAR(40) COLLATE utf8mb4_general_ci,
+gn VARCHAR(30) COLLATE utf8mb4_general_ci, bl VARCHAR(40) COLLATE utf8mb4_bin);
+INSERT INTO mix2 VALUES ('A', 'a,b', 'A', 'a,b'), ('a', 'a,b', 'a', 'a,b');
+SELECT FIND_IN_SET(bn, gl), FIND_IN_SET(gn, bl) FROM mix2 ORDER BY bn;
+➤ FIND_IN_SET(bn, gl)[-5,3,0]  ¦  FIND_IN_SET(gn, bl)[-5,3,0]  𝄀
+0  ¦  0  𝄀
+1  ¦  1
+SELECT 'á' LIKE 'a', 'Á' LIKE 'a%';
+➤ á like a[-6,8,0]  ¦  Á like a%[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ı' LIKE 'I', 'ß' LIKE 's', 'ß' LIKE 'ss';
+➤ ı like I[-6,8,0]  ¦  ß like s[-6,8,0]  ¦  ß like ss[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'œ' LIKE 'o', 'æ' LIKE 'a';
+➤ œ like o[-6,8,0]  ¦  æ like a[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'á' LIKE 'a' COLLATE utf8mb4_unicode_ci, 'áb' LIKE 'a_' COLLATE utf8mb4_unicode_ci;
+➤ á like (a) collate utf8mb4_unicode_ci[-6,8,0]  ¦  áb like (a_) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ı' LIKE 'I' COLLATE utf8mb4_unicode_ci, 'ß' LIKE 's' COLLATE utf8mb4_unicode_ci;
+➤ ı like (I) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ß like (s) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'ß' LIKE 'ss' COLLATE utf8mb4_unicode_ci, 'ss' LIKE 'ß' COLLATE utf8mb4_unicode_ci;
+➤ ß like (ss) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ss like (ß) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'œ' LIKE 'oe' COLLATE utf8mb4_unicode_ci, 'æ' LIKE 'ae' COLLATE utf8mb4_unicode_ci;
+➤ œ like (oe) collate utf8mb4_unicode_ci[-6,8,0]  ¦  æ like (ae) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'ß' LIKE '_' COLLATE utf8mb4_unicode_ci, 'ß' LIKE '__' COLLATE utf8mb4_unicode_ci;
+➤ ß like (_) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ß like (__) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'xßy' LIKE '%ss%' COLLATE utf8mb4_unicode_ci, 'xßy' LIKE '%s%' COLLATE utf8mb4_unicode_ci;
+➤ xßy like (%ss%) collate utf8mb4_unicode_ci[-6,8,0]  ¦  xßy like (%s%) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'á' REGEXP 'a', 'á' REGEXP 'a' COLLATE utf8mb4_unicode_ci;
+➤ á reg_match a[-6,8,0]  ¦  á reg_match (a) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'œ' REGEXP 'oe' COLLATE utf8mb4_unicode_ci, 'æ' REGEXP 'ae' COLLATE utf8mb4_unicode_ci;
+➤ œ reg_match (oe) collate utf8mb4_unicode_ci[-6,8,0]  ¦  æ reg_match (ae) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'ß' REGEXP 'ss' COLLATE utf8mb4_unicode_ci, 'ss' REGEXP 'ß' COLLATE utf8mb4_unicode_ci;
+➤ ß reg_match (ss) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ss reg_match (ß) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'Straße' REGEXP 'STRASSE' COLLATE utf8mb4_unicode_ci, 'STRASSE' REGEXP 'Straße' COLLATE utf8mb4_unicode_ci;
+➤ Straße reg_match (STRASSE) collate utf8mb4_unicode_ci[-6,8,0]  ¦  STRASSE reg_match (Straße) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ﬀ' REGEXP 'ff' COLLATE utf8mb4_unicode_ci, 'FF' REGEXP 'ﬀ' COLLATE utf8mb4_unicode_ci;
+➤ ﬀ reg_match (ff) collate utf8mb4_unicode_ci[-6,8,0]  ¦  FF reg_match (ﬀ) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ß' REGEXP 'ss', 'Straße' REGEXP 'strasse';
+➤ ß reg_match ss[-6,8,0]  ¦  Straße reg_match strasse[-6,8,0]  𝄀
+1  ¦  1
+INSERT INTO uci2 VALUES ('Straße');
+SELECT s FROM uci2 WHERE s = 'strasse' ORDER BY s;
+➤ s[12,20,0]  𝄀
+Straße
+SELECT s FROM uci2 WHERE s REGEXP 'strasse' ORDER BY s;
+➤ s[12,20,0]  𝄀
+Straße
+SELECT s FROM uci2 WHERE s LIKE 'strasse' ORDER BY s;
+➤ s[12,20,0]
+SELECT COUNT(*) FROM uci2 WHERE s REGEXP '^strasse$';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM uci2 WHERE s LIKE 'strasse';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT 'ß' REGEXP 's+' COLLATE utf8mb4_unicode_ci, 'ß' REGEXP 's{2}' COLLATE utf8mb4_unicode_ci, 'ss' REGEXP 's{2}' COLLATE utf8mb4_unicode_ci;
+➤ ß reg_match (s+) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ß reg_match (s{2}) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ss reg_match (s{2}) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0  ¦  1
+SELECT 'ß' REGEXP '[A-Z]' COLLATE utf8mb4_unicode_ci, 'SS' REGEXP '[A-Z]+' COLLATE utf8mb4_unicode_ci, 'ß' REGEXP '[ß]' COLLATE utf8mb4_unicode_ci;
+➤ ß reg_match ([A-Z]) collate utf8mb4_unicode_ci[-6,8,0]  ¦  SS reg_match ([A-Z]+) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ß reg_match ([ß]) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  1  ¦  1
+SELECT 'ẞ' REGEXP 'ẞ' COLLATE utf8mb4_unicode_ci, 'ẞ' REGEXP 'ß' COLLATE utf8mb4_unicode_ci, 'ẞ' REGEXP 'ss' COLLATE utf8mb4_unicode_ci;
+➤ ẞ reg_match (ẞ) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ẞ reg_match (ß) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ẞ reg_match (ss) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'ß' REGEXP 'ẞ' COLLATE utf8mb4_unicode_ci, 'ss' REGEXP 'ẞ' COLLATE utf8mb4_unicode_ci;
+➤ ß reg_match (ẞ) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ss reg_match (ẞ) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ß', 'ss', 'i'), REGEXP_LIKE('Straße', 'STRASSE', 'i');
+➤ REGEXP_LIKE(ß, ss, i)[-6,8,0]  ¦  REGEXP_LIKE(Straße, STRASSE, i)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ß', 'ss', 'c'), REGEXP_LIKE('Straße', 'STRASSE', 'c');
+➤ REGEXP_LIKE(ß, ss, c)[-6,8,0]  ¦  REGEXP_LIKE(Straße, STRASSE, c)[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'ß' REGEXP '(?i)ss', 'ß' REGEXP '(?i:ss)';
+➤ ß reg_match (?i)ss[-6,8,0]  ¦  ß reg_match (?i:ss)[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ß' REGEXP '(?-i:ss)' COLLATE utf8mb4_unicode_ci, 'ASS' REGEXP 'a(?-i:ss)' COLLATE utf8mb4_unicode_ci, 'Ass' REGEXP 'a(?-i:ss)' COLLATE utf8mb4_unicode_ci;
+➤ ß reg_match ((?-i:ss)) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ASS reg_match (a(?-i:ss)) collate utf8mb4_unicode_ci[-6,8,0]  ¦  Ass reg_match (a(?-i:ss)) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0  ¦  1
+SELECT 'ᾀ' REGEXP 'ᾈ+' COLLATE utf8mb4_unicode_ci, 'ᾈ' REGEXP 'ᾀ+' COLLATE utf8mb4_unicode_ci;
+➤ ᾀ reg_match (ᾈ+) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ᾈ reg_match (ᾀ+) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ᾀ' REGEXP 'ᾈ' COLLATE utf8mb4_unicode_ci, 'ᾈ' REGEXP 'ᾀ' COLLATE utf8mb4_unicode_ci;
+➤ ᾀ reg_match (ᾈ) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ᾈ reg_match (ᾀ) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ἀι' REGEXP 'ᾈ+' COLLATE utf8mb4_unicode_ci, 'ἀι' REGEXP 'ᾀ+' COLLATE utf8mb4_unicode_ci;
+➤ ἀι reg_match (ᾈ+) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ἀι reg_match (ᾀ+) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'ß' REGEXP '\\Qss\\E' COLLATE utf8mb4_unicode_ci, 'Straße' REGEXP '\\QSTRASSE\\E' COLLATE utf8mb4_unicode_ci;
+➤ ß reg_match (\\Qss\\E) collate utf8mb4_unicode_ci[-6,8,0]  ¦  Straße reg_match (\\QSTRASSE\\E) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ß' REGEXP '\\x{73}\\x{73}' COLLATE utf8mb4_unicode_ci, 'ß' REGEXP '\\x73\\x73' COLLATE utf8mb4_unicode_ci;
+➤ ß reg_match (\\x{73}\\x{73}) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ß reg_match (\\x73\\x73) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ß' REGEXP '\\Qss\\E', 'Straße' REGEXP '\\x{53}TRASSE';
+➤ ß reg_match \\Qss\\E[-6,8,0]  ¦  Straße reg_match \\x{53}TRASSE[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'abab' REGEXP '(?<Ab>ab)\\k<Ab>' COLLATE utf8mb4_unicode_ci, 'aBaB' REGEXP '(?<Ab>ab)\\k<Ab>' COLLATE utf8mb4_unicode_ci;
+➤ abab reg_match ((?<Ab>ab)\\k<Ab>) collate utf8mb4_unicode_ci[-6,8,0]  ¦  aBaB reg_match ((?<Ab>ab)\\k<Ab>) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ßßßßß' REGEXP 'ssssssssss' COLLATE utf8mb4_unicode_ci, 'ssssssssss' REGEXP 'ßßßßß' COLLATE utf8mb4_unicode_ci;
+➤ ßßßßß reg_match (ssssssssss) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ssssssssss reg_match (ßßßßß) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ßßßßß' REGEXP 'sssssssss' COLLATE utf8mb4_unicode_ci, 'ßßßßß' REGEXP 'sssssssssss' COLLATE utf8mb4_unicode_ci;
+➤ ßßßßß reg_match (sssssssss) collate utf8mb4_unicode_ci[-6,8,0]  ¦  ßßßßß reg_match (sssssssssss) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT FIND_IN_SET('á', 'a,b'), FIND_IN_SET('ı', 'I,x'), FIND_IN_SET('ß', 'ss,x');
+➤ FIND_IN_SET(á, a,b)[-5,3,0]  ¦  FIND_IN_SET(ı, I,x)[-5,3,0]  ¦  FIND_IN_SET(ß, ss,x)[-5,3,0]  𝄀
+1  ¦  1  ¦  0
+SELECT FIND_IN_SET('á', 'a,b' COLLATE utf8mb4_unicode_ci), FIND_IN_SET('ı', 'I,x' COLLATE utf8mb4_unicode_ci), FIND_IN_SET('ß', 'ss,x' COLLATE utf8mb4_unicode_ci);
+➤ FIND_IN_SET(á, (a,b) collate utf8mb4_unicode_ci)[-5,3,0]  ¦  FIND_IN_SET(ı, (I,x) collate utf8mb4_unicode_ci)[-5,3,0]  ¦  FIND_IN_SET(ß, (ss,x) collate utf8mb4_unicode_ci)[-5,3,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'x' LIKE NULL, 'x' REGEXP NULL;
+➤ x like null[-6,8,0]  ¦  x reg_match null[-6,8,0]  𝄀
+null  ¦  null
+SELECT '' LIKE '', '' LIKE '%', 'a' LIKE '';
+➤  like [-6,8,0]  ¦   like %[-6,8,0]  ¦  a like [-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'a_b' LIKE 'a\_b', 'ab' LIKE 'a\_b', 'axb' LIKE 'a\_b';
+➤ a_b like a\_b[-6,8,0]  ¦  ab like a\_b[-6,8,0]  ¦  axb like a\_b[-6,8,0]  𝄀
+1  ¦  0  ¦  0
+SELECT 'a%b' LIKE 'a\%b', 'a_b' LIKE 'a!_b' ESCAPE '!', 'AXB' LIKE 'a!_b' ESCAPE '!';
+➤ a%b like a\%b[-6,8,0]  ¦  a_b like a!_b escape ![-6,8,0]  ¦  AXB like a!_b escape ![-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'abXXcdYYef' LIKE 'ab%cd%ef', 'abXXef' LIKE 'ab%cd%ef', 'XXabXXcdXXef' LIKE 'ab%cd%ef';
+➤ abXXcdYYef like ab%cd%ef[-6,8,0]  ¦  abXXef like ab%cd%ef[-6,8,0]  ¦  XXabXXcdXXef like ab%cd%ef[-6,8,0]  𝄀
+1  ¦  0  ¦  0
+SELECT 'aaa' LIKE '%aa%a%', 'aa' LIKE '%a%a%', 'ba' LIKE '%a%a%';
+➤ aaa like %aa%a%[-6,8,0]  ¦  aa like %a%a%[-6,8,0]  ¦  ba like %a%a%[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'xAliceyBobz' LIKE '%alice%bob%', 'xAlicey' LIKE '%alice%bob%';
+➤ xAliceyBobz like %alice%bob%[-6,8,0]  ¦  xAlicey like %alice%bob%[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ABC' ILIKE 'a_c';
+➤ ABC ilike a_c[-6,8,0]  𝄀
+1
+SELECT 'K' ILIKE 'k', 'K' ILIKE 'K';
+➤ K ilike k[-6,8,0]  ¦  K ilike K[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'Å' ILIKE 'å', 'Å' ILIKE 'Å';
+➤ Å ilike å[-6,8,0]  ¦  Å ilike Å[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ς' ILIKE 'Σ', 'σ' ILIKE 'ς';
+➤ ς ilike Σ[-6,8,0]  ¦  σ ilike ς[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'xKz' ILIKE '%k%', 'K_k' ILIKE 'k!_k' ESCAPE '!';
+➤ xKz ilike %k%[-6,8,0]  ¦  K_k ilike k!_k escape ![-6,8,0]  𝄀
+1  ¦  1
+CREATE TABLE fis1 (k INT PRIMARY KEY, seg VARCHAR(40));
+INSERT INTO fis1 VALUES (1, 'Red,Green'), (2, 'blue');
+SELECT k FROM fis1 WHERE FIND_IN_SET('red', seg) > 0 ORDER BY k;
+➤ k[4,32,0]  𝄀
+1
+SELECT k FROM fis1 WHERE FIND_IN_SET('BLUE', seg) > 0 ORDER BY k;
+➤ k[4,32,0]  𝄀
+2
+CREATE INDEX ci1_name_idx ON ci1 (name);
+EXPLAIN SELECT name FROM ci1 WHERE name LIKE 'alice%';
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Table Scan on issue_31175.ci1  𝄀
+        Filter Cond: (ci1.name like 'alice%')
+SELECT name FROM ci1 WHERE name LIKE 'alice%' ORDER BY name;
+➤ name[12,30,0]  𝄀
+Alice
+SELECT '😀' LIKE '😁' COLLATE utf8mb4_unicode_ci, '😀' LIKE '😀' COLLATE utf8mb4_unicode_ci;
+➤ 😀 like (😁) collate utf8mb4_unicode_ci[-6,8,0]  ¦  😀 like (😀) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  1
+SELECT '😀' LIKE '_' COLLATE utf8mb4_unicode_ci, '😀' LIKE '__' COLLATE utf8mb4_unicode_ci;
+➤ 😀 like (_) collate utf8mb4_unicode_ci[-6,8,0]  ¦  😀 like (__) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'x😀y' LIKE '%😁%' COLLATE utf8mb4_unicode_ci, 'x😀y' LIKE '%😀%' COLLATE utf8mb4_unicode_ci;
+➤ x😀y like (%😁%) collate utf8mb4_unicode_ci[-6,8,0]  ¦  x😀y like (%😀%) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  1
+SELECT '😀' LIKE '�' COLLATE utf8mb4_unicode_ci, '𐐀' LIKE '𐐨' COLLATE utf8mb4_unicode_ci;
+➤ 😀 like (�) collate utf8mb4_unicode_ci[-6,8,0]  ¦  𐐀 like (𐐨) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+0  ¦  0
+SELECT '😀' LIKE '😁', '😀' LIKE '_', 'x😀y' LIKE '%😁%';
+➤ 😀 like 😁[-6,8,0]  ¦  😀 like _[-6,8,0]  ¦  x😀y like %😁%[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT '😀' LIKE '__', '😀😀' LIKE '_', '😀' LIKE '�';
+➤ 😀 like __[-6,8,0]  ¦  😀😀 like _[-6,8,0]  ¦  😀 like �[-6,8,0]  𝄀
+0  ¦  0  ¦  1
+SELECT FIND_IN_SET('a', 'a ,a' COLLATE utf8mb4_unicode_ci), FIND_IN_SET('a ', 'a,b' COLLATE utf8mb4_unicode_ci);
+➤ FIND_IN_SET(a, (a ,a) collate utf8mb4_unicode_ci)[-5,3,0]  ¦  FIND_IN_SET(a , (a,b) collate utf8mb4_unicode_ci)[-5,3,0]  𝄀
+2  ¦  0
+SELECT FIND_IN_SET('a', 'a , a' COLLATE utf8mb4_unicode_ci), FIND_IN_SET('', 'a,,b' COLLATE utf8mb4_unicode_ci);
+➤ FIND_IN_SET(a, (a , a) collate utf8mb4_unicode_ci)[-5,3,0]  ¦  FIND_IN_SET(, (a,,b) collate utf8mb4_unicode_ci)[-5,3,0]  𝄀
+0  ¦  2
+SELECT FIND_IN_SET('a', 'a ,a'), FIND_IN_SET('a ', 'a,b');
+➤ FIND_IN_SET(a, a ,a)[-5,3,0]  ¦  FIND_IN_SET(a , a,b)[-5,3,0]  𝄀
+2  ¦  0
+SELECT FIND_IN_SET('😀', '😁,x' COLLATE utf8mb4_unicode_ci), FIND_IN_SET('😀', '😁,x');
+➤ FIND_IN_SET(😀, (😁,x) collate utf8mb4_unicode_ci)[-5,3,0]  ¦  FIND_IN_SET(😀, 😁,x)[-5,3,0]  𝄀
+1  ¦  1
+SELECT FIND_IN_SET('ß', 'ss,x' COLLATE utf8mb4_unicode_ci);
+➤ FIND_IN_SET(ß, (ss,x) collate utf8mb4_unicode_ci)[-5,3,0]  𝄀
+1
+SELECT 'ß' REGEXP '(?xi)s s', 'ß' REGEXP '(?xi)ss#comment';
+➤ ß reg_match (?xi)s s[-6,8,0]  ¦  ß reg_match (?xi)ss#comment[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ß' REGEXP '(?x)ss # trailing comment';
+➤ ß reg_match (?x)ss # trailing comment[-6,8,0]  𝄀
+1
+SELECT 'ßß' REGEXP '(?xi)ss # ignored\nss';
+➤ ßß reg_match (?xi)ss # ignored
+ss[-6,8,0]  𝄀
+1
+SELECT 'ß' REGEXP '(?xi)s\ts';
+➤ ß reg_match (?xi)s	s[-6,8,0]  𝄀
+1
+SELECT 'ßß' REGEXP '(?xi)ß {2}', 'ss' REGEXP '(?xi)ß {2}';
+➤ ßß reg_match (?xi)ß {2}[-6,8,0]  ¦  ss reg_match (?xi)ß {2}[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ab cd' REGEXP '(?xi)a(?-x:b c)d', 'abcd' REGEXP '(?xi)a(?-x:b c)d';
+➤ ab cd reg_match (?xi)a(?-x:b c)d[-6,8,0]  ¦  abcd reg_match (?xi)a(?-x:b c)d[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'AB' REGEXP 'a(?#c)b', 'ß' REGEXP 's(?#ß)s', 'ßx' REGEXP 'ss(?#c ß)x';
+➤ AB reg_match a(?#c)b[-6,8,0]  ¦  ß reg_match s(?#ß)s[-6,8,0]  ¦  ßx reg_match ss(?#c ß)x[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'a b' REGEXP 'a(?#c) b', 'ab' REGEXP 'a(?#c) b';
+➤ a b reg_match a(?#c) b[-6,8,0]  ¦  ab reg_match a(?#c) b[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ab' REGEXP '(?x)a(?#c) b';
+➤ ab reg_match (?x)a(?#c) b[-6,8,0]  𝄀
+1
+SELECT 'ab' REGEXP 'a(?#cb';
+➤ ab reg_match a(?#cb[-6,8,0]  𝄀
+1
+SELECT 'abab' REGEXP '(?<X>ab)\\g<X>', "abab" REGEXP "(?<X>ab)\\g'X'", 'abab' REGEXP '(?<X>ab)\\g{X}';
+➤ abab reg_match (?<X>ab)\\g<X>[-6,8,0]  ¦  abab reg_match (?<X>ab)\\g'X'[-6,8,0]  ¦  abab reg_match (?<X>ab)\\g{X}[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'aBaB' REGEXP '(?<X>ab)\\g<X>', "aBaB" REGEXP "(?<X>ab)\\g'X'";
+➤ aBaB reg_match (?<X>ab)\\g<X>[-6,8,0]  ¦  aBaB reg_match (?<X>ab)\\g'X'[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'abab' REGEXP '(?<X>ab)\\g<x>';
+error parsing regexp: reference to undefined group name x in `(?i)(?<X>ab)\k<x>`
+SELECT 'aBaB' REGEXP '(?i)(?<X>ab)\\g<X>', REGEXP_LIKE('aBaB', '(?<X>ab)\\g<X>', 'i'), REGEXP_LIKE('aBaB', '(?<X>ab)\\g<X>', 'c');
+➤ aBaB reg_match (?i)(?<X>ab)\\g<X>[-6,8,0]  ¦  REGEXP_LIKE(aBaB, (?<X>ab)\\g<X>, i)[-6,8,0]  ¦  REGEXP_LIKE(aBaB, (?<X>ab)\\g<X>, c)[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'ß ß' REGEXP '\\Qss ss\\E', 'ß#' REGEXP '\\Qss#\\E', 'ß# ß' REGEXP '\\Qss# ss\\E';
+➤ ß ß reg_match \\Qss ss\\E[-6,8,0]  ¦  ß# reg_match \\Qss#\\E[-6,8,0]  ¦  ß# ß reg_match \\Qss# ss\\E[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'ss ss' REGEXP '\\Qss ss\\E', 'ssss' REGEXP '\\Qss ss\\E';
+➤ ss ss reg_match \\Qss ss\\E[-6,8,0]  ¦  ssss reg_match \\Qss ss\\E[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ß ß' REGEXP '(?xi)\\Qss ss\\E', 'ßß' REGEXP '(?xi)\\Qss ss\\E', 'ß#' REGEXP '(?xi)\\Qss#\\E';
+➤ ß ß reg_match (?xi)\\Qss ss\\E[-6,8,0]  ¦  ßß reg_match (?xi)\\Qss ss\\E[-6,8,0]  ¦  ß# reg_match (?xi)\\Qss#\\E[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'ß\nß' REGEXP '\\Qss\nss\\E', 'ss\nss' REGEXP '\\Qss\nss\\E';
+➤ ß
+ß reg_match \\Qss\nss\\E[-6,8,0]  ¦  ss
+ss reg_match \\Qss\nss\\E[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'a b' REGEXP '(?x)\\Qa b\\E', 'a b' REGEXP '(?x)a\\x{20}b', 'a#b' REGEXP '(?x)a\\x{23}b';
+➤ a b reg_match (?x)\\Qa b\\E[-6,8,0]  ¦  a b reg_match (?x)a\\x{20}b[-6,8,0]  ¦  a#b reg_match (?x)a\\x{23}b[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'ß' REGEXP '(?xi)\\x{73}\\x{73}';
+➤ ß reg_match (?xi)\\x{73}\\x{73}[-6,8,0]  𝄀
+1
+SELECT 'ß' REGEXP '\\x{73}\\x{73}';
+➤ ß reg_match \\x{73}\\x{73}[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('SS SS', '\\Qss ss\\E', 'c'), REGEXP_LIKE('ss ss', '\\Qss ss\\E', 'c'), REGEXP_LIKE('ß#', '\\Qss#\\E', 'c');
+➤ REGEXP_LIKE(SS SS, \\Qss ss\\E, c)[-6,8,0]  ¦  REGEXP_LIKE(ss ss, \\Qss ss\\E, c)[-6,8,0]  ¦  REGEXP_LIKE(ß#, \\Qss#\\E, c)[-6,8,0]  𝄀
+0  ¦  1  ¦  0
+SELECT REGEXP_LIKE('ß#', '\\Qss#\\E', 'i'), REGEXP_LIKE('ß', '(?x)ss', 'c'), REGEXP_LIKE('ß', '(?x)ss', 'i');
+➤ REGEXP_LIKE(ß#, \\Qss#\\E, i)[-6,8,0]  ¦  REGEXP_LIKE(ß, (?x)ss, c)[-6,8,0]  ¦  REGEXP_LIKE(ß, (?x)ss, i)[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+SELECT REGEXP_LIKE('ß', '(?xi)ss#comment'), REGEXP_LIKE('abab', '(?<X>ab)\\g{X}');
+➤ REGEXP_LIKE(ß, (?xi)ss#comment)[-6,8,0]  ¦  REGEXP_LIKE(abab, (?<X>ab)\\g{X})[-6,8,0]  𝄀
+1  ¦  1
+SELECT COUNT(*) FROM ci1 WHERE name REGEXP '(?xi)alice # trailing';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT 'ａ' REGEXP '\\U0000FF41', 'Ａ' REGEXP '\\U0000FF41', 'a' REGEXP '\\U0000FF41';
+➤ ａ reg_match \\U0000FF41[-6,8,0]  ¦  Ａ reg_match \\U0000FF41[-6,8,0]  ¦  a reg_match \\U0000FF41[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'ａß' REGEXP '\\U0000FF41ss', 'ＡSS' REGEXP '\\U0000FF41ss';
+➤ ａß reg_match \\U0000FF41ss[-6,8,0]  ¦  ＡSS reg_match \\U0000FF41ss[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ａss', '\\U0000FF41ss', 'c'), REGEXP_LIKE('ａß', '\\U0000FF41ss', 'c');
+➤ REGEXP_LIKE(ａss, \\U0000FF41ss, c)[-6,8,0]  ¦  REGEXP_LIKE(ａß, \\U0000FF41ss, c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ÿß' REGEXP '\\u00FFss(?#x)', 'ŸSS' REGEXP '\\u00FFss(?#x)';
+➤ ÿß reg_match \\u00FFss(?#x)[-6,8,0]  ¦  ŸSS reg_match \\u00FFss(?#x)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ÿss', '\\u00FFss(?#x)', 'c'), REGEXP_LIKE('ÿß', '\\u00FFss(?#x)', 'c');
+➤ REGEXP_LIKE(ÿss, \\u00FFss(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(ÿß, \\u00FFss(?#x), c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ß' REGEXP '\\u00DF(?#x)', 'ss' REGEXP '\\u00DF(?#x)';
+➤ ß reg_match \\u00DF(?#x)[-6,8,0]  ¦  ss reg_match \\u00DF(?#x)[-6,8,0]  𝄀
+1  ¦  0
+CREATE TABLE r10c1 (s VARCHAR(40));
+INSERT INTO r10c1 VALUES (CONCAT(CHAR(19),'ß')),(CONCAT(CHAR(19),'ss')),(CHAR(19));
+SELECT COUNT(*) FROM r10c1 WHERE s REGEXP '\\cSss';
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM r10c1 WHERE REGEXP_LIKE(s, '\\cSss', 'c');
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+DROP TABLE r10c1;
+SELECT '\nß' REGEXP '\\012ss', '\nSS' REGEXP '\\012ss', '\nss' REGEXP '\\012ss';
+➤ 
+ß reg_match \\012ss[-6,8,0]  ¦  
+SS reg_match \\012ss[-6,8,0]  ¦  
+ss reg_match \\012ss[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT REGEXP_LIKE('\nss', '\\012ss', 'c'), REGEXP_LIKE('\nß', '\\012ss', 'c');
+➤ REGEXP_LIKE(
+ss, \\012ss, c)[-6,8,0]  ¦  REGEXP_LIKE(
+ß, \\012ss, c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT '\nß' REGEXP '\\012ss(?#x)';
+➤ 
+ß reg_match \\012ss(?#x)[-6,8,0]  𝄀
+1
+SELECT 'abcdefghijkkß' REGEXP '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss', 'abcdefghijkkss' REGEXP '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss';
+➤ abcdefghijkkß reg_match (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss[-6,8,0]  ¦  abcdefghijkkss reg_match (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('abcdefghijkkss', '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss', 'c'), REGEXP_LIKE('abcdefghijkkß', '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss', 'c');
+➤ REGEXP_LIKE(abcdefghijkkss, (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss, c)[-6,8,0]  ¦  REGEXP_LIKE(abcdefghijkkß, (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\\11ss, c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT REGEXP_LIKE('A', '(?-I)A', 'i'), REGEXP_LIKE('a', '(?-I)A', 'i');
+➤ REGEXP_LIKE(A, (?-I)A, i)[-6,8,0]  ¦  REGEXP_LIKE(a, (?-I)A, i)[-6,8,0]  𝄀
+1  ¦  0
+SELECT REGEXP_LIKE('ß', '(?I)ss', 'c'), REGEXP_LIKE('SS', '(?I)ss', 'c');
+➤ REGEXP_LIKE(ß, (?I)ss, c)[-6,8,0]  ¦  REGEXP_LIKE(SS, (?I)ss, c)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ß', '(?+i)ss', 'c'), REGEXP_LIKE('SS', '(?+i)ss', 'c');
+➤ REGEXP_LIKE(ß, (?+i)ss, c)[-6,8,0]  ¦  REGEXP_LIKE(SS, (?+i)ss, c)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ß', '(?-i+I)ss', 'c'), REGEXP_LIKE('SS', '(?-i+I)ss', 'c');
+➤ REGEXP_LIKE(ß, (?-i+I)ss, c)[-6,8,0]  ¦  REGEXP_LIKE(SS, (?-i+I)ss, c)[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ß' REGEXP '(?X)ss#comment', 'ss' REGEXP '(?X)ss#comment';
+➤ ß reg_match (?X)ss#comment[-6,8,0]  ¦  ss reg_match (?X)ss#comment[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ss', '(?X)ss#comment', 'c'), REGEXP_LIKE('ß', '(?X)ss#comment', 'c');
+➤ REGEXP_LIKE(ss, (?X)ss#comment, c)[-6,8,0]  ¦  REGEXP_LIKE(ß, (?X)ss#comment, c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ss' REGEXP '(?X)s s', 's s' REGEXP '(?X)s s', 'ß' REGEXP '(?X)s s';
+➤ ss reg_match (?X)s s[-6,8,0]  ¦  s s reg_match (?X)s s[-6,8,0]  ¦  ß reg_match (?X)s s[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'AbC' REGEXP '(?i)a(?-I:b)c', 'ABC' REGEXP '(?i)a(?-I:b)c';
+➤ AbC reg_match (?i)a(?-I:b)c[-6,8,0]  ¦  ABC reg_match (?i)a(?-I:b)c[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ssSS' REGEXP '(?i)(?-I:ss)SS', 'SSSS' REGEXP '(?i)(?-I:ss)SS';
+➤ ssSS reg_match (?i)(?-I:ss)SS[-6,8,0]  ¦  SSSS reg_match (?i)(?-I:ss)SS[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ab cd' REGEXP '(?X)a(?-X:b c)d', 'abcd' REGEXP '(?X)a(?-X:b c)d';
+➤ ab cd reg_match (?X)a(?-X:b c)d[-6,8,0]  ¦  abcd reg_match (?X)a(?-X:b c)d[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ß' REGEXP '^s\\Q\\Es$', 'ss' REGEXP '^s\\Q\\Es$', 's' REGEXP '^s\\Q\\Es$';
+➤ ß reg_match ^s\\Q\\Es$[-6,8,0]  ¦  ss reg_match ^s\\Q\\Es$[-6,8,0]  ¦  s reg_match ^s\\Q\\Es$[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT REGEXP_LIKE('ss', '^s\\Q\\Es$', 'c'), REGEXP_LIKE('ß', '^s\\Q\\Es$', 'c');
+➤ REGEXP_LIKE(ss, ^s\\Q\\Es$, c)[-6,8,0]  ¦  REGEXP_LIKE(ß, ^s\\Q\\Es$, c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'ß' REGEXP '^s\\Q\\Es$(?#x)';
+➤ ß reg_match ^s\\Q\\Es$(?#x)[-6,8,0]  𝄀
+1
+SELECT 'aaa' REGEXP '^a\\Q\\E+$', 'a' REGEXP '^a\\Q\\E+$', '' REGEXP '^a\\Q\\E+$';
+➤ aaa reg_match ^a\\Q\\E+$[-6,8,0]  ¦  a reg_match ^a\\Q\\E+$[-6,8,0]  ¦   reg_match ^a\\Q\\E+$[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'sss' REGEXP '^ss\\Q\\E{2}$', 'ss' REGEXP '^ss\\Q\\E{2}$', 'ßs' REGEXP '^ss\\Q\\E{2}$';
+➤ sss reg_match ^ss\\Q\\E{2}$[-6,8,0]  ¦  ss reg_match ^ss\\Q\\E{2}$[-6,8,0]  ¦  ßs reg_match ^ss\\Q\\E{2}$[-6,8,0]  𝄀
+1  ¦  0  ¦  0
+SELECT 'x' REGEXP '\\Q\\E';
+➤ x reg_match \\Q\\E[-6,8,0]  𝄀
+1
+CREATE TABLE r10q (s VARCHAR(40));
+INSERT INTO r10q VALUES ('ß'),('ss'),('s');
+SELECT COUNT(*) FROM r10q WHERE s REGEXP '^s\\Q\\Es$';
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM r10q WHERE REGEXP_LIKE(s, '^s\\Q\\Es$', 'c');
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+DROP TABLE r10q;
+SELECT 'abcdefghijklmnopqrrss' REGEXP '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss', 'abcdefghijklmnopqrrß' REGEXP '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss';
+➤ abcdefghijklmnopqrrss reg_match (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss[-6,8,0]  ¦  abcdefghijklmnopqrrß reg_match (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('abcdefghijklmnopqrrß', '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss', 'c'), REGEXP_LIKE('abcdefghijklmnopqra8ss', '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss', 'i');
+➤ REGEXP_LIKE(abcdefghijklmnopqrrß, (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss, c)[-6,8,0]  ¦  REGEXP_LIKE(abcdefghijklmnopqra8ss, (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)\\18ss, i)[-6,8,0]  𝄀
+0  ¦  0
+SELECT 'abcdefghijklmnopqrssss' REGEXP '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)(s)\\19ss';
+➤ abcdefghijklmnopqrssss reg_match (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)(s)\\19ss[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('abcdefghijklmnopqrsa9ss', '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)(s)\\19ss', 'i');
+➤ REGEXP_LIKE(abcdefghijklmnopqrsa9ss, (a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)(s)\\19ss, i)[-6,8,0]  𝄀
+0
+SELECT 'ab\nß' REGEXP '(a)(b)\\12ss', 'ab\nss' REGEXP '(a)(b)\\12ss';
+➤ ab
+ß reg_match (a)(b)\\12ss[-6,8,0]  ¦  ab
+ss reg_match (a)(b)\\12ss[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ab\nß', '(a)(b)\\12ss', 'c'), REGEXP_LIKE('ab\n12ss', '(a)(b)\\12ss', 'c');
+➤ REGEXP_LIKE(ab
+ß, (a)(b)\\12ss, c)[-6,8,0]  ¦  REGEXP_LIKE(ab
+12ss, (a)(b)\\12ss, c)[-6,8,0]  𝄀
+0  ¦  0
+CREATE TABLE r11f (s VARCHAR(40));
+INSERT INTO r11f VALUES (CONCAT('ab',CHAR(1),'8ss')),(CONCAT('ab',CHAR(1),'8ß')),('ab8ss');
+SELECT COUNT(*) FROM r11f WHERE s REGEXP '(a)(b)\\18ss';
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM r11f WHERE REGEXP_LIKE(s, '(a)(b)\\18ss', 'c');
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+DROP TABLE r11f;
+SELECT 'ass' REGEXP '\\pLss', 'aß' REGEXP '\\pLss', '1ss' REGEXP '\\pLss';
+➤ ass reg_match \\pLss[-6,8,0]  ¦  aß reg_match \\pLss[-6,8,0]  ¦  1ss reg_match \\pLss[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT REGEXP_LIKE('ass', '\\pLss', 'c'), REGEXP_LIKE('aß', '\\pLss', 'c');
+➤ REGEXP_LIKE(ass, \\pLss, c)[-6,8,0]  ¦  REGEXP_LIKE(aß, \\pLss, c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT '1ss' REGEXP '\\PLss', 'aß' REGEXP '\\PLss';
+➤ 1ss reg_match \\PLss[-6,8,0]  ¦  aß reg_match \\PLss[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'aß' REGEXP '\\p{L}ss';
+➤ aß reg_match \\p{L}ss[-6,8,0]  𝄀
+1
+SELECT 'ass' REGEXP '\\pLss(?#x)', 'aß' REGEXP '\\pLss(?#x)';
+➤ ass reg_match \\pLss(?#x)[-6,8,0]  ¦  aß reg_match \\pLss(?#x)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('aß', '\\pLss(?#x)', 'c');
+➤ REGEXP_LIKE(aß, \\pLss(?#x), c)[-6,8,0]  𝄀
+0
+SELECT 'ass' REGEXP '[a-z-[bc]]ss(?#x)', 'zss' REGEXP '[a-z-[bc]]ss(?#x)', 'bss' REGEXP '[a-z-[bc]]ss(?#x)', 'css' REGEXP '[a-z-[bc]]ss(?#x)';
+➤ ass reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  ¦  zss reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  ¦  bss reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  ¦  css reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0
+SELECT 'aß' REGEXP '[a-z-[bc]]ss(?#x)', 'ASS' REGEXP '[a-z-[bc]]ss(?#x)', 'BSS' REGEXP '[a-z-[bc]]ss(?#x)', 'bß' REGEXP '[a-z-[bc]]ss(?#x)';
+➤ aß reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  ¦  ASS reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  ¦  BSS reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  ¦  bß reg_match [a-z-[bc]]ss(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0
+SELECT REGEXP_LIKE('ass', '[a-z-[bc]]ss(?#x)', 'c'), REGEXP_LIKE('aß', '[a-z-[bc]]ss(?#x)', 'c');
+➤ REGEXP_LIKE(ass, [a-z-[bc]]ss(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(aß, [a-z-[bc]]ss(?#x), c)[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'dss' REGEXP '[a-z-[b-c-[d]]]ss(?#x)', 'css' REGEXP '[a-z-[b-c-[d]]]ss(?#x)', 'dß' REGEXP '[a-z-[b-c-[d]]]ss(?#x)', 'cß' REGEXP '[a-z-[b-c-[d]]]ss(?#x)';
+➤ dss reg_match [a-z-[b-c-[d]]]ss(?#x)[-6,8,0]  ¦  css reg_match [a-z-[b-c-[d]]]ss(?#x)[-6,8,0]  ¦  dß reg_match [a-z-[b-c-[d]]]ss(?#x)[-6,8,0]  ¦  cß reg_match [a-z-[b-c-[d]]]ss(?#x)[-6,8,0]  𝄀
+1  ¦  0  ¦  1  ¦  0
+SELECT ']ss' REGEXP '[]-[a]]ss(?#x)', ']ß' REGEXP '[]-[a]]ss(?#x)', 'aß' REGEXP '[]-[a]]ss(?#x)';
+➤ ]ss reg_match []-[a]]ss(?#x)[-6,8,0]  ¦  ]ß reg_match []-[a]]ss(?#x)[-6,8,0]  ¦  aß reg_match []-[a]]ss(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'a]ss' REGEXP '[a-z-[bc]]ss', 'ass' REGEXP '[a-z-[bc]]ss', 'a]ß' REGEXP '[a-z-[bc]]ss', 'aß' REGEXP '[a-z-[bc]]ss';
+➤ a]ss reg_match [a-z-[bc]]ss[-6,8,0]  ¦  ass reg_match [a-z-[bc]]ss[-6,8,0]  ¦  a]ß reg_match [a-z-[bc]]ss[-6,8,0]  ¦  aß reg_match [a-z-[bc]]ss[-6,8,0]  𝄀
+1  ¦  0  ¦  1  ¦  0
+SELECT 'x' REGEXP '(?>ss)', 'ss' REGEXP '(?>ss)', 'ß' REGEXP '(?>ss)', 'SS' REGEXP '(?>ss)';
+➤ x reg_match (?>ss)[-6,8,0]  ¦  ss reg_match (?>ss)[-6,8,0]  ¦  ß reg_match (?>ss)[-6,8,0]  ¦  SS reg_match (?>ss)[-6,8,0]  𝄀
+0  ¦  1  ¦  1  ¦  1
+SELECT 'ss' REGEXP '^(?>ss)$', 'x' REGEXP '^(?>ss)$';
+➤ ss reg_match ^(?>ss)$[-6,8,0]  ¦  x reg_match ^(?>ss)$[-6,8,0]  𝄀
+1  ¦  0
+SELECT REGEXP_LIKE('x', '(?>ss)', 'c'), REGEXP_LIKE('SS', '(?>ss)', 'c'), REGEXP_LIKE('ss', '(?>ss)', 'c');
+➤ REGEXP_LIKE(x, (?>ss), c)[-6,8,0]  ¦  REGEXP_LIKE(SS, (?>ss), c)[-6,8,0]  ¦  REGEXP_LIKE(ss, (?>ss), c)[-6,8,0]  𝄀
+0  ¦  0  ¦  1
+SELECT 'xssy' REGEXP 'x(?>ss)y', 'xßy' REGEXP 'x(?>ss)y', 'xsy' REGEXP 'x(?>ss)y';
+➤ xssy reg_match x(?>ss)y[-6,8,0]  ¦  xßy reg_match x(?>ss)y[-6,8,0]  ¦  xsy reg_match x(?>ss)y[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'x' REGEXP '(?>(?>ss))', 'ß' REGEXP '(?>(?>ss))';
+➤ x reg_match (?>(?>ss))[-6,8,0]  ¦  ß reg_match (?>(?>ss))[-6,8,0]  𝄀
+0  ¦  1
+SELECT REGEXP_LIKE('ß', '(?>(?>ss))', 'c'), REGEXP_LIKE('ss', '(?>(?>ss))', 'c');
+➤ REGEXP_LIKE(ß, (?>(?>ss)), c)[-6,8,0]  ¦  REGEXP_LIKE(ss, (?>(?>ss)), c)[-6,8,0]  𝄀
+0  ¦  1
+SELECT 'aaab' REGEXP '(?>a+)ab', 'aaab' REGEXP '(a+)ab';
+➤ aaab reg_match (?>a+)ab[-6,8,0]  ¦  aaab reg_match (a+)ab[-6,8,0]  𝄀
+0  ¦  1
+SELECT 'ς' REGEXP '^ς$(?#x)', 'σ' REGEXP '^ς$(?#x)', 'Σ' REGEXP '^ς$(?#x)', 's' REGEXP '^ς$(?#x)';
+➤ ς reg_match ^ς$(?#x)[-6,8,0]  ¦  σ reg_match ^ς$(?#x)[-6,8,0]  ¦  Σ reg_match ^ς$(?#x)[-6,8,0]  ¦  s reg_match ^ς$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'ςς' REGEXP '^ςς$(?#x)', 'Σσ' REGEXP '^ςς$(?#x)', 'ςx' REGEXP '^ςς$(?#x)';
+➤ ςς reg_match ^ςς$(?#x)[-6,8,0]  ¦  Σσ reg_match ^ςς$(?#x)[-6,8,0]  ¦  ςx reg_match ^ςς$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT REGEXP_LIKE('ς', '^ς$(?#x)', 'i'), REGEXP_LIKE('σ', '^ς$(?#x)', 'c'), REGEXP_LIKE('ς', '^ς$(?#x)', 'c');
+➤ REGEXP_LIKE(ς, ^ς$(?#x), i)[-6,8,0]  ¦  REGEXP_LIKE(σ, ^ς$(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(ς, ^ς$(?#x), c)[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'ſ' REGEXP '^ſ$(?#x)', 's' REGEXP '^ſ$(?#x)';
+➤ ſ reg_match ^ſ$(?#x)[-6,8,0]  ¦  s reg_match ^ſ$(?#x)[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ſs' REGEXP '^ss$(?#x)', 'sſ' REGEXP '^ss$(?#x)', 'ſſ' REGEXP '^ss$(?#x)', 'SS' REGEXP '^ss$(?#x)';
+➤ ſs reg_match ^ss$(?#x)[-6,8,0]  ¦  sſ reg_match ^ss$(?#x)[-6,8,0]  ¦  ſſ reg_match ^ss$(?#x)[-6,8,0]  ¦  SS reg_match ^ss$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+SELECT 'ß' REGEXP '^ss$(?#x)', 'sx' REGEXP '^ss$(?#x)';
+➤ ß reg_match ^ss$(?#x)[-6,8,0]  ¦  sx reg_match ^ss$(?#x)[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'µ' REGEXP '^µ$(?#x)', 'μ' REGEXP '^µ$(?#x)', 'Μ' REGEXP '^µ$(?#x)', 'm' REGEXP '^µ$(?#x)';
+➤ µ reg_match ^µ$(?#x)[-6,8,0]  ¦  μ reg_match ^µ$(?#x)[-6,8,0]  ¦  Μ reg_match ^µ$(?#x)[-6,8,0]  ¦  m reg_match ^µ$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'ᲀ' REGEXP '^ᲀ$(?#x)', 'в' REGEXP '^ᲀ$(?#x)', 'В' REGEXP '^ᲀ$(?#x)', 'б' REGEXP '^ᲀ$(?#x)';
+➤ ᲀ reg_match ^ᲀ$(?#x)[-6,8,0]  ¦  в reg_match ^ᲀ$(?#x)[-6,8,0]  ¦  В reg_match ^ᲀ$(?#x)[-6,8,0]  ¦  б reg_match ^ᲀ$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'ἀι' REGEXP '^ᾀ$(?#x)', 'ᾀ' REGEXP '^ᾀ$(?#x)', 'ἀι' REGEXP '^ᾀ$(?#x)', 'ᾀ' REGEXP '^ᾀ$(?#x)', 'ᾈ' REGEXP '^ᾀ$(?#x)', 'ἀx' REGEXP '^ᾀ$(?#x)';
+➤ ἀι reg_match ^ᾀ$(?#x)[-6,8,0]  ¦  ᾀ reg_match ^ᾀ$(?#x)[-6,8,0]  ¦  ἀι reg_match ^ᾀ$(?#x)[-6,8,0]  ¦  ᾀ reg_match ^ᾀ$(?#x)[-6,8,0]  ¦  ᾈ reg_match ^ᾀ$(?#x)[-6,8,0]  ¦  ἀx reg_match ^ᾀ$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0
+SELECT 'ς' REGEXP '^ς$', 'Σ' REGEXP '^ς$', 's' REGEXP '^ς$';
+➤ ς reg_match ^ς$[-6,8,0]  ¦  Σ reg_match ^ς$[-6,8,0]  ¦  s reg_match ^ς$[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'ſ' REGEXP '^ſ$', 'µ' REGEXP '^µ$', 'ᲀ' REGEXP '^ᲀ$';
+➤ ſ reg_match ^ſ$[-6,8,0]  ¦  µ reg_match ^µ$[-6,8,0]  ¦  ᲀ reg_match ^ᲀ$[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT REGEXP_LIKE(REPEAT('s', 80), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '(?#x)'), 'i');
+-- @regex("regexp case-fold resource limit exceeded: .*backtracking state exceeds", true)
+internal error: regexp case-fold resource limit exceeded: expanded-pattern admission: invalid input: regular expression backtracking state exceeds the maximum supported size
+SELECT REGEXP_LIKE(REPEAT('s', 80), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '(?#x)'), 'c');
+➤ REGEXP_LIKE(REPEAT(s, 80), CONCAT(REPEAT(s, 80), |, REPEAT(s, 80), |, REPEAT(s, 80), |, REPEAT(s, 80), (?#x)), c)[-6,8,0]  𝄀
+1
+SELECT REPEAT('s', 80) REGEXP CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '(?#x)');
+-- @regex("regexp case-fold resource limit exceeded: .*backtracking state exceeds", true)
+internal error: regexp case-fold resource limit exceeded: expanded-pattern admission: invalid input: regular expression backtracking state exceeds the maximum supported size
+SELECT REGEXP_LIKE(REPEAT('ß', 6), CONCAT(REPEAT('s', 12), '|', REPEAT('s', 12), '|', REPEAT('s', 12), '|', REPEAT('s', 12), '(?#x)'), 'i');
+➤ REGEXP_LIKE(REPEAT(ß, 6), CONCAT(REPEAT(s, 12), |, REPEAT(s, 12), |, REPEAT(s, 12), |, REPEAT(s, 12), (?#x)), i)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE(REPEAT('ß', 40), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80)), 'i');
+➤ REGEXP_LIKE(REPEAT(ß, 40), CONCAT(REPEAT(s, 80), |, REPEAT(s, 80), |, REPEAT(s, 80), |, REPEAT(s, 80)), i)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE(REPEAT('s', 80), CONCAT(REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80), '|', REPEAT('s', 80)), 'c');
+➤ REGEXP_LIKE(REPEAT(s, 80), CONCAT(REPEAT(s, 80), |, REPEAT(s, 80), |, REPEAT(s, 80), |, REPEAT(s, 80)), c)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('SS', '^(?:ss|(?i)a|ss)$', 'c'), REGEXP_LIKE('ß', '^(?:ss|(?i)a|ss)$', 'c');
+➤ REGEXP_LIKE(SS, ^(?:ss|(?i)a|ss)$, c)[-6,8,0]  ¦  REGEXP_LIKE(ß, ^(?:ss|(?i)a|ss)$, c)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('SS', '(?=)^(?:ss|(?i)a|ss)$', 'c'), REGEXP_LIKE('ß', '(?=)^(?:ss|(?i)a|ss)$', 'c');
+➤ REGEXP_LIKE(SS, (?=)^(?:ss|(?i)a|ss)$, c)[-6,8,0]  ¦  REGEXP_LIKE(ß, (?=)^(?:ss|(?i)a|ss)$, c)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('ss', '^(?:ss|(?i:a)|ss)$', 'c'), REGEXP_LIKE('SS', '^(?:ss|(?i:a)|ss)$', 'c'), REGEXP_LIKE('ß', '^(?:ss|(?i:a)|ss)$', 'c');
+➤ REGEXP_LIKE(ss, ^(?:ss|(?i:a)|ss)$, c)[-6,8,0]  ¦  REGEXP_LIKE(SS, ^(?:ss|(?i:a)|ss)$, c)[-6,8,0]  ¦  REGEXP_LIKE(ß, ^(?:ss|(?i:a)|ss)$, c)[-6,8,0]  𝄀
+1  ¦  0  ¦  0
+SELECT REGEXP_LIKE('ss', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'i');
+-- @regex("regexp case-fold resource limit exceeded: .*expression nests too deeply", true)
+internal error: regexp case-fold resource limit exceeded: expanded-pattern admission: error parsing regexp: expression nests too deeply: `(?i)((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((?:ss|(?:ss|(?-i:ß)|(?-i:ẞ))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))`
+SELECT REGEXP_LIKE('SS', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'i');
+-- @regex("regexp case-fold resource limit exceeded: .*expression nests too deeply", true)
+internal error: regexp case-fold resource limit exceeded: expanded-pattern admission: error parsing regexp: expression nests too deeply: `(?i)((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((?:ss|(?:ss|(?-i:ß)|(?-i:ẞ))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))`
+SELECT REGEXP_LIKE('ß', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'i');
+-- @regex("regexp case-fold resource limit exceeded: .*expression nests too deeply", true)
+internal error: regexp case-fold resource limit exceeded: expanded-pattern admission: error parsing regexp: expression nests too deeply: `(?i)((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((?:ss|(?:ss|(?-i:ß)|(?-i:ẞ))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))`
+SELECT REGEXP_LIKE('ss', CONCAT(REPEAT('(', 999), 'ss', REPEAT(')', 999)), 'c');
+➤ REGEXP_LIKE(ss, CONCAT(REPEAT((, 999), ss, REPEAT(), 999)), c)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('ß', CONCAT(REPEAT('(', 997), 'ss', REPEAT(')', 997)), 'i');
+➤ REGEXP_LIKE(ß, CONCAT(REPEAT((, 997), ss, REPEAT(), 997)), i)[-6,8,0]  𝄀
+1
+SELECT REGEXP_LIKE('ss', CONCAT(REPEAT('(', 1000), 'ss', REPEAT(')', 1000)), 'i');
+error parsing regexp: expression nests too deeply: `(?i)((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((ss))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))`
+SELECT REGEXP_LIKE('ss{', 'ss{(?#x)', 'i');
+invalid input: invalid regular expression quantifier
+SELECT REGEXP_LIKE('ss{', 'ss{(?#x)', 'c');
+invalid input: invalid regular expression quantifier
+SELECT REGEXP_LIKE('ss{2', 'ss{2(?#x)', 'i');
+invalid input: invalid regular expression quantifier
+SELECT REGEXP_LIKE('ss{', 'ss\\{(?#x)', 'i'), REGEXP_LIKE('ss{', 'ss\\{(?#x)', 'c');
+➤ REGEXP_LIKE(ss{, ss\\{(?#x), i)[-6,8,0]  ¦  REGEXP_LIKE(ss{, ss\\{(?#x), c)[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'σ' REGEXP '^[ς]$(?#x)', 'ς' REGEXP '^[ς]$(?#x)', 'Σ' REGEXP '^[ς]$(?#x)', 's' REGEXP '^[ς]$(?#x)';
+➤ σ reg_match ^[ς]$(?#x)[-6,8,0]  ¦  ς reg_match ^[ς]$(?#x)[-6,8,0]  ¦  Σ reg_match ^[ς]$(?#x)[-6,8,0]  ¦  s reg_match ^[ς]$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'σ' REGEXP '^ς+$(?#x)', 'σς' REGEXP '^ς+$(?#x)', 'σσ' REGEXP '^ς{2}$(?#x)', 's' REGEXP '^ς+$(?#x)';
+➤ σ reg_match ^ς+$(?#x)[-6,8,0]  ¦  σς reg_match ^ς+$(?#x)[-6,8,0]  ¦  σσ reg_match ^ς{2}$(?#x)[-6,8,0]  ¦  s reg_match ^ς+$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'ſ' REGEXP '^s+$(?#x)', 'ſ' REGEXP '^[s]$(?#x)';
+➤ ſ reg_match ^s+$(?#x)[-6,8,0]  ¦  ſ reg_match ^[s]$(?#x)[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ſ' REGEXP '^[a-z]$(?#x)', 'ſ' REGEXP '^[A-Z]$(?#x)';
+➤ ſ reg_match ^[a-z]$(?#x)[-6,8,0]  ¦  ſ reg_match ^[A-Z]$(?#x)[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'σ' REGEXP '^[^ς]$(?#x)', 'x' REGEXP '^[^ς]$(?#x)';
+➤ σ reg_match ^[^ς]$(?#x)[-6,8,0]  ¦  x reg_match ^[^ς]$(?#x)[-6,8,0]  𝄀
+0  ¦  1
+SELECT 'K' REGEXP '^[k]$(?#x)', 'ẞ' REGEXP '^[ß]$(?#x)';
+➤ K reg_match ^[k]$(?#x)[-6,8,0]  ¦  ẞ reg_match ^[ß]$(?#x)[-6,8,0]  𝄀
+1  ¦  1
+SELECT 'ς' REGEXP '^[α-ω-[σ]]$(?#x)', 'Σ' REGEXP '^[α-ω-[σ]]$(?#x)', 'β' REGEXP '^[α-ω-[σ]]$(?#x)';
+➤ ς reg_match ^[α-ω-[σ]]$(?#x)[-6,8,0]  ¦  Σ reg_match ^[α-ω-[σ]]$(?#x)[-6,8,0]  ¦  β reg_match ^[α-ω-[σ]]$(?#x)[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'ſ' REGEXP '^[a-z-[bc]]$(?#x)', 'b' REGEXP '^[a-z-[bc]]$(?#x)';
+➤ ſ reg_match ^[a-z-[bc]]$(?#x)[-6,8,0]  ¦  b reg_match ^[a-z-[bc]]$(?#x)[-6,8,0]  𝄀
+0  ¦  0
+SELECT REGEXP_LIKE('σ', '^[ς]$(?#x)', 'c'), REGEXP_LIKE('ς', '^[ς]$(?#x)', 'c'), REGEXP_LIKE('σ', '^ς+$(?#x)', 'c'), REGEXP_LIKE('ſ', '^[a-z]$(?#x)', 'c');
+➤ REGEXP_LIKE(σ, ^[ς]$(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(ς, ^[ς]$(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(σ, ^ς+$(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(ſ, ^[a-z]$(?#x), c)[-6,8,0]  𝄀
+0  ¦  1  ¦  0  ¦  0
+CREATE TABLE orb1 (s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
+INSERT INTO orb1 VALUES ('σ'),('ς'),('Σ'),('s'),('x');
+SELECT COUNT(*) FROM orb1 WHERE s REGEXP '^[ς]$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+SELECT COUNT(*) FROM orb1 WHERE s REGEXP '^ς+$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+CREATE TABLE orb2 (s VARCHAR(20));
+INSERT INTO orb2 VALUES ('σ'),('ſ'),('s');
+SELECT COUNT(*) FROM orb2 WHERE s REGEXP '^[ς]$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM orb2 WHERE s REGEXP '^[a-z]$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+DROP TABLE orb1;
+DROP TABLE orb2;
+SELECT REGEXP_LIKE('s', '(?=)[s\\]', 'i');
+error parsing regexp: unterminated [] set in `(?i)(?=)[s\]`
+SELECT REGEXP_LIKE('s', '(?=)[s\\]', 'c');
+error parsing regexp: unterminated [] set in `(?=)[s\]`
+SELECT REGEXP_LIKE('s', '(?=)[^s\\]', 'i');
+error parsing regexp: unterminated [] set in `(?i)(?=)[^s\]`
+SELECT REGEXP_LIKE('s', '(?=)[a-z\\]', 'i');
+error parsing regexp: unterminated [] set in `(?i)(?=)[a-z\]`
+SELECT REGEXP_LIKE('s', '(?=)[\\p{L}\\]', 'i');
+error parsing regexp: unterminated [] set in `(?i)(?=)[\p{L}\]`
+SELECT REGEXP_LIKE('s', '(?=)[a-z-[bc\\]', 'i');
+error parsing regexp: unterminated [] set in `(?i)(?=)[a-z-[bc\]`
+SELECT REGEXP_LIKE('s', '(?=)[s\\', 'i');
+error parsing regexp: unterminated [] set in `(?i)(?=)[s\`
+SELECT 'abc' REGEXP 'ABC', 'a' LIKE 'A';
+➤ abc reg_match ABC[-6,8,0]  ¦  a like A[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('s', '(?=)[s\\\\]', 'i'), REGEXP_LIKE('ſ', '(?=)[s\\\\]', 'i'), REGEXP_LIKE('\\', '(?=)[s\\\\]', 'i');
+➤ REGEXP_LIKE(s, (?=)[s\\\\], i)[-6,8,0]  ¦  REGEXP_LIKE(ſ, (?=)[s\\\\], i)[-6,8,0]  ¦  REGEXP_LIKE(\\, (?=)[s\\\\], i)[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'σ' REGEXP '^[\\u03C2]$(?#x)', 'Σ' REGEXP '^[\\u03C2]$(?#x)', 'ς' REGEXP '^[\\u03C2]$(?#x)', 'x' REGEXP '^[\\u03C2]$(?#x)';
+➤ σ reg_match ^[\\u03C2]$(?#x)[-6,8,0]  ¦  Σ reg_match ^[\\u03C2]$(?#x)[-6,8,0]  ¦  ς reg_match ^[\\u03C2]$(?#x)[-6,8,0]  ¦  x reg_match ^[\\u03C2]$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'σ' REGEXP '^[^\\u03C2]$(?#x)', 'x' REGEXP '^[^\\u03C2]$(?#x)';
+➤ σ reg_match ^[^\\u03C2]$(?#x)[-6,8,0]  ¦  x reg_match ^[^\\u03C2]$(?#x)[-6,8,0]  𝄀
+0  ¦  1
+SELECT 'ſ' REGEXP '^[\\u0073]$(?#x)', 's' REGEXP '^[\\u017F]$(?#x)', 'S' REGEXP '^[\\u017F]$(?#x)';
+➤ ſ reg_match ^[\\u0073]$(?#x)[-6,8,0]  ¦  s reg_match ^[\\u017F]$(?#x)[-6,8,0]  ¦  S reg_match ^[\\u017F]$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'ſ' REGEXP '^[\\u0041-\\u005A]$(?#x)', 'ſ' REGEXP '^[\\u0061-\\u007A]$(?#x)', 'ſ' REGEXP '^[A-\\u005A]$(?#x)';
+➤ ſ reg_match ^[\\u0041-\\u005A]$(?#x)[-6,8,0]  ¦  ſ reg_match ^[\\u0061-\\u007A]$(?#x)[-6,8,0]  ¦  ſ reg_match ^[A-\\u005A]$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'σ' REGEXP '^[\\U000003C2]$', 'ς' REGEXP '^[\\U000003C2]$', 'x' REGEXP '^[\\U000003C2]$';
+➤ σ reg_match ^[\\U000003C2]$[-6,8,0]  ¦  ς reg_match ^[\\U000003C2]$[-6,8,0]  ¦  x reg_match ^[\\U000003C2]$[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'ẞ' REGEXP '^[\\u00DF]$(?#x)', 'ß' REGEXP '^[\\u1E9E]$(?#x)';
+➤ ẞ reg_match ^[\\u00DF]$(?#x)[-6,8,0]  ¦  ß reg_match ^[\\u1E9E]$(?#x)[-6,8,0]  𝄀
+1  ¦  1
+SELECT REGEXP_LIKE('x', '^[\\u12]$(?#x)', 'i');
+error parsing regexp: insufficient hexadecimal digits in `(?i)^[\u12]$(?#x)`
+SELECT REGEXP_LIKE('x', '^[\\u12]$(?#x)', 'c');
+error parsing regexp: insufficient hexadecimal digits in `^[\u12]$(?#x)`
+SELECT '1' REGEXP '^[\\U0041]$(?#x)', 'σ' REGEXP '^[\\U0041]$(?#x)';
+➤ 1 reg_match ^[\\U0041]$(?#x)[-6,8,0]  ¦  σ reg_match ^[\\U0041]$(?#x)[-6,8,0]  𝄀
+1  ¦  0
+SELECT 'σ' REGEXP '^[\\u03C2]$(?#x)' COLLATE utf8mb4_unicode_ci;
+➤ σ reg_match (^[\\u03C2]$(?#x)) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1
+SELECT 'σ' REGEXP '^[\\u03C2]$(?#x)' COLLATE utf8mb4_bin;
+➤ σ reg_match (^[\\u03C2]$(?#x)) collate utf8mb4_bin[-6,8,0]  𝄀
+0
+SELECT REGEXP_LIKE('σ', '^[\\u03C2]$(?#x)', 'c'), REGEXP_LIKE('ς', '^[\\u03C2]$(?#x)', 'c');
+➤ REGEXP_LIKE(σ, ^[\\u03C2]$(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(ς, ^[\\u03C2]$(?#x), c)[-6,8,0]  𝄀
+0  ¦  1
+CREATE TABLE orb3 (s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
+INSERT INTO orb3 VALUES ('σ'),('ς'),('Σ'),('x');
+SELECT COUNT(*) FROM orb3 WHERE s REGEXP '^[\\u03C2]$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+3
+SELECT COUNT(*) FROM orb3 WHERE s REGEXP '^[^\\u03C2]$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+CREATE TABLE orb4 (s VARCHAR(20));
+INSERT INTO orb4 VALUES ('σ'),('ſ'),('s'),('x');
+SELECT COUNT(*) FROM orb4 WHERE s REGEXP '^[\\u03C2]$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM orb4 WHERE s REGEXP '^[\\u0073]$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+DROP TABLE orb3;
+DROP TABLE orb4;
+SELECT 'σ' REGEXP '^\\u03C2$(?#x)', 'Σ' REGEXP '^\\u03C2$(?#x)', 'ς' REGEXP '^\\u03C2$(?#x)', 'x' REGEXP '^\\u03C2$(?#x)';
+➤ σ reg_match ^\\u03C2$(?#x)[-6,8,0]  ¦  Σ reg_match ^\\u03C2$(?#x)[-6,8,0]  ¦  ς reg_match ^\\u03C2$(?#x)[-6,8,0]  ¦  x reg_match ^\\u03C2$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0
+SELECT 'ſ' REGEXP '^\\u0073$(?#x)', 's' REGEXP '^\\u017F$(?#x)', 'S' REGEXP '^\\u017F$(?#x)', 'ſ' REGEXP '^\\u0053$(?#x)';
+➤ ſ reg_match ^\\u0073$(?#x)[-6,8,0]  ¦  s reg_match ^\\u017F$(?#x)[-6,8,0]  ¦  S reg_match ^\\u017F$(?#x)[-6,8,0]  ¦  ſ reg_match ^\\u0053$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+SELECT 'σ' REGEXP '^\\U000003C2$', 'ς' REGEXP '^\\U000003C2$', 'x' REGEXP '^\\U000003C2$';
+➤ σ reg_match ^\\U000003C2$[-6,8,0]  ¦  ς reg_match ^\\U000003C2$[-6,8,0]  ¦  x reg_match ^\\U000003C2$[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'σς' REGEXP '^\\u03C2+$(?#x)', 'Σ' REGEXP '^\\u03C2+$(?#x)', 'x' REGEXP '^\\u03C2+$(?#x)';
+➤ σς reg_match ^\\u03C2+$(?#x)[-6,8,0]  ¦  Σ reg_match ^\\u03C2+$(?#x)[-6,8,0]  ¦  x reg_match ^\\u03C2+$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'Σς' REGEXP '^\\u03C2{2}$(?#x)', 'σ' REGEXP '^\\u03C2{2}$(?#x)', 'σς' REGEXP '^\\u03C2$(?#x)';
+➤ Σς reg_match ^\\u03C2{2}$(?#x)[-6,8,0]  ¦  σ reg_match ^\\u03C2{2}$(?#x)[-6,8,0]  ¦  σς reg_match ^\\u03C2$(?#x)[-6,8,0]  𝄀
+1  ¦  0  ¦  0
+SELECT 'ß' REGEXP '^\\u00DF$(?#x)', 'ẞ' REGEXP '^\\u00DF$(?#x)', 'ss' REGEXP '^\\u00DF$(?#x)';
+➤ ß reg_match ^\\u00DF$(?#x)[-6,8,0]  ¦  ẞ reg_match ^\\u00DF$(?#x)[-6,8,0]  ¦  ss reg_match ^\\u00DF$(?#x)[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+SELECT 'ß' REGEXP '^\\u1E9E$(?#x)', 'ss' REGEXP '^\\u00DF+$(?#x)', 'ßẞ' REGEXP '^\\u00DF+$(?#x)';
+➤ ß reg_match ^\\u1E9E$(?#x)[-6,8,0]  ¦  ss reg_match ^\\u00DF+$(?#x)[-6,8,0]  ¦  ßẞ reg_match ^\\u00DF+$(?#x)[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+SELECT 'ſ' REGEXP '^\\u0073$(?#x)' COLLATE utf8mb4_unicode_ci;
+➤ ſ reg_match (^\\u0073$(?#x)) collate utf8mb4_unicode_ci[-6,8,0]  𝄀
+1
+SELECT 'ſ' REGEXP '^\\u0073$(?#x)' COLLATE utf8mb4_bin;
+➤ ſ reg_match (^\\u0073$(?#x)) collate utf8mb4_bin[-6,8,0]  𝄀
+0
+SELECT REGEXP_LIKE('σ', '^\\u03C2$(?#x)', 'c'), REGEXP_LIKE('ς', '^\\u03C2$(?#x)', 'c');
+➤ REGEXP_LIKE(σ, ^\\u03C2$(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(ς, ^\\u03C2$(?#x), c)[-6,8,0]  𝄀
+0  ¦  1
+SELECT REGEXP_LIKE('ſ', '^\\u0073$(?#x)', 'c'), REGEXP_LIKE('s', '^\\u0073$(?#x)', 'c');
+➤ REGEXP_LIKE(ſ, ^\\u0073$(?#x), c)[-6,8,0]  ¦  REGEXP_LIKE(s, ^\\u0073$(?#x), c)[-6,8,0]  𝄀
+0  ¦  1
+SELECT REGEXP_LIKE('u', '^\\u12$(?#x)', 'i');
+error parsing regexp: insufficient hexadecimal digits in `(?i)^\u12$(?#x)`
+SELECT REGEXP_LIKE('u', '^\\u12$(?#x)', 'c');
+error parsing regexp: insufficient hexadecimal digits in `^\u12$(?#x)`
+SELECT 'ａß' REGEXP '^\\U0000FF41ss$(?#x)', 'Ａß' REGEXP '^\\U0000FF41ss$(?#x)';
+➤ ａß reg_match ^\\U0000FF41ss$(?#x)[-6,8,0]  ¦  Ａß reg_match ^\\U0000FF41ss$(?#x)[-6,8,0]  𝄀
+1  ¦  1
+CREATE TABLE orb5 (s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
+INSERT INTO orb5 VALUES ('σ'),('ſ'),('x');
+SELECT COUNT(*) FROM orb5 WHERE s REGEXP '^\\u03C2$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM orb5 WHERE s REGEXP '^\\u0073$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+CREATE TABLE orb6 (s VARCHAR(20));
+INSERT INTO orb6 VALUES ('σ'),('ſ'),('x');
+SELECT COUNT(*) FROM orb6 WHERE s REGEXP '^\\u03C2$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM orb6 WHERE s REGEXP '^\\u0073$(?#x)';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+DROP TABLE orb5;
+DROP TABLE orb6;
+SELECT FIND_IN_SET(REPEAT('z', 60000), REPEAT('a,', 30000));
+➤ FIND_IN_SET(REPEAT(z, 60000), REPEAT(a,, 30000))[-5,3,0]  𝄀
+0
+SELECT FIND_IN_SET(REPEAT('Z', 600), CONCAT(REPEAT('a,', 300), REPEAT('z', 600)) COLLATE utf8mb4_unicode_ci);
+➤ FIND_IN_SET(REPEAT(Z, 600), (CONCAT(REPEAT(a,, 300), REPEAT(z, 600))) collate utf8mb4_unicode_ci)[-5,3,0]  𝄀
+301
+SELECT FIND_IN_SET(REPEAT('Z', 600), CONCAT(REPEAT('a,', 300), REPEAT('z', 600)));
+➤ FIND_IN_SET(REPEAT(Z, 600), CONCAT(REPEAT(a,, 300), REPEAT(z, 600)))[-5,3,0]  𝄀
+301
+SELECT CAST('abc' AS BINARY) LIKE ('ABC%' COLLATE utf8mb4_general_ci);
+➤ cast(abc as binary) like ((ABC%) collate utf8mb4_general_ci)[-6,8,0]  𝄀
+1
+SELECT ('abc' COLLATE utf8mb4_general_ci) LIKE CAST('ABC%' AS BINARY);
+➤ ((abc) collate utf8mb4_general_ci) like cast(ABC% as binary)[-6,8,0]  𝄀
+1
+SELECT CAST('abc' AS BINARY) LIKE ('ABC%' COLLATE utf8mb4_unicode_ci);
+➤ cast(abc as binary) like ((ABC%) collate utf8mb4_unicode_ci)[-6,8,0]  𝄀
+1
+SELECT ('abc' COLLATE utf8mb4_unicode_ci) LIKE CAST('ABC%' AS BINARY);
+➤ ((abc) collate utf8mb4_unicode_ci) like cast(ABC% as binary)[-6,8,0]  𝄀
+1
+SELECT CAST('abc' AS BINARY) LIKE 'ABC%', CAST('abc' AS BINARY) LIKE ('ABC%' COLLATE utf8mb4_bin);
+➤ cast(abc as binary) like ABC%[-6,8,0]  ¦  cast(abc as binary) like ((ABC%) collate utf8mb4_bin)[-6,8,0]  𝄀
+0  ¦  0
+SELECT CAST('abc' AS BINARY) LIKE ('abc%' COLLATE utf8mb4_general_ci), CAST('xyz' AS BINARY) LIKE ('ABC%' COLLATE utf8mb4_general_ci);
+➤ cast(abc as binary) like ((abc%) collate utf8mb4_general_ci)[-6,8,0]  ¦  cast(xyz as binary) like ((ABC%) collate utf8mb4_general_ci)[-6,8,0]  𝄀
+1  ¦  0
+SELECT FIND_IN_SET(CAST('A' AS BINARY), 'a,b' COLLATE utf8mb4_general_ci);
+➤ FIND_IN_SET(cast(A as binary), (a,b) collate utf8mb4_general_ci)[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET('A' COLLATE utf8mb4_general_ci, CAST('a,b' AS BINARY));
+➤ FIND_IN_SET((A) collate utf8mb4_general_ci, cast(a,b as binary))[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET(CAST('A' AS BINARY), 'a,b' COLLATE utf8mb4_unicode_ci);
+➤ FIND_IN_SET(cast(A as binary), (a,b) collate utf8mb4_unicode_ci)[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET('A' COLLATE utf8mb4_unicode_ci, CAST('a,b' AS BINARY));
+➤ FIND_IN_SET((A) collate utf8mb4_unicode_ci, cast(a,b as binary))[-5,3,0]  𝄀
+1
+SELECT FIND_IN_SET(CAST('A' AS BINARY), 'a,b'), FIND_IN_SET(CAST('a' AS BINARY), 'a,b' COLLATE utf8mb4_general_ci);
+➤ FIND_IN_SET(cast(A as binary), a,b)[-5,3,0]  ¦  FIND_IN_SET(cast(a as binary), (a,b) collate utf8mb4_general_ci)[-5,3,0]  𝄀
+0  ¦  1
+SELECT FIND_IN_SET(CAST('z' AS BINARY), 'a,b' COLLATE utf8mb4_general_ci), FIND_IN_SET(CAST('a' AS BINARY), 'a,b' COLLATE utf8mb4_bin);
+➤ FIND_IN_SET(cast(z as binary), (a,b) collate utf8mb4_general_ci)[-5,3,0]  ¦  FIND_IN_SET(cast(a as binary), (a,b) collate utf8mb4_bin)[-5,3,0]  𝄀
+0  ¦  1
+SELECT CAST('ALICE' AS BINARY) = ('Alice' COLLATE utf8mb4_general_ci);
+➤ cast(ALICE as binary) = ((Alice) collate utf8mb4_general_ci)[-6,8,0]  𝄀
+0
+SELECT ('Alice' COLLATE utf8mb4_general_ci) = CAST('ALICE' AS BINARY);
+➤ ((Alice) collate utf8mb4_general_ci) = cast(ALICE as binary)[-6,8,0]  𝄀
+0
+SELECT CAST('ALICE' AS BINARY) = ('Alice' COLLATE utf8mb4_unicode_ci);
+➤ cast(ALICE as binary) = ((Alice) collate utf8mb4_unicode_ci)[-6,8,0]  𝄀
+1
+SELECT ('Alice' COLLATE utf8mb4_unicode_ci) = CAST('ALICE' AS BINARY);
+➤ ((Alice) collate utf8mb4_unicode_ci) = cast(ALICE as binary)[-6,8,0]  𝄀
+1
+SELECT CAST('ALICE' AS BINARY) = 'Alice', CAST('ALICE' AS BINARY) = ('Alice' COLLATE utf8mb4_bin);
+➤ cast(ALICE as binary) = Alice[-6,8,0]  ¦  cast(ALICE as binary) = ((Alice) collate utf8mb4_bin)[-6,8,0]  𝄀
+0  ¦  0
+SELECT CAST('ALICE' AS BINARY) IN ('Alice' COLLATE utf8mb4_general_ci), CAST('ALICE' AS BINARY) IN ('Alice');
+➤ cast(ALICE as binary) in ((Alice) collate utf8mb4_general_ci)[-6,8,0]  ¦  cast(ALICE as binary) in (Alice)[-6,8,0]  𝄀
+0  ¦  0
+SELECT CAST('abc' AS BINARY) REGEXP ('ABC' COLLATE utf8mb4_general_ci);
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to reg_match.
+SELECT ('ABC' COLLATE utf8mb4_general_ci) REGEXP CAST('abc' AS BINARY);
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to reg_match.
+SELECT CAST('abc' AS BINARY) REGEXP 'ABC';
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to reg_match.
+SELECT 'abc' REGEXP CAST('ABC' AS BINARY);
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to reg_match.
+SELECT REGEXP_LIKE(CAST('abc' AS BINARY), 'ABC' COLLATE utf8mb4_general_ci);
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.
+SELECT REGEXP_LIKE('ABC' COLLATE utf8mb4_general_ci, CAST('abc' AS BINARY));
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_like.
+SELECT (CAST('abc' AS BINARY) COLLATE utf8mb4_general_ci) LIKE 'ABC%';
+COLLATION 'utf8mb4_general_ci' is not valid for CHARACTER SET 'binary'
+SELECT CONVERT('abc' USING BINARY) LIKE ('ABC%' COLLATE utf8mb4_general_ci);
+➤ CONVERT(abc using BINARY) like ((ABC%) collate utf8mb4_general_ci)[-6,8,0]  𝄀
+1
+CREATE TABLE bintie1 (s VARCHAR(20) COLLATE utf8mb4_unicode_ci, g VARCHAR(20));
+INSERT INTO bintie1 VALUES ('Alice','Alice'), ('BOB','BOB');
+SELECT COUNT(*) FROM bintie1 WHERE s LIKE CAST('alice%' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM bintie1 WHERE CAST('alice%' AS BINARY) LIKE s;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM bintie1 WHERE s LIKE CAST('Alice%' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE s NOT LIKE CAST('Alice%' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE s LIKE _binary 'alice%';
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE FIND_IN_SET(s, CAST('alice,bob' AS BINARY)) > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM bintie1 WHERE FIND_IN_SET(s, CAST('Alice,BOB' AS BINARY)) > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+2
+SELECT COUNT(*) FROM bintie1 WHERE FIND_IN_SET(CAST('alice' AS BINARY), s) > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM bintie1 WHERE FIND_IN_SET(CAST('Alice' AS BINARY), s) > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE s ILIKE CAST('alice%' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE CAST('bob' AS BINARY) ILIKE s;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE g LIKE CAST('alice%' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM bintie1 WHERE g LIKE CAST('Alice%' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE FIND_IN_SET(g, CAST('alice,bob' AS BINARY)) > 0;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM bintie1 WHERE s LIKE CAST('a%' AS BINARY) ESCAPE CAST('!' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SELECT COUNT(*) FROM bintie1 WHERE s LIKE CAST('A%' AS BINARY) ESCAPE CAST('!' AS BINARY);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM bintie1 WHERE s REGEXP CAST('^alice' AS BINARY);
+Character set 'utf8mb4_unicode_ci' cannot be used in conjunction with 'binary' in call to reg_match.
+SELECT COUNT(*) FROM bintie1 WHERE CAST('Alice' AS BINARY) REGEXP s;
+Character set 'binary' cannot be used in conjunction with 'utf8mb4_unicode_ci' in call to reg_match.
+SELECT COUNT(*) FROM bintie1 WHERE REGEXP_LIKE(s, CAST('^alice' AS BINARY));
+Character set 'utf8mb4_unicode_ci' cannot be used in conjunction with 'binary' in call to regexp_like.
+SELECT COUNT(*) FROM bintie1 WHERE s = CAST('ALICE' AS BINARY);
+Illegal mix of collations (utf8mb4_unicode_ci,IMPLICIT) and (binary,IMPLICIT) for operation '='
+SELECT COUNT(*) FROM bintie1 WHERE s LIKE g;
+Illegal mix of collations (utf8mb4_unicode_ci,IMPLICIT) and (utf8mb4_general_ci,IMPLICIT) for operation 'like'
+SELECT COUNT(*) FROM bintie1 WHERE s LIKE g ESCAPE CAST('!' AS BINARY);
+Illegal mix of collations (utf8mb4_unicode_ci,IMPLICIT) and (utf8mb4_general_ci,IMPLICIT) for operation 'like'
+CREATE TABLE bintie2 (s VARCHAR(20) COLLATE utf8mb4_unicode_ci, b VARBINARY(20), p VARBINARY(20));
+INSERT INTO bintie2 VALUES ('Alice','Alice,bob','alice%'), ('BOB','alice,bob','BO%');
+SELECT FIND_IN_SET(s, b) FROM bintie2 ORDER BY s;
+➤ FIND_IN_SET(s, b)[-5,3,0]  𝄀
+1  𝄀
+0
+SELECT COUNT(*) FROM bintie2 WHERE s LIKE p;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+DROP TABLE bintie2;
+PREPARE bintie_like FROM 'SELECT COUNT(*) FROM bintie1 WHERE s LIKE CAST(? AS BINARY)';
+SET @bintie_p = 'alice%';
+EXECUTE bintie_like USING @bintie_p;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SET @bintie_p = 'Alice%';
+EXECUTE bintie_like USING @bintie_p;
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE bintie_like;
+PREPARE bintie_fis FROM 'SELECT FIND_IN_SET(s, CAST(? AS BINARY)) FROM bintie1 ORDER BY s';
+SET @bintie_l = 'alice,bob';
+EXECUTE bintie_fis USING @bintie_l;
+➤ FIND_IN_SET(bintie1.s, cast(? as binary))[-5,3,0]  𝄀
+0  𝄀
+0
+SET @bintie_l = 'Alice,bob';
+EXECUTE bintie_fis USING @bintie_l;
+➤ FIND_IN_SET(bintie1.s, cast(? as binary))[-5,3,0]  𝄀
+1  𝄀
+0
+DEALLOCATE PREPARE bintie_fis;
+DROP TABLE bintie1;
+DROP DATABASE IF EXISTS issue_31175;

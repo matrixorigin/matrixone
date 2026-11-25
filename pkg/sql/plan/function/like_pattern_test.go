@@ -154,28 +154,20 @@ func TestLikeRegexpBatchHonorsCancellation(t *testing.T) {
 		name, pattern, value  string
 		escape                string
 		explicit, insensitive bool
-		mixed                 bool
 	}{
 		{name: "LIKE", pattern: "a_%b", value: "aXXb"},
 		{name: "ILIKE", pattern: "A_%B", value: "aXXb", insensitive: true},
 		{name: "LIKE ESCAPE", pattern: "a!_%b", value: "a_XXb", explicit: true, escape: "!"},
 		{name: "ILIKE ESCAPE", pattern: "A!_%B", value: "a_XXb", explicit: true, escape: "!", insensitive: true},
-		{name: "mixed text", pattern: "a_%b", value: "aXXb", mixed: true},
-		{name: "mixed text ESCAPE", pattern: "a!_%b", value: "a_XXb", explicit: true, escape: "!", mixed: true},
 	} {
 		for _, constant := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/constant=%v", tc.name, constant), func(t *testing.T) {
 				proc := newLikeTestProcess(t)
 				const rows = 3
-				values := vector.NewVec(types.T_varchar.ToType())
+				values := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				defer values.Free(proc.Mp())
 				for range rows {
 					require.NoError(t, vector.AppendBytes(values, []byte(tc.value), false, proc.Mp()))
-				}
-				if tc.mixed {
-					require.NoError(t, values.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
-						types.RuntimeStringBinary, types.RuntimeStringText, types.RuntimeStringText,
-					}, proc.Mp()))
 				}
 				var patterns *vector.Vector
 				if constant {
@@ -183,7 +175,7 @@ func TestLikeRegexpBatchHonorsCancellation(t *testing.T) {
 					patterns, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.pattern), rows, proc.Mp())
 					require.NoError(t, err)
 				} else {
-					patterns = vector.NewVec(types.T_varchar.ToType())
+					patterns = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 					for range rows {
 						require.NoError(t, vector.AppendBytes(patterns, []byte(tc.pattern), false, proc.Mp()))
 					}
@@ -211,9 +203,6 @@ func TestLikeRegexpBatchHonorsCancellation(t *testing.T) {
 				require.Same(t, ctx.Err(), err, "return the original context error")
 				matches := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 				require.True(t, matches[0], "evaluation must begin before cancellation")
-				if tc.mixed {
-					require.True(t, matches[1], "the mixed-domain text matcher must begin before cancellation")
-				}
 				require.False(t, matches[rows-1], "a canceled batch must not finish successfully")
 			})
 		}
@@ -242,7 +231,7 @@ func TestLikeFastPathBatchHonorsCancellation(t *testing.T) {
 				proc := newLikeTestProcess(t)
 				// The smallest batch crossing the 256-row cancellation interval.
 				const rows = 257
-				values := vector.NewVec(types.T_varchar.ToType())
+				values := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				defer values.Free(proc.Mp())
 				for range rows {
 					require.NoError(t, vector.AppendBytes(values, []byte(tc.value), false, proc.Mp()))

@@ -16,6 +16,7 @@ package group
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
-	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -152,6 +151,42 @@ func (w *spillRecordWriter) WriteSelectedFixedRows(
 	return n, err
 }
 
+func (w *spillRecordWriter) WriteSelectedVarlenaRows(
+	values []types.Varlena,
+	area []byte,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if fast, ok := w.target.(interface {
+		WriteSelectedVarlenaRows([]types.Varlena, []byte, []int32) (int, error)
+	}); ok {
+		n, err := fast.WriteSelectedVarlenaRows(values, area, rows)
+		w.written += int64(n)
+		return n, err
+	}
+	start := w.written
+	var encoded [4]byte
+	for _, row := range rows {
+		if row < 0 || int(row) >= len(values) {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("invalid varlena group spill row")
+		}
+		value := values[row].GetByteSlice(area)
+		if len(value) > math.MaxInt32 {
+			return int(w.written - start), moerr.NewInvalidInputNoCtx("group spill value exceeds wire format")
+		}
+		binary.LittleEndian.PutUint32(encoded[:], uint32(len(value)))
+		if err := types.WriteFull(w, encoded[:]); err != nil {
+			return int(w.written - start), err
+		}
+		if err := types.WriteFull(w, value); err != nil {
+			return int(w.written - start), err
+		}
+	}
+	return int(w.written - start), nil
+}
+
 func newGroupSpillBuffer(
 	ctr *container,
 	site mpool.AllocationSite,
@@ -216,26 +251,6 @@ type groupInsertPreview struct {
 	existingOnly bool
 }
 
-type groupKeySourcePublication struct {
-	overrides    [][]types.StringSource
-	destinations []*vector.Vector
-}
-
-func (publication *groupKeySourcePublication) addDestination(destination *vector.Vector) {
-	for _, existing := range publication.destinations {
-		if existing == destination {
-			return
-		}
-	}
-	publication.destinations = append(publication.destinations, destination)
-}
-
-func (publication *groupKeySourcePublication) finalize() {
-	for _, destination := range publication.destinations {
-		destination.FinalizeStringSourcePreflight()
-	}
-}
-
 type groupPrePublicationError struct {
 	cause error
 }
@@ -256,176 +271,16 @@ func (ctr *container) commitGroupByChunk(
 	if preview.existingOnly {
 		return preview.values, 0, nil
 	}
-	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
-	if !hasStringSourceMetadata {
-		for _, vec := range vectors {
-			if vec.HasStringSourceMetadata() {
-				hasStringSourceMetadata = true
-				break
-			}
-		}
-	}
-	var sourcePublication groupKeySourcePublication
-	if hasStringSourceMetadata {
-		defer sourcePublication.finalize()
-		if err := ctr.preflightPreviewGroupKeyStringSources(
-			vectors, offset, preview.values, preview.inserted,
-			&sourcePublication); err != nil {
-			return nil, 0, &groupPrePublicationError{cause: err}
-		}
-	}
 	values, _, err := ctr.hr.TxnItr.CommitPreview(&ctr.hr.insertPlan)
 	if err != nil {
 		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	err = ctr.appendGroupByBatchWithStringSources(
-		vectors, offset, preview.inserted, preview.newGroups, sourcePublication.overrides, 0)
-	if err != nil {
+	if err := ctr.appendGroupByBatch(
+		vectors, offset, preview.inserted, preview.newGroups); err != nil {
 		return nil, 0, err
 	}
-	if hasStringSourceMetadata {
-		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
-			return nil, 0, err
-		}
-		ctr.groupKeyStringSourceMetadata = true
-	}
 	return values, preview.newGroups, nil
-}
-
-func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
-	batchIndex := groupIndex / aggBatchSize
-	batchRow := groupIndex % aggBatchSize
-	if batchIndex < len(ctr.groupByBatches) {
-		return ctr.groupByBatches[batchIndex], batchRow, nil
-	}
-	if batchIndex == len(ctr.groupByBatches) && ctr.groupByStandby != nil {
-		return ctr.groupByStandby, batchRow, nil
-	}
-	return nil, 0, mpool.ErrAllocationAccountInvariant
-}
-
-func (ctr *container) forEachPreviewGroupKeyStringSource(
-	vectors []*vector.Vector,
-	offset int,
-	groups []uint64,
-	fn func(destination *vector.Vector, row int, source types.StringSource) error,
-) error {
-	for row, group := range groups {
-		if group == 0 {
-			continue
-		}
-		seen := false
-		for previous := 0; previous < row; previous++ {
-			if groups[previous] == group {
-				seen = true
-				break
-			}
-		}
-		if seen {
-			continue
-		}
-		groupIndex := int(group - 1)
-		destinationBatch, destinationRow, err := ctr.previewGroupDestination(groupIndex)
-		if err != nil {
-			return err
-		}
-		for column, sourceVector := range vectors {
-			destination := destinationBatch.Vecs[column]
-			merged := sourceVector.GetStringSourceAt(offset + row)
-			if destinationRow < destination.Length() {
-				merged, err = types.MergeStringSources(
-					destination.GetStringSourceAt(destinationRow), merged)
-				if err != nil {
-					return err
-				}
-			}
-			for candidate := row + 1; candidate < len(groups); candidate++ {
-				if groups[candidate] != group {
-					continue
-				}
-				merged, err = types.MergeStringSources(
-					merged, sourceVector.GetStringSourceAt(offset+candidate))
-				if err != nil {
-					return err
-				}
-			}
-			if err := fn(destination, destinationRow, merged); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (ctr *container) preflightPreviewGroupKeyStringSources(
-	vectors []*vector.Vector,
-	offset int,
-	groups []uint64,
-	inserted []uint8,
-	publication *groupKeySourcePublication,
-) error {
-	if len(groups) > hashmap.UnitLimit || len(inserted) != len(groups) || publication == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	if err := ctr.forEachPreviewGroupKeyStringSource(
-		vectors, offset, groups,
-		func(destination *vector.Vector, row int, source types.StringSource) error {
-			publication.addDestination(destination)
-			if err := destination.PreflightSetStringSourceAtLength(
-				row, max(destination.Length(), row+1), source, ctr.mp); err != nil {
-				return err
-			}
-			// Existing-row preflight has finalLength == Length and therefore does
-			// not infer a deferred publication. Keep both current and standby
-			// reservations alive until groupKeySourcePublication.finalize.
-			destination.RetainStringSourcePreflight()
-			return nil
-		},
-	); err != nil {
-		return err
-	}
-	// Keep preview results in operator-owned, UnitLimit-bounded scratch. The
-	// selected append consumes these overrides without modifying borrowed input.
-	publication.overrides = make([][]types.StringSource, len(vectors))
-	for column := range publication.overrides {
-		publication.overrides[column] = make([]types.StringSource, len(groups))
-	}
-	for row, flag := range inserted {
-		if flag == 0 {
-			continue
-		}
-		group := groups[row]
-		for column, sourceVector := range vectors {
-			merged := sourceVector.GetStringSourceAt(offset + row)
-			for candidate := row + 1; candidate < len(groups); candidate++ {
-				if groups[candidate] != group {
-					continue
-				}
-				var err error
-				merged, err = types.MergeStringSources(
-					merged, sourceVector.GetStringSourceAt(offset+candidate))
-				if err != nil {
-					return err
-				}
-			}
-			publication.overrides[column][row] = merged
-		}
-	}
-	return nil
-}
-
-func (ctr *container) applyPreviewGroupKeyStringSources(
-	vectors []*vector.Vector,
-	offset int,
-	groups []uint64,
-) error {
-	return ctr.forEachPreviewGroupKeyStringSource(
-		vectors, offset, groups,
-		func(destination *vector.Vector, row int, source types.StringSource) error {
-			return destination.SetStringSourceAtWithMP(row, source, ctr.mp)
-		},
-	)
 }
 
 func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
@@ -497,7 +352,7 @@ func (hr *ResHashRelated) IsEmpty() bool {
 func (hr *ResHashRelated) BuildHashTable(
 	ctx context.Context, mp *mpool.MPool,
 	rebuild bool,
-	isStrHash bool, keyNullable bool, groupingAware bool, preAllocated uint64,
+	isStrHash bool, keyNullable bool, preAllocated uint64,
 	hashAllocation *hashtable.AllocationAccountSelection,
 	iteratorAllocation *hashmap.IteratorAllocation,
 ) error {
@@ -537,12 +392,6 @@ func (hr *ResHashRelated) BuildHashTable(
 		}
 		if err != nil {
 			return err
-		}
-		if groupingAware {
-			if err = h.SetGroupingAware(); err != nil {
-				h.Free()
-				return err
-			}
 		}
 		hr.Hash = h
 		if !reuseIterator {
@@ -755,7 +604,6 @@ func (ctr *container) writeSpillRecord(
 	bucket int,
 	rows []int32,
 	bktFlags []uint8,
-	prepareParamKindSources []prepareParamKindRowsSource,
 ) (int64, int64, error) {
 	if len(rows) == 0 {
 		return 0, 0, nil
@@ -818,9 +666,7 @@ func (ctr *container) writeSpillRecord(
 		fullFlags = make([][]uint8, len(ctr.groupByBatches))
 		fullFlags[nthBatch] = bktFlags
 	}
-	clear(prepareParamKindSources)
-	hasPrepareParamKinds := false
-	for i, ag := range ctr.aggList {
+	for _, ag := range ctr.aggList {
 		// Generic spill is local state, so retain GROUP_CONCAT source rows even
 		// when this operator is currently connected to a legacy partial peer.
 		aggexec.SetGroupConcatSourceRowWire(ag, true)
@@ -837,25 +683,11 @@ func (ctr *container) writeSpillRecord(
 				return 0, 0, err
 			}
 		}
-		if i < len(ctr.aggExprs) && ctr.aggExprs[i].PreservesFirstArgPrepareParamKind() {
-			var err error
-			prepareParamKindSources[i], err = newPrepareParamKindSelectedRowsSource(
-				ag.PrepareParamKindVectorForChunk(nthBatch), rows)
-			if err != nil {
-				return 0, 0, err
-			}
-			hasPrepareParamKinds = hasPrepareParamKinds ||
-				prepareParamKindSources[i].summary.seen
-		}
 	}
-	if err := writeSpillBool(&record, hasPrepareParamKinds); err != nil {
+	// The record keeps its retired row-metadata trailer flag; current writers
+	// never append the trailer.
+	if err := writeSpillBool(&record, false); err != nil {
 		return 0, 0, err
-	}
-	if hasPrepareParamKinds {
-		if err := writePrepareParamKindTrailer(proc.Ctx, &record, ctr.aggExprs,
-			&ctr.prepareParamKind, prepareParamKindSources); err != nil {
-			return 0, 0, err
-		}
 	}
 
 	const lastMagic = uint64(0xDEADBEEF12345678)
@@ -985,7 +817,6 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 	//
 	nBatches := len(ctr.groupByBatches)
 	var compactedAggChunks int64
-	prepareParamKindSources := make([]prepareParamKindRowsSource, len(ctr.aggList))
 	maxBatchRows := 0
 	totalBatchRows := 0
 	for _, gb := range ctr.groupByBatches {
@@ -1067,7 +898,6 @@ func (ctr *container) spillDataToDiskWithInput(proc *process.Process, opAnalyzer
 			written, spilled, err := ctr.writeSpillRecord(
 				proc, spillfs, opStats, gb, nthBatch, bucket,
 				rows, bktFlags,
-				prepareParamKindSources,
 			)
 			if err != nil {
 				return err
@@ -1180,7 +1010,7 @@ func (ctr *container) prepareSpillReloadRecord(
 		ctr.spillGbBatch, err = ctr.createNewGroupByBatchWithAllocation(
 			nil,
 			record.rows,
-			ctr.spillGroupByAllocation,
+			ctr.spillGroupByMP(),
 		)
 		if err != nil {
 			return record, false, err
@@ -1188,7 +1018,7 @@ func (ctr *container) prepareSpillReloadRecord(
 	}
 	gbBatch := ctr.spillGbBatch
 	gbBatch.CleanOnlyData()
-	if err = unmarshalSpillGroupByRows(reader, gbBatch, record.rows, ctr.mp); err != nil {
+	if err = unmarshalSpillGroupByRows(reader, gbBatch, record.rows, ctr.spillGroupByMP()); err != nil {
 		return record, false, err
 	}
 
@@ -1239,39 +1069,20 @@ func (ctr *container) prepareSpillReloadRecord(
 		return record, false, aggErr
 	}
 
-	hasPrepareParamKinds, err := types.ReadBool(reader)
+	hasRowMetadataTrailer, err := types.ReadBool(reader)
 	if err != nil {
 		return record, false, err
 	}
-	if hasPrepareParamKinds {
-		var spillPrepareParamKind aggexec.PrepareParamKindStates
-		spillPrepareParamKind.Reset(aggExprs)
-		targets := make([]prepareParamKindRowsTarget, len(ctr.spillAggList))
+	if hasRowMetadataTrailer {
+		// Written only by older writers; validated and discarded.
+		expectedRows := make([]int, len(ctr.spillAggList))
 		for i, ag := range ctr.spillAggList {
-			targets[i] = prepareParamKindFlatTarget(ag)
+			expectedRows[i] = ag.GetNumGroups()
 		}
-		prepareParamKindSummaries, err := readPrepareParamKindTrailer(
-			proc.Ctx,
-			reader,
-			int32(len(ctr.spillAggList)),
-			&spillPrepareParamKind,
-			targets,
-			ctr.mp,
-			true,
-			true,
-		)
-		if err != nil {
+		if err := readRowMetadataTrailer(
+			proc.Ctx, reader, expectedRows, true, true,
+		); err != nil {
 			return record, false, err
-		}
-		for i, ag := range ctr.spillAggList {
-			if i >= len(aggExprs) || !aggExprs[i].PreservesFirstArgPrepareParamKind() {
-				continue
-			}
-			if !prepareParamKindSummaries[i].rows {
-				if prepareParamKindSummaries[i].seen {
-					ag.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
-				}
-			}
 		}
 	}
 
@@ -1372,9 +1183,6 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 
 	// first, if there is current spill bucket, transfer it to the spill bucket queue.
 	if ctr.currentSpillBkt != nil {
-		if ctr.spillBkts == nil {
-			ctr.spillBkts = list.New[*spillBucket]()
-		}
 		for i, bkt := range ctr.currentSpillBkt {
 			if bkt.cnt > 0 {
 				if err, canceled := vm.CancelCheck(proc); canceled {
@@ -1385,7 +1193,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
-				ctr.spillBkts.PushBack(bkt)
+				ctr.spillBkts = append(ctr.spillBkts, bkt)
 			} else {
 				if err := bkt.free(); err != nil {
 					ctr.currentSpillBkt[i] = nil
@@ -1403,13 +1211,16 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}
 
 	// then, if there is no spill bucket in the queue, done.
-	if ctr.spillBkts == nil || ctr.spillBkts.Len() == 0 {
+	if len(ctr.spillBkts) == 0 {
 		// done
 		return false, nil
 	}
 
 	// popped bkt must be defer freed.
-	bkt := ctr.spillBkts.PopBack().Value
+	last := len(ctr.spillBkts) - 1
+	bkt := ctr.spillBkts[last]
+	ctr.spillBkts[last] = nil
+	ctr.spillBkts = ctr.spillBkts[:last]
 	defer func() {
 		spillio.DropReadCache(bkt.file)
 		retErr = errors.Join(retErr, bkt.free())
@@ -1630,21 +1441,10 @@ func (ctr *container) getNextFinalResult(
 
 	if curr == 0 {
 		// flush aggs final result to vectors, all aggs follow groupby columns.
-		for i, ag := range ctr.aggList {
+		for _, ag := range ctr.aggList {
 			vecs, err := aggexec.FlushWithContext(proc.Ctx, ag)
 			if err != nil {
 				return vm.CancelResult, err
-			}
-			kind := ctr.prepareParamKind.Get(i)
-			for _, vec := range vecs {
-				// Preserving aggregates (MIN/MAX/ANY/MAX_BY and value
-				// windows) attach the winner's row provenance directly to
-				// their state vector. Keep that exact metadata; the scalar
-				// execution summary is only a compatibility fallback for
-				// aggregate implementations that materialize ordinary state.
-				if !vec.HasPrepareParamKind() {
-					vec.SetPrepareParamKind(kind)
-				}
 			}
 			for j := range vecs {
 				ctr.groupByBatches[j].Vecs = append(
@@ -1713,30 +1513,18 @@ func (ctr *container) newRuntimeEmptyGroupingSetBatch(
 		rows = len(setIDs)
 		rollupColumns--
 	}
-	output := batch.NewOffHeapWithSize(len(groupTypes))
-	if err := output.SetAllocationAccount(ctr.groupByAllocation); err != nil {
-		output.Clean(ctr.mp)
-		return nil, err
-	}
+	output := batch.NewWithSize(len(groupTypes))
+	groupByMP := ctr.groupByMP()
 	for i := 0; i < rollupColumns; i++ {
-		vec, err := vector.NewRollupConstWithAllocation(
-			groupTypes[i], rows, ctr.mp, ctr.groupByAllocation)
-		if err != nil {
-			output.Clean(ctr.mp)
-			return nil, err
-		}
-		output.Vecs[i] = vec
+		output.Vecs[i] = vector.NewConstNull(
+			groupTypes[i], rows, groupByMP)
 	}
 	if setIDs != nil {
-		setIDVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
-			groupTypes[len(groupTypes)-1], ctr.groupByAllocation)
-		if err != nil {
-			output.Clean(ctr.mp)
-			return nil, err
-		}
+		setIDVector := vector.NewVec(
+			groupTypes[len(groupTypes)-1], groupByMP)
 		output.Vecs[len(output.Vecs)-1] = setIDVector
-		if err = vector.AppendFixedList(setIDVector, setIDs, nil, ctr.mp); err != nil {
-			output.Clean(ctr.mp)
+		if err := vector.AppendFixedList(setIDVector, setIDs, nil, groupByMP); err != nil {
+			ctr.cleanGroupBatch(output)
 			return nil, err
 		}
 	}
@@ -2228,17 +2016,4 @@ func freeAggListPartial(aggList []aggexec.GroupAggFuncExec, n int) {
 // freeAggList frees all aggregators in the list.
 func freeAggList(aggList []aggexec.GroupAggFuncExec) {
 	freeAggListPartial(aggList, len(aggList))
-}
-
-func (ctr *container) sanityCheck() {
-	if util.Debug {
-		originGroupCount := ctr.hr.Hash.GroupCount()
-		batchRowCount := 0
-		for _, batch := range ctr.groupByBatches {
-			batchRowCount += batch.RowCount()
-		}
-		if batchRowCount != int(originGroupCount) {
-			panic(moerr.NewInternalErrorNoCtx("group count mismatch"))
-		}
-	}
 }

@@ -20,6 +20,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func adviseLargeMpoolMapping(data []byte) {
+	if len(data) >= 2<<20 {
+		// Under defer+madvise, this lets large MPool buffers obtain huge pages
+		// through compaction instead of depending only on immediately free
+		// contiguous blocks. Advice is optional; allocation remains valid if
+		// the kernel does not support or accept it.
+		_ = unix.Madvise(data, unix.MADV_HUGEPAGE)
+	}
+}
+
 func (f *fixedSizeMmapAllocator) reuseMem(ptr unsafe.Pointer, hints Hints, clearSize uint64) {
 	// no need to clear, since re-visiting a MADV_DONTNEED-advised page will zero it
 }

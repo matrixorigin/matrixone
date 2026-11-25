@@ -29,12 +29,26 @@ import (
 )
 
 type IBatchBuffer interface {
-	FetchWithSchema([]string, []types.Type) *batch.Batch
-	Fetch() *batch.Batch
+	// FetchWithSchema and Fetch return a batch whose vectors belong to mp.
+	FetchWithSchema([]string, []types.Type, *mpool.MPool) *batch.Batch
+	Fetch(*mpool.MPool) *batch.Batch
 	Putback(*batch.Batch, *mpool.MPool)
 	Close(*mpool.MPool)
 	Len() int
 	Usage() (int, int, int, int)
+}
+
+// MarkNull marks an existing row in an owned mutable vector as NULL. Unlike
+// UpdateValue, it returns bitmap allocation errors to the caller.
+func MarkNull(vec *vector.Vector, row uint32) error {
+	mask := vec.GetNulls()
+	if int64(row) >= mask.Len() {
+		if err := nulls.TryExpand(mask, int(row)+1); err != nil {
+			return err
+		}
+	}
+	mask.Add(uint64(row))
+	return nil
 }
 
 type GeneralBatchBuffer struct {
@@ -57,29 +71,20 @@ func (bb *GeneralBatchBuffer) Len() int {
 	return len(bb.fixedSizeVectors) + len(bb.varlenVectors)
 }
 
-func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
+func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type, mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
 
 	// Create the batch shell with nil vectors — we fill them below,
 	// either from the pool or by allocating fresh ones.  This avoids
 	// wasting vector allocations for positions that the pool can serve.
-	var bat *batch.Batch
-	if bb.offHeap {
-		bat = batch.NewOffHeapWithSize(len(types))
-	} else {
-		bat = batch.NewWithSize(len(types))
-	}
+	bat := batch.NewWithSize(len(types))
 	bat.Attrs = attrs
 
 	// if no vectors in buffer, allocate all fresh and return
 	if len(bb.fixedSizeVectors) == 0 && len(bb.varlenVectors) == 0 {
 		for i, t := range types {
-			if bb.offHeap {
-				bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
-			} else {
-				bat.Vecs[i] = vector.NewVec(t)
-			}
+			bat.Vecs[i] = vector.NewVec(t, mp)
 		}
 		return bat
 	}
@@ -91,7 +96,7 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 	// if there are vectors in buffer, try to fetch from buffer
 	for i, typ := range types {
 		if typ.IsVarlen() {
-			if len(bb.varlenVectors) == 0 {
+			if len(bb.varlenVectors) == 0 || bb.varlenVectors[len(bb.varlenVectors)-1].MPool() != mp {
 				notReused.Add(uint32(i))
 				continue
 			}
@@ -102,7 +107,7 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 			bb.reuseBytes += vec.Allocated()
 			bb.reuseCount++
 		} else {
-			if len(bb.fixedSizeVectors) == 0 {
+			if len(bb.fixedSizeVectors) == 0 || bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1].MPool() != mp {
 				notReused.Add(uint32(i))
 				continue
 			}
@@ -123,10 +128,10 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 			}
 
 			var vec *vector.Vector
-			if len(bb.fixedSizeVectors) > 0 {
+			if len(bb.fixedSizeVectors) > 0 && bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1].MPool() == mp {
 				vec = bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1]
 				bb.fixedSizeVectors = bb.fixedSizeVectors[:len(bb.fixedSizeVectors)-1]
-			} else if len(bb.varlenVectors) > 0 {
+			} else if len(bb.varlenVectors) > 0 && bb.varlenVectors[len(bb.varlenVectors)-1].MPool() == mp {
 				vec = bb.varlenVectors[len(bb.varlenVectors)-1]
 				bb.varlenVectors = bb.varlenVectors[:len(bb.varlenVectors)-1]
 			} else {
@@ -153,17 +158,13 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 		if bat.Vecs[i] != nil {
 			continue
 		}
-		if bb.offHeap {
-			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
-		} else {
-			bat.Vecs[i] = vector.NewVec(t)
-		}
+		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
 
 	return bat
 }
 
-func (bb *GeneralBatchBuffer) Fetch() *batch.Batch {
+func (bb *GeneralBatchBuffer) Fetch(*mpool.MPool) *batch.Batch {
 	panic("not supported")
 }
 
@@ -302,7 +303,7 @@ func (bb *OneSchemaBatchBuffer) Len() int {
 	return len(bb.buffer)
 }
 
-func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
+func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Type, mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
 	if len(attrs) != len(bb.attrs) || len(types) != len(bb.typs) {
@@ -317,8 +318,8 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 			panic(fmt.Sprintf("types not match: %s %s", types[i].String(), bb.typs[i].String()))
 		}
 	}
-	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(bb.offHeap, bb.attrs, bb.typs)
+	if len(bb.buffer) == 0 || !batchOfPool(bb.buffer[len(bb.buffer)-1], mp) {
+		return batch.NewWithSchema(bb.attrs, bb.typs, mp)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -328,11 +329,11 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 	return bat
 }
 
-func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
+func (bb *OneSchemaBatchBuffer) Fetch(mp *mpool.MPool) *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
-	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(bb.offHeap, bb.attrs, bb.typs)
+	if len(bb.buffer) == 0 || !batchOfPool(bb.buffer[len(bb.buffer)-1], mp) {
+		return batch.NewWithSchema(bb.attrs, bb.typs, mp)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -509,7 +510,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](
 	vec *vector.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
 ) {
 	if isNull {
-		nulls.Add(vec.GetNulls(), uint64(row))
+		vec.GetNulls().Add(uint64(row))
 	} else {
 		err := vector.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
 		if err != nil {
@@ -525,7 +526,7 @@ func GenericUpdateBytes(
 	vec *vector.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
 ) {
 	if isNull {
-		nulls.Add(vec.GetNulls(), uint64(row))
+		vec.GetNulls().Add(uint64(row))
 	} else {
 		err := vector.SetBytesAt(vec, int(row), v.([]byte), mp)
 		if err != nil {
@@ -615,7 +616,7 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch, mp *mpool.MPool) *Batch {
 	return bat
 }
 
-func ForeachVector(vec Vector, op any, sel *nulls.Bitmap) (err error) {
+func ForeachVector(vec Vector, op any, sel *nulls.Nulls) (err error) {
 	return ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sel)
 }
 
@@ -624,7 +625,7 @@ func ForeachVectorWindow(
 	start, length int,
 	op1 any,
 	op2 ItOp,
-	sel *nulls.Bitmap,
+	sel *nulls.Nulls,
 ) (err error) {
 	typ := vec.GetType()
 	col := vec.GetDownstreamVector()
@@ -965,7 +966,7 @@ func ForeachWindowBytes(
 	vec *vector.Vector,
 	start, length int,
 	op ItOpT[[]byte],
-	sels *nulls.Bitmap,
+	sels *nulls.Nulls,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
@@ -1005,7 +1006,7 @@ func ForeachWindowFixed[T any](
 	reverse bool,
 	op ItOpT[T],
 	opAny ItOp,
-	sels *nulls.Bitmap,
+	sels *nulls.Nulls,
 ) (err error) {
 	if vec.IsConst() {
 		var v T
@@ -1136,7 +1137,7 @@ func ForeachWindowVarlen(
 	reverse bool,
 	op ItOpT[[]byte],
 	opAny ItOp,
-	sels *nulls.Bitmap,
+	sels *nulls.Nulls,
 ) (err error) {
 	if vec.IsConst() {
 		var v []byte
@@ -1374,8 +1375,12 @@ func VectorsCopyToBatch(
 		return
 	}
 	for i, vec := range vecs {
+		if outputBat.Vecs[i] != nil && outputBat.Vecs[i].IsReadOnly() {
+			outputBat.Vecs[i].Free(nil)
+			outputBat.Vecs[i] = nil
+		}
 		if outputBat.Vecs[i] == nil {
-			outputBat.Vecs[i] = vector.NewVec(*vec.GetType())
+			outputBat.Vecs[i] = vector.NewVec(*vec.GetType(), mp)
 		} else {
 			outputBat.Vecs[i].ResetWithNewType(vec.GetType())
 		}
@@ -1391,4 +1396,15 @@ func VectorsCopyToBatch(
 	}
 	outputBat.SetRowCount(outputBat.Vecs[0].Length())
 	return
+}
+
+// batchOfPool reports whether every vector of bat belongs to mp, so bat can
+// be handed to a caller that allocates through mp.
+func batchOfPool(bat *batch.Batch, mp *mpool.MPool) bool {
+	for _, vec := range bat.Vecs {
+		if vec != nil && vec.MPool() != mp {
+			return false
+		}
+	}
+	return true
 }

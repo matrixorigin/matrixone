@@ -115,7 +115,7 @@ func TestD256MulScaledFallbackEnforcesDeclaredWidth(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			result := []types.Decimal256{{B0_63: 42}}
 			require.Error(t, d256Mul(
-				[]types.Decimal256{tc.left}, []types.Decimal256{y}, result, 11, 11, nulls.NewWithSize(1), decimalRangeUnknown, decimalRangeUnknown))
+				[]types.Decimal256{tc.left}, []types.Decimal256{y}, result, 11, 11, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), decimalRangeUnknown, decimalRangeUnknown))
 			require.Equal(t, types.Decimal256{B0_63: 42}, result[0])
 		})
 	}
@@ -153,12 +153,12 @@ func TestD256MulScaledRawOverflow(t *testing.T) {
 		{name: "const_vec", left: []types.Decimal256{x}, right: []types.Decimal256{y, y}, want: []types.Decimal256{want, want}},
 		{name: "vec_const", left: []types.Decimal256{x, x}, right: []types.Decimal256{y}, want: []types.Decimal256{want, want}},
 		{name: "negative", left: []types.Decimal256{x.Minus()}, right: []types.Decimal256{y}, want: []types.Decimal256{negativeWant}},
-		{name: "null", left: []types.Decimal256{x, x}, right: []types.Decimal256{y, y}, nulls: func() *nulls.Nulls { n := nulls.NewWithSize(2); n.Add(1); return n }(), want: []types.Decimal256{want, {}}},
+		{name: "null", left: []types.Decimal256{x, x}, right: []types.Decimal256{y, y}, nulls: func() *nulls.Nulls { n := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)); n.Add(1); return n }(), want: []types.Decimal256{want, {}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			nul := tc.nulls
 			if nul == nil {
-				nul = nulls.NewWithSize(len(tc.want))
+				nul = mustNullsOK(nulls.NewWithSize(len(tc.want), bitmapTestMP))
 			}
 			got := make([]types.Decimal256, len(tc.want))
 			require.NoError(t, d256Mul(tc.left, tc.right, got, sx, sy, nul, decimalRangeUnknown, decimalRangeUnknown))
@@ -176,7 +176,7 @@ func TestD256MulScaledRawOverflowPreservesOverflow(t *testing.T) {
 	y, sy := parseD256WideTest(t, value)
 	_, ok := expectedD256MulWideTest(x, y, sx, sy)
 	require.False(t, ok)
-	nul := nulls.NewWithSize(1)
+	nul := mustNullsOK(nulls.NewWithSize(1, bitmapTestMP))
 	got := make([]types.Decimal256, 1)
 	require.Error(t, d256Mul([]types.Decimal256{x}, []types.Decimal256{y}, got, sx, sy, nul, decimalRangeUnknown, decimalRangeUnknown))
 }
@@ -210,7 +210,7 @@ func TestD256MulScaledFallbackRoundingBoundary(t *testing.T) {
 	_, ok := expectedD256MulWideTest(carryLeft, carryRight, carryScale1, carryScale2)
 	require.False(t, ok)
 	result := []types.Decimal256{{B0_63: 42}}
-	require.Error(t, d256Mul([]types.Decimal256{carryLeft}, []types.Decimal256{carryRight}, result, carryScale1, carryScale2, nulls.NewWithSize(1), decimalRangeUnknown, decimalRangeUnknown))
+	require.Error(t, d256Mul([]types.Decimal256{carryLeft}, []types.Decimal256{carryRight}, result, carryScale1, carryScale2, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), decimalRangeUnknown, decimalRangeUnknown))
 	require.Equal(t, types.Decimal256{B0_63: 42}, result[0], "failed fallback must not overwrite the destination")
 }
 
@@ -250,7 +250,7 @@ func TestD256MulScaledFallbackChunkBoundaries(t *testing.T) {
 			// Exercise the same case through the vector kernel, including its
 			// >38-scale fallback dispatch.
 			gotVector := make([]types.Decimal256, 1)
-			require.NoError(t, d256Mul([]types.Decimal256{wideLeft}, []types.Decimal256{wideRight}, gotVector, scaleDown, scaleDown, nulls.NewWithSize(1), decimalRangeUnknown, decimalRangeUnknown))
+			require.NoError(t, d256Mul([]types.Decimal256{wideLeft}, []types.Decimal256{wideRight}, gotVector, scaleDown, scaleDown, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), decimalRangeUnknown, decimalRangeUnknown))
 			require.Equal(t, want, gotVector[0])
 		})
 	}
@@ -282,21 +282,21 @@ func TestD256MulHighScaleSmallValues(t *testing.T) {
 			require.True(t, ok)
 
 			vecVec := make([]types.Decimal256, 2)
-			require.NoError(t, d256Mul([]types.Decimal256{left, left}, []types.Decimal256{right, right}, vecVec, scale, scale, nulls.NewWithSize(2), decimalRangeUnknown, decimalRangeUnknown))
+			require.NoError(t, d256Mul([]types.Decimal256{left, left}, []types.Decimal256{right, right}, vecVec, scale, scale, mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)), decimalRangeUnknown, decimalRangeUnknown))
 			require.Equal(t, []types.Decimal256{want, want}, vecVec)
 
 			vecConst := make([]types.Decimal256, 2)
-			require.NoError(t, d256Mul([]types.Decimal256{left, left}, []types.Decimal256{right}, vecConst, scale, scale, nulls.NewWithSize(2), decimalRangeUnknown, decimalRangeUnknown))
+			require.NoError(t, d256Mul([]types.Decimal256{left, left}, []types.Decimal256{right}, vecConst, scale, scale, mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)), decimalRangeUnknown, decimalRangeUnknown))
 			require.Equal(t, []types.Decimal256{want, want}, vecConst)
 
 			constVec := make([]types.Decimal256, 2)
-			partialNull := nulls.NewWithSize(2)
+			partialNull := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 			partialNull.Add(1)
 			require.NoError(t, d256Mul([]types.Decimal256{left}, []types.Decimal256{right, right}, constVec, scale, scale, partialNull, decimalRangeUnknown, decimalRangeUnknown))
 			require.Equal(t, []types.Decimal256{want, {}}, constVec)
 
 			allNull := []types.Decimal256{{B0_63: 42}, {B0_63: 43}}
-			nul := nulls.NewWithSize(2)
+			nul := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 			nul.Add(0)
 			nul.Add(1)
 			require.NoError(t, d256Mul([]types.Decimal256{left, left}, []types.Decimal256{right, right}, allNull, scale, scale, nul, decimalRangeUnknown, decimalRangeUnknown))

@@ -44,11 +44,15 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		filter.OpAnalyzer.Reset()
 	}
 
+	if err = filter.ctr.bindOutputAllocation(proc); err != nil {
+		return
+	}
+
 	if len(filter.ctr.executors) == 0 && filter.FilterExprs != nil {
 		if filter.OwnsConstantCastWarnings {
 			filter.ctr.executors, err = colexec.NewOwnedConstantFilterExecutors(proc, filter.FilterExprs)
 		} else {
-			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.FilterExprs)
+			filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, filter.FilterExprs, filter.ctr.outputAllocation)
 		}
 		if err != nil {
 			return
@@ -57,7 +61,7 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(filter.RuntimeFilterExprs) > 0 {
-		filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.RuntimeFilterExprs)
+		filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, filter.RuntimeFilterExprs, filter.ctr.outputAllocation)
 		if err != nil {
 			return
 		}
@@ -87,13 +91,21 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 		return inputResult, nil
 	}
 
-	filterBat := inputResult.Batch
-	var sels []int64
-	defer func() {
-		if sels != nil {
-			vector.PutSels(sels)
+	if filter.ctr.selection.output || inputResult.Batch.HasSelection() {
+		output, err := filter.selectionCall(proc, inputResult.Batch)
+		if err != nil {
+			return vm.CancelResult, err
 		}
-	}()
+		result := vm.NewCallResult()
+		if !filter.IsEnd {
+			result.Batch = output
+		}
+		return result, nil
+	}
+
+	filterBat := inputResult.Batch
+	sels := filter.ctr.flatSels[:0]
+	defer func() { filter.ctr.flatSels = sels }()
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
 	filter.ctr.subjectReuseAdmissionDone = true
 	for i := range filter.ctr.allExecutors {
@@ -147,9 +159,6 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 		} else {
-			if sels == nil {
-				sels = vector.GetSels()
-			}
 			sels = sels[:0]
 
 			l := uint64(vec.Length())
@@ -193,7 +202,7 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 		return batch.EmptyBatch, nil
 	}
 	if bat == ctr.buf {
-		if err := ctr.buf.Shrink(sels, false, proc.Mp()); err != nil {
+		if err := ctr.buf.Shrink(sels, false, ctr.mp(proc)); err != nil {
 			return nil, err
 		}
 	} else {
@@ -203,19 +212,19 @@ func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, se
 			ctr.buf.Recursive = bat.Recursive
 			for j, vec := range bat.Vecs {
 				typ := *bat.GetVector(int32(j)).GetType()
-				ctr.buf.Vecs[j] = vector.NewOffHeapVecWithType(typ)
+				ctr.buf.Vecs[j] = vector.NewVec(typ, ctr.mp(proc))
 				ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
 			}
 			ctr.buf.SetRowCount(bat.RowCount())
 			ctr.buf.ShuffleIDX = bat.ShuffleIDX
-			err := ctr.buf.PreExtend(proc.Mp(), len(sels))
+			err := ctr.buf.PreExtend(ctr.mp(proc), len(sels))
 			if err != nil {
 				return nil, err
 			}
 		} else {
 			ctr.buf.CleanOnlyData()
 		}
-		err := ctr.buf.Union(bat, sels, proc.Mp())
+		err := ctr.buf.Union(bat, sels, ctr.mp(proc))
 		if err != nil {
 			return nil, err
 		}

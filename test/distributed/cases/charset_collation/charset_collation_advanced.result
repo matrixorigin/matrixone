@@ -224,7 +224,9 @@ SELECT COUNT(*) FROM t_where_case WHERE code = 'abc123';
 1
 SELECT * FROM t_where_case WHERE code LIKE 'abc%' ORDER BY id;
 ➤ id[4,32,0]  ¦  code[12,-1,0]  𝄀
-2  ¦  abc123
+1  ¦  ABC123  𝄀
+2  ¦  abc123  𝄀
+3  ¦  Abc123
 CREATE TABLE t_agg_test (
 id INT,
 category VARCHAR(50),

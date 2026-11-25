@@ -94,18 +94,13 @@ func TestPreparedTemporalResultContracts(t *testing.T) {
 				mock := NewMockOptimizer(false, newPlanTestProcess(t))
 				proc := mock.ctxt.GetProcess()
 				proc.GetSessionInfo().TimeZone = time.UTC
-				params := vector.NewVec(types.T_text.ToType())
+				params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 				defer func() {
 					proc.SetPrepareParams(nil)
 					params.Free(proc.Mp())
 				}()
 				require.NoError(t, vector.AppendBytes(params, []byte(tc.input), false, proc.Mp()))
 				value := ParamValue{Value: tc.input, SourceType: tc.source, HasSourceType: true}
-				if tc.source.Oid.IsInteger() {
-					value.PrepareParamKind = vector.PrepareParamInteger
-				} else if tc.source.IsDecimal() {
-					value.PrepareParamKind = vector.PrepareParamDecimal
-				}
 				sql := "select " + tc.expression + " as v"
 				if ctas {
 					sql = "create table temporal_result as " + sql
@@ -188,15 +183,12 @@ func TestPreparedTemporalWriteConsumers(t *testing.T) {
 			table.Name2ColIndex = map[string]int32{"n_nationkey": 0, rowID.Name: 1}
 			prepared, err := runOneStmt(mock, t, "prepare p from 'insert into nation(n_nationkey) select "+tc.expression+"'")
 			require.NoError(t, err)
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer params.Free(proc.Mp())
 			defer proc.SetPrepareParams(nil)
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.input), false, proc.Mp()))
 			proc.SetPrepareParams(params)
 			value := ParamValue{Value: tc.input, SourceType: tc.source, HasSourceType: true}
-			if tc.source.IsDecimal() {
-				value.PrepareParamKind = vector.PrepareParamDecimal
-			}
 			filled, _, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{value})
 			require.NoError(t, err)
 			originalQuery := prepared.GetDcl().GetPrepare().Plan.GetQuery()
@@ -276,7 +268,7 @@ func TestPreparedCalendarSelectHistory(t *testing.T) {
 			oldFlags = append([]bool(nil), old.datetime...)
 		}
 		bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_varchar.ToType()}, {Position: 1, Type: types.T_varchar.ToType()}}
-		params := vector.NewVec(types.T_text.ToType())
+		params := vector.NewVec(types.T_text.ToType(), ctx.proc.Mp())
 		func() {
 			defer params.Free(ctx.GetProcess().Mp())
 			defer ctx.GetProcess().SetPrepareParams(nil)
@@ -456,7 +448,7 @@ func TestPreparedCalendarNullCountDoesNotReport(t *testing.T) {
 			stmt, err := mysql.ParseOne(context.Background(), "select date_add(?, interval ? "+unit+")", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			defer params.Free(proc.Mp())
 			defer proc.SetPrepareParams(nil)
 			require.NoError(t, vector.AppendBytes(params, []byte("review-canary-invalid-date"), false, proc.Mp()))

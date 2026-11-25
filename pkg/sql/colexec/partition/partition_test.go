@@ -81,6 +81,7 @@ func TestPartition(t *testing.T) {
 		require.NoError(t, err)
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
+		colexec.FreeMockChildren(tc.arg)
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -107,6 +108,7 @@ func TestPartitionOutputHonorsCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -135,6 +137,7 @@ func TestPartitionHeapMergeScalesWithRunCount(t *testing.T) {
 	arg := &Partition{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32)}}}
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -179,8 +182,10 @@ func TestPartitionHeapMergeCompleteLargeGroupAndCancellation(t *testing.T) {
 			t.Cleanup(func() {
 				// Free must also release partially consumed heap inputs without Reset.
 				arg.Free(proc, cancelDuringCopy, nil)
+				colexec.FreeMockChildren(arg)
 				if child != nil {
 					child.Free(proc, false, nil)
+					colexec.FreeMockChildren(child)
 				}
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
@@ -252,6 +257,7 @@ func BenchmarkPartitionGroupMerge(b *testing.B) {
 			inputs := make([]*batch.Batch, 0, runs)
 			b.Cleanup(func() {
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				for _, input := range inputs {
 					input.Clean(proc.Mp())
 				}
@@ -303,6 +309,7 @@ func TestPartitionGroupSearchDoesNotRevisitEarlierHeads(t *testing.T) {
 	t.Cleanup(func() {
 		arg.Reset(proc, false, nil)
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})
@@ -375,6 +382,7 @@ func TestPartitionGroupSearchPreservesGroupsAndReset(t *testing.T) {
 			t.Cleanup(func() {
 				arg.Reset(proc, false, nil)
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
 			})
@@ -389,7 +397,7 @@ func TestPartitionGroupSearchPreservesGroupsAndReset(t *testing.T) {
 					input := makeHashPartitionBatch(t, proc, keys, ns, payloads[i])
 					arg.ctr.batchList = append(arg.ctr.batchList, input)
 					if tc.labels != nil {
-						labels := vector.NewVec(types.T_varchar.ToType())
+						labels := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 						input.Vecs = append(input.Vecs, labels)
 						for _, label := range tc.labels[i] {
 							require.NoError(t, vector.AppendBytes(labels, []byte(label), false, proc.Mp()))
@@ -432,6 +440,7 @@ func newExpression(pos int32, typeID types.T) *plan.Expr {
 }
 
 func resetChildren(arg *Partition, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	bat1 := colexec.MakeMockPartitionBatchs(1, m)
 	bat2 := colexec.MakeMockPartitionBatchs(2, m)
 	bat3 := colexec.MakeMockPartitionBatchs(3, m)

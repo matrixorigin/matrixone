@@ -36,6 +36,9 @@ func TestCompileParallelPartitionWindow(t *testing.T) {
 		owners int
 	}{
 		{"complete partitions", nil, 4},
+		{"fused expressions", func(_ *Compile, n *plan.Node, _ *Scope) {
+			n.WinSpecList = append(n.WinSpecList, proto.Clone(n.WinSpecList[0]).(*plan.Expr))
+		}, 4},
 		{"auto unchanged", func(_ *Compile, n *plan.Node, _ *Scope) { n.SpillMem = 0 }, 1},
 		{"small threshold", func(_ *Compile, n *plan.Node, _ *Scope) { n.SpillMem = 255 << 20 }, 1},
 		{"threshold boundary", func(_ *Compile, n *plan.Node, _ *Scope) { n.SpillMem = 256 << 20 }, 2},

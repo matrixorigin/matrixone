@@ -22,10 +22,14 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -47,7 +51,6 @@ func Test_runSql(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
-	proc.Base.SessionInfo.Buf = buffer.New()
 
 	ctx := context.Background()
 	proc.Ctx = context.Background()
@@ -301,28 +304,19 @@ func TestFkCatalogMutationSqlEscapesIdentifiers(t *testing.T) {
 		getSqlForCheckHasDBRefersTo(db))
 }
 
-func Test_buildPreDeleteFullTextIndexAsync(t *testing.T) {
-	{
-		//invalid json
-		idxdef := &plan.IndexDef{
-			IndexAlgoParams: `{"async":1}`,
-		}
-
-		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
-		require.NotNil(t, err)
+func TestIrregularDeleteByPkAsync(t *testing.T) {
+	var builder *QueryBuilder
+	fulltext := func(params string) *plan.IndexDef {
+		return &plan.IndexDef{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString(), IndexAlgoParams: params}
+	}
+	ivf := func(params string) *MultiTableIndex {
+		return &MultiTableIndex{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoParams: params}
 	}
 
-	{
-
-		// async true
-		idxdef := &plan.IndexDef{
-			IndexAlgoParams: `{"async":"true"}`,
-		}
-
-		err := buildPreDeleteFullTextIndex(nil, nil, nil, nil, idxdef, 0, nil, nil)
-		require.Nil(t, err)
-	}
-
+	require.Error(t, builder.buildIrregularFulltextDeleteByPk(nil, fulltext(`{"async":1}`), 0))
+	require.NoError(t, builder.buildIrregularFulltextDeleteByPk(nil, fulltext(`{"async":"true"}`), 0))
+	require.Error(t, builder.buildIrregularIvfDeleteByPk(nil, ivf(`{"async":1}`), 0))
+	require.NoError(t, builder.buildIrregularIvfDeleteByPk(nil, ivf(`{"async":"true"}`), 0))
 }
 
 // Test WITH clause support for INSERT statement (Issue #22583)
@@ -434,53 +428,181 @@ func TestMakeInsertValueConstExprDefersInternalTimeOverflow(t *testing.T) {
 }
 
 func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name        string
-		literal     string
-		colType     types.Type
-		expected    []byte
-		expectError bool
+	for _, tc := range []struct {
+		name, literal        string
+		colType              types.Type
+		want, lenient        []byte
+		overflow, parseError bool
 	}{
-		{
-			name:     "binary pads to declared width",
-			literal:  "0x4142",
-			colType:  types.New(types.T_binary, 4, 0),
-			expected: []byte{0x41, 0x42, 0x00, 0x00},
-		},
-		{
-			name:        "binary rejects decoded value over declared width",
-			literal:     "0x4142",
-			colType:     types.New(types.T_binary, 1, 0),
-			expectError: true,
-		},
-		{
-			name:        "varbinary counts decoded bytes instead of runes",
-			literal:     "0xC3A9",
-			colType:     types.New(types.T_varbinary, 1, 0),
-			expectError: true,
-		},
-		{
-			name:     "binary accepts odd digit hex literal",
-			literal:  "0x1",
-			colType:  types.New(types.T_binary, 2, 0),
-			expected: []byte{0x01, 0x00},
-		},
+		{"binary pads to declared width", "0x4142", types.New(types.T_binary, 4, 0), []byte{0x41, 0x42, 0, 0}, nil, false, false},
+		{"binary byte overflow", "0x4142", types.New(types.T_binary, 1, 0), nil, []byte{0x41}, true, false},
+		{"varbinary multibyte overflow", "0xC3A9", types.New(types.T_varbinary, 1, 0), nil, []byte{0xc3}, true, false},
+		{"binary odd digit", "0x1", types.New(types.T_binary, 2, 0), []byte{1, 0}, nil, false, false},
+		{"invalid hex still fails planning", "0xGG", types.New(types.T_varbinary, 2, 0), nil, nil, false, true},
+	} {
+		for _, mode := range []struct {
+			name, sqlMode string
+			ignore        bool
+		}{
+			{"strict", "STRICT_TRANS_TABLES", false}, {"nonstrict", "", false}, {"IGNORE", "STRICT_TRANS_TABLES", true},
+		} {
+			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				t.Cleanup(proc.Free)
+				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return mode.sqlMode, nil })
+				expr, err := MakeInsertValueConstExpr(proc, tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum), &tc.colType, mode.ignore)
+				if tc.parseError {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, int32(tc.colType.Oid), expr.Typ.Id)
+				exec, err := colexec.NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				t.Cleanup(func() { exec.Free() })
+				value, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				if tc.overflow && mode.name == "strict" {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCastWidthExceeded), "%v", err)
+					return
+				}
+				require.NoError(t, err)
+				got, isNull := vector.GenerateFunctionStrParameter(value).GetStrValue(0)
+				require.False(t, isNull)
+				want := tc.want
+				if tc.overflow {
+					want = tc.lenient
+				}
+				require.Equal(t, want, got)
+			})
+		}
 	}
+}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
-			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType, false)
-			if tc.expectError {
-				require.Error(t, err)
-				return
-			}
+func TestInsertBinaryStringLiteralUsesAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		for _, ignore := range []bool{false, true} {
+			typ := types.New(oid, 1, 0)
+			literal := tree.NewNumVal("ab", "ab", false, tree.P_char)
+			expr, err := MakeInsertValueConstExpr(proc, literal, &typ, ignore)
 			require.NoError(t, err)
-			require.Equal(t, string(tc.expected), expr.GetLit().GetSval())
-		})
+			fn := expr.GetF()
+			require.NotNil(t, fn)
+			want := "cast_assign"
+			if ignore {
+				want = "cast_ignore"
+			}
+			require.Equal(t, want, fn.Func.ObjName)
+			require.Equal(t, "ab", fn.Args[0].GetLit().GetSval())
+		}
 	}
+}
+
+func TestSameTypeDecimalWriteRetainsAssignmentValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_decimal64, 5, 2)
+	planType := makePlan2Type(&typ)
+	source := MakePlan2Decimal64ExprWithType(types.Decimal64(100000), &planType)
+	assigned, err := forceAssignmentCastExprWithProcess(proc.Ctx, source, planType, false, proc)
+	require.NoError(t, err)
+	require.NotNil(t, assigned.GetF())
+	require.Contains(t, []string{"cast_assign", "cast_strict"}, assigned.GetF().Func.ObjName)
+}
+
+func TestNonStrictIntegerInsertLiteralKeepsSourceForAdjustment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	typ := types.T_uint8.ToType()
+	literal := tree.NewNumVal(int64(300), "300", false, tree.P_int64)
+	expr, err := MakeInsertValueConstExpr(proc, literal, &typ, false)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, int32(types.T_int64), expr.GetF().Args[0].Typ.Id)
+}
+
+func TestNonStrictDecimalInsertLiteralKeepsSourceForAdjustment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	typ := types.New(types.T_decimal64, 5, 2)
+	literal := tree.NewNumVal("1234.56", "1234.56", false, tree.P_decimal)
+	expr, err := MakeInsertValueConstExpr(proc, literal, &typ, false)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Greater(t, expr.GetF().Args[0].Typ.Width, int32(5))
+}
+
+func TestDecimalInsertLiteralDefersScaleLossToAssignment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	typ := types.New(types.T_decimal64, 4, 1)
+	for _, value := range []string{"123.456", "12.30000"} {
+		literal := tree.NewNumVal(value, value, false, tree.P_decimal)
+		expr, err := MakeInsertValueConstExpr(proc, literal, &typ, false)
+		require.NoError(t, err)
+		if value == "123.456" {
+			require.NotNil(t, expr.GetF())
+			require.Equal(t, "cast_assign", expr.GetF().Func.ObjName)
+		} else {
+			require.NotNil(t, expr.GetLit())
+		}
+	}
+}
+
+func TestNonStrictQuotedNumericInsertLiteralUsesAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	for _, tc := range []struct {
+		typ   types.Type
+		value string
+	}{
+		{types.T_uint8.ToType(), "300"},
+		{types.New(types.T_decimal64, 5, 2), "1234.56"},
+		{types.T_date.ToType(), "2026-10-21 10:20:30"},
+	} {
+		literal := tree.NewNumVal(tc.value, tc.value, false, tree.P_char)
+		expr, err := MakeInsertValueConstExpr(proc, literal, &tc.typ, false)
+		require.NoError(t, err)
+		require.NotNil(t, expr.GetF())
+		require.Equal(t, "cast_assign", expr.GetF().Func.ObjName)
+		require.Equal(t, tc.value, expr.GetF().Args[0].GetLit().GetSval())
+	}
+}
+
+func TestNonStrictBinaryHexInsertLiteralUsesAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+	typ := types.New(types.T_binary, 1, 0)
+	literal := tree.NewNumVal("0x4142", "0x4142", false, tree.P_hexnum)
+	expr, err := MakeInsertValueConstExpr(proc, literal, &typ, false)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "AB", expr.GetF().Args[0].GetLit().GetSval())
 }
 
 func TestMakeInsertValueConstExprBitIgnoreTruncates(t *testing.T) {

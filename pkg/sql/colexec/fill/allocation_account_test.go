@@ -218,7 +218,7 @@ func TestAccountedFillLinearSpillLifecycle(t *testing.T) {
 	state := installFillTestAllocation(t, op, proc, 64<<20)
 	typ := types.New(types.T_decimal128, 38, 0)
 	makeBatch := func(value int64, isNull bool) *batch.Batch {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, proc.Mp())
 		require.NoError(t, vector.AppendFixed(
 			vec, types.Decimal128FromInt64(value), isNull, proc.Mp(),
 		))
@@ -270,7 +270,7 @@ func makeAccountedLinearEndpointBatch(
 	isNull bool,
 ) *batch.Batch {
 	t.Helper()
-	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0))
+	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0), proc.Mp())
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(value), isNull, proc.Mp()))
 	bat := batch.NewWithSize(2)
 	bat.SetVector(0, vec)
@@ -286,7 +286,7 @@ func makeAccountedDecimal256Batch(
 	nulls map[int]bool,
 ) *batch.Batch {
 	t.Helper()
-	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0))
+	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0), proc.Mp())
 	for row, value := range values {
 		require.NoError(t, vector.AppendFixed(
 			vec, types.Decimal256FromInt64(value), nulls[row], proc.Mp(),
@@ -315,7 +315,7 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 			op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 			state := installFillTestAllocation(t, op, proc, 64<<20)
 			input := batch.NewWithSize(1)
-			vec := vector.NewVec(test.typ)
+			vec := vector.NewVec(test.typ, proc.Mp())
 			if test.typ.Oid == types.T_decimal256 {
 				require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(100), false, proc.Mp()))
 				require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(130), false, proc.Mp()))
@@ -329,7 +329,8 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 			result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
 			require.NoError(t, err)
 			require.True(t, owned)
-			require.Same(t, op.ctr.expressionAllocation, result.AllocationAccountSelection())
+			require.NotNil(t, op.ctr.expressionAllocation)
+			require.Equal(t, state.account, op.ctr.expressionAllocation.ViewAccount())
 			if test.typ.Oid == types.T_decimal256 {
 				require.Equal(t, types.Decimal256FromInt64(115), vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 			} else {
@@ -339,7 +340,7 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 			require.True(t, ok)
 			require.Positive(t, owner.Peak)
 
-			result.Free(proc.Mp())
+			result.Free(orMP(op.ctr.expressionAllocation, proc))
 			input.Clean(proc.Mp())
 			op.Free(proc, false, nil)
 			finalizeFillTestAllocation(t, op, state)
@@ -352,7 +353,9 @@ func TestAccountedFillLinearDecimal256ExpressionSelection(t *testing.T) {
 func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
-	op.ctr.expressionAllocation = new(vector.AllocationAccountSelection)
+	// An account the pool cannot build a view for must fail before the
+	// result vector is allocated.
+	op.ctr.allocationAccount = new(mpool.AllocationAccount)
 	input := makeAccountedDecimal256Batch(t, proc, []int64{100, 130}, nil)
 
 	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
@@ -361,7 +364,7 @@ func TestAccountedFillLinearDecimal256RejectsInvalidExpressionSelection(t *testi
 	require.False(t, owned)
 
 	input.Clean(proc.Mp())
-	op.ctr.expressionAllocation = nil
+	op.ctr.allocationAccount = nil
 	op.Free(proc, true, err)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -371,7 +374,7 @@ func TestUnaccountedFillLinearDecimal256KeepsRegularVector(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	input := batch.NewWithSize(1)
-	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0))
+	vec := vector.NewVec(types.New(types.T_decimal256, 76, 0), proc.Mp())
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(100), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(130), false, proc.Mp()))
 	input.SetVector(0, vec)
@@ -380,9 +383,9 @@ func TestUnaccountedFillLinearDecimal256KeepsRegularVector(t *testing.T) {
 	result, owned, err := linearFillValue(&op.ctr, proc, 0, input, 0, input, 1)
 	require.NoError(t, err)
 	require.True(t, owned)
-	require.Nil(t, result.AllocationAccountSelection())
+	require.Nil(t, op.ctr.expressionAllocation)
 	require.Equal(t, types.Decimal256FromInt64(115), vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
-	result.Free(proc.Mp())
+	result.Free(orMP(op.ctr.expressionAllocation, proc))
 	input.Clean(proc.Mp())
 	op.Free(proc, false, nil)
 	proc.Free()
@@ -396,7 +399,7 @@ func runAccountedDecimal256LinearValue(t *testing.T, capacity uint64) (uint64, e
 	state := installFillTestAllocation(t, op, proc, capacity)
 	typ := types.New(types.T_decimal256, 76, 0)
 	input := batch.NewWithSize(1)
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(100), false, proc.Mp()))
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal256FromInt64(130), false, proc.Mp()))
 	input.SetVector(0, vec)
@@ -410,7 +413,7 @@ func runAccountedDecimal256LinearValue(t *testing.T, capacity uint64) (uint64, e
 		require.True(t, owned)
 	}
 	if result != nil && owned {
-		result.Free(proc.Mp())
+		result.Free(orMP(op.ctr.expressionAllocation, proc))
 	}
 	owner, ok := state.account.OwnerUsage(mpool.AllocationOwnerFill)
 	require.True(t, ok)

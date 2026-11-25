@@ -1296,7 +1296,11 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: FINDINSET,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// Keep every MySQL string operand in its original domain instead of
+		// casting it through VARCHAR: the executor routes byte-wise when
+		// either operand is a binary string (issue #31175 review), and a
+		// conversion cast would erase that domain for non-constant operands.
+		checkFn: stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -1542,66 +1546,6 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInJsonExtract().jsonExtractFloat64
 				},
-			},
-		},
-	},
-
-	// internal normalization for prepared JSON ordering parameters
-	{
-		functionId: INTERNAL_JSON_ORDERING_PARAM,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedTypeMatchOnly(overloads, inputs, 1)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_text},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_json.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return normalizeJsonOrderingParam
-				},
-			},
-			{
-				// v128: numeric parameters retain their comparison category and domain.
-				overloadId: 1,
-				args:       []types.T{types.T_text},
-				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
-				newOp:      func() executeLogicOfOverload { return normalizeJsonOrderingParam },
-			},
-		},
-	},
-
-	// internal normalization for prepared JSON equality parameters
-	{
-		functionId: INTERNAL_JSON_COMPARISON_PARAM,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedTypeMatchOnly(overloads, inputs, 1)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				args:       []types.T{types.T_text},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_json.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return normalizeJsonComparisonParam
-				},
-			},
-			{
-				// v128: numeric parameters retain their comparison category and domain.
-				overloadId: 1,
-				args:       []types.T{types.T_text},
-				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
-				newOp:      func() executeLogicOfOverload { return normalizeJsonComparisonParam },
 			},
 		},
 	},
@@ -8778,9 +8722,10 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `bit_count`
 	{
-		functionId: BIT_COUNT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
+		functionId:        BIT_COUNT,
+		integerParameters: []integerParameter{{position: 0, mode: temporalOnlyIntegerParameter}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) != 1 {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -13146,6 +13091,8 @@ func isMakeTimeTextType(oid types.T) bool {
 	}
 }
 
+const secToTimeTemporalFloatOverload = 4
+
 func secToTimeReturnType(parameters []types.Type) types.Type {
 	scale := parameters[0].Scale
 	switch parameters[0].Oid {
@@ -13163,9 +13110,28 @@ func secToTimeReturnType(parameters []types.Type) types.Type {
 	return types.T_time.ToTypeWithScale(scale)
 }
 
+func secToTimeTemporalReturnType(parameters []types.Type) types.Type {
+	scale := parameters[0].Scale
+	if scale < 0 {
+		scale = 6
+	} else if scale > 6 {
+		scale = 6
+	}
+	return types.T_time.ToTypeWithScale(scale)
+}
+
 func secToTimeCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if isTemporalContextSource(inputs[0].Oid) {
+		matched := temporalNumericTypeMatch(overloads, inputs)
+		if matched.status == succeedWithCast && matched.idx == 2 {
+			// The temporal conversion retains its source scale. Keep the
+			// ordinary FLOAT64 overload's scale-6 metadata unchanged.
+			matched.idx = secToTimeTemporalFloatOverload
+		}
+		return matched
 	}
 	if !isMakeTimeTextType(inputs[0].Oid) && !inputs[0].Oid.IsDecimal() {
 		return fixedTypeMatch(overloads, inputs)
@@ -14181,6 +14147,14 @@ var supportedControlBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_varchar},
 				retType:    secToTimeReturnType,
+				newOp: func() executeLogicOfOverload {
+					return SecToTime
+				},
+			},
+			{
+				overloadId: secToTimeTemporalFloatOverload,
+				args:       []types.T{types.T_float64},
+				retType:    secToTimeTemporalReturnType,
 				newOp: func() executeLogicOfOverload {
 					return SecToTime
 				},
@@ -17213,6 +17187,21 @@ var supportedOthersBuiltIns = []FuncNew{
 				return types.T_bool.ToType()
 			},
 			newOp: func() executeLogicOfOverload { return loadFKIgnoreCheck },
+		}},
+	},
+
+	{
+		functionId: MO_ASSERT_SNAPSHOT_AFTER,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			args:       []types.T{types.T_text},
+			volatile:   true,
+			retType: func([]types.Type) types.Type {
+				return types.T_bool.ToType()
+			},
+			newOp: func() executeLogicOfOverload { return moAssertSnapshotAfter },
 		}},
 	},
 

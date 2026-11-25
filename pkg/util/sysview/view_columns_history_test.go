@@ -103,8 +103,9 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 		" AND "+catalog.NonIndexRelationSQLPredicate("mt"), "",
 		" AND "+catalog.NonIndexRelationSQLPredicateForColumns("mc.att_relname", "mc.relkind", "mc.extra_info"), "",
 	).Replace(InformationSchemaColumnsDDL)
-	require.Equal(t, informationSchemaColumnsDefaultGeneratedExtraOver(InformationSchemaColumnsPreDefaultGeneratedDDL()), withoutPhysicalFilter,
-		"the current identity combines expression-default metadata with physical-index filters")
+	require.Equal(t, informationSchemaColumnsBoolTinyIntOneColumnsTypeOver(
+		informationSchemaColumnsDefaultGeneratedExtraOver(InformationSchemaColumnsPreDefaultGeneratedDDL())), withoutPhysicalFilter,
+		"the current identity combines expression-default metadata, physical-index filters and the physical-BOOL tinyint(1) COLUMN_TYPE")
 	require.NotEqual(t, InformationSchemaColumnsDDL, preAttributes,
 		"the decorated current template differs from the pre-change identity")
 	require.NotEqual(t, InformationSchemaColumnsDDL, preAttributesBinaryNull,

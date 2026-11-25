@@ -28,7 +28,7 @@ func (c *Compile) parallelPartitionWindow(node *plan.Node, ss []*Scope) int {
 	const minOwnerSpill = int64(128 << 20)
 	if node == nil || node.NodeType != plan.Node_WINDOW || c.IsTpQuery() ||
 		c.isPrepare || c.ncpu <= 1 || node.SpillMem < 2*minOwnerSpill ||
-		len(node.WinSpecList) != 1 || len(ss) != 1 || ss[0] == nil ||
+		len(node.WinSpecList) == 0 || len(ss) != 1 || ss[0] == nil ||
 		ss[0].Proc == nil || ss[0].RootOp == nil || ss[0].NodeInfo.Mcpu != 1 || len(c.cnList) != 1 ||
 		c.addr == "" || c.cnList[0].Addr != c.addr ||
 		!sameExecutionNode(ss[0].NodeInfo, c.cnList[0]) {
@@ -48,9 +48,14 @@ func (c *Compile) parallelPartitionWindow(node *plan.Node, ss []*Scope) int {
 			return 1
 		}
 	}
-	for _, arg := range w.WindowFunc.GetF().Args {
-		if arg == nil || (arg.GetCol() == nil && arg.GetLit() == nil) {
+	for _, expr := range node.WinSpecList {
+		if expr.GetW() == nil || expr.GetW().WindowFunc.GetF() == nil {
 			return 1
+		}
+		for _, arg := range expr.GetW().WindowFunc.GetF().Args {
+			if arg == nil || (arg.GetCol() == nil && arg.GetLit() == nil) {
+				return 1
+			}
 		}
 	}
 	if w.Frame != nil {

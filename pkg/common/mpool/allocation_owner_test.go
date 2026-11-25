@@ -37,6 +37,8 @@ func TestAllocationOwnerCatalog(t *testing.T) {
 		{AllocationOwnerExternal, 13, "external"},
 		{AllocationOwnerDependent, 14, "dependent"},
 		{AllocationOwnerWindow, 15, "window"},
+		{AllocationOwnerTxnWorkspace, 16, "txn_workspace"},
+		{AllocationOwnerSelection, 17, "selection"},
 	}
 	seen := make(map[AllocationOwner]struct{}, len(owners))
 	seenNames := make(map[string]struct{}, len(owners))
@@ -59,8 +61,8 @@ func TestAllocationOwnerCatalog(t *testing.T) {
 		}
 		seenNames[entry.name] = struct{}{}
 	}
-	if AllocationOwnerCatalogMax != AllocationOwnerWindow {
-		t.Fatalf("catalog max = %d, want %d", AllocationOwnerCatalogMax, AllocationOwnerWindow)
+	if AllocationOwnerCatalogMax != AllocationOwnerSelection {
+		t.Fatalf("catalog max = %d, want %d", AllocationOwnerCatalogMax, AllocationOwnerSelection)
 	}
 	if AllocationOwnerCatalogMax > AllocationOwnerMax {
 		t.Fatalf("catalog max %d exceeds reserved max %d", AllocationOwnerCatalogMax, AllocationOwnerMax)

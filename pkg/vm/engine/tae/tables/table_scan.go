@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,13 +45,19 @@ func preservePhysicalRows(ctx context.Context) bool {
 	return preserve
 }
 
-func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitmap) {
+// compactInvisibleAppendRows takes ownership of invisibleRows.
+func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Nulls, mp *mpool.MPool) error {
 	if bat == nil || invisibleRows.IsEmpty() {
-		return
+		invisibleRows.Free()
+		return nil
 	}
 
 	invisible := invisibleRows.ToArray()
-	remainingDeletes := nulls.NewWithSize(bat.Length() - len(invisible))
+	remainingDeletes, err := nulls.NewWithSize(bat.Length()-len(invisible), mp)
+	if err != nil {
+		invisibleRows.Free()
+		return err
+	}
 	invisibleIdx := 0
 	for _, row := range bat.Deletes.ToArray() {
 		for invisibleIdx < len(invisible) && invisible[invisibleIdx] < row {
@@ -65,10 +72,23 @@ func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitm
 	// Compact rows hidden by append MVCC (rollback holes and commits newer than
 	// the reader snapshot). Tombstone and workspace deletes remain represented
 	// in the returned batch, with offsets shifted over the removed rows.
-	bat.Deletes = invisibleRows
+	bat.SetDeletes(invisibleRows)
 	bat.Compact()
-	if !remainingDeletes.IsEmpty() {
-		bat.Deletes = remainingDeletes
+	if remainingDeletes.IsEmpty() {
+		remainingDeletes.Free()
+		return nil
+	}
+	bat.SetDeletes(remainingDeletes)
+	return nil
+}
+
+// closeBatchOnError closes *bat and sets it to nil when err is set and the
+// caller is responsible for the batch (own), so a partly built batch is
+// neither leaked nor handed back closed.
+func closeBatchOnError(err error, own bool, bat **containers.Batch) {
+	if err != nil && own && *bat != nil {
+		(*bat).Close()
+		*bat = nil
 	}
 }
 
@@ -81,21 +101,30 @@ func HybridScanByBlock(
 	colIdxs []int,
 	blkID *objectio.Blockid,
 	mp *mpool.MPool,
-) error {
+) (err error) {
+	// Once Scan has run, an error leaves *bat closed and nil, also when the
+	// caller passed one in: it may hold part of this block. Errors before
+	// that leave the caller's batch alone.
+	scanned := false
+	defer func() { closeBatchOnError(err, scanned, bat) }()
 	dataObject, err := tableEntry.GetObjectByID(blkID.Object(), false)
 	if err != nil {
 		return err
 	}
 	_, offset := blkID.Offsets()
 	deleteStartOffset := 0
-	var deletesBeforeScan *nulls.Bitmap
+	var deletesBeforeScan *nulls.Nulls
 	filterInvisibleAppendRows := dataObject.IsAppendable() && !preservePhysicalRows(ctx)
 	if *bat != nil {
 		deleteStartOffset = (*bat).Length()
 		if filterInvisibleAppendRows {
-			deletesBeforeScan = (*bat).Deletes.Clone()
+			if deletesBeforeScan, err = (*bat).Deletes.Clone(mp); err != nil {
+				return err
+			}
+			defer deletesBeforeScan.Free()
 		}
 	}
+	scanned = true
 	err = dataObject.GetObjectData().Scan(
 		ctx, bat, txn, readSchema, offset, colIdxs, mp)
 	if err != nil {
@@ -104,9 +133,13 @@ func HybridScanByBlock(
 	if *bat == nil {
 		return nil
 	}
-	var invisibleAppendRows *nulls.Bitmap
+	var invisibleAppendRows *nulls.Nulls
+	// Freed on error; compactInvisibleAppendRows takes it on success.
+	defer func() { invisibleAppendRows.Free() }()
 	if filterInvisibleAppendRows {
-		invisibleAppendRows = (*bat).Deletes.Clone()
+		if invisibleAppendRows, err = (*bat).Deletes.Clone(mp); err != nil {
+			return err
+		}
 		if deletesBeforeScan != nil {
 			deletesBeforeScan.Foreach(func(row uint64) bool {
 				invisibleAppendRows.Del(row)
@@ -118,9 +151,8 @@ func HybridScanByBlock(
 	defer it.Release()
 	for it.Next() {
 		tombstone := it.Item()
-		err := tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
+		err = tombstone.GetObjectData().FillBlockTombstones(ctx, txn, blkID, &(*bat).Deletes, uint64(deleteStartOffset), mp)
 		if err != nil {
-			(*bat).Close()
 			return err
 		}
 	}
@@ -128,11 +160,11 @@ func HybridScanByBlock(
 	id.BlockID = *blkID
 	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes, uint64(deleteStartOffset))
 	if err != nil {
-		(*bat).Close()
 		return err
 	}
-	compactInvisibleAppendRows(*bat, invisibleAppendRows)
-	return nil
+	rows := invisibleAppendRows
+	invisibleAppendRows = nil
+	return compactInvisibleAppendRows(*bat, rows, mp)
 }
 
 /*
@@ -216,15 +248,29 @@ func TombstoneRangeScanByObject(
 
 		if tombstone.HasCommittedPersistedData() {
 			zm := tombstone.SortKeyZoneMap()
-			if !zm.RowidPrefixEq(objectID[:]) {
+			// A committed drop does not imply that an appendable object has
+			// persisted stats. Empty appendable tombstones can be flushed without
+			// producing an object file, leaving their rowid ZM uninitialized. An
+			// unknown summary cannot prove the object does not contain this rowid;
+			// let the object-data collector apply the normal MVCC and I/O rules.
+			if zm.IsInited() && !zm.RowidPrefixEq(objectID[:]) {
 				return true
 			}
 			// TODO: Bloomfilter
 		}
-		err = tombstone.GetObjectData().CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
+		objectData := tombstone.GetObjectData()
+		if objectData == nil {
+			err = moerr.NewInternalErrorNoCtx("tombstone object data is unavailable")
+			return false
+		}
+		err = objectData.CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
 		return err == nil
 	})
 	if err != nil {
+		if bat != nil {
+			bat.Close()
+			bat = nil
+		}
 		return nil, err
 	}
 	return
@@ -241,20 +287,13 @@ func RangeScanInMemoryByObject(
 	return
 }
 
-// TODO: ensure bat does not exceed the 1G limit
-func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {
+// ScanSysTable visits snapshot-visible rows one block at a time. The callback
+// must copy anything it retains; the batch is released before the next block.
+func ScanSysTable(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn, visit func(*containers.Batch, int) error) error {
 	if entry.ID > 3 {
 		panic(fmt.Sprintf("unsupported sys table id %v", entry))
 	}
 	schema := entry.GetLastestSchema(false)
-	prefetchIt := entry.MakeDataVisibleObjectIt(readTxn)
-	defer prefetchIt.Release()
-	for prefetchIt.Next() {
-		obj := prefetchIt.Item()
-		for blkOffset := range obj.BlockCnt() {
-			obj.GetObjectData().Prefetch(uint16(blkOffset))
-		}
-	}
 	it := entry.MakeDataVisibleObjectIt(readTxn)
 	defer it.Release()
 	colIdxes := make([]int, 0, len(schema.ColDefs))
@@ -264,22 +303,47 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 		}
 		colIdxes = append(colIdxes, col.Idx)
 	}
-	var bat *containers.Batch
-	prevLen := 0
 	for it.Next() {
 		obj := it.Item()
 		for blkOffset := range obj.BlockCnt() {
+			if err := ctx.Err(); err != nil {
+				return context.Cause(ctx)
+			}
 			blkid := objectio.NewBlockidWithObjectID(obj.ID(), uint16(blkOffset))
+			var bat *containers.Batch
 			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, &blkid, common.CheckpointAllocator)
-			if err != nil || bat == nil || bat.Length() == prevLen {
-				panic(fmt.Sprintf("blkbat is nil, obj %v, blkid %v, err %v", obj.ID().String(), blkOffset, err))
+			if err != nil {
+				if bat != nil {
+					bat.Close()
+				}
+				return err
+			}
+			if bat == nil {
+				continue
+			}
+			err = func() error {
+				defer bat.Close()
+				for row := 0; row < bat.Length(); row++ {
+					if row%1024 == 0 {
+						if err := ctx.Err(); err != nil {
+							return context.Cause(ctx)
+						}
+					}
+					if bat.IsDeleted(row) {
+						continue
+					}
+					if err := visit(bat, row); err != nil {
+						return err
+					}
+				}
+				return nil
+			}()
+			if err != nil {
+				return err
 			}
 		}
 	}
-	if bat != nil {
-		bat.Compact()
-	}
-	return bat
+	return context.Cause(ctx)
 }
 
 func ReadMergeSettingsBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {

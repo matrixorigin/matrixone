@@ -67,7 +67,7 @@ func mustTestUUID(tb testing.TB, s string) types.Uuid {
 func loadedUUIDFilter(tb testing.TB, values ...types.Uuid) docfilter.MembershipFilter {
 	tb.Helper()
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_uuid, 16, 0))
+	vec := vector.NewVec(types.New(types.T_uuid, 16, 0), mp)
 	for _, value := range values {
 		require.NoError(tb, vector.AppendFixed(vec, value, false, mp))
 	}

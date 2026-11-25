@@ -62,14 +62,14 @@ func BenchmarkDependentExecutionScaling(b *testing.B) {
 				_, err := registry.Finalize(account)
 				require.NoError(b, err)
 			}()
-			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+			allocation, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerDependent, 1, mpool.AllocationCapacityClassDefault)
 			require.NoError(b, err)
 			compiled, tableOpened, sourceOpened, sourceClosed, scanned := 0, 0, 0, 0, 0
 			template, err := dependent.Compile(proc.Ctx, p.GetQuery(), func(node *plan.Node) (dependent.SourceFactory, error) {
 				compiled++
 				isTable := node.NodeType == plan.Node_TABLE_SCAN
 				isOuter := node.NodeId == 0
-				return func(child *process.Process, a *vector.AllocationAccountSelection, _ *mpool.AllocationAccount) (dependent.Source, error) {
+				return func(child *process.Process, a *mpool.MPool, _ *mpool.AllocationAccount) (dependent.Source, error) {
 					sourceOpened++
 					rows := 1
 					cols := 0
@@ -85,17 +85,13 @@ func BenchmarkDependentExecutionScaling(b *testing.B) {
 					bat := batch.NewWithSize(cols)
 					for i := range cols {
 						var err error
-						bat.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), a)
-						if err != nil {
-							bat.Clean(child.Mp())
-							return nil, err
-						}
+						bat.Vecs[i] = vector.NewVec(types.T_int32.ToType(), a)
 						for row := range rows {
 							value := int32(row + 1)
 							if isOuter {
 								value = int32(row%tc.inner + 1)
 							}
-							if err = vector.AppendFixed(bat.Vecs[i], value, false, child.Mp()); err != nil {
+							if err = vector.AppendFixed(bat.Vecs[i], value, false, a); err != nil {
 								bat.Clean(child.Mp())
 								return nil, err
 							}

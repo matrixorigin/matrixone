@@ -314,6 +314,9 @@ func GetTombstonesByBlockId(
 			// Shrink the tombstone batch, Because the rowid in the tombstone is no longer needed after apply,
 			// it cannot be written to disk
 			if needShrink {
+				if err := oData.data[idx].OwnReadOnlyVectors(common.DebugAllocator); err != nil {
+					return false, err
+				}
 				if err := oData.data[idx].Shrink(deleteRows, true, common.DebugAllocator); err != nil {
 					return false, err
 				}
@@ -361,6 +364,11 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 							return false, err
 						}
 						if len(visibleRows) != bat.Vecs[0].Length() {
+							// The loaded columns reference the cache; shrink owned copies.
+							if err := bat.OwnReadOnlyVectors(common.DebugAllocator); err != nil {
+								bat.Clean(common.DebugAllocator)
+								return false, err
+							}
 							if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
 								bat.Clean(common.DebugAllocator)
 								return false, err
@@ -477,6 +485,11 @@ func trimTombstoneData(
 			return err
 		}
 		if len(visibleRows) != bat.Vecs[0].Length() {
+			// The loaded columns reference the cache; shrink owned copies.
+			if err := bat.OwnReadOnlyVectors(common.DebugAllocator); err != nil {
+				bat.Clean(common.DebugAllocator)
+				return err
+			}
 			if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
 				bat.Clean(common.DebugAllocator)
 				return err
@@ -887,6 +900,11 @@ func ReWriteCheckpointAndBlockFromKey(
 				panic(any(fmt.Sprintf("data rows is 0: %v", objectData.stats.ObjectLocation().String())))
 			}
 
+			// Sorting rewrites the columns in place; read-only cache columns
+			// are copied into the pool the batch is read and freed with.
+			if err = objectData.data[0].OwnReadOnlyVectors(common.DebugAllocator); err != nil {
+				return err
+			}
 			sortData := containers.ToTNBatch(objectData.data[0], common.DebugAllocator)
 
 			if objectData.sortKey != math.MaxUint16 {
@@ -927,7 +945,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		func(oData *objData, writer *ioutil.BlockWriter) (bool, error) {
 			ds := NewBackupDeltaLocDataSource(ctx, fs, ts, dsTombstone)
 			blk := oData.stats.ConstructBlockInfo(uint16(0))
-			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, nil, ts, fs)
+			bat, sortKey, err := blockio.BlockDataReadBackup(ctx, &blk, ds, nil, ts, fs, common.DebugAllocator)
 			if err != nil {
 				return true, err
 			}
@@ -1012,8 +1030,8 @@ func ReWriteCheckpointAndBlockFromKey(
 	encoder := types.NewPacker()
 	defer encoder.Close()
 	if len(insertObjBatch) > 0 {
-		objectInfoMeta := ckputil.NewObjectListBatch()
-		tombstoneInfoMeta := ckputil.NewObjectListBatch()
+		objectInfoMeta := ckputil.NewObjectListBatch(ckpReader.mp)
+		tombstoneInfoMeta := ckputil.NewObjectListBatch(ckpReader.mp)
 		infoInsert := make(map[int]*objData, 0)
 		infoInsertTombstone := make(map[int]*objData, 0)
 		for tid := range insertObjBatch {
@@ -1098,7 +1116,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		}
 
 	} else {
-		dest := ckputil.NewObjectListBatch()
+		dest := ckputil.NewObjectListBatch(ckpReader.mp)
 		if err = ckpReader.ForEachRow(
 			ctx,
 			func(

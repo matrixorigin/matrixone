@@ -25,7 +25,6 @@ import (
 )
 
 func (Hooks) ValidateIndexMaintenance(function string, args []string, spec *executor.IndexMaintenanceSpec) error {
-	var db, source, store, meta string
 	switch function {
 	case "fulltext2_create":
 		if len(args) < 2 {
@@ -35,22 +34,21 @@ func (Hooks) ValidateIndexMaintenance(function string, args []string, spec *exec
 		if err := json.Unmarshal([]byte(args[1]), &cfg); err != nil {
 			return err
 		}
-		db, source, store, meta = cfg.DbName, cfg.SrcTable, cfg.IndexTable, cfg.MetadataTable
-		if source == "" {
+		if cfg.SrcTable == "" {
 			return moerr.NewInvalidInputNoCtx("fulltext2 source is empty")
 		}
+		return vectorindex.ValidateMaintenanceConfig(spec, function, cfg.DbName, cfg.SrcTable, fulltext2.MaintenanceOperands(cfg))
 	case "fulltext2_compact":
 		if len(args) < 3 {
 			return moerr.NewInvalidInputNoCtx("missing fulltext2 targets")
 		}
-		db, store, meta = args[0], args[1], args[2]
+		return vectorindex.ValidateMaintenanceConfig(spec, function, args[0], "", []vectorindex.MaintenanceOperand{
+			{Role: catalog.FullText2Index_TblType_Storage, Name: args[1]},
+			{Role: catalog.FullText2Index_TblType_Metadata, Name: args[2]},
+		})
 	default:
 		return moerr.NewInvalidInputNoCtx("unexpected fulltext2 maintenance function")
 	}
-	return vectorindex.ValidateMaintenanceConfig(spec, function, db, source, []vectorindex.MaintenanceOperand{
-		{Role: catalog.FullText2Index_TblType_Storage, Name: store},
-		{Role: catalog.FullText2Index_TblType_Metadata, Name: meta},
-	})
 }
 func (Hooks) InitSQLMaintenanceFunction() string { return "" }
 
@@ -59,8 +57,13 @@ func (Hooks) IndexMaintenanceFunctions() []string {
 }
 
 func (Hooks) IndexMaintenanceRoles(function string, defs map[string]*plan.IndexDef) ([]string, error) {
-	if function != "fulltext2_create" && function != "fulltext2_compact" {
+	required := []string{catalog.FullText2Index_TblType_Storage, catalog.FullText2Index_TblType_Metadata}
+	switch function {
+	case "fulltext2_create":
+		return vectorindex.MaintenanceRoles(defs, required, catalog.IndexIgnored_TblType)
+	case "fulltext2_compact":
+		return vectorindex.MaintenanceRoles(defs, required)
+	default:
 		return nil, moerr.NewInvalidInputNoCtx("unexpected index maintenance function")
 	}
-	return vectorindex.MaintenanceRoles(defs, []string{catalog.FullText2Index_TblType_Storage, catalog.FullText2Index_TblType_Metadata})
 }

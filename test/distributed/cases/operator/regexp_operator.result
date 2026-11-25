@@ -12,7 +12,7 @@ SELECT 'Corn' REGEXP 'Corn' AS 'Corn';
 1
 SELECT 'Acorn' REGEXP 'Corn' AS 'Acorn';
 ➤ Acorn[-7,1,0]  𝄀
-0
+1
 SELECT 'Corner' REGEXP 'Corn' AS 'Corner';
 ➤ Corner[-7,1,0]  𝄀
 1

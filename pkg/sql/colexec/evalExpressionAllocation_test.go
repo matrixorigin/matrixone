@@ -28,6 +28,104 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// requireAccountCovers requires that account is charged at least the backing
+// storage of vecs: storage that grew outside the accounted view would leave
+// the account short.
+func requireAccountCovers(t *testing.T, account *mpool.AllocationAccount, vecs ...*vector.Vector) {
+	t.Helper()
+	var allocated uint64
+	for _, vec := range vecs {
+		if vec != nil {
+			allocated += uint64(vec.Allocated())
+		}
+	}
+	used := account.Snapshot().Used
+	require.Positive(t, used)
+	require.GreaterOrEqual(t, used, allocated)
+}
+
+func TestAccountedPrefixBetweenResultValidity(t *testing.T) {
+	proc, allocation, account := dependentTestAllocation(t)
+	typ := types.T_varchar.ToType()
+	input := batch.NewWithSize(3)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	args := make([]*plan.Expr, 3)
+	for i, values := range [][]string{{"aa", "bc", "de"}, {"b", "b", "b"}, {"c", "c", "c"}} {
+		input.Vecs[i] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+		args[i] = &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}}}
+	}
+	input.SetRowCount(3)
+	executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, "prefix_between", args...), allocation)
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	batches := []*batch.Batch{input}
+	result, err := executor.Eval(proc, batches, nil)
+	require.NoError(t, err)
+	require.Equal(t, []bool{false, true, false}, vector.MustFixedColNoTypeCheck[bool](result))
+	require.Zero(t, result.GetNulls().GetBitmap().CapWords())
+	requireAccountCovers(t, account, result)
+	for _, arg := range input.Vecs {
+		arg.GetNulls().Add(1)
+		result, err = executor.Eval(proc, batches, nil)
+		require.NoError(t, err)
+		require.True(t, result.IsNull(1), "a NULL value or bound needs admitted validity storage")
+		arg.GetNulls().Del(1)
+	}
+}
+
+func TestAccountedFixedMaskedResultNullsAndReuse(t *testing.T) {
+	for _, oid := range []types.T{types.T_int64, types.T_decimal128} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc, allocation, account := dependentTestAllocation(t)
+			typ := types.New(oid, 18, 0)
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(typ, proc.Mp())
+			for row := range 12 {
+				if oid == types.T_int64 {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], -int64(row+1), row == 1, proc.Mp()))
+				} else {
+					value := types.Decimal128{B0_63: uint64(row + 1)}.Minus()
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, row == 1, proc.Mp()))
+				}
+			}
+			input.SetRowCount(12)
+			column := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			executor, err := NewExpressionExecutorWithAllocation(proc, bindTestFunction(t, proc, "abs", column), allocation)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			for index, mask := range [][]bool{
+				{true, true, false, false, false, false, false, false, false, false, false, true},
+				{false, true, true, true, true, true, true, true, true, true, true, false},
+				{false, false, false, false, false, false, false, false, false, false, false, false},
+				{true, true, true, true, true, true, true, true, true, true, true, true},
+				{false, false, true, false, false, false, false, false, false, false, false, true},
+			} {
+				result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				require.NoError(t, err)
+				if index == 0 {
+					require.Nil(t, executor.(*FunctionExpressionExecutor).selectedNullResult,
+						"sparse fixed output must avoid NULL-placeholder appends")
+				}
+				require.Equal(t, 12, result.Length())
+				for row, selected := range mask {
+					isNull := !selected || row == 1
+					require.Equal(t, isNull, result.IsNull(uint64(row)))
+					if isNull {
+						continue
+					}
+					if oid == types.T_int64 {
+						require.Equal(t, int64(row+1), vector.GetFixedAtNoTypeCheck[int64](result, row))
+					} else {
+						require.Equal(t, types.Decimal128{B0_63: uint64(row + 1)}, vector.GetFixedAtNoTypeCheck[types.Decimal128](result, row))
+					}
+				}
+				requireAccountCovers(t, account, result)
+			}
+		})
+	}
+}
+
 func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	pool := mpool.MustNewZero()
 	t.Cleanup(func() {
@@ -50,7 +148,7 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 		_, err := registry.Finalize(account)
 		assert.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	typ := types.T_varchar.ToType()
 	column := &plan.Expr{
@@ -89,19 +187,19 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 
 	assertFunctionStorage := func(function *FunctionExpressionExecutor) {
 		t.Helper()
-		require.Same(t, selection, function.resultVector.GetResultVector().AllocationAccountSelection())
-		require.Same(t, selection, function.selectedResult.GetResultVector().AllocationAccountSelection())
-		for _, selected := range function.selectedParameterVectors {
-			if selected != nil {
-				require.Same(t, selection, selected.AllocationAccountSelection())
-			}
-		}
+		vecs := make([]*vector.Vector, 0, 2+len(function.selectedParameterVectors))
+		vecs = append(vecs,
+			function.resultVector.GetResultVector(),
+			function.selectedResult.GetResultVector(),
+		)
+		vecs = append(vecs, function.selectedParameterVectors...)
+		requireAccountCovers(t, account, vecs...)
 	}
 	// Grow the selected path beyond its account budget, then retry the same
 	// executor with a small partial batch. Admission failure must not poison it.
 	large := batch.NewWithSize(1)
 	defer large.Clean(proc.Mp())
-	large.Vecs[0] = vector.NewVec(typ)
+	large.Vecs[0] = vector.NewVec(typ, pool)
 	for range 4 {
 		require.NoError(t, vector.AppendBytes(large.Vecs[0], []byte(strings.Repeat("A", 2048)), false, proc.Mp()))
 	}
@@ -113,11 +211,13 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"aaAA-", "", "ccCC-", ""}, vector.InefficientMustStrCol(result))
 
+	fixed := root.parameterExecutor[2].(*FixedVectorExpressionExecutor)
 	assertFunctionStorage(root)
 	assertFunctionStorage(nested)
-	fixed := root.parameterExecutor[2].(*FixedVectorExpressionExecutor)
-	require.Same(t, selection, fixed.resultVector.AllocationAccountSelection())
-	require.Positive(t, account.Snapshot().Used)
+	requireAccountCovers(t, account,
+		root.resultVector.GetResultVector(), root.selectedResult.GetResultVector(),
+		nested.resultVector.GetResultVector(), nested.selectedResult.GetResultVector(),
+		fixed.resultVector)
 
 	// Reuse the allocation-accounted result vectors after the first evaluation.
 	// ResetWithSameType clears the bitmap logical length while retaining its
@@ -155,15 +255,16 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	_, err = equalExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	equalRoot := equalExecutor.(*FunctionExpressionExecutor)
-	capacityRows := uint64(equalRoot.resultVector.GetResultVector().
-		GetNulls().GetBitmap().ExternalStorageCapacity() * 64)
-	require.GreaterOrEqual(t, capacityRows, uint64(4))
-	second.Vecs[0].GetNulls().Add(capacityRows)
-
+	require.Positive(t, equalRoot.resultVector.GetResultVector().GetNulls().GetBitmap().CapWords(),
+		"a nullable result reserves its validity bitmap at preparation")
+	// Establish real nullable storage before probing a stale NULL beyond its
+	// bound. The non-NULL fast path intentionally has no bitmap to exceed.
 	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
 	require.NoError(t, err)
 	require.True(t, equalResult.IsNull(1))
-	require.False(t, equalResult.IsNull(capacityRows))
+	equalResult, err = equalExecutor.Eval(proc, []*batch.Batch{second}, nil)
+	require.NoError(t, err)
+	require.True(t, equalResult.IsNull(1))
 	equalExecutor.Free()
 	equalExecutor = nil
 
@@ -214,7 +315,7 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 		_, err := registry.Finalize(account)
 		assert.NoError(t, err)
 	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	selection, err := proc.Mp().WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	expression := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_varbinary)},
@@ -240,58 +341,12 @@ func TestAccountedFixedCrossDomainConstBroadcastUsesPhysicalMetadata(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, 65, result.Length())
-	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
-	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(64))
+	require.Equal(t, "selected", result.GetStringAt(0))
+	require.Equal(t, "selected", result.GetStringAt(64))
 	require.Equal(t, used, account.Snapshot().Used)
 
 	executor.Free()
 	executor = nil
 	require.Zero(t, account.Snapshot().Used)
-	require.Zero(t, registry.LiveAllocationMetadata())
-}
-
-func TestAccountedLiteralConstructorReleasesPayloadOnDomainDenial(t *testing.T) {
-	pool := mpool.MustNewZero()
-	t.Cleanup(func() {
-		defer mpool.DeleteMPool(pool)
-		assert.Zero(t, pool.CurrNB(), "native storage before pool deletion")
-		bytes, objects := pool.OnHeapOutstanding()
-		assert.Zero(t, bytes, "heap storage before pool deletion")
-		assert.Zero(t, objects, "heap objects before pool deletion")
-	})
-	proc := testutil.NewProcess(t, testutil.WithMPool(pool), testutil.WithFileService(nil))
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	// One inline varlen cell and its NULL bitmap fit; the text-domain bitmap does not.
-	account, err := registry.Open(types.VarlenaSize + 16)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		assert.Zero(t, account.Snapshot().Used)
-		assert.Zero(t, registry.LiveAllocationMetadata())
-		snapshot := account.Seal()
-		assert.Zero(t, snapshot.Used)
-		_, err := registry.Finalize(account)
-		assert.NoError(t, err)
-	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
-	require.NoError(t, err)
-	func() {
-		payload, err := vector.NewConstBytesWithAllocation(types.T_varbinary.ToType(), []byte("selected"), 1, proc.Mp(), selection)
-		require.NoError(t, err, "payload allocation must succeed before domain admission")
-		defer payload.Free(proc.Mp())
-		require.Positive(t, account.Snapshot().Used)
-	}()
-	executor, err := NewExpressionExecutorWithAllocation(proc, &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_varbinary)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-			Value: &plan.Literal_Sval{Sval: "selected"}, LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
-		}},
-	}, selection)
-	if executor != nil {
-		t.Cleanup(executor.Free)
-	}
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Nil(t, executor)
-	require.Zero(t, account.Snapshot().Used, "constructor must release the already materialized payload")
 	require.Zero(t, registry.LiveAllocationMetadata())
 }

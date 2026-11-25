@@ -98,7 +98,7 @@ func TestCuvsWriterIgnoresUnstorableVectors(t *testing.T) {
 	require.NoError(t, ignored.flush(ctx, "", nil, "cuvs_idx"))
 	require.Equal(t, []string{
 		"DELETE FROM `test_db`.`ignored_tbl` WHERE `__mo_index_pk` IN (1,4,5)",
-		fmt.Sprintf("REPLACE INTO `test_db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (2, %d, 7), (3, %d, 7), (6, %d, 7)",
+		fmt.Sprintf("REPLACE INTO `test_db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_reason`, `__mo_index_ts`) VALUES (2, %d, NULL, 7), (3, %d, NULL, 7), (6, %d, NULL, 7)",
 			moerr.ErrIndexVectorOutOfRange, moerr.ErrIndexVectorOutOfRange, moerr.ErrIndexVectorOutOfRange),
 		"SELECT COUNT(*) FROM `test_db`.`ignored_tbl`",
 	}, *sqls)

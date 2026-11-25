@@ -197,7 +197,172 @@ execute zm_range using @zm_lower,@zm_upper;
 100  𝄀
 150
 deallocate prepare zm_range;
+select k from clustered where k in (100,150) order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from clustered where k in (100,150);
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=1\s+inputRows=2\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=1 inputRows=2 outputRows=2 (min=2, max=2) InputSize=8 bytes OutputSize=8 bytes ReadSize=48 bytes|0 bytes|0 bytes MemorySize=18 bytes (min=18 bytes, max=18 bytes)  𝄀
+              Filter Cond: clustered.k in ([100 150])  𝄀
+              Block Filter Cond: clustered.k in ([100 150])
+select k from interleaved where k in (100,150) order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from interleaved where k in (100,150);
+-- @regex("Table Scan on non_primary_zonemap[.]interleaved[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.interleaved  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=2 (min=2, max=2) InputSize=24 bytes OutputSize=8 bytes ReadSize=144 bytes|0 bytes|0 bytes MemorySize=18 bytes (min=18 bytes, max=18 bytes)  𝄀
+              Filter Cond: interleaved.k in ([100 150])  𝄀
+              Block Filter Cond: interleaved.k in ([100 150])
+create table period_values (id int primary key, period varchar(16), amount decimal(20,7));
+insert into period_values values (1,'2026.12',999),(2,null,999);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.period_values)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into period_values values (3,'2024.12',10),(4,'2024.12',20);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.period_values)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into period_values values (5,'2025.12',30),(6,'2025.12',40);
+select mo_ctl('dn', 'flush', 'non_primary_zonemap.period_values');
+-- @regex("returnStr.*OK", true)
+➤ mo_ctl(dn, flush, non_primary_zonemap.period_values)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
+➤ period[12,16,0]  ¦  total[3,42,7]  𝄀
+2024.12  ¦  30.0000000  𝄀
+2025.12  ¦  70.0000000
+select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+explain analyze select count(*) from period_values where period in ('2025.12',null,'2024.12','2025.12');
+-- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=2\s+inputRows=4\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=96 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.period_values  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=2 inputRows=4 outputRows=4 (min=4, max=4) InputSize=96 bytes OutputSize=96 bytes ReadSize=134 bytes|0 bytes|0 bytes MemorySize=100 bytes (min=100 bytes, max=100 bytes)  𝄀
+              Filter Cond: period_values.period in ([2025.12 2024.12 2025.12 ]-[3])  𝄀
+              Block Filter Cond: period_values.period in ([2025.12 2024.12 2025.12 ]-[3])
+select count(*) from period_values where period in (null,null);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from period_values where period not in ('2024.12',null);
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare zm_in from 'select id from period_values where period in (?,?) order by id';
+set @zm_first='2024.12';
+set @zm_second='2025.12';
+execute zm_in using @zm_first,@zm_second;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+set @zm_first=null;
+execute zm_in using @zm_first,@zm_second;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+set @zm_first='2024.12';
+execute zm_in using @zm_first,@zm_second;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+deallocate prepare zm_in;
+create table period_snapshot as
+with raw_data as (select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period)
+select row_number() over () as row_no, period, total from raw_data limit 2;
+select period,total from period_snapshot order by period;
+➤ period[12,16,0]  ¦  total[3,42,7]  𝄀
+2024.12  ¦  30.0000000  𝄀
+2025.12  ¦  70.0000000
 set optimizer_hints='blockFilter=2';
+select k from clustered where k in (100,150) order by k;
+➤ k[4,32,0]  𝄀
+100  𝄀
+150
+explain analyze select count(*) from clustered where k in (100,150);
+-- @regex("Table Scan on non_primary_zonemap[.]clustered[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.clustered  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=2 (min=2, max=2) InputSize=24 bytes OutputSize=8 bytes ReadSize=144 bytes|0 bytes|0 bytes MemorySize=22 bytes (min=22 bytes, max=22 bytes)  𝄀
+              Filter Cond: clustered.k in ([100 150])
+select period, sum(amount) as total from period_values where period in ('2024.12','2025.12') group by period order by period;
+➤ period[12,16,0]  ¦  total[3,42,7]  𝄀
+2024.12  ¦  30.0000000  𝄀
+2025.12  ¦  70.0000000
+select id from period_values where period in ('2025.12',null,'2024.12','2025.12') order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+explain analyze select count(*) from period_values where period in ('2024.12','2025.12');
+-- @regex("Table Scan on non_primary_zonemap[.]period_values[^\r\n]*\r?\n[^\r\n]*Analyze:[^\r\n]*\binputBlocks=3\s+inputRows=6\b", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=0ms waitTime=0ms inputRows=4 outputRows=1 (min=1, max=1) InputSize=96 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=64.00 KiB (min=64.00 KiB, max=64.00 KiB)  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on non_primary_zonemap.period_values  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=3 inputRows=6 outputRows=4 (min=4, max=4) InputSize=144 bytes OutputSize=96 bytes ReadSize=211 bytes|0 bytes|0 bytes MemorySize=102 bytes (min=102 bytes, max=102 bytes)  𝄀
+              Filter Cond: period_values.period in ([2024.12 2025.12])
 select k from clustered where k between 100 and 150 order by k;
 ➤ k[4,32,0]  𝄀
 100  𝄀

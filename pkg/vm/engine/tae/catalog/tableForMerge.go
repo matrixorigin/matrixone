@@ -75,6 +75,7 @@ type MergeTable interface {
 	IterDataItem() iter.Seq[MergeDataItem]
 	IterTombstoneItem() iter.Seq[MergeTombstoneItem]
 	GetNameDesc() string
+	GetBlockMaxRows() uint32
 	ID() uint64
 	HasDropCommitted() bool
 
@@ -165,6 +166,15 @@ type TNMergeTable struct {
 
 func (t TNMergeTable) ID() uint64 {
 	return t.TableEntry.ID
+}
+
+// GetBlockMaxRows returns the configured data and tombstone block capacity.
+func (t TNMergeTable) GetBlockMaxRows() uint32 {
+	schema := t.GetLastestSchema(false)
+	if schema == nil || schema.Extra == nil {
+		return 0
+	}
+	return schema.Extra.BlockMaxRows
 }
 
 func (t TNMergeTable) IsSpecialBigTable() bool {

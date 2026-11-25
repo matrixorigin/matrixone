@@ -24,7 +24,7 @@ import (
 
 func TestCloneToFlatCompactFreesPartialAllocation(t *testing.T) {
 	srcMP := mpool.MustNew("clone-compact-source")
-	src := NewVec(types.T_varchar.ToType())
+	src := NewVec(types.T_varchar.ToType(), srcMP)
 	require.NoError(t, AppendBytes(src, make([]byte, 2<<20), false, srcMP))
 
 	dstMP := mpool.MustNew("clone-compact-destination")
@@ -40,24 +40,21 @@ func TestCloneToFlatCompactFreesPartialAllocation(t *testing.T) {
 	require.Equal(t, int64(0), srcMP.CurrNB())
 }
 
-func TestCloneToFlatCompactPreservesConstGrouping(t *testing.T) {
+func TestCloneToFlatCompactExpandsConst(t *testing.T) {
 	mp := mpool.MustNewZero()
 	tests := []struct {
-		name         string
-		newSource    func(t *testing.T) *Vector
-		wantGrouping []bool
-		wantNull     bool
-		checkValue   func(t *testing.T, vec *Vector)
+		name       string
+		newSource  func(t *testing.T) *Vector
+		wantNull   bool
+		checkValue func(t *testing.T, vec *Vector)
 	}{
 		{
 			name: "fixed-value",
 			newSource: func(t *testing.T) *Vector {
 				vec, err := NewConstFixed(types.T_int8.ToType(), int8(7), 3, mp)
 				require.NoError(t, err)
-				vec.GetGrouping().Add(0, 2, 5)
 				return vec
 			},
-			wantGrouping: []bool{true, false, true},
 			checkValue: func(t *testing.T, vec *Vector) {
 				for row := range 3 {
 					require.Equal(t, int8(7), GetFixedAtNoTypeCheck[int8](vec, row))
@@ -69,10 +66,8 @@ func TestCloneToFlatCompactPreservesConstGrouping(t *testing.T) {
 			newSource: func(t *testing.T) *Vector {
 				vec, err := NewConstBytes(types.T_varchar.ToType(), []byte("rollup"), 3, mp)
 				require.NoError(t, err)
-				vec.GetGrouping().Add(0, 2, 5)
 				return vec
 			},
-			wantGrouping: []bool{true, false, true},
 			checkValue: func(t *testing.T, vec *Vector) {
 				for row := range 3 {
 					require.Equal(t, "rollup", string(vec.GetBytesAt(row)))
@@ -80,24 +75,18 @@ func TestCloneToFlatCompactPreservesConstGrouping(t *testing.T) {
 			},
 		},
 		{
-			name: "fixed-rollup-null",
+			name: "fixed-const-null",
 			newSource: func(t *testing.T) *Vector {
-				vec := NewRollupConst(types.T_int8.ToType(), 3, mp)
-				vec.GetGrouping().Add(5)
-				return vec
+				return NewConstNull(types.T_int8.ToType(), 3, mp)
 			},
-			wantGrouping: []bool{true, true, true},
-			wantNull:     true,
+			wantNull: true,
 		},
 		{
-			name: "varlen-rollup-null",
+			name: "varlen-const-null",
 			newSource: func(t *testing.T) *Vector {
-				vec := NewRollupConst(types.T_varchar.ToType(), 3, mp)
-				vec.GetGrouping().Add(5)
-				return vec
+				return NewConstNull(types.T_varchar.ToType(), 3, mp)
 			},
-			wantGrouping: []bool{true, true, true},
-			wantNull:     true,
+			wantNull: true,
 		},
 	}
 
@@ -108,11 +97,9 @@ func TestCloneToFlatCompactPreservesConstGrouping(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, dst.IsConst())
 			require.Equal(t, 3, dst.Length())
-			for row, grouped := range test.wantGrouping {
-				require.Equal(t, grouped, dst.GetGrouping().Contains(uint64(row)))
+			for row := range 3 {
 				require.Equal(t, test.wantNull, dst.GetNulls().Contains(uint64(row)))
 			}
-			require.False(t, dst.GetGrouping().Contains(5))
 			if test.checkValue != nil {
 				test.checkValue(t, dst)
 			}

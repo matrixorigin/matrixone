@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -133,9 +134,16 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 		if functionalJSONTextCastEligible(expr, cols) {
 			return true
 		}
+		if functionalJSONNumericCastEligible(expr, cols) {
+			return true
+		}
 		switch e.F.Func.ObjName {
 		case "lower", "upper":
 			if len(e.F.Args) != 1 || !functionalTextType(e.F.Args[0].Typ) || !functionalTextType(expr.Typ) {
+				return false
+			}
+		case "substring", "substr", "mid", "left", "reverse", "md5", "crc32", "hex", "length", "concat":
+			if !functionalScalarFunctionEligible(expr) {
 				return false
 			}
 		case "+", "-", "*", "abs":
@@ -146,6 +154,26 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				if !types.T(arg.Typ.Id).IsInteger() {
 					return false
 				}
+			}
+		case "unary_minus":
+			// The persisted bind keeps an authored negative integer constant
+			// in its unary_minus spelling while query binding folds it, so a
+			// suffix-position key like substring(v,-2,2) re-binds through
+			// every replay in exactly this form. Admit precisely that
+			// constant shape - one non-null signed-integer literal argument
+			// under the identical signed-integer result type - and nothing
+			// else. Negated columns (with or without their widening or
+			// signedness adapters) and unsigned or non-integer negations
+			// keep failing closed, so the unsigned-column boundary stays
+			// observable.
+			if len(e.F.Args) != 1 {
+				return false
+			}
+			lit := e.F.Args[0].GetLit()
+			if lit == nil || lit.Isnull ||
+				!types.T(e.F.Args[0].Typ.Id).IsSignedInt() || !types.T(expr.Typ.Id).IsSignedInt() ||
+				e.F.Args[0].Typ.Id != expr.Typ.Id {
+				return false
 			}
 		case "cast":
 			if len(e.F.Args) == 2 {
@@ -159,6 +187,14 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 				// and is safe to replay as a persisted functional expression.
 				if functionalTextType(expr.Typ) && functionalTextType(e.F.Args[0].Typ) &&
 					e.F.Args[0].GetLit() != nil && e.F.Args[0].GetLit().IsBin {
+					break
+				}
+				// The eight scalar functions can require one implicit argument
+				// adapter: md5 has no CHAR overload, so the binder inserts a
+				// flag-clear ordinary CAST from a T_char column into the fixed
+				// non-truncating T_varchar envelope with the charset retained.
+				// Every user-explicit or width-declaring cast stays excluded.
+				if functionalImplicitCharWidenCast(expr) {
 					break
 				}
 			}
@@ -186,9 +222,159 @@ func functionalTextType(typ Type) bool {
 	return typ.Id == int32(types.T_varchar) || typ.Id == int32(types.T_char)
 }
 
+// functionalScalarFunctionEligible admits the eight scalar functions of this
+// increment — substring (with its substr/mid spellings), left, reverse, md5,
+// crc32, hex, length and concat — by resolved identity and argument shape,
+// never by SQL spelling alone. The bound node's encoded overload ID must
+// decode to one of the eight function IDs with the arity, argument-domain and
+// result predicates below, and must re-resolve in the registry to the same
+// encoded overload ID with the same return type, permitting only the
+// constant-value-refined narrowing of the type-level width envelope
+// (verifyFunctionalIndexOverload). Argument-node structure is validated by
+// the caller's recursive walk.
+func functionalScalarFunctionEligible(expr *Expr) bool {
+	if expr == nil || expr.Typ.ValidateCollation() != nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+	textResult := functionalTextType(expr.Typ)
+	integerResult := types.T(expr.Typ.Id).IsInteger()
+	textArg := func(arg *Expr) bool { return arg != nil && functionalTextType(arg.Typ) }
+	integerArg := func(arg *Expr) bool { return arg != nil && types.T(arg.Typ.Id).IsInteger() }
+	switch fid {
+	case function.SUBSTRING:
+		// Position/count arguments are integer plan types (integer literals,
+		// or signed integer columns through the walk's widening-cast rule).
+		if !textResult || len(fn.Args) < 2 || len(fn.Args) > 3 || !textArg(fn.Args[0]) {
+			return false
+		}
+		for _, arg := range fn.Args[1:] {
+			if !integerArg(arg) {
+				return false
+			}
+		}
+	case function.LEFT:
+		if !textResult || len(fn.Args) != 2 || !textArg(fn.Args[0]) || !integerArg(fn.Args[1]) {
+			return false
+		}
+	case function.REVERSE, function.MD5, function.HEX:
+		if !textResult || len(fn.Args) != 1 || !textArg(fn.Args[0]) {
+			return false
+		}
+	case function.LENGTH, function.CRC32:
+		// Integer results: uint64 (crc32) and int64 (length) keys.
+		if !integerResult || len(fn.Args) != 1 || !textArg(fn.Args[0]) {
+			return false
+		}
+	case function.CONCAT:
+		// Every argument must already be in the text domain: a formatted
+		// scalar argument owns a conversion the recursive walk rejects.
+		if !textResult || len(fn.Args) == 0 {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if !textArg(arg) {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+	// The registry re-derivation reproduces the encoded overload and the
+	// type-level return envelope from the argument types; substring/left can
+	// carry a constant-value-refined width that narrows the envelope, so the
+	// scalar path permits the refined width (see
+	// verifyFunctionalIndexOverload).
+	return verifyFunctionalIndexOverload(expr, fn.Func.ObjName, fid, overload, true)
+}
+
+// functionalImplicitCharWidenCast recognizes the one implicit argument
+// adapter the eight scalar functions can require: md5 has no CHAR overload,
+// so the binder inserts a flag-clear ordinary CAST from the T_char column
+// into the matcher's fixed T_varchar envelope of MaxVarcharLen with the
+// source charset retained — a pure, non-truncating widening whose execution
+// path copies the bytes unchanged. A user-explicit or width-declaring cast
+// never matches this rule and stays excluded; the recursive walk validates
+// the column source itself.
+func functionalImplicitCharWidenCast(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.SyntaxExplicitCast || len(fn.Args) != 2 ||
+		fn.Func.Obj != int64(function.CAST)<<32 {
+		return false
+	}
+	from, to := fn.Args[0], expr.Typ
+	if from == nil || from.GetCol() == nil || from.GetLit() != nil ||
+		from.Typ.Id != int32(types.T_char) || to.Id != int32(types.T_varchar) ||
+		to.Width != int32(types.MaxVarcharLen) || from.Typ.Charset != to.Charset {
+		return false
+	}
+	return fn.Args[1].GetT() != nil && sameFunctionalValueType(to, fn.Args[1].Typ)
+}
+
+// functionalSessionDependentConversion reports whether a fail-closed
+// eligibility miss contains a conversion whose implementation demonstrably
+// reads session state, and is therefore reported with the retained
+// session-independence message rather than as rejection-by-coverage:
+//   - casts whose source or target plan type is TIMESTAMP — those conversion
+//     paths read the session time zone;
+//   - string-to-float32/64 casts — they read the session native-compatibility
+//     mode;
+//   - string-to-DATETIME/DATE/TIME casts — the parsing paths apply the
+//     session zero-date SQL-mode policy and TIME_TRUNCATE_FRACTIONAL.
+//
+// Deterministic temporal conversions such as DATE-to-CHAR stay outside this
+// audit and report rejection-by-coverage.
+func functionalSessionDependentConversion(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *pb.Expr_F:
+		if e.F == nil {
+			return false
+		}
+		if e.F.Func != nil {
+			if fid, _ := function.DecodeOverloadID(e.F.Func.Obj); fid == function.CAST && len(e.F.Args) == 2 {
+				from, to := types.T(e.F.Args[0].Typ.Id), types.T(expr.Typ.Id)
+				if from == types.T_timestamp || to == types.T_timestamp {
+					return true
+				}
+				if from.IsMySQLString() {
+					// typeswitch:partial the audited session-dependent string-parse targets are exactly the design-reviewed float32/64 boundary (func_cast.go reads the native-compatibility mode); bf16/float16/float8/float4 cast targets deliberately report rejection-by-coverage
+					switch to {
+					case types.T_float32, types.T_float64, types.T_datetime, types.T_date, types.T_time:
+						return true
+					}
+				}
+			}
+		}
+		for _, arg := range e.F.Args {
+			if functionalSessionDependentConversion(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // lowerFunctionalIndex lowers each expression to an index-owned generated value. Ordinary
 // generated-column writes and secondary-index maintenance then share exactly
 // the same row expression for backfill and future DML.
+// functionalIndexErrorExprText renders the authored key expression for the
+// category-3 diagnostic message. It preserves the authored spelling -
+// identifiers, function names, string literals in single quotes, letter case
+// - and joins expression-list items with "," (no space) so the message keeps
+// the authored word shape of multi-argument calls. This is diagnostic-only:
+// persisted SQL keeps the standard ", " separator because it is re-parsed.
+func functionalIndexErrorExprText(expr tree.Expr) string {
+	return tree.StringWithOpts(expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithCompactArgLists())
+}
+
 func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Index) (*tree.Index, error) {
 	if !hasFunctionalKey(index.KeyParts) {
 		return index, nil
@@ -240,15 +426,38 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 		bindCtx := ddlExpressionContext(ctx, ctx.GetContext())
 		expr, err := NewGeneratedColBinder(bindCtx, names, typs).bindPersistedExpr(key.Expr, 0, false)
 		if err != nil {
+			// A bind-stage resolution failure - unknown function, wrong
+			// arity, no matching signature - never reaches the eligibility
+			// walk, and the raw registry error (`invalid argument function
+			// substring, bad value [VARCHAR]`) misreports it. These are
+			// coverage rejections per the approved error model, so route
+			// them into the category-3 message naming the raw text. Other
+			// bind errors keep their native messages: the retained MEDIUMINT
+			// NYI cast target, parse errors, and identifier errors are not
+			// resolution failures.
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidArg) {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "functional index expression is not supported: %s",
+					functionalIndexErrorExprText(key.Expr))
+			}
+			return nil, err
+		}
+		// Genuinely non-deterministic functions are reported before
+		// eligibility with the generated-column message that names the
+		// offending function; the walk does not evaluate volatility.
+		if err := checkExprForVolatileFunc(bindCtx, expr); err != nil {
 			return nil, err
 		}
 		if !functionalExpressionEligible(expr, table.Cols, make(map[int32]bool)) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
+			// Three-way diagnostics: demonstrably session-dependent
+			// conversions keep the session-independence message, everything
+			// else is rejection-by-coverage naming the expression.
+			if functionalSessionDependentConversion(expr) {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index expression must have session-independent semantics")
+			}
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "functional index expression is not supported: %s",
+				functionalIndexErrorExprText(key.Expr))
 		}
 		if err := preservePersistedFormatCompatibility(bindCtx, expr); err != nil {
-			return nil, err
-		}
-		if err := checkExprForVolatileFunc(bindCtx, expr); err != nil {
 			return nil, err
 		}
 		if err := checkGeneratedExprReferences(bindCtx, expr, name, table.Cols, make(map[int32]bool)); err != nil {
@@ -257,9 +466,13 @@ func lowerFunctionalIndex(ctx CompilerContext, table *TableDef, index *tree.Inde
 		if !types.T(expr.Typ.Id).IsInteger() && !functionalTextType(expr.Typ) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "functional index result type")
 		}
+		origin := renderFunctionalIndexOriginString(key.Expr)
+		if err := verifyFunctionalIndexOriginRoundTrip(ctx.GetContext(), bindCtx, table, names, typs, expr, origin); err != nil {
+			return nil, err
+		}
 		col := &ColDef{Name: name, OriginName: name, Hidden: true, Typ: expr.Typ,
 			Alg: pb.CompressType_Lz4, Default: &pb.Default{NullAbility: true},
-			GeneratedCol: &pb.GeneratedCol{Expr: expr, OriginString: tree.StringWithOpts(key.Expr, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithModeIndependentStringLiterals()), IsStored: false}}
+			GeneratedCol: &pb.GeneratedCol{Expr: expr, OriginString: origin, IsStored: false}}
 		replacement := &tree.KeyPart{ColName: tree.NewUnresolvedColName(name)}
 		if err := checkIndexColumnSupportability(ctx.GetContext(), col, replacement, "index"); err != nil {
 			return nil, err
@@ -337,10 +550,11 @@ func renameFunctionalColumnDependencies(ctx context.Context, table *TableDef, ol
 	if err := validateFunctionalTable(ctx, table); err != nil {
 		return err
 	}
+	oldNames := make([]string, len(table.Cols))
 	names := make([]string, len(table.Cols))
 	types := make([]Type, len(table.Cols))
 	for i, col := range table.Cols {
-		names[i], types[i] = col.Name, col.Typ
+		oldNames[i], names[i], types[i] = col.Name, col.Name, col.Typ
 		if strings.EqualFold(col.Name, oldName) {
 			names[i] = strings.ToLower(newName)
 		}
@@ -357,6 +571,13 @@ func renameFunctionalColumnDependencies(ctx context.Context, table *TableDef, ol
 		if err != nil {
 			return err
 		}
+		// The rewritten persisted text is the artifact every later replay
+		// rebuilds from: require it to re-bind the rewritten tree's hidden
+		// key type and to keep the binding class of the text it replaces
+		// before the ALTER can commit.
+		if err := verifyFunctionalIndexRewriteRoundTrip(ctx, table, oldNames, names, types, col.GeneratedCol.OriginString, generated); err != nil {
+			return err
+		}
 		rewritten[i] = generated
 	}
 	for i, generated := range rewritten {
@@ -365,8 +586,10 @@ func renameFunctionalColumnDependencies(ctx context.Context, table *TableDef, ol
 	return nil
 }
 
-func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names []string, types []Type, oldName, newName string) (*pb.GeneratedCol, error) {
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+col.GeneratedCol.OriginString, 1)
+// parseFunctionalIndexOriginString parses persisted functional-expression SQL
+// in its select-statement storage form and returns the rebuilt expression.
+func parseFunctionalIndexOriginString(ctx context.Context, origin string) (tree.Expr, error) {
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select "+origin, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -379,16 +602,71 @@ func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names [
 	if !ok || len(clause.Exprs) != 1 {
 		return nil, moerr.NewInvalidInput(ctx, "invalid functional index expression")
 	}
-	visitor := &renameCheckColumnVisitor{oldName: oldName, newName: newName}
-	expr, ok := clause.Exprs[0].Expr.Accept(visitor)
-	if !ok || !visitor.changed {
-		return nil, moerr.NewInvalidInput(ctx, "functional index source cannot be renamed")
+	return clause.Exprs[0].Expr, nil
+}
+
+// verifyFunctionalIndexRewriteRoundTrip mirrors the authoring assertion at the
+// identifier-rewrite seam. The freshly rewritten persisted text must re-bind
+// against the post-rename schema and carry the rewritten tree's hidden key
+// plan type exactly — the same OID, width and scale, with no tolerance. The
+// rewrite must not degrade the class it was handed: the rewritten text and
+// the text it replaces must re-bind equal types, and a text whose pre-rename
+// re-bind admitted under the walk must still re-admit. Older binaries'
+// widthless texts do not re-admit before the rewrite either; their rename
+// keeps base behavior, so the ALTER fails only when the rewrite itself would
+// degrade the persisted text every later replay rebuilds from.
+func verifyFunctionalIndexRewriteRoundTrip(ctx context.Context, table *TableDef, oldNames, names []string, types []Type, previous string, generated *pb.GeneratedCol) error {
+	rebuilt, err := parseFunctionalIndexOriginString(ctx, generated.OriginString)
+	if err != nil {
+		return err
 	}
-	bound, err := NewGeneratedColBinder(ctx, names, types).BindExpr(expr, 0, true)
+	rebound, err := NewGeneratedColBinder(ctx, names, types).BindExpr(rebuilt, 0, true)
+	if err != nil {
+		return err
+	}
+	if rebound.Typ.Id != generated.Expr.Typ.Id ||
+		rebound.Typ.Width != generated.Expr.Typ.Width ||
+		rebound.Typ.Scale != generated.Expr.Typ.Scale {
+		return moerr.NewInvalidInput(ctx, "cannot rewrite functional index expression")
+	}
+	prior, err := parseFunctionalIndexOriginString(ctx, previous)
+	if err != nil {
+		return err
+	}
+	priorBound, err := NewGeneratedColBinder(ctx, oldNames, types).BindExpr(prior, 0, true)
+	if err != nil {
+		return err
+	}
+	if rebound.Typ.Id != priorBound.Typ.Id ||
+		rebound.Typ.Width != priorBound.Typ.Width ||
+		rebound.Typ.Scale != priorBound.Typ.Scale {
+		return moerr.NewInvalidInput(ctx, "cannot rewrite functional index expression")
+	}
+	if functionalExpressionEligible(priorBound, table.Cols, make(map[int32]bool)) &&
+		!functionalExpressionEligible(rebound, table.Cols, make(map[int32]bool)) {
+		return moerr.NewInvalidInput(ctx, "cannot rewrite functional index expression")
+	}
+	return nil
+}
+
+func rewriteFunctionalColumnDependency(ctx context.Context, col *ColDef, names []string, types []Type, oldName, newName string) (*pb.GeneratedCol, error) {
+	expr, err := parseFunctionalIndexOriginString(ctx, col.GeneratedCol.OriginString)
 	if err != nil {
 		return nil, err
 	}
-	return &pb.GeneratedCol{Expr: bound, OriginString: tree.StringWithOpts(expr, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString(), tree.WithModeIndependentStringLiterals()), IsStored: false}, nil
+	visitor := &renameCheckColumnVisitor{oldName: oldName, newName: newName}
+	rewritten, ok := expr.Accept(visitor)
+	if !ok || !visitor.changed {
+		return nil, moerr.NewInvalidInput(ctx, "functional index source cannot be renamed")
+	}
+	bound, err := NewGeneratedColBinder(ctx, names, types).BindExpr(rewritten, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	// The width-preserving literal serialization and the CAST-spelling
+	// canonicalization are shared with the lowering render, so a literal's
+	// persisted spelling class survives parsing and identifier rewriting.
+	return &pb.GeneratedCol{Expr: bound, OriginString: renderFunctionalIndexOriginString(rewritten), IsStored: false}, nil
 }
 
 func sameFunctionalValueType(a, b Type) bool {
@@ -406,6 +684,131 @@ func sameFunctionalValueType(a, b Type) bool {
 	return proto.Equal(&a, &b)
 }
 
+// renderFunctionalIndexOriginString is the single serialization shared by
+// every producer of persisted functional-expression SQL: the lowering render
+// and the identifier-rewrite render of RENAME COLUMN / renaming CHANGE
+// COLUMN. It runs after parsing and identifier rewriting, keeps
+// backslash-containing text literals in the width-preserving hex-introducer
+// spelling (the persisted-SQL formatting already provided for view
+// definitions) and canonicalizes the two LONGLONG-family CAST spellings whose
+// textual rendering would otherwise re-bind a narrower target.
+func renderFunctionalIndexOriginString(expr tree.Expr) string {
+	return tree.StringWithOpts(canonicalizeFunctionalIndexCastSpellings(expr), dialect.MYSQL, tree.WithViewDefinition())
+}
+
+// canonicalizeFunctionalIndexCastSpellings rewrites, copy-on-write, the two
+// CAST targets that bind int64/uint64 but render a narrowed textual target:
+// `AS SIGNED INTEGER` persists as `AS SIGNED` and `AS UNSIGNED INTEGER` as
+// `AS UNSIGNED` — the same bound targets in a lossless rendering. Every other
+// CAST head renders verbatim. On a miss the input tree is returned unchanged;
+// the lowering round-trip assertion is the fail-closed backstop for any
+// future spelling this rule does not cover.
+func canonicalizeFunctionalIndexCastSpellings(expr tree.Expr) tree.Expr {
+	switch e := expr.(type) {
+	case *tree.FuncExpr:
+		args, changed := canonicalizeFunctionalIndexCastArgs(e.Exprs)
+		if !changed {
+			return e
+		}
+		rewrite := *e
+		rewrite.Exprs = args
+		return &rewrite
+	case *tree.CastExpr:
+		inner := canonicalizeFunctionalIndexCastSpellings(e.Expr)
+		target, canonicalized := canonicalizeFunctionalIndexCastTarget(e.Type)
+		if inner == e.Expr && !canonicalized {
+			return e
+		}
+		rewrite := *e
+		rewrite.Expr = inner
+		rewrite.Type = target
+		return &rewrite
+	case *tree.BinaryExpr:
+		left := canonicalizeFunctionalIndexCastSpellings(e.Left)
+		right := canonicalizeFunctionalIndexCastSpellings(e.Right)
+		if left == e.Left && right == e.Right {
+			return e
+		}
+		rewrite := *e
+		rewrite.Left, rewrite.Right = left, right
+		return &rewrite
+	case *tree.UnaryExpr:
+		inner := canonicalizeFunctionalIndexCastSpellings(e.Expr)
+		if inner == e.Expr {
+			return e
+		}
+		rewrite := *e
+		rewrite.Expr = inner
+		return &rewrite
+	case *tree.ParenExpr:
+		inner := canonicalizeFunctionalIndexCastSpellings(e.Expr)
+		if inner == e.Expr {
+			return e
+		}
+		rewrite := *e
+		rewrite.Expr = inner
+		return &rewrite
+	default:
+		return expr
+	}
+}
+
+func canonicalizeFunctionalIndexCastArgs(exprs tree.Exprs) (tree.Exprs, bool) {
+	rewritten := make(tree.Exprs, len(exprs))
+	changed := false
+	for i, arg := range exprs {
+		rewritten[i] = canonicalizeFunctionalIndexCastSpellings(arg)
+		if rewritten[i] != arg {
+			changed = true
+		}
+	}
+	return rewritten, changed
+}
+
+// canonicalizeFunctionalIndexCastTarget narrows the SIGNED/UNSIGNED family's
+// LONGLONGInternalGrammar spelling recorded from the trailing INTEGER token
+// to the bare family spelling of the identical bound target.
+func canonicalizeFunctionalIndexCastTarget(target tree.ResolvableTypeReference) (tree.ResolvableTypeReference, bool) {
+	typ, ok := target.(*tree.T)
+	if !ok || typ.InternalType.Family != tree.IntFamily ||
+		typ.InternalType.Oid != uint32(defines.MYSQL_TYPE_LONGLONG) ||
+		typ.InternalType.Width != 64 ||
+		!strings.EqualFold(typ.InternalType.FamilyString, "integer") {
+		return target, false
+	}
+	rewrite := *typ
+	if rewrite.InternalType.Unsigned {
+		rewrite.InternalType.FamilyString = ""
+	} else {
+		rewrite.InternalType.FamilyString = "signed"
+	}
+	return &rewrite, true
+}
+
+// verifyFunctionalIndexOriginRoundTrip re-parses and re-binds the rendered
+// persistence text before the authoring DDL is accepted: the re-bound
+// expression must re-admit under the eligibility walk and carry the authored
+// hidden key plan type exactly — the same OID, width and scale, with no
+// tolerance. A diverging rendering fails the DDL fail-closed instead of
+// persisting a replay-lossy text.
+func verifyFunctionalIndexOriginRoundTrip(ctx, bindCtx context.Context, table *TableDef, names []string, typs []Type, authored *Expr, origin string) error {
+	rebuilt, err := parseFunctionalIndexOriginString(ctx, origin)
+	if err != nil {
+		return err
+	}
+	rebound, err := NewGeneratedColBinder(bindCtx, names, typs).bindPersistedExpr(rebuilt, 0, false)
+	if err != nil {
+		return err
+	}
+	if !functionalExpressionEligible(rebound, table.Cols, make(map[int32]bool)) ||
+		rebound.Typ.Id != authored.Typ.Id ||
+		rebound.Typ.Width != authored.Typ.Width ||
+		rebound.Typ.Scale != authored.Typ.Scale {
+		return moerr.NewNotSupported(ctx, "functional index expression does not persist losslessly")
+	}
+	return nil
+}
+
 // addFunctionalIndexFilters supplies an indexable equality while retaining the
 // original predicate as a base-row residual. Matching is structural and typed;
 // it never uses algebraic equivalence or session-dependent evaluation.
@@ -419,7 +822,8 @@ func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
 			continue
 		}
 		for _, col := range functionalIndexColumns(node.TableDef, index) {
-			if col == nil || !functionalExpressionEligible(col.GeneratedCol.Expr, node.TableDef.Cols, make(map[int32]bool)) {
+			if col == nil || !functionalExpressionEligible(col.GeneratedCol.Expr, node.TableDef.Cols, make(map[int32]bool)) ||
+				!functionalHiddenKeyByteStable(col, node.TableDef.Cols) {
 				continue
 			}
 			var pos int32 = -1
@@ -461,6 +865,17 @@ func normalizeFunctionalExpression(expr *Expr, tag int32) bool {
 		return false
 	}
 	expr.AuxId, expr.Ndv, expr.Selectivity = 0, 0, 0
+	// The prepared_numeric pointer is sparse planner provenance -
+	// prepared-statement envelopes, runtime string-domain witnesses - and no
+	// executor evaluates it (remote_expr strips the witnesses before
+	// dispatch). Query binding annotates admitted substring/left keys with a
+	// string-domain source the DDL-side bind never carries, so clearing the
+	// provenance pointer on both comparison copies keeps the structural
+	// equality meaningful; a value-bearing difference can only come from the
+	// validated tree, which the eligibility walk and the pending proto.Equal
+	// still pin exactly. Value-bearing type metadata (width, scale, charset,
+	// padding) stays exact.
+	expr.PreparedNumeric = nil
 	// Provenance and inferred nullability do not change expression values.
 	// Keep value-bearing type metadata (width, scale, charset, padding) exact.
 	expr.Typ.Table = ""
@@ -475,7 +890,22 @@ func normalizeFunctionalExpression(expr *Expr, tag int32) bool {
 		col.RelPos = 0
 		col.Name = ""
 	}
+	if lit := expr.GetLit(); lit != nil && types.T(expr.Typ.Id).IsInteger() {
+		// string_source and literal_form are binder-syntax provenance
+		// encodings: the query-side numeric binder records value ownership
+		// explicitly on a folded negated constant while the DDL-side bind
+		// keeps the legacy zero, and the spelling class mirrors how the
+		// constant was authored. An integer literal's entire value is the
+		// constant under the pinned type, so clearing the encodings on the
+		// comparison copies cannot manufacture an equality the visibly
+		// pinned trees do not already have. The executed plans are never
+		// the normalized copies.
+		lit.StringSource, lit.LiteralForm = 0, 0
+	}
 	if f := expr.GetF(); f != nil {
+		if foldFunctionalIndexSignedConstant(expr) {
+			return true
+		}
 		for _, arg := range f.Args {
 			if !normalizeFunctionalExpression(arg, tag) {
 				return false
@@ -483,4 +913,84 @@ func normalizeFunctionalExpression(expr *Expr, tag int32) bool {
 		}
 	}
 	return true
+}
+
+// foldFunctionalIndexSignedConstant rewrites, in the comparison copy only, the
+// persisted binder's negative-integer-constant spelling `unary_minus(<lit>)`
+// into the folded literal the query-side bind produces, so the structural
+// comparison sees one spelling of the same constant. It admits exactly the
+// DDL-admitted shape: one non-null i64 literal argument under the identical
+// signed-integer result type. Every other unary-minus form is returned
+// unchanged and keeps failing the pending equality instead of being coerced.
+func foldFunctionalIndexSignedConstant(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "unary_minus" || len(fn.Args) != 1 {
+		return false
+	}
+	arg, lit := fn.Args[0], fn.Args[0].GetLit()
+	if lit == nil || lit.Isnull ||
+		!types.T(arg.Typ.Id).IsSignedInt() || !types.T(expr.Typ.Id).IsSignedInt() ||
+		arg.Typ.Id != expr.Typ.Id {
+		return false
+	}
+	i64, ok := lit.GetValue().(*pb.Literal_I64Val)
+	if !ok {
+		return false
+	}
+	expr.Expr = &pb.Expr_Lit{Lit: &pb.Literal{
+		Isnull: false,
+		Value:  &pb.Literal_I64Val{I64Val: -i64.I64Val},
+	}}
+	return true
+}
+
+// functionalHiddenKeyByteStable states the match-time-only rule for adding
+// the physical hidden-column equality: the hidden key must be an integer or
+// VARCHAR plan type — a T_char key is padded at scan time per reader session
+// by PAD_CHAR_TO_FULL_LENGTH — and the persisted expression must reference no
+// T_char column, recursively. Every other DDL-admitted index keeps its
+// base-row residual and matches through that residual alone, exactly like the
+// CHAR-keyed JSON text indexes.
+func functionalHiddenKeyByteStable(col *ColDef, cols []*ColDef) bool {
+	if col == nil || col.GeneratedCol == nil || col.GeneratedCol.Expr == nil {
+		return false
+	}
+	if col.Typ.Id != int32(types.T_varchar) && !types.T(col.Typ.Id).IsInteger() {
+		return false
+	}
+	return !functionalExprReferencesCharColumn(col.GeneratedCol.Expr, cols, make(map[int32]bool))
+}
+
+// functionalExprReferencesCharColumn walks a bound plan expression (and its
+// generated-column dependencies) for a T_char column reference. An unknown
+// or cycle-blocked reference is treated conservatively as a CHAR reference.
+func functionalExprReferencesCharColumn(expr *Expr, cols []*ColDef, visiting map[int32]bool) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *pb.Expr_Col:
+		pos := e.Col.ColPos
+		if e.Col.RelPos != 0 || pos < 0 || int(pos) >= len(cols) || visiting[pos] {
+			return true
+		}
+		col := cols[pos]
+		if col == nil || col.Typ.Id == int32(types.T_char) {
+			return true
+		}
+		if col.GeneratedCol != nil {
+			visiting[pos] = true
+			charRef := functionalExprReferencesCharColumn(col.GeneratedCol.Expr, cols, visiting)
+			delete(visiting, pos)
+			return charRef
+		}
+		return false
+	case *pb.Expr_F:
+		for _, arg := range e.F.Args {
+			if functionalExprReferencesCharColumn(arg, cols, visiting) {
+				return true
+			}
+		}
+	}
+	return false
 }

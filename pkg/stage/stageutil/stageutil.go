@@ -113,6 +113,9 @@ func runSql(proc *process.Process, sql string) (executor.Result, error) {
 }
 
 func StageLoadCatalog(proc *process.Process, stagename string) (s stage.StageDef, err error) {
+	if proc == nil || proc.Base == nil || proc.Base.StageCache == nil {
+		return stage.StageDef{}, moerr.NewInternalErrorNoCtx("stage catalog lookup requires an initialized process")
+	}
 
 	// Stage grammar ident.Compare() always folds names, independently of the
 	// database/table case policy. Use that same owner for URI/cache identity.

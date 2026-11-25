@@ -140,6 +140,16 @@ load data infile {'filepath'='$resources/parquet/ts_no_tz_test.parquet', 'format
 select * from ts_test;
 drop table ts_test;
 
+create table ts_test_ctl(id bigint, v datetime);
+insert into ts_test_ctl values (1, '2023-12-31 23:59:59.999');
+select * from ts_test_ctl;
+set @ts_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+insert into ts_test_ctl values (2, '2023-12-31 23:59:59.999');
+select * from ts_test_ctl;
+set session sql_mode = @ts_saved_sql_mode;
+drop table ts_test_ctl;
+
 -- compressed file load
 drop table if exists none_compression;
 CREATE TABLE none_compression (

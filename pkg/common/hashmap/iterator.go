@@ -52,27 +52,6 @@ func validateIteratorVectors(
 	return nil
 }
 
-func hasGroupingInRange(vecs []*vector.Vector, start, count int) bool {
-	end := uint64(start + count)
-	for _, vec := range vecs {
-		if vec != nil && vec.GetGrouping().GetBitmap().CountRange(
-			uint64(start), end,
-		) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func rowHasGrouping(vecs []*vector.Vector, row int) bool {
-	for _, vec := range vecs {
-		if vec.GetGrouping().Contains(uint64(row)) {
-			return true
-		}
-	}
-	return false
-}
-
 func rowHasNull(vecs []*vector.Vector, row int) bool {
 	for _, vec := range vecs {
 		if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
@@ -106,15 +85,15 @@ func markNonMatchingNaNs(
 			oid != types.T_array_bf16 && oid != types.T_array_float16 {
 			continue
 		}
+
 		nulls := vec.GetNulls()
-		grouping := vec.GetGrouping()
 		isConst := vec.IsConst()
 		switch oid {
 		case types.T_float32:
 			values := vector.MustFixedColNoTypeCheck[float32](vec)
 			for i := 0; i < count; i++ {
 				row := start + i
-				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+				if nulls.Contains(uint64(row)) {
 					continue
 				}
 				valueRow := row
@@ -131,7 +110,7 @@ func markNonMatchingNaNs(
 			values := vector.MustFixedColNoTypeCheck[float64](vec)
 			for i := 0; i < count; i++ {
 				row := start + i
-				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+				if nulls.Contains(uint64(row)) {
 					continue
 				}
 				valueRow := row
@@ -148,7 +127,7 @@ func markNonMatchingNaNs(
 			types.T_array_bf16, types.T_array_float16:
 			for i := 0; i < count; i++ {
 				row := start + i
-				if nulls.Contains(uint64(row)) || grouping.Contains(uint64(row)) {
+				if nulls.Contains(uint64(row)) {
 					continue
 				}
 				valueRow := row
@@ -403,15 +382,6 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 		finishNonMatchingKeys(
 			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching,
 		)
-	}
-	if !itr.mp.hasNull && !itr.mp.groupingAware &&
-		hasGroupingInRange(vecs, start, count) {
-		for i := 0; i < count; i++ {
-			if rowHasGrouping(vecs, start+i) {
-				itr.values[i] = 0
-				itr.zValues[i] = 0
-			}
-		}
 	}
 	return itr.values[:count], itr.zValues[:count], nil
 }
@@ -754,14 +724,6 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 		finishNonMatchingKeys(
 			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching,
 		)
-	}
-	if hasGroupingInRange(vecs, start, count) {
-		for i := 0; i < count; i++ {
-			if rowHasGrouping(vecs, start+i) {
-				itr.values[i] = 0
-				itr.zValues[i] = 0
-			}
-		}
 	}
 	return itr.values[:count], itr.zValues[:count], nil
 }

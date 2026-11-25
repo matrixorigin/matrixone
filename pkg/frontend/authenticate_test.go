@@ -156,6 +156,9 @@ func TestGetTenantInfo(t *testing.T) {
 			{"tenant1#    #r1", "{account tenant1#    #r1 -- 0#0#0}", false},
 			{"     # #r1", "{account      # #r1 -- 0#0#0}", false},
 			{"   tenant1   #   u1   #   r1    ", "{account    tenant1   #   u1   #   r1     -- 0#0#0}", false},
+			{"sys:internal:moadmin", "{account sys:internal:moadmin -- 0:0:0}", false},
+			// a ?k:v connection-attribute suffix is stripped from the user string
+			{"sys:internal:moadmin?k:v", "{account sys:internal:moadmin -- 0:0:0}", false},
 		}
 
 		for _, arg := range args {
@@ -6322,16 +6325,22 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 	)
 
 	for _, tc := range []struct {
-		name     string
-		viewPath []*plan.ViewStep
+		name           string
+		viewPath       []*plan.ViewStep
+		reservedPrefix bool
 	}{
 		{name: "direct table"},
+		{name: "reserved prefix direct table", reservedPrefix: true},
 		{
 			name:     "view",
 			viewPath: []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			objectName := tableName
+			if tc.reservedPrefix {
+				objectName = catalog.IndexTableNamePrefix + objectName
+			}
 			p := &plan2.Plan{
 				Plan: &plan2.Plan_Query{
 					Query: &plan2.Query{
@@ -6341,7 +6350,7 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 								NodeType: plan.Node_EXTERNAL_SCAN,
 								ObjRef: &plan2.ObjectRef{
 									SchemaName: dbName,
-									ObjName:    tableName,
+									ObjName:    objectName,
 								},
 								ExternScan: &plan.ExternScan{
 									Type: int32(plan.ExternType_MONGODB_TB),
@@ -6364,28 +6373,10 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
 			require.Equal(t, objectTypeTable, arr[0].objType)
 			require.Equal(t, dbName, arr[0].databaseName)
-			require.Equal(t, tableName, arr[0].tableName)
+			require.Equal(t, objectName, arr[0].tableName)
 			require.Equal(t, tc.viewPath, arr[0].viewPath)
 		})
 	}
-}
-
-func TestMongoDBExternalTableScanDetectionExcludesOtherExternalScans(t *testing.T) {
-	for _, externType := range []plan.ExternType{
-		plan.ExternType_LOAD,
-		plan.ExternType_EXTERNAL_TB,
-		plan.ExternType_ICEBERG_TB,
-		plan.ExternType_RESULT_SCAN,
-	} {
-		node := &plan.Node{
-			NodeType:   plan.Node_EXTERNAL_SCAN,
-			ExternScan: &plan.ExternScan{Type: int32(externType)},
-		}
-		require.False(t, isMongoDBExternalTableScan(node), externType.String())
-	}
-	require.False(t, isMongoDBExternalTableScan(nil))
-	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_EXTERNAL_SCAN}))
-	require.False(t, isMongoDBExternalTableScan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}))
 }
 
 func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
@@ -6402,10 +6393,13 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 		viewPath       []*plan.ViewStep
 		tableSelect    bool
 		addRevokedView bool
+		reservedPrefix bool
 		want           bool
 	}{
 		{name: "table select revoked"},
 		{name: "table select granted", tableSelect: true, want: true},
+		{name: "reserved prefix table select revoked", reservedPrefix: true},
+		{name: "reserved prefix table select granted", reservedPrefix: true, tableSelect: true, want: true},
 		{
 			name:           "view select revoked",
 			viewPath:       []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
@@ -6414,6 +6408,10 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			objectName := tableName
+			if tc.reservedPrefix {
+				objectName = catalog.IndexTableNamePrefix + objectName
+			}
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
@@ -6431,7 +6429,7 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 			sql2result := makeSql2ExecResult2(userID, [][]interface{}{
 				{roleID, false},
 			}, nil, nil, nil, nil, nil, nil, nil)
-			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, tableName, map[PrivilegeType]bool{
+			addTablePrivilegeResultsForRole(t, sql2result, roleID, dbName, objectName, map[PrivilegeType]bool{
 				PrivilegeTypeSelect: tc.tableSelect,
 			})
 			if tc.addRevokedView {
@@ -6450,7 +6448,7 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 						NodeType: plan.Node_EXTERNAL_SCAN,
 						ObjRef: &plan.ObjectRef{
 							SchemaName: dbName,
-							ObjName:    tableName,
+							ObjName:    objectName,
 						},
 						ExternScan: &plan.ExternScan{
 							Type:        int32(plan.ExternType_MONGODB_TB),
@@ -7085,16 +7083,23 @@ type namedWindowAuthorizationCompilerContext struct {
 	*plan2.MockCompilerContext
 	mongoObject *plan.ObjectRef
 	mongoTable  *plan.TableDef
+	csvObject   *plan.ObjectRef
+	csvTable    *plan.TableDef
 }
 
 func (c *namedWindowAuthorizationCompilerContext) DatabaseExists(name string, snapshot *plan2.Snapshot) bool {
-	return name == "mongo_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
+	return name == "mongo_window_auth" || name == "csv_window_auth" || c.MockCompilerContext.DatabaseExists(name, snapshot)
 }
 
 func (c *namedWindowAuthorizationCompilerContext) Resolve(dbName, tableName string, snapshot *plan2.Snapshot, borrowOutput *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
 	borrowOutput.Reset()
-	if dbName == "mongo_window_auth" && tableName == "events" {
-		return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
+	if tableName == "events" {
+		switch dbName {
+		case "mongo_window_auth":
+			return plan2.DeepCopyObjectRef(c.mongoObject), plan2.DeepCopyTableDef(c.mongoTable, true), nil
+		case "csv_window_auth":
+			return plan2.DeepCopyObjectRef(c.csvObject), plan2.DeepCopyTableDef(c.csvTable, true), nil
+		}
 	}
 	return c.MockCompilerContext.Resolve(dbName, tableName, snapshot, nil)
 }
@@ -7130,15 +7135,24 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 				Createsql: sqlmongodb.BuildCreateSQLEnvelope(mongoMapping),
 				Cols:      []*plan.ColDef{{Name: "event_id", Typ: plan.Type{Id: int32(types.T_int64)}}},
 			},
+			csvObject: &plan.ObjectRef{
+				Db: 3, Obj: 4, SchemaName: "csv_window_auth", ObjName: "events",
+			},
+			csvTable: &plan.TableDef{
+				Name: "events", DbName: "csv_window_auth", DbId: 3, TblId: 4,
+				TableType: catalog.SystemExternalRel,
+				Cols:      []*plan.ColDef{{Name: "event_id", Typ: plan.Type{Id: int32(types.T_int64)}}},
+			},
 		}
 	}
 
 	tests := []struct {
-		name      string
-		sql       string
-		database  string
-		table     string
-		grantScan bool
+		name         string
+		sql          string
+		database     string
+		table        string
+		grantScan    bool
+		resultTables string
 	}{
 		{
 			name:     "unused MongoDB definition is rejected without select",
@@ -7152,8 +7166,23 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 		},
 		{
 			name:     "used MongoDB window control succeeds with select",
-			database: "mongo_window_auth", table: "events", grantScan: true,
+			database: "mongo_window_auth", table: "events", grantScan: true, resultTables: "nation, events",
 			sql: "select sum(n_nationkey) over w from nation window w as (order by (select event_id from mongo_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused CSV definition is rejected without select",
+			database: "csv_window_auth", table: "events",
+			sql: "select 1 from nation window w as (order by (select event_id from csv_window_auth.events limit 1))",
+		},
+		{
+			name:     "unused CSV definition succeeds with select",
+			database: "csv_window_auth", table: "events", grantScan: true,
+			sql: "select 1 from nation window w as (order by (select event_id from csv_window_auth.events limit 1))",
+		},
+		{
+			name:     "used CSV window control succeeds with select",
+			database: "csv_window_auth", table: "events", grantScan: true, resultTables: "nation, events",
+			sql: "select sum(n_nationkey) over w from nation window w as (order by (select event_id from csv_window_auth.events limit 1))",
 		},
 		{
 			name:     "unused table_changes definition is rejected without select",
@@ -7178,6 +7207,11 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 			require.NoError(t, err)
 			queryPlan, err := plan2.BuildPlan(newCompilerContext(), stmt, false, nil)
 			require.NoError(t, err)
+			expectedResultTables := tc.resultTables
+			if expectedResultTables == "" {
+				expectedResultTables = "nation"
+			}
+			require.Equal(t, expectedResultTables, getTablesFromPlan(queryPlan), "validation-only carriers must not add result-table names")
 
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
@@ -7567,6 +7601,18 @@ func addViewPrivilegeResultsForRole(
 		levels, err := getPrivilegeLevelsOfObjectType(context.TODO(), entry.objType)
 		require.NoError(t, err)
 		for _, level := range levels {
+			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
+			require.NoError(t, err)
+			rows := [][]interface{}{}
+			if allowed[privType] {
+				rows = [][]interface{}{{entry.privilegeId, true}}
+			}
+			sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+		}
+		// View enforcement also probes the exact-relation table-class grants
+		// written with the table spelling, so key that space too.
+		entry.objType = objectTypeTable
+		for _, level := range exactRelationPrivilegeLevels {
 			sql, err := getSqlForPrivilege(context.TODO(), roleID, entry, level)
 			require.NoError(t, err)
 			rows := [][]interface{}{}
@@ -9312,6 +9358,40 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 		})
 	}
 
+	t.Run("index prefixed external table uses locked catalog metadata", func(t *testing.T) {
+		const tableName = "__mo_index_events"
+		grantSQL, err := lockedGrantRelationSQL(ctx, "d", tableName, 42)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			name, kind, extra string
+			wantErr           bool
+		}{
+			{name: "external table", kind: catalog.SystemExternalRel},
+			{name: "physical index", kind: catalog.SystemOrdinaryRel, wantErr: true},
+			{name: "external relation with physical index marker", kind: catalog.SystemExternalRel,
+				extra: string(api.MustMarshalTblExtra(&api.SchemaExtra{FeatureFlag: features.IndexTable})), wantErr: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				bh := &backgroundExecTest{}
+				bh.init()
+				bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+				bh.sql2result[lockedTableSQL(tableName)] = newMrsForCheckDatabaseTable([][]interface{}{{int64(42)}})
+				bh.sql2result[grantSQL] = newMrsForLockedGrantRelation(42, tc.kind, tc.extra)
+
+				_, objectID, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
+					ctx, ses, bh, tree.OBJECT_TYPE_TABLE,
+					tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE, DbName: "d", TabName: tableName})
+				if tc.wantErr {
+					require.ErrorContains(t, err, "internal relation")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, int64(42), objectID)
+				}
+				require.Equal(t, []string{lockedDatabaseSQL("d"), lockedTableSQL(tableName), grantSQL}, bh.executedSQLs)
+			})
+		}
+	})
+
 	t.Run("renamed physical relation cannot receive an exact grant", func(t *testing.T) {
 		for _, tc := range []struct {
 			name, kind string
@@ -9359,6 +9439,12 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 	t.Run("hidden index relation cannot become an authorization object", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		tableName := catalog.IndexTableNamePrefix + "legacy"
+		grantSQL, grantErr := lockedGrantRelationSQL(ctx, "d", tableName, 42)
+		require.NoError(t, grantErr)
+		bh.sql2result[lockedDatabaseSQL("d")] = newMrsForCheckDatabase([][]interface{}{{int64(11)}})
+		bh.sql2result[lockedTableSQL(tableName)] = newMrsForCheckDatabaseTable([][]interface{}{{int64(42)}})
+		bh.sql2result[grantSQL] = newMrsForLockedGrantRelation(42, catalog.SystemIndexRel, "")
 		_, _, err := checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(
 			ctx,
 			ses,
@@ -9367,11 +9453,11 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 			tree.PrivilegeLevel{
 				Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
 				DbName:  "d",
-				TabName: catalog.IndexTableNamePrefix + "legacy",
+				TabName: tableName,
 			},
 		)
 		require.ErrorContains(t, err, "cannot grant privileges on internal relation")
-		require.Empty(t, bh.executedSQLs)
+		require.Equal(t, []string{lockedDatabaseSQL("d"), lockedTableSQL(tableName), grantSQL}, bh.executedSQLs)
 	})
 
 	for _, testCase := range []struct {
@@ -9950,6 +10036,220 @@ func Test_doRevokePrivilege(t *testing.T) {
 			registerLockedObjects(ctx, bh, dbName, tableName, true)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
+		}
+	})
+	convey.Convey("revoke on relation deletes both spellings and ALL clears every privilege row (issue #32444 challenge)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		dbName := "d"
+		tableName := "t"
+		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+
+		cases := []struct {
+			name    string
+			objTyp  tree.ObjectType
+			priv    tree.PrivilegeType
+			level   *tree.PrivilegeLevel
+			isView  bool
+			legacy  bool
+			wantAll bool
+		}{
+			{
+				name:   "all on table clears every relation privilege row",
+				objTyp: tree.OBJECT_TYPE_TABLE,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_ALL,
+				level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  dbName,
+					TabName: tableName,
+				},
+				isView:  false,
+				wantAll: true,
+			},
+			{
+				name:   "all on view clears every relation privilege row",
+				objTyp: tree.OBJECT_TYPE_VIEW,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_ALL,
+				level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  dbName,
+					TabName: tableName,
+				},
+				isView:  true,
+				wantAll: true,
+			},
+			{
+				name:   "select on table deletes both stored spellings",
+				objTyp: tree.OBJECT_TYPE_TABLE,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_SELECT,
+				level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  dbName,
+					TabName: tableName,
+				},
+				isView: false,
+			},
+			{
+				name:   "select on view deletes both stored spellings",
+				objTyp: tree.OBJECT_TYPE_VIEW,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_SELECT,
+				level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  dbName,
+					TabName: tableName,
+				},
+				isView: true,
+			},
+			{
+				name:   "unqualified select on table uses the relation delete too",
+				objTyp: tree.OBJECT_TYPE_TABLE,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_SELECT,
+				level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					TabName: tableName,
+				},
+				isView: false,
+			},
+			{
+				name:   "table wildcard all keeps the class-specific legacy delete",
+				objTyp: tree.OBJECT_TYPE_TABLE,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_ALL,
+				level: &tree.PrivilegeLevel{
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					DbName: dbName,
+				},
+				legacy: true,
+			},
+			{
+				name:   "view wildcard select keeps the class-specific legacy delete",
+				objTyp: tree.OBJECT_TYPE_VIEW,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_SELECT,
+				level: &tree.PrivilegeLevel{
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					DbName: dbName,
+				},
+				legacy: true,
+			},
+			{
+				name:   "star star all keeps the class-specific legacy delete",
+				objTyp: tree.OBJECT_TYPE_TABLE,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_ALL,
+				level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+				legacy: true,
+			},
+			{
+				name:   "all on account keeps the legacy exact-row delete",
+				objTyp: tree.OBJECT_TYPE_ACCOUNT,
+				priv:   tree.PRIVILEGE_TYPE_STATIC_ALL,
+				level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+				legacy: true,
+			},
+		}
+
+		for _, c := range cases {
+			stmt := &tree.RevokePrivilege{
+				Privileges: []*tree.Privilege{
+					{Type: c.priv},
+				},
+				ObjType: c.objTyp,
+				Level:   c.level,
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			}
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv, ctrl)
+			ses.SetDatabaseName("d")
+
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			for i, role := range stmt.Roles {
+				sql, _ := getSqlForRoleIdOfRole(context.TODO(), role.UserName)
+				mrs := newMrsForRoleIdOfRole([][]interface{}{
+					{i},
+				})
+				bh.sql2result[sql] = mrs
+			}
+
+			switch c.level.Level {
+			case tree.PRIVILEGE_LEVEL_TYPE_TABLE, tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
+				var sql string
+				if c.isView {
+					sql, _ = getSqlForCheckDatabaseView(ctx, dbName, tableName)
+				} else {
+					sql, _ = getSqlForCheckDatabaseTable(ctx, dbName, tableName)
+				}
+				mrs := newMrsForCheckDatabaseTable([][]interface{}{
+					{0},
+				})
+				bh.sql2result[sql] = mrs
+			case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
+				// the wildcard resolve executes the unlocked database id lookup
+				dbSQL, lookErr := getSqlForCheckDatabase(ctx, c.level.DbName)
+				convey.So(lookErr, convey.ShouldBeNil)
+				bh.sql2result[dbSQL] = newMrsForCheckDatabase([][]interface{}{
+					{0},
+				})
+			case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+			}
+
+			objType, err := convertAstObjectTypeToObjectType(ctx, stmt.ObjType)
+			convey.So(err, convey.ShouldBeNil)
+
+			privLevel, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
+			convey.So(err, convey.ShouldBeNil)
+
+			privType, err := convertAstPrivilegeTypeToPrivilegeType(ctx, stmt.Privileges[0].Type, stmt.ObjType)
+			convey.So(err, convey.ShouldBeNil)
+			sql := getSqlForCheckRoleHasPrivilege(0, objType, objId, int64(privType))
+			bh.sql2result[sql] = newMrsForCheckRoleHasPrivilege([][]interface{}{})
+
+			switch c.level.Level {
+			case tree.PRIVILEGE_LEVEL_TYPE_TABLE, tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
+				registerLockedObjects(ctx, bh, dbName, tableName, c.isView)
+			case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
+				// only the database row lock runs for a wildcard revoke
+				registerLockedObjects(ctx, bh, dbName, "", false)
+			}
+
+			before := len(bh.executedSQLs)
+			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
+			convey.So(err, convey.ShouldBeNil)
+
+			convey.So(len(bh.executedSQLs), convey.ShouldBeGreaterThan, before)
+			deleteSQL := bh.executedSQLs[len(bh.executedSQLs)-1]
+			switch {
+			case c.legacy:
+				expected := getSqlForDeleteRolePrivs(0, objType.String(), objId, int64(privType), privLevel.String())
+				convey.So(deleteSQL, convey.ShouldEqual, expected)
+				convey.So(strings.Contains(deleteSQL, `obj_type in ("table","view")`), convey.ShouldBeFalse)
+				convey.So(strings.Contains(deleteSQL, `privilege_level in ("d.t","t")`), convey.ShouldBeFalse)
+			case c.wantAll:
+				expected := getSqlForDeleteRelationAllRolePrivs(0, objId)
+				convey.So(deleteSQL, convey.ShouldEqual, expected)
+				convey.So(strings.Contains(deleteSQL, `obj_type in ("table","view")`), convey.ShouldBeTrue)
+				convey.So(strings.Contains(deleteSQL, `privilege_level in ("d.t","t")`), convey.ShouldBeTrue)
+				convey.So(strings.Contains(deleteSQL, "privilege_id"), convey.ShouldBeFalse)
+			default:
+				expected := getSqlForDeleteRelationRolePrivs(0, objId, int64(privType))
+				convey.So(deleteSQL, convey.ShouldEqual, expected)
+				convey.So(strings.Contains(deleteSQL, `obj_type in ("table","view")`), convey.ShouldBeTrue)
+				convey.So(strings.Contains(deleteSQL, `privilege_level in ("d.t","t")`), convey.ShouldBeTrue)
+				convey.So(strings.Contains(deleteSQL, fmt.Sprintf("privilege_id = %d", int64(privType))), convey.ShouldBeTrue)
+			}
 		}
 	})
 }
@@ -15113,6 +15413,138 @@ func TestGetSqlForScopedGrantOptionHelpers(t *testing.T) {
 	)
 }
 
+// TestVerifyViewPrivilegeForRoleHonorsTableSpellingGrant pins the enforcement
+// of a SELECT grant stored on a view through the table spelling ("grant ...
+// on table v" and the bare "grant ... on v"): the row is honored at the exact
+// relation identity only, while table-class wildcard scopes stay distinct
+// from view access.
+func TestVerifyViewPrivilegeForRoleHonorsTableSpellingGrant(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 10001)
+	const (
+		roleID   = int64(77)
+		dbName   = "db32444"
+		viewName = "vw_legacy"
+	)
+
+	viewSweepSQL := func(p PrivilegeType) (string, string, string) {
+		starStar := getSqlForCheckRoleHasTableLevelForStarStarWithObjType(objectTypeView, roleID, p)
+		dbStar, err := getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx, objectTypeView, roleID, p, dbName)
+		require.NoError(t, err)
+		viewExact, err := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeView, roleID, p, dbName, viewName)
+		require.NoError(t, err)
+		return starStar, dbStar, viewExact
+	}
+	tableExactSQL := func(p PrivilegeType) string {
+		sql, err := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleID, p, dbName, viewName)
+		require.NoError(t, err)
+		return sql
+	}
+	keyMiss := func(bh *backgroundExecTest, sql string) {
+		bh.sql2result[sql] = newMrsForRoleIdOfRole([][]interface{}{})
+	}
+
+	t.Run("table spelling grant on a view is enforced at the exact relation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		starStar, dbStar, viewExact := viewSweepSQL(PrivilegeTypeSelect)
+		tableExact := tableExactSQL(PrivilegeTypeSelect)
+		for _, sql := range []string{starStar, dbStar, viewExact} {
+			keyMiss(bh, sql)
+		}
+		bh.sql2result[tableExact] = newMrsForRoleIdOfRole([][]interface{}{{roleID}})
+
+		yes, err := verifyViewPrivilegeForRole(ctx, bh, nil, nil, roleID, PrivilegeTypeSelect, dbName, viewName, false, false)
+		require.NoError(t, err)
+		require.True(t, yes)
+		require.Equal(t, []string{starStar, dbStar, viewExact, tableExact}, bh.executedSQLs)
+	})
+
+	t.Run("view spelling grant keeps its own sweep", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		starStar, dbStar, viewExact := viewSweepSQL(PrivilegeTypeSelect)
+		tableExact := tableExactSQL(PrivilegeTypeSelect)
+		for _, sql := range []string{starStar, dbStar} {
+			keyMiss(bh, sql)
+		}
+		bh.sql2result[viewExact] = newMrsForRoleIdOfRole([][]interface{}{{roleID}})
+		keyMiss(bh, tableExact)
+
+		yes, err := verifyViewPrivilegeForRole(ctx, bh, nil, nil, roleID, PrivilegeTypeSelect, dbName, viewName, false, false)
+		require.NoError(t, err)
+		require.True(t, yes)
+		require.Equal(t, []string{starStar, dbStar, viewExact}, bh.executedSQLs)
+	})
+
+	t.Run("denial sweeps alternatives without table-class wildcard scopes", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		tableExactSQLs := make(map[string]struct{})
+		for _, p := range privilegeAlternatives(PrivilegeTypeSelect, false) {
+			starStar, dbStar, viewExact := viewSweepSQL(p)
+			tableExact := tableExactSQL(p)
+			for _, sql := range []string{starStar, dbStar, viewExact, tableExact} {
+				keyMiss(bh, sql)
+			}
+			tableExactSQLs[tableExact] = struct{}{}
+		}
+
+		yes, err := verifyViewPrivilegeForRole(ctx, bh, nil, nil, roleID, PrivilegeTypeSelect, dbName, viewName, false, false)
+		require.NoError(t, err)
+		require.False(t, yes)
+		require.Equal(t, 4*len(privilegeAlternatives(PrivilegeTypeSelect, false)), len(bh.executedSQLs))
+		for _, sql := range bh.executedSQLs {
+			if strings.Contains(sql, `obj_type = "table"`) {
+				require.Contains(t, tableExactSQLs, sql)
+			}
+		}
+	})
+}
+
+// TestVerifyViewPrivilegeForRoleTableSpellingGrantCachePromotion checks that a
+// legacy table-class grant is cached under the view class, so repeated checks
+// take the same cache path as a view-class grant.
+func TestVerifyViewPrivilegeForRoleTableSpellingGrantCachePromotion(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 10001)
+	const (
+		roleID   = int64(77)
+		dbName   = "db32444"
+		viewName = "vw_legacy"
+	)
+	starStar := getSqlForCheckRoleHasTableLevelForStarStarWithObjType(objectTypeView, roleID, PrivilegeTypeSelect)
+	dbStar, err := getSqlForCheckRoleHasTableLevelForDatabaseStarWithObjType(ctx, objectTypeView, roleID, PrivilegeTypeSelect, dbName)
+	require.NoError(t, err)
+	viewExact, err := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeView, roleID, PrivilegeTypeSelect, dbName, viewName)
+	require.NoError(t, err)
+	tableExact, err := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(ctx, objectTypeTable, roleID, PrivilegeTypeSelect, dbName, viewName)
+	require.NoError(t, err)
+
+	cache := &privilegeCache{}
+	bh := &backgroundExecTest{}
+	bh.init()
+	for _, sql := range []string{starStar, dbStar, viewExact} {
+		bh.sql2result[sql] = newMrsForRoleIdOfRole([][]interface{}{})
+	}
+	bh.sql2result[tableExact] = newMrsForRoleIdOfRole([][]interface{}{{roleID}})
+
+	yes, err := verifyViewPrivilegeForRole(ctx, bh, nil, cache, roleID, PrivilegeTypeSelect, dbName, viewName, true, false)
+	require.NoError(t, err)
+	require.True(t, yes)
+	require.True(t, cache.has(objectTypeView, privilegeLevelDatabaseTable, dbName, viewName, PrivilegeTypeSelect))
+
+	// The promoted entry answers the next check inside the view-class sweep;
+	// the exact-relation catalog lookup does not run again.
+	bh2 := &backgroundExecTest{}
+	bh2.init()
+	for _, sql := range []string{starStar, dbStar} {
+		bh2.sql2result[sql] = newMrsForRoleIdOfRole([][]interface{}{})
+	}
+	yes2, err := verifyViewPrivilegeForRole(ctx, bh2, nil, cache, roleID, PrivilegeTypeSelect, dbName, viewName, true, false)
+	require.NoError(t, err)
+	require.True(t, yes2)
+	require.Equal(t, []string{starStar, dbStar}, bh2.executedSQLs)
+}
+
 func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
 	roleID := int64(1001)
@@ -19271,5 +19703,40 @@ func TestExtensionPrivilegeClassification(t *testing.T) {
 			require.True(t, priv.canExecInRestricted)
 			require.False(t, priv.canExecInPasswordExpired)
 		})
+	}
+}
+
+func TestUnusedTableChangesWindowDiagnosticsAndCatalogValidation(t *testing.T) {
+	ctx := t.Context()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select 1 from nation window w as (order by (select count(*) from table_changes('tpch', 'region', '', '1-0')))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	for _, prepare := range []bool{false, true} {
+		compiler := plan2.NewMockCompilerContext(true, newPlanTestProcess(t))
+		query, err := plan2.NewBaseOptimizer(compiler).Optimize(stmt, prepare, nil)
+		require.NoError(t, err)
+		handler := &marshalPlanHandler{query: query}
+		_, stats := handler.Stats(ctx, nil)
+		require.Zero(t, stats.RowsRead)
+		require.Zero(t, stats.BytesScan)
+
+		built := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+		for _, bump := range []uint32{0, 1} {
+			validatedSource := false
+			changed, err := checkModify(built, func(db, name string, snapshot *plan.Snapshot, _ *plan2.TableResolution) (*plan.ObjectRef, *plan.TableDef, error) {
+				require.NotEmpty(t, name)
+				ref, def, err := compiler.Resolve(db, name, snapshot, nil)
+				if name == "region" {
+					validatedSource = true
+					def.Version += bump
+				}
+				return ref, def, err
+			})
+			require.NoError(t, err)
+			require.True(t, validatedSource)
+			require.Equal(t, bump != 0, changed)
+		}
 	}
 }

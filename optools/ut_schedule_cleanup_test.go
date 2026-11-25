@@ -636,8 +636,8 @@ func TestHelperFailedDrainKeepsParentOwnership(t *testing.T) {
 						hook = "            ut_test_publication \"$!\" ''\n"
 					}
 					if helper == "inventory" {
-						anchor = "    pid=$!\n    set +m\n"
-						hook = "    pid=$!\n    ut_test_publication \"$pid\" \"\"\n    set +m\n"
+						anchor = "    ) > \"${inventory}\" 2>&1 &\n    pid=$!\n    set +m\n"
+						hook = "    ) > \"${inventory}\" 2>&1 &\n    pid=$!\n    ut_test_publication \"$pid\" \"\"\n    set +m\n"
 					}
 					if strings.Count(text, anchor) != 1 {
 						t.Fatal("missing unique helper publication")

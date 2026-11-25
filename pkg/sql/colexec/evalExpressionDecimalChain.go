@@ -242,7 +242,7 @@ func (e *decimalChainExecutor) allocateScratch(rows int) (err error) {
 	for i := 0; i < len(e.nodes)-1; i++ {
 		v := &e.nodes[i]
 		if v.scratch == nil {
-			v.scratch, err = newExpressionOffHeapVector(v.typ, e.root.allocation)
+			v.scratch, err = newExpressionOffHeapVector(v.typ, e.root.m)
 			if err != nil {
 				return err
 			}
@@ -296,6 +296,7 @@ func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, select
 			return e.root.Eval(p, b, selected)
 		}
 	}
+
 	if n == 0 {
 		return e.root.Eval(p, b, selected)
 	}
@@ -341,7 +342,7 @@ func decimalChainColumn(expr *plan.Expr, executor ExpressionExecutor) *ColumnExp
 	return col
 }
 func decimalChainSource(v *vector.Vector, col *ColumnExpressionExecutor, n int) bool {
-	if v == nil || v.HasGrouping() || v.Length() != n {
+	if v == nil || v.Length() != n {
 		return false
 	}
 	if v.IsConstNull() {

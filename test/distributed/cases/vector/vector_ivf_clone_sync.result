@@ -39,5 +39,5 @@ id
 select count(distinct index_table_name) as physical_tables from mo_catalog.mo_indexes
 where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='ivf_clone_sync' and relname='unicode_indexes') and index_table_name<>'';
 physical_tables
-6
+8
 drop database ivf_clone_sync;

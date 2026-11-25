@@ -124,6 +124,62 @@ function remove_ut_report_file(){
     return 0
 }
 
+# Populate the caller's sources array with the authoritative representation of
+# one helper report. Prebuilt snapshot sources accept only the base and
+# numeric, non-symlink shards.
+function collect_ut_report_sources(){
+    local report=$1
+    local partial="" mode=${2:-normal}
+    sources=()
+
+    # Select one authoritative representation.  A ready marker is meaningful
+    # only when its complete base file is still present; silently treating a
+    # missing base as success would allow the caller to delete the marker and
+    # lose the only diagnostic source.
+    if [[ -f "${report}.ready" ]] &&
+        { [[ "${mode}" != prebuilt-snapshot ]] || [[ ! -L "${report}.ready" ]]; }; then
+        if [[ ! -f "${report}" ]] || [[ "${mode}" == prebuilt-snapshot && -L "${report}" ]]; then
+            echo "UT report marker exists without its base report: ${report}" >&2
+            return 1
+        fi
+        sources=("${report}")
+    else
+        for partial in "${report}".*; do
+            [[ -f "${partial}" ]] || continue
+            [[ "${partial}" == "${report}.ready" ]] && continue
+            # A hard kill can leave a previous transactional staging file.  It
+            # is not a report shard and must never be consumed as one.
+            [[ "${partial}" == "${report}.tmp."* ]] && continue
+            if [[ "${mode}" == prebuilt-snapshot ]] &&
+                { [[ -L "${partial}" ]] || ! [[ "${partial#"${report}".}" =~ ^[0-9]+$ ]]; }; then
+                continue
+            fi
+            sources+=("${partial}")
+        done
+        if (( ${#sources[@]} == 0 )) && [[ -f "${report}" ]] &&
+            { [[ "${mode}" != prebuilt-snapshot ]] || [[ ! -L "${report}" ]]; }; then
+            # This covers a helper that failed before it could create the
+            # marker and left only a diagnostic base file.
+            sources=("${report}")
+        fi
+    fi
+}
+
+# Seal a stopped writer's incomplete line before concatenating another report.
+# Keep report bytes for diagnosis. A complete JSON record without its newline
+# remains usable once the writer has stopped.
+function copy_ut_report_chunk(){
+    local source=$1
+    local last_byte_lines
+    cat "${source}" || return 1
+    if [[ -s "${source}" ]]; then
+        last_byte_lines=$(set -o pipefail; tail -c 1 "${source}" | wc -l) || return 1
+        if (( last_byte_lines == 0 )); then
+            printf '\n' || return 1
+        fi
+    fi
+}
+
 # append_ut_report copies a helper-owned report into the authoritative report
 # after the helper has stopped.  A helper may be interrupted while it is
 # merging shard files, so the completion marker is the ownership boundary:
@@ -150,47 +206,20 @@ function append_ut_report(){
     local partial=""
     local staging=""
     local expected=""
-    local partial_found=0
-
-    # Select one authoritative representation.  A ready marker is meaningful
-    # only when its complete base file is still present; silently treating a
-    # missing base as success would allow the caller to delete the marker and
-    # lose the only diagnostic source.
     local -a sources=()
-    if [[ -f "${report}.ready" ]]; then
-        if [[ ! -f "${report}" ]]; then
-            echo "UT report marker exists without its base report: ${report}" >&2
-            return 1
-        fi
-        sources=("${report}")
-    else
-        for partial in "${report}".*; do
-            [[ -f "${partial}" ]] || continue
-            [[ "${partial}" == "${report}.ready" ]] && continue
-            # A hard kill can leave a previous transactional staging file.  It
-            # is not a report shard and must never be consumed as one.
-            [[ "${partial}" == "${report}.tmp."* ]] && continue
-            sources+=("${partial}")
-            partial_found=1
-        done
-        if (( partial_found == 0 )) && [[ -f "${report}" ]]; then
-            # This covers a helper that failed before it could create the
-            # marker and left only a diagnostic base file.
-            sources=("${report}")
-        fi
-    fi
+    collect_ut_report_sources "${report}" || return 1
 
     if (( ${#sources[@]} == 0 )); then
         return 0
     fi
 
     staging=$(mktemp "${destination}.tmp.XXXXXX") || return 1
-    if [[ -f "${destination}" ]] && ! cat "${destination}" > "${staging}"; then
+    if [[ -f "${destination}" ]] && ! copy_ut_report_chunk "${destination}" > "${staging}"; then
         rm -f "${staging}"
         return 1
     fi
     for partial in "${sources[@]}"; do
-        if ! cat "${partial}" >> "${staging}"; then
+        if ! copy_ut_report_chunk "${partial}" >> "${staging}"; then
             # Do not touch any source or publish a prefix.  The caller can
             # retain the source for cancellation diagnostics or retry safely.
             rm -f "${staging}"

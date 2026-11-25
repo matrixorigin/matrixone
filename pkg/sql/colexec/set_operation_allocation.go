@@ -15,14 +15,15 @@
 package colexec
 
 import (
+	"math"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"unsafe"
 )
 
 // SetOperationAllocation is shared by the four membership kernels. It owns
@@ -32,7 +33,10 @@ type SetOperationAllocation struct {
 	account  *mpool.AllocationAccount
 	hash     *hashtable.AllocationAccountSelection
 	iterator *hashmap.IteratorAllocation
-	vectors  *vector.AllocationAccountSelection
+	// vectors is the accounted view of the operator's pool that charges
+	// set-operation vectors. It is built on first use because binding the
+	// account happens before the operator knows its process pool.
+	vectors  *mpool.MPool
 	budget   *process.ExecutionResourceGeneration
 	metadata uint64
 	selected [hashmap.UnitLimit]uint8
@@ -40,7 +44,7 @@ type SetOperationAllocation struct {
 }
 
 func (a *SetOperationAllocation) SetAllocationAccount(account *mpool.AllocationAccount) (err error) {
-	if account == nil {
+	if account == nil || account.Handle() == 0 {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	if a.account != nil && a.account != account {
@@ -57,11 +61,10 @@ func (a *SetOperationAllocation) SetAllocationAccount(account *mpool.AllocationA
 	if err != nil {
 		return err
 	}
-	vectors, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerSet, 4, 5, 6, 7)
-	if err != nil {
-		return err
+	if a.account != account {
+		a.vectors = nil
 	}
-	a.account, a.hash, a.iterator, a.vectors = account, hash, iterator, vectors
+	a.account, a.hash, a.iterator = account, hash, iterator
 	return nil
 }
 
@@ -85,8 +88,37 @@ func (a *SetOperationAllocation) NewHashMap(proc *process.Process) (*hashmap.Str
 
 func (a *SetOperationAllocation) Scratch() ([]uint8, []uint8) { return a.selected[:], a.zeroes[:] }
 
-func (a *SetOperationAllocation) ExpressionAllocation() *vector.AllocationAccountSelection {
-	return a.vectors
+// HasAllocationAccount reports whether an account is bound.
+func (a *SetOperationAllocation) HasAllocationAccount() bool {
+	return a.account != nil
+}
+
+// ExpressionAllocation returns the accounted view of proc's pool that
+// set-operation vectors and key expressions allocate through, or nil when no
+// account is bound.
+func (a *SetOperationAllocation) ExpressionAllocation(proc *process.Process) (*mpool.MPool, error) {
+	if a.account == nil {
+		return nil, nil
+	}
+	if a.vectors == nil {
+		view, err := proc.Mp().WithAccount(
+			a.account, mpool.AllocationOwnerSet, 4, mpool.AllocationCapacityClassDefault)
+		if err != nil {
+			return nil, err
+		}
+		a.vectors = view
+	}
+	return a.vectors, nil
+}
+
+// MP returns the pool set-operation vectors allocate from: the accounted view
+// when an account is bound, otherwise proc's pool.
+func (a *SetOperationAllocation) MP(proc *process.Process) (*mpool.MPool, error) {
+	view, err := a.ExpressionAllocation(proc)
+	if err != nil || view != nil {
+		return view, err
+	}
+	return proc.Mp(), nil
 }
 
 func (a *SetOperationAllocation) NewBatch(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -101,20 +133,41 @@ func (a *SetOperationAllocation) NewBatch(proc *process.Process, input *batch.Ba
 		}
 		a.budget, a.metadata = budget, a.metadata+size
 	}
+	mp, err := a.MP(proc)
+	if err != nil {
+		return nil, err
+	}
 	b := batch.NewWithSize(len(input.Vecs))
 	for i, v := range input.Vecs {
-		var err error
-		if a.vectors == nil {
-			b.Vecs[i] = vector.NewVec(*v.GetType())
-		} else {
-			b.Vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*v.GetType(), a.vectors)
-		}
-		if err != nil {
-			b.Clean(proc.Mp())
-			return nil, err
-		}
+		b.Vecs[i] = vector.NewVec(*v.GetType(), mp)
 	}
 	return b, nil
+}
+
+// CleanBatch frees a batch the operator owns. Each vector is freed with the
+// pool it belongs to when that is the operator's accounted view or proc's
+// pool; any other pool is passed proc's pool so the mismatch is reported.
+func (a *SetOperationAllocation) CleanBatch(proc *process.Process, bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	seen := make(map[*vector.Vector]struct{}, len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if _, ok := seen[vec]; !ok {
+			seen[vec] = struct{}{}
+			mp := vec.MPool()
+			if mp == nil || mp == a.vectors || mp == proc.Mp() {
+				vec.Free(mp)
+			} else {
+				vec.Free(proc.Mp())
+			}
+		}
+		bat.Vecs[i] = nil
+	}
+	bat.Clean(proc.Mp())
 }
 
 func (a *SetOperationAllocation) FreeMetadata() {

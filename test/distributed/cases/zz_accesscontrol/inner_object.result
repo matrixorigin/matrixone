@@ -29,6 +29,7 @@ system  𝄀
 system_metrics
 show grants;
 ➤ Grants for admin@localhost[12,-1,0]  𝄀
+GRANT connect ON account  `admin`@`localhost`  𝄀
 GRANT create user ON account  `admin`@`localhost`  𝄀
 GRANT drop user ON account  `admin`@`localhost`  𝄀
 GRANT alter user ON account  `admin`@`localhost`  𝄀
@@ -42,10 +43,10 @@ GRANT manage grants ON account  `admin`@`localhost`  𝄀
 GRANT account all ON account  `admin`@`localhost`  𝄀
 GRANT show tables ON database * `admin`@`localhost`  𝄀
 GRANT create table ON database * `admin`@`localhost`  𝄀
-GRANT drop table ON database * `admin`@`localhost`  𝄀
-GRANT alter table ON database * `admin`@`localhost`  𝄀
 GRANT create view ON database * `admin`@`localhost`  𝄀
+GRANT drop table ON database * `admin`@`localhost`  𝄀
 GRANT drop view ON database * `admin`@`localhost`  𝄀
+GRANT alter table ON database * `admin`@`localhost`  𝄀
 GRANT alter view ON database * `admin`@`localhost`  𝄀
 GRANT database all ON database * `admin`@`localhost`  𝄀
 GRANT database ownership ON database * `admin`@`localhost`  𝄀
@@ -58,8 +59,7 @@ GRANT reference ON table *.* `admin`@`localhost`  𝄀
 GRANT index ON table *.* `admin`@`localhost`  𝄀
 GRANT table all ON table *.* `admin`@`localhost`  𝄀
 GRANT table ownership ON table *.* `admin`@`localhost`  𝄀
-GRANT values ON table *.* `admin`@`localhost`  𝄀
-GRANT connect ON account  `admin`@`localhost`
+GRANT values ON table *.* `admin`@`localhost`
 use system;
 show triggers;
 ➤ Trigger[12,-1,0]  ¦  Event[12,-1,0]  ¦  Table[12,-1,0]  ¦  Statement[12,0,0]  ¦  Timing[12,-1,0]  ¦  Created[93,64,0]  ¦  sql_mode[12,-1,0]  ¦  Definer[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  ¦  Database Collation[12,-1,0]

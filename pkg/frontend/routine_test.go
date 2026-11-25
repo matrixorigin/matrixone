@@ -39,7 +39,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -185,24 +184,8 @@ func TestRoutineShouldCloseConnectionIgnoresRequestDeadline(t *testing.T) {
 	require.True(t, rt.shouldCloseConnection())
 }
 
-func TestRoutineRequestCallbacksAndCancelContexts(t *testing.T) {
+func TestRoutineCancelContexts(t *testing.T) {
 	rt, _ := newUnitTestRoutine(t, 43)
-
-	var called int32
-	rt.execCallbackBasedOnRequest(false, func() {
-		atomic.AddInt32(&called, 1)
-	})
-	require.Equal(t, int32(1), called)
-
-	require.True(t, rt.beginClientRequest())
-	rt.execCallbackBasedOnRequest(false, func() {
-		atomic.AddInt32(&called, 1)
-	})
-	require.Equal(t, int32(1), called)
-	rt.execCallbackBasedOnRequest(true, func() {
-		atomic.AddInt32(&called, 1)
-	})
-	require.Equal(t, int32(2), called)
 
 	reqCtx, cancelReq := context.WithCancel(context.Background())
 	rt.setCancelRequestFunc(cancelReq)
@@ -1006,14 +989,12 @@ func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 		}
 	})
 
-	require.NoError(t, ses.setUserDefinedVarWithKindAndReplayability(
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
 		"TS0",
 		"2026-08-07 04:20:01.123456",
 		"set @ts0 = (select updated_at from src limit 1)",
-		false,
-		vector.PrepareParamNone,
-		true,
-	))
+		false, inferUserDefinedVarType("2026-08-07 04:20:01.123456"),
+		true))
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 
@@ -1042,8 +1023,8 @@ func TestMigrateConnectionFromMarksPreparedUserStateUnreplayable(t *testing.T) {
 	})
 	// An empty SQL field models a value produced by a prepared SET. The typed
 	// snapshot is valid for v22, but the legacy raw replay stream cannot carry it.
-	require.NoError(t, ses.setUserDefinedVarWithKind(
-		"prepared", "value", "", false, vector.PrepareParamNone))
+	require.NoError(t, ses.setUserDefinedVar(
+		"prepared", "value", "", false))
 
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
@@ -1071,13 +1052,11 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T)
 	// Prepared SET assignments are applied by the frontend but are not
 	// guaranteed to be captured as replayable raw COM_QUERY statements by the
 	// proxy. An oversized typed snapshot must therefore fail closed.
-	require.NoError(t, ses.setUserDefinedVarWithKind(
+	require.NoError(t, ses.setUserDefinedVar(
 		"large",
 		string(make([]byte, maxMigrateUserDefinedVarsSize)),
 		"",
-		false,
-		vector.PrepareParamNone,
-	))
+		false))
 
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
@@ -1107,14 +1086,12 @@ func TestMigrateConnectionFromMarksTypedUserSnapshotTooLargeForLegacyReplay(t *t
 	// A normal COM_QUERY SET is retained by the proxy, so a pre-v22 target can
 	// still use the legacy replay stream. A v22 target must reject this marker
 	// instead of re-evaluating the raw expression.
-	require.NoError(t, ses.setUserDefinedVarWithKindAndReplayability(
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
 		"large",
 		string(make([]byte, maxMigrateUserDefinedVarsSize)),
 		"set @large = repeat('a', 16777216)",
-		false,
-		vector.PrepareParamNone,
-		true,
-	))
+		false, inferUserDefinedVarType(string(make([]byte, maxMigrateUserDefinedVarsSize))),
+		true))
 
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)

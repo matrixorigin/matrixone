@@ -407,9 +407,9 @@ func TestBuiltInNameConst(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, result.PreExtendAndReset(3))
 	require.NoError(t, builtInNameConst([]*vector.Vector{nameVec, valueVec}, result, proc, 3, nil))
-	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 0))
-	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 1))
-	require.True(t, nulls.Contains(result.GetResultVector().GetNulls(), 2))
+	require.True(t, result.GetResultVector().GetNulls().Contains(0))
+	require.True(t, result.GetResultVector().GetNulls().Contains(1))
+	require.True(t, result.GetResultVector().GetNulls().Contains(2))
 }
 
 func Test_BuiltIn_Rpad(t *testing.T) {
@@ -1377,7 +1377,7 @@ func nullsFromBools(nullList []bool) *nulls.Nulls {
 	if len(nullList) == 0 {
 		return nil
 	}
-	nsp := nulls.NewWithSize(len(nullList))
+	nsp := mustNullsOK(nulls.NewWithSize(len(nullList), bitmapTestMP))
 	for i, isNull := range nullList {
 		if isNull {
 			nsp.Set(uint64(i))
@@ -2840,6 +2840,15 @@ func testSerialExtractNamedType[T types.Enum | types.MoYear | types.Decimal256](
 	}
 }
 
+func TestDegreesFiniteOverflowReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), []float64{3.14e306, -3.14e306, 0, math.Pi}, nil)},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 0, 180}, []bool{true, true, false, false}), builtInDegrees)
+	ok, info := testCase.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func Test_BuiltIn_Math(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{
@@ -3565,7 +3574,7 @@ func TestBuiltInCurrentTimeNoArgDefaultsToZeroFSP(t *testing.T) {
 func TestTimestampFunctionsIgnoreNullPrecisionValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	arg := vector.NewVec(types.T_int64.ToType())
+	arg := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	defer arg.Free(proc.Mp())
 	require.NoError(t, vector.AppendFixed(arg, int64(6), false, proc.Mp()))
 	arg.SetNull(0) // A reused non-constant vector can retain its previous data.

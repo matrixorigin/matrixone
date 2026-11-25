@@ -287,69 +287,224 @@ func TestKillResetBeforeLifecycleAdmission(t *testing.T) {
 	}
 }
 
-func TestKillQueuedLifecycleOperationCleansUp(t *testing.T) {
+func TestAccountKillQueuedLifecycleAdmission(t *testing.T) {
+	for _, kind := range []string{"migrate", "reset"} {
+		for _, killed := range []bool{false, true} {
+			name := kind + "/healthy"
+			if killed {
+				name = kind + "/killed"
+			}
+			t.Run(name, func(t *testing.T) {
+				protocol := &observedKillProtocol{testMysqlWriter: &testMysqlWriter{}, closed: make(chan struct{})}
+				rt := NewRoutine(context.Background(), protocol, &config.FrontendParameters{})
+				require.True(t, rt.mc.tryBeginRequest())
+				require.True(t, rt.beginClientRequest())
+				waiting := make(chan struct{})
+				if kind == "migrate" {
+					rt.mc.operationWaitHook = func() { close(waiting) }
+				} else {
+					rt.mc.requestWaitHook = func() { close(waiting) }
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				var finishOnce sync.Once
+				var requestErr error
+				finishRequest := func() {
+					finishOnce.Do(func() {
+						requestErr = rt.endClientRequest(nil)
+						rt.mc.endRequest()
+					})
+				}
+				admitted := make(chan bool, 1)
+				finished := make(chan struct{})
+				go func() {
+					defer close(finished)
+					var ok bool
+					if kind == "migrate" {
+						_, ok = rt.mc.beginOperationWithContext(ctx)
+					} else {
+						_, ok = rt.mc.beginOperationAfterRequestWithContext(ctx)
+					}
+					if ok {
+						rt.mc.endOperation()
+					}
+					admitted <- ok
+				}()
+				t.Cleanup(func() {
+					cancel()
+					finishRequest()
+					select {
+					case <-finished:
+					case <-time.After(3 * time.Second):
+						t.Error("lifecycle waiter did not stop")
+					}
+					rt.beginClose()
+					rt.cancelRoutineFunc()
+				})
+				select {
+				case <-waiting:
+				case <-time.After(3 * time.Second):
+					t.Fatal("lifecycle operation did not queue")
+				}
+				if killed {
+					accounts := &AccountRoutineManager{
+						killIdQueue:       map[int64]KillRecord{42: {killTime: time.Now(), version: 0}},
+						accountId2Routine: map[int64]map[*Routine]uint64{42: {rt: 0}},
+					}
+					(&RoutineManager{accountRoutine: accounts}).KillRoutineConnections()
+					select {
+					case <-protocol.closed:
+						t.Fatal("KILL closed the protocol before the request completed")
+					default:
+					}
+				}
+				finishRequest()
+				if killed {
+					require.ErrorIs(t, requestErr, io.EOF)
+				} else {
+					require.NoError(t, requestErr)
+				}
+				select {
+				case ok := <-admitted:
+					require.Equal(t, !killed, ok, "lifecycle admission after request completion")
+				case <-time.After(3 * time.Second):
+					t.Fatal("lifecycle waiter did not complete")
+				}
+			})
+		}
+	}
+}
+
+func TestAccountKillAfterWireBeforeControllerRelease(t *testing.T) {
 	protocol := &observedKillProtocol{testMysqlWriter: &testMysqlWriter{}, closed: make(chan struct{})}
 	rt := NewRoutine(context.Background(), protocol, &config.FrontendParameters{})
 	require.True(t, rt.mc.tryBeginRequest())
 	require.True(t, rt.beginClientRequest())
-	waiting := make(chan struct{})
-	rt.mc.operationWaitHook = func() { close(waiting) }
-	type result struct {
-		ctx context.Context
-		ok  bool
-	}
-	admitted := make(chan result, 1)
-	release := make(chan struct{})
-	finished := make(chan struct{})
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	t.Cleanup(func() {
-		rt.beginClose()
-		rt.mc.endRequest()
-		unblock()
-		select {
-		case <-finished:
-		case <-time.After(3 * time.Second):
-			t.Error("lifecycle waiter did not stop")
-		}
-		rt.cancelRoutineFunc()
-	})
-	go func() {
-		defer close(finished)
-		ctx, ok := rt.mc.beginOperationWithContext(context.Background())
-		admitted <- result{ctx, ok}
-		if ok {
-			<-release
-			rt.mc.endOperation()
-		}
-	}()
-	select {
-	case <-waiting:
-	case <-time.After(3 * time.Second):
-		t.Fatal("lifecycle operation did not queue")
-	}
+	t.Cleanup(func() { rt.mc.endRequest(); rt.beginClose(); rt.cancelRoutineFunc() })
+	require.NoError(t, rt.endClientRequest(nil))
+	// Wire ownership is released, while the controller still owns the request.
 	rt.killConnection(false)
 	select {
-	case r := <-admitted:
-		t.Fatalf("lifecycle passed a running request: %+v", r)
+	case <-protocol.closed:
 	default:
+		t.Fatal("KILL did not close the idle wire")
 	}
-	require.ErrorIs(t, rt.endClientRequest(nil), io.EOF)
 	rt.mc.endRequest()
-	var r result
-	select {
-	case r = <-admitted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("queued lifecycle operation did not acquire ownership")
+	_, admitted := rt.mc.beginOperationWithContext(context.Background())
+	if admitted {
+		rt.mc.endOperation()
 	}
-	require.True(t, r.ok)
-	rt.beginClose()
-	require.ErrorIs(t, r.ctx.Err(), context.Canceled)
-	unblock()
+	require.False(t, admitted, "migration admitted after KILL")
+	_, admitted = rt.mc.beginOperationAfterRequestWithContext(context.Background())
+	if admitted {
+		rt.mc.endOperation()
+	}
+	require.False(t, admitted, "reset admitted after KILL")
+}
+
+type blockingDisconnectProtocol struct {
+	*testMysqlWriter
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingDisconnectProtocol) Close() {
+	close(p.entered)
+	<-p.release
+}
+
+func TestAccountKillBlockedCloseDoesNotBlockDisconnectScan(t *testing.T) {
+	protocol := &blockingDisconnectProtocol{testMysqlWriter: &testMysqlWriter{}, entered: make(chan struct{}), release: make(chan struct{})}
+	first := NewRoutine(context.Background(), protocol, &config.FrontendParameters{})
+	second := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	require.True(t, first.mc.tryBeginRequest())
+	require.True(t, first.beginClientRequest())
+	require.True(t, second.mc.tryBeginRequest())
+	require.True(t, second.beginClientRequest())
+	firstConn, secondConn := &Conn{remoteAddr: "first"}, &Conn{remoteAddr: "second"}
+	rm := &RoutineManager{clients: map[*Conn]*Routine{firstConn: first}}
+	selected, probeReturned := make(chan struct{}), make(chan struct{})
+	allowProbe := make(chan struct{})
+	firstDone, secondDone, killDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var allowOnce, closeOnce sync.Once
+	allow := func() { allowOnce.Do(func() { close(allowProbe) }) }
+	unblock := func() { closeOnce.Do(func() { close(protocol.release) }) }
+	controllerHeld, killStarted, secondStarted := false, false, false
+	t.Cleanup(func() {
+		if controllerHeld {
+			first.mc.Unlock()
+		}
+		allow()
+		unblock()
+		for _, done := range []struct {
+			started bool
+			ch      <-chan struct{}
+		}{{true, firstDone}, {killStarted, killDone}, {secondStarted, secondDone}} {
+			if done.started {
+				select {
+				case <-done.ch:
+				case <-time.After(3 * time.Second):
+					t.Error("owned goroutine did not stop")
+				}
+			}
+		}
+		second.endClientRequest(nil)
+		second.mc.endRequest()
+		first.beginClose()
+		second.beginClose()
+		first.cancelRoutineFunc()
+		second.cancelRoutineFunc()
+	})
+	go func() {
+		defer close(firstDone)
+		rm.cancelDisconnectedRequests(time.Now(), 0, func(*Conn) (bool, error) {
+			close(selected)
+			<-allowProbe
+			close(probeReturned)
+			return true, nil
+		})
+	}()
 	select {
-	case <-finished:
+	case <-selected:
 	case <-time.After(3 * time.Second):
-		t.Fatal("lifecycle operation did not end")
+		t.Fatal("first scan did not select the active request")
+	}
+	require.NoError(t, first.endClientRequest(nil))
+	first.mc.endRequest()
+	first.mc.Lock()
+	controllerHeld = true
+	killStarted = true
+	go func() { defer close(killDone); first.killConnection(false) }()
+	select {
+	case <-protocol.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("KILL did not reach protocol Close")
+	}
+	first.mc.Unlock()
+	controllerHeld = false
+	rm.mu.Lock()
+	rm.clients[secondConn] = second
+	rm.mu.Unlock()
+	allow()
+	select {
+	case <-probeReturned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first probe did not return")
+	}
+	secondReached := make(chan struct{})
+	secondStarted = true
+	go func() {
+		defer close(secondDone)
+		rm.cancelDisconnectedRequests(time.Now(), 0, func(conn *Conn) (bool, error) {
+			if conn == secondConn {
+				close(secondReached)
+			}
+			return false, nil
+		})
+	}()
+	select {
+	case <-secondReached:
+	case <-time.After(3 * time.Second):
+		t.Fatal("blocked protocol Close prevented the next disconnect scan")
 	}
 }
 
@@ -369,16 +524,31 @@ func (c *countedKillCloseConn) Close() error {
 }
 
 func TestKillProtocolCloseRacesCleanup(t *testing.T) {
+	t.Run("idle", func(t *testing.T) { testKillProtocolCloseRacesCleanup(t, false) })
+	t.Run("contended controller", func(t *testing.T) { testKillProtocolCloseRacesCleanup(t, true) })
+}
+
+func testKillProtocolCloseRacesCleanup(t *testing.T, contention bool) {
 	raw := &countedKillCloseConn{entered: make(chan struct{}), release: make(chan struct{})}
 	parameters := &config.FrontendParameters{}
 	proto := NewMysqlClientProtocol("", 42, &Conn{conn: raw}, 0, parameters)
 	rt := NewRoutine(context.Background(), proto, parameters)
+	if contention {
+		rt.mc.Lock()
+	}
+	var controllerOnce sync.Once
+	releaseController := func() {
+		if contention {
+			controllerOnce.Do(rt.mc.Unlock)
+		}
+	}
 	killDone := make(chan struct{})
 	cleanupStarted := make(chan struct{})
 	cleanupDone := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(raw.release) }) }
 	t.Cleanup(func() {
+		releaseController()
 		release()
 		select {
 		case <-killDone:
@@ -401,6 +571,7 @@ func TestKillProtocolCloseRacesCleanup(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("protocol close did not start")
 	}
+	releaseController()
 	close(cleanupStarted)
 	go func() { defer close(cleanupDone); rt.cleanup() }()
 	require.Eventually(t, rt.closing.Load, 3*time.Second, time.Millisecond, "cleanup must reach close while network close is blocked")

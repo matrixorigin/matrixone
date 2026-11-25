@@ -17,7 +17,6 @@
 package plan
 
 import (
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -43,7 +42,7 @@ func TestClassifyAlwaysAsyncGPUIndexesForUpdate(t *testing.T) {
 			}
 
 			inline, unsupported, err := classifyIrregularIndexesForUpdate(
-				context.Background(), tableDef, map[string]tree.Expr{"id": nil, "vec": nil})
+				tableDef, map[string]tree.Expr{"id": nil, "vec": nil})
 			require.NoError(t, err)
 			require.False(t, unsupported)
 			require.Empty(t, inline)

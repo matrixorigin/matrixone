@@ -71,3 +71,75 @@ func TestRefCountedRejectsNegativeAccounting(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, lease)
 }
+
+func TestRefCountedDisownRequiresLastReference(t *testing.T) {
+	var cleanup atomic.Int32
+	lease, err := NewRefCounted([]byte("data"), 4, func() { cleanup.Add(1) })
+	require.NoError(t, err)
+	require.True(t, lease.Retain())
+	require.False(t, lease.TryDisown())
+	require.Equal(t, []byte("data"), lease.Bytes())
+	lease.Release()
+	require.True(t, lease.TryDisown())
+	require.Zero(t, cleanup.Load())
+	require.Nil(t, lease.Bytes())
+	require.False(t, lease.Retain())
+	require.False(t, lease.TryDisown())
+}
+
+func TestRefCountedDisownAndRetainRace(t *testing.T) {
+	for range 64 {
+		var cleanup atomic.Int32
+		lease, err := NewRefCounted([]byte("data"), 4, func() { cleanup.Add(1) })
+		require.NoError(t, err)
+		start := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			<-start
+			if lease.Retain() {
+				_ = lease.Bytes()
+				lease.Release()
+			}
+		}()
+		close(start)
+		disowned := lease.TryDisown()
+		<-done
+		if disowned {
+			require.Zero(t, cleanup.Load())
+		} else {
+			lease.Release()
+			require.Equal(t, int32(1), cleanup.Load())
+		}
+		require.False(t, lease.Retain())
+	}
+}
+
+func TestHolderRetainsUntilRelease(t *testing.T) {
+	var cleanup atomic.Int32
+	lease, err := NewRefCounted([]byte("payload"), 7, func() { cleanup.Add(1) })
+	require.NoError(t, err)
+
+	var holder Holder
+	holder.Release() // zero value is safe
+	require.NoError(t, holder.Hold(lease))
+	require.NoError(t, holder.HoldLease(lease))
+	require.Equal(t, 2, holder.Len())
+	lease.Release() // the creator's reference
+	require.Zero(t, cleanup.Load(), "the holder keeps the backing alive")
+	require.Equal(t, []byte("payload"), lease.Bytes())
+
+	holder.Release()
+	require.Zero(t, holder.Len())
+	require.Equal(t, int32(1), cleanup.Load())
+	holder.Release() // idempotent
+	require.Equal(t, int32(1), cleanup.Load())
+
+	require.Error(t, holder.Hold(lease), "a released lease cannot be held again")
+	require.Error(t, holder.Hold(nil))
+	require.Zero(t, holder.Len())
+	var nilHolder *Holder
+	nilHolder.Release()
+	require.Zero(t, nilHolder.Len())
+	require.Error(t, nilHolder.Hold(lease))
+}

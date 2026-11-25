@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/bits"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -42,6 +44,11 @@ var eventVectorDestinationNotEmpty = logutil.Event{
 
 type CacheConstructor = func(ctx context.Context, r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
+
+// NewColumnReadEntry prepares a physical column read with ObjectIO's cache validator.
+func NewColumnReadEntry(ext Extent) fileservice.IOEntry {
+	return newColumnIOEntry(ext, columnCacheConstructorFactory)
+}
 
 func newColumnIOEntry(ext Extent, factory CacheConstructorFactory) fileservice.IOEntry {
 	return fileservice.IOEntry{
@@ -137,7 +144,9 @@ func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {
 
 // validatedVectorBackingForScope may only be consumed synchronously by an
 // ObjectIO operation that returns owned data or scalar/row-offset results. The
-// returned slice, and any Vector bound to it, must never escape to a caller.
+// returned slice, and any plain Vector bound to it, must never escape. The
+// retained read-only API below may publish leased headers only after
+// acquiring the cache owner and admitting its full physical pin.
 func (d *validatedVectorCacheData) validatedVectorBackingForScope() []byte {
 	return d.data.Bytes()
 }
@@ -162,32 +171,36 @@ func vectorCacheDataBytes(data fscache.Data) (buf []byte, trusted bool) {
 // use this to replace all other constructors
 func constructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator) (cacheData fscache.Data, err error) {
-		if len(data) == 0 {
-			data, err = io.ReadAll(reader)
-			if err != nil {
-				return
-			}
-		}
-		if algo == compress.Lz4Chunked {
-			return decodeChunkedColumn(ctx, data, allocator)
-		}
+		return constructCacheData(ctx, reader, data, allocator, size, algo)
+	}
+}
 
-		// no compress
-		if algo == compress.None {
-			cacheData = allocator.CopyToCacheData(ctx, data)
-			return cacheData, nil
-		}
-
-		// lz4 compress
-		decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
-		bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
+func constructCacheData(ctx context.Context, reader io.Reader, data []byte, allocator fileservice.CacheDataAllocator, size int64, algo uint8) (cacheData fscache.Data, err error) {
+	if len(data) == 0 {
+		data, err = io.ReadAll(reader)
 		if err != nil {
-			decompressedData.Release()
 			return
 		}
-		decompressedData = decompressedData.Slice(len(bs))
-		return decompressedData, nil
 	}
+	if algo == compress.Lz4Chunked {
+		return decodeChunkedColumn(ctx, data, allocator)
+	}
+
+	// no compress
+	if algo == compress.None {
+		cacheData = allocator.CopyToCacheData(ctx, data)
+		return cacheData, nil
+	}
+
+	// lz4 compress
+	decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
+	bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
+	if err != nil {
+		decompressedData.Release()
+		return
+	}
+	decompressedData = decompressedData.Slice(len(bs))
+	return decompressedData, nil
 }
 
 // DecompressColumnExtent materializes one serialized object column from its
@@ -221,14 +234,13 @@ func DecompressColumnExtent(
 // vectors stay unmarked because they do not perform the per-value scan, and
 // copying their payload would make the common empty-bitmap path O(bytes).
 func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
-	construct := constructorFactory(size, algo)
 	return func(
 		ctx context.Context,
 		reader io.Reader,
 		data []byte,
 		allocator fileservice.CacheDataAllocator,
 	) (fscache.Data, error) {
-		cacheData, err := construct(ctx, reader, data, allocator)
+		cacheData, err := constructCacheData(ctx, reader, data, allocator, size, algo)
 		if err != nil {
 			return nil, err
 		}
@@ -303,7 +315,7 @@ func decode(buf []byte, trusted bool) (any, error) {
 		return buf[IOEntryHeaderSize:], nil
 	}
 	if trusted && header.Type == IOET_ColData && header.Version == IOET_ColumnData_V2 {
-		vec := vector.NewVec(types.Type{})
+		vec := vector.NewVec(types.Type{}, nil)
 		if err := vec.UnmarshalBinaryTrusted(buf[IOEntryHeaderSize:]); err != nil {
 			return nil, err
 		}
@@ -403,9 +415,9 @@ func MaterializeCachedVectorWindow(
 			return nil, err
 		}
 		defer window.Free(nil)
-		return window.DupOffHeap(mp)
+		return window.Dup(mp)
 	}
-	dst := vector.NewVec(*source.GetType())
+	dst := vector.NewVec(*source.GetType(), mp)
 	sels := make([]int64, length)
 	for i := range sels {
 		sels[i] = int64(offset + i)
@@ -482,13 +494,10 @@ func copyCachedVector(
 		if readonlyArea && source.GetType().IsVarlen() && len(source.GetArea()) > 0 {
 			// The destination is empty and the source is independently pinned
 			// cache storage. Retire scratch from its old owned generation before
-			// admitting a fresh private copy; unused capacity must not consume
-			// the next block's budget. Inline-only and fixed columns keep reuse.
-			data := vector.DetachVectorData(toVec)
-			area := vector.DetachVectorArea(toVec)
-			data.Free(mp)
-			area.Free(mp)
-			return toVec.CopyWithReadonlyArea(&source, mp)
+			// admitting a fresh, exactly-sized private copy; unused capacity must
+			// not consume the next block's budget. Inline-only and fixed columns
+			// keep reuse.
+			toVec.Free(mp)
 		}
 		return toVec.UnionBatch(&source, 0, source.Length(), nil, mp)
 	}
@@ -964,6 +973,8 @@ func bindCachedVectorForScope(toVec *vector.Vector, data fscache.Data) error {
 	if data == nil {
 		return moerr.NewInvalidInputNoCtx("nil object cache data")
 	}
+	// A zero vector has no pool: decoding makes it a read-only reference to
+	// the cache bytes.
 	var bound vector.Vector
 	var err error
 	if marked, ok := data.(validatedVectorCacheDataMarker); ok {
@@ -1002,10 +1013,10 @@ func mustVectorTo(toVec *vector.Vector, buf []byte, trusted bool) (err error) {
 }
 
 func warnVectorDestinationNotEmpty(toVec *vector.Vector, inputBytes int) {
-	if !toVec.NeedDup() && toVec.Allocated() > 0 {
+	if !toVec.IsReadOnly() && toVec.Allocated() > 0 {
 		eventVectorDestinationNotEmpty.WarnLazy(func() []zap.Field {
 			return []zap.Field{
-				zap.Bool("need-dup", toVec.NeedDup()),
+				zap.Bool("need-dup", toVec.IsReadOnly()),
 				zap.Int("allocated-bytes", toVec.Allocated()),
 				zap.Int("input-bytes", inputBytes),
 			}
@@ -1019,4 +1030,72 @@ func MustObjectMeta(buffer []byte) ObjectMeta {
 		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
 	return ObjectMeta(buffer)
+}
+
+// TryBorrowCachedVector turns the empty dst into a read-only reference vector
+// (nil pool) over a privately validated cache column. keeper (the lender that
+// published dst, normally the output batch) holds the cache pin and, through
+// an accounted view mp, a reservation of the full pinned capacity, until it
+// drops or reuses its columns. dst must never be mutated; a consumer that
+// needs to write copies it first.
+func TryBorrowCachedVector(dst *vector.Vector, data fscache.Data, mp *mpool.MPool, keeper bufferlease.Keeper) (bool, error) {
+	marked, ok := data.(validatedVectorCacheDataMarker)
+	if !ok || keeper == nil || mp == nil || dst == nil || dst.Length() != 0 || dst.Allocated() != 0 || dst.GetType().Oid == types.T_json {
+		return false, nil
+	}
+	var source vector.Vector
+	if err := bindCachedVectorForScope(&source, data); err != nil {
+		return false, err
+	}
+	defer source.Free(nil)
+	if source.GetType().Oid != dst.GetType().Oid {
+		return false, moerr.NewInvalidInputNoCtx("cached column type mismatch")
+	}
+	source.SetType(*dst.GetType())
+
+	// mp is the destination's allocation view: an accounted view charges the
+	// cache pin to the destination's account.
+	var pin *mpool.CapacityLease
+	if mp.IsView() {
+		// A transient policy cannot promote an account-only cache pin.
+		// Decline so the loader copies through its admitted owned path.
+		if mp.IsAdmissionView() {
+			return false, nil
+		}
+		size := data.Capacity()
+		if size < 0 {
+			return false, moerr.NewInvalidInputNoCtx("invalid cache pin size")
+		}
+		var err error
+		pin, err = mp.ReservePinnedCapacity(uint64(size))
+		if errors.Is(err, mpool.ErrAllocationAccountCapacity) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	data.Retain()
+	lease, err := bufferlease.NewRefCounted(marked.validatedVectorBackingForScope(), data.Capacity(), func() {
+		data.Release()
+		pin.Release()
+	})
+	if err != nil {
+		data.Release()
+		pin.Release()
+		return false, err
+	}
+	// The keeper takes its own reference; ours is dropped on return, so the
+	// keeper's release is the last one.
+	defer lease.Release()
+	if err = keeper.HoldLease(lease); err != nil {
+		return false, err
+	}
+	view, err := source.Window(0, source.Length())
+	if err != nil {
+		// The keeper keeps the pin until its next release; dst holds nothing.
+		return false, err
+	}
+	*dst = *view
+	return true, nil
 }

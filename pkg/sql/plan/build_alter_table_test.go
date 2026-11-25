@@ -2719,3 +2719,108 @@ func TestCheckChangeTypeCompatibleVectorDimension(t *testing.T) {
 	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_varchar, 10), vec(types.T_varchar, 20)),
 		"a non-vector same-type width change is unaffected")
 }
+
+func TestAlterBinaryConversionPreservesDeclaredCapacity(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCVersion129)
+	for _, tc := range []struct {
+		source string
+		target types.T
+	}{
+		{"char(2)", types.T_binary},
+		{"varchar(2)", types.T_varbinary},
+		{"text", types.T_blob},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer(t)
+			definition, err := buildTestCreateTableStmt(mock, "create table capacity_source(v "+tc.source+")")
+			require.NoError(t, err)
+			original := mock.ctxt.tables["auto_incr_t"]
+			original.Cols[1].Typ = definition.Cols[0].Typ
+			original.DefaultCharset = definition.DefaultCharset
+			before, err := original.Marshal()
+			require.NoError(t, err)
+			p, err := buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t CONVERT TO CHARACTER SET binary")
+			require.NoError(t, err)
+			copy := p.GetDdl().GetAlterTable().CopyTableDef
+			require.Equal(t, int32(tc.target), copy.Cols[1].Typ.Id)
+			require.Equal(t, original.Cols[1].Typ.Width, copy.Cols[1].Typ.Width)
+			require.Zero(t, copy.Cols[1].Typ.CollationVersion)
+			require.Equal(t, uint32(types.CharsetBinary), copy.DefaultCharset)
+			after, err := original.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+	for _, corrupt := range []func(*TableDef){
+		func(td *TableDef) { td.Cols[1].Typ.Charset = 4; td.Cols[1].Typ.CollationVersion = 1 },
+		func(td *TableDef) { td.KeyFormat = 1 },
+		func(td *TableDef) { td.Cols[1].Typ.Charset = 256 },
+	} {
+		mock := newAutoIncrementAlterOptimizer(t)
+		original := mock.ctxt.tables["auto_incr_t"]
+		original.Cols[1].Typ = Type{Id: int32(types.T_varchar), Width: 2}
+		corrupt(original)
+		before, err := original.Marshal()
+		require.NoError(t, err)
+		_, err = buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t CONVERT TO CHARACTER SET binary")
+		require.Error(t, err)
+		after, err := original.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, before, after, "rejected source metadata must remain unchanged")
+	}
+}
+
+func TestAlterBinaryConvertAlgorithm(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want plan.AlterTable_AlgorithmType
+	}{
+		{"ALTER TABLE t CONVERT TO CHARACTER SET binary", plan.AlterTable_COPY},
+		{"ALTER TABLE t DEFAULT CHARACTER SET binary", plan.AlterTable_INPLACE},
+		{"ALTER TABLE t CONVERT TO CHARACTER SET utf8mb4", plan.AlterTable_COPY},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			got, err := ResolveAlterTableAlgorithm(context.Background(), stmt.(*tree.AlterTable).Options, &TableDef{})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestAlterBinaryConversionUsesFinalCombinedSchema(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCVersion129)
+	for _, clauses := range []string{
+		"ADD COLUMN extra VARCHAR(2) CHARACTER SET utf8mb4, CONVERT TO CHARACTER SET binary",
+		"ADD COLUMN (extra VARCHAR(2), extra2 VARCHAR(2)), CONVERT TO CHARACTER SET binary",
+		"CONVERT TO CHARACTER SET binary, ADD COLUMN (extra VARCHAR(2), extra2 VARCHAR(2))",
+		"CONVERT TO CHARACTER SET binary, ADD COLUMN extra VARCHAR(2) CHARACTER SET utf8mb4",
+		"MODIFY COLUMN v VARCHAR(2) CHARACTER SET utf8mb4, CONVERT TO CHARACTER SET binary",
+		"CONVERT TO CHARACTER SET binary, MODIFY COLUMN v VARCHAR(2) CHARACTER SET utf8mb4",
+		"CHANGE COLUMN v value_col VARCHAR(2) CHARACTER SET utf8mb4, CONVERT TO CHARACTER SET binary",
+		"CONVERT TO CHARACTER SET binary, CHANGE COLUMN v value_col VARCHAR(2) CHARACTER SET utf8mb4",
+	} {
+		t.Run(clauses, func(t *testing.T) {
+			mock := newAutoIncrementAlterOptimizer(t)
+			old := mock.ctxt.tables["auto_incr_t"]
+			old.Cols[1].Typ = Type{Id: int32(types.T_varchar), Width: 2, Charset: uint32(types.CharsetUTF8)}
+			before, err := old.Marshal()
+			require.NoError(t, err)
+			p, err := buildSingleStmt(mock, t, "ALTER TABLE constraint_test.auto_incr_t "+clauses)
+			require.NoError(t, err)
+			copy := p.GetDdl().GetAlterTable().CopyTableDef
+			for _, col := range copy.Cols {
+				if col.Name == "v" || col.Name == "extra" || col.Name == "extra2" || col.Name == "value_col" {
+					require.Equal(t, int32(types.T_varbinary), col.Typ.Id)
+					require.Equal(t, int32(2), col.Typ.Width)
+				}
+			}
+			require.Equal(t, uint32(types.CharsetBinary), copy.DefaultCharset)
+			after, err := old.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}

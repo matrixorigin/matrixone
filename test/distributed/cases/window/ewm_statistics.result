@@ -99,7 +99,7 @@ invalid input: invalid argument: ewm halflife decay requires a strictly positive
 select ewmmean(x, 'halflife', 0) over (order by id) from s order by id;
 invalid input: invalid argument: ewm halflife decay requires a strictly positive half-life constant
 select ewmmean(x, 'span') over (order by id) from s order by id;
-invalid argument function ewmmean, bad value [DOUBLE VARCHAR]
+invalid input: invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)
 select ewmmean(x, 'halflife', 10, true) over (order by id desc) from s order by id;
 invalid input: invalid argument: event-time ewm statistics require ascending ORDER BY
 select ewmmean(x, 'halflife', 10, true) over (order by id, x) from s order by id;

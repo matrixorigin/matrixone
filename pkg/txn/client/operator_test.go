@@ -810,6 +810,29 @@ func TestCommitFinalizesPreparedWorkspaceWithoutRollbackAfterTxnUnknown(t *testi
 	})
 }
 
+func TestCommitWrappedUnknownDoesNotRollBackWorkspace(t *testing.T) {
+	for _, joined := range []bool{false, true} {
+		t.Run(fmt.Sprintf("joined=%t", joined), func(t *testing.T) {
+			runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+				ws := &trackingWorkspace{commitRequests: []txn.TxnRequest{newTNRequest(1, 1)}}
+				tc.AddWorkspace(ws)
+				unknown := moerr.NewTxnUnknown(ctx, "test")
+				ts.setManual(func(*rpc.SendResult, error) (*rpc.SendResult, error) {
+					if joined {
+						return nil, errors.Join(moerr.NewInternalErrorNoCtx("cleanup"), unknown)
+					}
+					return nil, fmt.Errorf("commit: %w", unknown)
+				})
+				err := tc.Commit(ctx)
+				require.Same(t, unknown, moerr.FindTxnUnknown(err))
+				require.Equal(t, 1, ws.unknownCount)
+				require.Zero(t, ws.rollbackCount)
+				require.True(t, tc.reset.cannotCleanWorkspace.Load())
+			})
+		})
+	}
+}
+
 func TestCommitWithNoWrite(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		err := tc.Commit(ctx)

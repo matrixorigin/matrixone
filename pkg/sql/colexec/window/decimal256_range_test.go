@@ -49,7 +49,7 @@ func TestDecimal256RangeSearch(t *testing.T) {
 		if desc {
 			values = []int64{300, 125, 125, 0}
 		}
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, mp)
 		t.Cleanup(func() { v.Free(mp) })
 		for _, value := range values {
 			require.NoError(t, vector.AppendFixed(v, types.Decimal256FromInt64(value), false, mp))
@@ -183,6 +183,7 @@ func TestDecimal256RangePrepareReuse(t *testing.T) {
 	arg := makeWindowWithFrame(planned)
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
 	})

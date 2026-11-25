@@ -40,6 +40,7 @@ func BindIndexMaintenanceView(ctx CompilerContext, stmt *tree.Select) error {
 		return moerr.NewInvalidInputNoCtx("invalid index maintenance view probe")
 	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
+	builder.zeroScalarPolicy = zeroScalarValidateOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -81,7 +82,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	validate func(*Query) error,
 ) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
-		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "", nil,
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "", zeroScalarExecutable, nil,
 	)
 }
 
@@ -95,6 +96,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	capture func(*BindContext),
 	restoreViewMySQLSpecialTypes bool,
 	persistedViewTarget string,
+	zeroScalarPolicy zeroScalarPolicy,
 	planningInput *PlanningInput,
 ) (*Plan, error) {
 	start := time.Now()
@@ -113,6 +115,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 		ctx, stmt, builder.isReusablePlan(),
 	)
 	bindCtx := NewBindContext(builder, nil)
+	builder.zeroScalarPolicy = zeroScalarPolicy
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if capture != nil {
 		bindCtx.captureViewStarExpansion = true
@@ -224,6 +227,7 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	}()
 
 	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	builder.parseOptimizeHints()
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
@@ -242,14 +246,23 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 			}
 		}
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
-		// never fall back to the legacy ODKU operator. Two exceptions still fall
-		// back: ordinary plain INSERT (e.g. inserting into a system index table),
-		// and the degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// never fall back to the legacy ODKU operator. Three cases still fall
+		// back: ordinary plain INSERT (e.g. inserting into a system index table);
+		// the degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
-		// the prepared-statement parameters).
+		// the prepared-statement parameters); and INSERT IGNORE into a writable
+		// non-Iceberg external table (issue #32512). resolveSingleTable raises
+		// the external-table sentinel only for writable non-Iceberg targets
+		// (read-only targets fail with InvalidInput, Iceberg mappings with their
+		// own sentinel), and an ODKU list keeps external INSERT IGNORE on the
+		// modern rejection, so keying the sentinel admits exactly this one
+		// legacy-supported shape.
 		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
 			((len(stmt.GetOnDuplicateUpdate()) == 0 && !stmt.IsIgnore()) ||
-				err.Error() == noPkOnDupUpdateMsg) {
+				err.Error() == noPkOnDupUpdateMsg ||
+				(stmt.IsIgnore() &&
+					len(stmt.GetOnDuplicateUpdate()) == 0 &&
+					err.Error() == externalTableUnsupportedDMLMsg)) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
 		return nil, err
@@ -320,6 +333,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	}()
 
 	builder := NewQueryBuilder(plan.Query_INSERT, ctx, isPrepareStmt, true)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	builder.parseOptimizeHints()
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
@@ -473,6 +487,7 @@ func bindAndOptimizeDeleteQuery(ctx CompilerContext, stmt *tree.Delete, isPrepar
 	}
 
 	builder := NewQueryBuilder(plan.Query_DELETE, ctx, isPrepareStmt, true)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -531,6 +546,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}
 
 	builder := NewQueryBuilder(plan.Query_UPDATE, ctx, isPrepareStmt, true)
+	builder.zeroScalarPolicy = zeroScalarRetainOnly
 	bindCtx := NewBindContext(builder, nil)
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
@@ -765,19 +781,22 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, pla
 	}()
 	_, task := gotrace.NewTask(context.TODO(), "plan.BuildPlan")
 	defer task.End()
+	if err = rejectSnapshotQualifiedWriteTarget(ctx, stmt); err != nil {
+		return nil, err
+	}
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		if stmt.IsPerform && selectHasExportParam(stmt) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
 		}
-		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false, nil, nil, false, "", planningInput)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false, nil, nil, false, "", zeroScalarExecutable, planningInput)
 		if err != nil {
 			return nil, err
 		}
 		applySQLSelectLimit(stmt, queryPlan)
 		return queryPlan, nil
 	case *tree.ParenSelect:
-		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false, nil, nil, false, "", planningInput)
+		queryPlan, err := bindAndOptimizeSelectQueryWithValidatorAndCapture(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false, nil, nil, false, "", zeroScalarExecutable, planningInput)
 		if err != nil {
 			return nil, err
 		}
@@ -876,7 +895,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool, pla
 	case *tree.ShowSequences:
 		return buildShowSequences(stmt, ctx)
 	case *tree.ShowColumns:
-		return buildShowColumns(stmt, ctx)
+		return buildShowColumns(stmt, ctx, isPrepareStmt)
 	case *tree.ShowTableStatus:
 		return buildShowTableStatus(stmt, ctx)
 	case *tree.ShowTarget:
@@ -1047,6 +1066,13 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
 				Typ:  expr.Typ,
+			}
+
+			if idx < len(query.EnumSetResultTypes) && types.T(expr.Typ.Id).IsMySQLString() {
+				source := &query.EnumSetResultTypes[idx]
+				if isEnumOrSetPlanType(source) {
+					columns[idx].EnumSetResultType = DeepCopyType(source)
+				}
 			}
 
 			if graph := query.IntegerPrecision; graph != nil && idx < len(graph.Outputs) {

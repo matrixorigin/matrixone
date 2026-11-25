@@ -28,7 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/bytedance/sonic"
 	"github.com/bytedance/sonic/ast"
@@ -437,8 +436,20 @@ func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
 	opSize := uint64(reflect.TypeFor[metric.VecBlockOperand]().Size())
 	bound += uint64(nq) * (64 + 4*uint64(cellSize) + 8*uint64(dim) + opSize + 8)
 	// a margin for the decoder's own allocation; the commit returns what is not retained
-	return 2 * bound, nil
+	bound *= 2
+	if !binaryQueries {
+		// vecblock JSON queries decode through a sonic parser that the first decode after a
+		// garbage collection allocates anew; the format is only known after admission
+		bound += vectorMatmulJSONDecoderScratch
+	}
+	return bound, nil
 }
+
+// vectorMatmulJSONDecoderScratch is one sonic optdec parser: a 1 MiB padded input buffer
+// and a 1 MiB node buffer, with headroom for its small buffers. A parse decodes its JSON
+// texts one at a time, so at most one parser is live, though a garbage collection empties
+// sonic's pool and the next decode allocates a new one (about 2.1 MB measured).
+const vectorMatmulJSONDecoderScratch = 2<<20 + 64<<10
 
 // vectorMatmulJSONRows scans text as a JSON array of arrays without decoding it: it returns
 // the number of rows and calls row, when not nil, with each row's element count, the index
@@ -1456,7 +1467,7 @@ func (e *vectorMatmulJSON) ValidateData() error {
 			if math.IsInf(h.score, 0) || math.IsNaN(h.score) {
 				return moerr.NewInvalidInputNoCtx("vector_matmul: the distance overflows the float32 domain")
 			}
-			n := vectorMatmulJSONStringLen(s.id(h))
+			n := jsonValidUTF8Len(s.id(h))
 			total += uint64(vectorMatmulJSONPairFixed + vectorMatmulUvarintLen(n) + n)
 		}
 	}
@@ -1484,8 +1495,8 @@ func (e *vectorMatmulJSON) EncodeDataInto(dst []byte) (int, error) {
 			p := vectorMatmulJSONArrayStart(pair, 2)
 			vectorMatmulJSONSetEntry(pair, 0, bytejson.TpCodeString, p)
 			id := s.id(h)
-			p += binary.PutUvarint(pair[p:], uint64(vectorMatmulJSONStringLen(id)))
-			p += vectorMatmulJSONPutString(pair[p:], id)
+			p += binary.PutUvarint(pair[p:], uint64(jsonValidUTF8Len(id)))
+			p += putJSONValidUTF8(pair[p:], id)
 			vectorMatmulJSONSetEntry(pair, 1, vectorMatmulJSONPutDistance(pair[p:p+8], -h.score), p)
 			p += 8
 			binary.LittleEndian.PutUint32(pair[4:], uint32(p))
@@ -1559,43 +1570,6 @@ func vectorMatmulJSONPutDistance(dst []byte, dist float64) bytejson.TpCode {
 	v, _ := strconv.ParseFloat(text, 64)
 	binary.LittleEndian.PutUint64(dst, math.Float64bits(v))
 	return bytejson.TpCodeFloat64
-}
-
-// vectorMatmulJSONStringLen is the length of id as a JSON string value: JSON text replaces
-// each byte that is not part of valid UTF-8 with U+FFFD.
-func vectorMatmulJSONStringLen(id []byte) int {
-	if utf8.Valid(id) {
-		return len(id)
-	}
-	n := 0
-	for i := 0; i < len(id); {
-		r, size := utf8.DecodeRune(id[i:])
-		if r == utf8.RuneError && size == 1 {
-			n += utf8.RuneLen(utf8.RuneError)
-		} else {
-			n += size
-		}
-		i += size
-	}
-	return n
-}
-
-// vectorMatmulJSONPutString writes id as a JSON string value and returns its length.
-func vectorMatmulJSONPutString(dst, id []byte) int {
-	if utf8.Valid(id) {
-		return copy(dst, id)
-	}
-	n := 0
-	for i := 0; i < len(id); {
-		r, size := utf8.DecodeRune(id[i:])
-		if r == utf8.RuneError && size == 1 {
-			n += utf8.EncodeRune(dst[n:], utf8.RuneError)
-		} else {
-			n += copy(dst[n:], id[i:i+size])
-		}
-		i += size
-	}
-	return n
 }
 
 func vectorMatmulUvarintLen(n int) int {
@@ -2205,25 +2179,11 @@ func (exec *vectorMatmulExec) SaveIntermediateResult(cnt int64, flags [][]uint8,
 	return exec.aggExec.SaveIntermediateResult(cnt, flags, writer)
 }
 
-func (exec *vectorMatmulExec) SaveIntermediateResultWithStringSource(cnt int64, flags [][]uint8, writer io.Writer, includeStringSource bool) error {
-	if err := exec.drain(); err != nil {
-		return err
-	}
-	return exec.aggExec.SaveIntermediateResultWithStringSource(cnt, flags, writer, includeStringSource)
-}
-
 func (exec *vectorMatmulExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	if err := exec.drain(); err != nil {
 		return err
 	}
 	return exec.aggExec.SaveIntermediateResultOfChunk(chunk, writer)
-}
-
-func (exec *vectorMatmulExec) SaveIntermediateResultOfChunkWithStringSource(chunk int, writer io.Writer, includeStringSource bool) error {
-	if err := exec.drain(); err != nil {
-		return err
-	}
-	return exec.aggExec.SaveIntermediateResultOfChunkWithStringSource(chunk, writer, includeStringSource)
 }
 
 func (exec *vectorMatmulExec) SaveSpillIntermediateRows(chunk int, rows []int32, writer io.Writer) error {
@@ -2437,7 +2397,7 @@ func (exec *vectorMatmulExec) Flush() (_ []*vector.Vector, retErr error) {
 	enc := &vectorMatmulJSON{sorted: sorted}
 	empty := exec.emptyState()
 	for x, state := range exec.state {
-		result, err := exec.allocation.newVector(exec.retType)
+		result, err := exec.allocation.newVector(exec.retType, exec.mp)
 		if err != nil {
 			return nil, err
 		}

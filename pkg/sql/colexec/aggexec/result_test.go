@@ -76,7 +76,8 @@ func TestPreallocatedResultGrowthAcrossChunks(t *testing.T) {
 							ret.bsFromEmptyList[i/4][i%4] = i%3 == 0
 						}
 					}
-					output := ret.flushAll()
+					output, err := ret.flushAll()
+					require.NoError(t, err)
 					t.Cleanup(func() {
 						for _, chunk := range output {
 							chunk.Free(mp)
@@ -210,7 +211,8 @@ func TestFlushAll(t *testing.T) {
 		osr.optInformation.chunkSize = blockLimitation
 
 		require.NoError(t, osr.preExtend(130))
-		vs := osr.flushAll()
+		vs, err := osr.flushAll()
+		require.NoError(t, err)
 		require.True(t, len(vs) == 0 || (len(vs) == 1 && vs[0].Length() == 0))
 		for i := range vs {
 			vs[i].Free(mg)
@@ -226,7 +228,8 @@ func TestFlushAll(t *testing.T) {
 		osr.optInformation.chunkSize = blockLimitation
 
 		require.NoError(t, osr.extendResultPurely(201))
-		vs := osr.flushAll()
+		vs, err := osr.flushAll()
+		require.NoError(t, err)
 		require.Equal(t, 3, len(vs))
 		for i := range vs {
 			vs[i].Free(mg)
@@ -311,5 +314,47 @@ func TestResultSize(t *testing.T) {
 		// free and check memory release
 		r.free()
 		require.Equal(t, before, mp.CurrNB())
+	}
+}
+
+// Setting empty groups to NULL reserves the result's null storage first, so
+// a pool rejection is an error from flushAll instead of a panic.
+func TestFlushAllEmptyGroupNullsAtPoolCap(t *testing.T) {
+	for _, filled := range []bool{false, true} {
+		mp, err := mpool.NewMPool("flush_null_cap", 1<<20, mpool.NoFixed)
+		require.NoError(t, err)
+		osr := optSplitResult{}
+		osr.init(mp, types.T_int64.ToType(), true, false)
+		osr.optInformation.shouldSetNullToEmptyGroup = true
+		osr.optInformation.chunkSize = 100
+		require.NoError(t, osr.extendResultPurely(130))
+
+		var filler []byte
+		if filled {
+			filler, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()), true)
+			require.NoError(t, err)
+		}
+		flags := vector.MustFixedColNoTypeCheck[bool](osr.emptyList[0])
+		flags[5], flags[64] = true, true
+		want := 0
+		for _, empty := range vector.MustFixedColNoTypeCheck[bool](osr.emptyList[0]) {
+			if empty {
+				want++
+			}
+		}
+		vs, err := osr.flushAll()
+		if filled {
+			require.Error(t, err)
+			mp.Free(filler)
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, want, vs[0].GetNulls().Count())
+			for i := range vs {
+				vs[i].Free(mp)
+			}
+		}
+		osr.free()
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
 	}
 }

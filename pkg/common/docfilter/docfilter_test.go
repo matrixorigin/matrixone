@@ -39,7 +39,7 @@ func TestSupportsBitset(t *testing.T) {
 func buildIntVec[T int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64](
 	t *testing.T, mp *mpool.MPool, typ types.Type, vals []T, nullRows map[int]bool,
 ) *vector.Vector {
-	v := vector.NewVec(typ)
+	v := vector.NewVec(typ, mp)
 	for i, val := range vals {
 		require.NoError(t, vector.AppendFixed(v, val, nullRows[i], mp))
 	}

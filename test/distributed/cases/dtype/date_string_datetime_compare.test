@@ -1,0 +1,104 @@
+-- @bvt:parallel
+-- Regression for issue #31539: DATE vs string comparison semantics.
+
+-- MySQL compares a DATE with a string in the DATETIME domain, so a string
+-- that carries a non-zero time-of-day keeps its time portion instead of
+-- being truncated to a pure date. Zero-time strings keep the DATE domain.
+-- A BETWEEN range whose bounds cannot share one DATETIME domain evaluates
+-- as independent comparisons, so BETWEEN and NOT BETWEEN stay exact
+-- negations. Scalar TIME keeps string semantics with a bare string.
+-- Binary-introducer (_binary'...') literals follow the same rule as
+-- character strings: MySQL coerces their string content to DATETIME in
+-- temporal comparisons, so both literal kinds share one eligibility rule.
+
+select date '2026-01-01' < '2026-01-01 00:00:00.001' as date_lt_fractional_string;
+select date '2026-01-01' = '2026-01-01 00:00:00.001' as date_eq_fractional_string;
+select date '2026-01-01' != '2026-01-01 12:00:00' as date_ne_noon_string;
+select date '2026-01-01' <=> '2026-01-01 00:00:00' as date_null_safe_eq_midnight_string;
+select date '2026-01-01' = '2026-01-01 00:00:00' as date_eq_midnight_string;
+select '2026-01-01 00:00:00.001' > date '2026-01-01' as string_gt_date_reversed;
+select date '2026-01-01' = '2026-01-01' as date_eq_plain_date_string;
+select date '2026-01-01' = '20260101' as date_eq_compact_string;
+select time '05:00:00' = '05:00' as time_eq_short_string;
+select '05:00:00' = '05:00' as string_eq_short_string;
+
+-- Compact datetime strings ('YYYYMMDDHHMMSS') parse as datetimes but the
+-- DATE cast refuses them, so they compare in the DATETIME domain even at
+-- midnight.
+select date '2026-01-01' = '20260101000000' as date_eq_compact_datetime_string;
+select '20260101000000' = date '2026-01-01' as compact_datetime_eq_date_reversed;
+select date '2026-01-01' < '20260101000001' as date_lt_compact_datetime_string;
+select date '2026-01-01' between '20260101000000' and '20260103000000' as date_between_compact_datetime_bounds;
+-- The DATE cast accepts the slash-separated clock, so these keep the DATE
+-- domain and match MySQL.
+select date '2026-01-03' = '2026-01-03 00/00/00' as date_eq_slash_clock_string;
+select date '2026-01-01' = '2026-01-03 00/00/00' as date_ne_slash_clock_string;
+select date '2026-01-02' between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as date_between_mixed_format_bounds;
+-- The datetime parser rejects the slash clock, so the range cannot share
+-- one DATETIME domain; it evaluates as the same independent comparisons
+-- NOT BETWEEN uses: the noon bound keeps its time portion (excluding the
+-- midnight row) while the slash-clock bound converts with the date cast.
+select date '2026-01-01' between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as date_between_mixed_format_midnight;
+select date '2026-01-01' not between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as date_not_between_mixed_format_midnight;
+select date '2026-01-02' not between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as date_not_between_mixed_format_middle;
+select date '2026-01-03' between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as date_between_mixed_format_upper_edge;
+-- A typed DATE bound is not a string literal, so the range expands to
+-- independent comparisons as well and the noon bound keeps its time
+-- portion.
+select date '2026-01-01' between '2026-01-01 12:00:00' and date '2026-01-03' as date_between_typed_peer_midnight;
+select date '2026-01-01' not between '2026-01-01 12:00:00' and date '2026-01-03' as date_not_between_typed_peer_midnight;
+select date '2026-01-02' between '2026-01-01 12:00:00' and date '2026-01-03' as date_between_typed_peer_middle;
+select date '2026-01-02' not between '2026-01-01 12:00:00' and date '2026-01-03' as date_not_between_typed_peer_middle;
+-- Binary-introducer literals are eligible for the same DATETIME-domain
+-- coercion as character strings (matching MySQL), in binary comparisons
+-- and as BETWEEN bounds; NOT BETWEEN stays the exact negation.
+select date '2026-01-01' = _binary'2026-01-01 00:00:00.001' as date_eq_binary_fractional_string;
+select date '2026-01-01' < _binary'2026-01-01 00:00:00.001' as date_lt_binary_fractional_string;
+select date '2026-01-01' = _binary'2026-01-01 00:00:00' as date_eq_binary_midnight_string;
+select date '2026-01-01' between _binary'2026-01-01 12:00:00' and _binary'2026-01-03' as date_between_binary_bounds_midnight;
+select date '2026-01-01' not between _binary'2026-01-01 12:00:00' and _binary'2026-01-03' as date_not_between_binary_bounds_midnight;
+select date '2026-01-02' between _binary'2026-01-01 12:00:00' and _binary'2026-01-03' as date_between_binary_bounds_middle;
+select date '2026-01-02' not between _binary'2026-01-01 12:00:00' and _binary'2026-01-03' as date_not_between_binary_bounds_middle;
+select date '2026-01-01' between '2026-01-01 12:00:00' and _binary'2026-01-03' as date_between_mixed_char_binary_midnight;
+select date '2026-01-01' not between '2026-01-01 12:00:00' and _binary'2026-01-03' as date_not_between_mixed_char_binary_midnight;
+
+drop table if exists date_string_datetime_compare;
+create table date_string_datetime_compare(d date);
+insert into date_string_datetime_compare values ('2026-01-01'), ('2026-01-02');
+
+select d = '2026-01-01 00:00:00.5' as col_eq_fractional_string from date_string_datetime_compare order by d;
+select d < '2026-01-02 12:00:00' as col_lt_fractional_string from date_string_datetime_compare order by d;
+select d between '2026-01-01 00:00:00.5' and '2026-01-03' as col_between_fractional_lower from date_string_datetime_compare order by d;
+select d between '2026-01-01' and '2026-01-02 23:59:59' as col_between_fractional_upper from date_string_datetime_compare order by d;
+select d between '2026-01-01' and '2026-01-02' as col_between_zero_time from date_string_datetime_compare order by d;
+select d in ('2026-01-01 00:00:00.5', '2026-01-02') as col_in_fractional_string from date_string_datetime_compare order by d;
+select d = '2026-01-01 00:00:00' as col_eq_zero_time_string from date_string_datetime_compare order by d;
+select d between '20260101000000' and '20260103000000' as col_between_compact_datetime_bounds from date_string_datetime_compare order by d;
+-- Same expansion as the scalar case: the noon bound excludes the midnight
+-- row, the slash-clock bound converts with the date cast, and NOT BETWEEN
+-- is the exact negation.
+select d between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as col_between_mixed_format from date_string_datetime_compare order by d;
+select d not between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as col_not_between_mixed_format from date_string_datetime_compare order by d;
+select d between '2026-01-01 12:00:00' and date '2026-01-03' as col_between_typed_peer from date_string_datetime_compare order by d;
+select d not between '2026-01-01 12:00:00' and date '2026-01-03' as col_not_between_typed_peer from date_string_datetime_compare order by d;
+-- Column-level binary-introducer bounds: the noon lower bound excludes
+-- the midnight row and NOT BETWEEN is the exact negation.
+select d between _binary'2026-01-01 12:00:00' and _binary'2026-01-03' as col_between_binary_bounds from date_string_datetime_compare order by d;
+select d not between _binary'2026-01-01 12:00:00' and _binary'2026-01-03' as col_not_between_binary_bounds from date_string_datetime_compare order by d;
+
+drop table date_string_datetime_compare;
+
+-- A volatile left operand (a sequence) must evaluate exactly once even when
+-- the range expands to independent comparisons: each BETWEEN advances the
+-- sequence by one and keeps the expanded-domain result (issue #31539
+-- review).
+drop sequence if exists date_str_dt_cmp_seq;
+create sequence date_str_dt_cmp_seq as int start with 1;
+select cast(date_add(date '2026-01-01', interval nextval('date_str_dt_cmp_seq') day) as date) between '2026-01-01 12:00:00' and date '2026-01-02' as volatile_between_typed_peer;
+select currval('date_str_dt_cmp_seq') as seq_after_typed_peer;
+select cast(date_add(date '2026-01-01', interval nextval('date_str_dt_cmp_seq') day) as date) between '2026-01-01 12:00:00' and '2026-01-03 00/00/00' as volatile_between_slash_clock;
+select currval('date_str_dt_cmp_seq') as seq_after_slash_clock;
+-- The uniform-domain fused range evaluates a volatile operand once as well.
+select cast(date_add(date '2026-01-01', interval nextval('date_str_dt_cmp_seq') day) as date) between '2026-01-01 12:00:00' and '2026-01-04 00:00:00' as volatile_between_uniform_domain;
+select currval('date_str_dt_cmp_seq') as seq_after_uniform_domain;
+drop sequence date_str_dt_cmp_seq;

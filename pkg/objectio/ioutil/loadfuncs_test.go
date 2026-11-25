@@ -92,7 +92,7 @@ func TestLoadColumnsDataIntoAndTopNRejectsInvalidContract(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	destination := vector.NewVec(types.T_int64.ToType())
+	destination := vector.NewVec(types.T_int64.ToType(), mp)
 	defer destination.Free(mp)
 	top := &objectio.IndexReaderTopOp{}
 	selector := func() ([]int64, error) { return []int64{}, nil }
@@ -160,9 +160,9 @@ func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) 
 	defer mpool.DeleteMPool(mp)
 
 	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType(), mp)
 	defer input.Clean(mp)
 	for _, row := range []struct {
 		key     string
@@ -196,7 +196,7 @@ func TestAppendableVisibilityFiltersAbortFromMaterializeAndSearch(t *testing.T) 
 	location := stats.ObjectLocation()
 	snapshot := types.BuildTS(10, 0)
 
-	destination := vector.NewVec(types.T_varchar.ToType())
+	destination := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer destination.Free(mp)
 	deleteMask, _, err := LoadColumnsDataInto(
 		ctx,
@@ -243,9 +243,9 @@ func TestReadDeletesSupportsLegacyTombstoneWithoutAbortColumn(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	defer input.Clean(mp)
 	blockID := types.Blockid{}
 	for offset := uint32(1); offset <= 2; offset++ {
@@ -289,9 +289,9 @@ func TestLegacyBackupTombstoneUsesTrailingCommitTS(t *testing.T) {
 
 	blockID := *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)
 	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType(), mp)
 	defer input.Clean(mp)
 
 	for _, row := range []struct {
@@ -387,8 +387,8 @@ func TestReadDeletesBroadcastsPersistedConstantCommitTS(t *testing.T) {
 
 	blockID := *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)
 	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), mp)
 	for offset := uint32(1); offset <= 2; offset++ {
 		require.NoError(t, vector.AppendFixed(
 			input.Vecs[0], types.NewRowid(&blockID, offset), false, mp,
@@ -445,8 +445,8 @@ func TestTimestampPrimaryKeyWithoutCommitTSIsRejected(t *testing.T) {
 
 	blockID := *objectio.NewBlockid(objectio.NewSegmentid(), 1, 0)
 	input := batch.NewWithSize(2)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	defer input.Clean(mp)
 	require.NoError(t, vector.AppendFixed(
 		input.Vecs[0], types.NewRowid(&blockID, 1), false, mp,
@@ -498,9 +498,9 @@ func TestReadDeletesRejectsMalformedAbortColumn(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 
 	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
+	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
+	input.Vecs[2] = vector.NewVec(types.T_bool.ToType(), mp)
 	defer input.Clean(mp)
 	blockID := types.Blockid{}
 	for offset := uint32(1); offset <= 3; offset++ {
@@ -577,7 +577,7 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	writeMP := mpool.MustNewZero()
 	input := batch.NewWithSize(len(typs))
 	for i := range typs {
-		input.Vecs[i] = vector.NewVec(typs[i])
+		input.Vecs[i] = vector.NewVec(typs[i], writeMP)
 	}
 	for i := 0; i < rowCount; i++ {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i+1), false, writeMP))
@@ -608,10 +608,10 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	require.Zero(t, writeMP.CurrNB())
 	mpool.DeleteMPool(writeMP)
 
-	newDestinations := func() []*vector.Vector {
+	newDestinations := func(mp *mpool.MPool) []*vector.Vector {
 		ret := make([]*vector.Vector, len(typs))
 		for i := range typs {
-			ret[i] = vector.NewOffHeapVecWithType(typs[i])
+			ret[i] = vector.NewVec(typs[i], mp)
 		}
 		return ret
 	}
@@ -624,7 +624,7 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	// Populate the memory cache deterministically before measuring the bounded
 	// selected-row materialization path.
 	warmMP := mpool.MustNewZero()
-	warm := newDestinations()
+	warm := newDestinations(warmMP)
 	deleteMask, _, err := LoadColumnsDataInto(
 		ctx,
 		[]uint16{0, 1, 2, 3},
@@ -647,7 +647,7 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	require.NoError(t, err)
 	defer mpool.DeleteMPool(queryMP)
 	sels := []int64{0, 7, 511, 1024, 2047, 4096, 6143, 7001, 8000, 8191}
-	selected := newDestinations()
+	selected := newDestinations(queryMP)
 	deleteMask, fromCache, err := LoadColumnsDataInto(
 		ctx,
 		[]uint16{0, 1, 2, 3},
@@ -694,7 +694,7 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	require.Equal(t, beforeSearch, queryMP.CurrNB(), "scoped search must not duplicate the full varchar column")
 
 	selected[2].GetBytesAt(0)[0] = 'X'
-	again := newDestinations()
+	again := newDestinations(queryMP)
 	deleteMask, fromCache, err = LoadColumnsDataInto(
 		ctx,
 		[]uint16{0, 1, 2, 3},
@@ -715,7 +715,7 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	// Complete materialization has its own private area. Reusing the producing
 	// Vector and COW in an independent view must not affect a later cache read.
 	fullMP := mpool.MustNewZero()
-	full := vector.NewOffHeapVecWithType(typs[3])
+	full := vector.NewVec(typs[3], fullMP)
 	readonlyCopies := make([]*vector.Vector, 0, 4)
 	readonlyCopies = append(readonlyCopies, full)
 	defer func() {
@@ -728,9 +728,9 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, fromCache)
-	require.True(t, full.HasBorrowedBacking())
+	require.False(t, full.IsReadOnly(), "complete materialization is owned")
 	require.Equal(t, rowCount, full.Length())
-	retained, err := full.RetainedReadonlyViewWithMP(fullMP)
+	retained, err := full.Dup(fullMP)
 	require.NoError(t, err)
 	readonlyCopies = append(readonlyCopies, retained)
 	full.CleanOnlyData()
@@ -739,7 +739,11 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("%08d", rowCount-1)+strings.Repeat("p", 51), retained.GetStringAt(rowCount-1))
-	require.NoError(t, retained.MaterializeOwned(fullMP))
+	if retained.IsReadOnly() {
+		owned, dupErr := retained.Dup(fullMP)
+		require.NoError(t, dupErr)
+		retained = owned
+	}
 	retained.GetBytesAt(0)[0] = 'X'
 	require.Equal(t, "00000000"+strings.Repeat("p", 51), full.GetStringAt(0))
 	_, err = LoadColumnsDataIntoReadonly(
@@ -751,23 +755,23 @@ func TestLoadColumnsDataIntoSelectedRowsUsesHotSealedCache(t *testing.T) {
 	full.Free(fullMP)
 
 	readonlyPrefix := []*vector.Vector{
-		vector.NewOffHeapVecWithType(typs[3]),
-		vector.NewOffHeapVecWithType(types.T_int64.ToType()),
+		vector.NewVec(typs[3], fullMP),
+		vector.NewVec(types.T_int64.ToType(), fullMP),
 	}
 	readonlyCopies = append(readonlyCopies, readonlyPrefix...)
 	_, err = LoadColumnsDataIntoReadonly(
 		ctx, []uint16{3, 1}, []types.Type{typs[3], typs[1]}, fs, location, readonlyPrefix, fullMP, 0,
 	)
 	require.Error(t, err, "a later column's materialization error leaves an owned prefix")
-	require.True(t, readonlyPrefix[0].HasBorrowedBacking())
+	require.False(t, readonlyPrefix[0].IsReadOnly())
 	require.Equal(t, "00000000"+strings.Repeat("p", 51), readonlyPrefix[0].GetStringAt(0))
 	freeDestinations(readonlyPrefix, fullMP)
 	require.Zero(t, fullMP.CurrNB())
 
 	trackingFS := &releaseTrackingFS{FileService: fs}
 	partial := []*vector.Vector{
-		vector.NewOffHeapVecWithType(typs[2]),
-		vector.NewOffHeapVecWithType(types.T_int64.ToType()),
+		vector.NewVec(typs[2], queryMP),
+		vector.NewVec(types.T_int64.ToType(), queryMP),
 	}
 	_, _, err = LoadColumnsDataInto(
 		ctx,
@@ -798,7 +802,7 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_TS.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(
 		bat.Vecs[0],
 		types.BuildTS(42, 0),
@@ -845,7 +849,7 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 func TestObjectReadersRejectEmptyLocation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	destination := vector.NewVec(types.T_int64.ToType())
+	destination := vector.NewVec(types.T_int64.ToType(), mp)
 	defer destination.Free(mp)
 
 	readers := []struct {

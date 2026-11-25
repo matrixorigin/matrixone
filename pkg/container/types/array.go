@@ -116,12 +116,12 @@ func stringToArrayWithContext[T ArrayElement](ctx context.Context, str string) (
 	input := strings.ReplaceAll(str, " ", "")
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
-		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "malformed vector input: %s", str)
 	}
 
 	if len(input) == 2 {
 		// We don't handle empty vector like "[]"
-		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "malformed vector input: %s", str)
+		return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "malformed vector input: %s", str)
 	}
 
 	// remove "[" and "]"
@@ -129,7 +129,7 @@ func stringToArrayWithContext[T ArrayElement](ctx context.Context, str string) (
 
 	numStrs := strings.Split(input, ",")
 	if len(numStrs) > MaxArrayDimension {
-		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+		return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 	}
 	result := make([]T, len(numStrs))
 

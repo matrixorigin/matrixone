@@ -34,7 +34,7 @@ func TestAlterCopyBinaryAssignmentBoundary(t *testing.T) {
 			physicalType := types.New(oid, 4, 0)
 			target := makePlan2Type(&physicalType)
 			source := MakePlan2StringConstExprWithType("🧪")
-			require.Equal(t, "cast", assignmentCastFunctionNameForSource(ordinary, source, target, false, nil))
+			require.Equal(t, "cast_assign", assignmentCastFunctionNameForSource(ordinary, source, target, false, nil))
 			expression, err := forceAssignmentCastExprWithProcess(copyContext, source, target, false, nil)
 			require.NoError(t, err)
 			require.Equal(t, "cast_strict", expression.GetF().Func.ObjName)

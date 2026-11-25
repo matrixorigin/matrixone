@@ -156,7 +156,7 @@ func TestMasterIndexPublishesSortedPrefixPayload(t *testing.T) {
 	require.Equal(t, "prefix_in", inner.FilterList[0].GetF().Func.ObjName)
 	payload := inner.FilterList[0].GetF().Args[1].GetVec()
 
-	got := vector.NewVec(types.T_any.ToType())
+	got := vector.NewVec(types.T_any.ToType(), mp)
 	defer got.Free(mp)
 	require.NoError(t, got.UnmarshalBinary(payload.Data))
 

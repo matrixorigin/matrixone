@@ -56,19 +56,19 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     """
     # If it's already a string, return it
     if isinstance(query, str):
-        return query.rstrip(';').strip()
+        return query.strip().rstrip(';').rstrip()
 
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
         sql = substitute_parameters(sql, params)
-        return sql.rstrip(';').strip()
+        return sql.strip().rstrip(';').rstrip()
 
     # If it's a SQLAlchemy statement (has compile method)
     if hasattr(query, 'compile'):
         try:
             compiled = compile_expression(query)
-            return str(compiled).rstrip(';').strip()
+            return str(compiled).strip().rstrip(';').rstrip()
         except Exception as e:
             raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
 
@@ -134,7 +134,7 @@ def _build_csv_export_sql(
     query_sql = _query_to_sql(query)
 
     # Build the export SQL
-    sql_parts = [query_sql, "INTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
+    sql_parts = ["INTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
 
     # Add CSV options
     options = []
@@ -158,7 +158,8 @@ def _build_csv_export_sql(
             UserWarning,
         )
 
-    return ' '.join(sql_parts)
+    # End any trailing SELECT line comment before appending executable SQL.
+    return query_sql + '\n' + ' '.join(sql_parts)
 
 
 def _build_jsonl_export_sql(
@@ -180,7 +181,8 @@ def _build_jsonl_export_sql(
 
     # Build the export SQL with JSONL format
     # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
-    return f"{query_sql} INTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
+    # End any trailing SELECT line comment before appending executable SQL.
+    return f"{query_sql}\nINTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
 
 
 class ExportManager:

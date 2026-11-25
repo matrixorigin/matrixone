@@ -549,6 +549,16 @@ type FunctionResultWrapper interface {
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
+
+	// SetArgumentIsBin publishes, for each argument of the call, whether its
+	// value was spelled as a hex/bit literal or comes from a binary-flagged
+	// prepared parameter or user variable. The caller that produced the
+	// arguments owns this fact; vectors do not carry it. The slice is borrowed
+	// until the next call; nil means no argument is a binary literal.
+	SetArgumentIsBin(flags []bool)
+	// ArgumentIsBin reports the published flag of argument i, false when it
+	// was not published or i is out of range.
+	ArgumentIsBin(i int) bool
 }
 
 type reusableParameterWrapper interface{}
@@ -586,10 +596,10 @@ func OptGetBytesParamFromWrapper(wrapper FunctionResultWrapper, idx int, src *Ve
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
 
 type FunctionResult[T types.FixedSizeT] struct {
-	typ        types.Type
-	vec        *Vector
-	mp         *mpool.MPool
-	allocation *AllocationAccountSelection
+	typ types.Type
+	vec *Vector
+	// mp allocates the result vectors; an accounted view charges them.
+	mp *mpool.MPool
 
 	isVarlena bool
 	cols      []T
@@ -600,7 +610,20 @@ type FunctionResult[T types.FixedSizeT] struct {
 	//  this field is for optimisation to reduce the allocation of FunctionParameterWrapper pointer.
 	// 	there are still many built-in functions don't use it now, and will be fixed in the future.
 	convenientParam []reusableParameterWrapper
+
+	// argumentIsBin is the caller-published binary-literal flag per argument.
+	argumentIsBin []bool
 }
+
+func (fr *FunctionResult[T]) SetArgumentIsBin(flags []bool) { fr.argumentIsBin = flags }
+
+func (fr *FunctionResult[T]) ArgumentIsBin(i int) bool {
+	return i >= 0 && i < len(fr.argumentIsBin) && fr.argumentIsBin[i]
+}
+
+// MPool returns the pool the result allocates through (an accounted view
+// when the result is charged to an account).
+func (fr *FunctionResult[T]) MPool() *mpool.MPool { return fr.mp }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
 	if fr, ok := wrapper.(*FunctionResult[T]); ok {
@@ -636,12 +659,24 @@ func (fr *FunctionResult[T]) getConvenientParamList() []reusableParameterWrapper
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
+	return fr.preExtendAndReset(targetSize, true)
+}
+
+// PreExtendAndResetNonNull prepares an evaluation proven to emit no NULLs.
+// The caller must audit the kernel and its current runtime arguments; unknown
+// or nullable evaluations must use PreExtendAndReset instead. Value storage
+// stays accounted. An empty implicit validity bitmap needs no reservation.
+// Existing bitmap capacity remains owned for a later nullable evaluation.
+func (fr *FunctionResult[T]) PreExtendAndResetNonNull(targetSize int) error {
+	if targetSize < 0 {
+		return moerr.NewInvalidInputNoCtx("negative function result length")
+	}
+	return fr.preExtendAndReset(targetSize, false)
+}
+
+func (fr *FunctionResult[T]) preExtendAndReset(targetSize int, nullable bool) error {
 	if fr.vec == nil {
-		var err error
-		fr.vec, err = NewOffHeapVecWithTypeAndAllocation(fr.typ, fr.allocation)
-		if err != nil {
-			return err
-		}
+		fr.vec = NewVec(fr.typ, fr.mp)
 	}
 
 	oldLength := fr.vec.Length()
@@ -661,17 +696,17 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 			return err
 		}
 	}
-	if err := fr.vec.PreExtendNulls(targetSize, fr.mp); err != nil {
-		return err
-	}
 	if !wasConst {
 		fr.vec.ResetWithSameType()
 	}
-	if nullBitmap := fr.vec.nsp.GetBitmap(); nullBitmap.HasExternalStorage() {
-		// Allocation-accounted storage can outlive several evaluations and be
-		// larger than this result. Publish the current row domain explicitly so
-		// NULL unions never infer it from a reused source or physical capacity.
-		nullBitmap.TryExpandWithSize(targetSize)
+	// A nullable result reserves its null bitmap here, where an admission
+	// failure is an error: kernels then set NULL rows in place (Add, AddRange,
+	// Or), which cannot fail within the reserved rows. A result proven to emit
+	// no NULLs reserves nothing.
+	if nullable && targetSize > 0 {
+		if err := fr.vec.ensureNullCapacity(targetSize); err != nil {
+			return err
+		}
 	}
 
 	if !fr.isVarlena {
@@ -703,14 +738,34 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	return nil
 }
 
+// validateText rejects bytes that are not valid text for a native Unicode
+// result type. Functions and casts are where text values are produced, so a
+// result is checked once here instead of on every later copy of the vector.
+func (fr *FunctionResult[T]) validateText(val []byte) error {
+	return types.ValidateCollationValue(fr.vec.typ, val)
+}
+
 func (fr *FunctionResult[T]) AppendBytesWithWriter(size int, writer func([]byte) error) error {
 	if fr.vec.IsConst() {
 		return moerr.NewInternalErrorNoCtx("direct varlena writer does not support const result")
+	}
+	if types.IsUnicodeCollation(fr.vec.typ.Charset) {
+		return AppendBytesWithWriter(fr.vec, size, fr.mp, func(dst []byte) error {
+			if err := writer(dst); err != nil {
+				return err
+			}
+			return fr.validateText(dst)
+		})
 	}
 	return AppendBytesWithWriter(fr.vec, size, fr.mp, writer)
 }
 
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
+	if !isnull {
+		if err := fr.validateText(val); err != nil {
+			return err
+		}
+	}
 	if !fr.vec.IsConst() {
 		return AppendBytes(fr.vec, val, isnull, fr.mp)
 	} else if !isnull {
@@ -722,6 +777,11 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 // AppendMultiBytes appends cnt logical rows backed by one materialized varlena
 // payload. Non-inline descriptors intentionally share the same area range.
 func (fr *FunctionResult[T]) AppendMultiBytes(val []byte, isnull bool, cnt int) error {
+	if !isnull {
+		if err := fr.validateText(val); err != nil {
+			return err
+		}
+	}
 	if !fr.vec.IsConst() {
 		return AppendMultiBytes(fr.vec, val, isnull, cnt, fr.mp)
 	}
@@ -758,6 +818,9 @@ func (fr *FunctionResult[T]) AppendMustNull() {
 }
 
 func (fr *FunctionResult[T]) AppendMustBytesValue(val []byte) error {
+	if err := fr.validateText(val); err != nil {
+		return err
+	}
 	return AppendBytes(fr.vec, val, false, fr.mp)
 }
 
@@ -818,14 +881,6 @@ func (fr *FunctionResult[T]) Free() {
 		fr.vec = nil
 	}
 	fr.convenientParam = nil
-}
-
-func (fr *FunctionResult[T]) setAllocation(selection *AllocationAccountSelection) {
-	fr.allocation = selection
-}
-
-type functionResultAllocationSetter interface {
-	setAllocation(*AllocationAccountSelection)
 }
 
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
@@ -894,26 +949,4 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWra
 		return newResultFunc[types.Enum](typ, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
-}
-
-// NewFunctionResultWrapperWithAllocation constructs a reusable result whose
-// current and future vectors allocate through selection. The selection stays
-// with the wrapper when EvalWithoutResultReusing transfers its current vector.
-func NewFunctionResultWrapperWithAllocation(
-	typ types.Type,
-	mp *mpool.MPool,
-	selection *AllocationAccountSelection,
-) (FunctionResultWrapper, error) {
-	if selection != nil {
-		if err := selection.validate(); err != nil {
-			return nil, err
-		}
-	}
-	result := NewFunctionResultWrapper(typ, mp)
-	setter, ok := result.(functionResultAllocationSetter)
-	if !ok {
-		return nil, mpool.ErrAllocationAccountInvariant
-	}
-	setter.setAllocation(selection)
-	return result, nil
 }

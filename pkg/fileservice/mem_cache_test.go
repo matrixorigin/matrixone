@@ -40,6 +40,70 @@ func requireDataCacheSet(t *testing.T, cache fscache.DataCache, ctx context.Cont
 	require.NoError(t, err)
 }
 
+func TestTryReadMemoryCacheDeclinesBusyShard(t *testing.T) {
+	ctx := t.Context()
+	mem := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	t.Cleanup(func() { mem.Close(ctx) })
+	fs := &LocalFS{name: "local", memCache: mem}
+	cache := mem.cache.(*s3fifo.DataCache)
+	key := fscache.CacheKey{Path: "sample", Offset: 0, Sz: 1}
+	data := mem.CopyToCacheData(ctx, []byte{42})
+	defer data.Release()
+	requireDataCacheSet(t, cache, ctx, key, data)
+
+	read := func() (bool, byte) {
+		vec := IOVector{FilePath: "local:sample", Entries: []IOEntry{{Size: 1}}}
+		defer vec.ReleaseReadResultOnError()
+		if !TryReadMemoryCache(ctx, fs, &vec) {
+			return false, 0
+		}
+		return true, vec.Entries[0].CachedData.Bytes()[0]
+	}
+	hit, value := read()
+	require.True(t, hit)
+	require.Equal(t, byte(42), value)
+
+	locked, unlock, holderDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	attemptDone := make(chan struct{})
+	attemptStarted := false
+	go func() {
+		defer close(holderDone)
+		held, _, ok, _ := cache.GetWithPinAdmission(ctx, key, func(int64) (func(), error) {
+			close(locked)
+			<-unlock
+			return nil, nil
+		})
+		if ok {
+			held.Release()
+		}
+	}()
+	defer func() {
+		close(unlock)
+		<-holderDone
+		if attemptStarted {
+			<-attemptDone
+		}
+	}()
+	select {
+	case <-locked:
+	case <-holderDone:
+		t.Fatal("the fixture did not acquire the cached key's shard")
+	}
+
+	var contendedHit bool
+	attemptStarted = true
+	go func() {
+		defer close(attemptDone)
+		contendedHit, _ = read()
+	}()
+	select {
+	case <-attemptDone:
+		require.False(t, contendedHit)
+	case <-time.After(5 * time.Second):
+		t.Fatal("optional cache read waited for the shard holder")
+	}
+}
+
 type reclaimTrackingAllocator struct {
 	malloc.MemoryCacheAllocator
 	reclaims atomic.Int64
@@ -74,7 +138,7 @@ func (oomExactAllocator) BackingSize(size uint64) (uint64, error) {
 // It observes the real Set-return boundary without blocking the reservation
 // commit callback inside the accounting guard.
 type memCacheSetReturnGate struct {
-	fscache.DataCache
+	memoryCacheBacking
 	key       fscache.CacheKey
 	entered   chan struct{}
 	release   chan struct{}
@@ -83,7 +147,7 @@ type memCacheSetReturnGate struct {
 }
 
 func (g *memCacheSetReturnGate) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
-	inserted, err := g.DataCache.Set(ctx, key, data)
+	inserted, err := g.memoryCacheBacking.Set(ctx, key, data)
 	if key == g.key {
 		g.enterOnce.Do(func() { close(g.entered) })
 		<-g.release
@@ -488,10 +552,10 @@ func TestMemCacheReservationHandoffFitsAtSetReturn(t *testing.T) {
 	defer cVector.Release()
 
 	gate := &memCacheSetReturnGate{
-		DataCache: cache.cache,
-		key:       key(2),
-		entered:   make(chan struct{}),
-		release:   make(chan struct{}),
+		memoryCacheBacking: cache.cache,
+		key:                key(2),
+		entered:            make(chan struct{}),
+		release:            make(chan struct{}),
 	}
 	cache.cache = gate
 	updateDone := make(chan error, 1)
@@ -1335,9 +1399,166 @@ func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
 	}
 	assert.Equal(t, int64(10), cache.cache.Used())
 
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	assert.NotContains(t, EvictMemoryCachesToCapacityPercent(cancelled, 50), "test-target-evict")
+	assert.Equal(t, int64(10), cache.cache.Used())
+
 	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
 	assert.Equal(t, int64(5), ret["test-target-evict"])
 	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
+}
+
+func TestMemoryCachePressureStopsBeforeBatch(t *testing.T) {
+	for _, cancelAt := range []struct {
+		name string
+		read int
+		idle bool
+	}{
+		{name: "target snapshot", read: 1, idle: true},
+		{name: "under evictor lock", read: 2},
+		{name: "under evictor lock after releasing idle buffers", read: 2, idle: true},
+	} {
+		t.Run(cancelAt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			reads := 0
+			armed := false
+			evictions := 0
+			cache := NewMemCache(func() int64 {
+				if !armed {
+					return 1 << 20
+				}
+				reads++
+				if reads == cancelAt.read {
+					cancel()
+				}
+				return 80
+			}, &CacheCallbacks{
+				PostEvict: []CacheCallbackFunc{func(fscache.CacheKey, fscache.Data) { evictions++ }},
+			}, nil, "cancel-during-capacity-read")
+			defer cache.Close(t.Context())
+			tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+			cache.arenaAllocator = tracking
+			for i := range 8 {
+				key := fscache.CacheKey{Path: fmt.Sprint(i), Sz: 10}
+				requireDataCacheSet(t, cache.cache, ctx, key, staticTestData(make([]byte, 10)))
+			}
+			if cancelAt.idle {
+				cache.AllocateCacheData(ctx, 4096).Release()
+			}
+			idleBytes := cache.reservedBytes.Load()
+			armed = true
+			EvictMemoryCachesToCapacityPercent(ctx, 50)
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			require.Equal(t, int64(80), cache.cache.Used())
+			require.Zero(t, evictions)
+			if cancelAt.read == 2 && cancelAt.idle {
+				require.EqualValues(t, 1, tracking.reclaims.Load(), "idle page release was already admitted")
+			} else {
+				require.Zero(t, tracking.reclaims.Load())
+			}
+			if cancelAt.read == 1 {
+				require.Equal(t, idleBytes, cache.reservedBytes.Load())
+			} else {
+				require.Zero(t, cache.reservedBytes.Load(), "already admitted idle cleanup commits")
+			}
+		})
+	}
+}
+
+type controlledPressureDeadline struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c *controlledPressureDeadline) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestMemoryCachePressureReclaimsAdmittedBatchAfterDeadline(t *testing.T) {
+	ctx := &controlledPressureDeadline{Context: t.Context(), deadline: time.Now().Add(time.Hour)}
+	callbacks := 0
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), &CacheCallbacks{
+		PostEvict: []CacheCallbackFunc{func(_ fscache.CacheKey, data fscache.Data) {
+			require.Equal(t, "cached value", string(data.Bytes()))
+			callbacks++
+			ctx.deadline = time.Now().Add(-time.Second)
+		}},
+	}, nil, "pressure-reclaim-after-deadline")
+	defer cache.Close(t.Context())
+	tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+	cache.arenaAllocator = tracking
+	const batchSize = 64
+	const value = "cached value"
+	for i := range batchSize + 1 {
+		func() {
+			data := cache.CopyToCacheData(t.Context(), []byte(value))
+			defer data.Release()
+			requireDataCacheSet(t, cache.cache, t.Context(), fscache.CacheKey{Path: fmt.Sprint(i), Sz: int64(len(value))}, data)
+		}()
+	}
+	require.EqualValues(t, cache.BackingSize(len(value)), cache.EvictToCapacityPercent(ctx, 0))
+	require.NoError(t, ctx.Err(), "elapsed deadline can precede the timeout notification")
+	require.Equal(t, batchSize, callbacks)
+	require.EqualValues(t, 1, tracking.reclaims.Load(), "the walk purges after completing the batch")
+}
+
+func TestMemoryCacheCloseDuringPressureEviction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	callbackResult := make(chan string, 1)
+	unblock := sync.OnceFunc(func() { close(release) })
+	const name = "close-during-pressure-eviction"
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), &CacheCallbacks{
+		PostEvict: []CacheCallbackFunc{func(_ fscache.CacheKey, data fscache.Data) {
+			close(started)
+			<-release
+			callbackResult <- string(data.Bytes())
+		}},
+	}, nil, name)
+	tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+	cache.arenaAllocator = tracking
+	defer cache.Close(ctx)
+	defer unblock()
+	func() {
+		data := cache.CopyToCacheData(ctx, []byte("retained during callback"))
+		defer data.Release()
+		requireDataCacheSet(t, cache.cache, ctx, fscache.CacheKey{Path: "one", Sz: int64(len(data.Bytes()))}, data)
+	}()
+
+	walkCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	evicted := make(chan struct{})
+	go func() {
+		EvictMemoryCachesToCapacityPercent(walkCtx, 0)
+		close(evicted)
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	stop()
+	closed := make(chan struct{})
+	go func() {
+		cache.Close(ctx)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	require.NotContains(t, EvictMemoryCachesToCapacityPercent(ctx, 0), name)
+	unblock()
+	select {
+	case <-evicted:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	require.Equal(t, "retained during callback", <-callbackResult)
+	require.Equal(t, int64(1), tracking.reclaims.Load(), "only Close reclaims the retired arena")
 }
 
 func TestMemoryCacheExplicitEvictionReclaimsAllocator(t *testing.T) {

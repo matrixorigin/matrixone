@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -54,12 +53,7 @@ func TestPreparedSpatialDistanceUnitOverload(t *testing.T) {
 
 	numericValues := []any{
 		unitValues[0], unitValues[1],
-		ParamValue{
-			Value:            int64(4326),
-			SourceType:       types.T_varchar.ToType(),
-			HasSourceType:    true,
-			PrepareParamKind: vector.PrepareParamInteger,
-		},
+		sqlIntParam(4326),
 	}
 	runtimePlan, _, err = FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, numericValues)
 	require.NoError(t, err)

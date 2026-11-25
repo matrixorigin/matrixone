@@ -214,10 +214,9 @@ func localRankTestBudget(t *testing.T, limit uint64) (*process.Process, *process
 func localRankAccountedWindow(t *testing.T, n, width int, withNulls bool, limit uint64) (*Window, *process.Process, *process.ExecutionResourceGeneration) {
 	t.Helper()
 	proc, generation, account := localRankTestBudget(t, limit)
-	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	selection, err := proc.Mp().WithAccount(account, mpool.AllocationOwnerOrder, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	input, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_int32.ToType(), selection)
-	require.NoError(t, err)
+	input := vector.NewVec(types.T_int32.ToType(), selection)
 	t.Cleanup(func() {
 		if input != nil {
 			input.Free(proc.Mp())
@@ -227,7 +226,7 @@ func localRankAccountedWindow(t *testing.T, n, width int, withNulls bool, limit 
 	for i := range values {
 		values[i], nulls[i] = int32(i), withNulls && i%7 == 0
 	}
-	require.NoError(t, vector.AppendFixedList(input, values, nulls, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(input, values, nulls, selection))
 	bat := localRankBatch(proc.Mp(), n, input)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	input = nil // ownership transferred to the mock child
@@ -242,6 +241,7 @@ func localRankAccountedWindow(t *testing.T, n, width int, withNulls bool, limit 
 	}}
 	t.Cleanup(func() {
 		arg.Free(proc, false, nil)
+		colexec.FreeMockChildren(arg)
 		require.NoError(t, arg.ClearAllocationAccount(account))
 	})
 	arg.AppendChild(op)
@@ -310,7 +310,7 @@ func TestLocalRankIndexLaterOutputPressure(t *testing.T) {
 			}
 			// Hold all remaining headroom after consuming the previous output.
 			// The fourth Call reuses the index and must yield it for its output.
-			arg.ctr.cleanOutput(proc.Mp())
+			arg.ctr.cleanOutput(proc)
 			reservation, err := generation.ReserveTransientMemory(generation.Cap() - generation.Used())
 			require.NoError(t, err)
 			defer reservation.Release()
@@ -344,7 +344,7 @@ func TestLocalRankIndexResetReuse(t *testing.T) {
 	for i := range values {
 		values[i] = int32(n - i)
 	}
-	require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, input.Vecs[0].MPool()))
 	input.SetRowCount(n)
 	require.NoError(t, arg.Prepare(proc))
 	rows := 0
@@ -374,11 +374,11 @@ func TestLocalRankIndexAppendFailure(t *testing.T) {
 			defer vec.Free(proc.Mp())
 			_, err := ctr.rankIndex(proc, vec, 0, 256, 0, 0, 256)
 			require.NoError(t, err)
-			result, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+			result, err := ctr.allocation.NewVector(proc, types.T_uint64.ToType())
 			require.NoError(t, err)
-			defer result.Free(proc.Mp())
+			defer result.Free(result.MPool())
 			if name == "retry_rejected" {
-				require.NoError(t, vector.AppendFixedList(result, make([]uint64, 1024), nil, proc.Mp()))
+				require.NoError(t, vector.AppendFixedList(result, make([]uint64, 1024), nil, result.MPool()))
 			}
 			length := result.Length()
 			reservation, err := generation.ReserveTransientMemory(generation.Cap() - generation.Used())

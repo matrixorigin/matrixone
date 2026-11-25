@@ -50,16 +50,16 @@ const (
 	dedupJoinAllocationSiteCaptured
 	dedupJoinAllocationSiteCaptureData
 	dedupJoinAllocationSiteCaptureArea
-	dedupJoinAllocationSiteCaptureNulls
-	dedupJoinAllocationSiteCaptureGrouping
+	_ // reserved: was dedupJoinAllocationSiteCaptureNulls
+	_ // reserved: was dedupJoinAllocationSiteCaptureGrouping
 	dedupJoinAllocationSiteFinalizeSelections
 )
 
 const (
 	dedupJoinAllocationSiteResultData mpool.AllocationSite = iota + 110
 	dedupJoinAllocationSiteResultArea
-	dedupJoinAllocationSiteResultNulls
-	dedupJoinAllocationSiteResultGrouping
+	_ // reserved: was dedupJoinAllocationSiteResultNulls
+	_ // reserved: was dedupJoinAllocationSiteResultGrouping
 )
 
 // WorkerJoinMsg carries per-worker state from non-merger workers to the
@@ -68,12 +68,13 @@ const (
 // populates captured and capturedVecs.
 //
 // Ownership: once a non-merger successfully publishes this message to the
-// mailbox, it must relinquish captured / capturedVecs. The merger then becomes
-// the sole owner and is responsible for Free'ing capturedVecs.
+// mailbox, it must relinquish captured / capturedVecs / capturedMP. The merger
+// then becomes the sole owner and frees capturedVecs with capturedMP.
 type WorkerJoinMsg struct {
 	matched      *bitmap.Bitmap
 	captured     *bitmap.Bitmap
 	capturedVecs []*vector.Vector
+	capturedMP   *mpool.MPool // exact pool used to create capturedVecs
 	aborted      bool
 	err          error
 }
@@ -149,7 +150,7 @@ func (m *WorkerJoinMailbox) completeRound() {
 	m.roundDone = make(chan struct{})
 }
 
-func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
+func (m *WorkerJoinMailbox) stopAndDrain() {
 	if m == nil {
 		return
 	}
@@ -160,26 +161,26 @@ func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
 		close(m.roundDone)
 		m.roundDone = nil
 	}
-	m.drainLocked(proc)
+	m.drainLocked()
 }
 
-func (m *WorkerJoinMailbox) drain(proc *process.Process) {
+func (m *WorkerJoinMailbox) drain() {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.drainLocked(proc)
+	m.drainLocked()
 }
 
-func (m *WorkerJoinMailbox) drainLocked(proc *process.Process) {
+func (m *WorkerJoinMailbox) drainLocked() {
 	for {
 		select {
 		case msg, ok := <-m.ch:
 			if !ok {
 				return
 			}
-			freeWorkerJoinMsg(msg, proc)
+			freeWorkerJoinMsg(msg)
 		default:
 			return
 		}
@@ -189,7 +190,7 @@ func (m *WorkerJoinMailbox) drainLocked(proc *process.Process) {
 // resetParticipant closes one participant's use of the current generation.
 // The last Reset drains any residual status and reopens a clean mailbox for a
 // prepared pipeline's next execution.
-func (m *WorkerJoinMailbox) resetParticipant(proc *process.Process) {
+func (m *WorkerJoinMailbox) resetParticipant() {
 	if m == nil {
 		return
 	}
@@ -199,28 +200,36 @@ func (m *WorkerJoinMailbox) resetParticipant(proc *process.Process) {
 	if m.resetCount < m.participants {
 		return
 	}
-	m.drainLocked(proc)
+	m.drainLocked()
 	m.resetCount = 0
 	m.stopped = false
 	m.roundDone = make(chan struct{})
 }
 
-// freeCapturedVecs releases vectors owned by a WorkerJoinMsg. Intended to be
-// called by the merger after it has finished merging captures out of the
-// message (ownership was transferred from the sender).
-func freeCapturedVecs(vecs []*vector.Vector, proc *process.Process) {
-	for _, v := range vecs {
+// freeCapturedVecs releases vectors owned by a WorkerJoinMsg using the pool
+// transferred with them. It clears each released slot so cleanup can safely
+// resume if a later vector violates the pool invariant.
+func freeCapturedVecs(vecs []*vector.Vector, mp *mpool.MPool) {
+	for i, v := range vecs {
 		if v != nil {
-			v.Free(proc.GetMPool())
+			if mp == nil {
+				panic(moerr.NewInternalErrorNoCtx("dedup join captured vectors have no owning memory pool"))
+			}
+			v.Free(mp)
+			vecs[i] = nil
 		}
 	}
 }
 
-func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
+func freeWorkerJoinMsg(msg *WorkerJoinMsg) {
 	if msg != nil {
-		colexec.FreeAccountedBitmap(msg.matched, proc.Mp())
-		colexec.FreeAccountedBitmap(msg.captured, proc.Mp())
-		freeCapturedVecs(msg.capturedVecs, proc)
+		freeCapturedVecs(msg.capturedVecs, msg.capturedMP)
+		msg.capturedVecs = nil
+		msg.capturedMP = nil
+		msg.matched.Free()
+		msg.captured.Free()
+		msg.matched = nil
+		msg.captured = nil
 	}
 }
 
@@ -299,7 +308,11 @@ type container struct {
 	// source column into capturedVecs[i] at position `sel`. In finalize() the
 	// captured values are emitted into the Result slots that point at the
 	// build-side placeholder columns.
-	capturedVecs     []*vector.Vector
+	capturedVecs []*vector.Vector
+	// resultVecMP is the pool result vectors are created with (resultMP).
+	resultVecMP *mpool.MPool
+	// capturedMP is the pool capturedVecs were created with (the state view).
+	capturedMP       *mpool.MPool
 	captured         *bitmap.Bitmap
 	captureResultIdx []int32
 
@@ -329,12 +342,15 @@ type DedupJoin struct {
 	NumCPU   uint64
 	IsMerger bool
 
-	OnDuplicateAction         plan.Node_OnDuplicateAction
-	DedupBuildKeepLast        bool
-	DedupColName              string
-	SpillThreshold            int64
-	DedupColTypes             []plan.Type
-	DedupKeyExprs             []*plan.Expr
+	OnDuplicateAction  plan.Node_OnDuplicateAction
+	DedupBuildKeepLast bool
+	DedupColName       string
+	SpillThreshold     int64
+	DedupColTypes      []plan.Type
+	DedupKeyExprs      []*plan.Expr
+	// AuxiliaryRowIdColIdx is a one-based build-side row-ID column. NULL marks
+	// reservation/release evidence for IGNORE; zero disables that contract.
+	AuxiliaryRowIdColIdx      int32
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
@@ -367,8 +383,8 @@ type DedupJoin struct {
 	OldColCapturePlaceholderIdxList []int32
 	OldColCaptureProbeIdxList       []int32
 	allocationAccount               *mpool.AllocationAccount
-	stateAllocation                 *vector.AllocationAccountSelection
-	resultAllocation                *vector.AllocationAccountSelection
+	stateAllocation                 *mpool.AccountBinding
+	resultAllocation                *mpool.AccountBinding
 
 	vm.OperatorBase
 }
@@ -391,24 +407,18 @@ func (dedupJoin *DedupJoin) SetAllocationAccount(
 	if dedupJoin.allocationAccount == account {
 		return nil
 	}
-	selection, err := vector.NewAllocationAccountSelection(
+	selection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteCaptureData,
-		dedupJoinAllocationSiteCaptureArea,
-		dedupJoinAllocationSiteCaptureNulls,
-		dedupJoinAllocationSiteCaptureGrouping,
 	)
 	if err != nil {
 		return err
 	}
-	resultSelection, err := vector.NewAllocationAccountSelection(
+	resultSelection, err := mpool.NewAccountBinding(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteResultData,
-		dedupJoinAllocationSiteResultArea,
-		dedupJoinAllocationSiteResultNulls,
-		dedupJoinAllocationSiteResultGrouping,
 	)
 	if err != nil {
 		return err
@@ -487,7 +497,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 			// Reset follows process cancellation. Stop before cleaning merger
 			// state so no late worker can transfer capture ownership to an
 			// execution that no longer has a consumer.
-			dedupJoin.Mailbox.stopAndDrain(proc)
+			dedupJoin.Mailbox.stopAndDrain()
 		} else if !ctr.roundStatusPublished {
 			if pipelineFailed && err == nil {
 				err = context.Cause(proc.Ctx)
@@ -502,7 +512,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 				err:     err,
 			})
 		}
-		dedupJoin.Mailbox.resetParticipant(proc)
+		dedupJoin.Mailbox.resetParticipant()
 	}
 	if dedupJoin.OpAnalyzer != nil {
 		dedupJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
@@ -531,7 +541,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	if dedupJoin.IsMerger && dedupJoin.needsFinalizeMerge() {
 		// Pipeline cleanup always calls Reset first. Do not leave a newly
 		// reopened prepared-pipeline generation stopped from Free.
-		dedupJoin.Mailbox.drain(proc)
+		dedupJoin.Mailbox.drain()
 	}
 	ctr.cleanResultBatches(proc)
 	ctr.cleanBucketState(proc)
@@ -575,10 +585,22 @@ func (ctr *container) cleanStableUpdateVecs(proc *process.Process) {
 	ctr.finalizeCurrentVecs = nil
 }
 
+// cleanResultBatch frees a result batch. Every result vector is created with
+// the result pool (build columns are copied into it, never moved).
+func cleanResultBatch(bat *batch.Batch, mp *mpool.MPool) {
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(mp)
+			bat.Vecs[i] = nil
+		}
+	}
+	bat.Clean(nil)
+}
+
 func (ctr *container) cleanBuf(proc *process.Process) {
 	for _, bat := range ctr.buf {
 		if bat != nil && bat != ctr.rbat {
-			bat.Clean(proc.GetMPool())
+			cleanResultBatch(bat, ctr.resultVecMP)
 		}
 	}
 	ctr.buf = nil
@@ -587,7 +609,7 @@ func (ctr *container) cleanBuf(proc *process.Process) {
 func (ctr *container) cleanResultBatches(proc *process.Process) {
 	ctr.cleanBuf(proc)
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
+		cleanResultBatch(ctr.rbat, ctr.resultVecMP)
 		ctr.rbat = nil
 	}
 }
@@ -595,11 +617,12 @@ func (ctr *container) cleanResultBatches(proc *process.Process) {
 func (ctr *container) cleanCaptured(proc *process.Process) {
 	for _, v := range ctr.capturedVecs {
 		if v != nil {
-			v.Free(proc.GetMPool())
+			v.Free(ctr.capturedMP)
 		}
 	}
+	ctr.capturedMP = nil
 	ctr.capturedVecs = nil
-	colexec.FreeAccountedBitmap(ctr.captured, proc.Mp())
+	ctr.captured.Free()
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -608,7 +631,7 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	ctr.batches = nil
 
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.GetMPool())
+		cleanResultBatch(ctr.rbat, ctr.resultVecMP)
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
@@ -633,7 +656,7 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
-	colexec.FreeAccountedBitmap(ctr.matched, proc.Mp())
+	ctr.matched.Free()
 	ctr.matched = nil
 	ctr.resetActionReplayCursors()
 }

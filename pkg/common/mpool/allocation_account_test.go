@@ -298,7 +298,7 @@ func TestAllocationAccountFinalizeWaitsForRelease(t *testing.T) {
 	released := make(chan struct{})
 	go func() {
 		defer close(released)
-		allocationLease{account: account, owner: testAllocationOwner, site: 1}.release(1)
+		newAccountAllocationLease(account, testAllocationOwner, 1, false, AllocationCapacityClassDefault).release(1)
 	}()
 	<-controller.releaseStarted
 	require.Equal(t, uint64(1), account.Snapshot().Used)

@@ -70,9 +70,9 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 				continue
 			}
 			selects = append(selects, fmt.Sprintf(
-				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, CAST(%s AS VARCHAR) AS `Primary_key`, %s AS `Error_code`, %s AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
+				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, %s AS `Primary_key`, %s AS `Error_code`, %s AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
 				sqlquote.String(idx.IndexName),
-				sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk),
+				ignoredPkSql(def),
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Code),
 				reason,
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Ts),
@@ -90,6 +90,16 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 	}
 	defer newStmt.Free()
 	return buildShowIndexMetadataPlan(ctx, newStmt.(*tree.Select), stmt.Where, dbName, ignoredTables, objRef)
+}
+
+// ignoredPkSql returns the primary key of an ignored row of tableDef as text: a composite key,
+// recorded as the serial of its parts, as the hex literal X'...'.
+func ignoredPkSql(tableDef *TableDef) string {
+	pk := sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk)
+	if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		return fmt.Sprintf("CAST(%s AS VARCHAR)", pk)
+	}
+	return fmt.Sprintf("CONCAT('X''', HEX(%s), '''')", pk)
 }
 
 // tableWithPartitions returns tableDef and the definitions of its partitions, with the names

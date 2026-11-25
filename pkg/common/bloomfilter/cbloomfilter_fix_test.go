@@ -55,7 +55,7 @@ func TestCBloomFilter_EmptySlice(t *testing.T) {
 
 func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.New(types.T_varchar, 0, 0))
+	vec := vector.NewVec(types.New(types.T_varchar, 0, 0), mp)
 	defer vec.Free(mp)
 
 	// idx 0: "hello world. this is a big area."
@@ -122,7 +122,7 @@ func TestCBloomFilter_VarlenaVectorWithEmptySlices(t *testing.T) {
 
 func TestCBloomFilter_EmptyFixedVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	defer vec.Free(mp)
 
 	bf := NewCBloomFilterWithProbability(1, 0.01)

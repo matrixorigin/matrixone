@@ -1,0 +1,89 @@
+drop database if exists aggregate_membership_domain;
+create database aggregate_membership_domain;
+use aggregate_membership_domain;
+create table domain_keys(part int,name varchar(20));
+create table p(part int,supp int,avail decimal(7,2));
+create table f(part int,supp int,qty decimal(7,2),dt date);
+insert into domain_keys values (1,'lime-a'),(1,'lime-b'),(2,'other'),(3,'lime-c'),(null,'lime-null');
+insert into p values (1,10,20),(1,10,20),(1,11,5),(2,10,100),(3,10,100),(null,10,100),(1,null,100),(1,12,100);
+insert into f values (1,10,10,'1993-05-01'),(1,10,10,'1993-06-01'),(1,10,null,'1993-07-01'),(1,11,20,'1993-05-01'),(2,10,1,'1993-05-01'),(3,10,null,'1993-05-01'),(1,null,1,'1993-05-01'),(null,10,1,'1993-05-01'),(1,12,9,'1992-05-01'),(1,10,500,'1994-01-01');
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01' and f.part in (select part from domain_keys where name like 'lime%')) order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') and p.avail>(select count(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  null  ¦  100.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  11  ¦  5.00  𝄀
+1  ¦  12  ¦  100.00  𝄀
+3  ¦  10  ¦  100.00
+select p.part,p.supp,p.avail from p where p.part not in (select part from domain_keys where name like 'lime%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like 'lime%') or p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  null  ¦  100.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  11  ¦  5.00  𝄀
+1  ¦  12  ¦  100.00  𝄀
+2  ¦  10  ¦  100.00  𝄀
+3  ¦  10  ¦  100.00
+select 'fórêst' collate utf8mb4_general_ci like 'forest%' as accent, 'ßx' collate utf8mb4_general_ci like 'sx%' as sharp, 'ßx' collate utf8mb4_general_ci like 'ss%' as double_sharp, 'Forest' collate utf8mb4_bin like 'forest%' as binary_case;
+➤ accent[-6,8,0]  ¦  sharp[-6,8,0]  ¦  double_sharp[-6,8,0]  ¦  binary_case[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0
+insert into domain_keys values (4,null),(5,'');
+insert into p values (4,10,100),(5,10,100);
+insert into f values (4,10,1,'1993-05-01'),(5,10,1,'1993-05-01');
+select part,name like '%' as any_name,name like '_' as one_character from domain_keys where part in (4,5) order by part;
+➤ part[4,32,0]  ¦  any_name[-6,8,0]  ¦  one_character[-6,8,0]  𝄀
+4  ¦  null  ¦  null  𝄀
+5  ¦  1  ¦  0
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like '%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+2  ¦  10  ¦  100.00  𝄀
+5  ¦  10  ¦  100.00
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name is not null) and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+2  ¦  10  ¦  100.00  𝄀
+5  ¦  10  ¦  100.00
+delete from domain_keys where name is null;
+alter table domain_keys modify column name varchar(20) not null;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like '%%') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+2  ¦  10  ¦  100.00  𝄀
+5  ¦  10  ¦  100.00
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where true) and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+2  ¦  10  ¦  100.00  𝄀
+5  ¦  10  ¦  100.00
+prepare membership_pattern from "select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like ?) and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail";
+set @membership_pattern = '%';
+execute membership_pattern using @membership_pattern;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00  𝄀
+2  ¦  10  ¦  100.00  𝄀
+5  ¦  10  ¦  100.00
+set @membership_pattern = 'lime%';
+execute membership_pattern using @membership_pattern;
+➤ part[4,32,0]  ¦  supp[4,32,0]  ¦  avail[3,7,2]  𝄀
+1  ¦  10  ¦  20.00  𝄀
+1  ¦  10  ¦  20.00
+deallocate prepare membership_pattern;
+select p.part,p.supp,p.avail from p where p.part in (select part from domain_keys where name like '%' escape '!!') and p.avail>(select .5*sum(qty) from f where f.part=p.part and f.supp=p.supp and dt>=date '1993-01-01' and dt<date '1994-01-01') order by p.part,p.supp,p.avail;
+invalid input: Incorrect arguments to ESCAPE
+drop database aggregate_membership_domain;

@@ -45,4 +45,65 @@ select a.id, (select (select a.id)) as captured from outer_keys a
     where a.id in (select b.id from join_keys b) order by a.id;
 select a.id, (select (select a.id)) as captured from outer_keys a
     where a.id not in (select b.id from join_keys b where b.id is not null) order by a.id;
+-- Keep direct outer references at the join and set-branch evaluation sites.
+select o.id from outer_keys o where exists (
+    select 1 from outer_keys a join join_keys b on b.id = o.id
+) order by o.id;
+select o.id from outer_keys o where o.id in (
+    select a.id from outer_keys a join join_keys b on b.id = o.id
+) order by o.id;
+select o.id, (select count(*) - count(b.id) from outer_keys a left join join_keys b
+    on b.id = a.id and b.id = o.id) as unmatched
+from outer_keys o order by o.id;
+select o.id from outer_keys o where 2 in (
+    select a.id from outer_keys a where a.id = 1
+    union select 2 from outer_keys b where b.id = 2 and b.id = o.id
+) order by o.id;
+-- Identical UNION inputs retain outer captures and deduplicate result rows.
+select o.id, 1 in (
+    select o.id from outer_keys a where a.id = o.id
+    union select o.id from outer_keys a where a.id = o.id
+) as v from outer_keys o order by o.id;
+-- Changing only a branch alias must not change the result.
+select o.id, 1 in (
+    select o.id from outer_keys a where a.id = o.id
+    union select o.id from outer_keys b where b.id = o.id
+) as v from outer_keys o order by o.id;
+-- Set pagination runs after deduplication, even for identical branches.
+select o.id from outer_keys o where exists (
+    (select o.id from outer_keys a where a.id = o.id)
+    union (select o.id from outer_keys a where a.id = o.id)
+    limit 0
+) order by o.id;
+select o.id from outer_keys o where exists (
+    (select o.id from outer_keys a where a.id = o.id)
+    union (select o.id from outer_keys b where b.id = o.id)
+    limit 0
+) order by o.id;
+-- Branch pagination sees duplicate rows before the set removes them.
+select o.id, 2 in (
+    (select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+    union (select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+) as v from outer_keys o order by o.id;
+-- A capture keeps its declared type even when the set output widens it.
+create table medium_keys (k mediumint, i int);
+insert into medium_keys values (1, 2), (3, 4);
+select o.k, 1 in (
+    select o.k from medium_keys a where a.k = o.k
+    union select b.i from medium_keys b
+) as v from medium_keys o order by o.k;
+-- A column and a string literal with the same printed text are different inputs.
+create table text_keys (k varchar(20));
+insert into text_keys values ('one');
+select 'o.k' in (
+    select o.k from text_keys a where a.k = o.k
+    union select 'o.k' from text_keys a where a.k = o.k
+) as v from text_keys o;
+-- Both identical inputs must evaluate NEXTVAL before UNION deduplicates rows.
+create sequence union_branch_seq start with 1;
+select 2 in (
+    select nextval('union_branch_seq') from text_keys a where a.k = o.k
+    union select nextval('union_branch_seq') from text_keys a where a.k = o.k
+) as v from text_keys o;
+select currval('union_branch_seq') as v;
 drop database dependent_set_window;

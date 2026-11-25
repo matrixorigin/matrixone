@@ -26,6 +26,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -76,6 +77,9 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 			continue
 		}
 		repeatedPhysicalTarget := targetCountByTableID[tableDef.TblId] > 1
+		if repeatedPhysicalTarget && deferRepeatedPhysicalTargetMerge && len(tableDef.Checks) != 0 {
+			continue // This alias's child checks follow CHECK on its tentative row.
+		}
 		canonicalRepeatedTarget := repeatedPhysicalTarget && !deferRepeatedPhysicalTargetMerge &&
 			(len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0)
 		if repeatedPhysicalTarget && !deferRepeatedPhysicalTargetMerge {
@@ -160,142 +164,162 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 				return 0, 0, nil, err
 			}
 		}
-		affectedFks := affectedUpdateChildFks(tableDef, alias, newColName2Idx)
-		if len(affectedFks) == 0 {
-			continue
-		}
-
-		validatedFks := make([]*plan.ForeignKeyDef, 0, len(affectedFks))
-		for _, fk := range affectedFks {
-			if fk.ForeignTbl != 0 {
-				validatedFks = append(validatedFks, fk)
-			}
-		}
-		if len(validatedFks) == 0 {
-			continue
-		}
-
-		fkTableDef := *tableDef
-		fkTableDef.Fkeys = make([]*plan.ForeignKeyDef, len(validatedFks))
-		for j, fk := range validatedFks {
-			fkTableDef.Fkeys[j] = DeepCopyFkey(fk)
-		}
-
-		sourceNode := selectNode
-		projLen := len(sourceNode.ProjectList)
-		projectTypes := make([]plan.Type, projLen)
-		for j, expr := range sourceNode.ProjectList {
-			projectTypes[j] = expr.Typ
-		}
-
-		var oks []*plan.Expr
-		lastNodeID, oks, err = builder.appendModernChildFkMarkOks(
-			bindCtx,
-			&fkTableDef,
-			lastNodeID,
-			selectNodeTag,
-			func(colName string) int32 {
-				qualifiedName := alias + "." + colName
-				if pos, ok := newColName2Idx[qualifiedName]; ok {
-					return pos
-				}
-				return oldColName2Idx[qualifiedName]
-			},
-			true,
-			false,
+		lastNodeID, selectNodeTag, selectNode, err = builder.appendUpdateChildForeignKeyAssertions(
+			bindCtx, tableDef, alias, lastNodeID, selectNodeTag, selectNode,
+			oldColName2Idx, newColName2Idx, targetSelected,
 		)
 		if err != nil {
 			return 0, 0, nil, err
 		}
-
-		assertConds := make([]*plan.Expr, len(oks))
-		errExpr := makePlan2StringConstExprWithType(
-			"Cannot add or update a child row: a foreign key constraint fails",
-		)
-		errTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
-		for j, fk := range validatedFks {
-			unchanged, buildErr := builder.buildUpdateFkUnchangedExpr(
-				tableDef,
-				fk,
-				alias,
-				selectNodeTag,
-				oldColName2Idx,
-				newColName2Idx,
-				sourceNode,
-			)
-			if buildErr != nil {
-				return 0, 0, nil, buildErr
-			}
-			ok := oks[j]
-			if unchanged != nil {
-				ok, err = BindFuncExprImplByPlanExpr(
-					builder.GetContext(),
-					"or",
-					[]*plan.Expr{ok, unchanged},
-				)
-				if err != nil {
-					return 0, 0, nil, err
-				}
-			}
-			if targetSelected != nil {
-				notSelected, buildErr := BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "not", []*plan.Expr{DeepCopyExpr(targetSelected)})
-				if buildErr != nil {
-					return 0, 0, nil, buildErr
-				}
-				ok, buildErr = BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "or", []*plan.Expr{notSelected, ok})
-				if buildErr != nil {
-					return 0, 0, nil, buildErr
-				}
-			}
-			assertConds[j], err = BindFuncExprImplByPlanExpr(
-				builder.GetContext(),
-				"assert",
-				[]*plan.Expr{ok, DeepCopyExpr(errExpr), DeepCopyExpr(errTypeExpr)},
-			)
-			if err != nil {
-				return 0, 0, nil, err
-			}
-		}
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{lastNodeID},
-			FilterList: assertConds,
-		}, bindCtx)
-
-		validatedTag := builder.genNewBindTag()
-		projectList := make([]*plan.Expr, projLen)
-		for j := range projectList {
-			projectList[j] = &plan.Expr{
-				Typ: projectTypes[j],
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectNodeTag,
-						ColPos: int32(j),
-					},
-				},
-			}
-		}
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			ProjectList: projectList,
-			Children:    []int32{lastNodeID},
-			BindingTags: []int32{validatedTag},
-		}, bindCtx)
-
-		selectNodeTag = validatedTag
-		selectNode = builder.qry.Nodes[lastNodeID]
 	}
 
 	return lastNodeID, selectNodeTag, selectNode, nil
 }
 
+// appendUpdateChildForeignKeyAssertions validates an alias's own assignments.
+// A missing parent here aborts the statement, including for UPDATE IGNORE.
+func (builder *QueryBuilder) appendUpdateChildForeignKeyAssertions(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	alias string,
+	lastNodeID int32,
+	selectNodeTag int32,
+	selectNode *plan.Node,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+	targetSelected *plan.Expr,
+) (int32, int32, *plan.Node, error) {
+	affectedFks := affectedUpdateChildFks(tableDef, alias, newColName2Idx)
+	if len(affectedFks) == 0 {
+		return lastNodeID, selectNodeTag, selectNode, nil
+	}
+
+	validatedFks := make([]*plan.ForeignKeyDef, 0, len(affectedFks))
+	for _, fk := range affectedFks {
+		if fk.ForeignTbl != 0 {
+			validatedFks = append(validatedFks, fk)
+		}
+	}
+	if len(validatedFks) == 0 {
+		return lastNodeID, selectNodeTag, selectNode, nil
+	}
+
+	fkTableDef := *tableDef
+	fkTableDef.Fkeys = make([]*plan.ForeignKeyDef, len(validatedFks))
+	for j, fk := range validatedFks {
+		fkTableDef.Fkeys[j] = DeepCopyFkey(fk)
+	}
+
+	sourceNode := selectNode
+	projLen := len(sourceNode.ProjectList)
+	projectTypes := make([]plan.Type, projLen)
+	for j, expr := range sourceNode.ProjectList {
+		projectTypes[j] = expr.Typ
+	}
+
+	lastNodeID, oks, err := builder.appendModernChildFkMarkOks(
+		bindCtx,
+		&fkTableDef,
+		lastNodeID,
+		selectNodeTag,
+		func(colName string) int32 {
+			qualifiedName := alias + "." + colName
+			if pos, ok := newColName2Idx[qualifiedName]; ok {
+				return pos
+			}
+			return oldColName2Idx[qualifiedName]
+		},
+		true,
+		false,
+	)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+
+	assertConds := make([]*plan.Expr, len(oks))
+	errExpr := makePlan2StringConstExprWithType(
+		"Cannot add or update a child row: a foreign key constraint fails",
+	)
+	errTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
+	for j, fk := range validatedFks {
+		unchanged, buildErr := builder.buildUpdateFkUnchangedExpr(
+			tableDef,
+			fk,
+			alias,
+			selectNodeTag,
+			oldColName2Idx,
+			newColName2Idx,
+			sourceNode,
+		)
+		if buildErr != nil {
+			return 0, 0, nil, buildErr
+		}
+		ok := oks[j]
+		if unchanged != nil {
+			ok, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"or",
+				[]*plan.Expr{ok, unchanged},
+			)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+		}
+		if targetSelected != nil {
+			notSelected, buildErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "not", []*plan.Expr{DeepCopyExpr(targetSelected)})
+			if buildErr != nil {
+				return 0, 0, nil, buildErr
+			}
+			ok, buildErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{notSelected, ok})
+			if buildErr != nil {
+				return 0, 0, nil, buildErr
+			}
+		}
+		assertConds[j], err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"assert",
+			[]*plan.Expr{ok, DeepCopyExpr(errExpr), DeepCopyExpr(errTypeExpr)},
+		)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+	}
+
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{lastNodeID},
+		FilterList: assertConds,
+	}, bindCtx)
+
+	validatedTag := builder.genNewBindTag()
+	projectList := make([]*plan.Expr, projLen)
+	for j := range projectList {
+		projectList[j] = &plan.Expr{
+			Typ: projectTypes[j],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: int32(j),
+				},
+			},
+		}
+	}
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: projectList,
+		Children:    []int32{lastNodeID},
+		BindingTags: []int32{validatedTag},
+	}, bindCtx)
+
+	return lastNodeID, validatedTag, builder.qry.Nodes[lastNodeID], nil
+}
+
 // appendMergedPhysicalTargetChildForeignKeyChecks filters UPDATE IGNORE
-// candidates against the final child-key image. Alias-local checks run before
-// the physical-row merge and cannot validate a composite key assembled from
-// assignments made through sibling aliases.
+// candidates against the final child-key image. The alias-local assertions
+// cover a different row image and cannot validate a composite key assembled
+// from assignments made through sibling aliases.
 func (builder *QueryBuilder) appendMergedPhysicalTargetChildForeignKeyChecks(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
@@ -1538,13 +1562,6 @@ func (builder *QueryBuilder) validateModernUpdateParentMutation(
 	if err := builder.validateModernUpdateParentRowClosure(parentTableDef, affectedFK); err != nil {
 		return err
 	}
-	_, hasIrregularIndex := getValidIndexes(childTableDef)
-	if hasIrregularIndex {
-		return moerr.NewNotSupported(
-			builder.GetContext(),
-			"parent foreign key action on child table with irregular indexes",
-		)
-	}
 	if childTableDef.Partition != nil {
 		return moerr.NewNotSupported(
 			builder.GetContext(),
@@ -2419,6 +2436,28 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 		BindingTags: []int32{actionTag},
 		LockTargets: lockTargets,
 	}, bindCtx)
+	changedChildCols := make(map[string]tree.Expr, len(newChildExprs))
+	for pos := range newChildExprs {
+		changedChildCols[childTableDef.Cols[pos].Name] = nil
+	}
+	irregularIndexes, unsupportedIrregular, err := classifyIrregularIndexesForUpdate(childTableDef, changedChildCols)
+	if err != nil {
+		return err
+	}
+	if unsupportedIrregular {
+		return moerr.NewNotSupported(
+			builder.GetContext(),
+			"parent foreign key action on child table with irregular indexes",
+		)
+	}
+	if len(irregularIndexes) > 0 {
+		actionNodeID, err = builder.appendForeignKeyActionIrregularMaint(
+			bindCtx, actionNodeID, actionTag, actionProjection, childTableDef,
+			affectedFK.childObjRef, pkPos, deletePkPos, irregularIndexes)
+		if err != nil {
+			return err
+		}
+	}
 	actionNodeID = builder.appendNode(&plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		Children:      []int32{actionNodeID},
@@ -2428,6 +2467,57 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 	builder.appendStep(actionNodeID)
 	builder.qry.HasForeignKeyAction = true
 	return nil
+}
+
+// appendForeignKeyActionIrregularMaint materializes the locked action image of a
+// parent foreign key action and records the synchronous irregular-index
+// maintenance of the child rows: delete by the old primary key, then rebuild
+// from the final child image. It returns a scan of the image for MULTI_UPDATE.
+func (builder *QueryBuilder) appendForeignKeyActionIrregularMaint(
+	bindCtx *BindContext,
+	lockNodeID, actionTag int32,
+	actionProjection []*plan.Expr,
+	childTableDef *plan.TableDef,
+	childObjRef *plan.ObjectRef,
+	pkPos, deletePkPos int32,
+	indexes []*plan.IndexDef,
+) (int32, error) {
+	if builder.preserveLockProjection == nil {
+		builder.preserveLockProjection = make(map[int32]struct{})
+	}
+	builder.preserveLockProjection[lockNodeID] = struct{}{}
+	imageStep := builder.appendStep(appendSinkNodeWithTag(builder, bindCtx, lockNodeID, actionTag))
+
+	localProjList := make([]*plan.Expr, 0, len(childTableDef.Cols)+1)
+	for i := range childTableDef.Cols {
+		localProjList = append(localProjList, &plan.Expr{
+			Typ:  actionProjection[i].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: actionTag, ColPos: int32(i)}},
+		})
+	}
+	localDeletePkPos := pkPos
+	if deletePkPos != pkPos {
+		localDeletePkPos = int32(len(localProjList))
+		localProjList = append(localProjList, &plan.Expr{
+			Typ:  actionProjection[deletePkPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: actionTag, ColPos: deletePkPos}},
+		})
+	}
+	localProjTag := builder.genNewBindTag()
+	localProjID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{builder.appendTaggedSinkScan(bindCtx, imageStep, actionTag)},
+		ProjectList: localProjList,
+		BindingTags: []int32{localProjTag},
+	}, bindCtx)
+	if _, err := builder.appendOnDupIrregularMaintSource(
+		bindCtx, localProjID, localProjTag, localDeletePkPos, localProjList[localDeletePkPos].Typ,
+		-1, -1, -1, indexes, nil, -1, nil, childTableDef, childObjRef,
+	); err != nil {
+		return 0, err
+	}
+	builder.queueIrregularUpdateMaint()
+	return builder.appendTaggedSinkScan(bindCtx, imageStep, actionTag), nil
 }
 
 // appendUpdateSelfMutationRows converts the non-root self-cascade rows back to

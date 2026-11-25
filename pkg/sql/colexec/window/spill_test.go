@@ -64,6 +64,7 @@ func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
@@ -91,6 +92,7 @@ func TestWindowOrderSpillReleasesConsumedMaterializedInput(t *testing.T) {
 
 	t.Cleanup(func() {
 		arg.Free(proc, true, nil)
+		colexec.FreeMockChildren(arg)
 		input.Clean(proc.Mp())
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -180,6 +182,7 @@ func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				child.Free(proc, true, err)
+				colexec.FreeMockChildren(child)
 				arg.Free(proc, true, err)
 			})
 			require.NoError(t, arg.Prepare(proc))
@@ -228,11 +231,12 @@ func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []int32{20, 30, 10}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
-	require.Equal(t, []int64{20, 50, 60}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(20), types.Decimal128FromInt64(50), types.Decimal128FromInt64(60)}, vector.MustFixedColWithTypeCheck[types.Decimal128](result.Batch.Vecs[2]))
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
 
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())

@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -120,29 +121,30 @@ func GenVectorByVarValue(proc *process.Process, typ types.Type, val any) (*vecto
 	return GenVectorByVarValueWithAllocation(proc, typ, val, nil)
 }
 
+// GenVectorByVarValueWithAllocation builds the user-variable vector through
+// mp. A nil mp keeps the unaccounted proc.Mp() representation; an accounted
+// view produces an off-heap vector charged to the view's account.
 func GenVectorByVarValueWithAllocation(
 	proc *process.Process,
 	typ types.Type,
 	val any,
-	selection *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
 ) (*vector.Vector, error) {
+	accounted := mp.IsView()
+	if mp == nil {
+		mp = proc.Mp()
+	}
 	if val == nil {
-		if selection == nil {
-			return vector.NewConstNull(typ, 1, proc.Mp()), nil
-		}
-		return vector.NewConstNullWithAllocation(typ, 1, selection)
+		return vector.NewConstNull(typ, 1, mp), nil
 	}
 	if typ.Oid.IsArray() {
 		value, err := arrayUserVariableValueToBytes(typ, val)
 		if err != nil {
 			return nil, err
 		}
-		if selection == nil {
-			return vector.NewConstBytes(typ, value, 1, proc.Mp())
-		}
-		return vector.NewConstBytesWithAllocation(typ, value, 1, proc.Mp(), selection)
+		return vector.NewConstBytes(typ, value, 1, mp)
 	}
-	if vec, handled, err := genInternalFixedUserVariableVector(proc, typ, val, selection); handled {
+	if vec, handled, err := genInternalFixedUserVariableVector(proc, typ, val, mp, accounted); handled {
 		return vec, err
 	}
 	strVal := getVal(val)
@@ -151,73 +153,64 @@ func GenVectorByVarValueWithAllocation(
 	// like fixed-width values; otherwise DecodeJson sees the raw text as an
 	// invalid encoded value when a typed user variable is read back.
 	if !typ.IsVarlen() || typ.Oid == types.T_json {
-		var vec *vector.Vector
-		var err error
-		if selection == nil {
-			vec = vector.NewVec(typ)
-		} else {
-			vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if err = vec.PreExtend(1, proc.Mp()); err != nil {
-			vec.Free(proc.Mp())
+		vec := newUserVariableVector(typ, mp)
+		if err := vec.PreExtend(1, mp); err != nil {
+			vec.Free(mp)
 			return nil, err
 		}
 		vec.SetLength(1)
-		if err = SetBytesToAnyVector(proc.Ctx, strVal, 0, false, vec, proc); err != nil {
-			vec.Free(proc.Mp())
+		if err := setBytesToAnyVector(proc.Ctx, strVal, 0, false, vec, proc, mp); err != nil {
+			vec.Free(mp)
 			return nil, err
 		}
 		vec.ToConst()
 		return vec, nil
 	}
-	if selection == nil {
-		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
-	}
-	return vector.NewConstBytesWithAllocation(
-		typ, []byte(strVal), 1, proc.Mp(), selection,
-	)
+	return vector.NewConstBytes(typ, []byte(strVal), 1, mp)
+}
+
+func newUserVariableVector(typ types.Type, mp *mpool.MPool) *vector.Vector {
+	return vector.NewVec(typ, mp)
 }
 
 func genInternalFixedUserVariableVector(
 	proc *process.Process,
 	typ types.Type,
 	val any,
-	selection *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
+	accounted bool,
 ) (*vector.Vector, bool, error) {
 	switch typ.Oid {
 	case types.T_Rowid:
 		switch v := val.(type) {
 		case types.Rowid:
-			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			vec, err := newConstInternalFixedVector(typ, v, mp, accounted)
 			return vec, true, err
 		case []byte:
 			if len(v) == types.RowidSize {
-				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Rowid](v), selection)
+				vec, err := newConstInternalFixedVector(typ, types.DecodeFixed[types.Rowid](v), mp, accounted)
 				return vec, true, err
 			}
 		}
 	case types.T_Blockid:
 		switch v := val.(type) {
 		case types.Blockid:
-			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			vec, err := newConstInternalFixedVector(typ, v, mp, accounted)
 			return vec, true, err
 		case []byte:
 			if len(v) == types.BlockidSize {
-				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Blockid](v), selection)
+				vec, err := newConstInternalFixedVector(typ, types.DecodeFixed[types.Blockid](v), mp, accounted)
 				return vec, true, err
 			}
 		}
 	case types.T_TS:
 		switch v := val.(type) {
 		case types.TS:
-			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			vec, err := newConstInternalFixedVector(typ, v, mp, accounted)
 			return vec, true, err
 		case []byte:
 			if len(v) == types.TxnTsSize {
-				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.TS](v), selection)
+				vec, err := newConstInternalFixedVector(typ, types.DecodeFixed[types.TS](v), mp, accounted)
 				return vec, true, err
 			}
 		}
@@ -228,28 +221,19 @@ func genInternalFixedUserVariableVector(
 }
 
 func newConstInternalFixedVector[T types.FixedSizeT](
-	proc *process.Process,
 	typ types.Type,
 	val T,
-	selection *vector.AllocationAccountSelection,
+	mp *mpool.MPool,
+	accounted bool,
 ) (*vector.Vector, error) {
-	var vec *vector.Vector
-	var err error
-	if selection == nil {
-		vec = vector.NewVec(typ)
-	} else {
-		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err = vec.PreExtend(1, proc.Mp()); err != nil {
-		vec.Free(proc.Mp())
+	vec := newUserVariableVector(typ, mp)
+	if err := vec.PreExtend(1, mp); err != nil {
+		vec.Free(mp)
 		return nil, err
 	}
 	vec.SetLength(1)
-	if err = vector.SetFixedAtNoTypeCheck(vec, 0, val); err != nil {
-		vec.Free(proc.Mp())
+	if err := vector.SetFixedAtNoTypeCheck(vec, 0, val); err != nil {
+		vec.Free(mp)
 		return nil, err
 	}
 	vec.ToConst()
@@ -363,6 +347,13 @@ func SetAnyToStringVector(proc *process.Process, val any, vec *vector.Vector, id
 
 func SetBytesToAnyVector(ctx context.Context, val string, row int,
 	isNull bool, vec *vector.Vector, proc *process.Process) error {
+	return setBytesToAnyVector(ctx, val, row, isNull, vec, proc, proc.Mp())
+}
+
+// setBytesToAnyVector writes through mp, so an accounted view charges any
+// varlena area the value needs.
+func setBytesToAnyVector(ctx context.Context, val string, row int,
+	isNull bool, vec *vector.Vector, proc *process.Process, mp *mpool.MPool) error {
 	if isNull {
 		vec.GetNulls().Set(uint64(row))
 		return nil
@@ -482,49 +473,49 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
-		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
+		return vector.SetBytesAt(vec, row, []byte(val), mp)
 	case types.T_array_float32:
 		v, err := types.StringToArrayToBytes[float32](val)
 		if err != nil {
 			return err
 		}
-		return vector.SetBytesAt(vec, row, v, proc.Mp())
+		return vector.SetBytesAt(vec, row, v, mp)
 	case types.T_array_float64:
 		v, err := types.StringToArrayToBytes[float64](val)
 		if err != nil {
 			return err
 		}
-		return vector.SetBytesAt(vec, row, v, proc.Mp())
+		return vector.SetBytesAt(vec, row, v, mp)
 	case types.T_array_bf16:
 		v, err := types.StringToArrayToBytes[types.BF16](val)
 		if err != nil {
 			return err
 		}
-		return vector.SetBytesAt(vec, row, v, proc.Mp())
+		return vector.SetBytesAt(vec, row, v, mp)
 	case types.T_array_float16:
 		v, err := types.StringToArrayToBytes[types.Float16](val)
 		if err != nil {
 			return err
 		}
-		return vector.SetBytesAt(vec, row, v, proc.Mp())
+		return vector.SetBytesAt(vec, row, v, mp)
 	case types.T_array_int8:
 		v, err := types.StringToArrayToBytes[int8](val)
 		if err != nil {
 			return err
 		}
-		return vector.SetBytesAt(vec, row, v, proc.Mp())
+		return vector.SetBytesAt(vec, row, v, mp)
 	case types.T_array_uint8:
 		v, err := types.StringToArrayToBytes[uint8](val)
 		if err != nil {
 			return err
 		}
-		return vector.SetBytesAt(vec, row, v, proc.Mp())
+		return vector.SetBytesAt(vec, row, v, mp)
 	case types.T_json:
 		val, err := function.ConvertJsonBytes([]byte(val))
 		if err != nil {
 			return err
 		}
-		return vector.SetBytesAt(vec, row, val, proc.Mp())
+		return vector.SetBytesAt(vec, row, val, mp)
 	case types.T_time:
 		v, err := types.ParseTime(val, vec.GetType().Scale)
 		if err != nil {
@@ -879,20 +870,16 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, val []byte, err error) {
 	canInsert = true
 
-	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
+	checkStrLen := func(s string) ([]byte, error) {
 		destLen := int(typ.Width)
-		// CHAR/VARCHAR/TEXT/BLOB width is enforced at runtime by the assignment
-		// cast (cast_assign), which honors sql_mode, the trailing-space exemption
-		// and the INSERT IGNORE downgrade, and measures BLOB in bytes. Excluding
-		// them here avoids a plan-time hard rejection that would ignore sql_mode.
+		// String and binary widths are enforced at runtime by the assignment cast
+		// (cast_assign), which honors sql_mode, the trailing-space exemption and
+		// the INSERT IGNORE downgrade, and measures binary values in bytes.
 		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
 			typ.Oid != types.T_text && typ.Oid != types.T_blob && typ.Oid != types.T_datalink &&
-			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArray()
+			typ.Oid != types.T_binary && typ.Oid != types.T_varbinary && destLen != 0 && !typ.Oid.IsArray()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
-			if binaryLiteral && (typ.Oid == types.T_binary || typ.Oid == types.T_varbinary) {
-				srcLen = len(s)
-			}
 			if srcLen > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -933,14 +920,14 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		} else {
 			s = "0"
 		}
-		if val, err = checkStrLen(s, false); err != nil {
+		if val, err = checkStrLen(s); err != nil {
 			canInsert = false
 		}
 		return
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
 		s := insertLiteralText(numVal)
-		if val, err = checkStrLen(s, false); err != nil {
+		if val, err = checkStrLen(s); err != nil {
 			canInsert = false
 		}
 		return
@@ -954,7 +941,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 			canInsert = false
 			return
 		}
-		if val, err = checkStrLen(string(val), true); err != nil {
+		if val, err = checkStrLen(string(val)); err != nil {
 			canInsert = false
 		}
 		return

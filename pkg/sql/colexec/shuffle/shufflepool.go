@@ -60,19 +60,18 @@ type shuffleBatchPoolShard struct {
 }
 
 type ShufflePool struct {
-	bucketNum            int32
-	maxHolders           int32
-	drainAll             bool
-	ownedOutput          bool
-	ownedColumns         int
-	ownedInit            sync.Once
-	ownedInitErr         error
-	ownedReservation     *process.ExecutionTransientMemoryReservation
-	outputAllocation     *vector.AllocationAccountSelection
+	bucketNum        int32
+	maxHolders       int32
+	drainAll         bool
+	ownedOutput      bool
+	ownedColumns     int
+	ownedInit        sync.Once
+	ownedInitErr     error
+	ownedReservation *process.ExecutionTransientMemoryReservation
+	// outputAllocation is the accounted view owned output is copied through;
+	// nil copies through the writer's pool.
+	outputAllocation     *mpool.MPool
 	producerBatchMaxRows int
-	sharedLaneOnce       sync.Once
-	sharedBatchAccount   *vector.AllocationAccountSelection
-	sharedVecAccounts    []*vector.AllocationAccountSelection
 
 	holders    int32
 	finished   int32
@@ -84,10 +83,8 @@ type ShufflePool struct {
 	cleaned    bool
 	producers  map[int32]context.CancelCauseFunc
 
-	// Each destination bucket keeps one writable lane per producer. Accounted
-	// vectors cannot change allocation provenance after their first allocation,
-	// so sharing one tail across producers would seal and publish a partial batch
-	// on every producer switch.
+	// Each destination bucket keeps one writable lane per producer, plus one
+	// shared full-sized lane at high DOP.
 	batchSets      [][]*batch.BatchSet
 	readyProducers [][]int32
 	batchLocks     []sync.Mutex
@@ -131,7 +128,7 @@ func NewOwnedShufflePool(bucketNum, maxHolders int32, columns int) *ShufflePool 
 	return &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders, drainAll: true, ownedOutput: true, ownedColumns: columns}
 }
 
-func (sp *ShufflePool) initBuckets(selection *vector.AllocationAccountSelection) {
+func (sp *ShufflePool) initBuckets(selection *mpool.MPool) {
 	bucketNum, maxHolders, allBuckets := sp.bucketNum, sp.maxHolders, sp.drainAll
 	readyLimit := max(2, int(maxHolders)*2)
 	batchPoolShards := max(1, int(maxHolders))
@@ -169,13 +166,12 @@ func (sp *ShufflePool) initBuckets(selection *vector.AllocationAccountSelection)
 	for i := range sp.batchSets {
 		sp.batchSets[i] = make([]*batch.BatchSet, producerLanes)
 		for producer := range sp.batchSets[i] {
-			sp.batchSets[i][producer] = batch.NewBatchSetWithAllocation(producerBatchMaxRows, selection)
+			sp.batchSets[i][producer] = batch.NewBatchSet(producerBatchMaxRows)
 		}
 		if producerBatchMaxRows < objectio.BlockMaxRows {
-			// Inputs with identical allocation provenance can share a full-sized
-			// tail. Other provenance continues to use bounded producer-local lanes.
-			// This adds at most one block per destination, not one per producer.
-			sp.batchSets[i] = append(sp.batchSets[i], batch.NewBatchSetWithAllocation(objectio.BlockMaxRows, selection))
+			// Producers share a full-sized tail. This adds at most one block per
+			// destination, not one per producer.
+			sp.batchSets[i] = append(sp.batchSets[i], batch.NewBatchSet(objectio.BlockMaxRows))
 		}
 		sp.batchWaiters[i] = make(chan bool, 1)
 		sp.endingWaiters[i] = make(chan bool, 1)
@@ -183,7 +179,7 @@ func (sp *ShufflePool) initBuckets(selection *vector.AllocationAccountSelection)
 	}
 }
 
-func (sp *ShufflePool) initOwned(proc *process.Process, selection *vector.AllocationAccountSelection) error {
+func (sp *ShufflePool) initOwned(proc *process.Process, selection *mpool.MPool) error {
 	sp.ownedInit.Do(func() {
 		if err := sp.ownedFailure(proc, nil); err != nil {
 			sp.ownedInitErr = err
@@ -245,7 +241,7 @@ func (sp *ShufflePool) initOwned(proc *process.Process, selection *vector.Alloca
 	if sp.ownedInitErr != nil {
 		return sp.ownedInitErr
 	}
-	if !vector.AllocationAccountSelectionsEqual(sp.outputAllocation, selection) {
+	if !mpool.SameView(sp.outputAllocation, selection) {
 		return mpool.ErrAllocationAccountMismatch
 	}
 	return nil
@@ -436,6 +432,7 @@ func (sp *ShufflePool) cleanupLocked(m *mpool.MPool) {
 			rows += set.RowCount()
 			for i := 0; i < set.Length(); i++ {
 				sp.forgetBatch(set.Get(i))
+				freeOwnedVectors(set.Get(i))
 			}
 			set.Clean(m)
 		}
@@ -534,6 +531,7 @@ func (sp *ShufflePool) cleanBatchPool(m *mpool.MPool) {
 		shard.Unlock()
 		for _, bat := range pool[:count] {
 			sp.forgetBatch(bat)
+			freeOwnedVectors(bat)
 			bat.Clean(m)
 		}
 	}
@@ -552,7 +550,23 @@ func (sp *ShufflePool) putBatchToPool(buf *batch.Batch, m *mpool.MPool) {
 	}
 	shard.Unlock()
 	sp.forgetBatch(buf)
+	freeOwnedVectors(buf)
 	buf.Clean(m)
+}
+
+// freeOwnedVectors frees the vectors of a pooled batch, each with the pool it
+// was created with: the pool holds batches of several producers' allocation
+// views.
+func freeOwnedVectors(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+			bat.Vecs[i] = nil
+		}
+	}
 }
 
 func (sp *ShufflePool) getBatchFromPool(producer int32) *batch.Batch {
@@ -592,6 +606,7 @@ func (sp *ShufflePool) discardBatch(buf *batch.Batch, m *mpool.MPool) {
 		return
 	}
 	sp.forgetBatch(buf)
+	freeOwnedVectors(buf)
 	buf.Clean(m)
 }
 
@@ -874,18 +889,29 @@ func (sp *ShufflePool) notifyAnyBatch() {
 	}
 }
 
-// tryWrite writes selections starting at bucket/offset. It never mutates the
+// tryWrite writes selections starting at visit-position/offset. It never mutates the
 // blocked chunk, so the operator can safely retain and resume the child batch.
 func (sp *ShufflePool) tryWrite(
 	srcBatch *batch.Batch,
 	sels [][]int32,
 	producer int32,
-	startBucket int,
+	startPosition int,
 	startOffset int,
 	proc *process.Process,
-) (nextBucket int, nextOffset int, wait <-chan struct{}, done bool, err error) {
+) (nextPosition int, nextOffset int, wait <-chan struct{}, done bool, err error) {
+	return sp.tryWriteMode(srcBatch, sels, producer, startPosition, startOffset, false, proc)
+}
+
+func (sp *ShufflePool) tryWriteMode(
+	srcBatch *batch.Batch,
+	sels [][]int32,
+	producer int32,
+	startPosition, startOffset int,
+	wholeBucket bool,
+	proc *process.Process,
+) (nextPosition int, nextOffset int, wait <-chan struct{}, done bool, err error) {
 	if producer < 0 || len(sp.batchSets) == 0 {
-		return startBucket, startOffset, nil, false, moerr.NewInternalErrorf(
+		return startPosition, startOffset, nil, false, moerr.NewInternalErrorf(
 			proc.Ctx,
 			"invalid shuffle producer %d for %d configured holders",
 			producer,
@@ -895,96 +921,105 @@ func (sp *ShufflePool) tryWrite(
 	producer %= int32(max(1, int(sp.maxHolders)))
 	lane := producer
 	maxRows := sp.producerBatchMaxRows
-	if maxRows < objectio.BlockMaxRows && sp.matchesSharedLane(srcBatch) {
-		lane = int32(max(1, int(sp.maxHolders)))
+	// Vectors carry no allocation provenance, so every producer can share the
+	// full-sized tail whenever the pool has one.
+	if shared := max(1, int(sp.maxHolders)); maxRows < objectio.BlockMaxRows &&
+		shared < len(sp.batchSets[0]) {
+		lane = int32(shared)
 		maxRows = objectio.BlockMaxRows
 	}
-	for bucket := startBucket; bucket < len(sp.batchSets); bucket++ {
-		offset := 0
-		if bucket == startBucket {
-			offset = startOffset
+	writeMP := proc.Mp()
+	if sp.outputAllocation != nil {
+		writeMP = sp.outputAllocation
+	}
+	bucketCount := len(sp.batchSets)
+	bucket, limit := startPosition, bucketCount
+	first, visitBase := 0, 0
+	if wholeBucket {
+		limit = startPosition + 1
+	} else {
+		first = int(producer)
+		if first >= bucketCount {
+			first %= bucketCount
 		}
-		current := sels[bucket]
-		for offset < len(current) {
-			// BatchSet historically assumed its maximum was at least the input
-			// batch size. Producer-local lanes deliberately use a smaller maximum
-			// at high DOP, so split selections at that boundary before Union. This
-			// keeps ReadyDeltaFor and the batches actually published in lockstep.
-			end := min(offset+maxRows, len(current))
-			chunk := current[offset:end]
-			sp.batchLocks[bucket].Lock()
-			if sp.closed[bucket] {
-				sp.batchLocks[bucket].Unlock()
-				break
+		bucket += first
+		visitBase = -first
+		if bucket >= bucketCount {
+			bucket -= bucketCount
+			limit = first
+			visitBase += bucketCount
+		}
+	}
+	// Traverse at most two ordinary ascending ranges. Keep wrap arithmetic
+	// outside the hot bucket loop, including for the unrotated producer.
+	offset := startOffset
+	for {
+		for ; bucket < limit; bucket++ {
+			var current []int32
+			count := srcBatch.RowCount()
+			if !wholeBucket {
+				current = sels[bucket]
+				count = len(current)
 			}
-			batchSet := sp.batchSets[bucket][lane]
-			readyDelta := batchSet.ReadyDeltaFor(srcBatch, len(chunk))
-			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
-			if !ok {
-				sp.batchLocks[bucket].Unlock()
-				return bucket, offset, wait, false, nil
-			}
+			for offset < count {
+				// BatchSet historically assumed its maximum was at least the input
+				// batch size. Producer-local lanes deliberately use a smaller maximum
+				// at high DOP, so split selections at that boundary before Union. This
+				// keeps ReadyDeltaFor and the batches actually published in lockstep.
+				end := min(offset+maxRows, count)
+				sp.batchLocks[bucket].Lock()
+				if sp.closed[bucket] {
+					sp.batchLocks[bucket].Unlock()
+					break
+				}
+				batchSet := sp.batchSets[bucket][lane]
+				readyDelta := batchSet.ReadyDeltaFor(srcBatch, end-offset)
+				wait, ok := sp.reserveReady(int32(bucket), readyDelta)
+				if !ok {
+					sp.batchLocks[bucket].Unlock()
+					return bucket + visitBase, offset, wait, false, nil
+				}
 
-			oldReady := batchSet.ReadyCount()
-			oldLength := batchSet.Length()
-			buf := sp.getBatchFromPool(producer)
-			consumed, writeErr := batchSet.Union(proc.Mp(), srcBatch, chunk, buf)
-			if !consumed && buf != nil {
-				sp.putBatchToPool(buf, proc.Mp())
+				oldReady := batchSet.ReadyCount()
+				oldLength := batchSet.Length()
+				buf := sp.getBatchFromPool(producer)
+				var consumed bool
+				var writeErr error
+				if wholeBucket {
+					consumed, writeErr = batchSet.UnionRange(writeMP, srcBatch, offset, end-offset, buf)
+				} else {
+					consumed, writeErr = batchSet.Union(writeMP, srcBatch, current[offset:end], buf)
+				}
+				if !consumed && buf != nil {
+					sp.putBatchToPool(buf, proc.Mp())
+				}
+				// Union can only grow the previous writable tail and append new
+				// batches. Full batches before that tail are immutable, so avoid
+				// rescanning the entire bucket after every chunk.
+				sp.syncBatchSetFrom(batchSet, max(0, oldLength-1), producer)
+				actualDelta := batchSet.ReadyCount() - oldReady
+				if actualDelta < readyDelta {
+					sp.releaseReady(int32(bucket), readyDelta-actualDelta)
+				}
+				for range actualDelta {
+					sp.readyProducers[bucket] = append(
+						sp.readyProducers[bucket], lane,
+					)
+				}
+				sp.batchLocks[bucket].Unlock()
+				sp.publishReady(int32(bucket), actualDelta)
+				if writeErr != nil {
+					return bucket + visitBase, offset, nil, false, writeErr
+				}
+				offset = end
 			}
-			// Union can only grow the previous writable tail and append new
-			// batches. Full batches before that tail are immutable, so avoid
-			// rescanning the entire bucket after every chunk.
-			sp.syncBatchSetFrom(batchSet, max(0, oldLength-1), producer)
-			actualDelta := batchSet.ReadyCount() - oldReady
-			if actualDelta < readyDelta {
-				sp.releaseReady(int32(bucket), readyDelta-actualDelta)
-			}
-			for range actualDelta {
-				sp.readyProducers[bucket] = append(
-					sp.readyProducers[bucket], lane,
-				)
-			}
-			sp.batchLocks[bucket].Unlock()
-			sp.publishReady(int32(bucket), actualDelta)
-			if writeErr != nil {
-				return bucket, offset, nil, false, writeErr
-			}
-			offset = end
+			offset = 0
 		}
+		if wholeBucket || first == 0 || limit == first {
+			break
+		}
+		bucket, limit = 0, first
+		visitBase += bucketCount
 	}
 	return len(sp.batchSets), 0, nil, true, nil
-}
-
-// The first input selects one shared lane for this pool generation. Keep only
-// immutable allocation selections, never source vectors or their payloads.
-// Equality includes capacity classes: a producer's private spill recovery
-// capacity must not be spent by another producer's writes.
-func (sp *ShufflePool) matchesSharedLane(bat *batch.Batch) bool {
-	if sp.outputAllocation != nil {
-		return true
-	}
-	sp.sharedLaneOnce.Do(func() {
-		sp.sharedBatchAccount = bat.AllocationAccountSelection()
-		sp.sharedVecAccounts = make([]*vector.AllocationAccountSelection, len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			if vec != nil {
-				sp.sharedVecAccounts[i] = vec.AllocationAccountSelection()
-			}
-		}
-	})
-	if len(sp.sharedVecAccounts) != len(bat.Vecs) ||
-		!vector.AllocationAccountSelectionsEqual(sp.sharedBatchAccount, bat.AllocationAccountSelection()) {
-		return false
-	}
-	for i, vec := range bat.Vecs {
-		var selection *vector.AllocationAccountSelection
-		if vec != nil {
-			selection = vec.AllocationAccountSelection()
-		}
-		if !vector.AllocationAccountSelectionsEqual(sp.sharedVecAccounts[i], selection) {
-			return false
-		}
-	}
-	return true
 }

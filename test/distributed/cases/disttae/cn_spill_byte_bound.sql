@@ -41,6 +41,14 @@ select count(*), sum(v) from delete_rows;
 delete from delete_rows where mod(v,2)=0;
 select count(*), sum(v) from delete_rows;
 
+-- Keep clean spill objects while compacting a dirty object in the same transaction.
+create table compact_rows(id int primary key, payload text);
+begin;
+insert into compact_rows select result, concat(lpad(cast(result as char),4,'0'), repeat('x',32768)) from generate_series(1,64) g;
+delete from compact_rows where id=64;
+commit;
+select count(*) as n, count(distinct id) as unique_ids, sum(id) as id_sum, sum(length(payload)) as bytes, sum(case when cast(left(payload,4) as unsigned) <> id then 1 else 0 end) as mismatches from compact_rows;
+
 select remove_fault_point('fj/cn/flush_small_objs');
 select disable_fault_injection();
 drop database bvt_cn_spill_bound;

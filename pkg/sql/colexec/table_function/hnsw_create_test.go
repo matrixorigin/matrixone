@@ -73,8 +73,8 @@ func hnswCfg(src hnswSource, dict bool) string {
 
 func (src hnswSource) batch(t *testing.T, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(2)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.New(src.typ, src.dim, 0))
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.New(src.typ, src.dim, 0), mp)
 	for i, row := range src.rows {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
 		var b []byte
@@ -106,7 +106,7 @@ func (src hnswSource) batch(t *testing.T, mp *mpool.MPool) *batch.Batch {
 
 func int64Result(t *testing.T, mp *mpool.MPool, n int64) executor.Result {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], n, false, mp))
 	bat.SetRowCount(1)
 	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}

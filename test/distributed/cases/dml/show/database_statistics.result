@@ -15,7 +15,7 @@ show table_number from system;
 use mo_task;
 show column_number from sys_async_task;
 ➤ Number of columns in sys_async_task[-5,64,0]  𝄀
-14
+15
 show column_number from sys_cron_task;
 ➤ Number of columns in sys_cron_task[-5,64,0]  𝄀
 10

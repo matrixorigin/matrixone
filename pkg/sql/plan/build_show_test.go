@@ -20,9 +20,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
@@ -404,6 +407,167 @@ func TestCoverage_buildShowColumns(t *testing.T) {
 		"desc tpch.nation n_name",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowRewriteMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	addMockShowTable(t, mock, "temp_alias", "__mo_tmp_physical_temp_alias", true, "")
+	const restricted = `{"rewrites":{"tpch.nation":"select n_nationkey from tpch.nation"}}`
+	tests := []struct {
+		name  string
+		sql   string
+		hint  string
+		lower int64
+		deny  bool
+	}{
+		{
+			name:  "database clause selects the rewritten target",
+			sql:   "show full fields from other.nation from TPCH",
+			hint:  `{"rewrites":{"Tpch.Nation":["select n_nationkey from tpch.nation","select * from tpch.nation"]}}`,
+			lower: 1,
+			deny:  true,
+		},
+		{
+			name:  "explicit projection cannot prove all columns",
+			sql:   "show create table tpch.nation",
+			hint:  `{"rewrites":{"tpch.nation":"select n_nationkey, n_name, n_regionkey, n_comment from tpch.nation"}}`,
+			lower: 0,
+			deny:  true,
+		},
+		{
+			name:  "case sensitive lookup excludes a different key",
+			sql:   "show create table tpch.nation",
+			hint:  `{"rewrites":{"tpch.Nation":"select n_nationkey from tpch.nation"}}`,
+			lower: 0,
+		},
+		{
+			name:  "single column request still requires a proven source",
+			sql:   "desc nation n_nationkey",
+			hint:  `{"rewrites":{"tpch.nation":"select * from nation"}}`,
+			lower: 1,
+			deny:  true,
+		},
+		{
+			name:  "all layers preserve the local base table columns",
+			sql:   "show create table nation",
+			hint:  `{"rewrites":{"tpch.nation":["select * from tpch.nation where n_nationkey = 1","select n.* from tpch.nation as n"]}}`,
+			lower: 1,
+		},
+		{
+			name:  "remap without a table rule",
+			sql:   "describe nation",
+			hint:  `{"remapdb":{"other":"tpch"}}`,
+			lower: 1,
+		},
+		{
+			name:  "temporary table retains logical target identity",
+			sql:   "describe temp_alias",
+			hint:  `{"rewrites":{"tpch.temp_alias":"select * from tpch.temp_alias"}}`,
+			lower: 1,
+			deny:  true,
+		},
+		{
+			name:  "prepare rejects restricted metadata",
+			sql:   "prepare stmt from show create table nation",
+			hint:  restricted,
+			lower: 1,
+			deny:  true,
+		},
+		{
+			name:  "prepare allows another table",
+			sql:   "prepare stmt from show create table region",
+			hint:  restricted,
+			lower: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &rewriteMetadataModeCompiler{MockCompilerContext: &mock.ctxt, mode: tt.lower}
+			sql := "/*+ " + tt.hint + " */ " + tt.sql
+			stmt, err := parsers.ParseOneWithSQLMode(ctx.GetContext(), dialect.MYSQL, sql, tt.lower, "")
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.NoError(t, parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx.GetContext(), []tree.Statement{stmt}, sql, "", tt.lower))
+
+			built, err := BuildPlan(ctx, stmt, false, nil)
+			if tt.deny {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "unexpected error: %v", err)
+				require.EqualError(t, err, "internal error: do not have privilege to execute the statement")
+				require.Nil(t, built)
+				return
+			}
+			require.NoError(t, err)
+			if _, prepare := stmt.(*tree.PrepareStmt); prepare {
+				built = built.GetDcl().GetPrepare().GetPlan()
+			}
+			require.NotNil(t, built.GetQuery())
+		})
+	}
+}
+
+func TestShowColumnsPreparePreservesWhereParameters(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sql        string
+		paramCount int
+		full       bool
+		view       bool
+	}{
+		{"table", "show columns from nation where Field = ?", 1, false, false},
+		{"full fields", "show full fields from nation where Field = ? or Field = ?", 2, true, false},
+		{"view fields", "show fields from v1 where Field = ?", 1, false, true},
+		{"full view", "show full columns from v1 where Field = ?", 1, true, true},
+	} {
+		for _, entry := range []string{"SQL", "AST"} {
+			t.Run(tc.name+"/"+entry, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				mock.ctxt.tables["v1"].ViewSql.View = `{"Stmt":"create view v1 as select n_name from nation","DefaultDatabase":"tpch"}`
+				var stmt tree.Statement
+				if entry == "SQL" {
+					stmt = tree.NewPrepareString("show_params", tc.sql)
+				} else {
+					inner, err := mysql.ParseOne(mock.ctxt.GetContext(), tc.sql, 1)
+					require.NoError(t, err)
+					stmt = tree.NewPrepareStmt("show_params", inner)
+				}
+				defer stmt.Free()
+
+				// Rebuilding the saved AST must not lose or consume its predicate.
+				for range 2 {
+					built, err := BuildPlan(mock.CurrentContext(), stmt, false, nil)
+					require.NoError(t, err)
+					prepared := built.GetDcl().GetPrepare()
+					require.NotNil(t, prepared)
+					require.Len(t, prepared.GetParamTypes(), tc.paramCount)
+					require.True(t, prepared.GetPlan().GetIsPrepare())
+					wantHeadings := []string{"Field", "Type", "Null", "Key", "Default", "Extra", "Comment"}
+					if tc.full {
+						wantHeadings = []string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}
+					}
+					require.Equal(t, wantHeadings, prepared.GetPlan().GetQuery().GetHeadings())
+					var dependencies []string
+					for _, schema := range prepared.GetSchemas() {
+						dependencies = append(dependencies, schema.GetObjName())
+					}
+					require.Contains(t, dependencies, "nation")
+					if tc.view {
+						require.Contains(t, dependencies, "v1")
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("unprepared marker remains invalid", func(t *testing.T) {
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
+		stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show columns from nation where Field = ?", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		_, err = BuildPlan(mock.CurrentContext(), stmt, false, nil)
+		require.ErrorContains(t, err, "only prepare statement can use ? expr")
+		_, err = runOneStmt(mock, t, "show columns from nation where Field = 'n_name'")
+		require.NoError(t, err)
+	})
 }
 
 func TestShowColumnsTracksTargetDependency(t *testing.T) {

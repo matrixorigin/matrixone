@@ -170,6 +170,18 @@ func TestSelectLockViewAlternativesAndErrors(t *testing.T) {
 				}
 				results[sql] = newMrsForWithGrantOptionPrivilege(rows)
 			}
+			// The same grant may also be stored through the table spelling,
+			// whose exact-relation rows the view checker probes as well.
+			entry.objType = objectTypeTable
+			for _, level := range exactRelationPrivilegeLevels {
+				sql, err := getSqlForPrivilege(ctx, 3, entry, level)
+				require.NoError(t, err)
+				var rows [][]interface{}
+				if grant == typ {
+					rows = [][]interface{}{{typ, true}}
+				}
+				results[sql] = newMrsForWithGrantOptionPrivilege(rows)
+			}
 		}
 		allowed, err := verifyViewPrivilegeForRole(ctx, newBh(ctrl, results), ses, nil, 3, PrivilegeTypeSelect, "app", "v", false, true)
 		require.NoError(t, err)

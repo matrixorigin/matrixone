@@ -17,6 +17,7 @@ package table_function
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -157,7 +158,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			tblCfg: defaultTblCfg,
 			sqlFn: func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 				bat := batch.New([]string{"v"})
-				vec := vector.NewVec(types.T_int32.ToType())
+				vec := vector.NewVec(types.T_int32.ToType(), p.Proc.Mp())
 				vector.AppendFixed(vec, int32(1), false, p.Proc.Mp())
 				bat.SetVector(0, vec)
 				bat.SetRowCount(1)
@@ -173,7 +174,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 				bat := batch.New([]string{"v"})
 				typ := types.T_array_float32.ToType()
 				typ.Width = 2
-				vec := vector.NewVec(typ)
+				vec := vector.NewVec(typ, p.Proc.Mp())
 				vector.AppendBytes(vec, types.ArrayToBytes([]float32{1.0, 2.0}), false, p.Proc.Mp())
 				vector.AppendBytes(vec, types.ArrayToBytes([]float32{3.0}), false, p.Proc.Mp())
 				bat.SetVector(0, vec)
@@ -220,6 +221,87 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			err = st.start(arg, proc, 0, nil)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// A sample of rows the index cannot store still seeds the NULL centroid.
+func TestIvfCreateEndUnstorableSample(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.T
+		params string
+		rows   [][]byte
+		want   [][]float32
+	}{
+		{
+			name:   "float overflow",
+			typ:    types.T_array_float32,
+			params: `{"lists":"2", "op_type":"vector_l2_ops", "quantization":"float16"}`,
+			rows:   [][]byte{types.ArrayToBytes([]float32{100000, 1})},
+			want:   [][]float32{},
+		},
+		{
+			name:   "empty int8 before valid sample",
+			typ:    types.T_array_int8,
+			params: `{"lists":"2", "op_type":"vector_l2_ops"}`,
+			rows:   [][]byte{types.ArrayToBytes([]int8{}), types.ArrayToBytes([]int8{1, -2})},
+			want:   [][]float32{{1, -2}},
+		},
+		{
+			name:   "empty uint8 before valid sample",
+			typ:    types.T_array_uint8,
+			params: `{"lists":"2", "op_type":"vector_l2_ops"}`,
+			rows:   [][]byte{types.ArrayToBytes([]uint8{}), types.ArrayToBytes([]uint8{1, 254})},
+			want:   [][]float32{{1, 254}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldRunSQL, oldGetVersion := ivf_runSql, ivf_getVersion
+			t.Cleanup(func() { ivf_runSql, ivf_getVersion = oldRunSQL, oldGetVersion })
+			var inserts []string
+			ivf_runSql = func(p *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				if !strings.HasPrefix(sql, "SELECT SAMPLE") {
+					inserts = append(inserts, sql)
+					return executor.Result{}, nil
+				}
+				typ := tc.typ.ToType()
+				typ.Width = 2
+				bat := batch.New([]string{"v"})
+				vec := vector.NewVec(typ, p.Proc.Mp())
+				bat.SetVector(0, vec)
+				for _, row := range tc.rows {
+					if err := vector.AppendBytes(vec, row, false, p.Proc.Mp()); err != nil {
+						bat.Clean(p.Proc.Mp())
+						return executor.Result{}, err
+					}
+				}
+				bat.SetRowCount(len(tc.rows))
+				return executor.Result{Mp: p.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+			}
+			ivf_getVersion = func(*sqlexec.SqlProcess, vectorindex.IndexTableConfig) (int64, error) { return 3, nil }
+
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			proc.Ctx = context.Background()
+			installOrdinaryMaintenanceRelations(t, proc)
+			tblCfg, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`{"db":"db", "src":"t", "index":"c", "metadata":"meta", "part":"v", "datasize": 2}`), 1, proc.Mp())
+			require.NoError(t, err)
+			t.Cleanup(func() { tblCfg.Free(proc.Mp()) })
+			arg := &TableFunction{
+				Args:   []*plan.Expr{{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}, Typ: plan.Type{Id: int32(types.T_varchar)}}},
+				Params: []byte(tc.params),
+			}
+			st, err := ivfCreatePrepare(proc, arg)
+			t.Cleanup(func() { arg.Free(proc, false, nil) })
+			require.NoError(t, err)
+			arg.ctr.state = st
+			arg.ctr.argVecs = []*vector.Vector{tblCfg}
+			require.NoError(t, st.start(arg, proc, 0, nil))
+			u := st.(*ivfCreateState)
+			require.Equal(t, tc.want, u.data32)
+			require.NoError(t, u.end(arg, proc))
+			require.Len(t, inserts, 1)
+			require.Contains(t, inserts[0], "VALUES (3, 1, NULL)")
 		})
 	}
 }

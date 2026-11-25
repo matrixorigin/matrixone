@@ -43,7 +43,7 @@ import (
 // those bytes into a column vector typed by the destination declaration. The
 // subquery lowering must keep that carrier's physical bytes in the array
 // domain instead of binding a cast over them: the cast re-parses
-// already-materialized bytes as text and fails with Error 20101 "malformed
+// already-materialized bytes as text and fails with Error 20301 "malformed
 // vector input", the real fixture signature reproduced against the pre-fix
 // source (return21 red-run3: four shapes, identical byte payload).
 //
@@ -354,7 +354,7 @@ func exprHasColRef(e *planpb.Expr) bool {
 // arm returns raw decoded bits and bypasses the array parser, so the binder
 // fast path must not hand them to this lowering as a pre-parsed constant.
 // Every BIT row below must be rejected by the checked string-to-array
-// conversion (moerr 20101 "malformed vector input") at bind time or when the
+// conversion (moerr 20301 "malformed vector input") at bind time or when the
 // branch's own embedding expression is evaluated through the real expression
 // executor — never re-emitted as a bare VecVal, never silently decoded, and
 // never crashing the constant decoder on an unaligned payload. The
@@ -478,14 +478,14 @@ func (c *bitF64TwinContext) ResolveWithoutTemporaryAlias(dbName, tableName strin
 }
 
 // requireCheckedVectorRejection accepts only the checked vector conversion
-// rejection: the array parser's moerr.ErrInternal (20101) "malformed vector
+// rejection: the array parser's moerr.ErrInvalidInput (20301) "malformed vector
 // input". Any other bind/setup/evaluation error (missing object, harness or
 // internal failure) fails the test instead of silently satisfying it.
 func requireCheckedVectorRejection(t *testing.T, err error, stage string) {
 	t.Helper()
 	require.Error(t, err, "stage %s: a BIT payload must be rejected by the checked vector conversion", stage)
-	if !moerr.IsMoErrCode(err, moerr.ErrInternal) || !strings.Contains(err.Error(), "malformed vector input") {
-		t.Fatalf("stage %s: rejection is not the checked vector conversion class (20101 \"malformed vector input\"): %v",
+	if !moerr.IsMoErrCode(err, moerr.ErrInvalidInput) || !strings.Contains(err.Error(), "malformed vector input") {
+		t.Fatalf("stage %s: rejection is not the checked vector conversion class (20301 \"malformed vector input\"): %v",
 			stage, err)
 	}
 }

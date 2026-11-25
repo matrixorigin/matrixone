@@ -21,15 +21,14 @@ pkg/common/hashmap/keycodec/keycodec.go	ExactRuntimeFilterEncodingForPair	float	
 pkg/common/hashmap/strhashmap.go	appendVarlenaHashKey	vector	1
 pkg/common/hashmap/strhashmap.go	encodeHashKeys	float	1
 pkg/common/hashmap/strhashmap.go	encodeHashKeys	vector	2
-pkg/common/hashmap/strhashmap.go	fillFlatFixedGroupingAwareStr	float	1
-pkg/common/hashmap/strhashmap.go	fillGroupingAwareStr	float	1
+pkg/common/hashmap/strhashmap.go	fillFlatFixedNullableStr	float	1
+pkg/common/hashmap/strhashmap.go	fillNullableStr	float	1
 pkg/container/arrowbridge/bind.go	validateLoadTargetType	float	1
 pkg/container/types/types.go	GetArrayElementSize	vector	1
 pkg/container/types/types.go	IsArrayRelate	vector chain	1
 pkg/container/types/types.go	IsOrdered	float	1
 pkg/container/vector/vector.go	InplaceSort	vector	1
 pkg/container/vector/vector.go	InplaceSortAndCompact	vector	1
-pkg/container/vector/vector.go	PrepareParamKindForType	float	1
 pkg/container/vector/vector.go	supportsInplaceSort	vector	1
 pkg/container/vector/vector.go	validateVectorBinary	vector	1
 pkg/frontend/computation_wrapper.go	preparedJSONGenericConcreteTypeSupported	float	1
@@ -111,7 +110,7 @@ pkg/sql/colexec/evalExpression.go	finiteZoneMapEndpoints	float	1
 pkg/sql/colexec/evalExpression.go	zoneMapInVectorOrderIsKnown	vector	1
 pkg/sql/colexec/evalExpression.go	zoneMapTemporalEndpoints	float	1
 pkg/sql/colexec/external/external.go	isDirectParallelLoadType	vector chain	1
-pkg/sql/colexec/external/hive_partition_fill.go	fillConstantVector	float	1
+pkg/sql/colexec/external/hive_partition_fill.go	fillConstantVectorWithPool	float	1
 pkg/sql/colexec/external/iceberg_delete_apply.go	vectorEqualityValue	float	1
 pkg/sql/colexec/external/parquet_nested.go	appendLeafValue	float	1
 pkg/sql/colexec/external/parquet_nested.go	canAppendParquetRowLeafDirectly	float	1
@@ -135,7 +134,6 @@ pkg/sql/colexec/runtimefilter/contract.go	CloseFloatSignedZero	float	1
 pkg/sql/colexec/table_function/filter_helper_gpu.go	filterColTypeFromOid	float	1
 pkg/sql/colexec/table_function/ivf_create.go	clustering	vector chain	1
 pkg/sql/colexec/table_function/ivf_create.go	start	vector	1
-pkg/sql/colexec/window/window.go	searchLeftWithLocation	float	1
 pkg/sql/colexec/window/window.go	searchRightWithLocation	float	1
 pkg/sql/colexec/window/window.go	validateRangeFrameBound	float	1
 pkg/sql/compile/compile.go	evalAggOptimize	float	2
@@ -328,8 +326,8 @@ pkg/sql/plan/visit_plan.go	exploreNode	float chain	1
 pkg/sql/plan/visit_plan_rule.go	applyExpr	float chain	1
 pkg/sql/plan/visit_plan_rule.go	typedRuntimeParamExpr	float chain	1
 pkg/sql/plan/window_binder.go	resetWindowIntervalExpr	float chain	1
-pkg/sql/util/eval_expr_util.go	SetBytesToAnyVector	vector	1
 pkg/sql/util/eval_expr_util.go	checkOverFlow	float chain	1
+pkg/sql/util/eval_expr_util.go	setBytesToAnyVector	vector	1
 pkg/sql/util/index_util.go	compactPrimaryCol	float	1
 pkg/sql/util/index_util.go	compactPrimaryCol	vector	1
 pkg/sql/util/index_util.go	compactSingleIndexCol	float	1

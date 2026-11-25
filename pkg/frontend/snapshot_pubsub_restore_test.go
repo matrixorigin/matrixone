@@ -140,6 +140,7 @@ func Test_recreatePublicationsAfterDbRestoreTS(t *testing.T) {
 		})
 		bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub01'"] =
 			newMrsForSqlForGetSubs([][]interface{}{})
+		mockPublicationTargetRows(bh, 1)
 		return bh
 	}
 	ctx := defines.AttachAccountId(t.Context(), sysAccountID)

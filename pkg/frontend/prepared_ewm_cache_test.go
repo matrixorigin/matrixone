@@ -109,7 +109,8 @@ func TestPreparedEwmDisablesMixedRuntimeSpecializationCache(t *testing.T) {
 	ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 29945,
 		"select ewmmean(n, abs(?)) over (order by n), abs(?) from (select 1 as n union all select 3) t")
 	t.Cleanup(func() { cw.proc.SetPrepareParams(nil); prepared.Close() })
-	prepared.params = vector.NewVec(types.T_text.ToType())
+	prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+	prepared.paramsMP = cw.proc.Mp()
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("0.25"), false, cw.proc.Mp()))
 	require.NoError(t, vector.AppendBytes(prepared.params, []byte("-2"), false, cw.proc.Mp()))
 	prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0}
@@ -145,7 +146,8 @@ func TestPreparedEwmMarkerDecayKeepsRowModeOrderLatitude(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			ses, prepared, cw, execCtx := newPreparedExecuteEnvForSQL(t, 29946, sql)
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); prepared.Close() })
-			prepared.params = vector.NewVec(types.T_text.ToType())
+			prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepared.paramsMP = cw.proc.Mp()
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("0.5"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
 			comp, p, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepared.Name)

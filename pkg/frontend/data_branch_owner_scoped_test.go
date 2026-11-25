@@ -56,9 +56,9 @@ type liveMarkerContextKey struct{}
 func newReplayRecoveryChangesHandle(t *testing.T, owner uint32, mp *mpool.MPool) *replayRecoveryChangesHandle {
 	t.Helper()
 	recovered := batch.NewWithSize(2)
-	recovered.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	recovered.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(recovered.Vecs[0], types.Rowid{}, false, mp))
-	recovered.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	recovered.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(recovered.Vecs[1], int64(42), false, mp))
 	recovered.SetRowCount(1)
 	return &replayRecoveryChangesHandle{owner: owner, recovered: recovered}
@@ -80,7 +80,7 @@ func (h *replayRecoveryChangesHandle) Next(
 	}
 	out := batch.NewWithSize(h.recovered.VectorCount())
 	for i := range h.recovered.Vecs {
-		out.Vecs[i] = vector.NewVec(*h.recovered.Vecs[i].GetType())
+		out.Vecs[i] = vector.NewVec(*h.recovered.Vecs[i].GetType(), mp)
 		if err := out.Vecs[i].UnionBatch(h.recovered.Vecs[i], 0, h.recovered.RowCount(), nil, mp); err != nil {
 			return nil, nil, engine.ChangesHandle_Tail_done, err
 		}
@@ -196,7 +196,7 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 		scannerRecovers
 	)
 	var mode scannerMode
-	stub := gostub.Stub(&scanSnapshotRelationByIDWithFallback,
+	stub := gostub.Stub(&scanSnapshotRelationWithPreopened,
 		func(
 			scanCtx context.Context,
 			_ string,
@@ -218,8 +218,9 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 			}
 			readBatch := batch.NewWithSize(len(attrs))
 			mp := ses.proc.Mp()
+			defer readBatch.Clean(mp)
 			for i := range attrs {
-				readBatch.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+				readBatch.Vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
 				if i == 0 {
 					if err := vector.AppendBytes(readBatch.Vecs[i], []byte("k1"), false, mp); err != nil {
 						return err
@@ -227,12 +228,12 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 				}
 			}
 			readBatch.SetRowCount(1)
-			defer readBatch.Clean(mp)
 			return onBatch(readBatch)
 		})
 	t.Cleanup(stub.Reset)
 
-	fixture := func() (*batch.Batch, tableStuff) {
+	snapshotTS := types.BuildTS(100, 1)
+	fixture := func(t *testing.T) (*batch.Batch, tableStuff) {
 		lcaRel := mock_frontend.NewMockRelation(ctrl)
 		tarRel := mock_frontend.NewMockRelation(ctrl)
 		lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(777)).AnyTimes()
@@ -242,6 +243,7 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 
 		var tblStuff tableStuff
 		tblStuff.lcaRel = lcaRel
+		tblStuff.lcaRelSnapshot = snapshotTS
 		tblStuff.tarRel = tarRel
 		tblStuff.tarOperand = &branchOperand{
 			physAccount: 100, physDb: "pubdb",
@@ -255,17 +257,15 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 		tblStuff.def.pkColIdx = 0
 
 		tBat := batch.NewWithSize(1)
-		tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		t.Cleanup(func() { tBat.Clean(ses.proc.Mp()) })
+		tBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
 		require.NoError(t, vector.AppendBytes(tBat.Vecs[0], []byte("k1"), false, ses.proc.Mp()))
 		tBat.SetRowCount(1)
 		return tBat, tblStuff
 	}
-	snapshotTS := types.BuildTS(100, 1)
-
 	t.Run("child cancellation terminates the blocked in-flight probe", func(t *testing.T) {
 		mode = scannerBlocks
-		tBat, tblStuff := fixture()
-		defer tBat.Clean(ses.proc.Mp())
+		tBat, tblStuff := fixture(t)
 
 		child, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -293,11 +293,11 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 
 	t.Run("owner-scoped scan recovers and returns matching rows", func(t *testing.T) {
 		mode = scannerRecovers
-		tBat, tblStuff := fixture()
-		defer tBat.Clean(ses.proc.Mp())
+		tBat, tblStuff := fixture(t)
 
 		sqlRet, probeErr := runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
 		require.NoError(t, probeErr)
+		defer sqlRet.Close()
 		seen := <-scanSeen
 		require.Equal(t, uint32(100), seen.account)
 		require.NotEmpty(t, sqlRet.Batches)
@@ -305,6 +305,5 @@ func TestLCAScanDerivesOwnerContextFromLiveCallerContext(t *testing.T) {
 			"the row recovered under the segment owner reaches the probe result")
 		// The probe output is [input index, target columns...]: c1 is vec 1.
 		require.Equal(t, "k1", string(sqlRet.Batches[0].Vecs[1].GetRawBytesAt(0)))
-		sqlRet.Close()
 	})
 }

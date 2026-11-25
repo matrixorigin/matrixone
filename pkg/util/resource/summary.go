@@ -218,6 +218,8 @@ const (
 // algebra. Serialization and plan diagnostics consume this value but never add
 // resources independently.
 type StatementResourceSummary struct {
+	LockRead *LockReadDiagnostic `json:"lock_read,omitempty"`
+
 	Usage      Usage
 	Memory     MemoryTotals
 	Allocation AllocationAccountTotals
@@ -235,6 +237,10 @@ type StatementResourceSummary struct {
 // Clone returns a fully reference-independent statement summary.
 func (s StatementResourceSummary) Clone() StatementResourceSummary {
 	s.Allocation = s.Allocation.Clone()
+	if s.LockRead != nil {
+		lockRead := *s.LockRead
+		s.LockRead = &lockRead
+	}
 	return s
 }
 

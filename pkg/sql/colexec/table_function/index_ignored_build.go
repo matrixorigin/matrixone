@@ -62,7 +62,7 @@ func (g *ignoredBuild) leaveOut(pk string, err error) error {
 	if g.spill.Len() >= g.limit {
 		return moerr.NewIndexTooManyBadRecordsNoCtx(g.limit, pk, err.Error())
 	}
-	return g.spill.Add(pk, code)
+	return g.spill.Add(pk, code, vectorindex.IgnoredReason(err))
 }
 
 // allBad fails a build that can store none of the rows it reads.
@@ -82,7 +82,7 @@ func (g *ignoredBuild) sqls(tblcfg vectorindex.IndexTableConfig, ts int64, exec 
 			zap.Int64("ignored", g.left),
 			zap.String("first", g.firstPk+": "+g.firstErr.Error()))
 	}
-	cols := vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Ts: catalog.IndexIgnored_TblCol_Ts}
+	cols := vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Reason: catalog.IndexIgnored_TblCol_Reason, Ts: catalog.IndexIgnored_TblCol_Ts}
 	return g.spill.Sqls(tblcfg.DbName, tblcfg.IgnoredTable, cols, ts, exec)
 }
 

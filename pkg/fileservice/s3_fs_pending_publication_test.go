@@ -33,10 +33,12 @@ import (
 // hide a second full-object read while the first cache file is being published.
 type publicationReadStorage struct {
 	ObjectStorage
-	bytes      atomic.Int64
-	opens      atomic.Int64
-	closes     atomic.Int64
-	beforeRead func(context.Context) error
+	bytes        atomic.Int64
+	opens        atomic.Int64
+	closes       atomic.Int64
+	beforeRead   func(context.Context) error
+	readersMu    sync.Mutex
+	readerClosed []<-chan struct{}
 }
 
 type publicationVectorCache struct {
@@ -80,15 +82,47 @@ func (s *publicationReadStorage) Read(ctx context.Context, key string, min, max 
 	if err != nil {
 		return nil, err
 	}
+	closed := make(chan struct{})
+	s.readersMu.Lock()
+	s.readerClosed = append(s.readerClosed, closed)
 	s.opens.Add(1)
+	s.readersMu.Unlock()
+	var signalClosed sync.Once
 	return &readCloser{
 		r: readerFunc(func(p []byte) (int, error) {
 			n, err := r.Read(p)
 			s.bytes.Add(int64(n))
 			return n, err
 		}),
-		closeFunc: func() error { s.closes.Add(1); return r.Close() },
+		closeFunc: func() error {
+			s.closes.Add(1)
+			err := r.Close()
+			signalClosed.Do(func() { close(closed) })
+			return err
+		},
 	}, nil
+}
+
+// Publication can start before the source reader's deferred Close returns.
+// After the leader and follower have admitted their reads, wait for those exact
+// readers without releasing the publication barrier or hiding a missing close.
+func (s *publicationReadStorage) waitForReaderCloses(t *testing.T, release func()) {
+	t.Helper()
+	s.readersMu.Lock()
+	readers := append([]<-chan struct{}(nil), s.readerClosed...)
+	s.readersMu.Unlock()
+	timer := time.NewTimer(pendingPublicationTestWatchdog)
+	defer timer.Stop()
+	for _, closed := range readers {
+		select {
+		case <-closed:
+		case <-timer.C:
+			if release != nil {
+				release()
+			}
+			t.Fatal("source reader Close did not complete before publication")
+		}
+	}
 }
 
 // This test intentionally blocks asynchronous disk-cache publication. Keep
@@ -152,12 +186,16 @@ func waitPendingPublicationResult(t *testing.T, phase string, done <-chan error,
 }
 
 func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
+	// These subtests run serially. Share only the immutable source objects;
+	// every scenario still owns its file service, disk cache and barriers.
+	bucket := t.TempDir()
+	largeReady, smallReady := false, false
 	for _, mode := range []string{"sparse", "dense", "partial-hit", "read-to-end", "cancel-between-entries", "error-between-entries", "publication-failure", "custom-cache"} {
 		t.Run(mode, func(t *testing.T) {
 			setupCtx, cancelSetup := context.WithCancel(context.Background())
 			defer cancelSetup()
 			fs, err := NewS3FS(setupCtx, ObjectStorageArguments{
-				Name: "s3", Endpoint: "disk", Bucket: t.TempDir(),
+				Name: "s3", Endpoint: "disk", Bucket: bucket,
 			}, CacheConfig{
 				DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](32 << 20),
 				MemoryCapacity: ptrTo[toml.ByteSize](0),
@@ -165,17 +203,32 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			require.NoError(t, err)
 			unblock := func() {}
 			t.Cleanup(func() { unblock(); fs.Close(context.Background()) })
-			data := make([]byte, (9<<20)+4096)
+			// Only these scenarios need the two ranges to cross the expensive
+			// range threshold. The other modes exercise independent contracts.
+			largeObject := mode == "sparse" || mode == "partial-hit" || mode == "cancel-between-entries" || mode == "error-between-entries"
+			dataSize, object, ready := 16<<10, "object-small", &smallReady
+			if largeObject {
+				dataSize, object, ready = (9<<20)+4096, "object-large", &largeReady
+			}
+			data := make([]byte, dataSize)
 			for i := range data {
 				data[i] = byte(i*31 + i/251)
 			}
-			require.NoError(t, runPendingPublicationPhase(t, "initial object write", nil, func(ctx context.Context) error {
-				return fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache})
-			}))
+			if !*ready {
+				require.NoError(t, runPendingPublicationPhase(t, "initial object write", nil, func(ctx context.Context) error {
+					err := fs.Write(ctx, IOVector{FilePath: object, Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache})
+					if err == nil {
+						// A timed-out write can still publish while the watchdog joins it.
+						// The phase's result channel synchronizes this with the next test.
+						*ready = true
+					}
+					return err
+				}))
+			}
 			storage := &publicationReadStorage{ObjectStorage: fs.storage}
 			fs.storage = storage
 			if mode == "partial-hit" {
-				warm := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 2048, Size: 3}}, Policy: SkipFullFilePreloads}
+				warm := &IOVector{FilePath: object, Entries: []IOEntry{{Offset: 2048, Size: 3}}, Policy: SkipFullFilePreloads}
 				defer warm.Release()
 				require.NoError(t, runPendingPublicationPhase(t, "partial-hit warm read", nil, func(ctx context.Context) error {
 					return fs.Read(ctx, warm)
@@ -200,7 +253,7 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 				}
 				return nil
 			}
-			leader := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1024, Size: 4}}}
+			leader := &IOVector{FilePath: object, Entries: []IOEntry{{Offset: 1024, Size: 4}}}
 			defer leader.Release()
 			require.NoError(t, runPendingPublicationPhase(t, "leader read", unblock, func(ctx context.Context) error {
 				return fs.Read(ctx, leader)
@@ -209,21 +262,25 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			require.Equal(t, data[1024:1028], leader.Entries[0].Data)
 			require.Equal(t, int64(len(data)), storage.bytes.Load()-leaderBytes)
 			require.False(t, fs.ioMerger.IsMerging(fs.readMergeKey(leader)))
-			diskPath := fs.diskCache.pathForFile("object")
+			diskPath := fs.diskCache.pathForFile(object)
 			require.True(t, fs.diskCache.isUpdating(diskPath))
 			require.NoFileExists(t, diskPath)
 			require.False(t, fs.diskCache.cache.Contains(diskPath))
 
-			secondOffset := int64(9 << 20)
+			secondOffset := int64(12 << 10)
+			if largeObject {
+				secondOffset = 9 << 20
+				require.Greater(t, secondOffset-4096, minExpensiveRangeReadSpan)
+			}
 			if mode == "dense" {
 				secondOffset = 4112
 			}
-			follower := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: secondOffset, Size: 17}}}
+			follower := &IOVector{FilePath: object, Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: secondOffset, Size: 17}}}
 			if mode == "partial-hit" {
 				follower.Entries = append([]IOEntry{{Offset: 2048, Size: 3}}, follower.Entries...)
 			}
 			if mode == "read-to-end" {
-				follower.Entries = []IOEntry{{Offset: 9 << 20, Size: -1}}
+				follower.Entries = []IOEntry{{Offset: secondOffset, Size: -1}}
 			}
 			var vectorCache *publicationVectorCache
 			if mode == "custom-cache" {
@@ -296,6 +353,7 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 					require.Len(t, vectorCache.last.Entries, 2)
 				}
 			}
+			storage.waitForReaderCloses(t, unblock)
 			require.Equal(t, storage.opens.Load(), storage.closes.Load())
 			require.False(t, fs.ioMerger.IsMerging(fs.readMergeKey(follower)))
 			require.NoFileExists(t, diskPath)
@@ -309,7 +367,7 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			if mode == "publication-failure" {
 				require.NoFileExists(t, diskPath)
 				require.False(t, fs.diskCache.cache.Contains(diskPath))
-				retry := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 1024, Size: 4}}}
+				retry := &IOVector{FilePath: object, Entries: []IOEntry{{Offset: 1024, Size: 4}}}
 				defer retry.Release()
 				require.NoError(t, runPendingPublicationPhase(t, "publication retry read", unblock, func(ctx context.Context) error {
 					return fs.Read(ctx, retry)
@@ -334,7 +392,7 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			}))
 			require.Empty(t, tempFiles)
 			before = storage.bytes.Load()
-			hit := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: secondOffset, Size: 17}}}
+			hit := &IOVector{FilePath: object, Entries: []IOEntry{{Offset: 4096, Size: 13}, {Offset: secondOffset, Size: 17}}}
 			defer hit.Release()
 			require.NoError(t, runPendingPublicationPhase(t, "published cache hit", nil, func(ctx context.Context) error {
 				return fs.Read(ctx, hit)

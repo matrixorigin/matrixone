@@ -149,7 +149,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +157,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
+		return nil, err
+	}
+	if err = checkShowRewriteMetadata(ctx, stmt.RewriteOption, dbName, tblName, tableDef,
+		snapshot == nil && sub == nil && obj.GetPubInfo() == nil); err != nil {
 		return nil, err
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
@@ -657,7 +661,7 @@ func descColumnLikeInstaller(stmt *tree.ShowColumns, pattern string) func() {
 	}
 }
 
-func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
+func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
@@ -679,6 +683,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if err = checkShowRewriteMetadata(ctx, stmt.RewriteOption, dbName, tblName, tableDef, obj.GetPubInfo() == nil); err != nil {
+		return nil, err
 	}
 	catalogTblName := tblName
 	if tableDef.IsTemporary {
@@ -856,7 +863,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 	var result *Plan
 	if stmt.Where != nil {
-		result, err = returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+		result, err = returnByWhereAndBaseSQLWithPrepare(ctx, sql, stmt.Where, ddlType, isPrepareStmt)
 	} else if stmt.Like != nil {
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
@@ -1173,26 +1180,86 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	return returnByRewriteSQL(ctx, showIndexSql, ddlType)
 }
 
-// TODO: Improve SQL. Currently, Lack of the mata of grants
+// buildShowGrants rewrites SHOW GRANTS into a single query over
+// mo_role_privs. The stored privilege_level is only the level token
+// written at grant time (`d`, `t`, `d.*`, `d.t`, `*`, `*.*`); the durable
+// object identity of a grant lives in obj_id (the relation's logical id
+// for table/view grants, the database id for db-bound grants). The query
+// joins the granted id back to the live catalog of the same account so the
+// output names the real db/table a grant applies to, still identifying the
+// same object after rename or physical table rewrites. A grant whose
+// object no longer exists keeps the historical token instead of inventing
+// a name.
 func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
-
 	ddlType := plan.DataDefinition_SHOW_TARGET
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
 	if stmt.ShowGrantType == tree.GrantForRole {
 		role_name := stmt.Roles[0].UserName
-		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\")  as `Grants for %s` from  %s.mo_role_privs as p where p.role_name = '%s';"
-		sql = fmt.Sprintf(sql, role_name, role_name, MO_CATALOG_DB_NAME, role_name)
-		return returnByRewriteSQL(ctx, sql, ddlType)
-	} else {
-		if stmt.Hostname == "" {
-			stmt.Hostname = MO_DEFUALT_HOSTNAME
-		}
-		if stmt.Username == "" {
-			stmt.Username = ctx.GetUserName()
-		}
-		sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else p.privilege_level end,   \" `%s`\", \"@\", \"`%s`\")  as `Grants for %s@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
-		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Username, stmt.Hostname)
-		return returnByRewriteSQL(ctx, sql, ddlType)
+		return returnByRewriteSQL(ctx, buildShowGrantsRoleSQL(accountId, role_name), ddlType)
 	}
+	if stmt.Hostname == "" {
+		stmt.Hostname = MO_DEFUALT_HOSTNAME
+	}
+	if stmt.Username == "" {
+		stmt.Username = ctx.GetUserName()
+	}
+	return returnByRewriteSQL(ctx, buildShowGrantsUserSQL(accountId, stmt.Username, stmt.Hostname), ddlType)
+}
+
+// showGrantsObjectScope replaces the stored privilege_level token of a
+// mo_role_privs row with the real scope of its granted object: the exact
+// database.table (or table) for table/view grants, the database for
+// database grants, and db.* for db-bound wildcards (`d.*` and the
+// current-db `*`). Identifiers are backtick-quoted with existing backticks
+// doubled. Everything else keeps the stored token: account grants have no
+// scope at all, and global levels (`*.*`, database `*`) never join.
+const showGrantsObjectScope = "case" +
+	" when rt.relname is not null then concat('`', replace(rt.reldatabase, '`', '``'), '`.`', replace(rt.relname, '`', '``'), '`')" +
+	" when dbt.datname is not null and p.obj_type = 'database' then concat('`', replace(dbt.datname, '`', '``'), '`')" +
+	" when dbt.datname is not null then concat('`', replace(dbt.datname, '`', '``'), '`.*')" +
+	" else p.privilege_level" +
+	" end"
+
+// showGrantsObjectScopeJoins resolves the granted object identity within
+// the current account only. The object-type and privilege-level gates keep
+// the two id domains (logical relation id, database id) separate so a
+// granted id can never resolve across its domain, tenant, or catalog rows.
+func showGrantsObjectScopeJoins(accountId uint32) string {
+	return fmt.Sprintf(
+		"left join %s.mo_tables as rt on rt.account_id = %d and rt.rel_logical_id = p.obj_id and p.obj_type in ('table','view') and p.privilege_level in ('d.t','t') "+
+			"left join %s.mo_database as dbt on dbt.account_id = %d and dbt.dat_id = p.obj_id and ((p.obj_type in ('table','view') and p.privilege_level in ('d.*','*')) or (p.obj_type = 'database' and p.privilege_level = 'd'))",
+		MO_CATALOG_DB_NAME, accountId, MO_CATALOG_DB_NAME, accountId)
+}
+
+// buildShowGrantsRoleSQL renders the rewritten query of SHOW GRANTS FOR
+// ROLE: one bounded query resolving every scope by join. The statement
+// argument is rendered only through quoted contexts: creation routes
+// reject quote/backtick/space role names (getSqlForRoleIdOfRole ->
+// inputNameIsInvalid), but SHOW GRANTS itself applies no name admission, so
+// display, alias and equality all use the canonical sqlquote helpers.
+func buildShowGrantsRoleSQL(accountId uint32, roleName string) string {
+	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else " +
+		showGrantsObjectScope + " end,   %s)  as %s from  %s.mo_role_privs as p %s where p.role_name = %s order by p.role_id, p.privilege_id, p.obj_type, p.obj_id, p.privilege_level;"
+	return fmt.Sprintf(sql, sqlquote.String(" `"+roleName+"`"), sqlquote.Ident("Grants for "+roleName),
+		MO_CATALOG_DB_NAME, showGrantsObjectScopeJoins(accountId), sqlquote.String(roleName))
+}
+
+// buildShowGrantsUserSQL renders the rewritten query of SHOW GRANTS FOR a
+// user, restricted to that user's roles and expanded with the same object
+// scope resolution. User names of existing rows passed creation admission
+// (quote/backtick/space are rejected by getSqlForPasswordOfUser ->
+// inputNameIsInvalid), but the SHOW statement argument itself and stored
+// hostnames carry no name admission, so every interpolation uses the
+// canonical sqlquote helpers.
+func buildShowGrantsUserSQL(accountId uint32, username, hostname string) string {
+	sql := "select concat(\"GRANT \", p.privilege_name, ' ON ', p.obj_type, ' ', case p.obj_type when 'account' then '' else " +
+		showGrantsObjectScope + " end,   %s, '@', %s)  as %s from %s.mo_user as u join %s.mo_user_grant as g on g.user_id = u.user_id join %s.mo_role_privs as p on p.role_id = g.role_id %s where u.user_name = %s and u.user_host = %s order by p.role_id, p.privilege_id, p.obj_type, p.obj_id, p.privilege_level;"
+	return fmt.Sprintf(sql, sqlquote.String(" `"+username+"`"), sqlquote.String("`"+hostname+"`"),
+		sqlquote.Ident("Grants for "+username+"@localhost"), MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME,
+		showGrantsObjectScopeJoins(accountId), sqlquote.String(username), sqlquote.String(hostname))
 }
 
 func buildShowRoles(stmt *tree.ShowRolesStmt, ctx CompilerContext) (*Plan, error) {
@@ -1367,16 +1434,21 @@ func showSnapshotSpec(atTsExpr *tree.AtTimeStamp, snapshot *Snapshot) string {
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
+	return returnByWhereAndBaseSQLWithPrepare(ctx, baseSQL, where, ddlType, false)
+}
+
+func returnByWhereAndBaseSQLWithPrepare(ctx CompilerContext, baseSQL string,
+	where *tree.Where, ddlType plan.DataDefinition_DdlType, isPrepareStmt bool) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
-	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
-	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
-	// set show statement's where clause to new statement
+	defer newStmt.Free()
+	// The predicate belongs to the authored SHOW. Preserve its prepare mode
+	// when binding it as part of the rewritten SELECT.
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = where
-	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
+	return BuildPlan(ctx, newStmt, isPrepareStmt, nil)
 }
 
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,

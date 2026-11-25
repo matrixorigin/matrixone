@@ -295,7 +295,12 @@ func TestRegexpReviewForkFoldSubtraction(t *testing.T) {
 	require.Equal(t, "z\rXy", replaced)
 
 	// Bare-class fork-truth pins: differing fold classes keep the
-	// fork's exact singleton/partner memberships.
+	// fork's exact singleton/partner memberships. The lone bare-class
+	// row pins the round-16 F2 orbit completion instead: the rewrite
+	// augments [s] to [sſ] before the engine sees it (ICU closes [s]
+	// over ſ identically, probes D1-D2), superseding the round-8
+	// raw-fork membership for bare classes only — the subtraction
+	// classes above stay on the raw fiber, entirely verbatim.
 	for _, tc := range []struct {
 		pattern string
 		subject string
@@ -314,7 +319,7 @@ func TestRegexpReviewForkFoldSubtraction(t *testing.T) {
 		{`^(?i:[μ-[µ]])(?=)`, "μ", true},
 		{`^(?i:[μ-[µ]])(?=)`, "Μ", true},
 		{`^(?i:[μ-[µ]])(?=)`, "µ", false},
-		{`^(?i:[s])(?=)`, "ſ", false}, // ſ is not a fork fold partner of s
+		{`^(?i:[s])(?=)`, "ſ", true}, // round-16 F2: orbit-completed [s]→[sſ]; ICU agrees (D1-D2)
 		{`^(?i:[k-[ſ]])(?=)`, "K", true},
 	} {
 		got, err := op.regMap.regularLikeWithMode(tc.pattern, tc.subject, "m", false)

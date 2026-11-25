@@ -144,6 +144,15 @@ func sequenceTableName(db, table string) string {
 // list is metadata, not an API with a fixed order, so inspect the relkind key
 // explicitly and fail closed on missing or conflicting markers.
 func requireSequence(ctx context.Context, rel engine.Relation) error {
+	if source, ok := rel.(interface{ ValidatedCatalogKind() (string, bool) }); ok {
+		if kind, valid := source.ValidatedCatalogKind(); valid {
+			if kind == catalog.SystemSequenceRel {
+				return nil
+			}
+			return moerr.NewInternalError(ctx, "Table input is not a sequence")
+		}
+	}
+
 	td, err := rel.TableDefs(ctx)
 	if err != nil {
 		return err

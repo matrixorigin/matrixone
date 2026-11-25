@@ -499,7 +499,7 @@ func TestFillLinearSpillAlternatingColumnsAdvancesWatermark(t *testing.T) {
 	arg := &Fill{ColLen: 2, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{2}, SpillThreshold: 1}
 	arg.AppendChild(child)
 	require.NoError(t, arg.Prepare(proc))
-	midpoint := vector.NewVec(types.T_int64.ToType())
+	midpoint := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(midpoint, int64(99), false, proc.Mp()))
 	stub := &fillStubExpressionExecutor{result: midpoint}
 	arg.ctr.exes = []colexec.ExpressionExecutor{stub, stub}
@@ -554,7 +554,7 @@ func TestFillSpillWatermarkSplitsBatch(t *testing.T) {
 			arg := &Fill{ColLen: 2, FillType: fillType, PartitionColIdx: []int32{2}, SpillThreshold: 2}
 			arg.AppendChild(child)
 			require.NoError(t, arg.Prepare(proc))
-			midpoint := vector.NewVec(types.T_int64.ToType())
+			midpoint := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 			if fillType == plan.Node_LINEAR {
 				require.NoError(t, vector.AppendFixed(midpoint, int64(99), false, proc.Mp()))
 				stub := &fillStubExpressionExecutor{result: midpoint}
@@ -607,7 +607,7 @@ func TestFillLinearCrossBatchGap(t *testing.T) {
 		require.NoError(t, vector.AppendFixed(vec, types.Decimal128FromInt64(v), isNull, proc.Mp()))
 	}
 	// batch 1: [10, NULL]; batch 2: [NULL, 40]; one partition.
-	v1 := vector.NewVec(typ)
+	v1 := vector.NewVec(typ, proc.Mp())
 	set(v1, 10, false)
 	set(v1, 0, true)
 	b1 := batch.NewWithSize(2)
@@ -615,7 +615,7 @@ func TestFillLinearCrossBatchGap(t *testing.T) {
 	b1.SetVector(1, testutil.MakeInt64Vector([]int64{1, 1}, nil, proc.Mp()))
 	b1.SetRowCount(2)
 
-	v2 := vector.NewVec(typ)
+	v2 := vector.NewVec(typ, proc.Mp())
 	set(v2, 0, true)
 	set(v2, 40, false)
 	b2 := batch.NewWithSize(2)
@@ -661,7 +661,7 @@ func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
 	const nullBatches = 64
 	typ := types.New(types.T_decimal128, 38, 0)
 	makeBatch := func(value int64, isNull bool) *batch.Batch {
-		vec := vector.NewVec(typ)
+		vec := vector.NewVec(typ, proc.Mp())
 		require.NoError(t, vector.AppendFixed(vec, types.Decimal128FromInt64(value), isNull, proc.Mp()))
 		bat := batch.NewWithSize(2)
 		bat.SetVector(0, vec)
@@ -744,7 +744,7 @@ func TestFillLinearDecimal256SpillMatchesGapLength(t *testing.T) {
 			typ := types.New(types.T_decimal256, 65, 0)
 			bats := make([]*batch.Batch, 0, len(test.values))
 			for row, value := range test.values {
-				vec := vector.NewVec(typ)
+				vec := vector.NewVec(typ, proc.Mp())
 				require.NoError(t, vector.AppendFixed(
 					vec, types.Decimal256FromInt64(value), test.nulls[row], proc.Mp()))
 				bat := batch.NewWithSize(1)
@@ -787,7 +787,7 @@ func TestFillLinearConsecutiveSpillsPreserveSegmentEntry(t *testing.T) {
 		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		typ := types.New(types.T_decimal128, 38, 0)
 		makeBatch := func(values []int64, nulls []uint64, parts []int64) *batch.Batch {
-			vec := vector.NewVec(typ)
+			vec := vector.NewVec(typ, proc.Mp())
 			for row, value := range values {
 				require.NoError(t, vector.AppendFixed(
 					vec, types.Decimal128FromInt64(value), vec.GetNulls().Contains(uint64(row)), proc.Mp()))
@@ -853,7 +853,7 @@ func TestFillLinearConsecutiveSpillsPreserveSegmentEntry(t *testing.T) {
 		arg := &Fill{ColLen: 2, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{2}, SpillThreshold: 1}
 		arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
 		require.NoError(t, arg.Prepare(proc))
-		midpoint := vector.NewVec(types.T_int64.ToType())
+		midpoint := vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixed(midpoint, int64(99), false, proc.Mp()))
 		stub := &fillStubExpressionExecutor{result: midpoint}
 		arg.ctr.exes = []colexec.ExpressionExecutor{stub, stub}

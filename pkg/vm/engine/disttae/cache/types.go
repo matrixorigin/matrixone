@@ -26,10 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 const (
@@ -136,11 +136,12 @@ type TableItem struct {
 	deleted    bool // Mark if it is a delete
 
 	// table value
-	Id           uint64
-	TableDef     *plan.TableDef
-	Defs         []engine.TableDef
-	Version      uint32
-	DatabaseName string
+	Id               uint64
+	Defs             []engine.TableDef
+	schema           *candidateSchema
+	replayClusterKey *readutil.ClusterKeyDescriptor
+	Version          uint32
+	DatabaseName     string
 
 	CPKey []byte
 
@@ -169,11 +170,11 @@ func (item *TableItem) IsDeleted() bool {
 }
 
 func (item *TableItem) IsPartitionTable() bool {
-	return item.TableDef != nil && features.IsPartitioned(item.TableDef.FeatureFlag)
+	return (item.Defs != nil || item.schema != nil) && features.IsPartitioned(item.ExtraInfo.GetFeatureFlag())
 }
 
 func (item *TableItem) IsIndexTable() bool {
-	return item.TableDef != nil && features.IsIndexTable(item.TableDef.FeatureFlag)
+	return (item.Defs != nil || item.schema != nil) && features.IsIndexTable(item.ExtraInfo.GetFeatureFlag())
 }
 
 func (item *TableItem) String() string {
@@ -325,11 +326,14 @@ func tableItemCPKeyLess(a, b *TableItem) bool {
 // copyTableItem copies src to dst
 func copyTableItem(dst, src *TableItem) {
 	dst.Id = src.Id
+	dst.DatabaseName = src.DatabaseName
+	dst.CatalogVersion = src.CatalogVersion
 	dst.Defs = src.Defs
+	dst.schema = src.schema
+	dst.replayClusterKey = src.replayClusterKey
 	dst.Kind = src.Kind
 	dst.Comment = src.Comment
 	dst.ViewDef = src.ViewDef
-	dst.TableDef = src.TableDef
 	dst.Constraint = src.Constraint
 	dst.Partitioned = src.Partitioned
 	dst.Partition = src.Partition

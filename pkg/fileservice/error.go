@@ -24,6 +24,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
+	smithy "github.com/aws/smithy-go"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/minio/minio-go/v7"
 	"github.com/tencentyun/cos-go-sdk-v5"
@@ -104,14 +107,15 @@ func IsRetryableStartupError(err error) bool {
 		return true
 	}
 
-	var minioErr minio.ErrorResponse
-	if errors.As(err, &minioErr) {
-		statusCode := minioErr.StatusCode
+	if statusCode, ok := objectStorageStatusCode(err); ok {
 		if statusCode == http.StatusRequestTimeout ||
 			statusCode == http.StatusTooManyRequests ||
 			statusCode >= http.StatusInternalServerError {
 			return true
 		}
+	}
+	if code, ok := objectStorageErrorCode(err); ok && retryableObjectStorageErrorCode(code) {
+		return true
 	}
 
 	str := err.Error()
@@ -139,6 +143,60 @@ func IsRetryableStartupError(err error) bool {
 	}
 
 	return errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// objectStorageStatusCode returns the HTTP status of the object-storage response that err
+// reports.
+func objectStorageStatusCode(err error) (int, bool) {
+	var minioErr minio.ErrorResponse
+	if errors.As(err, &minioErr) {
+		return minioErr.StatusCode, true
+	}
+	var awsErr interface{ HTTPStatusCode() int }
+	if errors.As(err, &awsErr) {
+		return awsErr.HTTPStatusCode(), true
+	}
+	var ossErr oss.ServiceError
+	if errors.As(err, &ossErr) {
+		return ossErr.StatusCode, true
+	}
+	var cosErr *cos.ErrorResponse
+	if errors.As(err, &cosErr) && cosErr.Response != nil {
+		return cosErr.Response.StatusCode, true
+	}
+	return 0, false
+}
+
+// objectStorageErrorCode returns the API error code of the object-storage response that err
+// reports, such as RequestTimeout or SlowDown.
+func objectStorageErrorCode(err error) (string, bool) {
+	var minioErr minio.ErrorResponse
+	if errors.As(err, &minioErr) {
+		return minioErr.Code, true
+	}
+	var awsErr smithy.APIError
+	if errors.As(err, &awsErr) {
+		return awsErr.ErrorCode(), true
+	}
+	var ossErr oss.ServiceError
+	if errors.As(err, &ossErr) {
+		return ossErr.Code, true
+	}
+	var cosErr *cos.ErrorResponse
+	if errors.As(err, &cosErr) {
+		return cosErr.Code, true
+	}
+	return "", false
+}
+
+// retryableObjectStorageErrorCode reports whether the AWS SDK retryer retries an API error
+// with code: a request timeout or a throttling response.
+func retryableObjectStorageErrorCode(code string) bool {
+	if _, ok := retry.DefaultRetryableErrorCodes[code]; ok {
+		return true
+	}
+	_, ok := retry.DefaultThrottleErrorCodes[code]
+	return ok
 }
 
 type errorStr string

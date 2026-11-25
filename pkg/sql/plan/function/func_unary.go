@@ -43,7 +43,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -1037,8 +1036,8 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	if !perRow && uniformBinary {
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
+	if uniformBinary {
 		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 	}
 	param := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -1059,7 +1058,7 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 		}
 		var count uint64
 		var err error
-		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		binary := uniformBinary
 		if binary {
 			count = bitCountFromBinaryString(value)
 		} else {
@@ -1082,6 +1081,137 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 
 func BitCountBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
+}
+
+// PreparedBitCountCastOverload is a binder-only conversion for a string
+// execution after BIT_COUNT has latched to a numeric parameter domain.
+const PreparedBitCountCastOverload int32 = 10
+
+func appendPreparedBitCountConversionWarning(proc *process.Process, value, typeName string) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect %s value: '%-.128s'", typeName, trimASCIISpace(value)),
+	)
+}
+
+func preparedBitCountIntegerPrefix(prefix string) (int64, bool, error) {
+	rounded, err := parseMySQLDecimal256Prefix(prefix, 65, 0)
+	if err != nil {
+		return 0, false, err
+	}
+	integer, ok := new(big.Int).SetString(rounded.Format(0), 10)
+	if !ok {
+		return 0, false, strconv.ErrSyntax
+	}
+	if integer.IsInt64() {
+		return integer.Int64(), false, nil
+	}
+	if integer.Sign() < 0 {
+		return math.MinInt64, true, nil
+	}
+	return math.MaxInt64, true, nil
+}
+
+func preparedBitCountTextRows[T types.FixedSizeTExceptStrType](
+	source *vector.Vector, result *vector.FunctionResult[T], proc *process.Process, length int,
+	selectList *FunctionSelectList, convert func(string) (T, string, error),
+) error {
+	input := vector.GenerateFunctionStrParameter(source)
+	var zero T
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := input.GetStrValue(row)
+		if null {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text := convertByteSliceToString(value)
+		trimmed := trimASCIISpace(text)
+		prefix, _, hasPrefix := scanDecimalFloatPrefix(trimmed)
+		if !hasPrefix {
+			appendPreparedBitCountConversionWarning(proc, text, "INTEGER")
+			if err := result.Append(zero, false); err != nil {
+				return err
+			}
+			continue
+		}
+		converted, warningType, err := convert(prefix)
+		if err != nil {
+			return err
+		}
+		if warningType == "" && prefix != trimmed {
+			warningType = "INTEGER"
+		}
+		if warningType != "" {
+			appendPreparedBitCountConversionWarning(proc, text, warningType)
+		}
+		if err = result.Append(converted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NewPreparedBitCountCast keeps prepared string reuse out of the generic
+// strict CAST contract. Integer latches round the exact decimal prefix and
+// saturate at signed BIGINT boundaries; DOUBLE and DECIMAL retain their own
+// later BIT_COUNT conversion rules.
+func NewPreparedBitCountCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 2 || !parameters[0].GetType().Oid.IsMySQLString() {
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires a string value and numeric target")
+	}
+	source := parameters[0]
+	// typeswitch:partial Prepared BIT_COUNT numeric latches use canonical target types;
+	// other float-family members cannot reach this binder-only conversion.
+	switch target := result.GetResultVector().GetType(); target.Oid {
+	case types.T_int64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[int64](result), proc, length, selectList, func(prefix string) (int64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return value, "DECIMAL", err
+			}
+			return value, "", err
+		})
+	case types.T_uint64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, func(prefix string) (uint64, string, error) {
+			value, outOfRange, err := preparedBitCountIntegerPrefix(prefix)
+			if outOfRange {
+				return uint64(value), "DECIMAL", err
+			}
+			return uint64(value), "", err
+		})
+	case types.T_float64:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[float64](result), proc, length, selectList, func(prefix string) (float64, string, error) {
+			value, err := strconv.ParseFloat(prefix, 64)
+			if errors.Is(err, strconv.ErrRange) && math.IsInf(value, 0) {
+				// Retain the infinity for BIT_COUNT's existing floating conversion;
+				// the string conversion owns warning 1292.
+				return value, "INTEGER", nil
+			}
+			return value, "", err
+		})
+	case types.T_decimal256:
+		return preparedBitCountTextRows(source, vector.MustFunctionResult[types.Decimal256](result), proc, length, selectList, func(prefix string) (types.Decimal256, string, error) {
+			value, err := parseMySQLDecimal256Prefix(prefix, target.Width, target.Scale)
+			return value, "", err
+		})
+	default:
+		return moerr.NewInvalidInput(proc.Ctx, "prepared bit count cast requires an int64, uint64, float64, or decimal256 target")
+	}
 }
 
 func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1192,7 +1322,7 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			// ParseDatetime reports only invalid-input errors. Malformed strings
 			// share the input-NULL path without consulting the zero-date policy.
 			parsed, err = types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
-			if err != nil && !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+			if err != nil && !result.ArgumentIsBin(0) && isTemporalTextSource(ivecs[0].GetType().Oid) {
 				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
 			}
 			null = err != nil
@@ -1391,7 +1521,7 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	single := func(str string, row int) ([]byte, error) {
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0)) {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_quote")
 		}
 		if !utf8.ValidString(str) {
@@ -1462,7 +1592,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		// NULL and masked rows.  Runtime binary provenance can vary within a
 		// VARCHAR vector, and a selected text row can override a static binary
 		// result type.
-		if ivecs[0].GetIsBinaryStringAt(row) {
+		if isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0)) {
 			return "", moerr.NewInvalidInput(proc.Ctx, "binary data not supported by json_unquote")
 		}
 		if ivecs[0].GetType().Oid.IsMySQLString() {
@@ -1507,7 +1637,7 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			continue
 		}
 		if !utf8.Valid(value) {
-			isBinary := ivecs[0].GetIsBinaryStringAt(int(row))
+			isBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 			if isBinary {
 				return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
 			}
@@ -2583,6 +2713,13 @@ func validateMultiPointGeometryTextContent(content string, depth int) error {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		if strings.EqualFold(item, "EMPTY") {
+			// geo.WriteWKT renders an empty point member inside a
+			// MultiPoint as the bare token EMPTY, and a standard WKB
+			// NaN/NaN point member decodes into that form; the member
+			// carries no coordinates to parse.
+			continue
 		}
 		if itemType, err := geometryTypeNameFromText(item); err == nil {
 			if itemType != "POINT" {
@@ -6669,7 +6806,7 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 		sels[j] = int64(j)
 	}
 
-	err := toVec.Union(fromVec, sels, proc.GetMPool())
+	err := toVec.Union(fromVec, sels, resultMPool(result, proc))
 	return err
 }
 
@@ -6679,7 +6816,7 @@ func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultW
 	toVec.Reset(*toVec.GetType())
 
 	for i := 0; i < length; i++ {
-		if err := toVec.UnionOne(fromVec, int64(i), proc.Mp()); err != nil {
+		if err := toVec.UnionOne(fromVec, int64(i), resultMPool(result, proc)); err != nil {
 			return err
 		}
 	}
@@ -8884,7 +9021,7 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -8900,13 +9037,13 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			resultVal, ok := inetAtonValue(ipStr)
 			if !ok {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rsNull.AddRange(0, uint64(length))
 			} else {
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
@@ -9059,38 +9196,6 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		}, selectList)
 	default:
 		return moerr.NewInvalidInputNoCtxf("INET_NTOA does not support input type %s", argType.Oid.String())
-	}
-}
-
-func inetNtoaPreparedText(value []byte, kind vector.PrepareParamKind) (string, error) {
-	switch kind {
-	case vector.PrepareParamFloat:
-		floating, err := strconv.ParseFloat(string(value), 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaReal(floating)
-	case vector.PrepareParamDecimal:
-		integer, err := roundPreparedDecimalIntegerString(string(value))
-		if err != nil {
-			return "", err
-		}
-		number, err := strconv.ParseInt(integer, 10, 64)
-		if err != nil {
-			return "", err
-		}
-		return inetNtoaSigned(number)
-	case vector.PrepareParamBoolean:
-		switch strings.ToLower(string(value)) {
-		case "true", "1":
-			return inetNtoaUnsigned(1)
-		case "false", "0":
-			return inetNtoaUnsigned(0)
-		default:
-			return inetNtoaUnsigned(0)
-		}
-	default:
-		return inetNtoaSigned(parseMySQLIntegerPrefix(value))
 	}
 }
 
@@ -9259,10 +9364,6 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			if null {
 				return "", true, nil
 			}
-			if kind := param.GetPrepareParamKindAt(int(i)); kind != vector.PrepareParamNone {
-				text, err := inetNtoaPreparedText(value, kind)
-				return text, err != nil, err
-			}
 			return appendSigned(parseMySQLIntegerPrefix(value), false)
 		}
 	case types.T_year:
@@ -9322,7 +9423,7 @@ func executeIPPredicate[T ipPredicateResult](
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -9338,7 +9439,7 @@ func executeIPPredicate[T ipPredicateResult](
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rsNull.AddRange(0, uint64(length))
 		} else {
 			var resultVal T
 			if predicate(v1) {
@@ -9674,7 +9775,7 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 			data, null := source.GetStrValue(j)
 			if !null {
 				decodedSize := base64.StdEncoding.DecodedLen(len(data))
-				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, proc.Mp())
+				_ = rs.GetResultVector().PreExtendWithArea(length, decodedSize*length, resultMPool(result, proc))
 				break
 			}
 		}
@@ -10067,7 +10168,7 @@ func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	input := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	uniformBinary, perRow := stringDomainMode(ivecs[0])
+	uniformBinary := isBinaryStringVector(ivecs[0], result.ArgumentIsBin(0))
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -10082,7 +10183,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			continue
 		}
-		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+		if uniformBinary {
 			if err := rs.AppendBytesWithWriter(len(value), func(dst []byte) error {
 				for i := range value {
 					dst[len(value)-1-i] = value[i]
@@ -10097,7 +10198,7 @@ func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			return err
 		}
 	}
-	return setSelectedStringResultDomain(ivecs[0], result, proc)
+	return nil
 }
 
 func reverse(str string) string {
@@ -10153,12 +10254,12 @@ func OctTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // MySQL converts a string to its integer prefix before formatting it in base 8.
 // The empty string is NULL; a non-empty string without a numeric prefix is 0.
 func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	isBinaryLiteral := ivecs[0].GetIsBin()
+	isBinaryLiteral := result.ArgumentIsBin(0)
 	resultNulls := result.GetResultVector().GetNulls()
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
 			if ivecs[0].IsConst() {
-				nulls.AddRange(resultNulls, 0, uint64(length))
+				resultNulls.AddRange(0, uint64(length))
 			} else {
 				resultNulls.Add(uint64(row))
 			}
@@ -10603,44 +10704,13 @@ func randomBytesTextLength(
 	row uint64,
 	proc *process.Process,
 ) (int64, error) {
-	kind := param.GetPrepareParamKindAt(int(row))
-	switch kind {
-	case vector.PrepareParamFloat, vector.PrepareParamDecimal:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		// SQL PREPARE stores the value in a text transport vector. The source
-		// kind is the distinction between a string literal (integer prefix) and
-		// a numeric value (round-to-even for FLOAT, exact half-up for DECIMAL).
-		if kind == vector.PrepareParamDecimal {
-			integer, err := roundPreparedDecimalIntegerString(text)
-			if err != nil {
-				return 0, randomBytesRangeError(proc)
-			}
-			return randomBytesRoundedDecimalIntegerString(integer, proc)
-		}
-		floating, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		return randomBytesRoundedFloat(floating, proc)
-	case vector.PrepareParamBoolean:
-		text := strings.TrimSpace(functionUtil.QuickBytesToStr(value))
-		boolean, err := strconv.ParseBool(text)
-		if err != nil {
-			return 0, randomBytesRangeError(proc)
-		}
-		if boolean {
-			return 1, nil
-		}
-		return 0, nil
-	default:
-		// Keep ordinary character values byte-oriented. In particular, MySQL
-		// only ignores ASCII whitespace before the numeric prefix; using
-		// strings.TrimSpace here would incorrectly accept Unicode whitespace.
-		return parseMySQLIntegerPrefix(value), nil
-	}
+	// Keep ordinary character values byte-oriented. In particular, MySQL
+	// only ignores ASCII whitespace before the numeric prefix; using
+	// strings.TrimSpace here would incorrectly accept Unicode whitespace.
+	return parseMySQLIntegerPrefix(value), nil
 }
 
-func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (randomBytesLengthGetter, error) {
+func makeRandomBytesLengthGetter(param *vector.Vector, paramIsBin bool, proc *process.Process) (randomBytesLengthGetter, error) {
 	if param == nil {
 		return nil, moerr.NewInvalidArg(proc.Ctx, "function random_bytes", "nil argument")
 	}
@@ -10794,27 +10864,14 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary:
 		p := vector.GenerateFunctionStrParameter(param)
-		staticBinary := param.GetIsBin() ||
+		staticBinary := paramIsBin ||
 			types.StaticStringDomain(*param.GetType()) == types.StringDomainBinary
 		return func(i uint64) (int64, bool, error) {
 			value, null := p.GetStrValue(i)
 			if null {
 				return 0, true, nil
 			}
-			isBinary := staticBinary
-			switch param.GetRuntimeStringDomainAt(int(i)) {
-			case types.RuntimeStringText:
-				// A selected CASE/IF/COALESCE value can explicitly restore
-				// character semantics even when the common vector type is
-				// VARBINARY/BLOB.  The row-level override must win over the
-				// static type and any conservative vector summary.
-				isBinary = false
-			case types.RuntimeStringBinary:
-				isBinary = true
-			default:
-				isBinary = isBinary || param.GetIsBinaryStringAt(int(i))
-			}
-			if isBinary {
+			if staticBinary {
 				if len(value) == 0 {
 					return 0, false, moerr.NewInvalidArg(proc.Ctx, "cast to int", value)
 				}
@@ -10854,7 +10911,7 @@ func randomBytesWithReader(
 		return moerr.NewInvalidArg(proc.Ctx, "function random_bytes", fmt.Sprintf("expected 1 argument, got %d", len(parameters)))
 	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	getLength, err := makeRandomBytesLengthGetter(parameters[0], proc)
+	getLength, err := makeRandomBytesLengthGetter(parameters[0], result.ArgumentIsBin(0), proc)
 	if err != nil {
 		return err
 	}
@@ -11741,6 +11798,7 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 
 const userLevelLockTableID uint64 = 1 << 62
 
+const userLevelLockLookupTimeout = 10 * time.Second
 const userLevelLockCloseTimeout = 5 * time.Second
 const userLevelLockDetachedCleanupAttemptTimeout = time.Second
 const userLevelLockDetachedCleanupInitialBackoff = 10 * time.Millisecond
@@ -12017,22 +12075,6 @@ func userLevelLockFailedAttemptCleanupKey(ls lockservice.LockService, owner stri
 func userLevelLockTxnIDOld(owner, name string) []byte {
 	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
 }
-
-func userLevelLockProbeTxnID(owner string, connID uint64, name, probeType string) []byte {
-	sequence := userLevelLockProbeTxnIDSequence.Add(1)
-	prefix := userLevelLockProbeTxnIDPrefix(owner, connID, name, probeType)
-	var attempt [16]byte
-	if _, err := rand.Read(attempt[:]); err == nil {
-		return append(prefix, []byte(fmt.Sprintf("\x00%d\x00%s", sequence, hex.EncodeToString(attempt[:])))...)
-	}
-	return append(prefix, []byte(fmt.Sprintf("\x00%d\x00%d", sequence, time.Now().UnixNano()))...)
-}
-
-func userLevelLockProbeTxnIDPrefix(owner string, connID uint64, name, probeType string) []byte {
-	return []byte(fmt.Sprintf("mo-user-level-lock-probe\x00%s\x00%s\x00%s\x00%d", probeType, owner, name, connID))
-}
-
-var userLevelLockProbeTxnIDSequence atomic.Uint64
 
 func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
 	return userLevelLockConnectionIDFromTxnIDWithFallback(txnID, 0, false)
@@ -13022,29 +13064,6 @@ func queueDetachedUserLevelLockCleanupLocked() {
 	}
 }
 
-func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name, probeType string, txnID []byte) error {
-	attemptCtx, cancel := userLevelLockCleanupAttemptContext(ctx)
-	err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID)
-	cancel()
-	if err == nil {
-		return nil
-	}
-	key := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:"+probeType, txnID)
-	if handoffDetachedUserLevelLockTxnCleanup(
-		ctx,
-		ls,
-		key,
-		[][]byte{txnID},
-	) {
-		releaseRetainedUserLevelLockTxnCleanupSlot(key)
-		return err
-	}
-	if !retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
-		return moerr.NewInternalErrorNoCtxf("user-level lock probe cleanup queue is full for %s", name)
-	}
-	return err
-}
-
 func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
 	return lockpb.LockOptions{
 		Granularity: lockpb.Granularity_Row,
@@ -13063,12 +13082,6 @@ func userLevelLockContext(proc *process.Process, timeoutSeconds uint32) (context
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	return ctx, cancel, lockpb.WaitPolicy_Wait
-}
-
-func userLevelLockConflictOrTimeout(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
-		errors.Is(err, lockservice.ErrLockConflict) ||
-		errors.Is(err, context.DeadlineExceeded)
 }
 
 func userLevelLockTimedOut(err error) bool {
@@ -13357,46 +13370,8 @@ func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, b
 	connID := userLevelLockConnectionID(proc)
 	count := userLevelLockRefCount(owner, name)
 	if count == 0 {
-		probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "release")
-		probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:release", probeTxnID)
-		if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
-			return 0, false, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
-		}
-		if err := registerUserLevelLockTxn(ls, probeTxnID); err != nil {
-			releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
-			return 0, false, err
-		}
-		// Probe the lockservice to distinguish "lock does not exist" (NULL)
-		// from "lock exists but held by another session" (0).
-		_, probeErr := ls.Lock(
-			proc.Ctx,
-			userLevelLockTableID,
-			[][]byte{userLevelLockRow(proc, name)},
-			probeTxnID,
-			userLevelLockOptions(lockpb.WaitPolicy_FastFail))
-		if probeErr != nil {
-			cleanupErr := cleanupFailedUserLevelLockTxn(
-				proc.Ctx,
-				ls,
-				probeCleanupKey,
-				probeTxnID,
-			)
-			if cleanupErr != nil {
-				return 0, false, cleanupErr
-			}
-			if userLevelLockConflictOrTimeout(probeErr) {
-				// Lock exists but is held by another session.
-				return 0, false, nil
-			}
-			return 0, false, probeErr
-		}
-		// Lock did not exist — we acquired it via the probe. Release it and
-		// return NULL to signal the lock was already free.
-		if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "release", probeTxnID); err != nil {
-			return 0, false, err
-		}
-		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
-		return 0, true, nil
+		held, err := lookupUserLevelLockHeld(proc, ls, name)
+		return 0, err == nil && !held, err
 	}
 	if count > 1 {
 		untrackUserLevelLock(owner, name)
@@ -13414,43 +13389,20 @@ func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, er
 	if err != nil {
 		return 0, err
 	}
-	owner := userLevelLockOwner(proc)
-	connID := userLevelLockConnectionID(proc)
-	probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "is_free")
-	probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:is_free", probeTxnID)
-	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
-		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
-	}
-	if err := registerUserLevelLockTxn(ls, probeTxnID); err != nil {
-		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
+	held, err := lookupUserLevelLockHeld(proc, ls, name)
+	if err != nil || held {
 		return 0, err
 	}
-	_, err = ls.Lock(
-		proc.Ctx,
-		userLevelLockTableID,
-		[][]byte{userLevelLockRow(proc, name)},
-		probeTxnID,
-		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
-	if err != nil {
-		cleanupErr := cleanupFailedUserLevelLockTxn(
-			proc.Ctx,
-			ls,
-			probeCleanupKey,
-			probeTxnID,
-		)
-		if cleanupErr != nil {
-			return 0, cleanupErr
-		}
-		if userLevelLockConflictOrTimeout(err) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "is_free", probeTxnID); err != nil {
-		return 0, err
-	}
-	releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 	return 1, nil
+}
+
+func lookupUserLevelLockHeld(proc *process.Process, ls lockservice.LockService, name string) (bool, error) {
+	// The owner lookup can retry on stale bindings and transport errors.
+	ctx, cancel := context.WithTimeout(proc.Ctx, userLevelLockLookupTimeout)
+	defer cancel()
+	_, held, err := ls.GetLockHolder(ctx, userLevelLockTableID, userLevelLockRow(proc, name),
+		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
+	return held, err
 }
 
 func isUserLevelLockUsedValidated(name string, proc *process.Process) (uint64, bool, error) {
@@ -14269,27 +14221,16 @@ func LastDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
-func GroupingFunc(parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
+// GroupingFunc is never evaluated: the planner folds every GROUPING call to a
+// constant for its grouping set. The function id stays registered so plans
+// keep resolving it; reaching execution means a plan was built without that
+// fold (for example by an older CN).
+func GroupingFunc(_ []*vector.Vector,
+	_ vector.FunctionResultWrapper,
 	_ *process.Process,
-	length int,
-	selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[int64](result)
-
-	for i := 0; i < length; i++ {
-		var ans int64 = 0
-		power := 0
-		for j := len(parameters) - 1; j >= 0; j-- {
-			rollup := parameters[j].GetGrouping()
-			isRollup := rollup.Contains(uint64(i))
-			if isRollup {
-				ans += 1 << power
-			}
-			power++
-		}
-		rs.AppendMustValue(ans)
-	}
-	return nil
+	_ int,
+	_ *FunctionSelectList) error {
+	return moerr.NewNotSupportedNoCtx("GROUPING must be folded to a constant by the planner")
 }
 
 // CheckAsyncDatalinkSource validates only final rows eligible for a database write.

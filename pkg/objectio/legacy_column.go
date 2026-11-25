@@ -266,7 +266,7 @@ func readLegacyColumnLayout(source io.ReaderAt, originSize int64) (legacyColumnL
 	}
 	layout.nullsLength = int64(types.DecodeUint32(nullsLengthBytes))
 	layout.nullsOffset = nullsLengthOffset + 4
-	if layout.rows < 0 || layout.class > vector.DIST || layout.typ.TypeSize() <= 0 ||
+	if layout.rows < 0 || layout.class > vector.CONSTANT || layout.typ.TypeSize() <= 0 ||
 		layout.nullsOffset+layout.nullsLength+1 != originSize {
 		return layout, moerr.NewInvalidInputNoCtx("invalid legacy object column layout")
 	}
@@ -324,7 +324,7 @@ func materializeLegacyColumnWindow(
 		}
 		return sourceNulls.Contains(uint64(row))
 	}
-	dst := vector.NewVec(layout.typ)
+	dst := vector.NewVec(layout.typ, mp)
 	failed := true
 	defer func() {
 		if failed {

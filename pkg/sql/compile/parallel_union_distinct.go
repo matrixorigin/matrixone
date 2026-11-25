@@ -15,6 +15,8 @@
 package compile
 
 import (
+	"slices"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -82,7 +84,19 @@ func (c *Compile) parallelUnionDistinct(node *plan.Node, inputs ...[]*Scope) ([]
 	return keys, dop
 }
 
-func (c *Compile) compileParallelUnionDistinct(node *plan.Node, left, right []*Scope, keys []int32, dop int) []*Scope {
+// Only a mergeable aggregate may consume the disjoint complete owners without
+// gathering first. Each owner still deduplicates full UNION tuples, and the
+// aggregate's ordinary MergeGroup completes keys shared by different owners.
+func canPreserveParallelUnionDistinctOwners(aggregate, union *plan.Node) bool {
+	return aggregate != nil && aggregate.NodeType == plan.Node_AGG && len(aggregate.GroupBy) > 0 &&
+		union != nil && union.NodeType == plan.Node_UNION &&
+		len(union.Children) == 2 && union.Limit == nil && union.Offset == nil &&
+		len(union.OrderBy) == 0 && len(union.FilterList) == 0 && !union.FilterIsBarrier &&
+		aggregate.ExtraOptions == "" && !slices.Contains(aggregate.GroupingFlag, false) &&
+		!nodeHasUserLevelLockFunction(union) && !nodeHasUserLevelLockFunction(aggregate)
+}
+
+func (c *Compile) compileParallelUnionDistinctOwners(node *plan.Node, left, right []*Scope, keys []int32, dop int) []*Scope {
 	owners := c.newScopeListWithNode(dop, 2, c.cnList[0])
 	feeders := []*Scope{c.newMergeScope(left), c.newMergeScope(right)}
 	for i, source := range feeders {
@@ -111,6 +125,5 @@ func (c *Compile) compileParallelUnionDistinct(node *plan.Node, left, right []*S
 		owner.setRootOperator(op)
 	}
 	c.anal.isFirst = false
-	// Preserve UNION's one-stream interface for all existing downstream users.
-	return []*Scope{c.newMergeScope(owners)}
+	return owners
 }

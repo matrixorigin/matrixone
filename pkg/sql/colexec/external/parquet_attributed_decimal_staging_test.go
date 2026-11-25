@@ -116,7 +116,7 @@ func TestParquetAttributedDecimalStagingPredicateCoupling(t *testing.T) {
 		// Allocation mirror: external.go allocates VARCHAR for the LOAD
 		// staging predicate.
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 65535, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 65535, 0), proc.Mp())
 		require.NoError(t, h.getData(bat, loadParam, proc))
 		require.Equal(t, 2, bat.RowCount())
 		require.False(t, bat.Vecs[0].GetNulls().Contains(0))
@@ -132,7 +132,7 @@ func TestParquetAttributedDecimalStagingPredicateCoupling(t *testing.T) {
 		// a non-LOAD scan of the same attributed column, so the mapper must be
 		// the typed decimal mapper.
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		require.NoError(t, h.getData(bat, externalParam, proc))
 		require.Equal(t, 2, bat.RowCount())
 		require.False(t, bat.Vecs[0].GetNulls().Contains(0))
@@ -165,7 +165,7 @@ func TestParquetAttributedDecimalStagingMapperGate(t *testing.T) {
 	loadParam := attributedDecimalParquetParam(plan.ExternType_LOAD)
 	mp := h.getMapperWithStaging(col, typ, loadAttributedDecimalTextInput(loadParam, &typ))
 	require.NotNil(t, mp)
-	vec := vector.NewVec(types.New(types.T_varchar, 65535, 0))
+	vec := vector.NewVec(types.New(types.T_varchar, 65535, 0), proc.Mp())
 	require.NoError(t, mp.mapping(page, proc, vec))
 	require.Equal(t, 2, vec.Length())
 	require.Equal(t, "123.45", vec.GetStringAt(0))
@@ -176,7 +176,7 @@ func TestParquetAttributedDecimalStagingMapperGate(t *testing.T) {
 	externalParam := attributedDecimalParquetParam(plan.ExternType_EXTERNAL_TB)
 	mp = h.getMapperWithStaging(col, typ, loadAttributedDecimalTextInput(externalParam, &typ))
 	require.NotNil(t, mp)
-	vec2 := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+	vec2 := vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 	require.NoError(t, mp.mapping(page, proc, vec2))
 	require.Equal(t, 2, vec2.Length())
 	require.False(t, vec2.GetNulls().Contains(0))
@@ -228,7 +228,7 @@ func TestParquetAttributedDecimalStagingBooleanSource(t *testing.T) {
 		require.NoError(t, h.prepare(loadParam),
 			"the mapper switch must accept parquet.Boolean for attributed LOAD")
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 65535, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 65535, 0), proc.Mp())
 		require.NoError(t, h.getData(bat, loadParam, proc))
 		require.Equal(t, 3, bat.RowCount())
 		require.Equal(t, "1", bat.Vecs[0].GetStringAt(0), "--- renders true with the shared scalar logic")
@@ -246,7 +246,7 @@ func TestParquetAttributedDecimalStagingBooleanSource(t *testing.T) {
 		h := &ParquetHandler{file: f, batchCnt: 10}
 		require.NoError(t, h.prepare(externalParam))
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2), proc.Mp())
 		require.NoError(t, h.getData(bat, externalParam, proc))
 		require.Equal(t, 3, bat.RowCount())
 		got := vector.MustFixedColWithTypeCheck[types.Decimal64](bat.Vecs[0])

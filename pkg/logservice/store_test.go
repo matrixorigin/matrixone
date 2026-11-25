@@ -42,11 +42,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestMain(m *testing.M) {
 	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:  "debug",
+		Level:  "info",
 		Format: "console",
 	})
 
@@ -1629,6 +1631,111 @@ func TestGetLeaderID(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestRequiredLsnResetRejectsOldLeaderBeforeNewClaim(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.close())
+		require.NoError(t, store2.close())
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	leaderID, term, err := store1.leaderState(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), leaderID)
+	require.NoError(t, store1.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leaderID))
+	require.NoError(t, store1.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
+	var lastTransfer time.Time
+	require.Eventually(t, func() bool {
+		id, currentTerm, leaderErr := store2.leaderState(1)
+		if leaderErr == nil && id == 2 && currentTerm > term {
+			return true
+		}
+		if time.Since(lastTransfer) >= time.Second {
+			if leaderID, _, err := store1.leaderState(1); err == nil && leaderID == 1 {
+				_ = store1.requestLeaderTransfer(1, 2)
+			}
+			lastTransfer = time.Now()
+		}
+		return false
+	}, 20*time.Second, 10*time.Millisecond)
+	// The old owner and revision still match: only the new Raft term may
+	// reject this reset before the new DataSync worker claims an owner.
+	require.Error(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 2, 11))
+	// A proposal admitted before the leader changed can reach apply after the
+	// RPC precheck. Exercise the committed-entry fence directly as well.
+	session := store2.nh.GetNoOPSession(1)
+	result, err := store2.propose(ctx, session, getSetRequiredLsnIfCurrentCmd(0, 100, 2, 11))
+	require.NoError(t, err)
+	require.NotZero(t, result.Value)
+	result, err = store2.propose(ctx, session, getClaimRequiredLsnCmd(100, 2, 12, term, leaderID))
+	require.NoError(t, err)
+	require.NotZero(t, result.Value)
+	state, err := store2.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), state.lsn)
+	require.Equal(t, uint64(2), state.revision)
+	newLeaderID, newTerm, err := store2.leaderState(1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), newLeaderID)
+	require.Greater(t, newTerm, term)
+	require.NoError(t, store2.claimRequiredLsn(ctx, 1, 100, 2, 22, newTerm, newLeaderID))
+	require.NoError(t, store2.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 3, 22))
+	state, err = store2.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Zero(t, state.lsn)
+	require.Equal(t, uint64(4), state.revision)
+}
+
+func TestRequiredLsnTermAfterSnapshotAndRestart(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getStoreTestConfig()
+	cfg.FS = vfs.Default
+	cfg.DataDir = t.TempDir()
+	cfg.SnapshotExportDir = t.TempDir()
+	genCfg := func() Config { return cfg }
+	store, err := getTestStore(genCfg, true, nil)
+	require.NoError(t, err)
+	defer func() {
+		if store != nil {
+			require.NoError(t, store.close())
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var leader, term uint64
+	waitForLeader := func() {
+		require.Eventually(t, func() bool {
+			var err error
+			leader, term, err = store.leaderState(1)
+			return err == nil && leader == 2 && term != 0
+		}, testIOTimeout, 10*time.Millisecond)
+	}
+	waitForLeader()
+	require.NoError(t, store.claimRequiredLsn(ctx, 1, 0, 0, 11, term, leader))
+	snapshotIndex, err := store.nh.SyncRequestSnapshot(ctx, 1, dragonboat.SnapshotOption{})
+	require.NoError(t, err)
+	require.NoError(t, store.setRequiredLsnIfCurrent(ctx, 1, 100, 0, 1, 11))
+	lastIndex, err := store.getLatestLsn(ctx, 1)
+	require.NoError(t, err)
+	require.Greater(t, lastIndex, snapshotIndex)
+	require.NoError(t, store.close())
+	store = nil
+
+	store, err = getTestStore(genCfg, false, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.startReplica(1, 2, nil, false))
+	waitForLeader()
+	state, err := store.getRequiredLsnState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), state.lsn)
+	require.Equal(t, uint64(2), state.revision)
+	require.Equal(t, uint64(11), state.owner)
+	// The saved owner belongs to the earlier term; a new leader must claim it.
+	require.NoError(t, store.claimRequiredLsn(ctx, 1, 100, 2, 22, term, leader))
+	require.NoError(t, store.setRequiredLsnIfCurrent(ctx, 1, 0, 100, 3, 22))
+}
+
 func TestAddLogShard(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
@@ -2488,4 +2595,56 @@ func TestHAKeeperCheckWakeupRechecksDuringActiveCheck(t *testing.T) {
 		<-done
 		require.GreaterOrEqual(t, gate.calls, 2)
 	})
+}
+
+func TestAppendHeartbeatReplicas(t *testing.T) {
+	st := &store{runtime: runtime.DefaultRuntime()}
+	ready := []dragonboat.ShardInfo{
+		{ShardID: 9, ReplicaID: 2, ConfigChangeIndex: 11, LeaderID: 2, Term: 4, NonVotingNodes: map[uint64]string{7: "nonvoting"}, IsNonVoting: true},
+		{ShardID: 3, ReplicaID: 1, ConfigChangeIndex: 12, LeaderID: 1, Term: 5, Nodes: map[uint64]string{1: "voting"}},
+	}
+	pending := dragonboat.ShardInfo{ShardID: 7, Pending: true}
+	for _, tc := range []struct {
+		name   string
+		shards []dragonboat.ShardInfo
+		want   []pb.LogReplicaInfo
+	}{
+		{name: "empty", want: []pb.LogReplicaInfo{}},
+		{name: "pending", shards: []dragonboat.ShardInfo{pending}, want: []pb.LogReplicaInfo{}},
+		{name: "one ready among pending", shards: []dragonboat.ShardInfo{pending, ready[1], pending}, want: []pb.LogReplicaInfo{
+			{LogShardInfo: pb.LogShardInfo{ShardID: 3, Replicas: map[uint64]string{1: "voting"}, Epoch: 12, LeaderID: 1, Term: 5}, ReplicaID: 1},
+		}},
+		{name: "mixed", shards: []dragonboat.ShardInfo{ready[0], pending, ready[1]}, want: []pb.LogReplicaInfo{
+			{LogShardInfo: pb.LogShardInfo{ShardID: 9, Replicas: map[uint64]string{}, NonVotingReplicas: map[uint64]string{7: "nonvoting"}, Epoch: 11, LeaderID: 2, Term: 4}, ReplicaID: 2, IsNonVoting: true},
+			{LogShardInfo: pb.LogShardInfo{ShardID: 3, Replicas: map[uint64]string{1: "voting"}, Epoch: 12, LeaderID: 1, Term: 5}, ReplicaID: 1},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := st.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), tc.shards)
+			require.NotNil(t, got)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, len(tc.want), cap(got))
+			gotWire, err := (&pb.LogStoreHeartbeat{Replicas: got}).Marshal()
+			require.NoError(t, err)
+			wantWire, err := (&pb.LogStoreHeartbeat{Replicas: tc.want}).Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wantWire, gotWire)
+			var decoded pb.LogStoreHeartbeat
+			require.NoError(t, decoded.Unmarshal(gotWire))
+			require.Len(t, decoded.Replicas, len(tc.want))
+			for i := range decoded.Replicas {
+				require.Equal(t, tc.want[i].ShardID, decoded.Replicas[i].ShardID)
+			}
+		})
+	}
+	require.Panics(t, func() {
+		st.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), []dragonboat.ShardInfo{{ShardID: 8}})
+	})
+	core, logs := observer.New(zap.InfoLevel)
+	observed := &store{runtime: runtime.NewRuntime(metadata.ServiceType_LOG, "test", zap.New(core))}
+	require.Panics(t, func() {
+		observed.appendHeartbeatReplicas(make([]pb.LogReplicaInfo, 0), []dragonboat.ShardInfo{ready[0], pending, {ShardID: 8}})
+	})
+	require.Len(t, logs.FilterMessageSnippet("shard 7 is pending").All(), 1)
+
 }

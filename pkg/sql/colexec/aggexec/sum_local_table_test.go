@@ -63,7 +63,7 @@ func TestSumFullLocalTablePreservesGroups(t *testing.T) {
 						input, err = vector.NewConstFixed(param, types.Decimal128FromInt64(5), len(values), mp)
 						require.NoError(t, err)
 					} else {
-						input = vector.NewVec(param)
+						input = vector.NewVec(param, mp)
 					}
 					t.Cleanup(func() { input.Free(mp) })
 					if !constant {
@@ -77,7 +77,7 @@ func TestSumFullLocalTablePreservesGroups(t *testing.T) {
 					results, err := exec.Flush()
 					t.Cleanup(func() {
 						for _, result := range results {
-							result.Free(mp)
+							result.Free(result.MPool())
 						}
 					})
 					require.NoError(t, err)
@@ -125,7 +125,7 @@ func BenchmarkSumFullLocalTable(b *testing.B) {
 			mp := mpool.MustNewZero()
 			defer mpool.DeleteMPool(mp)
 			param := types.New(types.T_decimal128, 38, 0)
-			input := vector.NewVec(param)
+			input := vector.NewVec(param, mp)
 			defer input.Free(mp)
 			groups := make([]uint64, 8192)
 			for i := range groups {
@@ -178,7 +178,7 @@ func TestSumFullLocalTablePreservesDeferredOverflowOrder(t *testing.T) {
 		sums[group] = maximum
 		exec.state[0].vecs[0].UnsetNull(uint64(group))
 	}
-	input := vector.NewVec(param)
+	input := vector.NewVec(param, mp)
 	t.Cleanup(func() { input.Free(mp) })
 	groups := make([]uint64, 255, 258)
 	for i := range groups {

@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,8 +24,8 @@ import (
 const (
 	executionResourceAllocationSiteExpressionData mpool.AllocationSite = iota + 98
 	executionResourceAllocationSiteExpressionArea
-	executionResourceAllocationSiteExpressionNulls
-	executionResourceAllocationSiteExpressionGrouping
+	_ // reserved: was executionResourceAllocationSiteExpressionNulls
+	_ // reserved: was executionResourceAllocationSiteExpressionGrouping
 )
 
 // NewExpressionExecutors constructs expression trees used by HashBuild and
@@ -63,12 +62,9 @@ func NewJoinProbeExpressionExecutors(
 			return nil, nil, process.ErrExecutionResourceInvalid
 		}
 	}
-	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+	selection, err := proc.Mp().WithAccount(
 		account, mpool.AllocationOwnerHashBuild,
 		executionResourceAllocationSiteExpressionData,
-		executionResourceAllocationSiteExpressionArea,
-		executionResourceAllocationSiteExpressionNulls,
-		executionResourceAllocationSiteExpressionGrouping,
 		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
@@ -106,13 +102,10 @@ func newExpressionExecutorsWithCapacityClassAndDiagnostic(
 			return nil, process.ErrExecutionResourceInvalid
 		}
 	}
-	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+	selection, err := proc.Mp().WithAccount(
 		account,
 		mpool.AllocationOwnerHashBuild,
 		executionResourceAllocationSiteExpressionData,
-		executionResourceAllocationSiteExpressionArea,
-		executionResourceAllocationSiteExpressionNulls,
-		executionResourceAllocationSiteExpressionGrouping,
 		capacityClass,
 	)
 	if err != nil {

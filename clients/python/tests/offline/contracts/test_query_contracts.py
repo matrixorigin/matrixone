@@ -707,3 +707,24 @@ def test_decimal_query_compilation_keeps_exact_values(text):
     sql, params = Client().query(Item).filter_by(id=1).update(value=Item.value + value)._build_update_sql()
     assert format(value, 'f') in sql
     assert params == []
+
+
+@pytest.mark.parametrize('comment', ['-- trailing comment', '# trailing comment'])
+@pytest.mark.parametrize('format_name', ['csv', 'jsonl'])
+def test_export_clause_survives_trailing_line_comments(comment, format_name):
+    from matrixone.export import _build_csv_export_sql, _build_jsonl_export_sql
+
+    query = f"SELECT 1 {comment}\n"
+    builder = _build_csv_export_sql if format_name == 'csv' else _build_jsonl_export_sql
+    sql = builder(query, '/tmp/export.out')
+    assert '\nINTO OUTFILE ' in sql
+    assert sql.split('\nINTO OUTFILE ', 1)[0].endswith(comment)
+    assert "FORMAT '" in sql
+
+
+def test_export_clause_remains_separate_for_plain_select():
+    from matrixone.export import _build_csv_export_sql, _build_jsonl_export_sql
+
+    for builder in (_build_csv_export_sql, _build_jsonl_export_sql):
+        sql = builder('SELECT 1', '/tmp/export.out')
+        assert sql.startswith('SELECT 1\nINTO OUTFILE ')

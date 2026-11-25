@@ -42,7 +42,7 @@ func TestDirectDecimalDivisionVectorRoundTrip(t *testing.T) {
 	require.Equal(t, []types.Decimal128{{B0_63: 3333}}, vector.MustFixedColNoTypeCheck[types.Decimal128](result))
 	data, err := result.MarshalBinary()
 	require.NoError(t, err)
-	decoded := vector.NewVec(typ)
+	decoded := vector.NewVec(typ, proc.Mp())
 	defer decoded.Free(proc.Mp())
 	require.NoError(t, decoded.UnmarshalBinaryWithCopy(data, proc.Mp()))
 	require.Equal(t, wantType, *decoded.GetType())

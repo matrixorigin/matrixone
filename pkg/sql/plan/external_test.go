@@ -78,6 +78,40 @@ func plannerFilePruningBoolLiteral(value bool) *pbplan.Expr {
 	}
 }
 
+func TestIsExternalScanRequiringSelectPrivilege(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		nodeType  pbplan.Node_NodeType
+		extern    pbplan.ExternType
+		tableType string
+		want      bool
+	}{
+		{name: "CSV external table", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_EXTERNAL_TB, tableType: catalog.SystemExternalRel, want: true},
+		{name: "CSV non-external relation", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_EXTERNAL_TB, tableType: catalog.SystemOrdinaryRel},
+		{name: "MongoDB discriminator", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_MONGODB_TB, want: true},
+		{name: "DataStream", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_DATASTREAM_TB, tableType: catalog.SystemExternalRel, want: true},
+		{name: "Foreign", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_FOREIGN_TB, tableType: catalog.SystemExternalRel, want: true},
+		{name: "Iceberg", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_ICEBERG_TB, tableType: catalog.SystemExternalRel, want: true},
+		{name: "Kafka", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_KAFKA_TB, tableType: catalog.SystemExternalRel, want: true},
+		{name: "LOAD", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_LOAD, tableType: catalog.SystemExternalRel},
+		{name: "result scan", nodeType: pbplan.Node_EXTERNAL_SCAN, extern: pbplan.ExternType_RESULT_SCAN, tableType: catalog.SystemExternalRel},
+		{name: "table scan", nodeType: pbplan.Node_TABLE_SCAN, extern: pbplan.ExternType_ICEBERG_TB, tableType: catalog.SystemExternalRel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &pbplan.Node{
+				NodeType: tc.nodeType,
+				TableDef: &pbplan.TableDef{TableType: tc.tableType},
+				ExternScan: &pbplan.ExternScan{
+					Type: int32(tc.extern),
+				},
+			}
+			require.Equal(t, tc.want, IsExternalScanRequiringSelectPrivilege(node))
+		})
+	}
+	require.False(t, IsExternalScanRequiringSelectPrivilege(nil))
+	require.False(t, IsExternalScanRequiringSelectPrivilege(&pbplan.Node{NodeType: pbplan.Node_EXTERNAL_SCAN}))
+}
+
 func plannerFilePruningFunction(name string, id int64, typ types.T, args ...*pbplan.Expr) *pbplan.Expr {
 	return &pbplan.Expr{
 		Typ: pbplan.Type{Id: int32(typ)},

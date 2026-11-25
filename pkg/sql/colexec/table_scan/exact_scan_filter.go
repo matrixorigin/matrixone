@@ -190,6 +190,8 @@ func addComparison(column, literal *pb.Expr, op objectio.ExactScanOp, columns []
 }
 
 func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
+	tableScan.ctr.readerFilter.FreeMembership(proc.Mp())
+	tableScan.ctr.membershipPrepared, tableScan.ctr.membershipApplied = false, false
 	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
 		tableScan.ctr.readerFilter.Exact.Close()
 	}
@@ -203,6 +205,15 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.earlyColumns[i] = i
 		}
 	}
+	if len(tableScan.ctr.earlyColumns) == 0 && tableScan.OutputAllocation != nil && len(tableScan.ctr.allFilterExecutors) > 0 &&
+		len(tableScan.Attrs) == len(tableScan.Types) {
+		// Keep the eager path's all-column schedule. Scoped filtering may
+		// still avoid intermediate copies when publication requires owned data.
+		tableScan.ctr.earlyColumns = make([]int, len(tableScan.Types))
+		for i := range tableScan.ctr.earlyColumns {
+			tableScan.ctr.earlyColumns[i] = i
+		}
+	}
 	if len(tableScan.ctr.earlyColumns) == 0 {
 		tableScan.ctr.readerFilter = nil
 		return
@@ -211,13 +222,16 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 		Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			return tableScan.applyReaderFilter(proc, bat, loaded)
 		},
-		Exact: objectio.NewExactScanState(program),
+		OutputAllocation: tableScan.OutputAllocation,
+		Exact:            objectio.NewExactScanState(program),
 		Observe: func(stats objectio.ExactScanStats) {
 			tableScan.ctr.filterActiveDuration += stats.FilterTime
 			if stats.InputRows > 0 {
-				tableScan.OpAnalyzer.InputBlock()
 				op := tableScan.OpAnalyzer.GetOpStats()
-				op.InputRows += int64(stats.InputRows)
+				if !tableScan.ctr.membershipApplied {
+					tableScan.OpAnalyzer.InputBlock()
+					op.InputRows += int64(stats.InputRows)
+				}
 				op.InputSize += stats.InputBytes
 				op.ScanBytes += stats.InputBytes
 			}
@@ -227,5 +241,10 @@ func (tableScan *TableScan) prepareReaderFilter(proc *process.Process) {
 			tableScan.ctr.filterReadMetrics = true
 			tableScan.ctr.filterLateMaterialized = false
 		},
+	}
+	if tableScan.OutputAllocation != nil && !tableScan.ctr.padCharToFullLength {
+		tableScan.ctr.readerFilter.Select = func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			return tableScan.selectReaderFilter(proc, bat, loaded)
+		}
 	}
 }

@@ -1406,6 +1406,28 @@ const (
        									    and privilege_id = %d 
        									    and privilege_level = "%s";`
 
+	// A privilege on one concrete relation (privilege_level d.t or t) reaches
+	// enforcement through both stored object classes (the table class written
+	// by the ON TABLE and unqualified spellings, the view class written by the
+	// ON VIEW spelling) and through both qualification spellings, while the
+	// statement that granted or revoked it used only one of them (issue
+	// #32444). A revoke on the exact relation removes the granted rows of both
+	// classes and both spellings, and revoking ALL clears every privilege row
+	// the role holds on that exact object identity, otherwise the relation
+	// stays authorized through a surviving row.
+	deleteRelationRolePrivsFormat = `delete from mo_catalog.mo_role_privs 
+       									where role_id = %d 
+       									    and obj_type in ("table","view") 
+       									    and obj_id = %d 
+       									    and privilege_id = %d 
+       									    and privilege_level in ("%s","%s");`
+
+	deleteRelationAllRolePrivsFormat = `delete from mo_catalog.mo_role_privs 
+       									where role_id = %d 
+       									    and obj_type in ("table","view") 
+       									    and obj_id = %d 
+       									    and privilege_level in ("%s","%s");`
+
 	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = %s;`
 	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = %s and account_id = %d;`
 
@@ -2018,6 +2040,16 @@ func getSqlForDeleteRolePrivs(roleId int64, objType string, objId, privilegeId i
 	return fmt.Sprintf(deleteRolePrivsFormat, roleId, objType, objId, privilegeId, privilegeLevel)
 }
 
+func getSqlForDeleteRelationRolePrivs(roleId, objId, privilegeId int64) string {
+	return fmt.Sprintf(deleteRelationRolePrivsFormat, roleId, objId, privilegeId,
+		privilegeLevelDatabaseTable, privilegeLevelTable)
+}
+
+func getSqlForDeleteRelationAllRolePrivs(roleId, objId int64) string {
+	return fmt.Sprintf(deleteRelationAllRolePrivsFormat, roleId, objId,
+		privilegeLevelDatabaseTable, privilegeLevelTable)
+}
+
 func getSqlForCheckWithGrantOptionForTableStarStarWithObjType(objType objectType, roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objType, roleId, privId, privilegeLevelStarStar)
 }
@@ -2251,6 +2283,8 @@ func getSqlForDropAccount() []string {
 // row is locked first so CREATE TASK cannot commit after this cleanup has
 // passed, and task definitions are disabled before deleting dependent rows so
 // concurrent schedulers and run acquisition serialize with the cleanup.
+// Publication target validation also relies on this exclusive account-ID
+// lock being held before DROP inspects subscriptions, even for taskless tenants.
 func getSqlForDropAccountSQLTasks(accountID int64) []string {
 	return []string{
 		fmt.Sprintf("select account_id from mo_catalog.mo_account where account_id = %d for update;", accountID),
@@ -3745,10 +3779,13 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		}
 
 		// step3 : switch the default role and role id;
-		wasIndexAdmin := verifyAccountCanExecMoCtrl(account)
+		previousRoleID := account.GetDefaultRoleID()
 		account.SetDefaultRoleID(uint32(roleId))
 		account.SetDefaultRole(sr.Role.UserName)
-		if wasIndexAdmin != verifyAccountCanExecMoCtrl(account) {
+		// A prepared plan was bound under the previous active role. Rebuild it
+		// before reuse even when neither role has rewrite rules: object-level
+		// admission (including physical-index reads) depends on this role.
+		if previousRoleID != account.GetDefaultRoleID() {
 			ses.invalidateCachedPlans(true)
 		}
 		// then, reset secondary role to none
@@ -5295,6 +5332,9 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 	var objId int64
 	var privType PrivilegeType
 	var sql string
+	if err = checkNoPrivilegeColumnList(ctx, rp.Privileges); err != nil {
+		return err
+	}
 	err = normalizeNamesOfRoles(ctx, rp.Roles)
 	if err != nil {
 		return err
@@ -5363,7 +5403,21 @@ func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivil
 			if privType == PrivilegeTypeConnect && isPublicRole(role.name) {
 				return moerr.NewInternalErrorf(ctx, "the privilege %s can not be revoked from the role %s", privType, role.name)
 			}
-			sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
+			// A revoke on one concrete relation (privilege level d.t or t)
+			// removes the granted rows of both stored object classes and both
+			// qualification spellings; revoking ALL clears every privilege row
+			// on the exact object identity instead of only the table-all row.
+			// Wildcard scopes (d.*, *, *.*) keep the class-specific delete: the
+			// object classes hold independent grants there.
+			if privLevel == privilegeLevelDatabaseTable || privLevel == privilegeLevelTable {
+				if privType == PrivilegeTypeTableAll {
+					sql = getSqlForDeleteRelationAllRolePrivs(role.id, objId)
+				} else {
+					sql = getSqlForDeleteRelationRolePrivs(role.id, objId, int64(privType))
+				}
+			} else {
+				sql = getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
+			}
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -5807,14 +5861,6 @@ func SetGrantPrivilegeObjectLockedHookForTest(hook func()) func() {
 
 func checkPrivilegeObjectTypeAndPrivilegeLevelForGrant(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
-	if ot == tree.OBJECT_TYPE_TABLE &&
-		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) &&
-		isIndexTable(pl.TabName) {
-		// Hidden index relations are implementation details whose lifecycle is
-		// owned by their base table/index definition. They cannot be independent
-		// authorization objects.
-		return 0, 0, moerr.NewInvalidInputf(ctx, "cannot grant privileges on internal relation %s", pl.TabName)
-	}
 	privLevel, objID, err := checkPrivilegeObjectTypeAndPrivilegeLevelWithLock(ctx, ses, bh, ot, pl, true)
 	if err == nil && ot == tree.OBJECT_TYPE_TABLE &&
 		(pl.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE || pl.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE) {
@@ -6023,6 +6069,24 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 	return err
 }
 
+// checkNoPrivilegeColumnList fails closed on column-qualified privileges.
+// MatrixOne stores whole-object grants: doGrantPrivilege and
+// doRevokePrivilege consume only the privilege type of a parsed privilege
+// and the mo_role_privs object key has no column dimension. Silently
+// dropping the list would widen an intended column-restricted grant into a
+// full-object grant (every account inherits a PUBLIC grantee), and a
+// column-qualified REVOKE would remove a whole-object grant the statement
+// never named. The check runs before any role lookup or privilege
+// mutation, so a mixed privilege list cannot leave a partial grant behind.
+func checkNoPrivilegeColumnList(ctx context.Context, privileges []*tree.Privilege) error {
+	for _, priv := range privileges {
+		if len(priv.ColumnList) > 0 {
+			return moerr.NewNotSupportedf(ctx, "column-level privilege %s", priv.Type.ToString())
+		}
+	}
+	return nil
+}
+
 // doGrantPrivilege accomplishes the GrantPrivilege statement
 func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege, bh BackgroundExec) (err error) {
 	var erArray []ExecResult
@@ -6033,6 +6097,9 @@ func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivileg
 	var sql string
 	var userId uint32
 
+	if err = checkNoPrivilegeColumnList(ctx, gp.Privileges); err != nil {
+		return err
+	}
 	err = normalizeNamesOfRoles(ctx, gp.Roles)
 	if err != nil {
 		return err
@@ -7248,13 +7315,6 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 	return objRef.GetSchemaName()
 }
 
-func isMongoDBExternalTableScan(node *plan.Node) bool {
-	return node != nil &&
-		node.GetNodeType() == plan.Node_EXTERNAL_SCAN &&
-		node.GetExternScan() != nil &&
-		node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
-}
-
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
 }
@@ -7342,10 +7402,74 @@ func insertDedupTargetScans(q *plan.Query) map[int32]struct{} {
 	return scans
 }
 
+func icebergDMLTargetScans(q *plan.Query) map[int32]struct{} {
+	if q == nil {
+		return nil
+	}
+	var sinkOption string
+	switch q.StmtType {
+	case plan.Query_UPDATE:
+		sinkOption = icebergapi.DMLUpdatePlanExtraOptions
+	case plan.Query_DELETE:
+		sinkOption = icebergapi.DMLDeletePlanExtraOptions
+	case plan.Query_MERGE:
+		sinkOption = icebergapi.DMLMergePlanExtraOptions
+	default:
+		return nil
+	}
+
+	var targetRef *plan.ObjectRef
+	for _, node := range q.Nodes {
+		if node == nil || node.NodeType != plan.Node_INSERT || node.GetExtraOptions() != sinkOption {
+			continue
+		}
+		if node.GetInsertCtx() != nil && node.GetInsertCtx().GetRef() != nil {
+			targetRef = node.GetInsertCtx().GetRef()
+		} else {
+			targetRef = node.GetObjRef()
+		}
+		if targetRef != nil {
+			break
+		}
+	}
+	if targetRef == nil {
+		return nil
+	}
+
+	scans := make(map[int32]struct{}, 1)
+	for nodeID, node := range q.Nodes {
+		if node == nil || node.GetNodeType() != plan.Node_EXTERNAL_SCAN ||
+			node.GetExternScan().GetType() != int32(plan.ExternType_ICEBERG_TB) ||
+			node.GetExtraOptions() != icebergapi.DMLTargetScanPlanExtraOptions {
+			continue
+		}
+		ref := node.GetObjRef()
+		if ref == nil {
+			continue
+		}
+		if targetRef.GetObj() != 0 && ref.GetObj() != 0 {
+			if targetRef.GetObj() != ref.GetObj() {
+				continue
+			}
+		} else if !strings.EqualFold(targetRef.GetSchemaName(), ref.GetSchemaName()) ||
+			!strings.EqualFold(targetRef.GetObjName(), ref.GetObjName()) {
+			continue
+		}
+		scans[int32(nodeID)] = struct{}{}
+	}
+	return scans
+}
+
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
+	tips, _, err := extractPrivilegeTipsAndInsertTarget(p)
+	return tips, err
+}
+
+func extractPrivilegeTipsAndInsertTarget(p *plan2.Plan) (privilegeTipsArray, *plan.ObjectRef, error) {
 	// NOTE: the pts may be nil when the plan does operate any table.
 	var pts privilegeTipsArray
+	var insertTarget *plan.ObjectRef
 	appendPt := func(pt privilegeTips) {
 		pts = append(pts, pt)
 	}
@@ -7353,6 +7477,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 	if p.GetQuery() != nil { // select,insert select, update, delete
 		q := p.GetQuery()
 		insertDedupScans := insertDedupTargetScans(q)
+		icebergDMLScans := icebergDMLTargetScans(q)
 
 		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
@@ -7389,7 +7514,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 		}
 
 		for nodeID, node := range q.Nodes {
-			if isPrivilegeBearingTableScan(node) || isMongoDBExternalTableScan(node) {
+			if _, ok := icebergDMLScans[int32(nodeID)]; ok {
+				continue
+			}
+			externalSelectScan := plan2.IsExternalScanRequiringSelectPrivilege(node)
+			if isPrivilegeBearingTableScan(node) || externalSelectScan {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
 				}
@@ -7421,10 +7550,18 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 						scanTyp = PrivilegeTypeSelect
 						scanOperation = clusterTableSelect
 					}
+					if externalSelectScan {
+						// An external scan is always a read, even when its relation name
+						// matches a DML target. Subscription aliases make name-based
+						// target matching especially unsafe.
+						scanTyp = PrivilegeTypeSelect
+						scanOperation = clusterTableSelect
+					}
 
-					// do not check the privilege of the index table
+					// External tables are independent catalog objects even when their
+					// names use the internal index prefix.
 					viewPath := node.GetViewPath()
-					if !isIndexTable(node.ObjRef.GetObjName()) {
+					if externalSelectScan || !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
 							typ:                   scanTyp,
 							objType:               objectTypeTable,
@@ -7464,6 +7601,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 				}
 				if objRef == nil && node.ObjRef != nil {
 					objRef = node.ObjRef
+				}
+				if insertTarget == nil && q.StmtType == plan.Query_INSERT &&
+					objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+					insertTarget = objRef
 				}
 				if objRef != nil {
 					dbName := objRef.GetSchemaName()
@@ -7513,15 +7654,19 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
-				if q.StmtType == plan.Query_MERGE &&
-					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
-					continue
-				}
 				var objRef *plan.ObjectRef
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
 					objRef = node.InsertCtx.Ref
 				} else if node.ObjRef != nil {
 					objRef = node.ObjRef
+				}
+				if insertTarget == nil && node.GetInsertCtx().GetAddAffectedRows() &&
+					objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+					insertTarget = objRef
+				}
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
 				}
 				if objRef != nil {
 					dbName := objRef.GetSchemaName()
@@ -7532,12 +7677,21 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					if tableName == "" && node.TableDef != nil && node.TableDef.Name != "" {
 						tableName = node.TableDef.Name
 					}
-					// do not check the privilege of the index table
+					// External DML targets are catalog objects, not hidden index tables.
+					// Iceberg expresses UPDATE/DELETE with Node_INSERT. Execution
+					// markers must never decide whether authorization is required:
+					// missing or mismatched markers still fail closed on the statement privilege.
+					externalTarget := node.GetTableDef().GetTableType() == catalog.SystemExternalRel
+					targetPrivilege := PrivilegeTypeInsert
+					if externalTarget && (q.StmtType == plan.Query_INSERT ||
+						q.StmtType == plan.Query_UPDATE || q.StmtType == plan.Query_DELETE) {
+						targetPrivilege = t
+					}
 					viewPath := node.GetViewPath()
-					if !isIndexTable(tableName) {
+					if externalTarget || !isIndexTable(tableName) {
 						insertClusterTable := isClusterTable(dbName, tableName)
 						appendPt(privilegeTips{
-							typ:                   PrivilegeTypeInsert,
+							typ:                   targetPrivilege,
 							objType:               objectTypeTable,
 							databaseName:          dbName,
 							tableName:             tableName,
@@ -7565,6 +7719,12 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 					}
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
+				if insertTarget == nil && q.StmtType == plan.Query_INSERT && len(node.UpdateCtxList) > 0 {
+					objRef := node.UpdateCtxList[0].GetObjRef()
+					if objRef.GetSchemaName() != "" && objRef.GetObjName() != "" {
+						insertTarget = objRef
+					}
+				}
 				for _, updateCtx := range node.UpdateCtxList {
 					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
 						continue
@@ -7645,10 +7805,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 	}
 	lockTips, err := selectLockPrivilegeTips(p.GetQuery())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pts = append(pts, lockTips...)
-	return appendLogicalViewPrivilegeTips(pts, p.GetQuery())
+	tips, err := appendLogicalViewPrivilegeTips(pts, p.GetQuery())
+	return tips, insertTarget, err
 }
 
 // A path key identifies each catalog definition, not an authorization result.
@@ -7743,7 +7904,11 @@ func isPrivilegeBearingTableScan(node *plan.Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		return true
 	}
-	return node.NodeType == plan.Node_FUNCTION_SCAN &&
+	return isTableChangesScan(node)
+}
+
+func isTableChangesScan(node *plan.Node) bool {
+	return node.GetNodeType() == plan.Node_FUNCTION_SCAN &&
 		node.GetTableDef().GetTblFunc().GetName() == "table_changes"
 }
 
@@ -8349,6 +8514,18 @@ func verifyPrivilegeEntryInMultiPrivilegeLevels(
 	return false, nil
 }
 
+// exactRelationPrivilegeLevels are the privilege levels (d.t and t) that a
+// grant on one concrete relation produces.
+var exactRelationPrivilegeLevels = []privilegeLevelType{privilegeLevelDatabaseTable, privilegeLevelTable}
+
+// verifyViewPrivilegeForRole checks whether the role holds the privilege on
+// the named view. A view privilege is stored either under the view object
+// class ("grant ... on view v") or, for grants written with the table
+// spelling ("grant ... on table v" and the bare "grant ... on v"), under the
+// table object class against the view's exact relation identity. Legacy
+// table-class rows are honored only at the exact-relation levels, which
+// resolve the view by database, name and object identity: table-class
+// wildcard grants (db.*, *.*, *) stay distinct from view access.
 func verifyViewPrivilegeForRole(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -8377,7 +8554,6 @@ func verifyViewPrivilegeForRole(
 		}
 		seen[p] = struct{}{}
 		entry := privilegeEntriesMap[p]
-		entry.objType = objectTypeView
 		entry.databaseName = dbName
 		entry.tableName = viewName
 		entry.privilegeEntryTyp = privilegeEntryTypeGeneral
@@ -8386,6 +8562,7 @@ func verifyViewPrivilegeForRole(
 		if err != nil {
 			return false, err
 		}
+		entry.objType = objectTypeView
 		yes, err := verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, enableCache)
 		if err != nil {
 			return false, err
@@ -8393,13 +8570,56 @@ func verifyViewPrivilegeForRole(
 		if yes {
 			return true, nil
 		}
+		entry.objType = objectTypeTable
+		yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, exactRelationPrivilegeLevels, enableCache)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			// Cache under the view class so later checks of the same view take
+			// the same cache path as a view-class grant. The catalog-version
+			// based invalidation covers the legacy row like any other grant.
+			if cache != nil && enableCache {
+				cache.add(objectTypeView, privilegeLevelDatabaseTable, dbName, viewName, p)
+			}
+			return true, nil
+		}
 	}
 	return false, nil
 }
 
+// newCompoundPrivilegeChecks retains complete table-access checks across inherited
+// roles for one authorization attempt, independently of the session cache.
+func newCompoundPrivilegeChecks(priv *privilege) map[*compoundEntry][]bool {
+	if priv.needMatchedRole {
+		return nil
+	}
+	var checks map[*compoundEntry][]bool
+	for _, entry := range priv.entries {
+		if entry.privilegeEntryTyp != privilegeEntryTypeCompound || entry.compound == nil || len(entry.compound.items) < 2 {
+			continue
+		}
+		canCombine := true
+		for _, item := range entry.compound.items {
+			if item.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser ||
+				(item.objType != objectTypeTable && item.objType != objectTypeView) {
+				canCombine = false
+				break
+			}
+		}
+		if canCombine {
+			if checks == nil {
+				checks = make(map[*compoundEntry][]bool)
+			}
+			checks[entry.compound] = make([]bool, len(entry.compound.items))
+		}
+	}
+	return checks
+}
+
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
-func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, int64, error) {
+func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool, compoundChecks map[*compoundEntry][]bool) (bool, int64, error) {
 	var err error
 	var pls []privilegeLevelType
 	var yes bool
@@ -8445,8 +8665,13 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 				allTrue := true
 				matchedRoleID := int64(0)
-				// multi privileges take effect together
-				for _, mi := range entry.compound.items {
+				checked := compoundChecks[entry.compound]
+				// All items are required, but different inherited roles may satisfy
+				// them. Each view chain remains a complete check in its own context.
+				for itemIndex, mi := range entry.compound.items {
+					if checked != nil && checked[itemIndex] {
+						continue
+					}
 					if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
 						yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
 						if err != nil {
@@ -8554,7 +8779,11 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					}
 					if !yes {
 						allTrue = false
-						break
+						if checked == nil {
+							break
+						}
+					} else if checked != nil {
+						checked[itemIndex] = true
 					}
 				}
 
@@ -8814,7 +9043,8 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 
 	// Call the algorithm 2.
 	// If the result of the algorithm 2 is true, Then return true;
-	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache)
+	compoundChecks := newCompoundPrivilegeChecks(priv)
+	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache, compoundChecks)
 	if err != nil {
 		return false, stats, err
 	}
@@ -8909,7 +9139,7 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 
 		// Call the algorithm 2.
 		// If the result of the algorithm 2 is true, Then return true;
-		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache)
+		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache, compoundChecks)
 		if err != nil {
 			return false, stats, err
 		}
@@ -9735,7 +9965,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if isTargetSysWhiteList(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
 			return true, stats, nil
 		}
-		arr, err := extractPrivilegeTipsFromPlan(p)
+		arr, insertTarget, err := extractPrivilegeTipsAndInsertTarget(p)
 		if err != nil {
 			return false, stats, err
 		}
@@ -9745,24 +9975,46 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		if mergeStmt, ok := stmt.(*tree.Merge); ok {
 			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
 		}
-		if len(arr) == 0 {
+		if ins, ok := stmt.(*tree.Insert); ok {
 			var dbName, tableName string
-			var ok bool
-			switch st := stmt.(type) {
-			case *tree.Insert:
-				dbName, tableName, ok = getInsertTargetTableName(st, ses)
-			case *tree.Load:
-				dbName, tableName, ok = getLoadTargetTableName(st, ses)
+			hasTarget := insertTarget != nil
+			if hasTarget {
+				dbName, tableName = insertTarget.GetSchemaName(), insertTarget.GetObjName()
+			} else {
+				dbName, tableName, hasTarget = getInsertTargetTableName(ins, ses)
 			}
-			if ok {
-				arr = append(arr, privilegeTips{
-					typ:                   PrivilegeTypeInsert,
-					objType:               objectTypeTable,
-					databaseName:          dbName,
-					tableName:             tableName,
-					isClusterTable:        isClusterTable(dbName, tableName),
-					clusterTableOperation: clusterTableModify,
-				})
+			if hasTarget {
+				hasTargetInsert := false
+				for _, tip := range arr {
+					if tip.typ == PrivilegeTypeInsert && tip.objType == objectTypeTable &&
+						tip.databaseName == dbName && tip.tableName == tableName {
+						hasTargetInsert = true
+						break
+					}
+				}
+				if !hasTargetInsert {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableModify,
+					})
+				}
+			}
+		} else if len(arr) == 0 {
+			if loadStmt, ok := stmt.(*tree.Load); ok {
+				if dbName, tableName, hasTarget := getLoadTargetTableName(loadStmt, ses); hasTarget {
+					arr = append(arr, privilegeTips{
+						typ:                   PrivilegeTypeInsert,
+						objType:               objectTypeTable,
+						databaseName:          dbName,
+						tableName:             tableName,
+						isClusterTable:        isClusterTable(dbName, tableName),
+						clusterTableOperation: clusterTableModify,
+					})
+				}
 			}
 		}
 		// SHOW INDEX IGNORED and STATUS need SELECT on the named table, which their plans may not
@@ -10042,6 +10294,18 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	arr, err := extractPrivilegeTipsFromPlan(sourcePlan)
 	if err != nil {
 		return false, stats, err
+	}
+	// A CTAS source over a saved query result carries no table-scan tips, and
+	// the CTAS follow-up INSERT ... SELECT runs through the internal executor,
+	// whose compile path does not re-verify result-query access. Apply the same
+	// saved-result source re-verification the direct SELECT path uses, so a
+	// role whose source SELECT privilege is missing or revoked cannot copy the
+	// saved result by CTAS. Plain sources have no result scans and return here
+	// with no extra cost.
+	resultStats, resultErr := checkResultQueryPrivilege(compilerContext.GetProcess(), sourcePlan, ctx, ses.GetService(), ses)
+	stats.Add(&resultStats)
+	if resultErr != nil {
+		return false, stats, resultErr
 	}
 	if len(arr) == 0 {
 		return true, stats, nil
@@ -12144,7 +12408,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 				Filepath: localPath,
 			},
 		}
-		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter, loadLocalReader)
+		return processLoadLocal(funcCtx, ses, execCtx, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload

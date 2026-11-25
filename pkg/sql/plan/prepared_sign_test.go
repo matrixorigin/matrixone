@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -65,24 +64,18 @@ func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 
 	for _, test := range []struct {
 		name    string
-		value   string
-		kind    vector.PrepareParamKind
-		isBin   bool
+		param   ParamValue
 		wantArg types.T
 		wantOL  int32
 	}{
-		{name: "integer", value: "-3", kind: vector.PrepareParamInteger, wantArg: types.T_int64, wantOL: 0},
-		{name: "float", value: "-0.1", kind: vector.PrepareParamFloat, wantArg: types.T_float64, wantOL: 2},
-		{name: "decimal", value: "-0.1", kind: vector.PrepareParamDecimal, wantArg: types.T_decimal64, wantOL: 3},
-		{name: "binary string decimal", value: "-0.1", kind: vector.PrepareParamNone, isBin: true, wantArg: types.T_decimal64, wantOL: 3},
+		{name: "integer", param: comStmtIntParam(-3), wantArg: types.T_int64, wantOL: 0},
+		{name: "float", param: comStmtFloatParam(-0.1), wantArg: types.T_float64, wantOL: 2},
+		{name: "decimal", param: ParamValue{Value: "-0.1", SourceType: decimalParamType("-0.1"), HasSourceType: true}, wantArg: types.T_decimal64, wantOL: 3},
+		{name: "binary string decimal", param: ParamValue{Value: "-0.1", IsBinaryProtocol: true}, wantArg: types.T_decimal64, wantOL: 3},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtimePlan, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
-				ctx, preparePlan, []any{ParamValue{
-					Value:            test.value,
-					IsBinaryProtocol: test.isBin,
-					PrepareParamKind: test.kind,
-				}})
+				ctx, preparePlan, []any{test.param})
 			require.NoError(t, err)
 			require.True(t, specialized)
 			fn := findPlanFunctionExpr(runtimePlan, "sign")
@@ -115,28 +108,26 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		value       any
-		kind        vector.PrepareParamKind
+		kind        types.StringConversionKind
 		want        string
 		wantType    types.T
 		wantNull    bool
 		specialized bool
 	}{
-		{name: "decimal rounds one point four", value: "1.4", kind: vector.PrepareParamDecimal, want: "a", wantType: types.T_int64, specialized: true},
-		{name: "decimal rounds one point five", value: "1.5", kind: vector.PrepareParamDecimal, want: "b", wantType: types.T_int64, specialized: true},
-		{name: "decimal rounds two point five", value: "2.5", kind: vector.PrepareParamDecimal, want: "c", wantType: types.T_int64, specialized: true},
-		{name: "decimal rounds two point six", value: "2.6", kind: vector.PrepareParamDecimal, want: "c", wantType: types.T_int64, specialized: true},
-		{name: "numeric text follows decimal conversion", value: "1.6", kind: vector.PrepareParamNone, want: "b", wantType: types.T_int64, specialized: true},
-		{name: "numeric prefix remains accepted", value: "2tail", kind: vector.PrepareParamNone, want: "b", wantType: types.T_int64, specialized: true},
-		{name: "integer remains exact", value: "1", kind: vector.PrepareParamInteger, want: "a", wantType: types.T_int64, specialized: true},
-		{name: "out of range index", value: "4", kind: vector.PrepareParamInteger, wantNull: true, wantType: types.T_int64, specialized: true},
-		{name: "non-numeric text maps to zero", value: "foo", kind: vector.PrepareParamNone, wantNull: true, wantType: types.T_int64, specialized: true},
-		{name: "null index", value: nil, kind: vector.PrepareParamNone, wantNull: true, specialized: true},
+		{name: "decimal rounds one point four", value: "1.4", kind: types.StringConversionDecimal, want: "a", wantType: types.T_int64, specialized: true},
+		{name: "decimal rounds one point five", value: "1.5", kind: types.StringConversionDecimal, want: "b", wantType: types.T_int64, specialized: true},
+		{name: "decimal rounds two point five", value: "2.5", kind: types.StringConversionDecimal, want: "c", wantType: types.T_int64, specialized: true},
+		{name: "decimal rounds two point six", value: "2.6", kind: types.StringConversionDecimal, want: "c", wantType: types.T_int64, specialized: true},
+		{name: "numeric text follows decimal conversion", value: "1.6", kind: types.StringConversionString, want: "b", wantType: types.T_int64, specialized: true},
+		{name: "numeric prefix remains accepted", value: "2tail", kind: types.StringConversionString, want: "b", wantType: types.T_int64, specialized: true},
+		{name: "integer remains exact", value: "1", kind: types.StringConversionInteger, want: "a", wantType: types.T_int64, specialized: true},
+		{name: "out of range index", value: "4", kind: types.StringConversionInteger, wantNull: true, wantType: types.T_int64, specialized: true},
+		{name: "non-numeric text maps to zero", value: "foo", kind: types.StringConversionString, wantNull: true, wantType: types.T_int64, specialized: true},
+		{name: "null index", value: nil, kind: types.StringConversionString, wantNull: true, specialized: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtimePlan, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
-				ctx, preparePlan, []any{ParamValue{
-					Value: test.value, PrepareParamKind: test.kind,
-				}})
+				ctx, preparePlan, []any{sqlKindParam(test.value, test.kind)})
 			require.NoError(t, err)
 			require.Equal(t, test.specialized, specialized)
 			bound := findPlanFunctionExpr(runtimePlan, "elt")
@@ -170,7 +161,7 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(doublePlan))
 	filled, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
 		ctx, doublePlan, []any{ParamValue{
-			Value: "1.5", PrepareParamKind: vector.PrepareParamFloat,
+			Value: "1.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
 		}})
 	require.NoError(t, err)
 	require.True(t, specialized)

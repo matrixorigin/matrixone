@@ -16,6 +16,7 @@ package dependent
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -33,7 +34,7 @@ type SetupKernel struct {
 	Native     vm.Operator
 	Install    func(func(*process.Process) ([]*vector.Vector, error))
 	factory    colexec.DependentProgramFactory
-	allocation *vector.AllocationAccountSelection
+	allocation *mpool.MPool
 	frame      *colexec.DependentExpressionFrame
 	pending    vm.Continuation
 	values     []*vector.Vector
@@ -42,7 +43,7 @@ type SetupKernel struct {
 	charged    uint64
 }
 
-func (s *SetupKernel) BindDependent(f colexec.DependentProgramFactory, a *vector.AllocationAccountSelection) {
+func (s *SetupKernel) BindDependent(f colexec.DependentProgramFactory, a *mpool.MPool) {
 	s.factory, s.allocation = f, a
 	s.Install(s.evaluate)
 }

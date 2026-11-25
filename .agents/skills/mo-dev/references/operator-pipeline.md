@@ -26,10 +26,10 @@ This is the most common source of subtle operator bugs: premature pipeline termi
 |--------|----------|----------|
 | `Close()` | Wait for consumers to acknowledge end of stream by consuming nil batches | Graceful legacy nil-batch protocol |
 | `CloseWithTimeout()` | Same as `Close()` but bounded by a timeout | Legacy nil-batch cleanup only |
-| `ForceCleanupAfterTerminalSignal()` | Release deferred spool state after a successfully delivered typed `EventEnd` and paired receiver cleanup | Graceful typed-signal completion |
+| `ReleaseCache()` | Free the batches cached for reuse after a successfully delivered typed `EventEnd` and paired receiver cleanup | Graceful typed-signal completion |
 | `Abort(cause)` | Immediately release unconsumed slots and record failure/abort state | Error, cancel, abort, or terminal-delivery failure |
 
-Critical rule: typed termination has two outcomes. A successfully delivered `EventEnd` defers spool reclamation until paired receiver cleanup returns, then calls `ForceCleanupAfterTerminalSignal()`. Error/abort/cancel paths and terminal-delivery failures call `Abort(cause)` immediately. Do not use legacy `CloseWithTimeout()` for either typed path.
+Critical rule: typed termination has two outcomes. A successfully delivered `EventEnd` defers spool reclamation until paired receiver cleanup returns, then calls `ReleaseCache()`. Error/abort/cancel paths and terminal-delivery failures call `Abort(cause)` immediately. Do not use legacy `CloseWithTimeout()` for either typed path.
 
 ### Pipeline Signal Types
 
@@ -46,10 +46,9 @@ Dual-protocol compatibility: `GetNextBatch` handles both explicit typed signals 
 
 ### Test Freshness
 
-Use [validation-evidence.md](validation-evidence.md). Exact-head author/CI or
-local output is valid when selection, mode, terminal status, and relevant
-semantic inputs match. Do not rerun it merely because a reviewer turn changed
-or an unrelated document/PR body was edited.
+Use the [shared validation and evidence rules](validation-evidence.md) to
+select the test scope and verify whether author, CI, or local results apply to
+the final change.
 
 ### Completion Gate
 
@@ -59,7 +58,7 @@ contract with these domain-specific checks:
 ```
 □ sender/receiver and Call/Reset/cleanup closures are mapped
 □ exact changed/directly affected regression selection is non-empty and passes
-□ every affected owning package has valid normal evidence
+□ normal test evidence covers the affected behavior at the shared validation scope
 □ shared-state/lifecycle race evidence satisfies the shared adaptive protocol
 □ at least one real dependent endpoint is validated when the protocol crosses packages
 □ final delivery diff/generated artifacts are inspected

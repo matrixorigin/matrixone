@@ -101,7 +101,7 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 		{
 			name: "maximum int32 encoding",
 			vec: func() *vector.Vector {
-				vec := vector.NewVec(types.T_int32.ToType())
+				vec := vector.NewVec(types.T_int32.ToType(), mp)
 				require.NoError(t, vector.AppendFixed(vec, int32(math.MinInt32), false, mp))
 				return vec
 			}(),
@@ -109,7 +109,7 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 		{
 			name: "all bytes escaped",
 			vec: func() *vector.Vector {
-				vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+				vec := vector.NewVec(types.New(types.T_varchar, 128, 0), mp)
 				require.NoError(t, vector.AppendBytes(vec, make([]byte, 128), false, mp))
 				return vec
 			}(),
@@ -117,7 +117,7 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 		{
 			name: "declared width counts multibyte characters",
 			vec: func() *vector.Vector {
-				vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+				vec := vector.NewVec(types.New(types.T_varchar, 128, 0), mp)
 				require.NoError(t, vector.AppendBytes(
 					vec, []byte(strings.Repeat("𐍈", 128)), false, mp))
 				return vec
@@ -126,7 +126,7 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 		{
 			name: "decimal256 encoding",
 			vec: func() *vector.Vector {
-				vec := vector.NewVec(types.New(types.T_decimal256, 65, 2))
+				vec := vector.NewVec(types.New(types.T_decimal256, 65, 2), mp)
 				require.NoError(t, vector.AppendFixed(
 					vec, mustParseDecimal256(t, "123.45", 2), false, mp))
 				return vec
@@ -164,7 +164,7 @@ func TestSerialDecimal256Encoding(t *testing.T) {
 		mustParseDecimal256(t, "-123.45", 2),
 		mustParseDecimal256(t, "678.90", 2),
 	}
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
 
@@ -197,7 +197,7 @@ func TestSerialDecimal256Encoding(t *testing.T) {
 	}
 
 	t.Run("nulls use both serial contracts", func(t *testing.T) {
-		nullVec := vector.NewVec(typ)
+		nullVec := vector.NewVec(typ, mp)
 		defer nullVec.Free(mp)
 		require.NoError(t, vector.AppendFixedList(
 			nullVec, values, []bool{false, true}, mp))
@@ -215,7 +215,7 @@ func TestSerialDecimal256Encoding(t *testing.T) {
 		require.Equal(t, nullPacker.GetBuf(), fullPackers[1].GetBuf())
 		nullPacker.Close()
 
-		bitmap := nulls.NewWithSize(len(values))
+		bitmap := mustNullsOK(nulls.NewWithSize(len(values), bitmapTestMP))
 		compactPackers := types.NewPackerArray(len(values))
 		defer func() {
 			for _, packer := range compactPackers {

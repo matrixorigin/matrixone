@@ -778,6 +778,10 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 		switch s := attachStmt.(type) {
 		case *tree.Select:
 			s.RewriteOption = rewriteOption
+		case *tree.ShowColumns:
+			s.RewriteOption = rewriteOption
+		case *tree.ShowCreateTable:
+			s.RewriteOption = rewriteOption
 		case *tree.ParenSelect:
 			if s.Select != nil {
 				s.Select.RewriteOption = rewriteOption

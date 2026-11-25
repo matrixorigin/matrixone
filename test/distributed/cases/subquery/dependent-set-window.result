@@ -68,4 +68,86 @@ select a.id, (select (select a.id)) as captured from outer_keys a
 where a.id not in (select b.id from join_keys b where b.id is not null) order by a.id;
 ➤ id[4,32,0]  ¦  captured[4,32,0]  𝄀
 2  ¦  2
+select o.id from outer_keys o where exists (
+select 1 from outer_keys a join join_keys b on b.id = o.id
+) order by o.id;
+➤ id[4,32,0]  𝄀
+1
+select o.id from outer_keys o where o.id in (
+select a.id from outer_keys a join join_keys b on b.id = o.id
+) order by o.id;
+➤ id[4,32,0]  𝄀
+1
+select o.id, (select count(*) - count(b.id) from outer_keys a left join join_keys b
+on b.id = a.id and b.id = o.id) as unmatched
+from outer_keys o order by o.id;
+➤ id[4,32,0]  ¦  unmatched[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2
+select o.id from outer_keys o where 2 in (
+select a.id from outer_keys a where a.id = 1
+union select 2 from outer_keys b where b.id = 2 and b.id = o.id
+) order by o.id;
+➤ id[4,32,0]  𝄀
+2
+select o.id, 1 in (
+select o.id from outer_keys a where a.id = o.id
+union select o.id from outer_keys a where a.id = o.id
+) as v from outer_keys o order by o.id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select o.id, 1 in (
+select o.id from outer_keys a where a.id = o.id
+union select o.id from outer_keys b where b.id = o.id
+) as v from outer_keys o order by o.id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select o.id from outer_keys o where exists (
+(select o.id from outer_keys a where a.id = o.id)
+union (select o.id from outer_keys a where a.id = o.id)
+limit 0
+) order by o.id;
+➤ id[4,32,0]
+select o.id from outer_keys o where exists (
+(select o.id from outer_keys a where a.id = o.id)
+union (select o.id from outer_keys b where b.id = o.id)
+limit 0
+) order by o.id;
+➤ id[4,32,0]
+select o.id, 2 in (
+(select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+union (select a.id from outer_keys a cross join outer_keys d where a.id >= o.id order by a.id limit 2)
+) as v from outer_keys o order by o.id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
+create table medium_keys (k mediumint, i int);
+insert into medium_keys values (1, 2), (3, 4);
+select o.k, 1 in (
+select o.k from medium_keys a where a.k = o.k
+union select b.i from medium_keys b
+) as v from medium_keys o order by o.k;
+➤ k[4,9,0]  ¦  v[-6,8,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  0
+create table text_keys (k varchar(20));
+insert into text_keys values ('one');
+select 'o.k' in (
+select o.k from text_keys a where a.k = o.k
+union select 'o.k' from text_keys a where a.k = o.k
+) as v from text_keys o;
+➤ v[-6,8,0]  𝄀
+1
+create sequence union_branch_seq start with 1;
+select 2 in (
+select nextval('union_branch_seq') from text_keys a where a.k = o.k
+union select nextval('union_branch_seq') from text_keys a where a.k = o.k
+) as v from text_keys o;
+➤ v[-6,8,0]  𝄀
+1
+select currval('union_branch_seq') as v;
+➤ v[12,65535,0]  𝄀
+2
 drop database dependent_set_window;

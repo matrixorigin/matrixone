@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -936,6 +937,7 @@ func TestResolveWithoutTemporaryAliasPreservesOwnership(t *testing.T) {
 		def := &pbplan.TableDef{Name: tc.name, TblId: uint64(i + 11), TableType: tc.kind, Cols: []*pbplan.ColDef{{Name: tc.column, Typ: pbplan.Type{Id: int32(types.T_int32)}}}}
 		relation.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
 		relation.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		relation.EXPECT().Stats(gomock.Any(), true).Return(&statsinfo.StatsInfo{TableName: tc.name, TableCnt: float64(i + 1)}, nil).AnyTimes()
 		if tc.kind == catalog.SystemOrdinaryRel && defines.IsTempTableName(tc.name) {
 			relation.EXPECT().GetExtraInfo().Return(nil).AnyTimes()
 		}
@@ -956,7 +958,13 @@ func TestResolveWithoutTemporaryAliasPreservesOwnership(t *testing.T) {
 		} else {
 			require.Equal(t, uint64(12), def.TblId)
 		}
+		stats, err := tcc.doStatsHeavyWork(obj, nil, uint64(obj.Obj))
+		require.NoError(t, err)
+		require.Equal(t, obj.ObjName, stats.TableName, "statistics must describe the bound object, not a same-name temporary alias")
 	}
+	stats, err := tcc.doStatsHeavyWork(&pbplan.ObjectRef{SchemaName: "mo_catalog", ObjName: "t", Obj: 12, NotLockMeta: true}, nil, 12)
+	require.NoError(t, err)
+	require.Equal(t, physical, stats.TableName, "an owned temporary reference may still carry its SQL alias")
 	obj, def, err := tcc.ResolveWithoutTemporaryAlias("mo_catalog", physical, nil, nil)
 	require.NoError(t, err)
 	require.True(t, def.IsTemporary)

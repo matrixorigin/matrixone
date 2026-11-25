@@ -16,14 +16,19 @@ package function
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-// conditionalVectorType 为条件分支选择共同向量类型。维度必须一致，
-// 只允许 F32/F64 的无损提升；字符串和无类型 NULL 随向量分支转换。
-// 动态宽度不能充当某个已知固定宽度，以免结果元数据承诺不存在的约束。
-func conditionalVectorType(inputs []types.Type) (target types.Type, hasVector, ok bool) {
+// commonVectorType returns the type that holds every vector argument exactly.
+// Every vector argument must have the same dimension. Arguments of one vector
+// type keep it; mixed vector types resolve to vecf64 when any argument is
+// vecf64 and to vecf32 otherwise. Untyped NULL arguments and string arguments
+// with a cast to the result are cast to it; any other argument type fails.
+// hasVector reports whether any argument is a vector.
+func commonVectorType(inputs []types.Type) (target types.Type, hasVector, ok bool) {
+	mixed, wide := false, false
 	for _, input := range inputs {
 		if !input.Oid.IsArray() {
 			continue
 		}
+		wide = wide || input.Oid == types.T_array_float64
 		if !hasVector {
 			target, hasVector = input, true
 			continue
@@ -31,27 +36,31 @@ func conditionalVectorType(inputs []types.Type) (target types.Type, hasVector, o
 		if input.Width != target.Width {
 			return target, true, false
 		}
-		if input.Oid != target.Oid {
-			if (input.Oid == types.T_array_float32 && target.Oid == types.T_array_float64) ||
-				(input.Oid == types.T_array_float64 && target.Oid == types.T_array_float32) {
-				target = types.New(types.T_array_float64, target.Width, 0)
-			} else {
-				return target, true, false
-			}
+		mixed = mixed || input.Oid != target.Oid
+	}
+	if !hasVector {
+		return target, false, true
+	}
+	if mixed {
+		oid := types.T_array_float32
+		if wide {
+			oid = types.T_array_float64
+		}
+		target = types.New(oid, target.Width, 0)
+	}
+	for _, input := range inputs {
+		if input.Oid.IsArray() || input.Oid == types.T_any {
+			continue
+		}
+		if !input.Oid.IsMySQLString() || !IfTypeCastSupported(input.Oid, target.Oid) {
+			return target, true, false
 		}
 	}
-	if hasVector {
-		for _, input := range inputs {
-			if !input.Oid.IsArray() && input.Oid != types.T_any && !input.Oid.IsMySQLString() {
-				return target, true, false
-			}
-		}
-	}
-	return target, hasVector, true
+	return target, true, true
 }
 
 func coalesceVectorReturnType(parameters []types.Type) types.Type {
-	target, _, _ := conditionalVectorType(parameters)
+	target, _, _ := commonVectorType(parameters)
 	return target
 }
 

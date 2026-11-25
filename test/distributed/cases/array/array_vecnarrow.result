@@ -25,9 +25,9 @@ select * from i8t;
 a    v
 1    [127, -128, 0, 5]
 insert into i8t values(2, "[200,-200,0,0]");
-internal error: error while casting 200 to VECINT8
+invalid input: error while casting 200 to VECINT8
 insert into i8t values(3, "[1.4,2.6,0,0]");
-internal error: error while casting 1.4 to VECINT8
+invalid input: error while casting 1.4 to VECINT8
 select cast(cast("[1.6,200,-3.5,-200]" as vecf32(4)) as vecint8(4));
 cast(cast([1.6,200,-3.5,-200] as vecf32(4)) as vecint8(4))
 [2, 127, -4, -128]
@@ -41,7 +41,7 @@ select cast("[1,2,3]" as vecint8(3));
 cast([1,2,3] as vecint8(3))
 [1, 2, 3]
 select cast("[1.4,2.6,-3.5]" as vecint8(3));
-internal error: error while casting 1.4 to VECINT8
+invalid input: error while casting 1.4 to VECINT8
 select cast(bf as vecf32(3)), cast(f16 as vecf32(3)), cast(i8 as vecf32(3)) from nvec order by a;
 cast(bf as vecf32(3))    cast(f16 as vecf32(3))    cast(i8 as vecf32(3))
 [1, 2, 3]    [1, 2, 3]    [1, 2, 3]

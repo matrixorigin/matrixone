@@ -289,7 +289,7 @@ class VectorTypeDecorator(TypeDecorator):
     def load_dialect_impl(self, dialect):
         """Return the appropriate type for the given dialect."""
         if dialect.name == "mysql":
-            return mysql.TEXT  # Use TEXT for large vector data
+            return mysql.TEXT()  # Use TEXT for large vector data
         return self.impl
 
     def process_bind_param(self, value, dialect):

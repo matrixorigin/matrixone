@@ -36,56 +36,58 @@ import (
 
 func TestOwnedCompleteKeyShuffle(t *testing.T) {
 	for _, values := range [][]int64{{7, 7, 7}, {0, 1, 2, 3, 4, 5, 6, 7}} {
-		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-		budget, err := proc.GetExecutionResourceBudget()
-		require.NoError(t, err)
-		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
-		require.NoError(t, err)
-		account, err := registry.OpenWithController(1<<20, budget)
-		require.NoError(t, err)
-		arg := NewArgument()
-		arg.BucketNum, arg.ShuffleType = 8, int32(plan.ShuffleType_Hash)
-		arg.ShuffleKeyColumns, arg.DrainAllBuckets, arg.OwnedOutput = []int32{0}, true, true
-		arg.OwnedColumnCount = 1
-		require.NoError(t, arg.SetAllocationAccount(account))
-		input := batch.NewWithSize(1)
-		input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
-		input.SetRowCount(len(values))
-		input.ShuffleIDX = 99
-		source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-		arg.AppendChild(source)
-		require.NoError(t, vm.Prepare(arg, proc))
-		var got []int64
-		for {
-			result, err := vm.Exec(arg, proc)
+		{
+			expected := values
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			budget, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)
-			if result.Batch == nil || result.Status == vm.ExecStop {
-				break
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(1<<20, budget)
+			require.NoError(t, err)
+			arg := NewArgument()
+			arg.BucketNum, arg.ShuffleType = 8, int32(plan.ShuffleType_Hash)
+			arg.ShuffleKeyColumns, arg.DrainAllBuckets, arg.OwnedOutput = []int32{0}, true, true
+			arg.OwnedColumnCount = 1
+			require.NoError(t, arg.SetAllocationAccount(account))
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, proc.Mp()))
+			input.SetRowCount(len(values))
+			input.ShuffleIDX = 99
+			source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			arg.AppendChild(source)
+			require.NoError(t, vm.Prepare(arg, proc))
+			var got []int64
+			for {
+				result, err := vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+				if result.Batch.RowCount() == 0 {
+					continue
+				}
+				require.NotSame(t, input, result.Batch)
+				require.Same(t, account, arg.ctr.shufflePool.outputAllocation.ViewAccount())
+				got = append(got, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])...)
 			}
-			if result.Batch.RowCount() == 0 {
-				continue
-			}
-			require.NotSame(t, input, result.Batch)
-			require.True(t, vector.AllocationAccountSelectionsEqual(arg.outputAllocation, result.Batch.AllocationAccountSelection()))
-			got = append(got, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0])...)
+			require.ElementsMatch(t, expected, got)
+			require.Equal(t, int32(99), input.ShuffleIDX)
+			arg.Reset(proc, false, nil)
+			arg.Free(proc, false, nil)
+			require.Zero(t, account.Snapshot().Used)
+			require.NoError(t, arg.ClearAllocationAccount(account))
+			require.Zero(t, budget.Used())
+			account.Seal()
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+			arg.Release()
+			input.Clean(proc.Mp())
+			source.ResetBatchs()
+			require.Zero(t, proc.Mp().CurrNB())
+			proc.Free()
 		}
-		require.ElementsMatch(t, values, got)
-		require.Equal(t, int32(99), input.ShuffleIDX)
-		require.Nil(t, input.AllocationAccountSelection())
-		arg.Reset(proc, false, nil)
-		arg.Free(proc, false, nil)
-		require.Zero(t, account.Snapshot().Used)
-		require.NoError(t, arg.ClearAllocationAccount(account))
-		require.Zero(t, budget.Used())
-		account.Seal()
-		_, err = registry.Finalize(account)
-		require.NoError(t, err)
-		arg.Release()
-		input.Clean(proc.Mp())
-		source.ResetBatchs()
-		require.Zero(t, proc.Mp().CurrNB())
-		proc.Free()
 	}
 }
 
@@ -152,7 +154,7 @@ func TestOwnedShuffleRejectsTooManyBuckets(t *testing.T) {
 	require.NoError(t, arg.SetAllocationAccount(account))
 	require.Error(t, arg.Prepare(proc))
 	pool := NewOwnedShufflePool(MaxOwnedBuckets+1, 1, 1)
-	require.Error(t, pool.initOwned(proc, arg.outputAllocation))
+	require.Error(t, pool.initOwned(proc, testOutputMP(t, arg, proc)))
 	require.Zero(t, budget.Used())
 	require.NoError(t, arg.ClearAllocationAccount(account))
 	arg.Release()
@@ -192,7 +194,7 @@ func TestOwnedShuffleFailureReleasesReservations(t *testing.T) {
 			if tc.exhaustAfterPool {
 				pool := NewOwnedShufflePool(8, 1, 1)
 				arg.SetShufflePool(pool)
-				require.NoError(t, pool.initOwned(proc, arg.outputAllocation))
+				require.NoError(t, pool.initOwned(proc, testOutputMP(t, arg, proc)))
 				available, err := budget.AvailableMemory()
 				require.NoError(t, err)
 				require.Greater(t, available, uint64(1024))
@@ -630,9 +632,9 @@ func TestOwnedShuffleSelectionAndOutputFailure(t *testing.T) {
 			arg.OwnedColumnCount = 1
 			require.NoError(t, arg.SetAllocationAccount(account))
 			require.NoError(t, arg.Prepare(proc))
-			arg.ctr.keyHashes, err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_uint64.ToType(), arg.outputAllocation)
-			require.NoError(t, err)
-			require.NoError(t, arg.ctr.keyHashes.PreExtend(128, proc.Mp()))
+			arg.ctr.keyHashes = vector.NewVec(types.T_uint64.ToType(), testOutputMP(t, arg, proc))
+			arg.ctr.keyHashesMP = testOutputMP(t, arg, proc)
+			require.NoError(t, arg.ctr.keyHashes.PreExtend(128, testOutputMP(t, arg, proc)))
 			if failure == "output" {
 				arg.ctr.selectionBacking, err = mpool.MakeSliceAccounted[int32](128, proc.Mp(), account, mpool.AllocationOwnerSet, 13)
 				require.NoError(t, err)
@@ -655,4 +657,12 @@ func TestOwnedShuffleSelectionAndOutputFailure(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// testOutputMP returns the shuffle's owned-output accounted view of proc's pool.
+func testOutputMP(t testing.TB, arg *Shuffle, proc *process.Process) *mpool.MPool {
+	t.Helper()
+	view, err := arg.outputAllocation.MP(proc.Mp())
+	require.NoError(t, err)
+	return view
 }

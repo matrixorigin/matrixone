@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -56,7 +55,9 @@ func TestPartitionTopNMatchesPerGroupSort(t *testing.T) {
 	require.LessOrEqual(t, arg.top.retained.RowCount(), len(arg.top.groups)*2)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -218,7 +219,7 @@ func TestPartitionTopNSQLOrderFloatNaNs(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			input := batch.NewWithSize(3)
 			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
-			input.Vecs[1] = vector.NewVec(tc.oid.ToType())
+			input.Vecs[1] = vector.NewVec(tc.oid.ToType(), proc.Mp())
 			values := tc.make()
 			switch tc.oid {
 			case types.T_float32:
@@ -267,7 +268,9 @@ func TestPartitionTopNSQLOrderFloatNaNs(t *testing.T) {
 			require.Equal(t, tc.want, got)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			child.Free(proc, false, nil)
+			colexec.FreeMockChildren(child)
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
 		})
@@ -286,13 +289,13 @@ func TestPartitionTopNCompositeNullableKeyAndReset(t *testing.T) {
 
 	for run := 0; run < 2; run++ {
 		input := batch.NewWithSize(4)
-		input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{1, 1, 1, 1}, nil, proc.Mp()))
-		input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+		input.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[1], []int32{0, 0, 2, 2}, []bool{true, true, false, false}, proc.Mp()))
-		input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[2], []int64{7, 9, 0, 5}, []bool{false, false, true, false}, proc.Mp()))
-		input.Vecs[3] = vector.NewVec(types.T_int64.ToType())
+		input.Vecs[3] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(input.Vecs[3], []int64{70, 90, 0, 50}, nil, proc.Mp()))
 		input.SetRowCount(4)
 
@@ -303,10 +306,12 @@ func TestPartitionTopNCompositeNullableKeyAndReset(t *testing.T) {
 		got := collectTopNRowsAt(t, arg, proc, 0, 2, 3)
 		require.Equal(t, [][3]int64{{1, 9, 90}, {1, 5, 50}}, got)
 		child.Free(proc, false, nil)
+		colexec.FreeMockChildren(child)
 		arg.Reset(proc, false, nil)
 	}
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -337,7 +342,9 @@ func TestPartitionTopNTwoStageMatchesSingleStage(t *testing.T) {
 			localBatches = append(localBatches, copyBatch)
 		}
 		local.Free(proc, false, nil)
+		colexec.FreeMockChildren(local)
 		child.Free(proc, false, nil)
+		colexec.FreeMockChildren(child)
 	}
 
 	global := newTopNArgument(2)
@@ -351,7 +358,9 @@ func TestPartitionTopNTwoStageMatchesSingleStage(t *testing.T) {
 	}, collectTopNRows(t, global, proc))
 
 	global.Free(proc, false, nil)
+	colexec.FreeMockChildren(global)
 	globalChild.Free(proc, false, nil)
+	colexec.FreeMockChildren(globalChild)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -396,7 +405,9 @@ func TestPartitionTopNWithTiesMaintainsExactRankBoundary(t *testing.T) {
 			require.Equal(t, test.want, got)
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(arg)
 			child.Free(proc, false, nil)
+			colexec.FreeMockChildren(child)
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
 		})
@@ -428,7 +439,9 @@ func TestPartitionTopNWithTiesTwoStageMatchesSingleStage(t *testing.T) {
 			localBatches = append(localBatches, copyBatch)
 		}
 		local.Free(proc, false, nil)
+		colexec.FreeMockChildren(local)
 		child.Free(proc, false, nil)
+		colexec.FreeMockChildren(child)
 	}
 
 	global := newRankTopNArgument(2)
@@ -443,7 +456,9 @@ func TestPartitionTopNWithTiesTwoStageMatchesSingleStage(t *testing.T) {
 	}, got)
 
 	global.Free(proc, false, nil)
+	colexec.FreeMockChildren(global)
 	globalChild.Free(proc, false, nil)
+	colexec.FreeMockChildren(globalChild)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -482,35 +497,9 @@ func TestPartitionTopNWithTiesChunksUnboundedBoundary(t *testing.T) {
 	require.Greater(t, batchCount, 1)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
-}
-
-func TestPartitionTopNWithTiesTreatsGroupingSentinelAsPartitionNull(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	input := batch.NewWithSize(3)
-	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", ""}, []bool{false, true}, proc.Mp()))
-	input.Vecs[0].GetGrouping().Add(0)
-	input.Vecs[1] = testutil.MakeInt64Vector([]int64{10, 20}, nil, proc.Mp())
-	input.Vecs[2] = testutil.MakeInt64Vector([]int64{1, 2}, nil, proc.Mp())
-	input.SetRowCount(2)
-
-	arg := newRankTopNArgument(1)
-	arg.OrderBySpecs[0].Expr = topNCol(0, types.T_varchar)
-	arg.PreReduce = true
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	arg.AppendChild(child)
-	require.NoError(t, arg.Prepare(proc))
-	result, err := arg.Call(proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	require.Equal(t, []int64{20}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
-	require.Equal(t, 1, len(arg.top.groups))
-
-	arg.Free(proc, false, nil)
-	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -534,7 +523,9 @@ func TestPartitionTopNPreReducePacksCandidateGroups(t *testing.T) {
 	require.Equal(t, vm.ExecStop, result.Status)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -546,10 +537,10 @@ func TestPartitionTopNVarlenReplacementMemoryBound(t *testing.T) {
 	)
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(4)
-	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
-	input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	input.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	input.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	payload := []byte(strings.Repeat("x", payloadSize))
 	for i := 0; i < rows; i++ {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(1), false, proc.Mp()))
@@ -569,7 +560,9 @@ func TestPartitionTopNVarlenReplacementMemoryBound(t *testing.T) {
 	require.LessOrEqual(t, len(arg.top.retained.Vecs[3].GetArea()), minTopNVarlenCompactBytes+payloadSize)
 
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -583,7 +576,9 @@ func TestPartitionTopNZeroAndCancellation(t *testing.T) {
 	require.NoError(t, arg.Prepare(proc))
 	require.Empty(t, collectTopNRows(t, arg, proc))
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, false, nil)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -607,7 +602,9 @@ func TestPartitionTopNOutputHonorsCancellation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	arg.Free(proc, true, err)
+	colexec.FreeMockChildren(arg)
 	child.Free(proc, true, err)
+	colexec.FreeMockChildren(child)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }
@@ -632,11 +629,11 @@ func BenchmarkPartitionTopN(b *testing.B) {
 				b.StopTimer()
 				proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 				input := batch.NewWithSize(3)
-				input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				require.NoError(b, vector.AppendFixedList(input.Vecs[0], groupValues, nil, proc.Mp()))
-				input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				require.NoError(b, vector.AppendFixedList(input.Vecs[1], scores, nil, proc.Mp()))
-				input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+				input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 				require.NoError(b, vector.AppendFixedList(input.Vecs[2], payloads, nil, proc.Mp()))
 				input.SetRowCount(rows)
 				arg := newTopNArgument(limit)
@@ -658,7 +655,9 @@ func BenchmarkPartitionTopN(b *testing.B) {
 
 				b.ReportMetric(float64(retained), "retained_rows")
 				arg.Free(proc, false, nil)
+				colexec.FreeMockChildren(arg)
 				child.Free(proc, false, nil)
+				colexec.FreeMockChildren(child)
 				proc.Free()
 				require.Zero(b, proc.Mp().CurrNB())
 			}
@@ -722,11 +721,11 @@ func makeTopNBatch(
 	require.Len(t, scores, len(groups))
 	require.Len(t, payloads, len(groups))
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], groups, groupNulls, proc.Mp()))
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], scores, nil, proc.Mp()))
-	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], payloads, nil, proc.Mp()))
 	bat.SetRowCount(len(groups))
 	return bat
@@ -812,16 +811,16 @@ func makeAnyNullTopNBatch(t *testing.T, proc *process.Process, groups []int32, p
 			bat.Clean(proc.Mp())
 		}
 	}()
-	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], groups, nil, proc.Mp()))
 	if constant {
 		bat.Vecs[1] = vector.NewConstNull(types.T_any.ToType(), len(groups), proc.Mp())
 	} else {
-		bat.Vecs[1] = vector.NewVec(types.T_any.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_any.ToType(), proc.Mp())
 		bat.Vecs[1].SetLength(len(groups))
-		nulls.AddRange(bat.Vecs[1].GetNulls(), 0, uint64(len(groups)))
+		bat.Vecs[1].GetNulls().AddRange(0, uint64(len(groups)))
 	}
-	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], payloads, nil, proc.Mp()))
 	bat.SetRowCount(len(groups))
 	return bat

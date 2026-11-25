@@ -96,7 +96,7 @@ func TestWaitWithTimeout(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 		defer cancel()
-		assert.Error(t, w.wait(ctx, getLogger("")).err)
+		assert.ErrorIs(t, w.wait(ctx, getLogger("")).err, context.DeadlineExceeded)
 	})
 }
 

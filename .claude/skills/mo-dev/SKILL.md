@@ -18,9 +18,11 @@ Load only the reference needed for the task:
 |------|------|
 | CGo compile/link/load/module errors, controlled local test execution, layered matrices, hung tests, "pre-existing" claims, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
 | `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests, distributed pipeline hangs, remote dispatch/receiver registration | [references/operator-pipeline.md](references/operator-pipeline.md) |
+| Creating, holding, copying, or freeing a `bitmap.Bitmap` / `nulls.Nulls` outside a Vector; bitmap/nulls leaks or use-after-free; Gobra verification of bitmap/nulls | [references/bitmap-memory.md](references/bitmap-memory.md) |
 | Systematic regression design, counterexamples, white-box/black-box validation, planner/explain/rewrite correctness, avoiding scenario overfit | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext index algorithm work, plugin registry, GPU-only algorithm registration, index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
-| RPC/plan/pipeline encoding, persisted-state format, upgrade steps, `MORPCVersion` (shutdown upgrade only; when to bump) | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
+| Changed persisted format or interpretation, upgrade/restore, or protocol and plan encoding | [Shared upgrade compatibility contract](../../../.agents/skills/mo-dev/references/upgrade-compatibility.md) |
+| Focused versus owning-package validation, evidence selection and reuse | [Shared validation and evidence rules](../../../.agents/skills/mo-dev/references/validation-evidence.md) |
 
 ## Enforcement Gates
 
@@ -29,6 +31,7 @@ Consult the referenced material before acting:
 | Gate | When | Action |
 |------|------|--------|
 | **G-MODIFY** | Before editing any `colexec` operator or `process` signal type | Read [operator-pipeline.md](references/operator-pipeline.md). |
+| **G-BITMAP** | Code creates or holds a `Bitmap`/`Nulls` not owned by a Vector, or changes `pkg/common/bitmap` / `pkg/container/nulls` | Read [bitmap-memory.md](references/bitmap-memory.md). Every bitmap is vector-owned, read-only (`mp == nil`), or owned by a named component that `Free`s it on every exit path; no fourth state. |
 | **G-CGO-ERR** | Any build/test returns module/vendor, header, link, `dyld`, or shared-library errors | Read [cgo-build-test.md](references/cgo-build-test.md) and identify the failing layer before changing code. |
 | **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (missing Pixi activation, `gmake` jobserver, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
 | **G-IDXPLUGIN** | Before adding/editing an index-algorithm plugin, OR adding any `switch`/`if` on an index **algo** name in `pkg/sql/{compile,plan}` or `pkg/catalog` | Read [index-plugin.md](references/index-plugin.md). Route through `pkg/indexplugin`; new algo switches are forbidden. |
@@ -144,7 +147,7 @@ Read [references/operator-pipeline.md](references/operator-pipeline.md) before c
 
 - `Call()` processes one batch. It must not send terminal signals (`End`, `Error`, `Abort`).
 - `Reset()` performs cleanup and notifies downstream completion.
-- For typed signals, distinguish graceful completion from failure. After `EventEnd` is delivered, reclaim the spool with `ForceCleanupAfterTerminalSignal()` only after paired receiver cleanup returns.
+- For typed signals, distinguish graceful completion from failure. After `EventEnd` is delivered, reclaim the spool with `ReleaseCache()` only after paired receiver cleanup returns.
 - Use `Abort(cause)` for error/abort/cancel paths or terminal-delivery failure. Reserve `Close()` / `CloseWithTimeout()` for the legacy nil-batch protocol.
 - When sending terminal signals into bounded channels, record terminal state even if the channel send fails.
 
@@ -162,15 +165,14 @@ Read [references/index-plugin.md](references/index-plugin.md) before touching ve
 ## Completion Gate
 
 Before declaring any MatrixOne change done, map every changed artifact to its
-owning validation. Do not run an unrelated Go package merely to fill a box.
+owning validation. Apply the
+[shared evidence rules](../../../.agents/skills/mo-dev/references/validation-evidence.md#4-reuse-evidence-by-semantic-validity)
+to the final change.
 
 ```
 □ changed artifacts and their direct/dependent validators are explicitly named
-□ if Go is affected, each owning package pattern is named and
-  `GOWORK=off go list -mod=readonly <patterns...>` proves the selection is non-empty
-□ if Go is affected, GOWORK=off go build -mod=readonly <patterns...> -> exit 0
-□ if Go is affected, GOWORK=off go vet -mod=readonly <patterns...>   -> exit 0
-□ if Go is affected, GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s <patterns...> -> exit 0, no hangs
+□ if Go is affected, evidence covers the required test, build, and static checks
+  at the scope defined in the shared validation reference
 □ if non-Go artifacts are affected, their parser/linter plus the smallest
   behavior-level validation for the changed contract pass (for example shell
   syntax + script tests, Make dry-run + target test, or Docker check + relevant build)
@@ -180,7 +182,7 @@ owning validation. Do not run an unrelated Go package merely to fill a box.
   (a hand-listed set drifts from the diff; a `golangci-lint` run reported clean this way
   missed an unused symbol in a package the author forgot they had touched)
 □ git diff --stat -> inspected, no unintended files
-□ all evidence is newer than the last semantic edit/rebase and has a real exit code
+□ evidence covers the final change under the shared rules and records the real exit status
 ```
 
 Hang = failure. If `go test` produces >10s of no output, investigate instead of calling it slow.

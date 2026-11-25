@@ -39,6 +39,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCheckpointPrefetchVisitsPhysicalFiles(t *testing.T) {
+	dataID, tombstoneID := objectio.NewObjectid(), objectio.NewObjectid()
+	data := objectio.NewObjectStatsWithObjectID(&dataID, false, false, false)
+	tombstone := objectio.NewObjectStatsWithObjectID(&tombstoneID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(data, 5))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(tombstone, 3))
+
+	for _, tc := range []struct {
+		name   string
+		reader CKPReader
+	}{
+		{
+			name: "legacy",
+			reader: CKPReader{
+				version: CheckpointVersion12,
+				dataLocations: map[string]objectio.Location{
+					data.ObjectName().String(): data.ObjectLocation(),
+				},
+				tombstoneLocations: map[string]objectio.Location{
+					data.ObjectName().String():      data.ObjectLocation(),
+					tombstone.ObjectName().String(): tombstone.ObjectLocation(),
+				},
+			},
+		},
+		{
+			name: "table ranges",
+			reader: CKPReader{
+				version:     CheckpointCurrentVersion,
+				withTableID: true,
+				dataRanges:  []ckputil.TableRange{{ObjectStats: *data}, {ObjectStats: *data}},
+				tombstoneRanges: []ckputil.TableRange{
+					{ObjectStats: *data}, {ObjectStats: *tombstone},
+				},
+			},
+		},
+		{
+			name: "entire checkpoint",
+			reader: CKPReader{
+				version:            CheckpointCurrentVersion,
+				ckpDataObjectStats: []objectio.ObjectStats{*data, *tombstone},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var files []string
+			tc.reader.visitFiles(func(loc objectio.Location) {
+				files = append(files, loc.Name().String())
+			})
+			require.ElementsMatch(t, []string{data.ObjectName().String(), tombstone.ObjectName().String()}, files)
+		})
+	}
+}
+
 type trackingDeleteFileService struct {
 	fileservice.FileService
 	err     error
@@ -136,7 +189,7 @@ func TestConsumeCheckpointWithTableID(t *testing.T) {
 	require.Equal(t, 1, dataEntries)
 	require.Equal(t, 1, tombstoneEntries)
 
-	meta := ckputil.NewMetaBatch()
+	meta := ckputil.NewMetaBatch(proc.Mp())
 	defer meta.Clean(proc.Mp())
 	for _, ranges := range [][]ckputil.TableRange{dataRanges, tombstoneRanges} {
 		for _, r := range ranges {
@@ -400,7 +453,7 @@ func makeCheckpointObjectRanges(
 	t.Helper()
 
 	ctx := context.Background()
-	data := ckputil.NewObjectListBatch()
+	data := ckputil.NewObjectListBatch(mp)
 	defer data.Clean(mp)
 
 	sinker := ckputil.NewDataSinker(
@@ -464,7 +517,7 @@ func makeCheckpointObjectRanges(
 	require.Empty(t, inMemory)
 	require.NotEmpty(t, files)
 
-	ranges := ckputil.MakeTableRangeBatch()
+	ranges := ckputil.MakeTableRangeBatch(mp)
 	defer ranges.Clean(mp)
 	require.NoError(t, ckputil.CollectTableRanges(ctx, files, ranges, mp, fs))
 
@@ -516,22 +569,30 @@ func makeCheckpointMetaFixture(
 	fs.SetAsyncUpdate(false)
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() {
+		defer mpool.DeleteMPool(mp)
 		fs.Close(ctx)
 		require.Zero(t, mp.CurrNB())
-		mpool.DeleteMPool(mp)
 	})
-	bat := ckputil.NewMetaBatch()
+	return fs, writeCheckpointMetaFixture(t, fs, mp, ranges), mp
+}
+
+func writeCheckpointMetaFixture(
+	t testing.TB, fs fileservice.FileService, mp *mpool.MPool, ranges []ckputil.TableRange,
+) objectio.Location {
+	t.Helper()
+	ctx := context.Background()
+	bat := ckputil.NewMetaBatch(mp)
 	defer bat.Clean(mp)
 	for i := range ranges {
 		require.NoError(t, ranges[i].AppendTo(bat, mp))
 	}
 	writer := ioutil.ConstructWriter(0, ckputil.MetaSeqnums, -1, false, false, fs)
-	_, err = writer.WriteBatch(bat)
+	_, err := writer.WriteBatch(bat)
 	require.NoError(t, err)
 	_, _, err = writer.Sync(ctx)
 	require.NoError(t, err)
 	stats := writer.GetObjectStats()
-	return fs, stats.ObjectLocation(), mp
+	return stats.ObjectLocation()
 }
 
 func checkpointMetaRange(tableID uint64, objectType int8, ordinal int) ckputil.TableRange {
@@ -817,7 +878,7 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 	require.NoError(t, err)
 	defer destMP.Free(held)
 
-	dest := ckputil.MakeDataScanTableIDBatch()
+	dest := ckputil.MakeDataScanTableIDBatch(destMP)
 	defer dest.Clean(destMP)
 	err = compatibilityForV12(
 		objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
@@ -827,7 +888,7 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
 	require.Zero(t, dest.RowCount())
 
-	successDest := ckputil.MakeDataScanTableIDBatch()
+	successDest := ckputil.MakeDataScanTableIDBatch(sourceMP)
 	defer successDest.Clean(sourceMP)
 	err = compatibilityForV12(
 		objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
@@ -843,7 +904,7 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 		func() {
 			failureMP, err := mpool.NewMPool("v12-compatibility-error-after-append", 1<<20, mpool.NoFixed)
 			require.NoError(t, err)
-			dest := ckputil.MakeDataScanTableIDBatch()
+			dest := ckputil.MakeDataScanTableIDBatch(failureMP)
 			defer func() {
 				dest.Clean(failureMP)
 				mpool.DeleteMPool(failureMP)
@@ -851,7 +912,7 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 			for _, column := range columns {
 				require.NoError(t, dest.Vecs[column].PreExtend(1, failureMP))
 				if column == ckputil.TableObjectsAttr_Accout_Idx {
-					require.NoError(t, dest.Vecs[column].PreExtendBitmap(1, failureMP))
+					require.NoError(t, dest.Vecs[column].PreExtendNulls(1, failureMP))
 				}
 			}
 			available := failureMP.Cap() - failureMP.CurrNB()
@@ -917,7 +978,7 @@ func TestCompatibilityForV12PropagatesEveryAppendError(t *testing.T) {
 			require.NoError(t, err)
 			defer destMP.Free(held)
 
-			dest := ckputil.MakeDataScanTableIDBatch()
+			dest := ckputil.MakeDataScanTableIDBatch(destMP)
 			defer dest.Clean(destMP)
 			err = compatibilityForV12(
 				objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
@@ -957,7 +1018,7 @@ func TestCKPObjectReaderForV12ReleasesAllLoadedBlocksOnConversionError(t *testin
 				tombstoneLocations = []objectio.Location{location}
 			}
 			reader := newCKPObjectReaderForV12(dataLocations, tombstoneLocations, fs)
-			dest := ckputil.MakeDataScanTableIDBatch()
+			dest := ckputil.MakeDataScanTableIDBatch(mp)
 			end, err := reader.Read(ctx, dest, mp)
 			require.False(t, end)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
@@ -966,7 +1027,7 @@ func TestCKPObjectReaderForV12ReleasesAllLoadedBlocksOnConversionError(t *testin
 			require.Zero(t, mp.CurrNB())
 
 			reader.Reset(ctx)
-			dest = ckputil.MakeDataScanTableIDBatch()
+			dest = ckputil.MakeDataScanTableIDBatch(mp)
 			end, err = reader.Read(ctx, dest, mp)
 			require.False(t, end)
 			require.NoError(t, err)

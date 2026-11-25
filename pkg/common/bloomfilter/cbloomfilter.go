@@ -154,6 +154,29 @@ func NewCBloomFilterWithSeed(nbits uint64, k uint32, seed uint64) *CBloomFilter 
 	return &CBloomFilter{ptr: ptr, refcnt: 1}
 }
 
+// TryNewCBloomFilterWithSeed is the admitted, optional-allocation variant.
+// Existing required-filter callers retain the original constructor contract.
+func TryNewCBloomFilterWithSeed(nbits uint64, k uint32, seed uint64) (*CBloomFilter, bool) {
+	if nbits == 0 || k == 0 || k > MAX_K_SEED {
+		return nil, false
+	}
+	ptr := C.bloomfilter_init_with_seed(C.uint64_t(nbits), C.uint32_t(k), C.uint64_t(seed))
+	if ptr == nil {
+		return nil, false
+	}
+	return &CBloomFilter{ptr: ptr, refcnt: 1}, true
+}
+
+// TestFixedVectorInto avoids allocating a result per probe batch. The caller
+// owns scratch; the filter must be immutable while it is tested concurrently.
+func (bf *CBloomFilter) TestFixedVectorInto(v *vector.Vector, result []uint8) bool {
+	if !bf.Valid() || v == nil || !v.GetType().IsFixedLen() || len(result) < v.Length() {
+		return false
+	}
+	bf.testFixedVector(v, nil, result)
+	return true
+}
+
 func (bf *CBloomFilter) Ptr() *C.bloomfilter_t {
 	return bf.ptr
 }
@@ -426,8 +449,11 @@ func (bf *CBloomFilter) testAndAddFixedVector(v *vector.Vector, callBack func(bo
 	var nullptr unsafe.Pointer
 	var nulllen C.size_t
 	if !isConst && nullbm != nil {
-		nullptr = unsafe.Pointer(nullbm.Ptr())
-		nulllen = C.size_t(nullbm.Size())
+		// The bitmap can end before nitem bits; C tests every row's bit.
+		if words := nullbm.WordsCovering(int(nitem)); words != nil {
+			nullptr = unsafe.Pointer(&words[0])
+			nulllen = C.size_t(len(words) * 8)
+		}
 	}
 
 	physResults := make([]uint8, nitem)
@@ -456,8 +482,11 @@ func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(
 	var nullptr *uint64
 	var nulllen int
 	if !isConst && nullbm != nil {
-		nullptr = nullbm.Ptr()
-		nulllen = nullbm.Size()
+		// The bitmap can end before nitem bits; C tests every row's bit.
+		if words := nullbm.WordsCovering(int(nitem)); words != nil {
+			nullptr = &words[0]
+			nulllen = len(words) * 8
+		}
 	}
 
 	physResults := make([]uint8, nitem)
@@ -469,8 +498,12 @@ func (bf *CBloomFilter) testAndAddVarlenaVector(v *vector.Vector, callBack func(
 	runtime.KeepAlive(nullptr)
 }
 
-func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bool, int)) []uint8 {
+func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bool, int), scratch ...[]uint8) []uint8 {
 	if v.IsConstNull() {
+		if len(scratch) > 0 {
+			clear(scratch[0][:v.Length()])
+			return scratch[0][:v.Length()]
+		}
 		return emitConstNull(v, callBack)
 	}
 	nitem, isConst := vecPhysCount(v)
@@ -485,15 +518,30 @@ func (bf *CBloomFilter) testFixedVector(v *vector.Vector, callBack func(bool, bo
 	var nullptr unsafe.Pointer
 	var nulllen C.size_t
 	if !isConst && nullbm != nil {
-		nullptr = unsafe.Pointer(nullbm.Ptr())
-		nulllen = C.size_t(nullbm.Size())
+		// The bitmap can end before nitem bits; C tests every row's bit.
+		if words := nullbm.WordsCovering(int(nitem)); words != nil {
+			nullptr = unsafe.Pointer(&words[0])
+			nulllen = C.size_t(len(words) * 8)
+		}
 	}
 
-	physResults := make([]uint8, nitem)
+	var physResults []uint8
+	if len(scratch) > 0 {
+		physResults = scratch[0][:nitem]
+	} else {
+		physResults = make([]uint8, nitem)
+	}
 	C.bloomfilter_test_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(nitem), nullptr, nulllen, unsafe.Pointer(&physResults[0]))
 	runtime.KeepAlive(fixedData)
 	runtime.KeepAlive(nullptr)
 
+	if isConst && len(scratch) > 0 {
+		value := physResults[0]
+		for i := range v.Length() {
+			scratch[0][i] = value
+		}
+		return scratch[0][:v.Length()]
+	}
 	return broadcastResults(v, physResults, isConst, callBack)
 }
 
@@ -514,8 +562,11 @@ func (bf *CBloomFilter) testVarlenaVector(v *vector.Vector, callBack func(bool, 
 	var nullptr *uint64
 	var nulllen int
 	if !isConst && nullbm != nil {
-		nullptr = nullbm.Ptr()
-		nulllen = nullbm.Size()
+		// The bitmap can end before nitem bits; C tests every row's bit.
+		if words := nullbm.WordsCovering(int(nitem)); words != nil {
+			nullptr = &words[0]
+			nulllen = len(words) * 8
+		}
 	}
 
 	physResults := make([]uint8, nitem)
@@ -545,8 +596,11 @@ func (bf *CBloomFilter) addFixedVector(v *vector.Vector) {
 	var nullptr unsafe.Pointer
 	var nulllen C.size_t
 	if !isConst && nullbm != nil {
-		nullptr = unsafe.Pointer(nullbm.Ptr())
-		nulllen = C.size_t(nullbm.Size())
+		// The bitmap can end before nitem bits; C tests every row's bit.
+		if words := nullbm.WordsCovering(int(nitem)); words != nil {
+			nullptr = unsafe.Pointer(&words[0])
+			nulllen = C.size_t(len(words) * 8)
+		}
 	}
 
 	C.bloomfilter_add_fixed(bf.ptr, unsafe.Pointer(&fixedData[0]), C.size_t(len(fixedData)), C.size_t(typeSize), C.size_t(nitem), nullptr, nulllen)
@@ -570,8 +624,11 @@ func (bf *CBloomFilter) addVarlenaVector(v *vector.Vector) {
 	var nullptr *uint64
 	var nulllen int
 	if !isConst && nullbm != nil {
-		nullptr = nullbm.Ptr()
-		nulllen = nullbm.Size()
+		// The bitmap can end before nitem bits; C tests every row's bit.
+		if words := nullbm.WordsCovering(int(nitem)); words != nil {
+			nullptr = &words[0]
+			nulllen = len(words) * 8
+		}
 	}
 
 	C.bloomfilter_add_varlena(bf.ptr, unsafe.Pointer(&varlenData[0]), C.size_t(len(varlenData)*typeSize), C.size_t(typeSize), C.size_t(nitem), unsafe.Pointer(unsafe.SliceData(area)), C.size_t(len(area)), unsafe.Pointer(nullptr), C.size_t(nulllen))

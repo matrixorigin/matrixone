@@ -49,7 +49,7 @@ type rightDedupKeyContractMode struct {
 func TestRightDedupJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(90), uint8(rightDedupJoinAllocationSiteMatched))
 	require.Equal(t, uint8(114), uint8(rightDedupJoinAllocationSiteResultData))
-	require.Equal(t, uint8(117), uint8(rightDedupJoinAllocationSiteResultGrouping))
+	require.Equal(t, uint8(115), uint8(rightDedupJoinAllocationSiteResultArea))
 }
 
 func TestRightDedupJoinDoubleSignedZeroContract(t *testing.T) {
@@ -81,9 +81,11 @@ func runRightDedupJoinDoubleSignedZeroContract(
 	defer func() {
 		if rightDedupArg != nil {
 			rightDedupArg.Free(proc, false, nil)
+			freeTestChildren(rightDedupArg)
 		}
 		if buildArg != nil {
 			buildArg.Free(proc, false, nil)
+			freeTestChildren(buildArg)
 		}
 		if buildBatch != nil {
 			buildBatch.Clean(proc.Mp())
@@ -117,7 +119,7 @@ func runRightDedupJoinDoubleSignedZeroContract(
 
 	const buildRows = hashmap.UnitLimit + 1
 	buildBatch = batch.NewWithSize(1)
-	buildBatch.Vecs[0] = vector.NewVec(floatType)
+	buildBatch.Vecs[0] = vector.NewVec(floatType, proc.Mp())
 	for key := 1; key < buildRows; key++ {
 		require.NoError(t, vector.AppendFixed(buildBatch.Vecs[0], float64(key), false, proc.Mp()))
 	}
@@ -134,7 +136,7 @@ func runRightDedupJoinDoubleSignedZeroContract(
 	}
 
 	probeBatch = batch.NewWithSize(1)
-	probeBatch.Vecs[0] = vector.NewVec(floatType)
+	probeBatch.Vecs[0] = vector.NewVec(floatType, proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		probeBatch.Vecs[0],
 		math.Copysign(0, -1),
@@ -322,9 +324,11 @@ func runRightDedupJoinRemainingKeyContract(
 	defer func() {
 		if rightDedupArg != nil {
 			rightDedupArg.Free(proc, false, nil)
+			freeTestChildren(rightDedupArg)
 		}
 		if buildArg != nil {
 			buildArg.Free(proc, false, nil)
+			freeTestChildren(buildArg)
 		}
 		if buildBatch != nil {
 			buildBatch.Clean(proc.Mp())
@@ -469,7 +473,7 @@ func makeRightDedupContractKeyVector(
 	typ types.Type,
 	values []any,
 ) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	for _, value := range values {
 		switch typ.Oid {
 		case types.T_float32:
@@ -506,9 +510,11 @@ func TestRightDedupLogicalDiagnostic(t *testing.T) {
 					defer func() {
 						if join != nil {
 							join.Free(proc, false, nil)
+							freeTestChildren(join)
 						}
 						if buildArg != nil {
 							buildArg.Free(proc, false, nil)
+							freeTestChildren(buildArg)
 						}
 						if buildBat != nil {
 							buildBat.Clean(proc.Mp())
@@ -521,7 +527,7 @@ func TestRightDedupLogicalDiagnostic(t *testing.T) {
 					}()
 					typ := types.T_varchar.ToType()
 					buildBat = batch.NewWithSize(1)
-					buildBat.Vecs[0] = vector.NewVec(typ)
+					buildBat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 					for _, value := range []string{"Alpha", "Beta"} {
 						key, err := collation.UTF8MB4UnicodeCI.Key(nil, []byte(value))
 						require.NoError(t, err)
@@ -529,8 +535,8 @@ func TestRightDedupLogicalDiagnostic(t *testing.T) {
 					}
 					buildBat.SetRowCount(2)
 					probeBat = batch.NewWithSize(2)
-					probeBat.Vecs[0] = vector.NewVec(typ)
-					probeBat.Vecs[1] = vector.NewVec(typ)
+					probeBat.Vecs[0] = vector.NewVec(typ, proc.Mp())
+					probeBat.Vecs[1] = vector.NewVec(typ, proc.Mp())
 					key, err := collation.UTF8MB4UnicodeCI.Key(nil, []byte("alpha"))
 					require.NoError(t, err)
 					require.NoError(t, vector.AppendBytes(probeBat.Vecs[0], key, false, proc.Mp()))

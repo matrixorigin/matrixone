@@ -49,7 +49,7 @@ const (
 func TestHashJoinAllocationSiteLedger(t *testing.T) {
 	require.Equal(t, uint8(80), uint8(hashJoinAllocationSiteMatchedRows))
 	require.Equal(t, uint8(102), uint8(hashJoinAllocationSiteResultData))
-	require.Equal(t, uint8(105), uint8(hashJoinAllocationSiteResultGrouping))
+	require.Equal(t, uint8(103), uint8(hashJoinAllocationSiteResultArea))
 	require.Equal(t, uint8(106), uint8(hashJoinAllocationSiteAsofIndex))
 }
 
@@ -567,7 +567,9 @@ func runHashJoinKeyContract(
 	var build, probe *batch.Batch
 	defer func() {
 		arg.Free(proc, false, nil)
+		freeTestChildren(arg)
 		buildArg.Free(proc, false, nil)
+		freeTestChildren(buildArg)
 		if build != nil {
 			build.Clean(proc.Mp())
 		}
@@ -697,7 +699,7 @@ func makeJoinKeyVector(
 	typ types.Type,
 	values []joinKeyContractValue,
 ) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	for _, value := range values {
 		switch typ.Oid {
 		case types.T_float32:

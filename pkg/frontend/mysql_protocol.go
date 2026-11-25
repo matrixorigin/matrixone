@@ -37,7 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1015,10 +1015,19 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
 
+	if stmt.params != nil && stmt.paramsMP != proc.Mp() {
+		// The parameter vector is rewritten through this execution's pool.
+		if stmt.proc.GetPrepareParams() == stmt.params {
+			stmt.proc.SetPrepareParams(nil)
+		}
+		stmt.params.Free(stmt.paramsMP)
+		stmt.params, stmt.paramsMP = nil, nil
+	}
 	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
+		stmt.params = vector.NewVec(types.T_text.ToType(), proc.Mp())
+		stmt.paramsMP = proc.Mp()
 		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
+			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -1070,6 +1079,16 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			}
 			newParamTypes = true
 		}
+
+		// Every position is rewritten below (long data, NULL or a value), so
+		// this execution starts from an empty area that keeps its capacity: the
+		// statement's parameter storage grows only when this execution's strings
+		// need more room than any earlier one, and is otherwise reused.
+		stmt.params.CleanOnlyData()
+		stmt.params.SetLength(numParams)
+		// A NULL only sets its bit: clear every row so none keeps an earlier
+		// execution's value, which may point past the emptied area.
+		clear(vector.MustFixedColNoTypeCheck[types.Varlena](stmt.params))
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
@@ -1505,7 +1524,7 @@ func (mp *MysqlProtocolImpl) writeStringFix(data []byte, pos int, value string, 
 // append a string with fixed length to the buffer
 // return the buffer
 func (mp *MysqlProtocolImpl) appendStringFix(value string, length int) error {
-	err := mp.append(util2.UnsafeStringToBytes(value[:length])...)
+	err := mp.append(commonutil.UnsafeStringToBytes(value[:length])...)
 	if err != nil {
 		return err
 	}

@@ -158,7 +158,7 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	sameFixedBinary := true
 	hasFixedBinary := false
 	fixedBinaryWidth := int32(0)
-	width := int32(0)
+	bound := stringResultBound{}
 	for _, typ := range source {
 		switch typ.Oid {
 		case types.T_any:
@@ -174,30 +174,17 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 			} else if typ.Width != fixedBinaryWidth {
 				sameFixedBinary = false
 			}
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_varbinary:
 			hasBinary = true
 			sameFixedBinary = false
-			if typ.Width > width {
-				width = typ.Width
-			}
 		case types.T_char, types.T_varchar:
 			sameFixedBinary = false
-			// Character widths count runes, while VARBINARY widths count bytes.
-			// Reserve the maximum utf8mb4 encoding size without exceeding the
-			// largest representable VARBINARY width.
-			byteWidth := int32(types.MaxVarBinaryLen)
-			if typ.Width >= 0 && typ.Width <= int32(types.MaxVarBinaryLen/utf8.UTFMax) {
-				byteWidth = typ.Width * utf8.UTFMax
-			}
-			if byteWidth > width {
-				width = byteWidth
-			}
 		default:
 			return types.Type{}, false
 		}
+		inputBound := declaredStringByteBound(typ)
+		bound.unknown = bound.unknown || inputBound.unknown
+		bound.bytes = max(bound.bytes, inputBound.bytes)
 	}
 	if !hasBinary {
 		return types.Type{}, false
@@ -205,7 +192,11 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	if sameFixedBinary {
 		return types.New(types.T_binary, fixedBinaryWidth, 0), true
 	}
-	return types.New(types.T_varbinary, width, 0), true
+	// This is an expression bound, not a storage assignment capacity. Capping
+	// UTF-8 bytes at MaxVarBinaryLen would make the implicit branch CAST discard
+	// selected bytes before the real assignment owner can check them. Promote
+	// large/unknown bounds to BLOB; keep finite small results indexable.
+	return binaryStringResultType(bound), true
 }
 
 // MixedTextBinaryCommonType returns a binary common type only when a set
@@ -328,6 +319,10 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 			continue
 		case types.T_binary, types.T_varbinary:
 			hasBinary = true
+		case types.T_char, types.T_varchar:
+			// MySQL gives a COALESCE over byte and character strings the
+			// binary string type, as it does IF and CASE. The type is the
+			// only carrier of that domain: vectors have no per-row domain.
 		default:
 			return checkResult{}, false
 		}
@@ -362,35 +357,6 @@ func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (chec
 	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
-// caseVectorCommonType returns the complete vector result type when at least
-// one CASE value branch is a vector. Vector CASE branches deliberately use a
-// stricter contract than IF: every concrete value branch must have the same
-// vector OID and declared dimension. Untyped NULL branches are cast to the
-// selected vector type.
-func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, valid bool) {
-	for i := range source {
-		if source[i].Oid.IsArray() {
-			retType = source[i]
-			hasVector = true
-			break
-		}
-	}
-	if !hasVector {
-		return types.Type{}, false, false
-	}
-
-	for i := range source {
-		if source[i].Oid == types.T_any {
-			continue
-		}
-		if !source[i].Oid.IsArray() ||
-			source[i].Oid != retType.Oid || source[i].Width != retType.Width {
-			return types.Type{}, true, false
-		}
-	}
-	return retType, true, true
-}
-
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
 // caseConditionFinalType returns the execution type for a searched CASE
 // condition slot. MySQL evaluates a JSON condition with conditional numeric
@@ -420,8 +386,8 @@ func isEnumToBoolCastFunctionId(id int32) bool {
 // legacyConditionalBooleanCheck reproduces the pre-contract IF/CASE condition
 // admission for native-mode statements (D11): JSON conditions reject, and an
 // ENUM/SET operand keeps the ordinary string/numeric typing base produced.
-// The bodies are byte-for-byte the pre-contract checkers; only their names
-// differ, so native-mode parity is constructional.
+// The condition admission is byte-for-byte the pre-contract checkers'; vector
+// value branches resolve through commonVectorType in both modes.
 func legacyConditionalBooleanCheck(id int32, _ []overload, inputs []types.Type) (checkResult, bool) {
 	switch id {
 	case IFF:
@@ -491,7 +457,7 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+		if retType, hasVector, ok := commonVectorType(source); hasVector {
 			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -509,8 +475,16 @@ func legacyIffBooleanCheck(inputs []types.Type) checkResult {
 			}
 			otherIdx := 1 - binaryIdx
 			if source[otherIdx].Oid == types.T_any {
+				// The other value branch is an untyped NULL: it has no binary
+				// representation, so the common type is the binary-family
+				// branch itself and its Width/Scale must survive unchanged
+				// (#30729). An unsized CAST(v AS BINARY) stays T_binary(-1,
+				// -1) so the branch cast appends the source bytes unchanged;
+				// clamping the negative width to MaxVarBinaryLen would widen
+				// the target to BINARY(65535) and NUL-pad every selected
+				// value. Concrete BINARY(n)/VARBINARY(n) targets keep their
+				// declared width and the fixed truncate/pad semantics.
 				retType := source[binaryIdx]
-				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}
@@ -680,7 +654,7 @@ func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 			return newCheckResultWithCast(0, finalTypes)
 		}
 
-		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+		if vectorType, hasVector, valid := commonVectorType(source); hasVector {
 			if !valid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -923,7 +897,7 @@ func caseCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithCast(0, finalTypes)
 		}
 
-		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+		if vectorType, hasVector, valid := commonVectorType(source); hasVector {
 			if !valid {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -1073,7 +1047,7 @@ func newCaseConditionTruth(vec *vector.Vector) caseConditionTruth {
 
 func (c caseConditionTruth) truth(mode SQLCompatibilityMode, row uint64) (bool, error) {
 	if c.json != nil {
-		return IffConditionTruthyAt(c.json, row, mode)
+		return IffConditionTruthyAt(c.json, row, false, mode)
 	}
 	v, null := c.cond.GetValue(row)
 	return !null && v, nil
@@ -1392,7 +1366,7 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+		if retType, hasVector, ok := commonVectorType(source); hasVector {
 			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
@@ -1410,8 +1384,16 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 			}
 			otherIdx := 1 - binaryIdx
 			if source[otherIdx].Oid == types.T_any {
+				// The other value branch is an untyped NULL: it has no binary
+				// representation, so the common type is the binary-family
+				// branch itself and its Width/Scale must survive unchanged
+				// (#30729). An unsized CAST(v AS BINARY) stays T_binary(-1,
+				// -1) so the branch cast appends the source bytes unchanged;
+				// clamping the negative width to MaxVarBinaryLen would widen
+				// the target to BINARY(65535) and NUL-pad every selected
+				// value. Concrete BINARY(n)/VARBINARY(n) targets keep their
+				// declared width and the fixed truncate/pad semantics.
 				retType := source[binaryIdx]
-				setMaxWidthFromSource(&retType, source)
 				finalTypes := []types.Type{conditionType, retType, retType}
 				return newCheckResultWithCast(0, finalTypes)
 			}
@@ -1487,7 +1469,11 @@ func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityMode) (bool, error) {
+// IffConditionTruthyAt evaluates a conditional's truth at row. isBin reports
+// that the condition value is a binary literal (see
+// vector.FunctionResultWrapper.ArgumentIsBin), which reads string bytes as an
+// unsigned number rather than as numeric text.
+func IffConditionTruthyAt(vec *vector.Vector, row uint64, isBin bool, mode SQLCompatibilityMode) (bool, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return false, nil
 	}
@@ -1562,7 +1548,7 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 	case types.T_decimal256:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, int(row)).Compare(types.Decimal256{}) != 0, nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), vec.GetIsBin(), 64, mode)
+		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), isBin, 64, mode)
 		if err != nil {
 			return false, err
 		}
@@ -1642,6 +1628,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 
 	rs := vector.MustFunctionResult[T](result)
 	mode := CompatibilityModeFromProcess(proc)
+	conditionIsBin := result.ArgumentIsBin(0)
 	var zero T
 	for i := uint64(0); i < uint64(length); i++ {
 		if iffRowSkipped(selectList, i) {
@@ -1650,7 +1637,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
+		truth, err := IffConditionTruthyAt(vecs[0], i, conditionIsBin, mode)
 		if err != nil {
 			return err
 		}
@@ -1673,6 +1660,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	mode := CompatibilityModeFromProcess(proc)
+	conditionIsBin := result.ArgumentIsBin(0)
 	for i := uint64(0); i < uint64(length); i++ {
 		if iffRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -1680,7 +1668,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
+		truth, err := IffConditionTruthyAt(vecs[0], i, conditionIsBin, mode)
 		if err != nil {
 			return err
 		}
@@ -1724,6 +1712,11 @@ func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
 		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
 			// The low-precision floats widen losslessly to float32 (overload 4).
 			return newCheckResultWithCast(4, []types.Type{types.T_float32.ToType()})
+		case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+			// MySQL evaluates unary temporal negation in DOUBLE, unlike binary
+			// subtraction. The temporal-to-FLOAT64 cast preserves its numeric
+			// calendar representation and session-time-zone interpretation.
+			return newCheckResultWithCast(5, []types.Type{types.T_float64.ToType()})
 		}
 	}
 	return fixedTypeMatch(overloads, inputs)

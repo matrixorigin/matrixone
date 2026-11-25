@@ -15,9 +15,10 @@
 package table_function
 
 import (
+	"testing"
+
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -215,7 +216,7 @@ func TestHandleDataSource(t *testing.T) {
 }
 
 func createStringVector(t *testing.T, mp *mpool.MPool, values []string) *vector.Vector {
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, v := range values {
 		err := vector.AppendBytes(vec, []byte(v), false, mp)
 		require.NoError(t, err)

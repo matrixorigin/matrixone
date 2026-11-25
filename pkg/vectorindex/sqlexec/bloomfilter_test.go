@@ -31,7 +31,7 @@ import (
 
 func testUniqueKeyPayload(t *testing.T, values []byte) *keycodec.KeyPayload {
 	mp := mpool.MustNewZero()
-	v := vector.NewVec(types.T_uint8.ToType())
+	v := vector.NewVec(types.T_uint8.ToType(), mp)
 	defer v.Free(mp)
 	require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
 	data, err := v.MarshalBinary()
@@ -329,7 +329,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("int64 values", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 		vector.AppendFixed(vec, int64(10), false, proc.Mp())
 		vector.AppendFixed(vec, int64(20), false, proc.Mp())
 		vector.AppendFixed(vec, int64(30), false, proc.Mp())
@@ -340,7 +340,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("empty vector", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 
 		result, err := BuildExactPkFilter(ctx, vec)
 		require.NoError(t, err)
@@ -348,7 +348,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("single value", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 		vector.AppendFixed(vec, int64(99), false, proc.Mp())
 
 		result, err := BuildExactPkFilter(ctx, vec)
@@ -357,7 +357,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("varchar values", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+		vec := vector.NewVec(types.New(types.T_varchar, 128, 0), mp)
 		vector.AppendBytes(vec, []byte("hello"), false, proc.Mp())
 		vector.AppendBytes(vec, []byte("world"), false, proc.Mp())
 
@@ -367,7 +367,7 @@ func TestBuildExactPkFilter(t *testing.T) {
 	})
 
 	t.Run("with null values", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0), mp)
 		vector.AppendFixed(vec, int64(10), false, proc.Mp())
 		vector.AppendFixed(vec, int64(0), true, proc.Mp()) // null
 		vector.AppendFixed(vec, int64(30), false, proc.Mp())
@@ -432,7 +432,7 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 	})
 
 	t.Run("bit", func(t *testing.T) {
-		vec := vector.NewVec(types.New(types.T_bit, 10, 0))
+		vec := vector.NewVec(types.New(types.T_bit, 10, 0), mp)
 		vector.AppendFixed(vec, uint64(0x3FF), false, proc.Mp())
 		buf, err := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.NoError(t, err)
@@ -489,7 +489,7 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 	})
 
 	t.Run("binary", func(t *testing.T) {
-		vec := vector.NewVec(types.T_binary.ToType())
+		vec := vector.NewVec(types.T_binary.ToType(), mp)
 		vector.AppendBytes(vec, []byte{0xAB, 0xCD}, false, proc.Mp())
 		buf, _ := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.Equal(t, "x'abcd'", string(buf))
@@ -522,13 +522,13 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 
 	t.Run("decimal", func(t *testing.T) {
 		d64, _ := types.Decimal64FromFloat64(1.23, 10, 2)
-		vec64 := vector.NewVec(types.New(types.T_decimal64, 10, 2))
+		vec64 := vector.NewVec(types.New(types.T_decimal64, 10, 2), mp)
 		vector.AppendFixed(vec64, d64, false, proc.Mp())
 		buf, _ := AppendVectorSQLLiteral(ctx, vec64, 0, nil)
 		require.Equal(t, "'1.23'", string(buf))
 
 		d128, _ := types.Decimal128FromFloat64(1.23, 10, 2)
-		vec128 := vector.NewVec(types.New(types.T_decimal128, 10, 2))
+		vec128 := vector.NewVec(types.New(types.T_decimal128, 10, 2), mp)
 		vector.AppendFixed(vec128, d128, false, proc.Mp())
 		buf, _ = AppendVectorSQLLiteral(ctx, vec128, 0, nil)
 		require.Equal(t, "'1.23'", string(buf))
@@ -560,14 +560,14 @@ func TestAppendVectorSQLLiteral(t *testing.T) {
 	})
 
 	t.Run("enum", func(t *testing.T) {
-		vec := vector.NewVec(types.T_enum.ToType())
+		vec := vector.NewVec(types.T_enum.ToType(), mp)
 		vector.AppendFixed(vec, types.Enum(1), false, proc.Mp())
 		buf, _ := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.Equal(t, "'1'", string(buf))
 	})
 
 	t.Run("unsupported", func(t *testing.T) {
-		vec := vector.NewVec(types.T_any.ToType())
+		vec := vector.NewVec(types.T_any.ToType(), mp)
 		buf, err := AppendVectorSQLLiteral(ctx, vec, 0, nil)
 		require.Error(t, err)
 		require.Nil(t, buf)

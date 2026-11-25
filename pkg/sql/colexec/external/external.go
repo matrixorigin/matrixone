@@ -219,6 +219,7 @@ func (external *External) Prepare(proc *process.Process) error {
 	// Error-mode columns are resolved from the pruned attribute list before any
 	// reader is built, so every reader sees the same decision.
 	resolveExternalErrorMode(param)
+	param.outputMP = external.OutputAllocation
 
 	// Create reader (single dispatch point)
 	switch {
@@ -261,7 +262,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			attrs[i] = attr.ColName
 		}
-		external.ctr.buf = batch.NewOffHeap(attrs)
+		external.ctr.buf = batch.New(attrs)
 		flag := param.ParallelLoad
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -274,15 +275,8 @@ func (external *External) Prepare(proc *process.Process) error {
 			colType := &param.Cols[colIndex].Typ
 			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)) ||
 				loadAttributedDecimalTextInput(param, colType))
-			if external.OutputAllocation != nil {
-				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
-				if err != nil {
-					return err
-				}
-				external.ctr.buf.Vecs[i] = vec
-			} else {
-				external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-			}
+			// Readers grow the output through param.outputPool.
+			external.ctr.buf.Vecs[i] = vector.NewVec(typ, param.outputPool(proc))
 		}
 	}
 	return nil
@@ -400,11 +394,19 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	if external.ctr.buf != nil {
-		external.ctr.buf.CleanOnlyData()
+	// A publishing reader (Arrow) returns a batch it owns; every other reader
+	// fills the operator's own buffer.
+	out := external.ctr.buf
+	var fileFinished bool
+	var err error
+	if publisher, ok := external.reader.(BatchPublisher); ok {
+		out, fileFinished, err = publisher.PublishBatch(ctx, proc, analyzer)
+	} else {
+		if out != nil {
+			out.CleanOnlyData()
+		}
+		fileFinished, err = external.reader.ReadBatch(ctx, out, proc, analyzer)
 	}
-
-	fileFinished, err := external.reader.ReadBatch(ctx, external.ctr.buf, proc, analyzer)
 	if err != nil {
 		external.reader.Close()
 		external.fileOpened = false
@@ -414,8 +416,8 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 		return result, err
 	}
-	if external.ctr.buf != nil && external.ctr.buf.RowCount() > 0 {
-		if err := external.applyIcebergDeletes(ctx, external.ctr.buf, proc); err != nil {
+	if out != nil && out.RowCount() > 0 {
+		if err := external.applyIcebergDeletes(ctx, out, proc); err != nil {
 			external.reader.Close()
 			external.fileOpened = false
 			param.Fileparam.End = true
@@ -424,6 +426,7 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if fileFinished {
+		// Closing the file keeps a published batch: it is this call's output.
 		if err := external.reader.Close(); err != nil {
 			external.fileOpened = false
 			param.Fileparam.End = true
@@ -435,12 +438,12 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		external.finishCurrentFile(param)
 	}
 
-	analyzer.Input(external.ctr.buf)
+	analyzer.Input(out)
 
-	result.Batch = external.ctr.buf
-	if external.ctr.buf != nil {
-		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, external.ctr.buf.Size())
-		param.addParquetProfile(process.ParquetProfileStats{PeakBatchBytes: int64(external.ctr.buf.Size())})
+	result.Batch = out
+	if out != nil {
+		external.ctr.maxAllocSize = max(external.ctr.maxAllocSize, out.Size())
+		param.addParquetProfile(process.ParquetProfileStats{PeakBatchBytes: int64(out.Size())})
 		result.Batch.ShuffleIDX = int32(param.Idx)
 	}
 
@@ -1454,6 +1457,17 @@ func makeType(typ *plan.Type, flag bool) types.Type {
 // the pipeline while the project casts the value.  Vectors are already parsed
 // by getColData in the non-parallel path, so keeping their target type here
 // avoids that duplicate large allocation.
+// appendFieldText appends a field's raw text. This is where file input
+// becomes a typed value, so a native Unicode column admits only valid text in
+// its charset.
+func appendFieldText(vec *vector.Vector, text string, mp *mpool.MPool) error {
+	value := []byte(text)
+	if err := types.ValidateCollationValue(*vec.GetType(), value); err != nil {
+		return err
+	}
+	return vector.AppendBytes(vec, value, false, mp)
+}
+
 func isDirectParallelLoadType(id types.T) bool {
 	return id == types.T_array_float32 || id == types.T_array_float64
 }
@@ -1920,7 +1934,7 @@ func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Fie
 // materialize: every user column NULL, __mo_filepath and __mo_file_line as
 // usual, and the two error columns describing the failure.
 func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, cause error) error {
-	mp := proc.GetMPool()
+	mp := param.outputPool(proc)
 	message := cause.Error()
 	text := recordText(line, param)
 	for _, attr := range param.Attrs {
@@ -1986,7 +2000,7 @@ func recordText(line []csvparser.Field, param *ExternalParam) string {
 }
 
 func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
-	mp := proc.GetMPool()
+	mp := param.outputPool(proc)
 	// Kafka JSONL object conversion already checks the declared key count.
 	// Its field slice contains only projected data positions, so its length
 	// cannot be used as the record width. Synthetic attrs are filled by
@@ -2098,6 +2112,46 @@ func parseCSVUint(field csvparser.Field, bits int, round bool) (uint64, error) {
 	return strconv.ParseUint(integer, 10, bits)
 }
 
+// jsonNumberBitLexeme converts the canonical decimal lexeme of a nonnegative
+// integer JSON NUMBER token into that BIT value's canonical big-endian byte
+// encoding (single 0x00 for zero, no leading zero bytes, at most 8 bytes).
+// It returns false for everything else -- digits with leading zeros, signs,
+// fractions, exponents, values above uint64, or values above the BIT width
+// -- and the caller keeps the token text, preserving today's byte conversion
+// values and errors bit-for-bit.
+func jsonNumberBitLexeme(lexeme string, width int32) (string, bool) {
+	if len(lexeme) == 0 || len(lexeme) > 20 {
+		return "", false
+	}
+	for i := 0; i < len(lexeme); i++ {
+		if lexeme[i] < '0' || lexeme[i] > '9' {
+			return "", false
+		}
+	}
+	if len(lexeme) > 1 && lexeme[0] == '0' {
+		return "", false
+	}
+	value, err := strconv.ParseUint(lexeme, 10, 64)
+	if err != nil {
+		return "", false
+	}
+	// A BIT(64) target accepts the whole uint64 domain; narrower widths are
+	// clamped so out-of-width tokens keep the pre-existing conversion path.
+	if width > 0 && width < 64 && value > 1<<uint(width)-1 {
+		return "", false
+	}
+	var buf [8]byte
+	for i := 7; i >= 0; i-- {
+		buf[i] = byte(value)
+		value >>= 8
+	}
+	n := 8
+	for n > 1 && buf[8-n] == 0 {
+		n--
+	}
+	return string(buf[8-n:]), true
+}
+
 func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, mp *mpool.MPool, attr plan.ExternAttr, proc *process.Process) error {
 	colIdx := attr.ColIndex
 	colName := attr.ColName
@@ -2152,6 +2206,20 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return vector.AppendBytes(vec, nil, true, mp)
 	}
 
+	// A JSON NUMBER field for a BIT column is the exact uint64 the JSONLINE
+	// writer emitted, not a raw-byte CSV payload. Convert it after the raw
+	// NULLIF decision above and before both consumers: the staged varchar
+	// handoff below and the direct type construction below read the field as
+	// big-endian bytes, so canonical value bytes reach either consumer as the
+	// exact BIT value. Tokens that are not canonical nonnegative uint64
+	// integers, or that exceed the BIT width, keep the original text and with
+	// it today's conversion values and errors.
+	if id == types.T_bit && field.IsJSONNumber {
+		if encoded, ok := jsonNumberBitLexeme(field.Val, col.Typ.Width); ok {
+			field.Val = encoded
+		}
+	}
+
 	var temporalValue loadDataTemporalValue
 	if loadDataNonStrictAdjustments {
 		switch {
@@ -2181,11 +2249,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 
 	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) ||
 		loadAttributedDecimalTextInput(param, &col.Typ) {
-		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
-		if err != nil {
-			return err
-		}
-		return nil
+		return appendFieldText(vec, field.Val, mp)
 	}
 
 	// roundTextInteger classifies when integer assignment may use the exact
@@ -2470,8 +2534,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
-		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
-		if err != nil {
+		if err := appendFieldText(vec, field.Val, mp); err != nil {
 			return err
 		}
 	case types.T_array_float32:

@@ -79,7 +79,6 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
 	hashBuild.ctr.autoSpillTriggered = false
 	hashBuild.ctr.autoSpillLimitAtTrigger = 0
-	hashBuild.ctr.autoSpillHasGrouping = false
 	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
 	budget, err := proc.GetExecutionResourceBudget()
@@ -87,6 +86,10 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		return TerminalBudgetError(proc.Ctx, err)
 	}
 	hashBuild.ctr.hashmapBuilder.setBudget(budget)
+	// This broadcast capability set is produced for HashJoin. Product and
+	// LoopJoin have no hash map, and right DedupJoin retains no build payload.
+	hashBuild.ctr.hashmapBuilder.boundBatchAllocations = !hashBuild.IsShuffle &&
+		hashBuild.NeedHashMap && hashBuild.NeedBatches && !hashBuild.IsDedup
 	if hashBuild.ctr.hashmapBuilder.mapAllocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -108,6 +111,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 	hashBuild.ctr.hashmapBuilder.DedupKeyExprs = hashBuild.DedupKeyExprs
+	hashBuild.ctr.hashmapBuilder.AuxiliaryRowIdColIdx = hashBuild.AuxiliaryRowIdColIdx
 	hashBuild.ctr.hashmapBuilder.TrackNullKeys = hashBuild.TrackNullKeys
 	hashBuild.ctr.hashmapBuilder.joinDiagnostic = hashBuild.JoinDiagnostic
 	if hashBuild.JoinDiagnostic != nil {
@@ -141,6 +145,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			} else {
 				err = hashBuild.build(proc, analyzer)
+			}
+			if err == nil && ctr.hashmapBuilder.boundBatchAllocations {
+				err = ctr.hashmapBuilder.prepareBatchRowEnds(proc)
 			}
 			if err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
@@ -595,6 +602,11 @@ func (hashBuild *HashBuild) build(
 
 		runtimeFilterLimit := int32(-1)
 		ctr.hashmapBuilder.runtimeFilterKeysRequired = needUniqueVec && hashBuild.RuntimeFilterSpec.MustApply
+		ctr.hashmapBuilder.optionalRuntimeFilterMaxKeyBytes = hashBuild.OptionalRuntimeFilterMaxKeyBytes
+		ctr.hashmapBuilder.optionalRuntimeFilterMaxKeys = 0
+		if hashBuild.OptionalRuntimeFilterMaxKeyBytes > 0 && hashBuild.RuntimeFilterSpec != nil {
+			ctr.hashmapBuilder.optionalRuntimeFilterMaxKeys = int(hashBuild.RuntimeFilterSpec.UpperLimit)
+		}
 		if needUniqueVec && !hashBuild.RuntimeFilterSpec.UseMembershipFilter {
 			runtimeFilterLimit = hashBuild.RuntimeFilterSpec.UpperLimit
 		}
@@ -1000,16 +1012,6 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 			return nil
 		}
 		rowCount := ctr.hashmapBuilder.uniqueKeys.count()
-		hasGrouping := false
-		_ = ctr.hashmapBuilder.uniqueKeys.visit(func(keys []*vector.Vector) error {
-			hasGrouping = hasGrouping || keys[0].GetGrouping().GetBitmap().CountRange(0, uint64(keys[0].Length())) > 0
-			return nil
-		})
-		if hasGrouping {
-			runtimeFilter.Typ = message.RuntimeFilter_PASS
-			hashBuild.sendRuntimeFilter(runtimeFilter, spec, proc)
-			return nil
-		}
 
 		// Always send the unique join keys; the consumer (ivfflat / fulltext
 		// search) decides whether to use them as an exact pk IN filter or to
@@ -1092,10 +1094,14 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		return nil
 	}
 
+	keyMP, err := ctr.hashmapBuilder.uniqueKeyMP(proc)
+	if err != nil {
+		return err
+	}
 	if encoding == keycodec.ExactRuntimeFilterFloatZeroClosed {
 		if err := runtimefilter.CloseFloatSignedZero(
 			keyVec,
-			proc.Mp(),
+			keyMP,
 		); err != nil {
 			if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 				return nil
@@ -1110,7 +1116,7 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		return nil
 	}
 	keyVec.GetNulls().Reset()
-	if err := keyVec.InplaceSort(proc.Mp()); err != nil {
+	if err := keyVec.InplaceSort(keyMP); err != nil {
 		if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
 			return nil
 		}
@@ -1196,9 +1202,8 @@ func (hashBuild *HashBuild) handleScalarRuntimeFilter(
 		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return nil
 	}
-	if keyVec.GetGrouping().GetBitmap().CountRange(0, 1) != 0 ||
-		runtimefilter.ExactKeyEncoding(spec, *keyVec.GetType()) !=
-			keycodec.ExactRuntimeFilterRaw {
+	if runtimefilter.ExactKeyEncoding(spec, *keyVec.GetType()) !=
+		keycodec.ExactRuntimeFilterRaw {
 		runtimeFilter.Typ = message.RuntimeFilter_PASS
 		hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
 		return nil
@@ -1328,9 +1333,15 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 		return nil, nil, 0, false, err
 	}
 	defer freeRuntimeFilterExecutors(executors)
+	// The chunk payload is created with the unique-key view of proc's pool
+	// (cached by the binding, so the chunk gets this same pool).
+	payloadMP, err := hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
 	payload, rows, usable, err := hashBuild.materializeSerializedRuntimeFilterChunk(proc, spec, componentTypes, rowCount, hashBuild.ctr.hashmapBuilder.uniqueKeys.first.vecs, executors)
 	if payload != nil {
-		defer payload.Free(proc.Mp())
+		defer payload.Free(payloadMP)
 	}
 	if err != nil || !usable || rows == 0 {
 		return nil, nil, rows, usable, err
@@ -1423,20 +1434,18 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 	if areaBound+uint64(rowCount)*uint64(payloadType.TypeSize())+4096 > uint64(mpool.MaxAllocationSize()) {
 		return nil, 0, false, runtimefilter.ErrOptionalKeySize
 	}
-	payload, err := vector.NewOffHeapVecWithTypeAndAllocation(
-		payloadType,
-		hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation,
-	)
+	payloadMP, err := hashBuild.ctr.hashmapBuilder.uniqueKeyAllocation.MP(proc.Mp())
 	if err != nil {
 		return nil, 0, false, err
 	}
+	payload := vector.NewVec(payloadType, payloadMP)
 	defer func() {
 		if err != nil || !usable {
-			payload.Free(proc.Mp())
+			payload.Free(payloadMP)
 		}
 	}()
 	if err = payload.PreExtendWithArea(
-		rowCount, int(areaBound), proc.Mp(),
+		rowCount, int(areaBound), payloadMP,
 	); err != nil {
 		return nil, 0, false,
 			runtimefilter.MarkOptionalAllocationError(err)
@@ -1500,7 +1509,7 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 		// capacities. An append error contradicts that oracle and must remain
 		// an unmarked fatal invariant error.
 		if err = vector.AppendBytes(
-			payload, packer.GetBuf(), false, proc.Mp(),
+			payload, packer.GetBuf(), false, payloadMP,
 		); err != nil {
 			return nil, 0, false, err
 		}
@@ -1518,7 +1527,7 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilterChunk(
 	if outputRows == 0 {
 		return payload, 0, true, nil
 	}
-	if err := payload.InplaceSort(proc.Mp()); err != nil {
+	if err := payload.InplaceSort(payloadMP); err != nil {
 		return nil, 0, false, err
 	}
 	return payload, outputRows, true, nil

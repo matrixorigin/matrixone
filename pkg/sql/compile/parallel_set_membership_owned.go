@@ -98,11 +98,13 @@ func (c *Compile) tryCompileOwnedSetMembership(nodeID int32, node *plan.Node, le
 	// Consolidation reduces router count, not the input work available to
 	// membership owners: each router can send to every owner.
 	workerLimit := c.capFanoutByMaxDop(c.ncpu)
-	dop := min(4, workerLimit, inputWorkers)
+	// A gathered producer can route to every owner. Terminal-signal count is
+	// not a bound on downstream work or useful membership parallelism.
+	dop := min(4, workerLimit)
 	for dop > 1 && uint64(unit) > headroom/uint64(2*dop) {
 		dop--
 	}
-	if dop == 4 && workerLimit >= shuffle.MaxOwnedBuckets && inputWorkers >= shuffle.MaxOwnedBuckets &&
+	if dop == 4 && workerLimit >= shuffle.MaxOwnedBuckets &&
 		uint64(unit) <= headroom/(2*shuffle.MaxOwnedBuckets) {
 		dop = shuffle.MaxOwnedBuckets
 	}
@@ -202,12 +204,66 @@ func setMembershipRowWidth(query *plan.Query, node *plan.Node) (float64, bool) {
 		}
 		estimated = math.Max(estimated, w)
 	}
-	if estimated <= 0 || estimated > maxProfitableRowBytes {
+	if estimated <= 0 {
 		return 0, false
+	}
+	if estimated > maxProfitableRowBytes {
+		for _, id := range node.Children {
+			if !setMembershipBlockingDistinctOutput(query, id, make(map[int32]bool)) {
+				return 0, false
+			}
+		}
 	}
 	// The wider declared bound also drives the budget heuristic; the live
 	// allocation controller remains authoritative if statistics are stale.
 	return math.Max(estimated, declared), true
+}
+
+// Wide streaming inputs retain the existing copy-cost policy. A blocking
+// DISTINCT has already reduced complete tuples; its result can use the same
+// owners with the declared width still charged to the admission heuristic.
+func setMembershipBlockingDistinctOutput(query *plan.Query, id int32, seen map[int32]bool) bool {
+	if id < 0 || int(id) >= len(query.Nodes) || seen[id] || query.Nodes[id] == nil {
+		return false
+	}
+	seen[id] = true
+	node := query.Nodes[id]
+	switch node.NodeType {
+	case plan.Node_INTERSECT, plan.Node_MINUS:
+		return true
+	case plan.Node_AGG:
+		if len(node.AggList) != 0 || len(node.GroupBy) == 0 || len(node.ProjectList) != len(node.GroupBy) {
+			return false
+		}
+		columns := make(map[int32]bool)
+		for _, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || col.RelPos != -1 || col.ColPos < 0 || int(col.ColPos) >= len(node.GroupBy) || columns[col.ColPos] {
+				return false
+			}
+			columns[col.ColPos] = true
+		}
+		return true
+	case plan.Node_PROJECT, plan.Node_FILTER:
+		if len(node.Children) != 1 || node.Children[0] < 0 || int(node.Children[0]) >= len(query.Nodes) {
+			return false
+		}
+		child := query.Nodes[node.Children[0]]
+		if child == nil || len(node.ProjectList) != len(child.ProjectList) {
+			return false
+		}
+		columns := make(map[int32]bool)
+		for _, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) || columns[col.ColPos] {
+				return false
+			}
+			columns[col.ColPos] = true
+		}
+		return setMembershipBlockingDistinctOutput(query, node.Children[0], seen)
+	default:
+		return false
+	}
 }
 
 // This estimate is valid only along a chain of one-to-one column projections.

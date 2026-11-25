@@ -280,14 +280,14 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 		dtSepIdx = strings.IndexAny(s, " T")
 	}
 	if len(s) < 14 && dtSepIdx < 0 {
-		if d, err := parseDateCast(ctx, s, observe); err == nil {
+		if d, err := parseDateCast(ctx, s, observe, nil); err == nil {
 			if kind != nil {
 				*kind = TemporalStringDate
 			}
 			return d.ToDatetime(), nil
 		}
 		if kind != nil {
-			if y, m, d, _, err := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s), observe); err == nil && observedCalendarFields(y, m, d) {
+			if y, m, d, _, err := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s), observe, nil); err == nil && observedCalendarFields(y, m, d) {
 				*kind = TemporalStringDate
 			}
 		}
@@ -354,13 +354,13 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 			if dtSepIdx == len(s)-1 {
 				return -1, temporalInvalidInput(ctx, s, observe)
 			}
-			date, dateErr := parseDateCast(ctx, s[:dtSepIdx], observe)
+			date, dateErr := parseDateCast(ctx, s[:dtSepIdx], observe, nil)
 			if dateErr != nil || date == ZeroDate {
 				if kind != nil {
 					// The value parser exits before clock parsing for incomplete
 					// dates. Observe components and a valid surrogate clock only
 					// for classification; ordinary conversion keeps its error.
-					y, m, d, _, componentErr := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s[:dtSepIdx]), observe)
+					y, m, d, _, componentErr := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s[:dtSepIdx]), observe, nil)
 					if componentErr == nil && observedCalendarFields(y, m, d) {
 						if _, clockErr := parseDatetime(ctx, "2000-01-01 "+s[dtSepIdx+1:], scale, nil, observe); clockErr == nil {
 							*kind = TemporalStringDatetime
@@ -800,15 +800,34 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		}
 		return newDate, true
 	case Second:
+		if nums > math.MaxInt64/MicroSecsPerSec || nums < math.MinInt64/MicroSecsPerSec {
+			return 0, false
+		}
 		nums *= MicroSecsPerSec
 	case Minute:
-		nums *= MicroSecsPerSec * SecsPerMinute
+		const multiplier = MicroSecsPerSec * SecsPerMinute
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Hour:
-		nums *= MicroSecsPerSec * SecsPerHour
+		const multiplier = MicroSecsPerSec * SecsPerHour
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Day:
-		nums *= MicroSecsPerSec * SecsPerDay
+		const multiplier = MicroSecsPerSec * SecsPerDay
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Week:
-		nums *= MicroSecsPerSec * SecsPerWeek
+		const multiplier = MicroSecsPerSec * SecsPerWeek
+		if nums > math.MaxInt64/multiplier || nums < math.MinInt64/multiplier {
+			return 0, false
+		}
+		nums *= multiplier
 	case Month:
 		addMonth = nums
 		return dt.AddDateTime(addMonth, addYear, timeType)
@@ -825,7 +844,13 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 		return dt.AddDateTime(addMonth, addYear, timeType)
 	}
 
+	if (nums > 0 && int64(dt) > math.MaxInt64-nums) || (nums < 0 && int64(dt) < math.MinInt64-nums) {
+		return 0, false
+	}
 	newDate := dt + Datetime(nums)
+	if newDate < 0 {
+		return 0, false
+	}
 	y, m, d, _ := newDate.ToDate().Calendar(true)
 	if !ValidDatetime(y, m, d) {
 		return 0, false

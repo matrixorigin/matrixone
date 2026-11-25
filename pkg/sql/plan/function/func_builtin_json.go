@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -37,346 +36,23 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
-const (
-	JsonOrderingParamFunctionName   = "__mo_json_ordering_param"
-	JsonComparisonParamFunctionName = "__mo_json_comparison_param"
-)
-
-// PreparedJSONScalarValue converts the text transport used by a prepared
-// parameter into the JSON scalar represented by its runtime SQL type.  The
-// concrete type is deliberately kept separate from PrepareParamKind: the
-// latter describes a broad conversion category, while (for example) FLOAT
-// and DOUBLE have different wire precision.
-func PreparedJSONScalarValue(
+// jsonTextScalarValue converts a string-typed SQL value to its JSON scalar:
+// binary types and binary-flagged text become opaque values, other text a
+// JSON string.
+func jsonTextScalarValue(
 	ctx context.Context,
 	value []byte,
-	kind vector.PrepareParamKind,
-	paramType types.T,
+	oid types.T,
 	binaryString bool,
 	protocolVersion int64,
 ) (any, error) {
-	if paramType == types.T_binary || paramType == types.T_varbinary ||
-		paramType == types.T_blob {
-		return jsonvalue.FromBinary(ctx, protocolVersion, paramType, value)
+	if oid == types.T_binary || oid == types.T_varbinary || oid == types.T_blob {
+		return jsonvalue.FromBinary(ctx, protocolVersion, oid, value)
 	}
 	if binaryString {
 		return newTypedByteJson(bytejson.TpCodeOpaque, string(value)), nil
 	}
-	if paramType != types.T_any {
-		scalar, err := preparedTextToJSONValueWithType(
-			ctx, string(value), paramType, protocolVersion)
-		if err != nil {
-			return nil, err
-		}
-		return scalar, nil
-	}
-	if kind != vector.PrepareParamNone {
-		return preparedTextToJSONValue(ctx, string(value), kind)
-	}
 	return string(value), nil
-}
-
-// preparedTextToJSONValueWithType decodes the textual representation retained
-// by the binary prepared-parameter vector using the concrete protocol type.
-// In particular, parsing FLOAT with a 32-bit target and widening the resulting
-// float32 preserves the value that was actually carried on the wire.
-func preparedTextToJSONValueWithType(
-	ctx context.Context,
-	value string,
-	paramType types.T,
-	protocolVersion int64,
-) (any, error) {
-	parseSigned := func(bitSize int) (int64, error) {
-		parsed, err := strconv.ParseInt(value, 10, bitSize)
-		if err != nil {
-			return 0, moerr.NewInvalidInputf(
-				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
-		}
-		return parsed, nil
-	}
-	parseUnsigned := func(bitSize int) (uint64, error) {
-		parsed, err := strconv.ParseUint(value, 10, bitSize)
-		if err != nil {
-			return 0, moerr.NewInvalidInputf(
-				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
-		}
-		return parsed, nil
-	}
-	parseFloat := func(bitSize int) (bytejson.ByteJson, error) {
-		parsed, err := strconv.ParseFloat(value, bitSize)
-		if err != nil {
-			return bytejson.ByteJson{}, moerr.NewInvalidInputf(
-				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
-		}
-		if bitSize == 32 {
-			parsed = float64(float32(parsed))
-		}
-		return finiteFloatToJSON(parsed, ctx)
-	}
-
-	switch paramType {
-	case types.T_json:
-		parsed, err := types.ParseSliceToByteJson([]byte(value))
-		if err != nil {
-			return nil, err
-		}
-		return parsed, nil
-	case types.T_int8:
-		return parseSigned(8)
-	case types.T_int16:
-		return parseSigned(16)
-	case types.T_int32:
-		return parseSigned(32)
-	case types.T_int64:
-		return parseSigned(64)
-	case types.T_uint8:
-		return parseUnsigned(8)
-	case types.T_uint16:
-		return parseUnsigned(16)
-	case types.T_uint32:
-		return parseUnsigned(32)
-	case types.T_uint64:
-		return parseUnsigned(64)
-	case types.T_float32:
-		return parseFloat(32)
-	case types.T_float64:
-		return parseFloat(64)
-	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-		if len(value) == 0 || !json.Valid([]byte(value)) ||
-			(value[0] != '-' && (value[0] < '0' || value[0] > '9')) {
-			return nil, moerr.NewInvalidInputf(
-				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
-		}
-		return newTypedByteJson(bytejson.TpCodeDecimal, value), nil
-	case types.T_bool:
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return nil, moerr.NewInvalidInputf(
-				ctx, "invalid prepared %s JSON value %q", paramType.String(), value)
-		}
-		return parsed, nil
-	case types.T_year:
-		// A prepared YEAR is a numeric MEMBER OF scalar, even though the
-		// ordinary JSON constructor path formats YEAR as a temporal string.
-		return parseUnsigned(16)
-	case types.T_bit:
-		return parseUnsigned(64)
-	case types.T_date:
-		return newTypedByteJson(bytejson.TpCodeDate, value), nil
-	case types.T_time:
-		return newTypedByteJson(bytejson.TpCodeTime, value), nil
-	case types.T_datetime, types.T_timestamp:
-		return newTypedByteJson(bytejson.TpCodeDatetime, value), nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_enum, types.T_geometry:
-		return value, nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return jsonvalue.FromBinary(ctx, protocolVersion, paramType, []byte(value))
-	default:
-		return nil, moerr.NewInternalErrorf(
-			ctx, "unsupported prepared parameter type %s", paramType.String())
-	}
-}
-
-// normalizeJsonComparisonParam preserves the runtime scalar category of a
-// prepared parameter before a JSON equality comparison. Prepared parameters
-// use TEXT as their transport type; treating that transport type as the SQL
-// type would unquote both JSON strings and JSON booleans to the same text.
-func normalizeJsonComparisonParam(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	from := vector.GenerateFunctionStrParameter(parameters[0])
-	to := vector.MustFunctionResult[types.Varlena](result)
-	resultVector := to.GetResultVector()
-	paramType := parameters[0].GetPrepareParamType()
-
-	if length == 0 {
-		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
-		resultVector.SetPrepareParamType(paramType)
-		resultVector.SetPreparedJSONComparisonParam()
-		return nil
-	}
-
-	if selectList != nil && selectList.IgnoreAllRow() {
-		if err := to.AppendMultiBytes(nil, true, length); err != nil {
-			return err
-		}
-		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
-		resultVector.SetPrepareParamType(paramType)
-		resultVector.SetPreparedJSONComparisonParam()
-		return nil
-	}
-
-	// A direct prepared parameter is normally constant for the batch. Encode
-	// its physical value once, share the varlena payload across all rows, and
-	// keep the provenance in the scalar sidecar fast path.
-	if parameters[0].IsConst() && (selectList == nil || selectList.ShouldEvalAllRow()) {
-		value, null := from.GetStrValue(0)
-		kind := parameters[0].GetPrepareParamKindAt(0)
-		if null {
-			if err := to.AppendMultiBytes(nil, true, length); err != nil {
-				return err
-			}
-		} else {
-			encoded, err := encodeJsonComparisonParamWithMetadata(
-				proc.Ctx, value, kind, paramType,
-				parameters[0].GetIsBinaryStringAt(0), jsonSessionProtocolVersion(proc))
-			if err != nil {
-				return err
-			}
-			if err := to.AppendMultiBytes(encoded, false, length); err != nil {
-				return err
-			}
-		}
-		resultVector.SetPrepareParamKind(kind)
-		resultVector.SetPrepareParamType(paramType)
-		resultVector.SetPreparedJSONComparisonParam()
-		return nil
-	}
-
-	var (
-		firstKind vector.PrepareParamKind
-		seenKind  bool
-		kinds     []vector.PrepareParamKind
-	)
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		value, null := from.GetStrValue(i)
-		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		kind := from.GetSourceVector().GetPrepareParamKindAt(int(i))
-		if !seenKind {
-			firstKind, seenKind = kind, true
-		} else if kinds == nil && kind != firstKind {
-			kinds = make([]vector.PrepareParamKind, length)
-			for prior := uint64(0); prior < i; prior++ {
-				kinds[prior] = firstKind
-			}
-		}
-		if kinds != nil {
-			kinds[i] = kind
-		}
-
-		encoded, err := encodeJsonComparisonParamWithMetadata(
-			proc.Ctx, value, kind, paramType,
-			parameters[0].GetIsBinaryStringAt(int(i)), jsonSessionProtocolVersion(proc))
-		if err != nil {
-			return err
-		}
-		if err := to.AppendBytes(encoded, false); err != nil {
-			return err
-		}
-	}
-	if !seenKind {
-		// The marker, not its value, distinguishes this adapter output from an
-		// ordinary JSON vector even when every logical row is NULL.
-		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
-	} else if kinds == nil {
-		resultVector.SetPrepareParamKind(firstKind)
-	} else if err := resultVector.SetPrepareParamKindsWithMP(kinds, proc.Mp()); err != nil {
-		return err
-	}
-	resultVector.SetPrepareParamType(paramType)
-	resultVector.SetPreparedJSONComparisonParam()
-	return nil
-}
-
-func encodeJsonComparisonParam(
-	ctx context.Context,
-	value []byte,
-	kind vector.PrepareParamKind,
-) ([]byte, error) {
-	return encodeJsonComparisonParamWithMetadata(
-		ctx, value, kind, types.T_any, false, bytejson.MySQLOpaqueProtocolVersion)
-}
-
-func encodeJsonComparisonParamWithMetadata(
-	ctx context.Context,
-	value []byte,
-	kind vector.PrepareParamKind,
-	paramType types.T,
-	binaryString bool,
-	protocolVersion int64,
-) ([]byte, error) {
-	scalar, err := PreparedJSONScalarValue(
-		ctx, value, kind, paramType, binaryString, protocolVersion)
-	if err != nil {
-		return nil, err
-	}
-	jsonValue, err := bytejson.CreateByteJSON(scalar)
-	if err != nil {
-		return nil, err
-	}
-	return types.EncodeJson(jsonValue)
-}
-
-func normalizeJsonOrderingParam(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	paramType := parameters[0].GetPrepareParamType()
-	kind := parameters[0].GetPrepareParamKind()
-	if isJSONComparisonNumericType(paramType) || paramType == types.T_any &&
-		(kind == vector.PrepareParamInteger || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
-		return normalizeJsonComparisonParam(parameters, result, proc, length, selectList)
-	}
-	from := vector.GenerateFunctionStrParameter(parameters[0])
-	to := vector.MustFunctionResult[types.Varlena](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		value, null := from.GetStrValue(i)
-		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		encoded, err := encodeJsonOrderingParam(value)
-		if err != nil {
-			return err
-		}
-		if err := to.AppendBytes(encoded, false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func encodeJsonOrderingParam(value []byte) ([]byte, error) {
-	trimmed := bytes.TrimSpace(value)
-	if !json.Valid(trimmed) {
-		_, err := types.ParseStringToByteJson(string(trimmed))
-		return nil, err
-	}
-
-	if len(trimmed) > 0 && (trimmed[0] == '-' || trimmed[0] >= '0' && trimmed[0] <= '9') &&
-		bytes.ContainsAny(trimmed, ".eE") {
-		data := make([]byte, binary.MaxVarintLen64+len(trimmed))
-		n := binary.PutUvarint(data, uint64(len(trimmed)))
-		copy(data[n:], trimmed)
-		return types.EncodeJson(bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data[:n+len(trimmed)]})
-	}
-
-	parsed, err := types.ParseStringToByteJson(string(trimmed))
-	if err != nil {
-		return nil, err
-	}
-	return types.EncodeJson(parsed)
 }
 
 type opBuiltInJsonExtract struct {
@@ -561,8 +237,6 @@ func jsonLengthCheckFn(overloads []overload, inputs []types.Type) checkResult {
 
 type computeFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, error)
 
-type computeExtractFn func([]byte, []*bytejson.Path) (bytejson.ByteJson, bool, error)
-
 type computeJsonFn func([]byte, []*bytejson.Path, []bytejson.ByteJson) (bytejson.ByteJson, error)
 
 func computeString(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, error) {
@@ -584,36 +258,6 @@ func computeStringSimple(json []byte, paths []*bytejson.Path) (bytejson.ByteJson
 		return bytejson.Null, err
 	}
 	return bj.QuerySimple(paths), nil
-}
-
-func computeJsonWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
-	bj := types.DecodeJson(json)
-	result, exists := bj.QueryWithExists(paths)
-	return result, exists, nil
-}
-
-func computeStringWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
-	bj, err := types.ParseSliceToByteJson(json)
-	if err != nil {
-		return bytejson.Null, false, err
-	}
-	result, exists := bj.QueryWithExists(paths)
-	return result, exists, nil
-}
-
-func computeJsonSimpleWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
-	bj := types.DecodeJson(json)
-	result, exists := bj.QuerySimpleWithExists(paths)
-	return result, exists, nil
-}
-
-func computeStringSimpleWithExists(json []byte, paths []*bytejson.Path) (bytejson.ByteJson, bool, error) {
-	bj, err := types.ParseSliceToByteJson(json)
-	if err != nil {
-		return bytejson.Null, false, err
-	}
-	result, exists := bj.QuerySimpleWithExists(paths)
-	return result, exists, nil
 }
 
 func (op *opBuiltInJsonContains) jsonContains(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1319,7 +963,7 @@ func computeStringJsonRemove(json []byte, paths []*bytejson.Path) (bytejson.Byte
 	return bj.Remove(paths)
 }
 
-func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInJsonExtract) buildPath(ctx context.Context, params []*vector.Vector, length int, selectList *FunctionSelectList) error {
 	op.npath = len(params) - 1
 	if op.npath == 0 {
 		return nil
@@ -1391,6 +1035,9 @@ func (op *opBuiltInJsonExtract) buildPath(params []*vector.Vector, length int, s
 	} else {
 		op.simple = true
 		for i := 0; i < length; i++ {
+			if err := CheckJSONExtractRow(ctx, i); err != nil {
+				return err
+			}
 			strs := op.pathStrs[i*op.npath : (i+1)*op.npath]
 			paths := op.paths[i*op.npath : (i+1)*op.npath]
 			if selectList.Contains(uint64(i)) {
@@ -1448,77 +1095,64 @@ func (op *opBuiltInJsonExtract) buildOnePath(paramWrappers []vector.FunctionPara
 	return nil
 }
 
-func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	var err error
-	var fn computeExtractFn
+// CheckJSONExtractRow checks before the next bounded group of rows, including
+// groups consisting entirely of masked or NULL inputs.
+func CheckJSONExtractRow(ctx context.Context, row int) error {
+	if row%64 == 0 && ctx != nil {
+		return ctx.Err()
+	}
+	return nil
+}
 
+func (op *opBuiltInJsonExtract) jsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	ctx := proc.Ctx
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	native := jsonVec.GetType().Oid == types.T_json
 
-	if selectList.IgnoreAllRow() {
-		for i := 0; i < length; i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
-		return nil
+	if err := CheckJSONExtractRow(ctx, 0); err != nil {
+		return err
 	}
-
-	// build all paths
-	if err = op.buildPath(parameters, length, selectList); err != nil {
+	if err := op.buildPath(ctx, parameters, length, selectList); err != nil {
 		return err
 	}
 
-	if op.simple {
-		if jsonVec.GetType().Oid == types.T_json {
-			fn = computeJsonSimpleWithExists
-		} else {
-			fn = computeStringSimpleWithExists
+	for row := 0; row < length; row++ {
+		if err := CheckJSONExtractRow(ctx, row); err != nil {
+			return err
 		}
-	} else {
-		if jsonVec.GetType().Oid == types.T_json {
-			fn = computeJsonWithExists
-		} else {
-			fn = computeStringWithExists
-		}
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList.Contains(i) {
-			if err = rs.AppendBytes(nil, true); err != nil {
+		if selectList.IgnoreAllRow() || selectList.Contains(uint64(row)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
-		if jIsNull {
-			if err = rs.AppendBytes(nil, true); err != nil {
+		raw, null := jsonWrapper.GetStrValue(uint64(row))
+		paths := op.getPaths(uint64(row))
+		if null || len(paths) == 0 || paths[0] == nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		paths := op.getPaths(i)
-		if len(paths) == 0 || paths[0] == nil {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
+		var doc bytejson.ByteJson
+		if native {
+			doc = types.DecodeJson(raw)
 		} else {
-			out, exists, err := fn(jsonBytes, paths)
+			var err error
+			doc, err = bytejson.ParseFromByteSliceWithCancellation(ctx, raw)
 			if err != nil {
 				return err
 			}
-			if !exists {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				if err = rs.AppendByteJson(out, false); err != nil {
-					return err
-				}
-			}
+		}
+		out, exists, err := doc.QueryWithExistsContext(ctx, paths)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendByteJson(out, !exists); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1543,7 +1177,7 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 	}
 
 	// build all paths
-	if err = op.buildPath(parameters, length, selectList); err != nil {
+	if err = op.buildPath(proc.Ctx, parameters, length, selectList); err != nil {
 		return err
 	}
 
@@ -1627,7 +1261,7 @@ func (op *opBuiltInJsonExtract) jsonExtractFloat64(parameters []*vector.Vector, 
 	}
 
 	// build all paths
-	if err = op.buildPath(parameters, length, selectList); err != nil {
+	if err = op.buildPath(proc.Ctx, parameters, length, selectList); err != nil {
 		return err
 	}
 	if !op.simple || op.npath > 1 {
@@ -2199,7 +1833,7 @@ rowLoop:
 				}
 				continue rowLoop
 			}
-			val, err := op.buildJsonModifyValue(proc, parameters[j], int(i), protocolVersion)
+			val, err := op.buildJsonModifyValue(proc, parameters[j], result.ArgumentIsBin(j), int(i), protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2246,8 +1880,8 @@ func jsonModifyFunctionName(jsonFuncType bytejson.JsonModifyType) string {
 	}
 }
 
-func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (bytejson.ByteJson, error) {
-	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, row, protocolVersion)
+func (op *opBuiltInJsonSet) buildJsonModifyValue(proc *process.Process, v *vector.Vector, isBin bool, row int, protocolVersion int64) (bytejson.ByteJson, error) {
+	elem, err := (&opBuiltInJsonArray{}).convertToAny(proc, v, isBin, row, protocolVersion)
 	if err != nil {
 		return bytejson.Null, err
 	}
@@ -2283,7 +1917,7 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 		}
 		elems := make([]any, 0, len(params))
 		for i := 0; i < len(params); i++ {
-			elem, err := op.convertToAny(proc, params[i], j, protocolVersion)
+			elem, err := op.convertToAny(proc, params[i], result.ArgumentIsBin(i), j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2305,7 +1939,9 @@ func (op *opBuiltInJsonArray) jsonArray(params []*vector.Vector, result vector.F
 	return nil
 }
 
-func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, row int, protocolVersion int64) (any, error) {
+// convertToAny converts row of v to a JSON value. isBin is v's
+// binary-literal flag (vector.FunctionResultWrapper.ArgumentIsBin).
+func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vector, isBin bool, row int, protocolVersion int64) (any, error) {
 	ctx := context.Background()
 	if proc != nil {
 		ctx = proc.Ctx
@@ -2313,12 +1949,8 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 	if !v.IsNull(uint64(row)) {
 		switch v.GetType().Oid {
 		case types.T_char, types.T_varchar, types.T_text:
-			kind := v.GetPrepareParamKindAt(row)
-			paramType := v.GetPrepareParamType()
-			binaryString := v.GetIsBinaryStringAt(row)
-			if kind != vector.PrepareParamNone || paramType != types.T_any || binaryString {
-				return PreparedJSONScalarValue(ctx, v.GetBytesAt(row), kind,
-					paramType, binaryString, protocolVersion)
+			if isBinaryStringVector(v, isBin) {
+				return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
 			}
 		}
 	}
@@ -2332,43 +1964,6 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 			return geometryToByteJSON(ctx, payload)
 		},
 	)
-}
-
-func preparedTextToJSONValue(
-	ctx context.Context,
-	value string,
-	kind vector.PrepareParamKind,
-) (any, error) {
-	switch kind {
-	case vector.PrepareParamInteger:
-		if signed, err := strconv.ParseInt(value, 10, 64); err == nil {
-			return signed, nil
-		}
-		if unsigned, err := strconv.ParseUint(value, 10, 64); err == nil {
-			return unsigned, nil
-		}
-		return nil, moerr.NewInvalidInputf(ctx, "invalid prepared integer JSON value %q", value)
-	case vector.PrepareParamFloat:
-		floating, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared floating-point JSON value %q", value)
-		}
-		return finiteFloatToJSON(floating, ctx)
-	case vector.PrepareParamDecimal:
-		if len(value) == 0 || !json.Valid([]byte(value)) ||
-			(value[0] != '-' && (value[0] < '0' || value[0] > '9')) {
-			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared decimal JSON value %q", value)
-		}
-		return newTypedByteJson(bytejson.TpCodeDecimal, value), nil
-	case vector.PrepareParamBoolean:
-		boolean, err := strconv.ParseBool(value)
-		if err != nil {
-			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared boolean JSON value %q", value)
-		}
-		return boolean, nil
-	default:
-		return nil, moerr.NewInternalErrorf(ctx, "unsupported prepared parameter kind %d", kind)
-	}
 }
 
 func jsonSessionTimeZone(proc *process.Process) *time.Location {
@@ -2495,7 +2090,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 				key = fmt.Sprint(v)
 			}
 
-			elem, err := arrayOp.convertToAny(proc, params[i+1], j, protocolVersion)
+			elem, err := arrayOp.convertToAny(proc, params[i+1], result.ArgumentIsBin(i+1), j, protocolVersion)
 			if err != nil {
 				return err
 			}
@@ -2535,15 +2130,6 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 		visible, err := concatStringValue(proc.Ctx, types.T_json, v.GetBytesAt(row))
 		return string(visible), err
 	case types.T_char, types.T_varchar, types.T_text:
-		// Prepared key text keeps the previous kind-only conversion. Concrete
-		// scalar and binary sidecars belong to values, not member names.
-		if kind := v.GetPrepareParamKindAt(row); kind != vector.PrepareParamNone {
-			ctx := context.Background()
-			if proc != nil {
-				ctx = proc.Ctx
-			}
-			return preparedTextToJSONValue(ctx, string(v.GetBytesAt(row)), kind)
-		}
 		return string(v.GetBytesAt(row)), nil
 	case types.T_time:
 		return newTypedByteJson(bytejson.TpCodeTime,
@@ -2567,7 +2153,8 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 	case types.T_geometry:
 		return string(v.GetBytesAt(row)), nil
 	default:
-		return arrayOp.convertToAny(proc, v, row, protocolVersion)
+		// The string types the binary-literal flag applies to return above.
+		return arrayOp.convertToAny(proc, v, false, row, protocolVersion)
 	}
 }
 
@@ -2693,7 +2280,7 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 	// selectList: ignore all rows
 	if selectList != nil && selectList.IgnoreAllRow() {
-		nulls.AddRange(rsNull, 0, uint64(length))
+		rsNull.AddRange(0, uint64(length))
 		return nil
 	}
 

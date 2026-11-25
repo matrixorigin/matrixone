@@ -12,6 +12,7 @@ package compile
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,11 +38,11 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 	for i, version := range []uint8{0, 1} {
 		typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
 		typ.CollationVersion = version
-		source.Vecs[i] = vector.NewVec(typ)
+		source.Vecs[i] = vector.NewVec(typ, mp)
 		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("x"), false, mp))
 	}
 	source.SetRowCount(1)
-	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+	data, err := source.MarshalBinaryWithBuffer(new(bytes.Buffer), true)
 	require.NoError(t, err)
 	before := mp.CurrNB()
 	decoded, err := decodeBatch(mp, data)
@@ -92,7 +93,7 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	require.ErrorContains(t, err, "disabled")
 	require.Nil(t, literalVector)
 	// A legacy outer Type must not hide disabled metadata inside opaque bytes.
-	payload := vector.NewVec(types.MustTypeFromPlan(typ))
+	payload := vector.NewVec(types.MustTypeFromPlan(typ), c.proc.Mp())
 	data, err := payload.MarshalBinary()
 	require.NoError(t, err)
 	payload.Free(c.proc.Mp())
@@ -112,4 +113,35 @@ func TestCollationMetadataExecutionBoundaries(t *testing.T) {
 	// The transport codec can retain a known domain without admitting it.
 	runtime := types.MustTypeFromPlan(typ)
 	require.Equal(t, []types.Type{runtime}, convertToTypes(convertToPlanTypes([]types.Type{runtime})))
+}
+
+// An older CN appends a ROLLUP grouping trailer after the stable batch. The
+// receiver discards it and decodes the stable payload unchanged.
+func TestDecodeBatchDiscardsLegacyGroupingTrailer(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := batch.NewWithSize(1)
+	t.Cleanup(func() { source.Clean(mp); require.Zero(t, mp.CurrNB()) })
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
+	for _, value := range []string{"one", "two"} {
+		require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte(value), false, mp))
+	}
+	source.SetRowCount(2)
+	encoded, err := source.MarshalBinaryWithBuffer(new(bytes.Buffer), true)
+	require.NoError(t, err)
+	encoded = append([]byte(nil), encoded...)
+
+	// [int64 rows][int32 vector count][int32 bitmap size per vector] + footer.
+	trailer := binary.LittleEndian.AppendUint64(nil, 2)
+	trailer = binary.LittleEndian.AppendUint32(trailer, 1)
+	trailer = binary.LittleEndian.AppendUint32(trailer, 0)
+	encoded = append(encoded, trailer...)
+	encoded = append(encoded, "MOGROUP\x01"...)
+	encoded = binary.LittleEndian.AppendUint64(encoded, uint64(len(trailer)))
+
+	decoded, err := decodeBatch(mp, encoded)
+	require.NoError(t, err)
+	defer decoded.Clean(mp)
+	require.Equal(t, 2, decoded.RowCount())
+	require.Equal(t, "one", decoded.Vecs[0].GetStringAt(0))
+	require.Equal(t, "two", decoded.Vecs[0].GetStringAt(1))
 }

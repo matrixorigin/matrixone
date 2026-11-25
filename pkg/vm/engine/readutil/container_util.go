@@ -15,6 +15,7 @@
 package readutil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -23,7 +24,8 @@ import (
 func NewCNTombstoneBatch(
 	pkType *types.Type,
 	hidden objectio.HiddenColumnSelection,
+	mp *mpool.MPool,
 ) *batch.Batch {
 	attrs, attrTypes := objectio.GetTombstoneSchema(*pkType, hidden)
-	return batch.NewWithSchema(false, attrs, attrTypes)
+	return batch.NewWithSchema(attrs, attrTypes, mp)
 }

@@ -229,7 +229,7 @@ func TestPreparedJoinDiagnosticProofOnlyRelaxesCurrentExecution(t *testing.T) {
 	require.True(t, builder.filterPushdownBarrier(condition))
 
 	proc := ctx.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 	require.NoError(t, vector.AppendBytes(params, []byte("00:00:01"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
@@ -396,7 +396,7 @@ func TestPreparedScanFilterDiagnosticTriggersExecutionProof(t *testing.T) {
 	require.True(t, PreparedPlanHasJoinParameterDiagnostic(template))
 
 	proc := ctx.GetProcess()
-	params := vector.NewVec(types.T_text.ToType())
+	params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(params, []byte("7"), false, proc.Mp()))
 	proc.SetPrepareParams(params)
 	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })

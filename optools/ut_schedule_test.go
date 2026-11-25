@@ -436,32 +436,42 @@ printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$
 
 func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ name, budget, global, overlap, planParallel, engine, heavy, plan, expected, engineShards string }{
-		{"default-safe", "", "8", "1", "1", "0", "0", "0", "0", "6"},
-		{"global-one", "", "1", "1", "1", "0", "0", "0", "0", "1"},
-		{"global-two", "", "2", "1", "1", "0", "0", "0", "0", "2"},
-		{"global-three", "", "3", "1", "1", "0", "0", "0", "0", "3"},
-		{"global-six", "", "6", "1", "1", "0", "0", "0", "0", "6"},
-		{"global-caps-explicit", "4", "2", "1", "1", "0", "0", "0", "0", "2"},
-		{"explicit-three", "3", "8", "", "1", "0", "0", "0", "0", "3"},
-		{"overlap", "3", "8", "1", "1", "0", "0", "0", "0", "3"},
-		{"plan-two-slots", "3", "8", "1", "2", "0", "0", "0", "0", "3"},
-		{"engine-failure", "3", "8", "1", "1", "7", "0", "0", "1", "3"},
-		{"heavy-failure", "3", "8", "1", "1", "0", "8", "0", "1", "3"},
-		{"plan-failure", "3", "8", "1", "1", "0", "0", "9", "1", "3"},
-		{"plan-undrained", "3", "8", "1", "1", "0", "0", "125", "1", "3"},
-		{"plan-undrained-sequential", "3", "8", "0", "1", "0", "0", "125", "1", "3"},
-		{"engine-undrained", "3", "8", "1", "1", "125", "0", "0", "1", "3"},
-		{"sequential-baseline", "3", "8", "0", "1", "0", "0", "0", "0", "3"},
-		{"one-slot", "1", "8", "1", "1", "0", "0", "0", "0", "1"},
-		{"two-slots", "2", "8", "1", "1", "0", "0", "0", "0", "2"},
-		{"one-budget-two-plan-slots", "1", "8", "1", "2", "0", "0", "0", "0", "1"},
+	for _, tc := range []struct{ name, budget, global, overlap, planParallel, engine, heavy, plan, expected, engineShards, osPrefix, planShards, defaultBudget string }{
+		{"default-safe", "", "8", "1", "1", "0", "0", "0", "0", "6", "linux", "1", "3"},
+		{"global-one", "", "1", "1", "1", "0", "0", "0", "0", "1", "linux", "1", "3"},
+		{"global-two", "", "2", "1", "1", "0", "0", "0", "0", "2", "linux", "1", "3"},
+		{"global-three", "", "3", "1", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"global-six", "", "6", "1", "1", "0", "0", "0", "0", "6", "linux", "1", "3"},
+		{"global-caps-explicit", "4", "2", "1", "1", "0", "0", "0", "0", "2", "linux", "1", "3"},
+		{"explicit-three", "3", "8", "", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"overlap", "3", "8", "1", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"plan-two-slots", "3", "8", "1", "2", "0", "0", "0", "0", "3", "linux", "2", "3"},
+		{"engine-failure", "3", "8", "1", "1", "7", "0", "0", "1", "3", "linux", "1", "3"},
+		{"heavy-failure", "3", "8", "1", "1", "0", "8", "0", "1", "3", "linux", "1", "3"},
+		{"plan-failure", "3", "8", "1", "1", "0", "0", "9", "1", "3", "linux", "1", "3"},
+		{"plan-undrained", "3", "8", "1", "1", "0", "0", "125", "1", "3", "linux", "1", "3"},
+		{"plan-undrained-sequential", "3", "8", "0", "1", "0", "0", "125", "1", "3", "linux", "1", "3"},
+		{"engine-undrained", "3", "8", "1", "1", "125", "0", "0", "1", "3", "linux", "1", "3"},
+		{"sequential-baseline", "3", "8", "0", "1", "0", "0", "0", "0", "3", "linux", "1", "3"},
+		{"one-slot", "1", "8", "1", "1", "0", "0", "0", "0", "1", "linux", "1", "3"},
+		{"two-slots", "2", "8", "1", "1", "0", "0", "0", "0", "2", "linux", "1", "3"},
+		{"one-budget-two-plan-slots", "1", "8", "1", "2", "0", "0", "0", "0", "1", "linux", "2", "3"},
+		{"default-linux-two-plan-slots", "", "8", "1", "2", "0", "0", "0", "0", "6", "linux", "2", "4"},
+		{"default-darwin-two-plan-slots", "", "8", "1", "2", "0", "0", "0", "0", "6", "darwin", "2", "3"},
+		{"default-other-plan-generations", "", "8", "1", "2", "0", "0", "0", "0", "6", "linux", "4", "3"},
+		{"default-sequential-two-plan-slots", "", "8", "0", "2", "0", "0", "0", "0", "6", "linux", "2", "3"},
+		{"explicit-four-two-plan-slots", "4", "8", "1", "2", "0", "0", "0", "0", "4", "linux", "2", "4"},
+		{"profile-engine-failure", "", "8", "1", "2", "7", "0", "0", "1", "6", "linux", "2", "4"},
+		{"profile-heavy-failure", "", "8", "1", "2", "0", "8", "0", "1", "6", "linux", "2", "4"},
+		{"profile-plan-failure", "", "8", "1", "2", "0", "0", "9", "1", "6", "linux", "2", "4"},
+		{"profile-plan-undrained", "", "8", "1", "2", "0", "0", "125", "1", "6", "linux", "2", "4"},
+		{"profile-engine-undrained", "", "8", "1", "2", "125", "0", "0", "1", "6", "linux", "2", "4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expectedOverlap := "0"
 			effectiveBudget := tc.budget
 			if effectiveBudget == "" {
-				effectiveBudget = "3"
+				effectiveBudget = tc.defaultBudget
 			}
 			budget, err := strconv.Atoi(effectiveBudget)
 			if err != nil {
@@ -475,6 +485,7 @@ func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
 				expectedOverlap = "1"
 			}
 			script := `source ./run_ut.sh UT
+OSTYPE_PREFIX="${UT_TEST_OS_PREFIX}"
 trap handle_ut_termination TERM
 function logger() { :; }
 function report_cgroup_memory_usage() {
@@ -556,7 +567,7 @@ printf '\nREPORT\n'
 			if expectedHeavyParallel == "" {
 				expectedHeavyParallel = "3"
 			}
-			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "UT_PARALLEL="+tc.global, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+tc.engineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
+			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "UT_PARALLEL="+tc.global, "UT_TEST_OS_PREFIX="+tc.osPrefix, "PLAN_RACE_SHARDS="+tc.planShards, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+tc.engineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
 			if tc.plan == "125" || tc.engine == "125" {
 				exit, ok := err.(*exec.ExitError)
 				if !ok || exit.ExitCode() != 125 {
@@ -569,6 +580,9 @@ printf '\nREPORT\n'
 			}
 			if err != nil {
 				t.Fatalf("schedule: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), "#  HEAVY/PLAN UT:   "+effectiveBudget+" total package slots\n") {
+				t.Fatalf("displayed heavy budget differs from dispatch: %s", out)
 			}
 			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)
@@ -1109,13 +1123,20 @@ kill -TERM "$$"
 func TestCancellationReportsCompletedSlowCases(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
-function logger() { printf "%s\n" "$2"; }
+function logger() { printf "%s\n" "$2"; echo called >> "$CASE_DIR/logger-calls"; }
 UT_REPORT="$CASE_DIR/report.json"
 UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
 mkdir -p "$UT_DIAGNOSTIC_DIR"
 cat > "$UT_REPORT" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/slow","Test":"TestSlow"}
 {"Time":"2026-09-10T01:00:04Z","Action":"pass","Package":"example/slow","Test":"TestSlow","Elapsed":3.5}
+EOF
+for ((i=0; i<200; i++)); do
+ printf '%s\n' '{"Action":"output","Package":"example/fast","Test":"TestFailed","Output":"detail line\n"}' >> "$UT_REPORT"
+done
+cat >> "$UT_REPORT" <<'EOF'
+{"Time":"2026-09-10T01:00:04Z","Action":"output","Package":"example/fast","Test":"TestFailed","Output":"assertion: unexpected result\n"}
+{"Time":"2026-09-10T01:00:04Z","Action":"fail","Package":"example/fast","Test":"TestFailed","Elapsed":0.01}
 {"Time":"2026-09-10T01:00:05Z","Action":"run","Package":"example/slow","Test":"TestBlocked"}
 EOF
 trap handle_ut_termination TERM
@@ -1128,6 +1149,9 @@ set -e
 [[ -s "$UT_DIAGNOSTIC_DIR/ut-report.json" ]] || exit 92
 [[ -s "$UT_DIAGNOSTIC_DIR/ut-checkpoint.log" ]] || exit 93
 grep -q 'TestSlow' "$UT_DIAGNOSTIC_DIR/top.txt"
+grep -q 'TestFailed' "$UT_DIAGNOSTIC_DIR/top.txt"
+grep -q 'assertion: unexpected result' "$UT_DIAGNOSTIC_DIR/top.txt"
+[[ $(wc -l < "$CASE_DIR/logger-calls" | tr -d ' ') -lt 50 ]] || exit 94
 `
 	out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
@@ -1135,6 +1159,127 @@ exit 0
 `)
 	if err != nil {
 		t.Fatalf("cancellation diagnostics: %v\n%s", err, out)
+	}
+}
+
+func TestCancellationSummarizesUnmergedFailureReports(t *testing.T) {
+	for _, mode := range []string{"joined", "prebuilt", "empty-main", "light", "engine", "plan", "prebuilt-symlink", "prebuilt-nonnumeric", "midpoint"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+UT_REPORT="$CASE_DIR/main-report"
+: > "$UT_REPORT"
+if [[ "$MODE" != empty-main ]]; then
+ printf '%s\n' '{"Action":"pass","Package":"example/main","Elapsed":3}' > "$UT_REPORT"
+fi
+report="$CASE_DIR/helper-report"
+cat > "$report.00" <<'EOF'
+{"Action":"start","Package":"example/issues"}
+{"Action":"run","Package":"example/issues","Test":"TestShardFailure"}
+{"Action":"output","Package":"example/issues","Test":"TestShardFailure","Output":"shard assertion\n"}
+{"Action":"fail","Package":"example/issues","Test":"TestShardFailure","Elapsed":0.01}
+{"Action":"fail","Package":"example/issues","Elapsed":0.1}
+EOF
+printf '%s' '{"Action":"fail","Package":"example/issues","Test":"TestIncomplete","Elapsed":1}' > "$report.01"
+case "$MODE" in
+ prebuilt-symlink|prebuilt-nonnumeric)
+  mv "$report.00" "$report"; rm "$report.01"
+  printf '%s\n' '{"Action":"fail","Package":"example/issues","Test":"TestIneligible"}' > "$CASE_DIR/other"
+  if [[ "$MODE" == prebuilt-symlink ]]; then
+   ln -s "$CASE_DIR/other" "$report.00"
+  else
+   cp "$CASE_DIR/other" "$report.other"
+  fi
+  PREBUILT_RACE_REPORT="$report"; CLUSTER_PREBUILD_DRAIN_FAILED=1 ;;
+ joined) PREBUILT_RACE_REPORT="$report" ;;
+ midpoint)
+  python3 - "$report.00" "${UT_MIDPOINT_FILL_MIB:-9}" <<'PYFIXTURE'
+import pathlib, sys
+report = pathlib.Path(sys.argv[1])
+terminal = report.read_bytes()
+line = b'{"Action":"run","Package":"example/noise","Test":"TestNoise"}\n'
+# Other tests can emit output between an assertion and its terminal event.
+terminal = terminal.replace(
+    b'{"Action":"fail","Package":"example/issues","Test":"TestShardFailure"',
+    line * 100 + b'{"Action":"output","Package":"example/noise","n":' + b'9' * 5000 + b'}\n' +
+    b'{"Action":"fail","Package":"example/issues","Test":"TestShardFailure"',
+    1,
+)
+block = line * ((1024 * 1024 + len(line) - 1) // len(line))
+with report.open("wb") as stream:
+    for group in range(2):
+        for _ in range(int(sys.argv[2])):
+            stream.write(block)
+        if not group:
+            stream.write(terminal)
+PYFIXTURE
+  PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
+ prebuilt|empty-main) PREBUILT_RACE_REPORT="$report"; CURRENT_UT_DRAIN_FAILED=1 ;;
+ light) LIGHT_RACE_REPORT="$report.00"; LIGHT_RACE_DRAIN_FAILED=1 ;;
+ engine) ENGINE_RACE_REPORT="$report"; ENGINE_RACE_DRAIN_FAILED=1; cp "$report.00" "$report"; : > "$report.ready" ;;
+ plan) PLAN_RACE_REPORT="$report"; PLAN_RACE_DRAIN_FAILED=1; printf 'partial base\n' > "$report" ;;
+esac
+set +e
+( trap handle_ut_termination TERM; fixture_self_pid pid; kill -TERM "$pid"; exit 89 )
+status=$?
+set -e
+if [[ "$MODE" == joined ]]; then
+ [[ "$status" == 143 ]] || exit 90
+ grep -q TestShardFailure "$UT_DIAGNOSTIC_DIR/ut-report.json" || exit 91
+else
+ [[ "$status" == 125 ]] || exit 92
+ ! grep -q TestShardFailure "$UT_DIAGNOSTIC_DIR/ut-report.json" || exit 93
+ if [[ "$MODE" == prebuilt-* ]]; then
+  [[ "$report" -ef "$UT_DIAGNOSTIC_DIR/live-prebuilt-$G_TS/live.base.jsonl" ]] || exit 94
+  ! grep -q TestIneligible "$UT_DIAGNOSTIC_DIR/top.txt" || exit 98
+ else
+  [[ -f "$report.00" ]] || exit 94
+ fi
+fi
+[[ $(grep -c 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt") == 1 ]] || exit 95
+grep -A 1 'action=fail package="example/issues" test="TestShardFailure"' "$UT_DIAGNOSTIC_DIR/top.txt" |
+ grep -q '^\[failed_ut_output\] shard assertion' || exit 96
+if [[ "$MODE" != joined ]]; then
+ ! grep -q TestIncomplete "$UT_DIAGNOSTIC_DIR/top.txt" || exit 97
+fi
+`
+			out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, "MODE="+mode)
+			if err != nil {
+				t.Fatalf("termination report %s: %v\n%s", mode, err, out)
+			}
+		})
+	}
+}
+
+func TestCancellationSummarizesMainWhenHelperHasNoSource(t *testing.T) {
+	for _, mode := range []string{"absent", "missing-ready-base"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+set -u
+UT_DIAGNOSTIC_DIR="$CASE_DIR/diagnostics"
+UT_REPORT="$CASE_DIR/main-report"
+printf '%s\n' '{"Action":"fail","Package":"example/main","Test":"TestMainFailure"}' > "$UT_REPORT"
+PREBUILT_RACE_REPORT="$CASE_DIR/helper-report"
+CURRENT_UT_DRAIN_FAILED=1
+if [[ "$MODE" == missing-ready-base ]]; then : > "$PREBUILT_RACE_REPORT.ready"; fi
+set +e
+( handle_ut_termination )
+status=$?
+set -e
+[[ "$status" == 125 ]] || exit 90
+grep -q 'action=fail package="example/main" test="TestMainFailure"' "$UT_DIAGNOSTIC_DIR/top.txt" || exit 91
+`
+			out, err := scheduleHarnessWithMock(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, "MODE="+mode)
+			if err != nil {
+				t.Fatalf("termination report %s: %v\n%s", mode, err, out)
+			}
+		})
 	}
 }
 
@@ -1168,14 +1313,12 @@ cgroup_resource_breakdown "$CASE_DIR/missing"
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
-mkfifo "$CASE_DIR/heartbeat-ready"
-exec 9<> "$CASE_DIR/heartbeat-ready"
-trap 'stop_ut_heartbeat; exec 9>&-' EXIT
+mkfifo "$CASE_DIR/heartbeat-tick" "$CASE_DIR/heartbeat-waiting" || exit 90
+exec 8<> "$CASE_DIR/heartbeat-tick"
+exec 9<> "$CASE_DIR/heartbeat-waiting"
+trap 'stop_ut_heartbeat; exec 8>&- 9>&-' EXIT
 function logger() {
     printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
-    if [[ "$2" == *active_cases=3* && "$2" == *TestPrivate* && "$2" == *TestShard* && "$2" == *TestBatched* ]]; then
-        printf 'ready\n' >&9
-    fi
 }
 UT_HEARTBEAT_INTERVAL=60
 start_ut_heartbeat
@@ -1187,12 +1330,30 @@ stop_ut_heartbeat
 ! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
 
 UT_HEARTBEAT_INTERVAL=1
+# Release one timer only after the reports are ready. Its next wait confirms
+# the previous iteration wrote both the log and checkpoint.
+function sleep() {
+    if [[ "$*" == 1 ]]; then
+        printf 'waiting\n' >&9
+        read -r tick <&8
+    else
+        command sleep "$@"
+    fi
+}
+function heartbeat_waiting() {
+    local state
+    read -r -t 10 state <&9 && [[ "$state" == waiting ]]
+}
+function heartbeat_tick() {
+    printf 'tick\n' >&8 && heartbeat_waiting
+}
 # Exercise the actual heartbeat formatting without exposing real process data.
 function ps() {
     [[ "$*" == '-eo pid=,ppid=,rss=,comm=' ]] || return 93
     printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
 }
 start_ut_heartbeat
+heartbeat_waiting || exit 92
 LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
 cat > "$LIGHT_RACE_REPORT" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/light","Test":"TestPrivate"}
@@ -1203,19 +1364,42 @@ EOF
 cat > "$G_WKSP/${G_TS}-embedded-batched-race-report.out.0" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/embedded","Test":"TestBatched"}
 EOF
-read -r -t 10 heartbeat_ready <&9 || exit 92
+cat > "$G_WKSP/${G_TS}-engine-race-report.out.tmp.staging" <<'EOF'
+{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestStaged"}
+EOF
+cat > "$UT_REPORT" <<'EOF'
+{"Time":"2026-09-10T00:00:00Z","Action":"start","Package":"example/retired"}
+{"Time":"2026-09-10T00:00:01Z","Action":"run","Package":"example/retired","Test":"TestRetired"}
+{"Time":"2026-09-10T00:00:02Z","Action":"fail","Package":"example/retired"}
+EOF
+heartbeat_tick || exit 92
 stop_ut_heartbeat
-exec 9>&-
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
-grep -q 'event=heartbeat' "$UT_CHECKPOINT"
-grep -q 'active_cases=3' "$CASE_DIR/ut.log"
-grep -q 'TestPrivate' "$CASE_DIR/ut.log"
-grep -q 'TestShard' "$CASE_DIR/ut.log"
-grep -q 'TestBatched' "$CASE_DIR/ut.log"
-grep -q 'processes=9' "$CASE_DIR/ut.log"
-grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
-grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
-! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log"
+grep -q 'event=heartbeat ' "$UT_CHECKPOINT" || exit 93
+grep -q 'active_cases=3 ' "$CASE_DIR/ut.log" || exit 93
+grep -q 'TestPrivate' "$CASE_DIR/ut.log" || exit 93
+grep -q 'TestShard' "$CASE_DIR/ut.log" || exit 93
+grep -q 'TestBatched' "$CASE_DIR/ut.log" || exit 93
+! grep -qE 'active_cases=unknown|TestRetired|TestStaged' "$CASE_DIR/ut.log" || exit 94
+grep -q 'processes=9' "$CASE_DIR/ut.log" || exit 93
+grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log" || exit 93
+grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log" || exit 93
+! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log" || exit 95
+
+function python3() { return 1; }
+function awk() {
+    if [[ "$*" == *active_ut_cases.awk* ]]; then
+        touch "$CASE_DIR/rescanned"
+        return 1
+    fi
+    command awk "$@"
+}
+: > "$CASE_DIR/ut.log"
+start_ut_heartbeat
+heartbeat_waiting && heartbeat_tick || exit 96
+stop_ut_heartbeat
+exec 8>&- 9>&-
+grep -q 'active_cases=unknown active=unclassified report' "$CASE_DIR/ut.log" && [[ ! -e "$CASE_DIR/rescanned" ]]
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
@@ -1224,6 +1408,59 @@ exit 0
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
+	}
+}
+
+func TestPlanRaceReportSeparatesTornShard(t *testing.T) {
+	script := `source ./run_ut.sh UT
+PLAN_RACE_SHARDS=2
+PLAN_RACE_PARALLEL=2
+PLAN_RACE_REPORT="$CASE_DIR/plan.out"
+status=0
+run_plan_race_shards example/plan || status=$?
+[[ "$status" == 1 && -f "$PLAN_RACE_REPORT.ready" ]] || exit 90
+append_ut_report "$PLAN_RACE_REPORT" "$CASE_DIR/ready.out" || exit 91
+rm "$PLAN_RACE_REPORT.ready"
+append_ut_report "$PLAN_RACE_REPORT" "$CASE_DIR/recovered.out" || exit 92
+cmp "$CASE_DIR/ready.out" "$CASE_DIR/recovered.out" || exit 93
+python3 -B ./optools/summarize_ut_slow_cases.py "$CASE_DIR/ready.out" \
+    --active-out "$CASE_DIR/lifecycle" || exit 94
+grep -q 'unresolved UT case .*test=TestOne' "$CASE_DIR/lifecycle" || exit 95
+[[ $(wc -l < "$CASE_DIR/lifecycle") == 1 ]] || exit 96
+`
+	mock := `#!/bin/bash
+case "$1" in
+ version) exit 0 ;;
+ list) printf '%s\t%s\n' "$CASE_DIR" example/plan ;;
+ test)
+  while [[ "$1" != -o ]]; do shift; done
+  cat > "$2" <<'BINARY'
+#!/bin/bash
+printf 'TestOne\nTestTwo\n'
+BINARY
+  chmod +x "$2"
+  ;;
+ tool)
+  printf '%s\n' '{"Action":"start","Package":"example/plan"}'
+  case "$*" in
+   *TestOne*)
+    printf '%s\n' '{"Action":"run","Package":"example/plan","Test":"TestOne"}'
+    printf '%s' '{"Action":"fail","Package":"example/plan"'
+    exit 1
+    ;;
+   *TestTwo*)
+    printf '%s\n' '{"Action":"run","Package":"example/plan","Test":"TestTwo"}' \
+     '{"Action":"pass","Package":"example/plan","Test":"TestTwo"}' \
+     '{"Action":"pass","Package":"example/plan"}'
+    ;;
+   *) exit 99 ;;
+  esac
+  ;;
+ *) exit 99 ;;
+esac
+`
+	if out, err := scheduleHarnessWithMock(t, script, mock); err != nil {
+		t.Fatalf("plan report publication: %v\n%s", err, out)
 	}
 }
 
