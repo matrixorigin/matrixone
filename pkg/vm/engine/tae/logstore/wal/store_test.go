@@ -18,13 +18,16 @@ import (
 	"context"
 	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -36,6 +39,83 @@ import (
 const (
 	ModuleName = "logstore"
 )
+
+type blockedAppendClient struct {
+	logservice.Client
+	started chan<- struct{}
+	release <-chan struct{}
+	closed  chan<- struct{}
+	used    bool
+}
+
+func (c *blockedAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	c.used = true
+	close(c.started)
+	<-c.release
+	return c.Client.Append(ctx, record)
+}
+
+func (c *blockedAppendClient) Close() error {
+	err := c.Client.Close()
+	if c.used {
+		close(c.closed)
+	}
+	return err
+}
+
+func TestStoreCloseDeadlineIncludesAppendDrain(t *testing.T) {
+	_, newClient := logservicedriver.NewMockServiceAndClientFactory()
+	started, release, closed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	allowAppend := sync.OnceFunc(func() { close(release) })
+	defer allowAppend()
+	cfg := logservicedriver.NewConfig("",
+		logservicedriver.WithConfigOptMaxClient(1),
+		logservicedriver.WithConfigOptClientFactory(func() (logservice.Client, error) {
+			client, err := newClient()
+			return &blockedAppendClient{Client: client, started: started, release: release, closed: closed}, err
+		}),
+	)
+	cfg.CloseTimeout = 50 * time.Millisecond
+	wal := NewStore(logservicedriver.NewLogServiceDriver(&cfg))
+	require.NoError(t, wal.Replay(context.Background(), nil, func() driver.ReplayMode {
+		return driver.ReplayMode_ReplayForWrite
+	}, nil))
+
+	e := mockEntry()
+	_, err := wal.AppendEntry(GroupUserTxn, e)
+	require.NoError(t, err)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("append did not reach LogService")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- wal.Close() }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("Store.Close did not return while append was blocked")
+	}
+	require.ErrorIs(t, wal.Close(), context.DeadlineExceeded)
+	rejected := mockEntry()
+	defer rejected.Free()
+	_, err = wal.AppendEntry(GroupUserTxn, rejected)
+	require.ErrorIs(t, err, sm.ErrClose)
+	select {
+	case <-closed:
+		t.Fatal("LogService client closed during append")
+	default:
+	}
+	allowAppend()
+	require.NoError(t, e.WaitDone())
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("LogService client remained open after append completed")
+	}
+}
 
 // var buf []byte
 // func init() {

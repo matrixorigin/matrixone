@@ -96,19 +96,27 @@ func (w *StoreImpl) ValidateUserTxnRecordSize(entrySize int) error {
 }
 
 func (w *StoreImpl) Close() error {
+	if d, ok := w.driver.(*logservicedriver.LogServiceDriver); ok {
+		w.TryClose()
+		return d.CloseAfterDrain(w.drain)
+	}
 	if !w.TryClose() {
 		return nil
 	}
+	w.drain()
+	return w.driver.Close()
+}
+
+func (w *StoreImpl) drain() {
+	// Let any append that passed the closed check register and enqueue before
+	// waiting. Subsequent appends observe the closed state under appendMu.
+	w.appendMu.Lock()
+	w.appendMu.Unlock()
 	w.appendWg.Wait()
 	w.driverAppendQueue.Stop()
 	w.doneWithErrQueue.Stop()
 	w.logInfoQueue.Stop()
 	w.checkpointQueue.Stop()
-	err := w.driver.Close()
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (w *StoreImpl) AppendEntry(gid uint32, e entry.Entry) (lsn uint64, err error) {
@@ -124,6 +132,11 @@ func (w *StoreImpl) start() {
 }
 
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
+	w.appendMu.Lock()
+	defer w.appendMu.Unlock()
+	if w.IsClosed() {
+		return nil, 0, sm.ErrClose
+	}
 	w.appendWg.Add(1)
 	accepted := false
 	defer func() {
@@ -131,11 +144,6 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 			w.appendWg.Done()
 		}
 	}()
-	if w.IsClosed() {
-		return nil, 0, sm.ErrClose
-	}
-	w.appendMu.Lock()
-	defer w.appendMu.Unlock()
 	lsn = w.peekNextLSN(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info

@@ -205,7 +205,7 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	}
 	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
 	d := NewLogServiceDriver(&cfg)
-	d.closeTimeout = 50 * time.Millisecond
+	d.config.CloseTimeout = 50 * time.Millisecond
 	d.workers.Release()
 	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
 
@@ -247,19 +247,95 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 	require.NoError(t, <-firstDone)
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
 
-	// A production caller fail-stops after the deadline error. The test keeps
-	// the process alive, so release the remaining internal loops explicitly.
-	d.waitCommitLoop.Stop()
-	d.truncateQueue.Stop()
-	d.clientPool.Close()
-	d.cancel()
-	close(d.commitWaitQueue)
-	close(d.postCommitQueue)
+	select {
+	case _, open := <-d.postCommitQueue:
+		require.False(t, open)
+	case <-time.After(time.Second):
+		t.Fatal("driver did not complete cleanup after append returned")
+	}
 }
 
 type failingBackendClient struct {
 	*mockBackendClient
 	err error
+}
+
+type blockedTruncateClient struct {
+	*mockBackendClient
+	started  chan<- struct{}
+	canceled chan<- struct{}
+	release  <-chan struct{}
+}
+
+func (c *blockedTruncateClient) Truncate(ctx context.Context, _ uint64) error {
+	close(c.started)
+	select {
+	case <-c.release:
+		return nil
+	case <-ctx.Done():
+		close(c.canceled)
+		<-c.release
+		return ctx.Err()
+	}
+}
+
+func TestCloseDeadlineIncludesInFlightTruncate(t *testing.T) {
+	backend := NewMockBackend()
+	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	allowTruncate := sync.OnceFunc(func() { close(release) })
+	defer allowTruncate()
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			return &blockedTruncateClient{
+				mockBackendClient: newMockBackendClient(backend),
+				started:           started,
+				canceled:          canceled,
+				release:           release,
+			}, nil
+		}),
+	)
+	d := NewLogServiceDriver(&cfg)
+	d.config.CloseTimeout = 50 * time.Millisecond
+	require.NoError(t, d.Replay(context.Background(), nil, func() driver.ReplayMode {
+		return driver.ReplayMode_ReplayForWrite
+	}, nil))
+	e := entry.MockEntryWithPayload([]byte("truncate target"))
+	require.NoError(t, d.Append(e))
+	require.NoError(t, e.WaitDone())
+	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
+	require.NoError(t, d.Truncate(e.DSN))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("truncate did not reach LogService")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("driver Close did not return while truncate was blocked")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel the truncate request")
+	}
+	select {
+	case <-d.postCommitQueue:
+		t.Fatal("driver finished cleanup while truncate still owned a client")
+	default:
+	}
+	allowTruncate()
+	select {
+	case _, open := <-d.postCommitQueue:
+		require.False(t, open)
+	case <-time.After(time.Second):
+		t.Fatal("driver did not complete cleanup after truncate returned")
+	}
+	require.Zero(t, d.truncatedPSN)
 }
 
 func (c *failingBackendClient) Append(context.Context, logservice.LogRecord) (uint64, error) {

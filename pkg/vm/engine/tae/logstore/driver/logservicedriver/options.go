@@ -42,7 +42,8 @@ type Config struct {
 	ClientMaxEntryCount int
 	MaxWALRecordSize    int
 
-	MaxTimeout time.Duration
+	MaxTimeout   time.Duration
+	CloseTimeout time.Duration
 
 	ClientRetryTimes    int
 	ClientRetryInterval time.Duration
