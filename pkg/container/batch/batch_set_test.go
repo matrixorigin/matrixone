@@ -29,7 +29,7 @@ const (
 
 func TestBatchSetUnionRangeSplitsAndFillsTail(t *testing.T) {
 	mp := mpool.MustNewZero()
-	input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
+	input := NewWithTypes([]types.Type{types.T_int64.ToType()}, mp)
 	queue := NewBatchSet(3)
 	t.Cleanup(func() {
 		queue.Clean(mp)
@@ -82,7 +82,7 @@ func TestBatchSetChargesCopiesToCallerView(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 	})
 	newInput := func(alloc *mpool.MPool, values ...int64) *Batch {
-		input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, alloc)
+		input := NewWithTypes([]types.Type{types.T_int64.ToType()}, alloc)
 		inputs = append(inputs, input)
 		inputPools = append(inputPools, alloc)
 		require.NoError(t, vector.AppendFixedList(input.Vecs[0], values, nil, alloc))
@@ -121,7 +121,7 @@ func TestBatchSetOwnedDestinationAllocationFailure(t *testing.T) {
 	view, err := mp.WithAccount(account, mpool.AllocationOwnerSet, 9, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	queue := NewBatchSet(4)
-	input := NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, mp)
+	input := NewWithTypes([]types.Type{types.T_int64.ToType()}, mp)
 	t.Cleanup(func() {
 		queue.Clean(mp)
 		input.Clean(mp)

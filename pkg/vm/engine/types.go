@@ -1115,11 +1115,16 @@ type Relation interface {
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
+	// Write inserts bat, whose columns attrs names, one name per vector. A
+	// batch of persisted objects is named [BlockMeta_BlockInfo,
+	// ObjectMeta_ObjectStats].
 	// Note: Write Will access Fileservice
-	Write(context.Context, *batch.Batch) error
+	Write(ctx context.Context, bat *batch.Batch, attrs []string) error
 
-	// Delete(context.Context, *vector.Vector, string) error
-	Delete(context.Context, *batch.Batch, string) error
+	// Delete deletes the rows bat identifies. attrs names bat's columns: a
+	// row delete starts with Row_ID, a delete of persisted tombstone objects
+	// is named [ObjectMeta_ObjectStats].
+	Delete(ctx context.Context, bat *batch.Batch, attrs []string, name string) error
 
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error

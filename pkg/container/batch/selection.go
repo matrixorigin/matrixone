@@ -129,7 +129,6 @@ func (bat *Batch) PhysicalRowCount() int {
 func (bat *Batch) PhysicalView(dst *Batch) {
 	dst.Recursive = bat.Recursive
 	dst.ShuffleIDX = bat.ShuffleIDX
-	dst.Attrs = bat.Attrs
 	dst.Vecs = bat.Vecs
 	dst.extraBuf = bat.extraBuf
 	dst.mp = nil // a view owns nothing
@@ -174,7 +173,6 @@ func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool, rows *[]int64) error 
 			}
 		}
 	}
-	dst.Attrs = append(dst.Attrs[:0], bat.Attrs...)
 	dst.Recursive, dst.ShuffleIDX = bat.Recursive, bat.ShuffleIDX
 	dst.SetRowCount(bat.rowCount)
 	return nil

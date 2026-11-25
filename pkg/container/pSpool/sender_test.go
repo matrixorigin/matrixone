@@ -45,7 +45,7 @@ func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	data := types.EncodeSlice([]int64{11, 22})
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 2, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	source := batch.New([]string{"v"})
+	source := batch.NewWithSize(1)
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 
@@ -83,7 +83,7 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	owner := vec
 	vec = vector.NewVecWithData(types.T_varchar.ToType(), 2, owner.GetData(), area, nil)
 
-	source := batch.New([]string{"v"})
+	source := batch.NewWithSize(1)
 	source.Vecs[0] = vec
 	source.SetRowCount(2)
 	sourceDataPointer := uintptr(unsafe.Pointer(unsafe.SliceData(vec.GetData())))

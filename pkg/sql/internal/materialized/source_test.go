@@ -19,10 +19,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 
@@ -721,33 +719,6 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	require.NoError(t, bat.MarshalBinaryForSpillTo(&encoded))
 	require.Equal(t, uint64(encoded.Len()), serialized)
 	require.GreaterOrEqual(t, scratch, serialized)
-}
-
-func TestSharedMaterializedSourceStoresOnlyPositionalBatches(t *testing.T) {
-	for _, memoryLimit := range []int64{0, sharedMaterializedSourceMaxBytes} {
-		t.Run(fmt.Sprintf("memory-limit-%d", memoryLimit), func(t *testing.T) {
-			mp := mpool.MustNewZeroNoFixed()
-			t.Cleanup(func() { mpool.DeleteMPool(mp) })
-			bat := testInt64Batch(t, mp, 7)
-			bat.Attrs = []string{strings.Repeat("attribute", 64)}
-			t.Cleanup(func() { bat.Clean(mp) })
-
-			source := newSource(1, memoryLimit)
-			budget := newTestSpillBudget(math.MaxUint64, math.MaxUint64, 1)
-			require.NoError(t, source.Begin(mp, budget.config(testSpillFactory(t.TempDir()))))
-			require.NoError(t, source.Append(bat))
-			source.Finish(nil)
-			got, end, err := source.Next(context.Background(), 0, 0)
-			require.NoError(t, err)
-			require.False(t, end)
-			for _, attr := range got.Attrs {
-				require.Empty(t, attr)
-			}
-			require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](got.Vecs[0]))
-			got.Clean(source.BatchMP())
-			source.ReleaseReader(0)
-		})
-	}
 }
 
 func TestSharedMaterializedSourceRejectsUnfinalizedBatchMetadata(t *testing.T) {

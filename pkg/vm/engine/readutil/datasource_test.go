@@ -63,7 +63,6 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 	proc.Base.FileService = testutil.NewSharedFS()
 
 	bat := batch.NewWithSize(3)
-	bat.Attrs = objectio.TombstoneAttrs_TN_Created
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType(), proc.Mp())

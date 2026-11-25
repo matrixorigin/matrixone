@@ -39,7 +39,6 @@ func BenchmarkDeleteTableWritesSparseWorkspace(b *testing.B) {
 	var workspace types.Rowid
 	workspace.SetSegment(colexec.TxnWorkspaceSegment)
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
@@ -50,7 +49,7 @@ func BenchmarkDeleteTableWritesSparseWorkspace(b *testing.B) {
 				b.Run(fmt.Sprintf("writes=%d/blocks=%d/guard=%t", writes, blockCount, optimized), func(b *testing.B) {
 					txn := &Transaction{writes: make([]Entry, writes)}
 					for i := range txn.writes {
-						txn.writes[i] = Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}
+						txn.writes[i] = Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat, attrs: []string{objectio.PhysicalAddr_Attr}}
 					}
 					blocks := make(map[types.Blockid]bool, blockCount)
 					for i := 0; i < blockCount; i++ {
@@ -82,7 +81,6 @@ func BenchmarkDeleteTableWritesGuardBoundary(b *testing.B) {
 	var workspace types.Rowid
 	workspace.SetSegment(colexec.TxnWorkspaceSegment)
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
@@ -103,7 +101,7 @@ func BenchmarkDeleteTableWritesGuardBoundary(b *testing.B) {
 				txn := &Transaction{writes: make([]Entry, tc.writes)}
 				if tc.sameTable {
 					for i := range txn.writes {
-						txn.writes[i] = Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}
+						txn.writes[i] = Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat, attrs: []string{objectio.PhysicalAddr_Attr}}
 					}
 				}
 				blocks := make(map[types.Blockid]bool, tc.blocks)
@@ -152,7 +150,7 @@ func (txn *Transaction) referenceDeleteTableWrites(
 		if entry.bat == nil || entry.bat.RowCount() == 0 {
 			continue
 		}
-		if entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+		if entry.attrs[0] == catalog.BlockMeta_BlockInfo {
 			continue
 		}
 		sels = sels[:0]
@@ -186,7 +184,6 @@ func BenchmarkDeleteTableWritesNamespaceGuard(b *testing.B) {
 	workspace.SetSegment(colexec.TxnWorkspaceSegment)
 	workspace.SetBlkOffset(2)
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{objectio.PhysicalAddr_Attr}
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 	require.NoError(b, vector.AppendFixed(bat.Vecs[0], workspace, false, proc.Mp()))
 	bat.SetRowCount(1)
@@ -208,7 +205,7 @@ func BenchmarkDeleteTableWritesNamespaceGuard(b *testing.B) {
 				b.Run(name, func(b *testing.B) {
 					txn := &Transaction{writes: make([]Entry, 1024)}
 					for i := range txn.writes {
-						txn.writes[i] = Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat}
+						txn.writes[i] = Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: bat, attrs: []string{objectio.PhysicalAddr_Attr}}
 					}
 					blocks := make(map[types.Blockid]bool)
 					if kind != "workspace" {
@@ -263,7 +260,6 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	t.Cleanup(func() { server.RetireTxnWorkspaceSegments(&txn.workspaceSegments) })
 	makeBatch := func(ids ...types.Rowid) *batch.Batch {
 		bat := batch.NewWithSize(1)
-		bat.Attrs = []string{objectio.PhysicalAddr_Attr}
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], ids, nil, proc.Mp()))
 		bat.SetRowCount(len(ids))
@@ -271,7 +267,7 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 		return bat
 	}
 	insert := makeBatch(memory)
-	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: insert}}
+	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: insert, attrs: []string{objectio.PhysicalAddr_Attr}}}
 	for _, ids := range [][]types.Rowid{{committed, spilled}, {committed, spilled, memory}} {
 		out, err := txn.deleteBatch(makeBatch(ids...), 7, 42, proc.Mp())
 		require.NoError(t, err)
@@ -326,12 +322,12 @@ func TestDeleteTableWritesNamespaceGuard(t *testing.T) {
 				txn := &Transaction{batchSelectList: make(map[*batch.Batch][]int64)}
 				for i := 0; i < 8; i++ {
 					b := batch.NewWithSize(1)
-					b.Attrs = []string{objectio.PhysicalAddr_Attr}
+					bAttrs := []string{objectio.PhysicalAddr_Attr}
 					b.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), proc.Mp())
 					require.NoError(t, vector.AppendFixedList(b.Vecs[0], []types.Rowid{rowID(true, 1, 0), hit, rowID(true, 1, 2)}, nil, proc.Mp()))
 					b.SetRowCount(3)
 					t.Cleanup(func() { b.Clean(proc.Mp()) })
-					e := Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: b}
+					e := Entry{typ: INSERT, databaseId: 7, tableId: 42, bat: b, attrs: bAttrs}
 					switch i {
 					case 1:
 						e.databaseId++
@@ -342,7 +338,7 @@ func TestDeleteTableWritesNamespaceGuard(t *testing.T) {
 					case 4:
 						e.typ = ALTER
 					case 5:
-						b.Attrs[0] = catalog.BlockMeta_BlockInfo
+						e.attrs = []string{catalog.BlockMeta_BlockInfo}
 					case 6:
 						b.SetRowCount(0)
 					case 7:

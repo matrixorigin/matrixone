@@ -26,7 +26,7 @@ import (
 
 // MarshalBinaryForSpillSize returns the spill-only Batch wire size: an int64
 // payload size followed by the stable batch. Spill records deliberately omit
-// Attrs and ExtraBuf: joins do not consume either field, and ExtraBuf would
+// column names and ExtraBuf: joins do not consume either field, and ExtraBuf would
 // otherwise create an unaccounted data-scaled Go-heap owner while decoding.
 func (bat *Batch) MarshalBinaryForSpillSize() (int, error) {
 	metadataFree := bat.spillView()
@@ -59,7 +59,6 @@ func (bat *Batch) MarshalBinaryForSpillTo(w io.Writer) error {
 
 func (bat *Batch) spillView() Batch {
 	metadataFree := *bat
-	metadataFree.Attrs = nil
 	metadataFree.extraBuf = nil
 	metadataFree.mp = nil
 	// The view may read bat's selection but never owns its storage.

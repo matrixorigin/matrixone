@@ -46,6 +46,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"runtime"
 	"testing"
 	"time"
@@ -193,7 +194,7 @@ func TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction(t *tes
 	require.NoError(t, colexec.ExpandObjectStatsToBatch(
 		mp, false, recBat, false, stats))
 	require.NoError(t, txn.WriteFile(
-		INSERT, 1, 7, 42, "db", "tbl", name, recBat, txn.tnStores[0]),
+		INSERT, 1, 7, 42, "db", "tbl", name, recBat, catalog.ObjectInsertAttrs, txn.tnStores[0]),
 		"the statement records its S3 object before the GC is scheduled")
 	recBat.Clean(mp)
 	txn.EndStatement()

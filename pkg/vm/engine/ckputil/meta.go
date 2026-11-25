@@ -141,11 +141,7 @@ func (r *TableRange) IsEmpty() bool {
 }
 
 func MakeTableRangeBatch(mp *mpool.MPool) *batch.Batch {
-	return batch.NewWithSchema(
-		MetaSchema_TableRange_Attrs,
-		MetaSchema_TableRange_Types,
-		mp,
-	)
+	return batch.NewWithTypes(MetaSchema_TableRange_Types, mp)
 }
 
 // data should be sorted by table id and object type
@@ -282,14 +278,12 @@ func ForEachFile(
 	var (
 		end bool
 	)
-	tmpBat := batch.NewWithSchema(
-		DataScan_TableIDAtrrs, DataScan_TableIDTypes, mp,
-	)
+	tmpBat := batch.NewWithTypes(DataScan_TableIDTypes, mp)
 	defer tmpBat.Clean(mp)
 	for {
 		tmpBat.CleanOnlyData()
 		if end, err = reader.Read(
-			ctx, tmpBat.Attrs, nil, mp, tmpBat,
+			ctx, DataScan_TableIDAtrrs, nil, mp, tmpBat,
 		); err != nil {
 			return
 		}

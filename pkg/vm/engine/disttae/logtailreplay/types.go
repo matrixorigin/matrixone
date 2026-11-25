@@ -30,6 +30,14 @@ type sharedStates struct {
 }
 
 // RowEntry represents a version of a row
+// ReplayBatch is one replayed logtail batch shared by the RowEntries it
+// holds, with the column names the logtail carried for it. An empty name marks
+// a dropped column. A delete's retained batch carries no names.
+type ReplayBatch struct {
+	*batch.Batch
+	Attrs []string
+}
+
 type RowEntry struct {
 	BlockID objectio.Blockid // we need to iter by block id, so put it first to allow faster iteration
 	RowID   objectio.Rowid
@@ -37,7 +45,7 @@ type RowEntry struct {
 
 	ID                int64 // a unique version id, for primary index building and validating
 	Deleted           bool
-	Batch             *batch.Batch
+	Batch             *ReplayBatch
 	Offset            int64
 	PrimaryIndexBytes []byte
 }

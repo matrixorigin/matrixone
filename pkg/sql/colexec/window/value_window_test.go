@@ -98,14 +98,14 @@ func makeValueWindowAggExpr(name string) aggexec.AggFuncExecExpression {
 }
 
 func makeInt32Batch(mp *mpool.MPool, vals []int32) *batch.Batch {
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector(vals, nil, mp)
 	bat.SetRowCount(len(vals))
 	return bat
 }
 
 func makeVarcharBatch(mp *mpool.MPool, vals []string) *batch.Batch {
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeVarcharVector(vals, nil, mp)
 	bat.SetRowCount(len(vals))
 	return bat

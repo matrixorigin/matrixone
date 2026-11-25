@@ -89,13 +89,13 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 			}
 			routines := newTestRoutineControllers(16)
 			makeTail := func(b *batch.Batch, id uint64, name string, seq uint32) logtail.TableLogtail {
-				_, err := fillRandomRowidAndZeroTs(b, mp)
+				filled, err := fillRandomRowidAndZeroTs(b, catalogTupleAttrsForTest(id), mp)
 				require.NoError(t, err)
 				ts := vector.MustFixedColWithTypeCheck[types.TS](b.Vecs[cache.MO_TIMESTAMP_IDX])
 				for i := range ts {
 					ts[i] = types.BuildTS(100, 0)
 				}
-				encoded, err := batch.BatchToProtoBatch(b)
+				encoded, err := batch.BatchToProtoBatch(b, filled.Attrs)
 				require.NoError(t, err)
 				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Bat: encoded}}}
 			}

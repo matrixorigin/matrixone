@@ -266,7 +266,7 @@ func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
 	}
 	require.NoError(t, arg.Prepare(proc))
 
-	bat := batch.New([]string{"ts", "v"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs = []*vector.Vector{
 		testutil.MakeDatetimeVector([]string{
 			"2026-01-01 00:01:00",
@@ -307,7 +307,7 @@ func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
 		Sliding:  types.Datetime(types.SecsPerMinute * types.MicroSecsPerSec),
 	}
 
-	nullBatch := batch.New([]string{"ts", "v"})
+	nullBatch := batch.NewWithSize(2)
 	nullBatch.Vecs = []*vector.Vector{
 		testutil.MakeDatetimeVector([]string{
 			"2026-01-01 00:00:00",
@@ -317,7 +317,7 @@ func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
 	}
 	nullBatch.SetRowCount(2)
 
-	validBatch := batch.New([]string{"ts", "v"})
+	validBatch := batch.NewWithSize(2)
 	validBatch.Vecs = []*vector.Vector{
 		testutil.MakeDatetimeVector([]string{
 			"2026-01-01 00:01:00",

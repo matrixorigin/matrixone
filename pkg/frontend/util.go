@@ -1378,7 +1378,7 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 		return nil, nil, err
 	}
 	//1. make vector type
-	bat := batch.New(colNames)
+	bat := batch.NewWithSize(len(colNames))
 	// On error, free the vectors already built in pool.
 	defer func() {
 		if err != nil {

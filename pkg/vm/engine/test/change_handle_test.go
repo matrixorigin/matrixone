@@ -321,7 +321,6 @@ func TestChangesHandle1(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			assert.NotEqual(t, data.Vecs[0].Length(), 0)
 			totalRows += data.Vecs[0].Length()
@@ -339,7 +338,6 @@ func TestChangesHandle1(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 9)
 			data.Clean(mp)
@@ -410,7 +408,6 @@ func TestChangesHandle2(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			totalRows += data.Vecs[0].Length()
 			assert.NotEqual(t, data.Vecs[0].Length(), 0)
@@ -458,13 +455,7 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 		assert.Equal(t, bat.Vecs[i].Length(), length)
 	}
 	commitPos := -1
-	for pos, attr := range bat.Attrs {
-		if attr == objectio.DefaultCommitTS_Attr {
-			commitPos = pos
-			break
-		}
-	}
-	if commitPos == -1 {
+	{
 		for pos := len(bat.Vecs) - 1; pos >= len(userBatch.Vecs); pos-- {
 			if bat.Vecs[pos].GetType().Oid == types.T_TS {
 				commitPos = pos
@@ -556,7 +547,6 @@ func TestChangesHandle3(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			totalRows += data.Vecs[0].Length()
 			data.Clean(mp)
@@ -641,7 +631,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		require.NoError(t, err)
 
 		for idx := 0; idx < blockCnt; idx++ {
-			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx]), bats[idx].Attrs))
 		}
 
 		require.NoError(t, txn.Commit(ctx))
@@ -669,7 +659,6 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			totalRows += data.Vecs[0].Length()
 			data.Clean(mp)
@@ -757,7 +746,7 @@ func TestChangesHandle4(t *testing.T) {
 		require.NoError(t, err)
 
 		for idx := 3; idx < batchCount; idx++ {
-			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx]), bats[idx].Attrs))
 		}
 
 		require.NoError(t, txn.Commit(ctx))
@@ -910,7 +899,6 @@ func TestChangesHandle5(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			assert.NotEqual(t, data.Vecs[0].Length(), 0)
 			totalRows += data.Vecs[0].Length()
@@ -928,7 +916,6 @@ func TestChangesHandle5(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 9)
 			data.Clean(mp)
@@ -1009,7 +996,6 @@ func TestChangesHandle6(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Snapshot)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			assert.NotEqual(t, data.Vecs[0].Length(), 0)
 			totalRows += data.Vecs[0].Length()
@@ -1027,7 +1013,6 @@ func TestChangesHandle6(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
 			assert.Equal(t, data.Vecs[0].Length(), 9)
 			data.Clean(mp)
@@ -1174,7 +1159,7 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 		require.NoError(t, err)
 
 		for idx := 0; idx < blockCnt; idx++ {
-			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx])))
+			require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bats[idx]), bats[idx].Attrs))
 		}
 
 		require.NoError(t, txn.Commit(ctx))
@@ -1699,7 +1684,6 @@ func TestPartitionChangesHandle(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			assert.Nil(t, tombstone)
-			t.Log(data.Attrs)
 			totalRows += data.Vecs[0].Length()
 			data.Clean(mp)
 		}
@@ -2010,7 +1994,7 @@ func TestISCPExecutor1(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -2087,7 +2071,7 @@ func TestISCPExecutor1(t *testing.T) {
 	_, rel, txn, err = disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 	require.Nil(t, err)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]), bats[1].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -2479,7 +2463,7 @@ func TestISCPExecutor3(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 		require.Nil(t, err)
 
-		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
+		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]), bats[idx].Attrs)
 		require.NoError(t, err)
 
 		require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -2702,7 +2686,7 @@ func TestISCPExecutor4(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 		require.NoError(t, err)
 
-		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
+		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]), bats[idx].Attrs)
 		require.NoError(t, err)
 
 		require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -3137,7 +3121,7 @@ func TestISCPExecutor7(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -3539,7 +3523,7 @@ func TestISCPExecutor8(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -3726,7 +3710,7 @@ func TestUpdateJobSpec(t *testing.T) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, dbName, tableName)
 		require.NoError(t, err)
 
-		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
+		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]), bats[idx].Attrs)
 		require.NoError(t, err)
 
 		require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -3975,7 +3959,7 @@ func TestGCInMemoryJob(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -4189,7 +4173,7 @@ func TestIteration(t *testing.T) {
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table1")
 	require.Nil(t, err)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bat1))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bat1), bat1.Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -4197,7 +4181,7 @@ func TestIteration(t *testing.T) {
 	_, rel, txn, err = disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table2")
 	require.Nil(t, err)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bat2))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bat2), bat2.Attrs)
 	require.NoError(t, err)
 
 	tableID2 := rel.GetTableID(ctxWithTimeout)
@@ -4463,7 +4447,7 @@ func TestInvalidTimestamp(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.Nil(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -4792,7 +4776,7 @@ func TestStartFromNow(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.Nil(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -4905,7 +4889,7 @@ func TestApplyISCPLog(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.Nil(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -5031,7 +5015,7 @@ func TestISCPResumeRecoversAcceptedIteration(t *testing.T) {
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 	require.NoError(t, err)
 	tableID := rel.GetTableID(ctxWithTimeout)
-	require.NoError(t, rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0])))
+	require.NoError(t, rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs))
 	require.NoError(t, txn.Commit(ctxWithTimeout))
 	minimumRecoveredWatermark := taeHandler.GetDB().TxnMgr.Now()
 
@@ -5470,7 +5454,7 @@ func TestStaleRead(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -5779,7 +5763,7 @@ func TestCheckLeaseFailed(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.Nil(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -5836,7 +5820,7 @@ func TestCheckLeaseFailed(t *testing.T) {
 	_, rel, txn, err = disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 	require.Nil(t, err)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]), bats[1].Attrs)
 	require.Nil(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -6195,7 +6179,7 @@ func TestISCPTableIDChange(t *testing.T) {
 
 	tableID := rel.GetTableID(ctxWithTimeout)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
@@ -6282,7 +6266,7 @@ func TestISCPTableIDChange(t *testing.T) {
 	_, rel, txn, err = disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 	require.NoError(t, err)
 
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]), bats[1].Attrs)
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))

@@ -862,81 +862,13 @@ func appendRuntimeVisibleBatch(attrs []string, bat *batch.Batch) (*batch.Batch, 
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch has fewer vectors than visible columns", nil)
 	}
 	// The insert/pre-insert contract keeps target columns at the front and
-	// appends generated or hidden vectors after them. Some pipeline batches do
-	// not carry attributes; in that case the plan-defined prefix is the only
-	// available mapping.
-	if len(bat.Attrs) == 0 {
-		if len(bat.Vecs) == len(attrs) {
-			return bat, nil
-		}
-		visible := batch.NewWithSize(len(attrs))
-		visible.Attrs = append([]string(nil), attrs...)
-		copy(visible.Vecs, bat.Vecs[:len(attrs)])
-		visible.SetRowCount(bat.RowCount())
-		return visible, nil
-	}
-	namedVecs := bat.Vecs
-	if len(bat.Attrs) != len(bat.Vecs) {
-		// A batch may name only its target-column prefix while carrying unnamed
-		// generated vectors at the end. Bind those names to that prefix, but keep
-		// using the strict name mapping below so mismatches cannot become silent
-		// positional writes.
-		if len(bat.Attrs) != len(attrs) {
-			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch has incomplete column names", nil)
-		}
-		namedVecs = bat.Vecs[:len(bat.Attrs)]
+	// appends generated or hidden vectors after them: the plan-defined prefix
+	// is the mapping.
+	if len(bat.Vecs) == len(attrs) {
+		return bat, nil
 	}
 	visible := batch.NewWithSize(len(attrs))
-	visible.Attrs = append([]string(nil), attrs...)
-	exactPositions := make(map[string]int, len(bat.Attrs))
-	foldedPositions := make(map[string]int, len(bat.Attrs))
-	ambiguousFolded := make(map[string]struct{})
-	for idx, attr := range bat.Attrs {
-		name := strings.TrimSpace(attr)
-		if name == "" {
-			continue
-		}
-		if _, ok := exactPositions[name]; ok {
-			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch contains duplicate column names", map[string]string{"column": attr})
-		}
-		exactPositions[name] = idx
-		folded := strings.ToLower(name)
-		if _, exists := foldedPositions[folded]; exists {
-			delete(foldedPositions, folded)
-			ambiguousFolded[folded] = struct{}{}
-			continue
-		}
-		if _, ambiguous := ambiguousFolded[folded]; !ambiguous {
-			foldedPositions[folded] = idx
-		}
-	}
-	for idx, attr := range attrs {
-		name := strings.TrimSpace(attr)
-		pos, ok := exactPositions[name]
-		if !ok {
-			folded := strings.ToLower(name)
-			if _, ambiguous := ambiguousFolded[folded]; ambiguous {
-				return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch column name is ambiguous", map[string]string{"column": attr})
-			}
-			pos, ok = foldedPositions[folded]
-		}
-		if !ok || pos < 0 || pos >= len(namedVecs) {
-			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch is missing a visible column", map[string]string{"column": attr})
-		}
-		visible.Vecs[idx] = namedVecs[pos]
-	}
-	if len(bat.Vecs) == len(attrs) {
-		positional := true
-		for idx := range visible.Vecs {
-			if visible.Vecs[idx] != bat.Vecs[idx] {
-				positional = false
-				break
-			}
-		}
-		if positional {
-			return bat, nil
-		}
-	}
+	copy(visible.Vecs, bat.Vecs[:len(attrs)])
 	visible.SetRowCount(bat.RowCount())
 	return visible, nil
 }
