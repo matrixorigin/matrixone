@@ -302,5 +302,6 @@ func TestFixMissingIsIgnored(t *testing.T) {
 	defer fs.Close(ctx)
 	_, err = fs.StatFile(ctx, "obj")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+	<-fs.(*S3FS).diskCache.load.done
 	require.NoFileExists(t, old)
 }
