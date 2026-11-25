@@ -4431,7 +4431,7 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
-	if c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
+	if node.Stats.HashmapStats.Shuffle && scopesContainWindow(probeScopes, buildScopes) {
 		probeScopes = c.singleCoordinatorJoinInput(probeScopes)
 		buildScopes = c.singleCoordinatorJoinInput(buildScopes)
 		node.Stats.HashmapStats.Shuffle = false

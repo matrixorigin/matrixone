@@ -51,6 +51,7 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 		windowBuild      bool
 		distributed      bool
 		extraBuild       bool
+		shuffle          bool
 	}{
 		{name: "remote_probe_local_sink", probes: []engine.Node{remote}, sink: true, wantLocal: true, wantRemoteInputs: 1},
 		{name: "local_parallel_probe_local_sink", probes: []engine.Node{scopeNodeWithMcpu(local, 4)}, sink: true, wantLocal: true, preserveProbe: true},
@@ -58,6 +59,12 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 		{name: "local_probe_remote_build", probes: []engine.Node{local}, build: remote, wantLocal: true, preserveProbe: true, wantRemoteInputs: 1},
 		{name: "forced_single_cn_full_outer", probes: []engine.Node{local, remote}, build: remote, fullOuter: true, wantLocal: true, wantRemoteInputs: 2},
 		{name: "remote_probe_local_window", probes: []engine.Node{remote}, build: local, windowBuild: true, wantLocal: true, wantRemoteInputs: 1},
+		{name: "window_owner_first", probes: []engine.Node{local, remote}, build: local, windowBuild: true, distributed: true},
+		{name: "window_owner_last", probes: []engine.Node{remote, local}, build: local, windowBuild: true, distributed: true},
+		{name: "window_and_peer_build_input", probes: []engine.Node{local, remote}, build: local, windowBuild: true, distributed: true, extraBuild: true},
+		{name: "no_probe_owns_window", probes: []engine.Node{remote, peer}, build: local, windowBuild: true, wantLocal: true, wantRemoteInputs: 2},
+		{name: "shuffle_with_window", probes: []engine.Node{remote, local}, build: local, windowBuild: true, shuffle: true, wantLocal: true, wantRemoteInputs: 1},
+		{name: "forced_single_with_window", probes: []engine.Node{remote, local}, build: local, windowBuild: true, fullOuter: true, wantLocal: true, wantRemoteInputs: 1},
 		{name: "sink_owner_first", probes: []engine.Node{local, remote}, sink: true, distributed: true},
 		{name: "sink_owner_last", probes: []engine.Node{remote, local}, sink: true, distributed: true},
 		{name: "sink_and_peer_build_input", probes: []engine.Node{remote, local}, sink: true, distributed: true, extraBuild: true},
@@ -78,7 +85,7 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 			eq, err := planfunction.GetFunctionByName(context.Background(), "=", []types.Type{colType, colType})
 			require.NoError(t, err)
 			join := newShuffleJoinTestNode(1)
-			join.Stats.HashmapStats.Shuffle = false
+			join.Stats.HashmapStats.Shuffle = tc.shuffle
 			if tc.fullOuter {
 				join.JoinType, join.IsRightJoin = plan.Node_OUTER, true
 			}
@@ -153,6 +160,10 @@ func TestBroadcastJoinStageRetainsInputOwnership(t *testing.T) {
 			}
 			if tc.distributed {
 				checkTwoCNBroadcast(t, c.addr, probes, builds, result)
+				if tc.windowBuild {
+					require.True(t, build.ipAddrMatch(c.addr))
+					require.IsType(t, &window.Window{}, build.RootOp.GetOperatorBase().GetChildren(0))
+				}
 				return
 			}
 			require.Len(t, result, 1)
