@@ -231,7 +231,9 @@ func compareJSONNumericVectors(parameters []*vector.Vector, result vector.Functi
 	jsonVector, numericVector := parameters[jsonPos], parameters[numericPos]
 	rs := vector.MustFunctionResult[bool](result)
 	output := rs.GetResultVector()
-	output.GetNulls().Reset()
+	// Clear, not Reset: Reset would return the validity storage the result
+	// reserved, and the Adds below would then allocate where they cannot fail.
+	output.GetNulls().Clear()
 	values := vector.MustFixedColNoTypeCheck[bool](output)
 	var scratch [8]byte
 	var peer jsonNumericPeer

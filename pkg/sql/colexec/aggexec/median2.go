@@ -1727,7 +1727,7 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 			s++
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 func (exec *medianColumnDecimalExec[T, R]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
@@ -1772,7 +1772,7 @@ func (exec *medianColumnDecimalExec[T, R]) Flush() ([]*vector.Vector, error) {
 			s++
 		}
 	}
-	return exec.ret.flushAll(), nil
+	return exec.ret.flushAll()
 }
 
 func flushAccountedMedianNumeric[T numeric](
