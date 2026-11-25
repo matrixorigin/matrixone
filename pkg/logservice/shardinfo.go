@@ -124,7 +124,7 @@ func getShardInfoWithContext(
 var queryShardInfoRawFn = queryShardInfoRaw
 
 // getShardMembership returns the live membership of the given shard as the
-// queried peer sees it. Unlike GetShardInfo it does NOT require an elected
+// queried peer sees it, mapping replica IDs to store UUIDs. Unlike GetShardInfo it does NOT require an elected
 // leader: as long as the peer's gossip registry knows the shard, ok=true is
 // returned with whatever members the peer has on file. This is the form the
 // zombie self-check needs, because the scenario that produces zombies is
@@ -141,7 +141,7 @@ func getShardMembership(
 	}
 	members := make(map[uint64]string, len(si.Replicas))
 	for replicaID, info := range si.Replicas {
-		members[replicaID] = info.ServiceAddress
+		members[replicaID] = info.UUID
 	}
 	return members, si.Epoch, true, nil
 }

@@ -320,7 +320,8 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	assert.False(t, ok2,
 		"svc3b has no running replica for shard 0 so GetLeaderID must be ok=false")
 
-	epoch, skipped := svc3b.store.skippedZombieEpoch(hakeeper.DefaultHAKeeperShardID, 3)
+	absence, skipped := svc3b.store.skippedZombie(hakeeper.DefaultHAKeeperShardID, 3)
+	epoch := absence.epoch
 	require.True(t, skipped)
 	require.NotZero(t, epoch)
 	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
@@ -342,7 +343,8 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	// bootstrap whose metadata was retired from disk.
 	require.NoError(t, svc3b.Close())
 	svc3b = restartService3(t, cfg3, obsLogger)
-	restoredEpoch, skipped := svc3b.store.skippedZombieEpoch(hakeeper.DefaultHAKeeperShardID, 3)
+	restored, skipped := svc3b.store.skippedZombie(hakeeper.DefaultHAKeeperShardID, 3)
+	restoredEpoch := restored.epoch
 	require.True(t, skipped)
 	require.GreaterOrEqual(t, restoredEpoch, epoch)
 	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
@@ -367,7 +369,7 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	require.True(t, ok)
 	mark := func(epoch uint64) {
 		svc3b.store.mu.Lock()
-		svc3b.store.mu.skippedZombies[zombieKey{replicaID: 4}] = epoch
+		svc3b.store.mu.skippedZombies[zombieKey{replicaID: 4}] = startupAbsence{epoch: epoch}
 		svc3b.store.mu.Unlock()
 	}
 	mark(view.ConfigChangeIndex)

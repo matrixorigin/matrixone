@@ -190,8 +190,8 @@ func TestTruncationCleansSkippedZombieReplicaMetadata(t *testing.T) {
 				s.store.mu.Lock()
 				s.store.mu.metadata.Shards = []metadata.LogShard{logShard}
 				if tc.skipped {
-					s.store.mu.skippedZombies = map[zombieKey]uint64{
-						{shardID: shardID, replicaID: staleReplica}: 1,
+					s.store.mu.skippedZombies = map[zombieKey]startupAbsence{
+						{shardID: shardID, replicaID: staleReplica}: {epoch: 1},
 					}
 				}
 				s.store.mu.Unlock()

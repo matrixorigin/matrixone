@@ -342,8 +342,8 @@ func TestGetShardMembership_IncludesExpiredReplicaAddresses(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, uint64(12), epoch)
-	assert.Equal(t, "10.0.0.1:1", members[1])
-	assert.Equal(t, "10.0.0.2:1", members[2])
+	assert.Equal(t, "uuid-1", members[1])
+	assert.Equal(t, "uuid-2", members[2])
 }
 
 func TestServiceGetShardInfoOmitsExpiredReplicasByDefault(t *testing.T) {

@@ -485,7 +485,7 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	key := zombieKey{shardID: shard, replicaID: replica}
 	markAbsent := func(epoch uint64) {
 		service.store.mu.Lock()
-		service.store.mu.skippedZombies[key] = epoch
+		service.store.mu.skippedZombies[key] = startupAbsence{epoch: epoch}
 		service.store.mu.Unlock()
 	}
 	threeVoters := map[uint64]string{1: "first", replica: cfg.UUID, 3: "third"}
@@ -526,4 +526,133 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	propose(shard, getTestUserEntry())
 	batch = heartbeat()
 	require.Empty(t, batch.Commands, "the retained Start is acknowledged by the recovered replica")
+}
+func TestInitialHAKeeperOrphanRestoresQuorum(t *testing.T) {
+	const shard = hakeeper.DefaultHAKeeperShardID
+	var configs [3]Config
+	var services [3]*Service
+	members := make(map[uint64]string, len(configs))
+	var seeds, bootstrap, addresses [3]string
+	for i := range configs {
+		cfg := getServiceTestConfig()
+		cfg.DataDir = t.TempDir()
+		cfg.SnapshotExportDir = filepath.Join(cfg.DataDir, "exported")
+		cfg.FS = vfs.Default
+		cfg.RTTMillisecond = 50
+		cfg.LogDBDisablePrealloc = true
+		configs[i] = cfg
+		id := uint64(i + 1)
+		members[id] = cfg.UUID
+		seeds[i] = getTestGossipAddress(cfg.GossipPort)
+		addresses[i] = cfg.LogServiceServiceAddr()
+		bootstrap[i] = fmt.Sprintf("%d:%s", id, cfg.UUID)
+	}
+	for i := range configs {
+		cfg := &configs[i]
+		cfg.GossipSeedAddresses = seeds[:]
+		cfg.HAKeeperClientConfig.ServiceAddresses = addresses[:]
+		cfg.BootstrapConfig.BootstrapCluster = true
+		cfg.BootstrapConfig.InitHAKeeperMembers = bootstrap[:]
+		cfg.BootstrapConfig.NumOfLogShards = 1
+		cfg.BootstrapConfig.NumOfTNShards = 1
+		cfg.BootstrapConfig.NumOfLogShardReplicas = 3
+	}
+
+	open := func(i int) {
+		t.Helper()
+		s, err := NewService(configs[i], newFS(), nil)
+		require.NoError(t, err)
+		services[i] = s
+	}
+	closeStore := func(i int) {
+		t.Helper()
+		if s := services[i]; s != nil {
+			services[i] = nil
+			require.NoError(t, s.Close())
+		}
+	}
+	for i := range configs {
+		open(i)
+		t.Cleanup(func() { closeStore(i) })
+	}
+
+	readMembership := func(i int) *dragonboat.Membership {
+		t.Helper()
+		deadline, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+		defer cancel()
+		tick := time.NewTicker(25 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			ctx, stop := context.WithTimeout(deadline, time.Second)
+			m, err := services[i].store.nh.SyncGetShardMembership(ctx, shard)
+			stop()
+			if err == nil {
+				return m
+			}
+			select {
+			case <-deadline.Done():
+				t.Fatalf("voter %d has no quorum: %v", i+1, err)
+			case <-tick.C:
+			}
+		}
+	}
+	require.NoError(t, services[0].store.startHAKeeperReplica(1, members, false))
+	require.NoError(t, services[1].store.startHAKeeperReplica(2, members, false))
+	require.Equal(t, members, readMembership(1).Nodes)
+
+	// Dragonboat persists its bootstrap before MatrixOne writes its metadata.
+	native := services[2].store.nh
+	require.NoError(t, native.StartReplica(members, false, hakeeper.NewStateMachine, getRaftConfig(shard, 3)))
+	require.True(t, native.HasNodeInfo(shard, 3))
+	require.Equal(t, int64(-1), services[2].store.getReplicaID(shard))
+	closeStore(2)
+	closeStore(0)
+
+	prefix := pb.ShardInfoQueryResult{ShardID: shard, Epoch: 2, Replicas: map[uint64]pb.ReplicaInfo{
+		1: {UUID: members[1]}, 2: {UUID: members[2]},
+	}}
+	var retired pb.ShardInfoQueryResult
+	originalQuery := queryShardInfoRawFn
+	t.Cleanup(func() { queryShardInfoRawFn = originalQuery })
+	queryShardInfoRawFn = func(ctx context.Context, sid, address string, shardID uint64, includeExpired, excludeHardDown bool) (pb.ShardInfoQueryResult, bool, error) {
+		if sid != configs[2].UUID || shardID != shard {
+			return originalQuery(ctx, sid, address, shardID, includeExpired, excludeHardDown)
+		}
+		switch address {
+		case addresses[1]:
+			return prefix, true, nil
+		case addresses[0]:
+			return retired, retired.Epoch != 0, nil
+		}
+		return pb.ShardInfoQueryResult{}, false, nil
+	}
+	bootstrapStore := func() {
+		t.Helper()
+		open(2)
+		s := services[2]
+		require.True(t, s.store.nh.HasNodeInfo(shard, 3))
+		require.Equal(t, int64(-1), s.store.getReplicaID(shard))
+		ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+		defer cancel()
+		require.NoError(t, s.BootstrapHAKeeper(ctx, configs[2]))
+	}
+	bootstrapStore()
+	require.Equal(t, int64(3), services[2].store.getReplicaID(shard), "the valid voter must reopen")
+	require.Equal(t, members, readMembership(1).Nodes)
+
+	// A newer peer view proves retirement even when another peer has a prefix.
+	open(0)
+	services[2].store.removeMetadata(shard, 3)
+	closeStore(2)
+	commitRemoveReplica(t, services[1].store, 3)
+	membership := readMembership(1)
+	require.NotContains(t, membership.Nodes, uint64(3))
+	require.Greater(t, membership.ConfigChangeID, uint64(len(members)))
+	retired = pb.ShardInfoQueryResult{ShardID: shard, Epoch: membership.ConfigChangeID, Replicas: map[uint64]pb.ReplicaInfo{
+		1: {UUID: membership.Nodes[1]}, 2: {UUID: membership.Nodes[2]},
+	}}
+	bootstrapStore()
+	_, err := services[2].store.nh.GetNodeUser(shard)
+	require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+	require.Equal(t, int64(-1), services[2].store.getReplicaID(shard))
 }
