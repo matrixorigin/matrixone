@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -181,6 +182,7 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 	}); err != nil {
 		return err
 	}
+	observeMainTableWrite(proc, updateCtx)
 	analyzer.AddWrittenRows(int64(newRowCount))
 	return nil
 }
@@ -272,6 +274,9 @@ func (update *MultiUpdate) insert_table(
 	})
 	if err != nil {
 		return err
+	}
+	if info.tableType == UpdateMainTable {
+		observeMainTableWrite(proc, updateCtx)
 	}
 	analyzer.AddWrittenRows(int64(writeBatch.RowCount()))
 	return
@@ -393,4 +398,15 @@ func (update *MultiUpdate) check_null_and_insert_table(
 		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
 	}
 	return
+}
+
+// observeMainTableWrite is a table-scoped fault-injection observation point.
+// It runs only after the real main-table Relation.Write succeeds, so a counter
+// can distinguish an executed action from a merely constructed input batch.
+func observeMainTableWrite(proc *process.Process, updateCtx *MultiUpdateCtx) {
+	if !fault.Status() || updateCtx.ObjRef == nil {
+		return
+	}
+	fault.TriggerFaultWithContext(proc.Ctx, "fj/sql/main_table_write/"+
+		updateCtx.ObjRef.SchemaName+"/"+updateCtx.ObjRef.ObjName)
 }

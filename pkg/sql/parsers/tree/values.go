@@ -18,7 +18,12 @@ package tree
 type ValuesClause struct {
 	SelectStatement
 	RowWord bool
-	Rows    []Exprs
+	// HasRowWord preserves whether the source used the explicit ROW(...) form.
+	// RowWord controls formatting of the existing VALUES query form; the
+	// separate bit lets INSERT validation reject ROW(...) row aliases without
+	// losing the distinction during parsing.
+	HasRowWord bool
+	Rows       []Exprs
 }
 
 func (node *ValuesClause) Format(ctx *FmtCtx) {
