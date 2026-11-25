@@ -15768,24 +15768,44 @@ func ParseIcebergSnapshotID(ctx context.Context, expr tree.Expr) (int64, error) 
 }
 
 func (builder *QueryBuilder) parseIcebergTimestampAsOfMS(expr tree.Expr) (int64, error) {
-	raw, err := icebergRefLiteralText(builder.GetContext(), expr, "timestamp")
+	ctx := builder.GetContext()
+	datetime, raw, err := parseIcebergTimestampDatetime(ctx, expr)
 	if err != nil {
 		return 0, err
 	}
-
 	loc := time.UTC
 	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
 	}
-	ts, err := types.ParseTimestamp(loc, raw, 6)
-	if err != nil {
-		return 0, moerr.NewInvalidInputf(builder.GetContext(), "invalid FOR ICEBERG TIMESTAMP AS OF value: %s", raw)
-	}
-	epochMicros := int64(ts) - int64(types.UnixToTimestamp(0))
+	epochMicros := int64(datetime.ToTimestamp(loc)) - int64(types.UnixToTimestamp(0))
 	if epochMicros < 0 {
-		return 0, moerr.NewInvalidInputf(builder.GetContext(), "FOR ICEBERG TIMESTAMP AS OF must be at or after Unix epoch: %s", raw)
+		return 0, moerr.NewInvalidInputf(ctx, "FOR ICEBERG TIMESTAMP AS OF must be at or after Unix epoch: %s", raw)
 	}
 	return epochMicros / 1000, nil
+}
+
+// SameIcebergTimestampMillis compares selectors that produce the same instant
+// at scan precision in any session time zone. Zone offsets and DST gap
+// adjustments are in whole seconds and preserve the fractional second.
+func SameIcebergTimestampMillis(ctx context.Context, left, right tree.Expr) bool {
+	a, _, err := parseIcebergTimestampDatetime(ctx, left)
+	if err != nil {
+		return false
+	}
+	b, _, err := parseIcebergTimestampDatetime(ctx, right)
+	return err == nil && a != types.ZeroDatetime && b != types.ZeroDatetime && int64(a)/1000 == int64(b)/1000
+}
+
+func parseIcebergTimestampDatetime(ctx context.Context, expr tree.Expr) (types.Datetime, string, error) {
+	raw, err := icebergRefLiteralText(ctx, expr, "timestamp")
+	if err != nil {
+		return 0, "", err
+	}
+	datetime, err := types.ParseDatetime(raw, 6)
+	if err != nil {
+		return 0, "", moerr.NewInvalidInputf(ctx, "invalid FOR ICEBERG TIMESTAMP AS OF value: %s", raw)
+	}
+	return datetime, raw, nil
 }
 
 func icebergRefLiteralText(ctx context.Context, expr tree.Expr, kind string) (string, error) {

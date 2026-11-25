@@ -1662,6 +1662,9 @@ func sameRewriteIcebergRef(ctx context.Context, left, right *tree.IcebergRefSpec
 	if left.Type == tree.IcebergRefNamedRef {
 		return icebergref.EquivalentReadRefs(string(left.RefName), string(right.RefName))
 	}
+	if left.Type == tree.IcebergRefTimestamp {
+		return plan2.SameIcebergTimestampMillis(ctx, left.Timestamp, right.Timestamp)
+	}
 	if left.Type != tree.IcebergRefSnapshot {
 		return reflect.DeepEqual(left, right)
 	}

@@ -562,8 +562,14 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ = ADMIN
 	}
 
-	if l.whereSources != nil && l.lastToken == UNDERSCORE_BINARY && typ == STRING && str != "" {
-		typ, str = HEXNUM, "0x"+hex.EncodeToString([]byte(str))
+	if l.whereSources != nil && l.lastToken == UNDERSCORE_BINARY {
+		switch {
+		case typ == STRING && str != "":
+			typ, str = HEXNUM, "0x"+hex.EncodeToString([]byte(str))
+		case typ == HEXNUM && len(str)%2 != 0:
+			// The binder pads an odd number of hex digits by one nibble.
+			str = "0x0" + str[2:]
+		}
 	}
 	icebergRefName := l.previousToken == FOR_ICEBERG && l.lastToken == REF
 	l.previousToken = l.lastToken

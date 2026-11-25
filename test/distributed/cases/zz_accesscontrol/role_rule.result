@@ -409,6 +409,16 @@ alter role test_rule_role_inherit_b add rule "select _binary 0x41 as code from d
 select count(code), min(hex(code)) from db1.t_rule_text;
 ➤ count(code)[-5,64,0]  ¦  min(hex(code))[12,2,0]  𝄀
 2  ¦  41
+alter role test_rule_role_inherit_a add rule "select id, _binary 0xA as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, _binary 0x0A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x) from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,2,0]  𝄀
+1  ¦  0A  𝄀
+3  ¦  0A
+alter role test_rule_role_inherit_b add rule "select id, _binary 0x00A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x) from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,4,0]  𝄀
+3  ¦  000A
 alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
 alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
 select id from db1.t_rule_text order by id;
