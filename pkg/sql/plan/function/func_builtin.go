@@ -3637,6 +3637,8 @@ func (op *opSerial) builtInSerial(parameters []*vector.Vector, result vector.Fun
 	}
 
 	bitMap := new(nulls.Nulls)
+	bitMap.Init(proc.Mp())
+	defer bitMap.Free()
 	for _, v := range parameters {
 		if v.AllNull() {
 			rs.SetNullResult(uint64(length))

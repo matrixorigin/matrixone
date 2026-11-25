@@ -18,9 +18,11 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -53,6 +55,8 @@ type PrefixFn struct {
 
 // RowSelection describes selected rows in [MinRow, MaxRow). Holes contains
 // absolute row offsets inside that range. MaxRow <= MinRow means empty.
+// Holes is allocated from TAE's small allocator; whoever receives a
+// RowSelection calls Release once, and copies share the same Holes.
 type RowSelection struct {
 	MinRow uint32
 	MaxRow uint32
@@ -60,6 +64,19 @@ type RowSelection struct {
 }
 
 func (s RowSelection) IsEmpty() bool { return s.MaxRow <= s.MinRow }
+
+// Release frees Holes.
+func (s *RowSelection) Release() {
+	s.Holes.Free()
+	s.Holes = nil
+}
+
+func (s *RowSelection) ensureHoles() {
+	if s.Holes == nil {
+		s.Holes = &nulls.Nulls{}
+		s.Holes.Init(common.SmallAllocator)
+	}
+}
 
 func (s RowSelection) Contains(row uint32) bool {
 	return row >= s.MinRow && row < s.MaxRow &&
@@ -76,9 +93,7 @@ func (s *RowSelection) AddRange(start, end uint32) {
 		return
 	}
 	if start > s.MaxRow {
-		if s.Holes == nil {
-			s.Holes = &nulls.Nulls{}
-		}
+		s.ensureHoles()
 		s.Holes.AddRange(uint64(s.MaxRow), uint64(start))
 	}
 	if end > s.MaxRow {
@@ -90,9 +105,7 @@ func (s *RowSelection) MakePrefix() {
 	if s.IsEmpty() || s.MinRow == 0 {
 		return
 	}
-	if s.Holes == nil {
-		s.Holes = &nulls.Nulls{}
-	}
+	s.ensureHoles()
 	s.Holes.AddRange(0, uint64(s.MinRow))
 	s.MinRow = 0
 }
@@ -124,7 +137,9 @@ type SecondaryIndex interface {
 
 type StaticFilter interface {
 	MayContainsKey(key []byte) (bool, error)
-	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Nulls, error)
+	// MayContainsAnyKeys returns the rows of keys that may be present, as a
+	// bitmap allocated from mp that the caller frees.
+	MayContainsAnyKeys(keys containers.Vector, mp *mpool.MPool) (bool, *nulls.Nulls, error)
 	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
 
 	PrefixMayContainsKey(key []byte, prefixFnId uint8, level uint8) (bool, error)

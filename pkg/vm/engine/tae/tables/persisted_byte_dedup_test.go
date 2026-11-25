@@ -70,6 +70,8 @@ func TestPersistedByteDedupSelectedProbes(t *testing.T) {
 					loader.abort.Append(aborted[i], false)
 				}
 				var selected nulls.Nulls
+				selected.Init(bitmapTestMP)
+				defer selected.Free()
 				want := make([]int, 160)
 				var wantErr error
 				for i := range want {

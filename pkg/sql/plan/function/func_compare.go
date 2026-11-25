@@ -415,7 +415,7 @@ func opBinaryFixedFixedToFixedNullSafe[T types.FixedSizeTExceptStrType](
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
 	// Result of <=> is never NULL
-	rsVec.GetNulls().Reset()
+	rsVec.GetNulls().Clear()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
@@ -447,7 +447,7 @@ func opBinaryBytesBytesToFixedNullSafe(
 	rss := vector.MustFixedColNoTypeCheck[bool](rsVec)
 
 	// Result of <=> is never NULL
-	rsVec.GetNulls().Reset()
+	rsVec.GetNulls().Clear()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
@@ -518,7 +518,7 @@ func opBinaryJSONBytesBytesToFixedNullSafe(
 		rightConst, rightConstNull = prepareJSONComparisonAt(p2, 0)
 	}
 	// Result of <=> is never NULL.
-	rsVec.GetNulls().Reset()
+	rsVec.GetNulls().Clear()
 
 	for row := uint64(0); row < uint64(length); row++ {
 		var leftRaw, rightRaw []byte

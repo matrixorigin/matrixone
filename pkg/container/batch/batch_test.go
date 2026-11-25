@@ -1841,7 +1841,8 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 			bat.SetRowCount(3)
 			if mask {
 				var sels bitmap.Bitmap
-				sels.InitWithSize(3)
+				sels.Init(bitmapTestMP)
+				mustBitmapOK(sels.InitWithSize(3, bitmapTestMP))
 				sels.AddMany([]uint64{1, 2})
 				require.Error(t, bat.ShrinkByMask(&sels, false, 0, mp))
 			} else {
@@ -1874,11 +1875,55 @@ func TestBatchShrinkByMaskRowCount(t *testing.T) {
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
 			bat.SetRowCount(3)
 			var sels bitmap.Bitmap
-			sels.InitWithSize(3)
+			sels.Init(bitmapTestMP)
+			mustBitmapOK(sels.InitWithSize(3, bitmapTestMP))
 			sels.AddMany(tc.sels)
 			require.NoError(t, bat.ShrinkByMask(&sels, tc.negate, 0, mp))
 			require.Equal(t, len(tc.want), bat.RowCount())
 			require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
 		})
 	}
+}
+
+// When a later Dup fails, OwnReadOnlyVectors still frees the read-only
+// originals it already replaced; one of them owns its nulls bitmap.
+func TestOwnReadOnlyVectorsLeavesBatchOnDupError(t *testing.T) {
+	srcMP := mpool.MustNewZero()
+	nspMP := mpool.MustNewZero()
+	dstMP, err := mpool.NewMPool("own_read_only_cap", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(dstMP)
+
+	small := vector.NewVec(types.T_int64.ToType(), srcMP)
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(small, int64(i), i%2 == 0, srcMP))
+	}
+	// Larger than dstMP's 1 MB cap, so its Dup fails.
+	big := vector.NewVec(types.T_int64.ToType(), srcMP)
+	for i := 0; i < 200_000; i++ {
+		require.NoError(t, vector.AppendFixed(big, int64(i), false, srcMP))
+	}
+	w1, err := small.Window(0, 8)
+	require.NoError(t, err)
+	require.NoError(t, w1.DetachNulls(nspMP))
+	require.Greater(t, nspMP.CurrNB(), int64(0))
+	w2, err := big.Window(0, big.Length())
+	require.NoError(t, err)
+
+	// w1 sits in two columns, around the column whose copy fails.
+	bat := New([]string{"a", "b", "c"})
+	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = w1, w2, w1
+	require.Error(t, bat.OwnReadOnlyVectors(dstMP))
+
+	require.Same(t, w1, bat.Vecs[0], "a failed call leaves the batch unchanged")
+	require.Same(t, w2, bat.Vecs[1])
+	require.Same(t, w1, bat.Vecs[2])
+	require.Equal(t, 8, w1.Length(), "the aliased original stays intact")
+	require.True(t, w1.GetNulls().Contains(0))
+	require.Zero(t, dstMP.CurrNB(), "the copies already made are freed")
+	w1.Free(nil)
+	require.Zero(t, nspMP.CurrNB())
+	small.Free(srcMP)
+	big.Free(srcMP)
+	require.Zero(t, srcMP.CurrNB())
 }
