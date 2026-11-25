@@ -798,6 +798,45 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	return analyzeTableDumpBindingsWithCandidateVisitLimit(ctx, target, supplied, tableDumpMaxCandidateVisits)
 }
 
+// RecoverTableDumpV1Bindings reconstructs the released POW bindings that a
+// v1 manifest could not store. It returns an owned replacement only when a
+// CHECK changes, plus whether a released POW CHECK was proved.
+func RecoverTableDumpV1Bindings(ctx CompilerContext, target *planpb.TableDef) (*planpb.TableDef, bool, error) {
+	checks := make(map[*planpb.CheckDef]*planpb.Expr)
+	sensitive, err := analyzeTableDumpBindings(ctx, target, nil, tableDumpMaxCandidateVisits, checks)
+	if err != nil {
+		return nil, false, err
+	}
+	if sensitive {
+		return nil, false, moerr.NewInvalidInput(ctx.GetContext(), "legacy table dump cannot verify persisted expression bindings; create a new dump")
+	}
+	var replacement *planpb.TableDef
+	for i, check := range target.Checks {
+		expr := checks[check]
+		if expr == nil || proto.Equal(check.Check, expr) {
+			continue
+		}
+		if replacement == nil {
+			// Keep the catalog identity and any unknown protobuf fields.
+			replacement = proto.Clone(target).(*planpb.TableDef)
+		}
+		replacement.Checks[i].Check = expr
+	}
+	return replacement, len(checks) != 0, nil
+}
+
+func tableDumpHasPower(expr *planpb.Expr, releasedOnly bool) bool {
+	found := false
+	_ = planpb.VisitExprTree(expr, func(expr *planpb.Expr) error {
+		if ref := expr.GetF().GetFunc(); ref != nil {
+			fid, overload := function.DecodeOverloadID(ref.Obj)
+			found = found || fid == function.POW && (!releasedOnly || overload == 0)
+		}
+		return nil
+	})
+	return found
+}
+
 // newTableDumpProofProcess isolates speculative session settings and warnings.
 // The caller owns and frees the returned process.
 func newTableDumpProofProcess(ctx CompilerContext) *process.Process {
@@ -926,6 +965,12 @@ func tableDumpBindingScope(target, ddlScope *planpb.TableDef, item tableDumpExpr
 }
 
 func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target, supplied *planpb.TableDef, candidateVisitLimit int) (bool, error) {
+	return analyzeTableDumpBindings(ctx, target, supplied, candidateVisitLimit, nil)
+}
+
+func analyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.TableDef, candidateVisitLimit int,
+	recoverChecks map[*planpb.CheckDef]*planpb.Expr,
+) (bool, error) {
 	if ctx == nil || target == nil {
 		return false, moerr.NewInvalidInputNoCtx("table dump binding context is unavailable")
 	}
@@ -981,6 +1026,9 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 		}
 		var matched bool
 		var parsed bool
+		recoverPower := recoverChecks != nil && item.check != nil && tableDumpHasPower(item.expr, false)
+		var releasedCheck *planpb.Expr
+		var foundReleasedPower bool
 		for _, mode := range tableDumpParserModesForOrigin(item.origin) {
 			stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, mode)
 			if err != nil {
@@ -1101,7 +1149,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			primaryMode := tableDumpBindingCurrent
 			if visit.hasPower && supplied == nil {
 				// POW plans in SQL-only v1 manifests predate the NULL-producing
-				// overload. Require their binding on the target before loading.
+				// overload. Verify or reconstruct the released binding.
 				primaryMode |= tableDumpBindingPrePowerNullResults
 				for i := range modes {
 					modes[i] |= tableDumpBindingPrePowerNullResults
@@ -1265,6 +1313,19 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					} else if !sameTableDumpBoundExpression(first, candidate) {
 						sensitive = true
 					}
+					if recoverPower && err == nil {
+						// A v1 manifest has no payload to disambiguate
+						// different complete trees across parser modes.
+						if releasedCheck == nil {
+							releasedCheck = candidate
+						} else if !proto.Equal(releasedCheck, candidate) {
+							sensitive = true
+						}
+						if !foundReleasedPower && tableDumpHasPower(candidate, true) {
+							foundReleasedPower = true
+							matched = true
+						}
+					}
 					if !matched {
 						var matchErr error
 						matched, matchErr = matchCandidate(mode, candidate)
@@ -1351,9 +1412,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 			}
 			stmt.Free()
-			if matched {
+			if matched && !recoverPower {
 				break
 			}
+		}
+		if foundReleasedPower {
+			recoverChecks[item.check] = releasedCheck
 		}
 		if !parsed || !matched {
 			return false, moerr.NewInvalidInputNoCtxf("table dump cannot verify bound %s expression %s", item.kind, item.name)

@@ -225,6 +225,11 @@ func inferViewColumns(
 	viewName string,
 	forAuthoring bool,
 ) (*viewColumnInference, error) {
+	if stored, ok := ctx.(*viewRegenerationContext); ok {
+		previous := ctx.GetContext()
+		ctx.SetContext(function.WithViewPowerBinding(previous, !stored.powerNullOnNonFinite))
+		defer ctx.SetContext(previous)
+	}
 	if !forAuthoring {
 		// Description and regeneration rebind a stored definition, not the
 		// caller's SQL namespace. Authoring must still reject temporary sources.
@@ -460,6 +465,7 @@ func genViewTableDef(
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
 		LowerCaseTableNames:     &lowerCaseTableNames,
 		Dependencies:            inferred.dependencies,
+		PowerNullOnNonFinite:    true,
 		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {

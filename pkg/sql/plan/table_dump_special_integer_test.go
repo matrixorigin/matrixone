@@ -176,6 +176,7 @@ func TestTableDumpReleasedPowerChecks(t *testing.T) {
 			built, err := BuildPlan(compiler, stmt, false, nil)
 			require.NoError(t, err)
 			current := built.GetDdl().GetCreateTable().GetTableDef()
+			current.OriginalName = "original_table_name"
 			legacy := proto.Clone(current).(*planpb.TableDef)
 			legacy.Checks = []*planpb.CheckDef{released}
 
@@ -184,6 +185,18 @@ func TestTableDumpReleasedPowerChecks(t *testing.T) {
 			require.False(t, sensitive)
 			_, err = AnalyzeTableDumpBindings(compiler, current, nil)
 			require.ErrorContains(t, err, "cannot verify bound check expression")
+
+			replacement, containsPower, err := RecoverTableDumpV1Bindings(compiler, current)
+			require.NoError(t, err)
+			require.True(t, containsPower)
+			require.NotNil(t, replacement)
+			require.Equal(t, current.OriginalName, replacement.OriginalName)
+			require.True(t, proto.Equal(released, replacement.Checks[0]), "restore the exact published CHECK")
+			require.False(t, proto.Equal(current.Checks[0], replacement.Checks[0]))
+			replacement, containsPower, err = RecoverTableDumpV1Bindings(compiler, legacy)
+			require.NoError(t, err)
+			require.True(t, containsPower)
+			require.Nil(t, replacement, "the original bound CHECK already matches")
 
 			// LOAD can replay either complete bound payload against the same
 			// declaration. Names are part of the shared schema and stay stable.
@@ -209,6 +222,32 @@ func TestTableDumpReleasedPowerChecks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecoverTableDumpV1RejectsOtherSensitiveChecks(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	for _, tc := range []struct {
+		name, declarations string
+	}{
+		{"without POW", "check (a/b>0)"},
+		{"with POW", "constraint pw check (power(a, 0.5)>0), check (a/b>0)"},
+		{"inside POW", "check (power(a/b, 0.5)>0)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table t(a decimal(10,2), b decimal(10,2), "+tc.declarations+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().GetTableDef()
+			replacement, _, err := RecoverTableDumpV1Bindings(compiler, def)
+			require.ErrorContains(t, err, "legacy table dump cannot verify persisted expression bindings")
+			require.Nil(t, replacement)
+		})
+	}
+
 }
 
 func TestTableDumpLegacyTimeWidthCompatibility(t *testing.T) {

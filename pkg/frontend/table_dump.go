@@ -1700,6 +1700,114 @@ var lockTableDumpLoadTargets = func(
 	return nil
 }
 
+// tableDumpV1PowerSchemaHash reconstructs the released fingerprint for a
+// proved v1 POW CHECK. The original DDL must confirm any automatic CHECK name
+// and implicit table collation before either representation can be changed.
+func tableDumpV1PowerSchemaHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest) (string, error) {
+	if !canReconstructTableSchema(target) {
+		return "", nil
+	}
+	sourceNames, sourceImplicit, ok := tableDumpV1CheckDeclarations(ctx, manifest.CreateSQL, manifest.SourceTable)
+	if !ok {
+		return "", nil
+	}
+	targetNames, targetImplicit, ok := tableDumpV1CheckDeclarations(ctx, target.Createsql, target.Name)
+	if !ok || len(sourceNames) != len(target.Checks) || len(targetNames) != len(target.Checks) {
+		return "", nil
+	}
+	legacy := *target
+	legacy.Checks = make([]*plan.CheckDef, len(target.Checks))
+	for i, check := range target.Checks {
+		if check == nil || !strings.EqualFold(sourceNames[i], targetNames[i]) {
+			return "", nil
+		}
+		copy := *check
+		if sourceNames[i] == "" && check.Name == fmt.Sprintf("%s_chk_%d", target.Name, i+1) {
+			copy.Name = fmt.Sprintf("__mo_chk_%d", i+1)
+		}
+		legacy.Checks[i] = &copy
+	}
+	if sourceImplicit && targetImplicit && tableDumpV1CollationIndependent(target) {
+		legacy.DefaultCharset = uint32(types.CharsetLegacy)
+	}
+	return tableSchemaHashWithResolver(ctx, &legacy, nil)
+}
+
+func tableDumpV1CheckDeclarations(ctx context.Context, sql, name string) (names []string, implicitCharset, ok bool) {
+	stmt, err := mysql.ParseOne(ctx, sql, 1)
+	if err != nil {
+		return nil, false, false
+	}
+	defer stmt.Free()
+	create, ok := stmt.(*tree.CreateTable)
+	if !ok || create.IsAsLike || create.IsAsSelect || !strings.EqualFold(string(create.Table.ObjectName), name) {
+		return nil, false, false
+	}
+	for _, def := range create.Defs {
+		switch def := def.(type) {
+		case *tree.CheckIndex:
+			names = append(names, def.ConstraintSymbol)
+		case *tree.ColumnTableDef:
+			for _, attr := range def.Attributes {
+				if check, ok := attr.(*tree.AttributeCheckConstraint); ok {
+					names = append(names, check.Name)
+				}
+			}
+		}
+	}
+	implicitCharset = true
+	for _, option := range create.Options {
+		switch option.(type) {
+		case *tree.TableOptionCharset, *tree.TableOptionCollate:
+			implicitCharset = false
+		}
+	}
+	return names, implicitCharset, true
+}
+
+func tableDumpV1CollationIndependent(def *plan.TableDef) bool {
+	for _, col := range def.Cols {
+		if !col.Hidden && !types.T(col.Typ.Id).ToType().IsNumeric() && types.T(col.Typ.Id) != types.T_bool {
+			return false
+		}
+	}
+	err := plan.VisitExpressionsInOwner(def, func(expr *plan.Expr) error {
+		if !tableDumpV1NumericExpression(expr) {
+			return moerr.NewInvalidInputNoCtx("table expression may depend on collation")
+		}
+		return nil
+	})
+	return err == nil
+}
+
+func tableDumpV1NumericExpression(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	typ := types.T(expr.Typ.Id)
+	if !typ.ToType().IsNumeric() && typ != types.T_bool && typ != types.T_any {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		for i, arg := range fn.Args {
+			// A decimal literal is represented by a numeric cast from a text
+			// token. The cast parses the token without consulting collation.
+			if i == 0 && fn.Func.GetObjName() == "cast" && typ.IsDecimal() && arg.GetLit().GetSval() != "" {
+				continue
+			}
+			if !tableDumpV1NumericExpression(arg) {
+				return false
+			}
+		}
+	}
+	for _, arg := range expr.GetList().GetList() {
+		if !tableDumpV1NumericExpression(arg) {
+			return false
+		}
+	}
+	return tableDumpV1NumericExpression(expr.GetLit().GetSrc())
+}
+
 func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (err error) {
 	dbName, _, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
@@ -1730,11 +1838,30 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	if err = validateTableDumpRelations(ctx, targetRefs); err != nil {
 		return err
 	}
+	var restoredDef *plan.TableDef
+	var restoreExpressions bool
+	if manifest.Version == tableDumpFormatVersion && tableDumpHasBoundExpressions(targetDef) {
+		var releasedPower bool
+		restoredDef, releasedPower, err = sqlplan.RecoverTableDumpV1Bindings(ses.GetTxnCompileCtx(), targetDef)
+		if err != nil {
+			return err
+		}
+		restoreExpressions = restoredDef != nil
+		if releasedPower && targetRefs[0].SchemaHash != manifest.SchemaHash {
+			legacyHash, hashErr := tableDumpV1PowerSchemaHash(ctx, targetDef, manifest)
+			if hashErr != nil {
+				return hashErr
+			}
+			if legacyHash != "" && legacyHash == manifest.SchemaHash {
+				// The same verified fingerprint is used for the main entry in
+				// Relations. All index fingerprints keep their regular checks.
+				targetRefs[0].SchemaHash = legacyHash
+			}
+		}
+	}
 	if targetRefs[0].SchemaHash != manifest.SchemaHash {
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
-	var restoredDef *plan.TableDef
-	var restoreExpressions bool
 	if manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion {
 		restoredDef, restoreExpressions, err = tableDumpRestoredExpressions(
 			targetDef, manifest.BoundExpressions, manifest.ExpressionHash)
@@ -1743,16 +1870,6 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
 			return err
-		}
-	} else if tableDumpHasBoundExpressions(targetDef) {
-		var sensitive bool
-		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, nil)
-		if err != nil {
-			return err
-		}
-		if sensitive {
-			return moerr.NewInvalidInputNoCtx(
-				"legacy table dump cannot verify persisted expression bindings; create a new dump")
 		}
 	}
 	if len(targetRefs) != len(manifest.Relations) {

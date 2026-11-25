@@ -43,6 +43,24 @@ func LegacyPowerForTableDump(ctx context.Context) bool {
 	return legacy
 }
 
+type viewPowerContextKey struct{}
+
+// WithViewPowerBinding scopes POW binding to one stored view definition.
+func WithViewPowerBinding(ctx context.Context, legacy bool) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, viewPowerContextKey{}, legacy)
+}
+
+func legacyViewPowerBinding(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	legacy, _ := ctx.Value(viewPowerContextKey{}).(bool)
+	return legacy
+}
+
 // WithLegacyUnixTimestampDatetime reconstructs pre-DATETIME-overload trees
 // only while verifying persisted table expressions during DUMP/LOAD.
 func WithLegacyUnixTimestampDatetime(ctx context.Context) context.Context {

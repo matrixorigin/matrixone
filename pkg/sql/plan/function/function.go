@@ -698,8 +698,12 @@ func getFunctionByName(
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
-	if r.fid == POW && LegacyPowerForTableDump(ctx) {
-		check = fixedTypeMatch(f.Overloads[:1], args)
+	if r.fid == POW {
+		if LegacyPowerForTableDump(ctx) {
+			check = fixedTypeMatch(f.Overloads[:1], args)
+		} else if legacyViewPowerBinding(ctx) && (check.status == succeedMatched || check.status == succeedWithCast) {
+			check.idx = 0
+		}
 	}
 	if legacy, ok := legacyIncompleteTemporalCheck(ctx, r.fid, f.Overloads, args); ok {
 		check = legacy

@@ -1880,6 +1880,142 @@ func TestTableDumpBoundPayloadFieldAndCheckLimits(t *testing.T) {
 	require.ErrorContains(t, preflightTableDumpBoundPayload(wrap()), "too many fields")
 }
 
+func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
+	column := func(name string, typ types.T, nullable bool) *plan.ColDef {
+		return &plan.ColDef{Name: name, Typ: plan.Type{Id: int32(typ), NotNullable: !nullable},
+			Default: &plan.Default{NullAbility: nullable}}
+	}
+	for _, tc := range []struct {
+		name, sql, checkName, origin, hash string
+		exponentColumn                     bool
+	}{
+		{"fp", "create table fp (id int primary key, b double, p double, constraint ck_pow check (pow(b,p)>0))",
+			"ck_pow", "pow(`b`, `p`) > 0", "a9121361cef78612eb171598e9ec72ebfc423b899c696f06254512980499d92a", true},
+		{"mp", "create table mp (id int primary key, b double, check (power(b,0.5)>0))",
+			"mp_chk_1", "power(`b`, 0.5) > 0", "9dac0a8d3fbcc08e0a42eb070a4e9e71fef211047905d27009c01ff842c06a31", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The hashes came from official v4.2.9 full and metadata-only archives.
+			// CHECK origins retain the function spelling authored in CREATE.
+			id := column("id", types.T_int32, false)
+			id.Primary = true
+			def := &plan.TableDef{Name: tc.name, Createsql: tc.sql,
+				DefaultCharset: uint32(types.CharsetUTF8),
+				Cols:           []*plan.ColDef{id, column("b", types.T_float64, true)},
+				Pkey:           &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Checks:         []*plan.CheckDef{{Name: tc.checkName, OriginSql: tc.origin}}}
+			if tc.exponentColumn {
+				def.Cols = append(def.Cols, column("p", types.T_float64, true))
+			}
+			manifest := &tableDumpManifest{Version: 1, SourceTable: tc.name, CreateSQL: tc.sql, SchemaHash: tc.hash}
+			normal, err := tableSchemaHash(def)
+			require.NoError(t, err)
+			require.NotEqual(t, tc.hash, normal)
+			hash, err := tableDumpV1PowerSchemaHash(t.Context(), def, manifest)
+			require.NoError(t, err)
+			require.Equal(t, tc.hash, hash)
+			require.Equal(t, tc.checkName, def.Checks[0].Name)
+			require.Equal(t, uint32(types.CharsetUTF8), def.DefaultCharset)
+
+			for name, change := range map[string]func(*plan.TableDef){
+				"changed check": func(def *plan.TableDef) {
+					def.Checks[0].OriginSql = strings.Replace(def.Checks[0].OriginSql, "> ", ">= ", 1)
+				},
+				"changed type":            func(def *plan.TableDef) { def.Cols[1].Typ.Id = int32(types.T_float32) },
+				"missing column metadata": func(def *plan.TableDef) { def.Cols[0].Default = nil },
+				"missing CHECK declaration": func(def *plan.TableDef) {
+					def.Createsql = "create table " + def.Name + " (id int primary key, b double)"
+				},
+				"missing CHECK metadata": func(def *plan.TableDef) { def.Checks[0] = nil },
+				"explicit collation": func(def *plan.TableDef) {
+					def.Createsql += " COLLATE=utf8mb4_general_ci"
+				},
+				"character column": func(def *plan.TableDef) {
+					def.Cols = append(def.Cols, column("label", types.T_varchar, true))
+				},
+				"explicit check name": func(def *plan.TableDef) {
+					def.Createsql = strings.Replace(def.Createsql, "constraint ck_pow ", "", 1)
+					def.Createsql = strings.Replace(def.Createsql, "check (", "constraint user_name check (", 1)
+					def.Checks[0].Name = "user_name"
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					changed := proto.Clone(def).(*plan.TableDef)
+					change(changed)
+					hash, err := tableDumpV1PowerSchemaHash(t.Context(), changed, manifest)
+					require.NoError(t, err)
+					require.NotEqual(t, tc.hash, hash)
+				})
+			}
+		})
+	}
+}
+
+func TestTableDumpV1NumericExpression(t *testing.T) {
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		t.Helper()
+		expr, err := sqlplan.BindFuncExprImplByPlanExpr(t.Context(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	decimal := types.New(types.T_decimal64, 2, 1)
+	exponent := bind("cast", sqlplan.MakePlan2StringConstExprWithType("0.5"),
+		&plan.Expr{Typ: decimal.PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+	base := &plan.Expr{Typ: types.T_float64.ToType().PlanType(),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	power := bind("pow", base, exponent)
+	numericCheck := bind(">", power, sqlplan.MakePlan2Int32ConstExprWithType(0))
+	text := sqlplan.MakePlan2StringConstExprWithType("A")
+	textColumn := &plan.Expr{Typ: text.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	textCheck := bind("=", textColumn, text)
+	null := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	list := func(items ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: items}}}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		safe bool
+	}{
+		{"decimal cast from a string token", exponent, true},
+		{"ordinary numeric CHECK", numericCheck, true},
+		{"string comparison", textCheck, false},
+		{"NULL in numeric list", list(base, null), true},
+		{"string in list", list(base, text), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.safe, tableDumpV1NumericExpression(tc.expr))
+		})
+	}
+	def := &plan.TableDef{
+		Cols:   []*plan.ColDef{{Name: "b", Typ: base.Typ}},
+		Checks: []*plan.CheckDef{{Name: "c", Check: numericCheck}},
+	}
+	require.True(t, tableDumpV1CollationIndependent(def))
+	def.Checks[0].Check = textCheck
+	require.False(t, tableDumpV1CollationIndependent(def), "numeric columns do not make a string expression collation-independent")
+}
+
+func TestTableDumpV1CheckDeclarations(t *testing.T) {
+	for _, sql := range []string{
+		"create table",
+		"select 1",
+		"create table t like s",
+		"create table t as select 1",
+		"create table other (a int)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, _, ok := tableDumpV1CheckDeclarations(t.Context(), sql, "t")
+			require.False(t, ok)
+		})
+	}
+	names, implicitCharset, ok := tableDumpV1CheckDeclarations(t.Context(),
+		"create table t(a int check (a > 0), constraint named check (a < 10)) character set utf8mb4", "t")
+	require.True(t, ok)
+	require.False(t, implicitCharset)
+	require.Equal(t, []string{"", "named"}, names)
+}
+
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {
 	left := &plan.TableDef{TblId: 1, DbId: 2, DbName: "a", Name: "t", Createsql: "create table a.t(a int)", Cols: []*plan.ColDef{{Name: "a"}}}
 	right := &plan.TableDef{TblId: 9, DbId: 8, DbName: "b", Name: "t2", Createsql: "create table b.t2(a int)", Cols: []*plan.ColDef{{Name: "a"}}}
