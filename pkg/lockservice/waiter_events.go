@@ -58,6 +58,8 @@ type lockContext struct {
 	rangeLastWaitKey   []byte
 	lockWaitDeadline   time.Time
 	lockWaitTimeoutErr error
+	txnGeneration      uint64
+	nextReady          *lockContext
 }
 
 func (l *localLockTable) newLockContext(
@@ -70,6 +72,7 @@ func (l *localLockTable) newLockContext(
 	c := reuse.Alloc[lockContext](nil)
 	c.ctx = ctx
 	c.txn = txn
+	c.txnGeneration = txn.generation
 	c.rows = rows
 	c.waitTxn = txn.toWaitTxn(l.bind.ServiceID, true)
 	c.opts = opts
@@ -140,23 +143,28 @@ func getLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error
 }
 
 type event struct {
-	c      *lockContext
-	eventC chan *lockContext
+	c     *lockContext
+	queue *waiterEvents
 }
 
 func (e event) notified() {
-	if e.eventC != nil {
-		e.eventC <- e.c
+	if e.queue != nil {
+		e.queue.enqueue(e.c)
 	}
 }
 
 // waiterEvents is used to handle all notified waiters. And use a pool to retry the lock op,
 // to avoid too many goroutine blocked.
 type waiterEvents struct {
-	logger            *log.MOLogger
-	workers           int
-	detector          *detector
-	eventC            chan *lockContext
+	logger   *log.MOLogger
+	workers  int
+	detector *detector
+	eventC   chan *lockContext
+	readyC   chan struct{}
+	ready    struct {
+		sync.Mutex
+		head, tail *lockContext
+	}
 	checkOrphanC      chan checkOrphan
 	txnHolder         activeTxnHolder
 	remoteLockTimeout time.Duration
@@ -192,6 +200,7 @@ func newWaiterEvents(
 		remoteLockTimeout: remoteLockTimeout,
 		unlock:            unlock,
 		eventC:            make(chan *lockContext, 10000),
+		readyC:            make(chan struct{}, 1),
 		checkOrphanC:      make(chan checkOrphan, 64),
 		checkC:            make(chan struct{}, 1),
 		stopper:           stopper.NewStopper("waiter-events", stopper.WithLogger(logger.RawLogger())),
@@ -208,7 +217,7 @@ func (mw *waiterEvents) start() {
 
 func (mw *waiterEvents) close() {
 	// Seal event admission before stopping workers. Every notification accepted
-	// before this close remains readable from the buffered channel; workers
+	// before this close remains in the channel or the ready list; workers
 	// drain those contexts to their normal terminal callback instead of leaving
 	// pooled lock contexts and response ownership stranded.
 	close(mw.eventC)
@@ -229,8 +238,8 @@ func (mw *waiterEvents) close() {
 func (mw *waiterEvents) add(c *lockContext) {
 	if c.opts.async {
 		c.w.event = event{
-			eventC: mw.eventC,
-			c:      c,
+			queue: mw,
+			c:     c,
 		}
 	}
 	// The sync path enforces LockWaitTimeout via context.WithTimeoutCause in
@@ -296,6 +305,54 @@ func (mw *waiterEvents) wakeCheck() {
 	}
 }
 
+// Notifications can run while a transaction or table mutex is held. When the
+// channel is full, queue the already admitted context instead of waiting for a
+// worker that may need that mutex. The waiter's status transition enqueues
+// each context only once per wait.
+func (mw *waiterEvents) enqueue(c *lockContext) {
+	select {
+	case mw.eventC <- c:
+		return
+	default:
+	}
+	mw.ready.Lock()
+	if mw.ready.tail == nil {
+		mw.ready.head = c
+	} else {
+		mw.ready.tail.nextReady = c
+	}
+	mw.ready.tail = c
+	mw.ready.Unlock()
+	mw.wakeReady()
+}
+
+func (mw *waiterEvents) wakeReady() {
+	select {
+	case mw.readyC <- struct{}{}:
+	default:
+	}
+}
+
+func (mw *waiterEvents) popReady() *lockContext {
+	mw.ready.Lock()
+	c := mw.ready.head
+	if c == nil {
+		mw.ready.Unlock()
+		return nil
+	}
+	mw.ready.head = c.nextReady
+	c.nextReady = nil
+	more := mw.ready.head != nil
+	if !more {
+		mw.ready.tail = nil
+	}
+	mw.ready.Unlock()
+	if more {
+		mw.wakeReady()
+	}
+	return c
+}
+
 func (mw *waiterEvents) handle(ctx context.Context) {
 	timeout := defaultLazyCheckDuration.Load().(time.Duration)
 	timer := time.NewTimer(timeout)
@@ -315,6 +372,10 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 				return
 			}
 			mw.handleEvent(c)
+		case <-mw.readyC:
+			if c := mw.popReady(); c != nil {
+				mw.handleEvent(c)
+			}
 		case v := <-mw.checkOrphanC:
 			mw.checkOrphan(v)
 		case <-mw.checkC:
@@ -339,6 +400,9 @@ func (mw *waiterEvents) handleEvent(c *lockContext) {
 
 func (mw *waiterEvents) drainEvents() {
 	for c := range mw.eventC {
+		mw.handleEvent(c)
+	}
+	for c := mw.popReady(); c != nil; c = mw.popReady() {
 		mw.handleEvent(c)
 	}
 }

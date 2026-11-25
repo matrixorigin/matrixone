@@ -166,12 +166,12 @@ func TestLockTableBindTouchedTracksFenceIntentOnly(t *testing.T) {
 		defer reuse.Free(txn, nil)
 
 		bind := pb.LockTable{Group: 0, Table: 1, ServiceID: "s1", Version: 1}
-		assert.True(t, txn.lockTableBindTouched(bind))
-		assert.False(t, txn.lockTableBindTouched(bind))
+		assert.True(t, txn.lockTableBindTouched(bind, nil))
+		assert.False(t, txn.lockTableBindTouched(bind, nil))
 
 		h := txn.getHoldLocksLocked(bind.Group)
 		assert.Empty(t, h.tableBinds)
-		assert.Equal(t, bind, h.tableBindIntents[bind.Table])
+		assert.Equal(t, bind, h.tableBindIntents[bind.Table].bind)
 
 		refs := make(map[uint32]map[uint64]uint64)
 		txn.incLockTableRef(refs, bind.ServiceID)

@@ -835,72 +835,64 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 		})
 }
 
-func TestOrphanTxnHolderCanBeRelease(t *testing.T) {
-	ch := make(chan struct{})
-	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second*5)
-	runLockServiceTests(
-		t,
-		[]string{"s1", "s2"},
-		func(alloc *lockTableAllocator, s []*service) {
-			s1 := s[0]
-			s2 := s[1]
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-			defer cancel()
-
-			txn1 := []byte("txn1")
-			txn2 := []byte("txn2")
-			txn3 := []byte("txn3")
-			table := uint64(10)
-			rows := newTestRows(1)
-
-			mustAddTestLock(t, ctx, s1, table, txn1, rows, pb.Granularity_Row)
-			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
-
-			_, err := s2.Lock(ctx2, table, rows, txn2, newTestRowExclusiveOptions())
-			require.Error(t, err)
-
-			// make unlock use new connection
-			client := s2.remote.client.(*client)
-			require.NoError(t, client.client.CloseBackend())
-			require.NoError(t, s2.Unlock(ctx, txn2, timestamp.Timestamp{}))
-			close(ch)
-
-			v, err := s1.getLockTable(context.Background(), 0, table)
-			require.NoError(t, err)
-			lt := v.(*localLockTable)
-
-		OUT:
-			for {
-				select {
-				case <-ctx.Done():
-					t.Fail()
-					return
-				default:
-					lt.mu.RLock()
-					_, ok := lt.mu.store.Get(rows[0])
-					lt.mu.RUnlock()
-					if ok {
-						break OUT
-					}
-				}
-				time.Sleep(time.Millisecond * 10)
+func TestLateRemoteLockCannotGrantAfterSourceUnlock(t *testing.T) {
+	previous := remoteLockAdmissionWindow
+	remoteLockAdmissionWindow = 500 * time.Millisecond
+	defer func() { remoteLockAdmissionWindow = previous }()
+	runLockServiceTests(t, []string{"origin", "owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		source, owner := nodes[0], nodes[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		id, row := []byte("late"), []byte("row")
+		opts := newTestRowExclusiveOptions()
+		const table = 988
+		seed := []byte("seed")
+		_, err := owner.Lock(ctx, table, [][]byte{row}, seed, opts)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+		gate := make(chan struct{})
+		entered := make(chan struct{})
+		var first sync.Once
+		owner.option.beforeRemoteLockBindCheck = func() { first.Do(func() { close(entered); <-gate }) }
+		released := false
+		defer func() {
+			if !released {
+				close(gate)
 			}
-
-			mustAddTestLock(t, ctx, s1, table, txn3, rows, pb.Granularity_Row)
-			require.NoError(t, s1.Unlock(ctx, txn3, timestamp.Timestamp{}))
-		},
-		func(s *service) {
-			s.option.serverOpts = append(s.option.serverOpts,
-				WithServerMessageFilter(func(r *pb.Request) bool {
-					// make handle lock after unlock
-					if r.Method == pb.Method_Lock {
-						cancel2()
-						<-ch
-					}
-					return true
-				}))
-		},
-	)
+		}()
+		callCtx, cancelCall := context.WithCancel(ctx)
+		defer cancelCall()
+		done := make(chan error, 1)
+		go func() { _, err := source.Lock(callCtx, table, [][]byte{row}, id, opts); done <- err }()
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("request did not reach owner")
+		}
+		cancelCall()
+		select {
+		case err := <-done:
+			require.Error(t, err)
+		case <-ctx.Done():
+			t.Fatal("source Lock did not return")
+		}
+		require.NoError(t, source.Unlock(ctx, id, timestamp.Timestamp{}))
+		close(gate)
+		released = true
+		require.Eventually(t, func() bool {
+			owner.mu.RLock()
+			defer owner.mu.RUnlock()
+			return owner.mu.lockAdmissions == 0
+		}, time.Second, time.Millisecond, "the delayed owner handler must finish before inspecting the row")
+		id2 := []byte("contender")
+		opts.Policy = pb.WaitPolicy_FastFail
+		_, err = source.Lock(ctx, table, [][]byte{row}, id2, opts)
+		require.NoError(t, err)
+		require.NoError(t, source.Unlock(ctx, id2, timestamp.Timestamp{}))
+		_, locked, err := owner.GetLockHolder(ctx, table, row, opts)
+		require.NoError(t, err)
+		require.False(t, locked)
+	})
 }
 
 func TestValidTxnWithLocalTxn(t *testing.T) {
