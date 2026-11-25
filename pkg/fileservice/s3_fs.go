@@ -1831,7 +1831,6 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 	if closing := s.diskCache.async.ctx; closing != nil {
 		stopOnClose = context.AfterFunc(closing, cancelFill)
 	}
-	diskPath := s.diskCache.pathForFile(file)
 	type admittedDownload struct {
 		download *objectDownload
 		file     io.ReaderAt
@@ -1845,7 +1844,10 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 			// The reader holds the download's file before any byte is fetched, so the
 			// bytes stay readable whatever the download does next.
 			var admitted admittedDownload
-			download := s.diskCache.download(diskPath)
+			var download *objectDownload
+			if fill, ok := ctx.Value(fileDownloadKey{}).(*filePrefetchObject); ok {
+				download = fill.joinableDownload()
+			}
 			if download != nil {
 				if f, ok := download.acquire(); ok {
 					admitted = admittedDownload{download: download, file: f, waited: download.idle.wait()}
