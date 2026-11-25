@@ -73,6 +73,11 @@ type reservationProbeTable struct {
 	stats []*objectio.ObjectStats
 }
 
+func reservationProbeBaseTable(id uint64) catalog.MergeTable {
+	db := catalog.MockDBEntryWithAccInfo(1, 999)
+	return catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, id))
+}
+
 type reservationProbeItem struct{ stats *objectio.ObjectStats }
 
 func (i reservationProbeItem) GetCreatedAt() types.TS                { return types.BuildTS(1, 0) }
@@ -142,7 +147,7 @@ func runMergeReservationAccountingProbe(t *testing.T, originSize uint32, checkGl
 				{name: "schedule_failure", ample: true, rejectAt: 2},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					table := &reservationProbeTable{MergeTable: promotionTable(8901)}
+					table := &reservationProbeTable{MergeTable: reservationProbeBaseTable(8901)}
 					// Six metadata-only objects: two disjoint key clusters, each
 					// containing the minimum default overlap depth of three.
 					for cluster := range 2 {
@@ -278,7 +283,7 @@ func runMergeReservationAccountingProbe(t *testing.T, originSize uint32, checkGl
 }
 
 func TestMergeReservationContinuesAfterDenial(t *testing.T) {
-	table := &reservationProbeTable{MergeTable: promotionTable(8902)}
+	table := &reservationProbeTable{MergeTable: reservationProbeBaseTable(8902)}
 	for cluster := range 3 {
 		size := uint32(64 * common.Const1MBytes)
 		if cluster == 2 {
@@ -347,7 +352,7 @@ func (e *inlineCompletionExecutor) ExecuteFor(_ catalog.MergeTable, task mergeTa
 }
 
 func TestMergeReservationInlineCompletion(t *testing.T) {
-	table := &reservationProbeTable{MergeTable: promotionTable(8903)}
+	table := &reservationProbeTable{MergeTable: reservationProbeBaseTable(8903)}
 	for cluster := range 3 {
 		for range 3 {
 			lo := int32(cluster*100 + 1)
