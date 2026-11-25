@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -104,8 +105,7 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	filterBat := inputResult.Batch
-	sels := filter.ctr.flatSels[:0]
-	defer func() { filter.ctr.flatSels = sels }()
+	rows := filter.ctr.selectionBitmaps(proc)
 	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
 	filter.ctr.subjectReuseAdmissionDone = true
 	for i := range filter.ctr.allExecutors {
@@ -141,47 +141,25 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			continue
 		}
 
-		if filter.ctr.bs == nil {
-			filter.ctr.bs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
-		} else {
-			ok := vector.ReuseFunctionFixedTypeParameter[bool](vec, filter.ctr.bs)
-			if !ok {
-				filter.ctr.bs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
-			}
-		}
-		bs := filter.ctr.bs
 		if vec.IsConst() {
-			v, null := bs.GetValue(0)
-			if null || !v {
-				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, nil)
-				if err != nil {
-					return vm.CancelResult, err
-				}
+			if vec.IsConstNull() || !vector.GetFixedAtNoTypeCheck[bool](vec, 0) {
+				filterBat = batch.EmptyBatch
 			}
-		} else {
-			sels = sels[:0]
-
-			l := uint64(vec.Length())
-			if bs.WithAnyNullValue() {
-				for j := uint64(0); j < l; j++ {
-					v, null := bs.GetValue(j)
-					if !null && v {
-						sels = append(sels, int64(j))
-					}
-				}
-			} else {
-				for j := uint64(0); j < l; j++ {
-					v, _ := bs.GetValue(j)
-					if v {
-						sels = append(sels, int64(j))
-					}
-				}
-			}
-			if len(sels) != filterBat.RowCount() {
-				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, sels)
-				if err != nil {
-					return vm.CancelResult, err
-				}
+			continue
+		}
+		// The TRUE, non-NULL rows, built a word at a time, then gathered by
+		// the bitmap.
+		var nulls *bitmap.Bitmap
+		if nsp := vec.GetNulls(); !nsp.IsEmpty() {
+			nulls = nsp.GetBitmap()
+		}
+		if err = rows.InitWithBools(vector.MustFixedColNoTypeCheck[bool](vec), nulls, filter.ctr.mp(proc)); err != nil {
+			return vm.CancelResult, err
+		}
+		if rows.Count() != filterBat.RowCount() {
+			filterBat, err = filter.ctr.compactByMask(proc, filterBat, rows)
+			if err != nil {
+				return vm.CancelResult, err
 			}
 		}
 	}
@@ -197,37 +175,51 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 	return result, nil
 }
 
-func (ctr *container) shrinkWithSels(proc *process.Process, bat *batch.Batch, sels []int64) (*batch.Batch, error) {
-	if len(sels) == 0 {
+// compactByMask keeps the rows of bat selected by sel, gathering by the
+// bitmap itself: into the filter's own output batch, or in place when bat is
+// that batch already.
+// selectionBitmaps returns the filter's selection bitmap, owned by the
+// filter's pool; a pool change (a new execution) releases the old words.
+func (ctr *container) selectionBitmaps(proc *process.Process) *bitmap.Bitmap {
+	s := &ctr.selection
+	if mp := ctr.mp(proc); s.rows.MPool() != mp {
+		s.rows.Free()
+		s.rows.Init(mp)
+		s.pred.Free()
+		s.pred.Init(mp)
+	}
+	return &s.rows
+}
+
+func (ctr *container) compactByMask(proc *process.Process, bat *batch.Batch, sel *bitmap.Bitmap) (*batch.Batch, error) {
+	if sel.IsEmpty() {
 		return batch.EmptyBatch, nil
 	}
+	mp := ctr.mp(proc)
 	if bat == ctr.buf {
-		if err := ctr.buf.Shrink(sels, false, ctr.mp(proc)); err != nil {
+		// A later predicate over the filter's own output: shrink in place.
+		if err := ctr.buf.ShrinkByMask(sel, false, 0, mp); err != nil {
+			return nil, err
+		}
+		return ctr.buf, nil
+	}
+	if ctr.buf == nil {
+		ctr.buf = batch.NewWithSize(len(bat.Vecs))
+		ctr.buf.SetAttributes(bat.Attrs)
+		ctr.buf.Recursive = bat.Recursive
+		for j, vec := range bat.Vecs {
+			ctr.buf.Vecs[j] = vector.NewVec(*vec.GetType(), mp)
+			ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
+		}
+		ctr.buf.ShuffleIDX = bat.ShuffleIDX
+		if err := ctr.buf.PreExtend(mp, sel.Count()); err != nil {
 			return nil, err
 		}
 	} else {
-		if ctr.buf == nil {
-			ctr.buf = batch.NewWithSize(len(bat.Vecs))
-			ctr.buf.SetAttributes(bat.Attrs)
-			ctr.buf.Recursive = bat.Recursive
-			for j, vec := range bat.Vecs {
-				typ := *bat.GetVector(int32(j)).GetType()
-				ctr.buf.Vecs[j] = vector.NewVec(typ, ctr.mp(proc))
-				ctr.buf.Vecs[j].SetSorted(vec.GetSorted())
-			}
-			ctr.buf.SetRowCount(bat.RowCount())
-			ctr.buf.ShuffleIDX = bat.ShuffleIDX
-			err := ctr.buf.PreExtend(ctr.mp(proc), len(sels))
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			ctr.buf.CleanOnlyData()
-		}
-		err := ctr.buf.Union(bat, sels, ctr.mp(proc))
-		if err != nil {
-			return nil, err
-		}
+		ctr.buf.CleanOnlyData()
+	}
+	if err := ctr.buf.UnionByMask(bat, sel, mp); err != nil {
+		return nil, err
 	}
 	return ctr.buf, nil
 }

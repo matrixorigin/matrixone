@@ -156,46 +156,103 @@ func forSelectedRows(mask *bitmap.Bitmap, rows int, visit func(r int)) {
 	}
 }
 
+// nullWords reads the words of a vector's NULL bitmap, which may cover
+// fewer rows than the vector: words past it read as zero.
+type nullWords struct {
+	r maskReader
+	n int
+}
+
+func newNullWords(w *Vector) nullWords {
+	if w.nsp.IsEmpty() {
+		return nullWords{}
+	}
+	nsp := w.nsp.GetBitmap()
+	return nullWords{r: newMaskReader(nsp), n: nsp.NumWords()}
+}
+
+func (z *nullWords) word(i int) uint64 {
+	if i < z.n {
+		return z.r.word(i)
+	}
+	return 0
+}
+
+// selectedWord is word i of mask limited to rows [0, rows).
+func selectedWord(mr *maskReader, i, words, rows int) uint64 {
+	word := mr.word(i)
+	if i == words-1 && rows%64 != 0 {
+		word &= ^uint64(0) >> uint(64-rows%64)
+	}
+	return word
+}
+
 // unionNullsByMask sets the NULL rows of v for the selected rows of w, which
-// were appended starting at row out.
+// were appended starting at row out. Only the selected NULL rows are
+// visited: such a row's destination is out plus the number of selected rows
+// below it.
 func unionNullsByMask(v, w *Vector, mask *bitmap.Bitmap, rows, out int) {
-	forSelectedRows(mask, rows, func(r int) {
-		if w.nsp.Contains(uint64(r)) {
-			v.nsp.Add(uint64(out))
+	mr := newMaskReader(mask)
+	nw := newNullWords(w)
+	words := maskWords(mask, rows)
+	for i := 0; i < words; i++ {
+		m := selectedWord(&mr, i, words, rows)
+		for x := m & nw.word(i); x != 0; x &= x - 1 {
+			t := uint(bits.TrailingZeros64(x))
+			v.nsp.Add(uint64(out + bits.OnesCount64(m&(uint64(1)<<t-1))))
 		}
-		out++
-	})
+		out += bits.OnesCount64(m)
+	}
 }
 
 func (v *Vector) unionVarlenByMask(w *Vector, mask *bitmap.Bitmap, rows, cnt int, hasNull bool, mp *mpool.MPool) error {
 	vCol := toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+cnt)
 	var wCol []types.Varlena
 	ToSliceNoTypeCheck(w, &wCol)
+	mr := newMaskReader(mask)
+	var nw nullWords
+	if hasNull {
+		nw = newNullWords(w)
+	}
+	words := maskWords(mask, rows)
 	// Grow the area once for the selected non-NULL, non-inline values.
 	total := 0
-	forSelectedRows(mask, rows, func(r int) {
-		if hasNull && w.nsp.Contains(uint64(r)) {
-			return
+	for i := 0; i < words; i++ {
+		base := 64 * i
+		for m := selectedWord(&mr, i, words, rows) &^ nw.word(i); m != 0; m &= m - 1 {
+			if s := &wCol[base+bits.TrailingZeros64(m)]; !s.IsSmall() {
+				_, l := s.OffsetLen()
+				total += int(l)
+			}
 		}
-		if s := &wCol[r]; !s.IsSmall() {
-			_, l := s.OffsetLen()
-			total += int(l)
-		}
-	})
+	}
 	if err := pregrowVarlenaArea(v, total, mp); err != nil {
 		return err
 	}
-	var err error
-	forSelectedRows(mask, rows, func(r int) {
-		if err != nil {
-			return
+	out := v.length
+	for i := 0; i < words; i++ {
+		base := 64 * i
+		m := selectedWord(&mr, i, words, rows)
+		nulls := m & nw.word(i)
+		for ; m != 0; m &= m - 1 {
+			t := uint(bits.TrailingZeros64(m))
+			if nulls&(uint64(1)<<t) != 0 {
+				// A NULL slot holds no payload; clear any stale descriptor.
+				vCol[out] = types.Varlena{}
+				v.nsp.Add(uint64(out))
+			} else if src := &wCol[base+int(t)]; src.IsSmall() {
+				BuildVarlenaInline(&vCol[out], src)
+			} else {
+				off, l := src.OffsetLen()
+				payload := w.area[off : off+l]
+				if err := buildVarlenaNoInline(v, &vCol[out], &payload, mp); err != nil {
+					v.setLengthAfterExtend(out)
+					return err
+				}
+			}
+			out++
 		}
-		if hasNull && w.nsp.Contains(uint64(r)) {
-			v.nsp.Add(uint64(v.length))
-		} else if err = BuildVarlenaFromVarlena(v, &vCol[v.length], &wCol[r], &w.area, mp); err != nil {
-			return
-		}
-		v.setLengthAfterExtend(v.length + 1)
-	})
-	return err
+	}
+	v.setLengthAfterExtend(out)
+	return nil
 }

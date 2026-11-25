@@ -37,7 +37,6 @@ type selectionState struct {
 	mask     []bool
 	physical batch.Batch
 	compact  *batch.Batch
-	sels     []int64
 	// uses is the reader column policy for selected reads: the columns the
 	// scan outputs are borrowed (ReaderColumnRetain) instead of copied.
 	uses []engine.ReaderColumnUse
@@ -107,8 +106,7 @@ func (s *selectionState) compactInto(out *batch.Batch, mp *mpool.MPool) (*batch.
 	compact := s.compact
 	compact.CleanOnlyData()
 	physical := out.PhysicalRowCount()
-	s.sels = out.SelectionRows(s.sels)
-	sels := s.sels
+	sel := out.Selection()
 	for i, vec := range out.Vecs {
 		if vec == nil {
 			compact.Vecs[i] = nil
@@ -125,7 +123,7 @@ func (s *selectionState) compactInto(out *batch.Batch, mp *mpool.MPool) (*batch.
 		if vec.Length() == 0 && physical != 0 {
 			continue
 		}
-		if err := dst.Union(vec, sels, mp); err != nil {
+		if err := dst.UnionByMask(vec, sel, mp); err != nil {
 			return nil, err
 		}
 		dst.SetSorted(vec.GetSorted())

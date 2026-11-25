@@ -29,8 +29,6 @@ type selectionState struct {
 	mask     []bool
 	physical batch.Batch
 	compact  *batch.Batch
-	// sels is CompactInto's row-list scratch, reused across batches.
-	sels []int64
 }
 
 // AcceptsSelection: grouping-set expansion reads compacted rows.
@@ -64,7 +62,7 @@ func (projection *Projection) finishSelected(input *batch.Batch, mp *mpool.MPool
 			s.compact.Vecs[i] = vector.NewVec(*vec.GetType(), mp)
 		}
 	}
-	if err := buf.CompactInto(s.compact, mp, &s.sels); err != nil {
+	if err := buf.CompactInto(s.compact, mp); err != nil {
 		return nil, err
 	}
 	buf.ClearSelection()

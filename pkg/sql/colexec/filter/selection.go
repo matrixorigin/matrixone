@@ -28,12 +28,13 @@ import (
 // until the next Call.
 type selectionState struct {
 	// output is set by the parent's preparation (vm.SelectionProducer).
-	output   bool
-	rows     bitmap.Bitmap
+	output bool
+	rows   bitmap.Bitmap
+	// pred holds one predicate's TRUE rows while they are ANDed into rows.
+	pred     bitmap.Bitmap
 	mask     []bool
 	physical batch.Batch
 	view     batch.Batch
-	sels     []int64
 }
 
 // AcceptsSelection: the filter evaluates its predicates on a selected input's
@@ -56,13 +57,9 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	physical := &s.physical
 	physicalRows := physical.RowCount()
 
-	// rows is allocated from the filter's pool and freed in Free. A pool
-	// change (a new execution) releases the old words first.
+	// rows and pred are allocated from the filter's pool and freed in Free.
+	filter.ctr.selectionBitmaps(proc)
 	mp := filter.ctr.mp(proc)
-	if s.rows.MPool() != mp {
-		s.rows.Free()
-		s.rows.Init(mp)
-	}
 	// selected == false means every physical row is selected.
 	selected := input.HasSelection()
 	if selected {
@@ -99,38 +96,38 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 		if filter.IsAssert && i >= len(filter.ctr.runtimeExecutors) {
 			continue
 		}
-		if filter.ctr.bs == nil || !vector.ReuseFunctionFixedTypeParameter[bool](vec, filter.ctr.bs) {
-			filter.ctr.bs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
-		}
-		bs := filter.ctr.bs
-		keep := func(row uint64) bool {
-			if vec.IsConst() {
-				row = 0
+		if vec.IsConst() {
+			// One value for every row: all of them survive or none does.
+			if vec.IsConstNull() || !vector.GetFixedAtNoTypeCheck[bool](vec, 0) {
+				return batch.EmptyBatch, nil
 			}
-			v, null := bs.GetValue(row)
-			return !null && v
+			continue
+		}
+		if vec.Length() < physicalRows {
+			return nil, moerr.NewInternalErrorf(proc.Ctx,
+				"filter condition has %d rows for %d physical rows", vec.Length(), physicalRows)
+		}
+		// The TRUE, non-NULL rows, built a word at a time.
+		values := vector.MustFixedColNoTypeCheck[bool](vec)[:physicalRows]
+		var nulls *bitmap.Bitmap
+		if nsp := vec.GetNulls(); !nsp.IsEmpty() {
+			nulls = nsp.GetBitmap()
 		}
 		if !selected {
-			if err := s.rows.InitWithSize(int64(physicalRows), mp); err != nil {
+			if err := s.rows.InitWithBools(values, nulls, mp); err != nil {
 				return nil, err
-			}
-			for row := 0; row < physicalRows; row++ {
-				if keep(uint64(row)) {
-					s.rows.Add(uint64(row))
-				}
 			}
 			if s.rows.Count() == physicalRows {
 				continue // every row survives; stay unselected
 			}
 			selected = true
 		} else {
-			itr := s.rows.IteratorValue()
-			for itr.HasNext() {
-				row := itr.Next()
-				if !keep(row) {
-					s.rows.Remove(row)
-				}
+			// Rows outside the selection were masked and not evaluated;
+			// the AND drops them whatever their value.
+			if err := s.pred.InitWithBools(values, nulls, mp); err != nil {
+				return nil, err
 			}
+			s.rows.And(&s.pred)
 		}
 		if s.rows.IsEmpty() {
 			return batch.EmptyBatch, nil
@@ -146,6 +143,5 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 	if s.output {
 		return &s.view, nil
 	}
-	s.sels = s.view.SelectionRows(s.sels)
-	return filter.ctr.shrinkWithSels(proc, physical, s.sels)
+	return filter.ctr.compactByMask(proc, physical, &s.rows)
 }
