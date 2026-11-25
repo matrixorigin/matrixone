@@ -80,7 +80,7 @@ flowchart TB
 
   subgraph res["Resources, taken before registering"]
     budget["Flight budget<br/>min(5% of available memory,<br/>memory-max × connections);<br/>one buffer when none in flight"]
-    conns["Download connections<br/>half the host's connections"]
+    conns["Download connections<br/>half of min(host's connections,<br/>storage concurrency)"]
     slots["Prefetch share<br/>connections / workers objects<br/>of one prefetch at once"]
   end
 
@@ -415,10 +415,10 @@ object.
 - The last part reads to the object's end, so a wrong size makes the download fail.
   Any failed part fails the whole download, which publishes nothing. A download whose
   source ends short of its range leaves the reads waiting for it to read their own bytes.
-- Downloads hold at most half of the host's object-storage connections, so range
-  reads always keep connections of their own. A download that cannot reserve its
-  parts runs as one stream; one that cannot reserve even one connection waits until
-  a connection is free (decision 2026-11-13).
+- Downloads hold at most half of the smaller of the host's object-storage connections
+  and the storage concurrency, so range reads always keep connections of their own. A
+  download that cannot reserve its parts runs as one stream; one that cannot reserve
+  even one connection waits until a connection is free (decision 2026-11-13).
 
 ### A download waited for is bounded by its readers (decision 2026-11-16)
 
@@ -452,7 +452,7 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
 | Buffers of MemoryPrefetchObjects under way or held by reads | the disk cache | 5% of the memory available on the node, at most one buffer of `disk-prefetch-memory-max` bytes, rounded up to a power of two, for each object-storage connection downloads may hold, and one buffer when none is under way; past it a prefetch object, a read's included, waits until buffers are freed; each range of a prefetch is its own prefetch object, admitted in order, that waits, holding nothing, for its buffer and one of the object-storage connections downloads may hold before reads can join it; a prefetch of ranges counts as started once every range is under way or one waits, and a read of a range not under way reads its own bytes; a prefetch starts none once its object was deleted |
 | FilePrefetchObjects under way | the prefetcher's workers, or the reads that start them | the worker count, and one per range a live read waits for: one a read starts is shared by every read of its range and stopped when no read waits for it before its download starts; one prefetch has at most its share of prefetch objects, of both kinds, waiting or under way at once (below); one of a run waits, holding nothing, for its connection before it registers, and one that then finds another holding its bytes joins it, so concurrent reads download a run once; a prefetch starts none once its object was deleted; the object-storage connections they hold count with whole-object downloads |
 | Deleted objects remembered for cache writes | the disk cache | a fixed number of entries; when cleared, entries read before are not cached |
-| Object-storage connections held by downloads | the disk cache | half the host's connections; a configured `max-conns-per-host` below 64 is rejected (decision 2026-11-24); past it a download waits |
+| Object-storage connections held by downloads | the disk cache | half of the smaller of the host's connections and the storage concurrency; a configured `max-conns-per-host` below 64 is rejected (decision 2026-11-24), and a configured `concurrency` below 64 (decision 2026-11-25); past it a download waits |
 | Cache files kept open for reads, and paths found without a file | the disk cache, and apart the index-file cache | `disk-open-files-max` files each, default 128, 0 keeping none and noting no path missing; past it the least recently read file no read holds is closed; a change or eviction of a path closes its file once no read holds it; a path found without a file is not opened again until it changes, with a fixed number of such paths, forgotten when full; the bound counts against the process's open-file limit, shared by every service of a process, which it must stay well below; warm TPC-H SF10 read as fast at 128 as at 512 or 1024 (decision 2026-11-18, v9: column ranges are cached as separate files, and warm reads opened each again) |
 
 ## Alternatives
@@ -525,6 +525,12 @@ idle timeout" ([#32792](https://github.com/matrixorigin/matrixone/issues/32792))
   misconfiguration for a database: every table read, write, listing, delete and
   download waits on the same few connections. 0 keeps the default pool. A released
   configuration that sets 1–63 must be changed to 0 or to at least 64 before upgrading.
+- **`concurrency` below 64 is rejected at startup (decision 2026-11-25, won't change).**
+  An object-storage client running fewer than 64 operations at once is a misconfiguration
+  for a database; downloads hold at most half of the smaller of the host's connections and
+  the storage concurrency, so foreground reads keep at least 32. 0 keeps the default. A
+  released configuration that sets 1–63 must be changed to 0 or to at least 64 before
+  upgrading.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
 - **Fallback:** there is no runtime switch for the prefetcher itself. Splitting can be
   turned off by configuration.
