@@ -17,6 +17,8 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,4 +103,42 @@ func TestParamValueStoreCopyFromReusesStorage(t *testing.T) {
 	require.Equal(t, "raw", copied[2])
 	require.Zero(t, testing.AllocsPerRun(100, func() { snapshot.CopyFrom(values) }))
 	require.Nil(t, snapshot.CopyFrom(nil))
+}
+
+func TestParamValueStoreClearDropsPayloads(t *testing.T) {
+	var store ParamValueStore
+	values := store.Reset(3)
+	for i := range values {
+		*store.Ref(i) = ParamValue{Value: "payload"}
+	}
+	refs := []*ParamValue{store.Ref(0), store.Ref(1), store.Ref(2)}
+	store.Reset(1) // a shorter execution leaves the tail in the backing array
+	store.Clear()
+	for i, ref := range refs {
+		require.Equal(t, ParamValue{}, *ref, "no payload stays reachable")
+		require.Nil(t, values[i], "nor does the view")
+	}
+	again := store.Reset(3)
+	require.Same(t, refs[0], again[0], "the memory is kept for the next execution")
+}
+
+func TestParamValueKind(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		param ParamValue
+		want  types.StringConversionKind
+	}{
+		{"protocol integer", comStmtIntParam(2), types.StringConversionInteger},
+		{"protocol float", comStmtFloatParam(1.5), types.StringConversionFloat},
+		{"protocol Boolean", ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true}, types.StringConversionBoolean},
+		{"protocol DECIMAL", ParamValue{Value: "15e-1", RuntimeType: types.New(types.T_decimal64, 2, 1), HasRuntimeType: true}, types.StringConversionDecimal},
+		{"runtime type wins over source type", ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, SourceType: types.T_float64.ToType(), HasSourceType: true}, types.StringConversionInteger},
+		{"SQL user variable", sqlFloatParam(2.5), types.StringConversionFloat},
+		{"text is a string", ParamValue{Value: "1", SourceType: types.T_text.ToType(), HasSourceType: true}, types.StringConversionString},
+		{"temporal is text", ParamValue{Value: "2026-01-01", RuntimeType: types.T_date.ToType(), HasRuntimeType: true}, types.StringConversionString},
+		{"typed NULL", ParamValue{SourceType: types.New(types.T_decimal128, 38, 0), HasSourceType: true}, types.StringConversionDecimal},
+		{"untyped NULL is a string", ParamValue{IsBinaryProtocol: true}, types.StringConversionString},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, ParamValueKind(tc.param)) })
+	}
 }

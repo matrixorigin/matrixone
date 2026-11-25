@@ -101,11 +101,6 @@ func TestPreparedTemporalResultContracts(t *testing.T) {
 				}()
 				require.NoError(t, vector.AppendBytes(params, []byte(tc.input), false, proc.Mp()))
 				value := ParamValue{Value: tc.input, SourceType: tc.source, HasSourceType: true}
-				if tc.source.Oid.IsInteger() {
-					value.PrepareParamKind = types.StringConversionInteger
-				} else if tc.source.IsDecimal() {
-					value.PrepareParamKind = types.StringConversionDecimal
-				}
 				sql := "select " + tc.expression + " as v"
 				if ctas {
 					sql = "create table temporal_result as " + sql
@@ -194,9 +189,6 @@ func TestPreparedTemporalWriteConsumers(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.input), false, proc.Mp()))
 			proc.SetPrepareParams(params)
 			value := ParamValue{Value: tc.input, SourceType: tc.source, HasSourceType: true}
-			if tc.source.IsDecimal() {
-				value.PrepareParamKind = types.StringConversionDecimal
-			}
 			filled, _, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{value})
 			require.NoError(t, err)
 			originalQuery := prepared.GetDcl().GetPrepare().Plan.GetQuery()

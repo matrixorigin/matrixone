@@ -111,11 +111,13 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		}
 		typ := *plan2.DeepCopyType(&variable.Type)
 		item := &query.MigrateUserDefinedVar{
-			Name:                name,
-			Value:               value,
-			Sql:                 variable.Sql,
-			IsBin:               variable.IsBin,
-			PrepareParamKind:    uint32(variable.PrepareParamKind),
+			Name:  name,
+			Value: value,
+			Sql:   variable.Sql,
+			IsBin: variable.IsBin,
+			// Kept on the wire for CNs that still read it; it is derived from
+			// the type and ignored on receipt.
+			PrepareParamKind:    uint32(variable.prepareParamKind()),
 			RuntimeStringDomain: uint32(variable.RuntimeStringDomain),
 			Type:                &typ,
 		}
@@ -258,7 +260,6 @@ func decodeUserDefinedVars(
 			Sql:                 item.Sql,
 			IsBin:               item.IsBin,
 			Type:                typ,
-			PrepareParamKind:    types.StringConversionKind(item.PrepareParamKind),
 			RuntimeStringDomain: runtimeDomain,
 			Replayable:          replayable && (value != nil || types.T(typ.Id) != types.T_any || regexpStringResult),
 		}

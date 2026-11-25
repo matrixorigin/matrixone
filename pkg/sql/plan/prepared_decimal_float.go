@@ -56,9 +56,6 @@ func preparedIntegerFloatValue(value any, source types.T) (float64, bool) {
 			return 0, false
 		}
 		value = param.Value
-		if param.MaterializedValue != "" {
-			value = param.MaterializedValue
-		}
 	}
 	if !source.IsInteger() {
 		return 0, false
