@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 // The production lifecycle hook runs against a real backExec process. Unit
@@ -2362,9 +2363,9 @@ func TestRoleRuleModesAndBinaryHint(t *testing.T) {
 		require.Equal(t, expected, got)
 	}
 	cases := [][2]string{
-		{"", `select "East" as x from db.t where (payload = _binary 0xff5c) or (id = 2)`},
+		{"", `select "East" as x from db.t where (payload = ` + raw + `) or (id = 2)`},
 		{"ANSI_QUOTES", right},
-		{"NO_BACKSLASH_ESCAPES", `select "East" as x from db.t where (payload = _binary 0xff5c5c) or (id = 2)`},
+		{"NO_BACKSLASH_ESCAPES", `select "East" as x from db.t where (payload = ` + raw + `) or (id = 2)`},
 	}
 	for _, tc := range cases {
 		check(t, tc[0], tc[1])
@@ -2380,11 +2381,41 @@ func TestRoleRuleModesAndBinaryHint(t *testing.T) {
 
 	policy.roleVariants = &roleRuleVariants{hasNonUTF8: true}
 	policy.roleRules[key] = "select " + raw + " as x from db.t"
-	check(t, "", "select _binary 0xff5c as x from db.t")
+	check(t, "", "select "+raw+" as x from db.t")
 	policy.roleVariants = &roleRuleVariants{hasNonUTF8: true}
 	policy.roleRules[key] += " where name = '\xff'"
 	_, err = policy.rewrite(t.Context(), query, "")
 	require.ErrorContains(t, err, "invalid UTF-8 outside binary literals")
+}
+
+func TestRoleRuleHintPreservesRawSQL(t *testing.T) {
+	const key = "db.t"
+	const rule = "select _binary /* \xff */ '\xff' from db.t"
+	const query = "select * from db.t"
+	policy := &rewritePolicySnapshot{enabled: true, roleRules: map[string]string{key: rule},
+		roleVariants: &roleRuleVariants{hasNonUTF8: true}}
+
+	outer, err := policy.rewrite(t.Context(), "prepare p from 'select * from db.t'", "")
+	require.NoError(t, err)
+	sql, err := rewriteSQLFromMaterializedPolicy(t.Context(), outer, `/*+ {"rewrites":{"db.t":"select * from db.t"}} */ `+query)
+	require.NoError(t, err)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.NoError(t, parsers.AddRewriteHints(t.Context(), []tree.Statement{stmt}, sql))
+	chain := stmt.(*tree.Select).RewriteOption.Rewrites[key]
+	require.Len(t, chain, 2)
+	projection := chain[0].Stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+	require.Equal(t, "�", plan2.SelectOutputColumnName(projection))
+
+	hint, ok := leadingHintContent(sql)
+	require.True(t, ok)
+	chains, _, err := parsers.DecodeRewriteHint(t.Context(), hint)
+	require.NoError(t, err)
+	require.Equal(t, []string{rule, query}, chains[key])
+
+	_, _, err = extractInlineRewrites(t.Context(), sql)
+	require.ErrorContains(t, err, nonStringRewriteMsg)
 }
 
 func TestRoleRuleModeErrorRecovery(t *testing.T) {

@@ -440,9 +440,9 @@ func formatRewriteHint(ctx context.Context, rules map[string]string) (string, er
 
 // formatRewriteHintChains serializes per-table rewrite chains into the
 // /*+ {"rewrites": {...}} */ hint format. A chain with a single layer is
-// emitted as a plain string (keeping the common case identical to
-// formatRewriteHint); a chain with multiple layers is emitted as an ordered
-// JSON array (innermost first, outermost last). Empty chains are skipped.
+// emitted on its own; a chain with multiple layers is emitted as an ordered
+// JSON array (innermost first, outermost last). Each layer is normally a JSON
+// string, with a byte-preserving representation for non-UTF-8 SQL.
 func formatRewriteHintChains(ctx context.Context, chains map[string][]string, remapDb map[string]string) (string, error) {
 	rewrites := make(map[string]interface{}, len(chains))
 	for k, chain := range chains {
@@ -450,9 +450,13 @@ func formatRewriteHintChains(ctx context.Context, chains map[string][]string, re
 		case 0:
 			continue
 		case 1:
-			rewrites[k] = chain[0]
+			rewrites[k] = parsers.EncodeRewriteHintSQL(chain[0])
 		default:
-			rewrites[k] = chain
+			layers := make([]any, len(chain))
+			for i, sql := range chain {
+				layers[i] = parsers.EncodeRewriteHintSQL(sql)
+			}
+			rewrites[k] = layers
 		}
 	}
 	payload := map[string]interface{}{"rewrites": rewrites}
@@ -603,44 +607,6 @@ func isStandaloneSQLModeAssignment(a *tree.VarAssignmentExpr) bool {
 	}
 	_, ok := a.Value.(*tree.DefaultVal)
 	return ok
-}
-
-// roleRuleHintSQL encodes binary tokens for JSON transport.
-// JSON replaces invalid UTF-8, so any remaining invalid byte must fail closed.
-func roleRuleHintSQL(ctx context.Context, rule string, mode mysql.SQLModeFlags) (string, error) {
-	if utf8.ValidString(rule) {
-		return rule, nil
-	}
-	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, rule, mode)
-	defer mysql.PutScanner(scanner)
-	var out strings.Builder
-	var previous int
-	copied := 0
-	for {
-		scan := scanner.Scan
-		if previous == '.' {
-			scan = scanner.ScanAfterDot
-		}
-		token, value := scan()
-		if token == 0 || token == mysql.EofChar() || token == mysql.LEX_ERROR {
-			break
-		}
-		if previous == mysql.UNDERSCORE_BINARY && token == mysql.STRING && !utf8.ValidString(value) {
-			out.WriteString(rule[copied:scanner.PrePos])
-			// Separate both sides because quotes can delimit SQL tokens
-			// without whitespace, but a hexadecimal number cannot.
-			fmt.Fprintf(&out, " 0x%x ", value)
-			copied = scanner.Pos
-		}
-		previous = token
-	}
-	if copied != 0 {
-		out.WriteString(rule[copied:])
-		if sql := out.String(); utf8.ValidString(sql) {
-			return sql, nil
-		}
-	}
-	return "", moerr.NewInvalidInput(ctx, "rewrite rule contains invalid UTF-8 outside binary literals")
 }
 
 // rewriteSingleSQL merges a policy snapshot with one statement's own leading
@@ -1157,12 +1123,10 @@ func (c *roleRuleVariants) forMode(ctx context.Context, defaults map[string]stri
 		}
 	}
 	if c.hasNonUTF8 {
-		for name, rule := range rules {
-			sql, err := roleRuleHintSQL(ctx, rule, mode)
-			if err != nil {
+		for _, rule := range rules {
+			if err := parsers.ValidateRewriteSQLBytes(ctx, rule, mode); err != nil {
 				return nil, err
 			}
-			rules[name] = sql
 		}
 	}
 	c.last.Store(&mergedRoleRules{mode, lower, systemDefault, rules})
@@ -1606,11 +1570,6 @@ func rewriteProjectionNeedsOriginalHeading(expr tree.SelectExpr) bool {
 }
 
 func rewriteRuleOutputNames(ctx context.Context, sql string, lower int64, mode mysql.SQLModeFlags) ([]string, error) {
-	// The hint transport can change binary spelling before the planner sees it.
-	// Invalid bytes in discarded predicates are checked after rule selection.
-	if encoded, err := roleRuleHintSQL(ctx, sql, mode); err == nil {
-		sql = encoded
-	}
 	stmt, err := mysql.ParseOneWithSQLModeFlags(ctx, sql, lower, mode)
 	if err != nil {
 		return nil, err
