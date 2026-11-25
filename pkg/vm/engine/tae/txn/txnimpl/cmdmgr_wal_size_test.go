@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -33,6 +34,12 @@ type recordingWALStore struct {
 	payload         []byte
 	maxRecordEntry  int
 	lastRecordEntry int
+}
+
+type rejectingWALStore struct{ wal.Store }
+
+func (rejectingWALStore) AppendEntry(uint32, entry.Entry) (uint64, error) {
+	return 0, errors.New("append rejected")
 }
 
 func (w *recordingWALStore) AppendEntry(_ uint32, e entry.Entry) (uint64, error) {
@@ -192,6 +199,21 @@ func TestLargeWALRecordsBoundedUntilEntriesFreed(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("third large WAL record did not advance after a slot was freed")
 	}
+}
+
+func TestLargeWALRecordAppendRejectionReleasesBudget(t *testing.T) {
+	const recordLimit = 8 * 1024
+	budget := semaphore.NewWeighted(recordLimit)
+	txn := txnbase.NewTxn(nil, &txnbase.NoopTxnStore{}, bytes.Repeat([]byte("x"), 6*1024), types.BuildTS(1, 0), types.TS{})
+	mgr := newCommandManager(rejectingWALStore{})
+	mgr.maxWalSize = recordLimit
+	mgr.walBudget = budget
+	mgr.AddCmd(txnbase.NewTxnStateCmd("state", 0, types.TS{}))
+	e, err := mgr.ApplyTxnRecord(&txnStore{txn: txn})
+	require.ErrorContains(t, err, "append rejected")
+	require.Nil(t, e)
+	require.True(t, budget.TryAcquire(recordLimit))
+	budget.Release(recordLimit)
 }
 
 func TestCommandManagerRetainsOnlySmallPreflightRecord(t *testing.T) {
