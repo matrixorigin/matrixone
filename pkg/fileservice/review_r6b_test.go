@@ -152,7 +152,8 @@ func TestStalledDownloadsLeaveStorageConcurrencyForForegroundRead(t *testing.T) 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.Background()
 		data := bytes.Repeat([]byte("data"), 64<<10)
-		paths := []string{"foreground"}
+		paths := make([]string, 0, 33)
+		paths = append(paths, "foreground")
 		for i := range 32 {
 			paths = append(paths, fmt.Sprintf("prefetch-%d", i))
 		}

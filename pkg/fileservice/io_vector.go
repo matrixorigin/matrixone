@@ -26,20 +26,20 @@ const (
 )
 
 // streams reports whether the entry writes its bytes to its caller.
-func (e *IOEntry) streams() bool {
-	return e.WriterForRead != nil || e.ReadCloserForRead != nil
+func (i *IOEntry) streams() bool {
+	return i.WriterForRead != nil || i.ReadCloserForRead != nil
 }
 
 // ranged reports whether the entry is not done and reads a known positive size.
-func (e *IOEntry) ranged() bool {
-	return !e.done && e.Size > 0
+func (i *IOEntry) ranged() bool {
+	return !i.done && i.Size > 0
 }
 
 // materializes reports whether the entry may take its bytes from a shared source that
 // hands them over once all arrived: one that does not stream them to its caller, or
 // streams at most max bytes. A larger or read-to-end streamed entry opens its own reader.
-func (e *IOEntry) materializes(max int64) bool {
-	return !e.streams() || e.Size > 0 && e.Size <= max
+func (i *IOEntry) materializes(max int64) bool {
+	return !i.streams() || i.Size > 0 && i.Size <= max
 }
 
 // materializes reports whether every entry not done materializes under max.
