@@ -763,43 +763,123 @@ func TestRollbackCleanupRetainsConfirmedLockUntilOwnerRecovers(t *testing.T) {
 	})
 }
 
-func TestRollbackCleanupTransfersBeforeWaitingOnLocalTable(t *testing.T) {
-	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
-		s := nodes[0]
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		const tableID = 1036
-		id, row := []byte("local-rollback"), []byte{1}
-		opts := newTestRowExclusiveOptions()
-		_, err := s.Lock(ctx, tableID, [][]byte{row}, id, opts)
-		require.NoError(t, err)
-		table := s.tableGroups.get(0, tableID).(*localLockTable)
-		resolved := make(chan struct{})
-		transferred := make(chan bool, 1)
-		failed := make(chan error, 1)
+func TestRollbackCleanupYieldsWhileTableBusy(t *testing.T) {
+	for _, remoteProxy := range []bool{false, true} {
+		name := "local"
+		if remoteProxy {
+			name = "proxy"
+		}
+		t.Run(name, func(t *testing.T) {
+			var visits atomic.Int32
+			var armed atomic.Bool
+			attempt := make(chan struct{})
+			runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, nodes []*service) {
+				owner, source := nodes[0], nodes[1]
+				source.cfg.EnableRemoteLocalProxy = remoteProxy
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				const busyTable, healthyTable = 1036, 1037
+				busy, healthy, seed := []byte("busy"), []byte("healthy"), []byte("seed")
+				row := []byte{1}
+				rows := [][]byte{row}
+				options := newTestRowExclusiveOptions()
+				for _, table := range []uint64{busyTable, healthyTable} {
+					if table == busyTable && !remoteProxy {
+						continue
+					}
+					_, err := owner.Lock(ctx, table, rows, seed, options)
+					require.NoError(t, err)
+				}
+				require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+				busyOptions := options
+				if remoteProxy {
+					busyOptions = newTestRowSharedOptions()
+				}
+				_, err := source.Lock(ctx, busyTable, rows, busy, busyOptions)
+				require.NoError(t, err)
+				_, err = source.Lock(ctx, healthyTable, rows, healthy, options)
+				require.NoError(t, err)
 
-		table.mu.Lock()
-		go func() {
-			scheduled, err := s.ResolveRollbackCleanup(id, func() { close(resolved) })
-			failed <- err
-			transferred <- scheduled
-		}()
-		select {
-		case scheduled := <-transferred:
-			table.mu.Unlock()
-			require.True(t, scheduled)
-			require.NoError(t, <-failed)
-		case <-time.After(time.Second):
-			table.mu.Unlock()
-			t.Fatal("rollback waited for a local table mutex before transferring")
-		}
-		select {
-		case <-resolved:
-		case <-ctx.Done():
-			t.Fatal("transferred rollback did not release the local row")
-		}
-		_, held, err := s.GetLockHolder(ctx, tableID, row, opts)
-		require.NoError(t, err)
-		require.False(t, held)
-	})
+				releaseBusy := func() func() {
+					switch table := source.tableGroups.get(0, busyTable).(type) {
+					case *localLockTable:
+						require.False(t, remoteProxy)
+						table.mu.Lock()
+						return table.mu.Unlock
+					case *localLockTableProxy:
+						require.True(t, remoteProxy)
+						table.mu.Lock()
+						return table.mu.Unlock
+					default:
+						t.Fatalf("unexpected busy table type %T", table)
+						return nil
+					}
+				}()
+				// Release before the service fixture closes, including on failure.
+				defer func() {
+					if releaseBusy != nil {
+						releaseBusy()
+						releaseBusy = nil
+					}
+				}()
+				busyDone, healthyDone := make(chan struct{}), make(chan struct{})
+				armed.Store(true)
+				transfer := make(chan error, 1)
+				go func() {
+					pending, err := source.ResolveRollbackCleanup(busy, func() { close(busyDone) })
+					if err == nil && !pending {
+						err = fmt.Errorf("busy rollback did not transfer cleanup")
+					}
+					transfer <- err
+				}()
+				select {
+				case err := <-transfer:
+					require.NoError(t, err)
+				case <-ctx.Done():
+					t.Fatal("foreground rollback waited for the busy table")
+				}
+				select {
+				case <-attempt:
+				case <-ctx.Done():
+					t.Fatal("resolver did not attempt the busy rollback")
+				}
+
+				transferred, err := source.ResolveRollbackCleanup(healthy, func() { close(healthyDone) })
+				require.NoError(t, err)
+				require.True(t, transferred)
+				select {
+				case <-healthyDone:
+				case <-ctx.Done():
+					t.Fatal("busy table blocked the independent rollback")
+				}
+				_, held, err := owner.GetLockHolder(ctx, healthyTable, row, options)
+				require.NoError(t, err)
+				require.False(t, held)
+				select {
+				case <-busyDone:
+					t.Fatal("busy rollback acknowledged before releasing its lock")
+				default:
+				}
+				releaseBusy()
+				releaseBusy = nil
+				select {
+				case <-busyDone:
+				case <-ctx.Done():
+					t.Fatal("busy rollback did not finish after the table became available")
+				}
+				busyOwner := source
+				if remoteProxy {
+					busyOwner = owner
+				}
+				_, held, err = busyOwner.GetLockHolder(ctx, busyTable, row, busyOptions)
+				require.NoError(t, err)
+				require.False(t, held)
+			}, WithWait(func(context.Context) error {
+				if armed.Load() && visits.Add(1) == 2 {
+					close(attempt)
+				}
+				return nil
+			}))
+		})
+	}
 }

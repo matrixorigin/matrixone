@@ -185,11 +185,16 @@ func (s *service) Lock(
 		return pb.Result{}, ErrLockTimeout
 	}
 
-	admission, admitted := s.beginLockAdmission(txnID, options, tableID, rows)
+	admission, admitted := s.beginLockAdmission(txnID, options, tableID, rows, options.ForwardTo == "")
 	if !admitted {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
 	}
-	defer func() { s.endLockAdmission(admission) }()
+	defer func() {
+		if admission.sourceTxn.pendingBinds != 0 {
+			s.activeTxnHolder.discardSourceBind(txnID, admission.sourceTxn.bindStamp)
+		}
+		s.endLockAdmission(admission)
+	}()
 	ctx, cancelServiceClose := contextWithServiceClose(ctx, admission.serviceCtx)
 	defer cancelServiceClose()
 
@@ -243,14 +248,22 @@ func (s *service) Lock(
 	if lockWaitDeadlineExpired(options, time.Now()) {
 		return pb.Result{}, ErrLockTimeout
 	}
-	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
+	source := admission.sourceTxn
+	if source.pendingBinds != 0 {
+		source = s.activeTxnHolder.completeSourceBind(txnID, source.bindStamp)
+		admission.sourceTxn.pendingBinds = 0
+		if source.txn == nil {
+			return pb.Result{}, ErrTxnNotFound
+		}
+	}
+	txn := source.txn
 
 	s.bindChangeMu.RLock()
 	// All txn lock op must be serial. And avoid dead lock between doAcquireLock
 	// and getLock. The doAcquireLock and getLock operations of the same transaction
 	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
 	txn.Lock()
-	if txn.closing.Load() || !bytes.Equal(txn.txnID, txnID) {
+	if txn.closing.Load() || txn.generation != source.generation || !bytes.Equal(txn.txnID, txnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrTxnNotFound
@@ -279,6 +292,7 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
+
 	if txn.lockTableBindTouched(bind, l) &&
 		bind.ServiceID == s.serviceID &&
 		!admission.consume(bind) {
@@ -457,7 +471,8 @@ func (s *service) unlockTransaction(
 	defer closure.release()
 	// Keep the holder discoverable while releasing its locks. An Unlock
 	// retry must not acknowledge an empty holder before release finishes.
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+	entry := s.activeTxnHolder.lookupClosingTxn(txnID)
+	txn := entry.txn
 	if txn == nil {
 		return nil
 	}
@@ -470,7 +485,7 @@ func (s *service) unlockTransaction(
 		txn.Lock()
 	}
 	defer txn.Unlock()
-	if !bytes.Equal(txn.txnID, txnID) {
+	if entry.generation != txn.generation || !bytes.Equal(txn.txnID, txnID) {
 		return nil
 	}
 
@@ -478,16 +493,20 @@ func (s *service) unlockTransaction(
 		return ErrLockTimeout
 	}
 	defer logUnlockTxn(s.logger, txn)()
+	if mode == resolverCleanup && txn.remoteInFlight != 0 {
+		txn.closing.Store(true)
+		return ErrLockTimeout
+	}
 	if err := txn.joinRemoteLocksLocked(ctx); err != nil {
 		return err
 	}
-	if !bytes.Equal(txn.txnID, txnID) {
+	if entry.generation != txn.generation || !bytes.Equal(txn.txnID, txnID) {
 		return nil
 	}
 	binds := txn.lockTableBindsLocked()
 	if err := txn.closeWithContextInternal(ctx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
 		return s.getLockTable(ctx, group, table)
-	}, s.logger, false, mode == localRollbackCleanup, mutations...); err != nil {
+	}, s.logger, false, mode, mutations...); err != nil {
 		return err
 	}
 	s.reduceCanMoveGroupTables(binds)
@@ -626,7 +645,7 @@ func (s *service) unlockUnknownCommit(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 ) error {
-	return s.unlockTransaction(ctx, txnID, commitTS, normalCleanup)
+	return s.unlockTransaction(ctx, txnID, commitTS, resolverCleanup)
 }
 
 func (s *service) unlockWithContext(
@@ -792,6 +811,7 @@ type lockAdmission struct {
 	reservedBind pb.LockTable
 	reserved     bool
 	serviceCtx   context.Context
+	sourceTxn    activeTxnEntry
 }
 
 func (a *lockAdmission) consume(bind pb.LockTable) bool {
@@ -809,6 +829,7 @@ func (s *service) beginLockAdmission(
 	opts pb.LockOptions,
 	tableID uint64,
 	rows [][]byte,
+	registerSourceTxn bool,
 ) (lockAdmission, bool) {
 	serviceCtx, admitted := s.beginServiceOperation()
 	if !admitted {
@@ -838,6 +859,12 @@ func (s *service) beginLockAdmission(
 		admission.reservedBind = l.getBind()
 		admission.reserved = true
 		s.mu.lockTableRef[opts.Group][tableID]++
+	}
+	// Publish the source generation before the admitted operation can wait
+	// for a bind. A concurrent close can release an empty holder and fence
+	// this Lock through the captured generation, even if GetBind is slow.
+	if registerSourceTxn {
+		admission.sourceTxn = s.activeTxnHolder.admitSourceTxn(txnID)
 	}
 	s.mu.lockAdmissions++
 	s.mu.Unlock()
@@ -1732,8 +1759,12 @@ type activeTxnHolder interface {
 	getAllTxnID() [][]byte
 	incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string)
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
+	admitSourceTxn(txnID []byte) activeTxnEntry
+	discardSourceBind(txnID []byte, stamp uint64)
+	completeSourceBind(txnID []byte, stamp uint64) activeTxnEntry
+	lookupClosingTxn(txnID []byte) activeTxnEntry
 	admitRemoteTxn(txnID []byte, remoteService string, cutoff int64) *activeTxn
-	prepareHandoffTxn(txnID []byte, remoteService string) (*activeTxn, bool)
+	prepareHandoffTxn(txnID []byte, remoteService string) (activeTxnEntry, bool)
 	publishHandoffTxns(targets map[string]*lockHandoffTarget) bool
 	admitForwardedTxn(txnID []byte, live func([]byte) bool) *activeTxn
 	retireRemoteAdmission(txnID []byte, cutoff int64) bool
@@ -1757,13 +1788,19 @@ type activeTxnHolder interface {
 const activeTxnHolderShards = 16
 
 type activeTxnEntry struct {
+	// A nil txn with pending binds represents a source Lock that is still
+	// resolving its table. The stamp survives promotion to a holder.
+	pendingBinds  int
+	bindStamp     uint64
+	generation    uint64
 	txn           *activeTxn
 	remoteService string
 }
 
 type activeTxnShard struct {
 	sync.RWMutex
-	txns map[string]activeTxnEntry
+	txns          map[string]activeTxnEntry
+	nextBindStamp uint64
 	// A backward wall clock change must not reopen a deadline already used
 	// to acknowledge cleanup. This watermark is shared by all IDs in the shard.
 	retiredAdmissionDeadline int64
@@ -1837,25 +1874,112 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	create bool,
 	remoteService string,
 ) *activeTxn {
-	txn, _ := h.findOrCreateTxn(txnID, create, remoteService, 0, nil)
-	return txn
+	return h.findOrCreateTxn(txnID, create, remoteService, 0, nil).txn
+}
+
+func (h *mapBasedTxnHolder) admitSourceTxn(txnID []byte) activeTxnEntry {
+	key := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(key)
+	shard.RLock()
+	entry := shard.txns[key]
+	shard.RUnlock()
+	if entry.txn != nil {
+		return entry
+	}
+	shard.Lock()
+	defer shard.Unlock()
+	entry = shard.txns[key]
+	if entry.txn != nil {
+		return entry
+	}
+	if entry.pendingBinds == 0 {
+		shard.nextBindStamp++
+		entry.bindStamp = shard.nextBindStamp
+		key = string(txnID)
+	}
+	entry.pendingBinds++
+	shard.txns[key] = entry
+	return entry
+}
+
+func (h *mapBasedTxnHolder) completeSourceBind(txnID []byte, stamp uint64) activeTxnEntry {
+	key := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(key)
+	shard.Lock()
+	defer shard.Unlock()
+	entry := shard.txns[key]
+	if entry.bindStamp != stamp {
+		return activeTxnEntry{}
+	}
+	if entry.txn != nil {
+		return entry
+	}
+	txn := newActiveTxn(txnID, key, h.fsp, "")
+	return h.publishTxnLocked(shard, txn, stamp)
+}
+
+func (h *mapBasedTxnHolder) discardSourceBind(txnID []byte, stamp uint64) {
+	key := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(key)
+	shard.Lock()
+	defer shard.Unlock()
+	entry := shard.txns[key]
+	if entry.bindStamp != stamp || entry.txn != nil {
+		return
+	}
+	if entry.pendingBinds == 1 {
+		delete(shard.txns, key)
+		return
+	}
+	entry.pendingBinds--
+	shard.txns[key] = entry
+}
+
+func (h *mapBasedTxnHolder) lookupClosingTxn(txnID []byte) activeTxnEntry {
+	key := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(key)
+	shard.RLock()
+	entry := shard.txns[key]
+	shard.RUnlock()
+	if entry.pendingBinds == 0 {
+		return entry
+	}
+	stamp := entry.bindStamp
+	shard.Lock()
+	defer shard.Unlock()
+	entry = shard.txns[key]
+	if entry.bindStamp != stamp {
+		return activeTxnEntry{}
+	}
+	if entry.pendingBinds != 0 {
+		delete(shard.txns, key)
+		return activeTxnEntry{}
+	}
+	return entry
 }
 
 func (h *mapBasedTxnHolder) admitRemoteTxn(txnID []byte, remoteService string, cutoff int64) *activeTxn {
-	txn, _ := h.findOrCreateTxn(txnID, true, remoteService, cutoff, nil)
-	return txn
+	return h.findOrCreateTxn(txnID, true, remoteService, cutoff, nil).txn
 }
 
 func (h *mapBasedTxnHolder) admitForwardedTxn(txnID []byte, live func([]byte) bool) *activeTxn {
-	txn, _ := h.findOrCreateTxn(txnID, true, "", 0, live)
-	return txn
+	return h.findOrCreateTxn(txnID, true, "", 0, live).txn
 }
 
-func (h *mapBasedTxnHolder) prepareHandoffTxn(txnID []byte, remoteService string) (*activeTxn, bool) {
-	if txn := h.getActiveTxn(txnID, false, ""); txn != nil {
-		return txn, false
+func (h *mapBasedTxnHolder) prepareHandoffTxn(txnID []byte, remoteService string) (activeTxnEntry, bool) {
+	key := util.UnsafeBytesToString(txnID)
+	shard := h.getActiveTxnShard(key)
+	shard.RLock()
+	entry := shard.txns[key]
+	shard.RUnlock()
+	if entry.pendingBinds != 0 {
+		return activeTxnEntry{}, false
 	}
-	return newActiveTxnLocked(txnID, string(txnID), h.fsp, remoteService), true
+	if entry.txn != nil {
+		return entry, false
+	}
+	txn := newActiveTxnLocked(txnID, string(txnID), h.fsp, remoteService)
+	return activeTxnEntry{txn: txn, generation: txn.generation}, true
 }
 
 // Publish only after every target has reserved its rows. If a real Lock
@@ -1882,7 +2006,7 @@ func (h *mapBasedTxnHolder) publishHandoffTxns(targets map[string]*lockHandoffTa
 	}
 	for key, target := range targets {
 		if target.created {
-			h.publishTxnLocked(h.getActiveTxnShard(key), target.txn)
+			h.publishTxnLocked(h.getActiveTxnShard(key), target.txn, 0)
 			target.created = false
 		}
 	}
@@ -1916,44 +2040,44 @@ func (s *activeTxnShard) admissionExpired(cutoff int64) bool {
 
 func (h *mapBasedTxnHolder) findOrCreateTxn(
 	txnID []byte, create bool, remoteService string, cutoff int64, live func([]byte) bool,
-) (*activeTxn, bool) {
+) activeTxnEntry {
 	txnKey := util.UnsafeBytesToString(txnID)
 	shard := h.getActiveTxnShard(txnKey)
 	shard.RLock()
 	if shard.admissionExpired(cutoff) || (live != nil && !live(txnID)) {
 		shard.RUnlock()
-		return nil, false
+		return activeTxnEntry{}
 	}
-	entry, ok := shard.txns[txnKey]
+	entry := shard.txns[txnKey]
 	shard.RUnlock()
-	if ok {
-		return entry.txn, false
+	if entry.txn != nil {
+		return entry
 	}
 	if !create {
-		return nil, false
+		return activeTxnEntry{}
 	}
 
 	shard.Lock()
 	defer shard.Unlock()
 	if shard.admissionExpired(cutoff) || (live != nil && !live(txnID)) {
-		return nil, false
+		return activeTxnEntry{}
 	}
-	if entry, ok := shard.txns[txnKey]; ok {
-		return entry.txn, false
+	entry = shard.txns[txnKey]
+	if entry.txn != nil {
+		return entry
 	}
-
 	txn := newActiveTxn(txnID, txnKey, h.fsp, remoteService)
-	h.publishTxnLocked(shard, txn)
-	return txn, true
+	return h.publishTxnLocked(shard, txn, entry.bindStamp)
 }
 
-func (h *mapBasedTxnHolder) publishTxnLocked(shard *activeTxnShard, txn *activeTxn) {
+func (h *mapBasedTxnHolder) publishTxnLocked(shard *activeTxnShard, txn *activeTxn, stamp uint64) activeTxnEntry {
 	txnKey, remoteService := txn.txnKey, txn.remoteService
 	// Publish the transaction count before the map entry. This keeps empty()
 	// conservative while a create is in flight: count == 0 always means that
 	// every shard is empty, which is required by the service drain transition.
 	h.activeTxnCount.Add(1)
-	shard.txns[txnKey] = activeTxnEntry{txn: txn, remoteService: remoteService}
+	entry := activeTxnEntry{txn: txn, remoteService: remoteService, generation: txn.generation, bindStamp: stamp}
+	shard.txns[txnKey] = entry
 	if remoteService != "" {
 		h.mu.Lock()
 		if _, ok := h.mu.remoteServices[remoteService]; !ok {
@@ -1966,6 +2090,7 @@ func (h *mapBasedTxnHolder) publishTxnLocked(shard *activeTxnShard, txn *activeT
 		h.mu.Unlock()
 	}
 	logTxnCreated(h.logger, txn)
+	return entry
 }
 
 func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
@@ -1986,8 +2111,10 @@ func (h *mapBasedTxnHolder) getAllTxnID() [][]byte {
 	for i := range h.activeTxns {
 		shard := &h.activeTxns[i]
 		shard.RLock()
-		for txnKey := range shard.txns {
-			txns = append(txns, []byte(txnKey))
+		for txnKey, entry := range shard.txns {
+			if entry.txn != nil {
+				txns = append(txns, []byte(txnKey))
+			}
 		}
 		shard.RUnlock()
 	}
@@ -2001,7 +2128,9 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 	entry, ok := shard.txns[txnKey]
 	if ok {
 		delete(shard.txns, txnKey)
-		h.activeTxnCount.Add(-1)
+		if entry.txn != nil {
+			h.activeTxnCount.Add(-1)
+		}
 	}
 	shard.Unlock()
 	return entry.txn
@@ -2013,12 +2142,13 @@ func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
 	}
 	shard := h.getActiveTxnShard(txn.txnKey)
 	shard.Lock()
-	if entry, ok := shard.txns[txn.txnKey]; ok {
+	entry := shard.txns[txn.txnKey]
+	if entry.txn != nil {
 		shard.Unlock()
 		return entry.txn == txn
 	}
 	h.activeTxnCount.Add(1)
-	shard.txns[txn.txnKey] = activeTxnEntry{txn: txn, remoteService: txn.remoteService}
+	shard.txns[txn.txnKey] = activeTxnEntry{txn: txn, remoteService: txn.remoteService, generation: txn.generation, bindStamp: entry.bindStamp}
 	shard.Unlock()
 
 	if txn.remoteService != "" {
@@ -2042,7 +2172,7 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 			for {
 				shard.RLock()
 				entry, ok := shard.txns[txnKey]
-				if !ok || entry.txn.closing.Load() {
+				if !ok || entry.txn == nil || entry.txn.closing.Load() {
 					shard.RUnlock()
 					break
 				}
@@ -2267,7 +2397,9 @@ func (h *mapBasedTxnHolder) close() {
 	}
 	for i := range h.activeTxns {
 		for txnKey, entry := range h.activeTxns[i].txns {
-			reuse.Free(entry.txn, nil)
+			if entry.txn != nil {
+				reuse.Free(entry.txn, nil)
+			}
 			delete(h.activeTxns[i].txns, txnKey)
 		}
 	}
@@ -2282,7 +2414,9 @@ func (h *mapBasedTxnHolder) incLockTableRef(m map[uint32]map[uint64]uint64, serv
 		shard := &h.activeTxns[i]
 		shard.RLock()
 		for _, entry := range shard.txns {
-			entry.txn.incLockTableRef(m, serviceID)
+			if entry.txn != nil {
+				entry.txn.incLockTableRef(m, serviceID)
+			}
 		}
 		shard.RUnlock()
 	}

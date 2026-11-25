@@ -6062,6 +6062,144 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 	)
 }
 
+func TestRollbackFencesFirstLockWaitingForBind(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(alloc *lockTableAllocator, services []*service) {
+		owner, source := services[0], services[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table, nextTable = 24917, 24918
+		row := []byte{1}
+		rows := [][]byte{row}
+		options := newTestRowExclusiveOptions()
+		seed := []byte("owner-seed")
+		_, err := owner.Lock(ctx, table, rows, seed, options)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+		_, err = source.Lock(ctx, nextTable, rows, seed, options)
+		require.NoError(t, err)
+		require.NoError(t, source.Unlock(ctx, seed, timestamp.Timestamp{}))
+
+		entered, release := make(chan struct{}), make(chan struct{})
+		resume := sync.OnceFunc(func() { close(release) })
+		defer resume()
+		alloc.server.RegisterMethodHandler(pb.Method_GetBind,
+			func(ctx context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				if req.GetBind.Table == table && req.GetBind.ServiceID == source.serviceID {
+					close(entered)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return
+					}
+				}
+				alloc.handleGetBind(ctx, cancel, req, resp, cs)
+			})
+		id := []byte("rollback-first-bind")
+		defer func() { require.NoError(t, source.Unlock(ctx, id, timestamp.Timestamp{})) }()
+		lockDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(ctx, table, rows, id, options)
+			lockDone <- err
+		}()
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("first Lock did not reach GetBind")
+		}
+		peerCtx, cancelPeer := context.WithCancel(ctx)
+		defer cancelPeer()
+		observedPeer := &doneObservedContext{Context: peerCtx, doneObserved: make(chan struct{})}
+		peerDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(observedPeer, table, rows, id, options)
+			peerDone <- err
+		}()
+		select {
+		case <-observedPeer.doneObserved:
+		case <-ctx.Done():
+			t.Fatal("second Lock did not enter binding")
+		}
+		cancelPeer()
+		select {
+		case err := <-peerDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-ctx.Done():
+			t.Fatal("canceled Lock waited for the other binding")
+		}
+		require.True(t, source.activeTxnHolder.hasActiveTxn(id))
+
+		pending, err := source.ResolveRollbackCleanup(id, nil)
+		require.NoError(t, err)
+		require.False(t, pending)
+		require.False(t, source.activeTxnHolder.hasActiveTxn(id))
+
+		// Bind another peer for the reused ID, then promote that generation
+		// with a Lock which is blocked on the already-bound local table.
+		nextPeerCtx, cancelNextPeer := context.WithCancel(ctx)
+		defer cancelNextPeer()
+		nextPeer := &doneObservedContext{Context: nextPeerCtx, doneObserved: make(chan struct{})}
+		nextPeerDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(nextPeer, table, rows, id, options)
+			nextPeerDone <- err
+		}()
+		select {
+		case <-nextPeer.doneObserved:
+		case <-ctx.Done():
+			t.Fatal("new generation did not enter binding")
+		}
+		local := source.tableGroups.get(0, nextTable).(*localLockTable)
+		local.mu.Lock()
+		releaseLocal := sync.OnceFunc(local.mu.Unlock)
+		defer releaseLocal()
+		nextLockDone := make(chan error, 1)
+		go func() {
+			_, err := source.Lock(ctx, nextTable, rows, id, options)
+			nextLockDone <- err
+		}()
+		require.Eventually(t, func() bool {
+			txn := source.activeTxnHolder.getActiveTxn(id, false, "")
+			if txn == nil {
+				return false
+			}
+			if txn.TryLock() {
+				txn.Unlock()
+				return false
+			}
+			return true
+		}, time.Second, time.Millisecond)
+
+		cancelNextPeer()
+		select {
+		case err := <-nextPeerDone:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-ctx.Done():
+			t.Fatal("canceled bind waited for a promoted holder's mutex")
+		}
+		releaseLocal()
+		select {
+		case err := <-nextLockDone:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("new generation did not acquire its own table")
+		}
+		resume()
+		select {
+		case err := <-lockDone:
+			require.ErrorIs(t, err, ErrTxnNotFound)
+		case <-ctx.Done():
+			t.Fatal("first Lock did not return after GetBind")
+		}
+		_, held, err := owner.GetLockHolder(ctx, table, row, options)
+		require.NoError(t, err)
+		require.False(t, held)
+		holder, held, err := source.GetLockHolder(ctx, nextTable, row, options)
+		require.NoError(t, err)
+		require.True(t, held)
+		require.Equal(t, id, holder.TxnID)
+	})
+}
+
 func TestLockWaitTimeoutCallerContextBeforeCeiling(t *testing.T) {
 	testLockWaitHonorsCallerDeadline(t, 10)
 }
@@ -6742,13 +6880,13 @@ func TestPostGateAdmissionsDoNotBlockDrainSnapshot(t *testing.T) {
 			_, err := s.Lock(context.Background(), table, newTestRows(1), txnID, options)
 			require.NoError(t, err)
 
-			preDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1))
+			preDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1), false)
 			require.True(t, admitted)
 			require.True(t, preDrain.preDrain)
 			s.checkCanMoveGroupTables()
 
 			for range 100 {
-				postDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1))
+				postDrain, admitted := s.beginLockAdmission(txnID, options, table, newTestRows(1), false)
 				require.True(t, admitted)
 				require.False(t, postDrain.preDrain)
 				s.endLockAdmission(postDrain)

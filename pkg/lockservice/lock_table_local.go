@@ -312,6 +312,7 @@ const (
 	normalLocalUnlock localUnlockMode = iota
 	handoffLocalUnlock
 	immediateLocalUnlock
+	resolverLocalUnlock
 )
 
 func (l *localLockTable) unlock(
@@ -349,7 +350,7 @@ func (l *localLockTable) releaseLocks(
 	locks := ls.slice()
 	defer locks.unref()
 
-	if mode == immediateLocalUnlock {
+	if mode == immediateLocalUnlock || mode == resolverLocalUnlock {
 		if !l.mu.TryLock() {
 			return ErrLockTimeout
 		}
@@ -567,11 +568,15 @@ func (l *localLockTable) lockHandoffTargets(source *activeTxn, targets map[strin
 		if bytes.Equal(source.txnID, id) {
 			return ErrTxnNotFound
 		}
-		replacement, created := l.txnHolder.prepareHandoffTxn(id, source.remoteService)
+		entry, created := l.txnHolder.prepareHandoffTxn(id, source.remoteService)
+		replacement := entry.txn
+		if replacement == nil {
+			return moerr.NewLockNeedUpgradeNoCtx()
+		}
 		if !created && !replacement.TryLock() {
 			return ErrLockTimeout
 		}
-		if !bytes.Equal(replacement.txnID, id) {
+		if replacement.generation != entry.generation || !bytes.Equal(replacement.txnID, id) {
 			replacement.Unlock()
 			return ErrLockTimeout
 		}

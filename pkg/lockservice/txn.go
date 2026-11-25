@@ -339,7 +339,7 @@ func (txn *activeTxn) closeWithContext(
 		lockTableFunc,
 		logger,
 		true,
-		false,
+		normalCleanup,
 		mutations...,
 	)
 }
@@ -359,7 +359,7 @@ func (txn *activeTxn) closeWithoutFreeWithContext(
 		lockTableFunc,
 		logger,
 		false,
-		false,
+		normalCleanup,
 		mutations...,
 	)
 }
@@ -370,7 +370,8 @@ func (txn *activeTxn) closeWithContextInternal(
 	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint32, uint64) (lockTable, error),
 	logger *log.MOLogger,
-	release, immediateLocal bool,
+	release bool,
+	mode txnCleanupMode,
 	mutations ...pb.ExtraMutation,
 ) error {
 	logTxnReadyToClose(logger, txn)
@@ -430,18 +431,7 @@ func (txn *activeTxn) closeWithContextInternal(
 						txn,
 						table,
 					)
-					var err error
-					if immediateLocal {
-						if local, ok := l.(*localLockTable); ok {
-							err = local.releaseLocks(txn, cs, commitTS, immediateLocalUnlock)
-						} else {
-							err = ErrLockTimeout
-						}
-					} else if unlocker, ok := l.(contextUnlocker); ok {
-						err = unlocker.unlockWithContext(ctx, txn, cs, commitTS, mutations...)
-					} else {
-						l.unlock(txn, cs, commitTS, mutations...)
-					}
+					err := unlockTxnTable(ctx, l, txn, cs, commitTS, mode, mutations...)
 					// The completion log reads cs before a successful detach releases it.
 					logTxnUnlockTableCompleted(
 						logger,
@@ -492,6 +482,36 @@ func (txn *activeTxn) closeWithContextInternal(
 		reuse.Free(txn, nil)
 	}
 	return firstErr
+}
+
+func unlockTxnTable(
+	ctx context.Context,
+	table lockTable,
+	txn *activeTxn,
+	rows *cowSlice,
+	commitTS timestamp.Timestamp,
+	mode txnCleanupMode,
+	mutations ...pb.ExtraMutation,
+) error {
+	if mode == localRollbackCleanup {
+		if local, ok := table.(*localLockTable); ok {
+			return local.releaseLocks(txn, rows, commitTS, immediateLocalUnlock)
+		}
+		return ErrLockTimeout
+	}
+	if mode == resolverCleanup {
+		switch table := table.(type) {
+		case *localLockTable:
+			return table.releaseLocks(txn, rows, commitTS, resolverLocalUnlock, mutations...)
+		case *localLockTableProxy:
+			return table.releaseLocks(ctx, txn, rows, commitTS, true)
+		}
+	}
+	if unlocker, ok := table.(contextUnlocker); ok {
+		return unlocker.unlockWithContext(ctx, txn, rows, commitTS, mutations...)
+	}
+	table.unlock(txn, rows, commitTS, mutations...)
+	return nil
 }
 
 // removeClosedLockTable forgets a successfully released table while an

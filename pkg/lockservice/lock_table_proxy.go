@@ -166,6 +166,25 @@ func (lp *localLockTableProxy) unlockWithContext(
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	_ ...pb.ExtraMutation) error {
+	return lp.releaseLocks(ctx, txn, ls, commitTS, false)
+}
+
+func (lp *localLockTableProxy) releaseLocks(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice,
+	commitTS timestamp.Timestamp,
+	tryLock bool,
+) error {
+	if tryLock {
+		if !lp.mu.TryLock() {
+			return ErrLockTimeout
+		}
+	} else {
+		lp.mu.Lock()
+	}
+	defer lp.mu.Unlock()
+
 	rows := ls.slice()
 	defer rows.unref()
 
@@ -182,8 +201,6 @@ func (lp *localLockTableProxy) unlockWithContext(
 	var remoteMutations []pb.ExtraMutation
 	var updates []holderUpdate
 	var newPending []string
-	lp.mu.Lock()
-	defer lp.mu.Unlock()
 	rows.iter(func(key []byte) bool {
 		row := util.UnsafeBytesToString(key)
 		if v, ok := lp.mu.holders[row]; ok {

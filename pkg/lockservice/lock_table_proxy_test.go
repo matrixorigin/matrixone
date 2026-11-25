@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -342,7 +343,7 @@ func TestProxySharedUnlock(t *testing.T) {
 	)
 }
 
-func TestProxyUnlockCleansBookkeepingAfterContextExpiry(t *testing.T) {
+func TestUnknownCommitYieldsWithoutChangingProxyHolder(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1", "s2"},
@@ -382,28 +383,22 @@ func TestProxyUnlockCleansBookkeepingAfterContextExpiry(t *testing.T) {
 			}
 			s2.unknownCommitResolver.mu.Unlock()
 
-			// Expire the resolver context while the unknown-commit resolver is
-			// waiting on the source txn mutex. It must leave both proxy and owner
-			// on the old holder so a later orphan cleanup cannot release a lock
-			// that the proxy still treats as held by survivor.
+			// The resolver must yield while the source transaction is busy,
+			// preserving the proxy and owner holder for its next attempt.
 			timedOut.Lock()
-			unlockCtx, unlockCancel := context.WithCancel(context.Background())
-			defer unlockCancel()
+			releaseTxn := sync.OnceFunc(timedOut.Unlock)
+			defer releaseTxn()
 			unlocked := make(chan error, 1)
 			go func() {
-				unlocked <- s2.unlockUnknownCommit(
-					unlockCtx,
-					timedOutTxn,
-					timestamp.Timestamp{},
-				)
+				unlocked <- s2.unlockUnknownCommit(ctx, timedOutTxn, timestamp.Timestamp{})
 			}()
-			require.Eventually(t, func() bool {
-				return s2.activeTxnHolder.hasActiveTxn(timedOutTxn)
-			}, time.Second, time.Millisecond)
-			unlockCancel()
-			timedOut.Unlock()
-
-			require.ErrorIs(t, <-unlocked, context.Canceled)
+			select {
+			case err := <-unlocked:
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-ctx.Done():
+				t.Fatal("unknown-commit cleanup waited for the source transaction mutex")
+			}
+			releaseTxn()
 
 			// The failed handoff cannot publish survivor as the remote holder.
 			// Keeping the old source txn active makes CheckActiveTxn report it as
