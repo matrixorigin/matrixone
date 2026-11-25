@@ -373,21 +373,22 @@ func (s *S3FS) touchIndexObject(diskPath string) {
 	_ = os.Chtimes(diskPath, now, now)
 }
 
-// deleteIndexObjects deletes the index-file cache's entries of the objects of filePaths.
+// deleteIndexObjects deletes the index-file cache's entries of the objects of filePaths,
+// each one whatever the others return, and returns their errors joined.
 func (s *S3FS) deleteIndexObjects(ctx context.Context, filePaths []string) error {
 	if !s.cachesIndexObjects() {
 		return nil
 	}
+	var errs []error
 	for _, filePath := range filePaths {
 		p, err := parseFilePathAtService(filePath, s.name)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
-		if err := s.indexFileCache.Delete(ctx, IndexObjectEntry(p.File)); err != nil {
-			return err
-		}
+		errs = append(errs, s.indexFileCache.Delete(ctx, IndexObjectEntry(p.File)))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // sourceErrReader records the error, io.EOF included, a read of its Reader returns.

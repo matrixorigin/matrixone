@@ -577,7 +577,7 @@ func (ls *LocalDisttaeDataSource) Next(
 			}
 
 			info = ls.rangeSlice.Get(ls.rangesCursor)
-			if !ls.rc.prefetchDisabled && fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
+			if !ls.rc.prefetchDisabled && len(ls.OrderBy) == 0 && fileservice.GetFileServicePolicy(ctx).Any(fileservice.ColumnPrefetch) {
 				ls.rc.prefetch.Reach(ctx, ls.fs, info, seqNums)
 			}
 			ls.rangesCursor++
@@ -1764,7 +1764,9 @@ func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
 
 func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
 	policy := fileservice.GetFileServicePolicy(ctx)
-	if ls.rc.prefetchDisabled || ls.rc.fewBlocks && !policy.Any(fileservice.ColumnPrefetch) {
+	columns := policy.Any(fileservice.ColumnPrefetch)
+	// An ordered scan prefetches no columns.
+	if ls.rc.prefetchDisabled || columns && len(ls.OrderBy) > 0 || ls.rc.fewBlocks && !columns {
 		return
 	}
 	n := ls.rangeSlice.Len()
