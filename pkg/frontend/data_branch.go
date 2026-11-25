@@ -2295,6 +2295,7 @@ func constructChangeHandle(
 	// This narrows the time window on the source side so only changes within the
 	// snapshot range are collected.  The base (destination) side is not narrowed.
 	if betweenFrom != nil && betweenTo != nil {
+		tables.boundedPick = true
 		bFrom := betweenFrom.Next()
 		bTo := *betweenTo
 		// The shared prefix before the first divergence is still handled
@@ -2302,7 +2303,6 @@ func constructChangeHandle(
 		// source generation, including the parent of a later logical fork.
 		tarForkTS, _ := branchInfo.lcaProbeSnapshots(tarSnapshot, baseSnapshot, true)
 		hasLCA := branchInfo.hasLCA()
-		useWindowStart := !hasLCA || betweenFrom.GT(&tarForkTS)
 		j := 0
 		lastDropped := -1
 		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
@@ -2325,9 +2325,10 @@ func constructChangeHandle(
 				e = bTo
 			}
 			if f.LE(&e) {
-				if j == 0 && useWindowStart {
+				if j == 0 {
 					seg, snapshot := i, *betweenFrom
-					if bFrom.LT(&tarRange.from[i]) {
+					coversLowerBound := !bFrom.LT(&tarRange.from[i])
+					if !coversLowerBound {
 						// The next generation is not visible yet. Its
 						// captured parent image supplies the baseline.
 						seg = lastDropped
@@ -2335,7 +2336,10 @@ func constructChangeHandle(
 							snapshot = tarRange.end[seg]
 						}
 					}
-					if seg >= 0 && (!hasLCA || snapshot.GT(&tarForkTS)) {
+					// Even before the first source fork, a contributing
+					// ancestor segment can contain lo and define the real
+					// before-image (the shared prefix was already pruned).
+					if seg >= 0 && (coversLowerBound || !hasLCA || snapshot.GT(&tarForkTS)) {
 						ident := tarRange.segmentIdentity(seg, tarIdent)
 						tables.pickWindowStart = &dataBranchPickWindowStart{
 							tableID:  tarRange.rel[seg].GetTableID(identityCtx(ctx, ident)),

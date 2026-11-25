@@ -409,7 +409,22 @@ func appendPickedBatchRows(
 					}
 				}
 				rowDirectUpdate = true
-				requiresNative = len(tblStuff.def.indexedSpecialUpdateIdxes) != 0
+			}
+			if rowDirectUpdate && destinationRow >= 0 && !requiresNative {
+				// Staging omits uniquely indexed special columns. For a
+				// conflict the destination, not the source's lo, decides
+				// whether those columns must be assigned.
+				for _, idx := range tblStuff.def.indexedSpecialUpdateIdxes {
+					cmp, err := compareSingleValInVector(ctx, ses, rowIdx, destinationRow,
+						wrapped.batch.Vecs[idx], destinationRows.Vecs[idx])
+					if err != nil {
+						return err
+					}
+					if cmp != 0 {
+						requiresNative = true
+						break
+					}
+				}
 			}
 		}
 		if rowDirectUpdate && wrapped.kind == diffDelete {

@@ -1210,7 +1210,7 @@ func dataBranchPickWindowProbe(
 		lineageOnly = dagInfo.pathFromLCAToTarLineageOnly[i:]
 		creationDefs = slices.Clone(pathDefs)
 		for j := len(pathDefs) - 1; j > 0; j-- {
-			if !lineageOnly[j] || pathDefs[j].Version == 0 {
+			if pathDefs[j].Version == 0 {
 				continue
 			}
 			copyRel, copyIdent, copySP := tblStuff.tarRel, tarIdent, tarSP
@@ -1221,9 +1221,13 @@ func dataBranchPickWindowProbe(
 					return tableStuff{}, err
 				}
 			}
-			creationDefs[j], err = dataBranchPickWindowCopyCreation(ctx, ses, bh, copyRel, copyIdent, copySP)
+			creationDefs[j], err = dataBranchPickWindowCreation(ctx, ses, bh, copyRel, copyIdent, copySP)
 			if err != nil {
 				return tableStuff{}, err
+			}
+			if lineageOnly[j] && creationDefs[j].Version != 0 {
+				return tableStuff{}, moerr.NewNotSupportedNoCtxf(
+					"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for table %d at the window start", path[j])
 			}
 		}
 	}
@@ -1242,14 +1246,26 @@ func dataBranchPickWindowProbe(
 		startCol := tarCol
 		for j := len(pathDefs) - 1; j > 0 && startCol != nil; j-- {
 			prev := pathDefs[j-1]
-			if lineageOnly[j] && isDataBranchUserVisibleColumn(startCol) {
+			if isDataBranchUserVisibleColumn(startCol) {
 				created := creationDefs[j]
 				createdCol := dataBranchColumnDefByIdentity(created, startCol)
 				if createdCol == nil && dataBranchColumnDefByName(created, startCol.Name) == nil {
 					startCol = nil // Added within the copied generation.
 					break
 				}
-				if createdCol == nil || !strings.EqualFold(createdCol.Name, startCol.Name) ||
+				if !lineageOnly[j] {
+					if createdCol == nil {
+						return tableStuff{}, moerr.NewNotSupportedNoCtxf(
+							"DATA BRANCH PICK cannot establish fork column identity for %q", name)
+					}
+					// A logical fork copies its creation names. Later
+					// in-place names cannot identify the parent's column.
+					startCol = dataBranchColumnDefByLogicalName(prev, createdCol)
+					continue
+				}
+				if createdCol == nil ||
+					(!strings.EqualFold(createdCol.Name, startCol.Name) &&
+						dataBranchColumnDefByName(pathDefs[j], createdCol.Name) != nil) ||
 					!isDataBranchLogicalTypeEquivalent(createdCol.Typ, startCol.Typ) {
 					return tableStuff{}, moerr.NewNotSupportedNoCtxf(
 						"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for %q at the window start",
@@ -1288,13 +1304,12 @@ func dataBranchPickWindowProbe(
 	return tblStuff, nil
 }
 
-func dataBranchPickWindowCopyCreation(
+func dataBranchPickWindowCreation(
 	ctx context.Context, ses *Session, bh BackgroundExec,
 	copyRel engine.Relation, ident branchIdentity, snapshot types.TS,
 ) (*plan2.TableDef, error) {
-	// COPY coordinates are table-local. A later rename can make a reassigned
-	// coordinate look like the old generation's column. Compare against the
-	// COPY's own initial layout before trusting its versioned definition.
+	// Coordinates are table-local. Bind the versioned definition to the
+	// same physical table at creation before crossing a lineage edge.
 	tableID := copyRel.GetTableID(identityCtx(ctx, ident))
 	cts, err := getTablesCreationCommitTS(ctx, ses, ident, copyRel, ident, copyRel, []types.TS{snapshot, snapshot})
 	if err != nil {
@@ -1304,12 +1319,7 @@ func dataBranchPickWindowCopyCreation(
 	if err != nil {
 		return nil, err
 	}
-	createdDef := createdRel.GetTableDef(identityCtx(ctx, ident))
-	if createdDef.Version != 0 {
-		return nil, moerr.NewNotSupportedNoCtxf(
-			"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for table %d at the window start", tableID)
-	}
-	return createdDef, nil
+	return createdRel.GetTableDef(identityCtx(ctx, ident)), nil
 }
 
 func dataBranchPickWindowCopyColumn(
@@ -1872,6 +1882,42 @@ func hashDiffIfHasLCA(
 			"data branch source update is missing %d replacement row(s)",
 			len(restoreMissingKeys),
 		)
+	}
+
+	if copt.preservePickConflicts && tblStuff.boundedPick && tblStuff.def.pkKind != fakeKind &&
+		copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT && tarDataHashmap.ItemCount() != 0 {
+		// A window INSERT has no old source row to match during phase 2.
+		// Emit conflicts for its remaining destination deletions before
+		// the writer checks the live destination and inserts the key.
+		for _, deleted := range baseDeleteBatches {
+			if deleted.fromUpdate {
+				continue
+			}
+			matches, err := tarDataHashmap.GetByVectors([]*vector.Vector{deleted.batch.Vecs[tblStuff.def.pkColIdx]})
+			if err != nil {
+				return err
+			}
+			var selected []int64
+			for i, match := range matches {
+				if match.Exists {
+					selected = append(selected, int64(i))
+				}
+			}
+			if len(selected) == 0 {
+				continue
+			}
+			markers := tblStuff.retPool.acquireRetBatch(tblStuff, false, ses.proc.Mp())
+			if err := markers.Union(deleted.batch, selected, ses.proc.Mp()); err != nil {
+				tblStuff.retPool.releaseRetBatch(markers, false)
+				return err
+			}
+			// It is only a marker, not a DELETE or an instruction to UPDATE
+			// a missing destination row. ACCEPT still takes the INSERT path.
+			if stop, err := emitBatch(emit, batchWithKind{batch: markers, name: deleted.name,
+				kind: diffDelete, side: diffSideBase, fromUpdate: true}, false, tblStuff.retPool); err != nil || stop {
+				return err
+			}
+		}
 	}
 
 	// what can I do with these left base updates/inserts ?
@@ -3621,7 +3667,7 @@ func buildHashmapForTable(
 			// the tombstone for the destination-fork probe; a true net-zero
 			// insert/delete will not find a before-image there.
 			if staleDataCount >= totalTombstones &&
-				!(side == "base" && tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind) {
+				!(side == "base" && tblStuff.boundedPick && tblStuff.def.pkKind != fakeKind) {
 				if _, err3 = cursor.PopByEncodedKeyValue(
 					key, tombstoneRet.Rows[maxIdx], false,
 				); err3 != nil {

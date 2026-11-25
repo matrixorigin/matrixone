@@ -391,3 +391,99 @@ select k,v from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: ACCEPT replaces indexed ENUM values that differ only at the destination
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int, e enum('red','blue') unique);
+data branch create table src from root;
+data branch create table dst from root;
+insert into dst values (1,99,'blue');
+insert into src values (1,10,'red');
+create snapshot pick_window_lo for table pick_window src;
+update src set v=20 where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst where e='red';
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: An in-window reinsert conflicts with a destination delete
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10);
+data branch create table src from root;
+data branch create table dst from root;
+delete from src where k=1;
+create snapshot pick_window_lo for table pick_window src;
+delete from dst where k=1;
+insert into src values (1,30);
+create snapshot pick_window_hi for table pick_window src;
+-- @regex("conflict: src INSERT and dst INSERT", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Window includes parent updates before the first source fork
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10);
+data branch create table dst from root;
+update root set v=20;
+create snapshot pick_window_lo for table pick_window root;
+update root set v=30;
+data branch create table src from root;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: A child rename does not turn a parent's net-zero change into an update
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10);
+data branch create table dst from root;
+data branch create table par from root;
+update par set v=20;
+create snapshot pick_window_lo for table pick_window par;
+update par set v=25;
+data branch create table src from par;
+alter table src algorithm=inplace, rename column v to vv;
+update src set vv=20;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: COPY with an unambiguous later shared-column rename
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10);
+data branch create table src from root;
+data branch create table dst from root;
+update src set v=20;
+create snapshot pick_window_lo for table pick_window src;
+alter table src algorithm=copy, modify column v int;
+alter table src algorithm=inplace, rename column v to vv;
+update src set vv=30;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;

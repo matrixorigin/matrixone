@@ -281,6 +281,7 @@ type tableStuff struct {
 
 	// PICK may cut into an existing source generation after its lineage
 	// boundary. Resolve source updates against that window's before image.
+	boundedPick     bool
 	pickWindowStart *dataBranchPickWindowStart
 
 	def struct {
