@@ -70,7 +70,7 @@ type blockingBackendClient struct {
 	*mockBackendClient
 	appendStarted chan struct{}
 	release       chan struct{}
-	startOnce     sync.Once
+	startOnce     *sync.Once
 }
 
 type deadlineBlockingBackendClient struct {
@@ -103,11 +103,13 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	backend := NewMockBackend()
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var startOnce sync.Once
 	factory := func() (logservice.Client, error) {
 		return &blockingBackendClient{
 			mockBackendClient: newMockBackendClient(backend),
 			appendStarted:     started,
 			release:           release,
+			startOnce:         &startOnce,
 		}, nil
 	}
 	cfg := NewConfig("", WithConfigOptClientFactory(factory), WithConfigOptMaxClient(2))
@@ -116,7 +118,10 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	// to one, so the second accepted committer reaches the worker handoff while
 	// the first task is still running.
 	d.workers.Release()
-	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true))
+	panics := make(chan any, 2)
+	d.workers, _ = ants.NewPool(1, ants.WithNonblocking(true), ants.WithPanicHandler(func(v any) {
+		panics <- v
+	}))
 
 	first := entry.MockEntryWithPayload([]byte("first"))
 	second := entry.MockEntryWithPayload([]byte("second"))
@@ -149,6 +154,39 @@ func TestCommitSubmissionWaitsForWorkerHandoff(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
 	require.NoError(t, d.Close())
+	require.Empty(t, panics, "append worker panicked")
+	records, _, err := backend.Read(context.Background(), 1, DefaultRecordSize)
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	for i, record := range records {
+		require.Equal(t, uint64(i+1), LogEntry(record.Payload()).GetStartDSN())
+	}
+}
+
+type retryTruncateReadClient struct {
+	*mockBackendClient
+	calls int
+}
+
+func (c *retryTruncateReadClient) GetTruncatedLsn(context.Context) (uint64, error) {
+	c.calls++
+	if c.calls == 1 {
+		return 0, errors.New("transient truncation read error")
+	}
+	return 7, nil
+}
+
+func TestGetTruncatedPSNRetriesTransientRead(t *testing.T) {
+	client := &retryTruncateReadClient{mockBackendClient: newMockBackendClient(NewMockBackend())}
+	cfg := NewConfig("", WithConfigOptMaxClient(1), WithConfigOptMaxTimeout(2*time.Second),
+		WithConfigOptClientFactory(func() (logservice.Client, error) { return client, nil }))
+	d := NewLogServiceDriver(&cfg)
+	defer func() { require.NoError(t, d.Close()) }()
+
+	psn, err := d.getTruncatedPSNFromBackend(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), psn)
+	require.Equal(t, 2, client.calls)
 }
 
 func TestSubmitCommitWaitsAfterCommitterCompletion(t *testing.T) {

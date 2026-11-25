@@ -106,6 +106,14 @@ func (w *StoreImpl) Close() error {
 	return w.driver.Close()
 }
 
+// ShutdownDone reports asynchronous driver shutdown. Local WAL closes synchronously.
+func (w *StoreImpl) ShutdownDone() <-chan struct{} {
+	if d, ok := w.driver.(*logservicedriver.LogServiceDriver); ok {
+		return d.ShutdownDone()
+	}
+	return nil
+}
+
 func (w *StoreImpl) drain() {
 	// Take ownership after any append that passed the closed check has enqueued.
 	w.appendMu.Lock()

@@ -233,12 +233,12 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	defer client.Putback()
 
 	for {
-		ctx, cancel := context.WithTimeoutCause(
+		attemptCtx, cancel := context.WithTimeoutCause(
 			ctx,
 			d.config.MaxTimeout,
 			moerr.CauseGetLogserviceTruncate,
 		)
-		psn, err = client.wrapped.GetTruncatedLsn(ctx)
+		psn, err = client.wrapped.GetTruncatedLsn(attemptCtx)
 		cancel()
 		if err == nil {
 			break

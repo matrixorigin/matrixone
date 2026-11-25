@@ -96,6 +96,7 @@ type LogServiceDriver struct {
 	truncateCtx    context.Context
 	cancelTruncate context.CancelFunc
 	closeC         chan struct{}
+	shutdownDone   chan struct{}
 
 	workers   *ants.Pool
 	closeOnce sync.Once
@@ -124,6 +125,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
 		closeC:              make(chan struct{}),
+		shutdownDone:        make(chan struct{}),
 		onAppendFailure: func(err error) {
 			logutil.Fatal(
 				"Wal-Cannot-Append",
@@ -162,6 +164,11 @@ func (d *LogServiceDriver) Close() error {
 	return d.CloseAfterDrain(nil)
 }
 
+// ShutdownDone closes after the queues, workers, and LogService clients stop.
+func (d *LogServiceDriver) ShutdownDone() <-chan struct{} {
+	return d.shutdownDone
+}
+
 // CloseAfterDrain includes the WAL store's accepted appends and queue shutdown
 // in the driver's close deadline. The drain may still submit to the driver.
 func (d *LogServiceDriver) CloseAfterDrain(drain func()) error {
@@ -180,7 +187,11 @@ func (d *LogServiceDriver) CloseAfterDrain(drain func()) error {
 			if drain != nil {
 				drain()
 			}
-			done <- d.closeGracefully()
+			err := d.closeGracefully()
+			if err == nil {
+				close(d.shutdownDone)
+			}
+			done <- err
 		}()
 		select {
 		case d.closeErr = <-done:

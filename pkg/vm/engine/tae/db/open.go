@@ -80,14 +80,14 @@ func Open(
 		if err == nil && dbLocker != nil {
 			db.DBLocker, dbLocker = dbLocker, nil
 		}
-		if dbLocker != nil {
-			dbLocker.Close()
-		}
 		if err != nil {
 			if err2 := rollbackSteps.Apply("open-tae", true, 1); err2 != nil {
 				panic(fmt.Sprintf("open-tae: rollback failed, %s", err2))
 			}
 			logger = logutil.Error
+		}
+		if dbLocker != nil {
+			dbLocker.Close()
 		}
 		logger(
 			Phase_Open+"-end",
