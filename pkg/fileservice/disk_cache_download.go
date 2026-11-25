@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"os"
@@ -455,7 +454,7 @@ var sourceIdleTimeout = readWriteTimeout
 var errSourceIdle = moerr.NewInternalErrorNoCtx("fileservice: no bytes from the source within the idle timeout")
 
 // errSourceShort is the error of a source that ended before the range it was read for.
-var errSourceShort = fmt.Errorf("fileservice: source ended before its range: %w", io.ErrUnexpectedEOF)
+var errSourceShort = moerr.NewInternalErrorNoCtx("fileservice: source ended before its range")
 
 // idleReader reads r, which reads through ctx, and cancels ctx when a Read waits for
 // bytes past sourceIdleTimeout while it is not attached. While attached, a Read is
