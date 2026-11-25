@@ -391,8 +391,6 @@ func TestNonVotingStartReopensDisk(t *testing.T) {
 }
 
 func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	cfg := getServiceTestConfig()
 	useRecoveryRPCSocket(t, &cfg)
 	cfg.DataDir = t.TempDir()
@@ -416,9 +414,10 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	})
 
 	const (
-		control = hakeeper.DefaultHAKeeperShardID
-		shard   = uint64(1)
-		replica = uint64(2)
+		phaseTimeout = 30 * time.Second
+		control      = hakeeper.DefaultHAKeeperShardID
+		shard        = uint64(1)
+		replica      = uint64(2)
 	)
 	require.NoError(t, service.store.startHAKeeperReplica(1, map[uint64]string{1: cfg.UUID}, false))
 	var term uint64
@@ -427,8 +426,20 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 		term = observed
 		return err == nil && valid && leader == 1
 	}
-	require.Eventually(t, hasLeader, 8*time.Second, 25*time.Millisecond)
-	require.NoError(t, service.store.setInitialClusterInfo(1, 1, 1, 100, nil, nil))
+	require.Eventually(t, hasLeader, phaseTimeout, 25*time.Millisecond)
+	// Give each operation its own budget. Reopening the on-disk store
+	// must not use up the time available for the recovery assertions.
+	propose := func(shardID uint64, command []byte) uint64 {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), phaseTimeout)
+		defer cancel()
+		session := service.store.nh.GetNoOPSession(shardID)
+		result, err := service.store.propose(ctx, session, command)
+		require.NoError(t, err, "propose on shard %d", shardID)
+		return result.Value
+	}
+	initial := hakeeper.GetInitialClusterRequestCmd(1, 1, 1, 100, nil, nil)
+	require.Equal(t, uint64(pb.HAKeeperCreated), propose(control, initial))
 
 	members := map[uint64]string{replica: cfg.UUID}
 	start := pb.ScheduleCommand{
@@ -438,9 +449,7 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 			Replica: pb.Replica{UUID: cfg.UUID, ShardID: shard, ReplicaID: replica},
 		},
 	}
-	session := service.store.nh.GetNoOPSession(control)
-	_, err := service.store.nh.SyncPropose(ctx, session, hakeeper.GetUpdateCommandsCmd(term, []pb.ScheduleCommand{start}))
-	require.NoError(t, err)
+	propose(control, hakeeper.GetUpdateCommandsCmd(term, []pb.ScheduleCommand{start}))
 
 	// Leave the files produced by Dragonboat before openDataReplica can
 	// save the new replica in MatrixOne's metadata.
@@ -449,7 +458,7 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	require.NoError(t, service.Close())
 	service = nil
 	open()
-	require.Eventually(t, hasLeader, 8*time.Second, 25*time.Millisecond)
+	require.Eventually(t, hasLeader, phaseTimeout, 25*time.Millisecond)
 	require.True(t, service.store.nh.HasNodeInfo(shard, replica))
 	require.Equal(t, int64(-1), service.store.getReplicaID(shard))
 
@@ -490,24 +499,31 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	delete(service.store.mu.skippedZombies, key)
 	service.store.mu.Unlock()
 
-	client, err := NewLogHAKeeperClient(ctx, cfg.UUID, HAKeeperClientConfig{
+	dialCtx, cancelDial := context.WithTimeout(t.Context(), phaseTimeout)
+	client, err := NewLogHAKeeperClient(dialCtx, cfg.UUID, HAKeeperClientConfig{
 		ServiceAddresses: []string{cfg.LogServiceServiceAddr()},
 	})
+	cancelDial()
 	require.NoError(t, err)
 	defer func() { require.NoError(t, client.Close()) }()
-	batch, err := client.SendLogHeartbeat(ctx, service.store.getHeartbeatMessage())
-	require.NoError(t, err)
+	heartbeat := func() pb.CommandBatch {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), phaseTimeout)
+		defer cancel()
+		batch, err := client.SendLogHeartbeat(ctx, service.store.getHeartbeatMessage())
+		require.NoError(t, err)
+		return batch
+	}
+	batch := heartbeat()
 	require.Equal(t, []pb.ScheduleCommand{start}, batch.Commands)
 	service.handleCommands(batch.Commands)
 	require.Equal(t, int64(replica), service.store.getReplicaID(shard))
 
 	require.Eventually(t, func() bool {
-		attempt, stop := context.WithTimeout(ctx, 300*time.Millisecond)
-		defer stop()
-		_, err := service.store.nh.SyncPropose(attempt, service.store.nh.GetNoOPSession(shard), getTestUserEntry())
-		return err == nil
-	}, 8*time.Second, 25*time.Millisecond)
-	batch, err = client.SendLogHeartbeat(ctx, service.store.getHeartbeatMessage())
-	require.NoError(t, err)
+		leader, _, valid, err := service.store.nh.GetLeaderID(shard)
+		return err == nil && valid && leader == replica
+	}, phaseTimeout, 25*time.Millisecond, "the recovered data shard must elect a leader")
+	propose(shard, getTestUserEntry())
+	batch = heartbeat()
 	require.Empty(t, batch.Commands, "the retained Start is acknowledged by the recovered replica")
 }
