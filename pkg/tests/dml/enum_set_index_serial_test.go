@@ -418,17 +418,32 @@ where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).S
 			expectCorrupt("delete u,s from unique_rows u join delete_side s on u.id=s.id where u.id=1")
 			require.Equal(t, 3, count("select count(*) from delete_side"))
 
+			_, entriesBeforeDelete := readState()
+			ownerFourPresent := false
+			for _, entry := range strings.Split(entriesBeforeDelete, ",") {
+				ownerFourPresent = ownerFourPresent || strings.HasSuffix(entry, ":4")
+			}
+			require.True(t, ownerFourPresent)
+			var expectedEntries []string
+			for _, entry := range strings.Split(entriesBeforeDelete, ",") {
+				if !strings.HasSuffix(entry, ":2") && !strings.HasSuffix(entry, ":4") {
+					expectedEntries = append(expectedEntries, entry)
+				}
+			}
 			result := exec("delete from unique_rows where id in (2,4)")
 			deleted, err := result.RowsAffected()
 			require.NoError(t, err)
 			require.EqualValues(t, 2, deleted)
+			base, entries := readState()
+			require.Equal(t, "1,3", base)
+			require.Equal(t, expectedEntries, strings.Split(entries, ","))
 			result = exec("delete u from unique_rows u join delete_side s on s.id=4 where u.id=3")
 			deleted, err = result.RowsAffected()
 			require.NoError(t, err)
 			require.EqualValues(t, 1, deleted)
-			base, _ := readState()
+			base, entries = readState()
 			require.Equal(t, "1", base)
-			require.Equal(t, 1, count("select count(*) from "+hidden+" where __mo_index_pri_col=1"))
+			require.Equal(t, expectedEntries, strings.Split(entries, ","))
 		}
 
 		// R-tree indexes omit NULL geometries. An ENUM primary-key owner alias
