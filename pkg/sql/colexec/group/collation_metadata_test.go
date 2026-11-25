@@ -92,7 +92,7 @@ func TestMergeGroupExtraBufCollationAdmission(t *testing.T) {
 				for _, payload := range payloads {
 					extra.Write(payload)
 				}
-				partial.ExtraBuf = extra.Bytes()
+				require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 				wire, err := partial.MarshalBinaryWithBuffer(new(bytes.Buffer), true)
 				require.NoError(t, err)
 				decoded := batch.NewWithSize(0)

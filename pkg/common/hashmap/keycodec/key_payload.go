@@ -17,9 +17,9 @@ package keycodec
 import (
 	"context"
 	"math"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -36,7 +36,38 @@ type KeyPayload struct {
 	rest  [][]byte
 	typ   types.Type
 	rows  uint64
-	lease bufferlease.BufferLease
+	refs  *payloadRefs
+}
+
+// payloadRefs is the payload's shared reference count: a payload is handed to
+// several consumers, and the last Release runs the creator's cleanup once.
+type payloadRefs struct {
+	count   atomic.Int64
+	release func()
+}
+
+func (r *payloadRefs) retain() bool {
+	for {
+		count := r.count.Load()
+		if count <= 0 {
+			return false
+		}
+		if r.count.CompareAndSwap(count, count+1) {
+			return true
+		}
+	}
+}
+
+func (r *payloadRefs) drop() {
+	count := r.count.Add(-1)
+	if count < 0 {
+		panic("runtime key payload release underflow")
+	}
+	if count == 0 && r.release != nil {
+		release := r.release
+		r.release = nil
+		release()
+	}
 }
 
 // NewKeyPayload validates before accepting ownership. On error, release remains
@@ -112,12 +143,12 @@ func newKeyPayloadParts(ctx context.Context, first []byte, rest [][]byte, accoun
 		p.rows += uint64(v.Length())
 		v.Free(nil)
 	}
-	p.first, p.rest = first, rest
-	lease, err := bufferlease.NewRefCounted(nil, accountedBytes, release)
-	if err != nil {
-		return nil, err
+	if accountedBytes < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("negative runtime key payload accounting")
 	}
-	p.lease = lease
+	p.first, p.rest = first, rest
+	p.refs = &payloadRefs{release: release}
+	p.refs.count.Store(1)
 	return p, nil
 }
 
@@ -143,12 +174,12 @@ func (p *KeyPayload) Type() types.Type {
 }
 
 func (p *KeyPayload) Retain() bool {
-	return p != nil && p.lease != nil && p.lease.Retain()
+	return p != nil && p.refs != nil && p.refs.retain()
 }
 
 func (p *KeyPayload) Release() {
-	if p != nil && p.lease != nil {
-		p.lease.Release()
+	if p != nil && p.refs != nil {
+		p.refs.drop()
 	}
 }
 
