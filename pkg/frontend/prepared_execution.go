@@ -68,7 +68,7 @@ func preparedExecutionBindingsInto(ctx context.Context, dst *[]plan2.PreparedSou
 					return nil, moerr.NewInvalidInput(ctx, "prepared parameter has no protocol source type")
 				}
 				mysqlType := defines.MysqlType(protocolTypes[i*2])
-				if param.PrepareParamKind == types.StringConversionBoolean {
+				if plan2.ParamValueKind(param) == types.StringConversionBoolean {
 					binding.Type = types.T_bool.ToType()
 				} else if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
 					binding.Type, binding.NumericType = param.DirectResultType, param.RuntimeType
@@ -125,7 +125,7 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 		writeType(binding.NumericType)
 		writeType(binding.BitCountType)
 		if param, ok := plan2.AsParamValue(values[i]); ok {
-			writeInt(int64(param.PrepareParamKind), ':')
+			writeInt(int64(plan2.ParamValueKind(param)), ':')
 			writeBool(param.IsBinaryProtocol, ':')
 			writeBool(param.IsBin, ':')
 			writeBool(param.IsBinaryString, ':')
