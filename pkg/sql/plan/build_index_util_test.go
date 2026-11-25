@@ -197,6 +197,20 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_uint64, "a", "b"), keyPart, "secondary"))
 	})
 
+	t.Run("special type index prefix", func(t *testing.T) {
+		part := keyPartWithLength("c", 1)
+		for _, col := range []*ColDef{colOf(types.T_enum), colOf(types.T_enum, "a", "b"), colOf(types.T_uint64, "a", "b")} {
+			for _, kind := range []string{"secondary", "unique"} {
+				require.ErrorContains(t, checkIndexColumnSupportability(ctx, col, part, kind), "index prefix on ENUM or SET")
+			}
+		}
+		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_varchar), part, "secondary"))
+		// An explicit (0) is already treated as a full-column index.
+		zero := keyPartWithLength("c", -1)
+		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), zero, "unique"))
+		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_uint64, "a", "b"), zero, "secondary"))
+	})
+
 	t.Run("geometry only allowed for rtree", func(t *testing.T) {
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_geometry), keyPart, "rtree"))
 		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_geometry), keyPart, "primary"))

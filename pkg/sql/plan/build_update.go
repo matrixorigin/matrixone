@@ -409,6 +409,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		rowIdPos := -1
 		for idx, col := range tableDef.Cols {
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			e.StoredValue = isEnumOrSetPlanType(&col.Typ)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
 			})
