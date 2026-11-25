@@ -15,4 +15,14 @@ BITMAP_COUNT(bitmap_construct_agg(BITMAP_BUCKET_NUMBER(col2))) bmp
 from bitmappanic;
 ➤ bmp[-5,64,0]  𝄀
 3
+insert into bitmappanic values (65537), (65538);
+select col2, bitmap_count(bitmap_construct_agg(bitmap_bit_position(col2)) over (
+partition by bitmap_bucket_number(col2) order by col2 rows between 1 preceding and current row)) as cnt
+from bitmappanic order by col2;
+➤ col2[4,32,0]  ¦  cnt[-5,64,0]  𝄀
+0  ¦  1  𝄀
+65536  ¦  1  𝄀
+65537  ¦  2  𝄀
+65538  ¦  2  𝄀
+131072  ¦  1
 drop table if EXISTS bitmappanic;
