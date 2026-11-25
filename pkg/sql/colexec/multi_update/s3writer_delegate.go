@@ -577,7 +577,7 @@ func (writer *s3WriterDelegate) append(
 			writer.deleteBatches[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 		}
 		projBat := contextBatch.SelectColumns(updateCtx.DeleteCols[:2], DeleteBatchAttrs)
-		if _, err = writer.deleteBatches[i].Extend(mp, projBat, nil); err != nil {
+		if _, err = writer.deleteBatches[i].Append(mp, projBat, 0, projBat.RowCount(), nil); err != nil {
 			return
 		}
 	}
