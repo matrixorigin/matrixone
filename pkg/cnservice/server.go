@@ -150,6 +150,11 @@ func NewService(
 		return nil, err
 	}
 
+	sharedFS, err := fileservice.Get[fileservice.FileService](fileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	srv := &service{
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
@@ -312,6 +317,10 @@ func NewService(
 		return nil, err
 	}
 
+	if err := srv.colexecServer.StartCNS3Cleanup(srv.stopper, cfg.UUID, metadataFS, sharedFS); err != nil {
+		return nil, err
+	}
+
 	return srv, nil
 }
 
@@ -459,6 +468,7 @@ func (s *service) closeService() error {
 			s.server.Close,
 			s.stopRPCs,
 			s.waitPipelineHandlers,
+			s.colexecServer.FlushCNS3Cleanup,
 			s.closeIncrService,
 			s.closeTxnTraceService,
 			func() error {

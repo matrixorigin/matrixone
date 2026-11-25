@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -37,9 +38,18 @@ import (
 	"go.uber.org/zap"
 )
 
+type hdfsFileClient interface {
+	Create(string) (*hdfs.FileWriter, error)
+	MkdirAll(string, os.FileMode) error
+	Open(string) (*hdfs.FileReader, error)
+	Remove(string) error
+	Rename(string, string) error
+	Stat(string) (os.FileInfo, error)
+}
+
 type HDFS struct {
 	name            string
-	client          *hdfs.Client
+	client          hdfsFileClient
 	rootPath        string
 	perfCounterSets []*perfcounter.CounterSet
 }
@@ -133,15 +143,27 @@ func (h *HDFS) Delete(ctx context.Context, keys ...string) (err error) {
 	}, h.perfCounterSets...)
 
 	for _, key := range keys {
-		_, err := DoWithRetryContext(ctx, "HDFS: delete", func() (bool, error) {
-			return true, h.client.Remove(h.keyToPath(key))
+		filePath := h.keyToPath(key)
+		_, deleteErr := DoWithRetryContext(ctx, "HDFS: delete", func() (bool, error) {
+			removeErr := h.client.Remove(filePath)
+			if removeErr == nil {
+				// The SDK also returns nil for a false NameNode delete reply.
+				// Confirm absence before releasing the caller's ownership.
+				if _, removeErr = h.client.Stat(filePath); removeErr == nil {
+					return false, moerr.NewInternalErrorf(ctx, "HDFS file still exists after delete: %s", filePath)
+				}
+			}
+			if errors.Is(removeErr, os.ErrNotExist) {
+				return true, nil
+			}
+			return false, removeErr
 		}, maxRetryAttemps, IsRetryableError)
-		if err != nil {
-			logutil.Warn("HDFS: delete file", zap.Error(err))
+		if err == nil && deleteErr != nil {
+			err = deleteErr
 		}
 	}
 
-	return nil
+	return err
 }
 
 func (h *HDFS) keyToPath(key string) string {

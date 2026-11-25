@@ -881,12 +881,17 @@ func (a *QCloudSDK) deleteObjects(ctx context.Context, keys ...string) (bool, er
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 				counter.FileService.S3.DeleteMulti.Add(1)
 			}, a.perfCounterSets...)
-			_, _, err := a.client.Object.DeleteMulti(ctx, &cos.ObjectDeleteMultiOptions{
+			result, _, err := a.client.Object.DeleteMulti(ctx, &cos.ObjectDeleteMultiOptions{
 				Quiet:   true,
 				Objects: objects,
 			})
 			if err != nil {
 				return false, err
+			}
+			if len(result.Errors) != 0 {
+				failure := result.Errors[0]
+				return false, moerr.NewInternalErrorf(ctx, "COS bulk delete failed for %q (%s): %s",
+					failure.Key, failure.Code, failure.Message)
 			}
 			return true, nil
 		},

@@ -53,6 +53,7 @@ type Server struct {
 	cnSegmentMap CnSegmentMap
 
 	receivedRunningPipeline RunningPipelineMapForRemoteNode
+	spillCleanup            *cnSpillCleanup
 }
 
 // RunningPipelineMapForRemoteNode

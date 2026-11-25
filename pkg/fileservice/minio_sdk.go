@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -648,18 +649,28 @@ func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, erro
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 				counter.FileService.S3.DeleteMulti.Add(1)
 			}, a.perfCounterSets...)
-			objsCh := make(chan minio.ObjectInfo)
-			errCh := a.client.RemoveObjects(ctx, a.bucket, objsCh, minio.RemoveObjectsOptions{})
-			for _, key := range keys {
-				objsCh <- minio.ObjectInfo{
-					Key: key,
+			var firstErr error
+			for batch := range slices.Chunk(keys, 1000) {
+				// Provide one S3-sized batch upfront so the SDK can emit
+				// errors without waiting for more input from this caller.
+				objects := make(chan minio.ObjectInfo, len(batch))
+				for _, key := range batch {
+					objects <- minio.ObjectInfo{Key: key}
+				}
+				close(objects)
+				for failure := range a.client.RemoveObjects(ctx, a.bucket, objects, minio.RemoveObjectsOptions{}) {
+					if firstErr == nil {
+						firstErr = failure.Err
+					}
+				}
+				if ctx.Err() != nil {
+					break
 				}
 			}
-			close(objsCh)
-			for err := range errCh {
-				return nil, err.Err
+			if firstErr == nil {
+				firstErr = ctx.Err()
 			}
-			return nil, nil
+			return nil, firstErr
 		},
 		maxRetryAttemps,
 		IsRetryableError,

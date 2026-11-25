@@ -218,6 +218,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		}
 		opts := []ioutil.SinkerOption{
 			ioutil.WithBuffer(writer.insertFreeLists[i], false),
+			colexec.WithCNS3SpillCleanup(proc.GetService()),
 		}
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
@@ -576,6 +577,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
+	opts = append(opts, colexec.WithCNS3SpillCleanup(proc.GetService()))
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(
@@ -585,7 +587,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
 	}
 
-	defer s3Writer.Close()
+	defer s3Writer.CloseForService(proc.GetService())
 
 	counterSet := analyzer.GetOpCounterSet()
 	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
@@ -598,28 +600,24 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			owned, writeErr := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
 				return s3Writer.WriteOwned(writeCtx, bats[i])
 			})
+			if owned {
+				bats[i] = nil
+			}
 			if writeErr != nil {
 				err = writeErr
 				return
 			}
-			if owned {
+			if !owned {
+				// WriteOwned already copied the batch on this path.
+				bats[i].Clean(proc.GetMPool())
 				bats[i] = nil
-				continue
 			}
-			// WriteOwned returned false: data was already copied inside
-			// WriteOwned via Write(), so skip the Write() call below.
-			bats[i].Clean(proc.GetMPool())
-			bats[i] = nil
 			continue
 		}
 		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 			return s3Writer.Write(writeCtx, bats[i])
 		}); err != nil {
 			return
-		}
-
-		if cleanBatchAfterUse {
-			bats[i].Clean(proc.GetMPool())
 		}
 		bats[i] = nil
 	}
@@ -844,7 +842,7 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 	// Close persistent insert sinkers.
 	for i, s3w := range writer.insertSinkers {
 		if s3w != nil {
-			s3w.Close()
+			s3w.CloseForService(proc.GetService())
 			writer.insertSinkers[i] = nil
 		}
 	}

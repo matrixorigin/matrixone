@@ -447,12 +447,13 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 		objCnt, blkCnt, rowCnt int
 	)
 
-	s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
+	s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false,
+		colexec.WithCNS3SpillCleanup(r.table.getTxn().proc.GetService()))
 	defer func() {
 		if dataReader != nil {
 			dataReader.Close()
 		}
-		s3Writer.Close()
+		s3Writer.CloseForService(r.table.getTxn().proc.GetService())
 	}()
 
 	source, err := NewLocalDataSource(
@@ -512,13 +513,14 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 		objCnt, blkCnt, rowCnt int
 	)
 
-	s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
+	s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1,
+		colexec.WithCNS3SpillCleanup(r.table.getTxn().proc.GetService()))
 
 	defer func() {
 		if iter != nil {
 			iter.Close()
 		}
-		s3Writer.Close()
+		s3Writer.CloseForService(r.table.getTxn().proc.GetService())
 
 		if tombstoneReader != nil {
 			tombstoneReader.Close()

@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net"
@@ -24,6 +25,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -171,4 +174,60 @@ func getHDFSTestAddr(t *testing.T) string {
 	}
 
 	return addr
+}
+
+type hdfsDeleteTestClient struct {
+	hdfsFileClient
+	files     map[string]bool
+	removeErr error
+	skip      string
+	removed   []string
+}
+
+func (c *hdfsDeleteTestClient) Remove(name string) error {
+	c.removed = append(c.removed, name)
+	switch {
+	case !c.files[name]:
+		return &os.PathError{Op: "remove", Path: name, Err: os.ErrNotExist}
+	case name == "/root/fail" && c.removeErr != nil:
+		return c.removeErr
+	case name != c.skip:
+		delete(c.files, name)
+	}
+	return nil
+}
+
+func (c *hdfsDeleteTestClient) Stat(name string) (os.FileInfo, error) {
+	if !c.files[name] {
+		return nil, &os.PathError{Op: "stat", Path: name, Err: os.ErrNotExist}
+	}
+	return nil, nil
+}
+
+func TestHDFSDeletePropagatesFailedRemovals(t *testing.T) {
+	removeErr := errors.New("injected NameNode delete failure")
+	client := &hdfsDeleteTestClient{
+		files:     map[string]bool{"/root/fail": true, "/root/success": true},
+		removeErr: removeErr,
+	}
+	h := &HDFS{rootPath: "/root", client: client}
+	require.ErrorIs(t, h.Delete(t.Context(), "absent", "fail", "success"), removeErr)
+	require.Equal(t, []string{"/root/absent", "/root/fail", "/root/success"}, client.removed)
+	require.Equal(t, map[string]bool{"/root/fail": true}, client.files)
+	client.removeErr = nil
+	require.NoError(t, h.Delete(t.Context(), "absent", "fail", "success"))
+	require.Empty(t, client.files)
+}
+
+func TestHDFSDeleteRequiresAbsenceAfterSDKSuccess(t *testing.T) {
+	client := &hdfsDeleteTestClient{
+		files: map[string]bool{"/root/file": true},
+		skip:  "/root/file",
+	}
+	h := &HDFS{rootPath: "/root", client: client}
+	require.ErrorContains(t, h.Delete(t.Context(), "file"), "HDFS file still exists")
+	require.True(t, client.files["/root/file"])
+	client.skip = ""
+	require.NoError(t, h.Delete(t.Context(), "file"))
+	require.Empty(t, client.files)
 }

@@ -1140,7 +1140,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			s3Writer.CloseForService(txn.proc.GetService())
 		}
 	}()
 
@@ -1151,6 +1151,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 		s3Writer = colexec.NewCNS3DataWriter(
 			txn.proc.GetMPool(), fs, tableDef, -1, false,
+			colexec.WithCNS3SpillCleanup(txn.proc.GetService()),
 		)
 
 		for _, bat = range mp[tbKey] {
@@ -1191,7 +1192,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return err
 		}
 
-		s3Writer.Close()
+		s3Writer.CloseForService(txn.proc.GetService())
 
 		s3Writer = nil
 	}
@@ -1283,7 +1284,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			s3Writer.CloseForService(txn.proc.GetService())
 		}
 	}()
 
@@ -1294,6 +1295,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
 			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1,
+			colexec.WithCNS3SpillCleanup(txn.proc.GetService()),
 		)
 
 		for i := 0; i < len(mp[tbKey]); i++ {
@@ -1335,7 +1337,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return err
 		}
 
-		if err = s3Writer.Close(); err != nil {
+		if err = s3Writer.CloseForService(txn.proc.GetService()); err != nil {
 			return err
 		}
 	}

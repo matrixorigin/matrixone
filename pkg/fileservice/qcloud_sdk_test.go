@@ -156,6 +156,33 @@ func TestQCloudSDKCopyObject(t *testing.T) {
 	require.False(t, copied)
 }
 
+func TestQCloudDeleteReturnsBulkObjectErrors(t *testing.T) {
+	var fail atomic.Bool
+	fail.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !r.URL.Query().Has("delete") {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		if fail.Load() {
+			_, _ = io.WriteString(w, `<DeleteResult><Deleted><Key>deleted</Key></Deleted><Error><Key>pending</Key><Code>AccessDenied</Code><Message>rejected</Message></Error></DeleteResult>`)
+			return
+		}
+		_, _ = io.WriteString(w, "<DeleteResult/>")
+	}))
+	t.Cleanup(server.Close)
+	sdk := newTestCOSClient(t, server)
+	ctx := context.Background()
+
+	err := sdk.Delete(ctx, "deleted", "pending")
+	require.ErrorContains(t, err, "pending")
+	require.ErrorContains(t, err, "AccessDenied")
+	fail.Store(false)
+	require.NoError(t, sdk.Delete(ctx, "deleted", "pending"))
+}
+
 func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {
 	data := bytes.Repeat([]byte("x"), int(smallObjectThreshold))
 	size := int64(len(data))
