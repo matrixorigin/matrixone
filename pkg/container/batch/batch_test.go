@@ -1887,7 +1887,7 @@ func TestBatchShrinkByMaskRowCount(t *testing.T) {
 
 // When a later Dup fails, OwnReadOnlyVectors still frees the read-only
 // originals it already replaced; one of them owns its nulls bitmap.
-func TestOwnReadOnlyVectorsFreesReplacedOnDupError(t *testing.T) {
+func TestOwnReadOnlyVectorsLeavesBatchOnDupError(t *testing.T) {
 	srcMP := mpool.MustNewZero()
 	nspMP := mpool.MustNewZero()
 	dstMP, err := mpool.NewMPool("own_read_only_cap", 1<<20, mpool.NoFixed)
@@ -1910,15 +1910,19 @@ func TestOwnReadOnlyVectorsFreesReplacedOnDupError(t *testing.T) {
 	w2, err := big.Window(0, big.Length())
 	require.NoError(t, err)
 
-	bat := New([]string{"a", "b"})
-	bat.Vecs[0], bat.Vecs[1] = w1, w2
+	// w1 sits in two columns, around the column whose copy fails.
+	bat := New([]string{"a", "b", "c"})
+	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = w1, w2, w1
 	require.Error(t, bat.OwnReadOnlyVectors(dstMP))
 
-	require.Zero(t, nspMP.CurrNB(), "the replaced original's nulls are freed")
-	require.False(t, bat.Vecs[0].IsReadOnly(), "the first column was copied")
-	require.Same(t, w2, bat.Vecs[1], "the failed column is left in place")
-	bat.Vecs[0].Free(dstMP)
-	require.Zero(t, dstMP.CurrNB())
+	require.Same(t, w1, bat.Vecs[0], "a failed call leaves the batch unchanged")
+	require.Same(t, w2, bat.Vecs[1])
+	require.Same(t, w1, bat.Vecs[2])
+	require.Equal(t, 8, w1.Length(), "the aliased original stays intact")
+	require.True(t, w1.GetNulls().Contains(0))
+	require.Zero(t, dstMP.CurrNB(), "the copies already made are freed")
+	w1.Free(nil)
+	require.Zero(t, nspMP.CurrNB())
 	small.Free(srcMP)
 	big.Free(srcMP)
 	require.Zero(t, srcMP.CurrNB())

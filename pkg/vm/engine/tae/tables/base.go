@@ -525,9 +525,15 @@ func (obj *baseObject) persistedGetDuplicatedRows(
 			uint32(i),
 			mp,
 		)
-		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		if err == nil {
 			sels.Free()
 			continue
+		}
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			// A failed probe (bloom filter load, candidate bitmap
+			// allocation) proves nothing about the block's keys.
+			sels.Free()
+			return err
 		}
 		err = obj.getDuplicateRowsWithLoad(
 			ctx, txn, keys, sels, rowIDs, uint16(i), filterByCommitTS, from, to, mp)
@@ -566,9 +572,15 @@ func (obj *baseObject) persistedContains(
 			uint32(i),
 			mp,
 		)
-		if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		if err == nil {
 			sels.Free()
 			continue
+		}
+		if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			// A failed probe (bloom filter load, candidate bitmap
+			// allocation) proves nothing about the block's keys.
+			sels.Free()
+			return err
 		}
 		err = obj.containsWithLoad(
 			ctx, txn, keys, sels, uint16(i), isAblk, mp)

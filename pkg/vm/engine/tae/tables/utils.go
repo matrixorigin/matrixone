@@ -151,6 +151,12 @@ func LoadPersistedColumnData(
 						for _, vec := range vecs {
 							vec.Close()
 						}
+						// Vectors made before the load, e.g. row IDs.
+						for _, vec := range vectors {
+							if vec != nil {
+								vec.Close()
+							}
+						}
 						return nil, nil, nil, err
 					}
 				}
