@@ -47,7 +47,7 @@ func downloading(t *testing.T) (*DiskCache, *io.PipeWriter, chan error) {
 		defer close(done)
 		filled <- cache.SetFile(ctx, "obj", func(context.Context) (io.ReadCloser, error) { return pr, nil })
 	}()
-	require.Eventually(t, func() bool { return cache.download(cache.pathForFile("obj")) != nil },
+	require.Eventually(t, func() bool { return cache.download(cache.objectKey("obj")) != nil },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 	return cache, pw, filled
 }
@@ -128,7 +128,7 @@ func TestDiskCacheReadWaitsForDownloadedBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
-	require.Nil(t, cache.download(cache.pathForFile("obj")), "a finished download is forgotten")
+	require.Nil(t, cache.download(cache.objectKey("obj")), "a finished download is forgotten")
 }
 
 // A read whose bytes the download never writes is not served from it.
@@ -169,7 +169,7 @@ func TestDiskCacheReadCleanupCancelsPendingRead(t *testing.T) {
 			default:
 				t.Error("pending read did not finish before download cleanup")
 			}
-			require.NotNil(t, cache.download(cache.pathForFile("obj")))
+			require.NotNil(t, cache.download(cache.objectKey("obj")))
 		})
 		pending = readRange(t, context.Background(), cache, 6, 5)
 		select {
@@ -214,7 +214,7 @@ func TestDiskCacheReadBeyondDownloadedObject(t *testing.T) {
 func TestObjectDownloadReadableAfterPublishOrRemoval(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		cache, pw, filled := downloading(t)
-		download := cache.download(cache.pathForFile("obj"))
+		download := cache.download(cache.objectKey("obj"))
 		_, err := pw.Write([]byte("hello"))
 		require.NoError(t, err)
 		require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
@@ -275,7 +275,7 @@ func TestDiskCacheReadLeavesStalledDownload(t *testing.T) {
 			return io.NopCloser(&stalledReader{ctx: ctx, data: []byte("0")}), nil
 		})
 	}()
-	require.Eventually(t, func() bool { return cache.download(cache.pathForFile("obj")) != nil },
+	require.Eventually(t, func() bool { return cache.download(cache.objectKey("obj")) != nil },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 	readCtx, cancel := context.WithTimeout(ctx, 10*sourceIdleTimeout)
 	defer cancel()
@@ -369,7 +369,7 @@ func TestDiskCacheWaitedDownloadIsNotTimed(t *testing.T) {
 		})
 	}()
 	var o *objectDownload
-	require.Eventually(t, func() bool { o = cache.download(cache.pathForFile("obj")); return o != nil },
+	require.Eventually(t, func() bool { o = cache.download(cache.objectKey("obj")); return o != nil },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 	waited := make(chan bool, 1)
 	go func() {
@@ -389,7 +389,7 @@ func TestDiskCacheWaitedDownloadIsNotTimed(t *testing.T) {
 	case <-time.After(diskCacheLifecycleTestTimeout):
 		t.Fatal("the download did not end")
 	}
-	require.True(t, cache.cache.Contains(cache.pathForFile("obj")))
+	require.True(t, cache.cache.Contains(cache.wholePath("obj", 6)))
 }
 
 // A read whose bytes the download writes later than a range read fetches them goes to a
@@ -400,7 +400,7 @@ func TestDiskCacheReadDeclinesDownloadFarBehind(t *testing.T) {
 	cache, pw, filled := downloading(t)
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
-	download := cache.download(cache.pathForFile("obj"))
+	download := cache.download(cache.objectKey("obj"))
 	require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 
@@ -437,7 +437,7 @@ func TestDiskCacheReadWaitsWhenItWouldDuplicateTheDownload(t *testing.T) {
 	cache.downloadMaxExtraWait = 0
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
-	download := cache.download(cache.pathForFile("obj"))
+	download := cache.download(cache.objectKey("obj"))
 	require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 
@@ -469,7 +469,7 @@ func TestDiskCacheDownloadReadsCountAsCachedFileReads(t *testing.T) {
 	require.NoError(t, <-filled)
 
 	cache.preloads.mu.Lock()
-	served, ok := cache.preloads.served[cache.pathForFile("obj")]
+	served, ok := cache.preloads.served[cache.wholePath("obj", 5)]
 	cache.preloads.mu.Unlock()
 	require.True(t, ok)
 	require.Equal(t, int64(3), served)
@@ -534,9 +534,9 @@ func TestDiskCacheContentFillIsAnUnmeasuredDownload(t *testing.T) {
 	go func() {
 		filled <- cache.fillFile(ctx, "obj", func(context.Context) (io.ReadCloser, error) { return pr, nil }, false, contentFill, nil)
 	}()
-	require.Eventually(t, func() bool { return cache.download(cache.pathForFile("obj")) != nil },
+	require.Eventually(t, func() bool { return cache.download(cache.objectKey("obj")) != nil },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
-	require.False(t, cache.download(cache.pathForFile("obj")).measured)
+	require.False(t, cache.download(cache.objectKey("obj")).measured)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
 }
@@ -550,7 +550,7 @@ func TestDiskCacheDownloadReadsCountWhenEvictedOnPublish(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
 	const group = 7
-	diskPath := cache.pathForFile("obj")
+	diskPath := cache.objectKey("obj")
 	cache.preloads.narrowRead(diskPath, group, func() bool { return true })
 	pw, filled := startTestCacheFill(t, ctx, cache)
 	require.Eventually(t, func() bool { return cache.download(diskPath) != nil },
@@ -563,7 +563,7 @@ func TestDiskCacheDownloadReadsCountWhenEvictedOnPublish(t *testing.T) {
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
 
-	require.False(t, cache.cache.Contains(diskPath), "a file larger than the cache is evicted")
+	require.False(t, cache.cache.Contains(cache.wholePath("obj", 4096)), "a file larger than the cache is evicted")
 	cache.preloads.mu.Lock()
 	defer cache.preloads.mu.Unlock()
 	require.NotNil(t, cache.preloads.groups[group])
@@ -634,7 +634,7 @@ func TestDiskCacheDownloadReadOverlappingPublicationCounts(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
 	const group = 7
-	diskPath := cache.pathForFile("obj")
+	diskPath := cache.objectKey("obj")
 	cache.preloads.narrowRead(diskPath, group, func() bool { return true })
 	pw, filled := startTestCacheFill(t, ctx, cache)
 	require.Eventually(t, func() bool { return cache.download(diskPath) != nil },
@@ -655,7 +655,7 @@ func TestDiskCacheDownloadReadOverlappingPublicationCounts(t *testing.T) {
 	}
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
-	require.False(t, cache.cache.Contains(diskPath), "a file larger than the cache is evicted")
+	require.False(t, cache.cache.Contains(cache.wholePath("obj", 4096)), "a file larger than the cache is evicted")
 	release()
 	require.NoError(t, <-read)
 
@@ -674,7 +674,7 @@ func TestDiskCacheDownloadCaptureCountsWhenEvictedOnPublish(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
 	const group = 7
-	diskPath := cache.pathForFile("obj")
+	diskPath := cache.objectKey("obj")
 	cache.preloads.narrowRead(diskPath, group, func() bool { return true })
 	pw, filled := startTestCacheFill(t, ctx, cache)
 	require.Eventually(t, func() bool { return cache.download(diskPath) != nil },
@@ -692,7 +692,7 @@ func TestDiskCacheDownloadCaptureCountsWhenEvictedOnPublish(t *testing.T) {
 	require.NoError(t, <-filled)
 	finish(true)
 
-	require.False(t, cache.cache.Contains(diskPath), "a file larger than the cache is evicted")
+	require.False(t, cache.cache.Contains(cache.wholePath("obj", 4096)), "a file larger than the cache is evicted")
 	cache.preloads.mu.Lock()
 	defer cache.preloads.mu.Unlock()
 	require.NotNil(t, cache.preloads.groups[group])
@@ -731,7 +731,7 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 // registerWholeFill registers o as the download of a fill of the whole object at diskPath.
 func registerWholeFill(d *DiskCache, diskPath string, o *objectDownload) *filePrefetchObject {
 	p := d.newContentFill(diskPath)
-	d.startDownload(diskPath, p, o, false)
+	d.startDownload(p, o, false)
 	p.started(o)
 	return p
 }
@@ -743,7 +743,7 @@ func newPreloadGeneration(t *testing.T, p *preloadUsage, diskPath string, data [
 	o := newObjectDownload(tempPath, false, nil)
 	t.Cleanup(o.retire)
 	o.credit = func(n int64) { p.readDownload(diskPath, o, n) }
-	p.cachedDownload(diskPath, o)
+	p.cachedDownload(diskPath, diskPath, o)
 	return o
 }
 
@@ -758,7 +758,7 @@ func newReadShareDownload(t *testing.T, data []byte, advertised int64) (*DiskCac
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
 
-	diskPath := cache.pathForFile("obj")
+	diskPath := cache.objectKey("obj")
 	o := newPreloadGeneration(t, cache.preloads, diskPath, data)
 	registerWholeFill(cache, diskPath, o)
 	o.advance(0, advertised)
@@ -837,7 +837,7 @@ func TestDiskCacheDownloadFailedReadDoesNotCountWhenEvictedOnPublish(t *testing.
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
 	const group = 7
-	diskPath := cache.pathForFile("obj")
+	diskPath := cache.objectKey("obj")
 	cache.preloads.narrowRead(diskPath, group, func() bool { return true })
 	pw, filled := startTestCacheFill(t, ctx, cache)
 	require.Eventually(t, func() bool { return cache.download(diskPath) != nil },
@@ -858,7 +858,7 @@ func TestDiskCacheDownloadFailedReadDoesNotCountWhenEvictedOnPublish(t *testing.
 	}
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
-	require.False(t, cache.cache.Contains(diskPath), "a file larger than the cache is evicted")
+	require.False(t, cache.cache.Contains(cache.wholePath("obj", 4096)), "a file larger than the cache is evicted")
 	release()
 	require.Error(t, <-read)
 
@@ -1142,7 +1142,7 @@ func TestDiskCacheDownloadKeepsNoSourceReader(t *testing.T) {
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	require.NoError(t, err)
 	defer cache.Close(ctx)
-	diskPath := cache.pathForFile("obj")
+	diskPath := cache.wholePath("obj", 4096)
 	data := make([]byte, 4096)
 	require.NoError(t, cache.fillFile(ctx, "obj", func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(data)), nil

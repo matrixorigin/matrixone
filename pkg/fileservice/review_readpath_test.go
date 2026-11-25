@@ -61,7 +61,7 @@ func TestLargeReadPastDeclinedFilePrefetch(t *testing.T) {
 				FilePath: "object", Size: size, Ranges: []PrefetchRange{{Size: size}},
 			}))
 			require.Eventually(t, func() bool { return opens.Load() == 1 }, 5*time.Second, time.Millisecond)
-			download, _ := d.fileDownload(d.pathForFile("object"), 0, size)
+			download, _ := d.fileDownload(d.objectKey("object"), 0, size)
 			require.NotNil(t, download)
 			_, eta := download.estimate(0, size)
 			require.Greater(t, eta, rangeReadCosts.cost(size), "the original file prefetch is too slow to join")
@@ -117,7 +117,7 @@ func TestJoinedFileRangeWaitsForCaller(t *testing.T) {
 				cur, _, _ := storage.counts(key)
 				return cur == 1
 			}, time.Second, time.Millisecond)
-			download, _ := d.fileDownload(d.pathForFile("object"), 16, 80)
+			download, _ := d.fileDownload(d.objectKey("object"), 16, 80)
 			require.NotNil(t, download)
 
 			var dst bytes.Buffer
@@ -171,7 +171,7 @@ func TestConcurrentSplitAdmissionAtLimitOne(t *testing.T) {
 			defer cancel()
 			require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Policy: SkipAllCache,
 				Entries: []IOEntry{{Size: size, Data: data}}}))
-			d.prefetched.store(d.pathForFile("other"), size)
+			d.prefetched.store(d.objectKey("other"), size)
 
 			staging := make(chan chan struct{}, 2)
 			cancelStaging := make(chan struct{})
@@ -317,7 +317,7 @@ func TestSplitCacheReadReturnsWriterError(t *testing.T) {
 				{Offset: part, Size: part, Data: data[part : 2*part]},
 			}}, false))
 			const offset, size = part - 16, 32
-			rs, ok := d.ranges.covering(d.rangeObjectKey("object"), offset, size)
+			rs, ok := d.ranges.covering(d.objectKey("object"), offset, size)
 			require.True(t, ok)
 			require.Len(t, rs, 2)
 			wantErr := errors.New("review: caller's writer rejected output")

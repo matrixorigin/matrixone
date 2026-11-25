@@ -496,7 +496,7 @@ func (s *S3FS) WholeObjectPreloadSkipped(filePath string, group uint64) bool {
 	if err != nil {
 		return false
 	}
-	return s.diskCache.preloads.narrowRead(s.diskCache.pathForFile(path.File), group, s.diskCache.wholeObjectFits)
+	return s.diskCache.preloads.narrowRead(s.diskCache.objectKey(path.File), group, s.diskCache.wholeObjectFits)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
@@ -526,6 +526,11 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache, or to the index-file cache for an object it keeps
+	target := s.fillTarget(GetFileServicePolicy(ctx), filePath)
+	layout := s.prefetchedSize(path.File, 0)
+	if target == nil {
+		layout = s.cachedObjectSize(path.File)
+	}
 	if err := s.diskCache.fillFileTo(
 		withPrefetchFill(ctx), path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
@@ -533,8 +538,8 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 		},
 		s.asyncUpdate,
 		storageFill,
-		s.prefetchedSize(path.File, 0),
-		s.fillTarget(GetFileServicePolicy(ctx), filePath),
+		layout,
+		target,
 	); err != nil {
 		return err
 	}
@@ -658,10 +663,27 @@ func firstNeeded(vector *IOVector) int64 {
 // or an error when none did, and splitAt.
 func (s *S3FS) prefetchedSize(file string, splitAt int64) objectLayout {
 	return func(context.Context) (int64, int64, error) {
-		if size, ok := s.diskCache.prefetched.size(s.diskCache.pathForFile(file)); ok {
+		if size, ok := s.diskCache.prefetched.size(s.diskCache.objectKey(file)); ok {
 			return size, splitAt, nil
 		}
 		return 0, 0, errObjectSizeUnknown
+	}
+}
+
+// cachedObjectSize is prefetchedSize, which learns the size of an object none told of
+// from object storage when the disk cache holds a range of it from its start, so a fill
+// finds the object cached as the range [0, size).
+func (s *S3FS) cachedObjectSize(file string) objectLayout {
+	told := s.prefetchedSize(file, 0)
+	return func(ctx context.Context) (int64, int64, error) {
+		size, splitAt, err := told(ctx)
+		if err == nil || !s.diskCache.ranges.startsAt0(s.diskCache.objectKey(file)) {
+			return size, splitAt, err
+		}
+		if size, err = s.storage.Stat(ctx, s.pathToKey(file)); err != nil {
+			return 0, 0, errObjectSizeUnknown
+		}
+		return size, 0, nil
 	}
 }
 

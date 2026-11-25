@@ -101,7 +101,7 @@ func TestReadStartedSplitHonorsConfiguredPartCount(t *testing.T) {
 				DiskPrefetchObjectSplit:    ptrTo(4),
 				DiskPrefetchObjectSplitMin: ptrTo[toml.ByteSize](0),
 			}).diskObjectSplit()
-			fs.diskCache.storePrefetchedSize(fs.diskCache.pathForFile("object"), int64(len(data)), fs.diskCache.deletes.now())
+			fs.diskCache.storePrefetchedSize(fs.diskCache.objectKey("object"), int64(len(data)), fs.diskCache.deletes.now())
 			vector := &IOVector{FilePath: "object", Entries: []IOEntry{{Offset: tc.offset, Size: 16}}}
 			defer vector.Release()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -157,7 +157,7 @@ func TestFileRangeReadUsesCachePublishedWhileAdmitted(t *testing.T) {
 			}()
 			defer func() { cancel(); unblock(); <-readDone; vector.Release() }()
 			if tc.overlap {
-				path := fs.diskCache.pathForFile("object")
+				path := fs.diskCache.objectKey("object")
 				objects := &fs.diskCache.prefetchObjects
 				require.Eventually(t, func() bool {
 					objects.mu.Lock()

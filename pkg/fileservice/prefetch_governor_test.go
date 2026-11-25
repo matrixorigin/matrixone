@@ -500,7 +500,7 @@ func TestPrefetchReadRunWaitingAcrossDeleteCachesNothing(t *testing.T) {
 	require.NoError(t, <-other)
 	<-object
 	f.reads.Wait()
-	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 0, unit)
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 0, unit)
 	require.False(t, cached, "no range of the deleted object is cached")
 }
 
@@ -510,7 +510,7 @@ func TestPrefetchReadOfRunCutAtStaleSizeReturns(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
 	fs.diskCache.memoryPrefetchMax = unit
-	fs.diskCache.prefetched.store(fs.diskCache.pathForFile("object"), 30<<10)
+	fs.diskCache.prefetched.store(fs.diskCache.objectKey("object"), 30<<10)
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 60 << 10, Size: 10 << 10}}}
 	done := make(chan error, 1)
 	go func() { done <- fs.Read(context.Background(), vec) }()
@@ -530,7 +530,7 @@ func TestPrefetchReadAcrossDeleteReturnsNoBytes(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
 	d := fs.diskCache
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	var opens atomic.Int64
 	open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 		// The second run opens once the object is deleted.

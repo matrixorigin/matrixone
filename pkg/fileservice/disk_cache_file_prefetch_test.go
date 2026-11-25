@@ -61,7 +61,7 @@ func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 	require.Equal(t, int64(1), storage.reads.Load(), "the read is served from the download")
 	close(storage.release)
 	require.NoError(t, <-done)
-	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 1000, 200<<10-1000)
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 1000, 200<<10-1000)
 	require.True(t, cached)
 }
 
@@ -88,7 +88,7 @@ func TestDeleteCancelsFilePrefetch(t *testing.T) {
 		recreated[i] ^= 0xff
 	}
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(recreated)), Data: recreated}}, Policy: SkipAllCache}))
-	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 0, 200<<10)
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 0, 200<<10)
 	require.False(t, cached)
 	require.Equal(t, recreated[100:110], readRangeOf(t, fs, ColumnPrefetch, 100, 10))
 }

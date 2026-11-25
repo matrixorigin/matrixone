@@ -162,13 +162,13 @@ func TestS3FSFileRunPastObjectEnd(t *testing.T) {
 	require.Equal(t, data[5000:9990], readRangeOf(t, fs, 0, 5000, 4990))
 	_, err := os.Stat(fs.diskCache.pathForIOEntry("object", IOEntry{Offset: 4096, Size: 8192}))
 	require.True(t, os.IsNotExist(err), "a run past the end publishes no file")
-	size, ok := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
+	size, ok := fs.diskCache.prefetched.size(fs.diskCache.objectKey("object"))
 	require.True(t, ok)
 	require.Equal(t, int64(10000), size)
 
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 10000)
 	fs.diskCache.memoryPrefetchMax = 4096
-	fs.diskCache.prefetched.store(fs.diskCache.pathForFile("object"), 10000)
+	fs.diskCache.prefetched.store(fs.diskCache.objectKey("object"), 10000)
 	require.Equal(t, data[5000:9990], readRangeOf(t, fs, 0, 5000, 4990))
 	require.Equal(t, int64(1), storage.reads.Load())
 	require.Equal(t, data[4096:10000], readRangeOf(t, fs, 0, 4096, 10000-4096))
@@ -281,7 +281,7 @@ func TestS3FSCacheBypassReadSkipsActiveRange(t *testing.T) {
 func TestS3FSPrefetchRangeKeepsCachedRangeOpen(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	readRangeOf(t, fs, 0, 5000, 2)
-	ranges := fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object"))
+	ranges := fs.diskCache.ranges.of(fs.diskCache.objectKey("object"))
 	require.Len(t, ranges, 1)
 	require.Equal(t, data[6000:9000], readRangeOf(t, fs, 0, 6000, 3000))
 	require.Equal(t, int64(2), storage.reads.Load(), "the cached range is not read again")
@@ -312,7 +312,7 @@ func deliver(fl *memoryPrefetchObject, content []byte) {
 // A reader of a failed prefetch range reads its own range.
 func TestS3FSPrefetchRangeWaiterFallsBackOnFailure(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	fl := addFlight(fs.diskCache, diskPath, 4096, 8192, time.Now())
 	storage := fs.storage.(*countingStorage)
 	done := make(chan []byte, 1)
@@ -352,7 +352,7 @@ func TestS3FSPrefetchRangeMergesCachedUnits(t *testing.T) {
 // waits for the other.
 func TestS3FSPrefetchRangeNeverReadsABlockTwice(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	fl := addFlight(fs.diskCache, diskPath, 4096, 8192, time.Now())
 	done := make(chan []byte, 1)
 	go func() { done <- readRangeOf(t, fs, 0, 6000, 4000) }()
@@ -406,7 +406,7 @@ func TestS3FSPrefetchRangeSkipsGapsBetweenEntries(t *testing.T) {
 // A reader waiting on a flight takes its bytes once they arrive, before the flight ends.
 func TestS3FSPrefetchRangeServesBytesAsTheyArrive(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 8192, 64<<10)
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	fl := addFlight(fs.diskCache, diskPath, 0, 8192, time.Now())
 	done := make(chan []byte, 1)
 	go func() { done <- readRangeOf(t, fs, 0, 100, 10) }()
@@ -550,7 +550,7 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 	d.prefetchObjects.reads.Wait()
 	require.Equal(t, int64(1), opened.Load())
 	require.Equal(t, int64(1), ended.Load(), "read to its end")
-	r, ok := d.ranges.containing(d.rangeObjectKey("object"), 0, 128<<10, nil)
+	r, ok := d.ranges.containing(d.objectKey("object"), 0, 128<<10, nil)
 	require.True(t, ok, "cached after its reader's context ended")
 	require.Equal(t, int64(128<<10), r.size)
 }
@@ -563,8 +563,8 @@ func TestDeleteRemovesCachedRanges(t *testing.T) {
 	require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
 	require.Equal(t, int64(1), storage.reads.Load())
 	require.NoError(t, fs.Delete(ctx, "object"))
-	require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object")))
-	_, err := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 6000, 100)
+	require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.objectKey("object")))
+	_, err := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 6000, 100)
 	require.False(t, err, "the deleted object's ranges are not indexed")
 
 	recreated := slices.Clone(data)
@@ -692,7 +692,7 @@ func TestDeleteDropsPrefetchRangeUnderWay(t *testing.T) {
 	require.True(t, storage.canceled.Load(), "the delete cancels the read under way")
 	close(storage.release)
 	fs.diskCache.prefetchObjects.reads.Wait()
-	require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object")))
+	require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.objectKey("object")))
 
 	recreated := slices.Clone(data)
 	for i := range recreated {
@@ -888,7 +888,7 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	mu.Lock()
 	require.Equal(t, fs.diskCache.prefetchShare(), most)
 	mu.Unlock()
-	key := fs.diskCache.rangeObjectKey("object")
+	key := fs.diskCache.objectKey("object")
 	for _, r := range ranges {
 		_, ok := fs.diskCache.ranges.covering(key, r.Offset, r.Size)
 		require.True(t, ok, "range %d cached", r.Offset)
@@ -1012,7 +1012,7 @@ func TestPrefetchFilesStopAfterDelete(t *testing.T) {
 		done <- err
 	}()
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(); return cur == fs.diskCache.prefetchShare() }, 5*time.Second, time.Millisecond)
-	fs.diskCache.deletes.deleted(fs.diskCache.pathForFile("object"))
+	fs.diskCache.deletes.deleted(fs.diskCache.objectKey("object"))
 	release()
 	require.ErrorIs(t, <-done, errPrefetchDeleted)
 	_, _, total := g.counts()
@@ -1026,7 +1026,7 @@ func TestDiskCacheBadRangeFileIsDropped(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			fs, storage, data := newPrefetchRangeFS(t, 4096, 64<<10)
 			require.Equal(t, data[5000:5002], readRangeOf(t, fs, 0, 5000, 2))
-			rs := fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object"))
+			rs := fs.diskCache.ranges.of(fs.diskCache.objectKey("object"))
 			require.Len(t, rs, 1)
 			if mode == "truncate" {
 				require.NoError(t, os.Truncate(rs[0].diskPath, 100))

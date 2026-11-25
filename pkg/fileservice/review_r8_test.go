@@ -96,7 +96,7 @@ func TestCachingReadDoesNotJoinUncachedFlight(t *testing.T) {
 				return done
 			}
 
-			path := fs.diskCache.pathForFile("object")
+			path := fs.diskCache.objectKey("object")
 			first := start(SkipDiskCacheWrites)
 			require.Eventually(t, func() bool { return failedOpen.failed.Load() && memoryWaiters(fs, path) == 1 },
 				time.Second, time.Millisecond, "the uncached flight must be waiting for its first storage open")
@@ -157,7 +157,7 @@ func TestAsyncDiskPrefetchSurvivesIndexDownload(t *testing.T) {
 
 				require.True(t, fs.indexObjectHeld("object"))
 				_, _, attempts = storage.counts("object")
-				require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")),
+				require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))),
 					"the disk cache stayed empty after %d storage open(s), despite a prefetch for each cache", attempts)
 				require.Equal(t, 2, attempts)
 			})

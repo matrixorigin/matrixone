@@ -97,7 +97,7 @@ func TestAsyncWholeFillDoesNotPublishAfterDeleteMark(t *testing.T) {
 				t.Fatal("whole-object fill did not reach the publication gate", ctx.Err())
 			}
 
-			diskPath := d.pathForFile("object")
+			diskPath := d.objectKey("object")
 			if tc.delete {
 				mark := d.deletes.now()
 				deleteCtx, cancelDelete := context.WithCancel(ctx)
@@ -109,17 +109,16 @@ func TestAsyncWholeFillDoesNotPublishAfterDeleteMark(t *testing.T) {
 				}, time.Second, time.Millisecond, "the source delete completed and the cache delete was counted")
 				_, err := fs.StatFile(ctx, "object")
 				require.Error(t, err, "object storage no longer holds the object")
-				cancelDelete()
-				require.ErrorIs(t, <-deleted, context.Canceled, "the caller stops waiting for the cache path owner")
+				require.NoError(t, <-deleted, "the delete waits for no fill whose publication it prevents")
 			}
 			allowPublish()
 			d.Flush(ctx)
 			require.NoError(t, ctx.Err())
 			if !tc.delete {
-				require.FileExists(t, diskPath, "the staged whole object normally publishes")
+				require.FileExists(t, d.wholePath("object", 64<<10), "the staged whole object normally publishes")
 				return
 			}
-			require.NoFileExists(t, diskPath, "the old whole object must not appear once its delete has been counted")
+			require.NoFileExists(t, d.wholePath("object", 64<<10), "the old whole object must not appear once its delete has been counted")
 		})
 	}
 }
@@ -152,7 +151,7 @@ func TestSyncWholeFillDoesNotPublishAfterDeleteMark(t *testing.T) {
 				t.Fatal("whole-object fill did not reach the publication claim", ctx.Err())
 			}
 
-			diskPath := d.pathForFile("object")
+			diskPath := d.objectKey("object")
 			deleted := make(chan error, 1)
 			if tc.delete {
 				mark := d.deletes.now()
@@ -176,10 +175,10 @@ func TestSyncWholeFillDoesNotPublishAfterDeleteMark(t *testing.T) {
 			}
 			require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, time.Second, time.Millisecond)
 			if !tc.delete {
-				require.FileExists(t, diskPath)
+				require.FileExists(t, d.wholePath("object", 64<<10))
 				return
 			}
-			require.NoFileExists(t, diskPath, "a delete counted during the publication of the whole object removes it")
+			require.NoFileExists(t, d.wholePath("object", 64<<10), "a delete counted during the publication of the whole object removes it")
 		})
 	}
 }

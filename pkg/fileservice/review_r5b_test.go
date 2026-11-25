@@ -79,7 +79,7 @@ func TestPrefetchBufferReleasedBeforeDecode(t *testing.T) {
 				require.NoError(t, readErr)
 			}()
 			require.Eventually(t, func() bool {
-				return memoryWaiters(fs, d.pathForFile("object")) == 1
+				return memoryWaiters(fs, d.objectKey("object")) == 1
 			}, time.Second, time.Millisecond, "the read should be joined to the prefetch")
 			resumeStorage()
 			select {

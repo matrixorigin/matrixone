@@ -36,7 +36,7 @@ func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 	stats := &statCountingStorage{ObjectStorage: fs.storage}
 	fs.storage = stats
 	fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data))})
-	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 	require.Equal(t, int64(2), storage.reads.Load(), "the whole object in two parts")
 	require.Zero(t, stats.stats.Load())
 }
@@ -70,7 +70,7 @@ func TestS3FSReadOfQueuedObjectJoinsItsDownload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
 	require.False(t, fs.prefetcher.isQueued("object"))
-	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")) },
+	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))) },
 		10*time.Second, time.Millisecond)
 	require.Equal(t, int64(2), storage.reads.Load(), "the whole object in two parts, read once")
 	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts)
@@ -83,7 +83,7 @@ func TestPrefetchOfCachedObjectMarksItUsed(t *testing.T) {
 	d := fs.diskCache
 	ctx := context.Background()
 	<-d.load.done
-	a, b := d.pathForFile("a"), d.pathForFile("b")
+	a, b := d.wholePath("a", 1), d.wholePath("b", 1)
 	for _, p := range []string{a, b} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte{1}, 0o644))
@@ -103,7 +103,7 @@ func TestRangePrefetchOfCachedObjectLeavesItsOrder(t *testing.T) {
 	d := fs.diskCache
 	ctx := context.Background()
 	<-d.load.done
-	a, b := d.pathForFile("a"), d.pathForFile("b")
+	a, b := d.wholePath("a", 1), d.wholePath("b", 1)
 	for _, p := range []string{a, b} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte{1}, 0o644))
@@ -130,7 +130,7 @@ func TestS3FSPrefetchRanges(t *testing.T) {
 	fs.prefetchObject(ctx, req)
 	require.Equal(t, int64(2), storage.reads.Load())
 	require.Equal(t, int64(30), storage.bytes.Load(), "not the bytes between the ranges")
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 	require.True(t, fs.haveObject(req))
 
 	got := readRangeOf(t, fs, ColumnPrefetch, 200<<10+5, 10)
@@ -171,7 +171,7 @@ func TestS3FSPrefetchObjectOfWrongSizeCachesNothing(t *testing.T) {
 		fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 		fs.diskCache.prefetched = prefetchedObjects{}
 		fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data) + delta)})
-		require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")), "size off by %d", delta)
+		require.Empty(t, fs.diskCache.objectFiles("object"), "size off by %d", delta)
 	}
 }
 
@@ -228,7 +228,7 @@ func TestS3FSColumnReadJoinsQueuedColumns(t *testing.T) {
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
 	require.Equal(t, data[150<<10:150<<10+10], readRangeOf(t, fs, ColumnPrefetch, 150<<10, 10))
 	require.False(t, fs.prefetcher.isQueued("object"), "a column read joins a whole-object download")
-	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")) },
+	require.Eventually(t, func() bool { return fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))) },
 		10*time.Second, time.Millisecond)
 }
 
@@ -240,12 +240,12 @@ func TestS3FSPrefetchPastMemoryMaxDownloadsFiles(t *testing.T) {
 	ranges := []PrefetchRange{{Offset: 100, Size: 10}, {Offset: 200 << 10, Size: 20}}
 	fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 30, Ranges: ranges})
 	require.Equal(t, int64(30), storage.bytes.Load(), "only the ranges")
-	key := fs.diskCache.rangeObjectKey("object")
+	key := fs.diskCache.objectKey("object")
 	for _, r := range ranges {
 		_, cached := fs.diskCache.ranges.covering(key, r.Offset, r.Size)
 		require.True(t, cached)
 	}
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 	require.Empty(t, fs.diskCache.prefetchObjects.m, "no MemoryPrefetchObject")
 	require.Equal(t, data[200<<10+5:200<<10+15], readRangeOf(t, fs, ColumnPrefetch, 200<<10+5, 10))
 	require.Equal(t, int64(30), storage.bytes.Load(), "served from the cached range")
@@ -317,7 +317,7 @@ func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
 	})
 	require.Equal(t, downloaded, promtestutil.ToFloat64(metric.FSPrefetchDownloadedCounter))
 	require.Equal(t, failed+1, promtestutil.ToFloat64(metric.FSPrefetchFailedCounter))
-	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 100, 10)
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 100, 10)
 	require.False(t, cached)
 }
 
@@ -352,7 +352,7 @@ func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
 	<-first
 	<-second
 	require.Equal(t, int64(2), storage.reads.Load())
-	_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 200<<10, 20)
+	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 200<<10, 20)
 	require.True(t, cached)
 }
 

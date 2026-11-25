@@ -17,7 +17,6 @@ package fileservice
 import (
 	"bytes"
 	"context"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +57,5 @@ func TestReplayWriteAWSMultipartCancelDoesNotCache(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("multipart cancellation did not return")
 	}
-	_, err := os.Stat(fs.diskCache.pathForFile("multipart-cancel"))
-	require.True(t, os.IsNotExist(err), "canceled upload must not publish a disk-cache entry")
+	require.Empty(t, fs.diskCache.objectFiles("multipart-cancel"), "canceled upload must not publish a disk-cache entry")
 }

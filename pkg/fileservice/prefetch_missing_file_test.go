@@ -64,9 +64,9 @@ func TestPrefetchObjectRefillsMissingCachedFile(t *testing.T) {
 
 				require.NoError(t, fs.PrefetchObject(ctx, req()))
 				waitPrefetcherIdle(t, fs)
-				diskPath := fs.diskCache.pathForFile("object")
+				diskPath := fs.diskCache.wholePath("object", int64(len(data)))
 				if !whole {
-					rs := fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey("object"))
+					rs := fs.diskCache.ranges.of(fs.diskCache.objectKey("object"))
 					require.Len(t, rs, 1)
 					diskPath = rs[0].diskPath
 				}

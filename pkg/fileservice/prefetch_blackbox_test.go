@@ -313,7 +313,7 @@ func TestBlackBoxColumnReadNotHeldByPrefetchWaitingForConnection(t *testing.T) {
 	require.True(t, fs.prefetcher.isRunning("object"), "the prefetch still waits")
 	release()
 	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
-	key := fs.diskCache.rangeObjectKey("object")
+	key := fs.diskCache.objectKey("object")
 	for _, r := range ranges {
 		_, cached := fs.diskCache.ranges.covering(key, r.Offset, r.Size)
 		require.True(t, cached)
@@ -420,7 +420,7 @@ func TestBlackBoxWholeObjectPrefetchWaitingForConnection(t *testing.T) {
 		"the whole download of other holds the connection")
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Scan: &PrefetchScan{}}))
 	d := fs.diskCache
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	f := &d.prefetchObjects
 	waitingWhole := func() (waiting, registered bool) {
 		f.mu.Lock()
@@ -486,7 +486,7 @@ func TestBlackBoxPrefetchRangeSplitIntoParts(t *testing.T) {
 		"the parts are read at once")
 	release()
 	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
-	cached, ok := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), r.Offset, r.Size)
+	cached, ok := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), r.Offset, r.Size)
 	require.True(t, ok)
 	require.Len(t, cached, 2, "each part is its own range file")
 	off := r.Offset + 512<<10 - 100
@@ -556,7 +556,7 @@ func TestBlackBoxEndedPrefetchRangeFreesItsBuffer(t *testing.T) {
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 * unit,
 		Ranges: []PrefetchRange{{Offset: 0, Size: unit}, {Offset: 2 * unit, Size: unit}}, Scan: &PrefetchScan{}}))
 	f := &d.prefetchObjects
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	require.Eventually(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -651,7 +651,7 @@ func TestBlackBoxPrefetchKeepsJoinedReadDownload(t *testing.T) {
 	}()
 	<-entered
 	f := &d.prefetchObjects
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	var started *filePrefetchObject
 	f.mu.Lock()
 	for _, o := range f.m[diskPath] {
@@ -702,7 +702,7 @@ func TestBlackBoxWideRangePrefetchLeavesConnectionsToOthers(t *testing.T) {
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == share }, 5*time.Second, time.Millisecond)
 	require.Never(t, func() bool { cur, _, _ := g.counts(key); return cur > share }, 100*time.Millisecond, time.Millisecond)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: 64 << 10, Ranges: []PrefetchRange{{Offset: 0, Size: 1 << 10}}, Scan: &PrefetchScan{}}))
-	otherKey := fs.diskCache.rangeObjectKey("other")
+	otherKey := fs.diskCache.objectKey("other")
 	require.Eventually(t, func() bool { _, ok := fs.diskCache.ranges.covering(otherKey, 0, 1<<10); return ok },
 		5*time.Second, time.Millisecond, "the other object's prefetch read while the wide prefetch waited")
 	release()

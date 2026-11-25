@@ -782,25 +782,22 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 		return s.indexObjectHeld(req.FilePath)
 	}
 	// A fill of the index-file cache does not fill the disk cache.
-	diskPath := s.diskCache.pathForFile(path.File)
-	if s.diskCache.wholeFill(diskPath, false) != nil {
+	key := s.diskCache.objectKey(path.File)
+	if s.diskCache.wholeFill(key, false) != nil {
 		return true
 	}
 	ctx := context.Background()
-	if len(req.Ranges) == 0 {
-		_, ok := s.diskCache.cache.Get(ctx, diskPath)
-		return ok && s.diskCache.cachedFileExists(ctx, diskPath)
-	}
-	if s.diskCache.cache.Contains(diskPath) && s.diskCache.cachedFileExists(ctx, diskPath) {
-		return true
+	// The whole object is the range [0, size).
+	ranges, whole := req.Ranges, len(req.Ranges) == 0
+	if whole {
+		ranges = []PrefetchRange{{Offset: 0, Size: req.Size}}
 	}
 	// Every range is checked, so the record of a missing file is dropped before the
 	// download decides which ranges to fetch.
-	key := s.diskCache.rangeObjectKey(path.File)
-	size, sized := s.diskCache.prefetched.size(diskPath)
+	size, sized := s.diskCache.prefetched.size(key)
 	checked := make(map[string]struct{})
 	have := true
-	for _, r := range req.Ranges {
+	for _, r := range ranges {
 		if sized && r.Offset < size && size < r.Offset+r.Size {
 			// A range ends at the object's known end, not past it.
 			r.Size = size - r.Offset
@@ -817,6 +814,8 @@ func (s *S3FS) haveObject(req ObjectPrefetch) bool {
 			checked[c.diskPath] = struct{}{}
 			if !s.diskCache.cachedFileExists(ctx, c.diskPath) {
 				have = false
+			} else if whole {
+				s.diskCache.cache.Get(ctx, c.diskPath)
 			}
 		}
 	}
@@ -830,7 +829,7 @@ func (s *S3FS) prefetchObject(ctx context.Context, req ObjectPrefetch) {
 		return
 	}
 	// A request queued again after its object was deleted downloads nothing.
-	objectPath := s.diskCache.pathForFile(path.File)
+	objectPath := s.diskCache.objectKey(path.File)
 	if s.diskCache.deletes.since(objectPath, req.deletes) {
 		metric.FSPrefetchEndedCounter.Inc()
 		return
@@ -860,7 +859,7 @@ func (s *S3FS) countPrefetch(req ObjectPrefetch, err error) {
 	switch {
 	case err == nil:
 		metric.FSPrefetchDownloadedCounter.Inc()
-	case s.diskCache.deletes.since(s.diskCache.pathForFile(req.FilePath), req.deletes):
+	case s.diskCache.deletes.since(s.diskCache.objectKey(req.FilePath), req.deletes):
 		metric.FSPrefetchEndedCounter.Inc()
 	default:
 		metric.FSPrefetchFailedCounter.Inc()
@@ -904,11 +903,11 @@ func (s *S3FS) prefetchRanges(ctx context.Context, req ObjectPrefetch) {
 func (s *S3FS) rangesToDownload(req ObjectPrefetch) []PrefetchRange {
 	var key string
 	if path, err := parseFilePathAtService(req.FilePath, s.name); err == nil {
-		key = s.diskCache.rangeObjectKey(path.File)
+		key = s.diskCache.objectKey(path.File)
 	}
 	size, sized := int64(0), false
 	if key != "" {
-		size, sized = s.diskCache.prefetched.size(s.diskCache.pathForFile(req.FilePath))
+		size, sized = s.diskCache.prefetched.size(s.diskCache.objectKey(req.FilePath))
 	}
 	out := make([]PrefetchRange, 0, len(req.Ranges))
 	for _, r := range req.Ranges {

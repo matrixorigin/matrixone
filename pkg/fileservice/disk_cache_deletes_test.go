@@ -36,7 +36,7 @@ func TestPrefetchedSizeStoredOnlyWithoutDelete(t *testing.T) {
 	d, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	require.NoError(t, err)
 	defer d.Close(ctx)
-	path := d.pathForFile("object")
+	path := d.objectKey("object")
 	deleteObject := func(p string) {
 		d.deletes.deleted(p)
 		d.prefetched.forget(p)
@@ -49,13 +49,13 @@ func TestPrefetchedSizeStoredOnlyWithoutDelete(t *testing.T) {
 	require.False(t, known)
 
 	told = d.deletes.now()
-	deleteObject(d.pathForFile("unrelated"))
+	deleteObject(d.objectKey("unrelated"))
 	d.storePrefetchedSize(path, 20, told)
 	size, known := d.prefetched.size(path)
 	require.True(t, known, "a delete of another object keeps the size")
 	require.Equal(t, int64(20), size)
 
-	other := d.pathForFile("other")
+	other := d.objectKey("other")
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Add(2)
@@ -173,7 +173,7 @@ func TestColumnRangeReadBeforeDeleteIsNotCached(t *testing.T) {
 		fs.diskCache.flushAsyncUpdates(ctx)
 
 		require.Equal(t, recreated[102:107], readRangeOf(t, fs, ColumnPrefetch, 102, 5), "async %v", async)
-		_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), 100, 10)
+		_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 100, 10)
 		require.False(t, cached, "the old range is not cached, async %v", async)
 	}
 }
@@ -233,7 +233,7 @@ func TestExactColumnsReadNeverDownloadsTheObject(t *testing.T) {
 			require.Equal(t, int64(2), storage.reads.Load())
 			require.Equal(t, int64(20), storage.bytes.Load(), "only the entries")
 		} else {
-			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")), "policy 0 caches the whole object")
+			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))), "policy 0 caches the whole object")
 		}
 	}
 }
@@ -296,7 +296,7 @@ func TestDeleteWaitsForPublicationOfEarlierRead(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
 			d := fs.diskCache
 			ctx := context.Background()
-			key := d.rangeObjectKey("object")
+			key := d.objectKey("object")
 			entry := IOEntry{Offset: 100, Size: 10, Data: slices.Clone(data[100:110]), readDeletes: d.readDeletes()}
 
 			deleted := make(chan struct{})

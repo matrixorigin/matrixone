@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sync"
@@ -733,7 +735,10 @@ func TestS3FSSharedDecodeDiskFillEligibility(t *testing.T) {
 	single := IOVector{FilePath: "columns", Entries: []IOEntry{entry}}
 	require.True(t, sharedDecodeDiskFillAvailable(fs.diskCache, "columns", &single))
 	require.False(t, sharedDecodeDiskFillAvailable(fs.diskCache, "columns", &multi))
-	inserted, rejected = fs.diskCache.cache.Set(t.Context(), fs.diskCache.pathForFile("columns"), struct{}{}, 9)
+	whole := fs.diskCache.wholePath("columns", 9)
+	require.NoError(t, os.MkdirAll(filepath.Dir(whole), 0o755))
+	require.NoError(t, os.WriteFile(whole, make([]byte, 9), 0o644))
+	inserted, rejected = fs.diskCache.cache.Set(t.Context(), whole, struct{}{}, 9)
 	require.True(t, inserted)
 	require.False(t, rejected)
 	require.True(t, sharedDecodeDiskFillAvailable(fs.diskCache, "columns", &multi))

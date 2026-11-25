@@ -101,9 +101,9 @@ func TestBatchDeleteRemovesOtherDiskCacheObjects(t *testing.T) {
 				require.NoError(t, read(file, SkipFullFilePreloads, 100))
 				require.NoError(t, read(file, 0, 200<<10))
 			}
-			firstPath, secondPath := fs.diskCache.pathForFile(first), fs.diskCache.pathForFile(second)
+			firstPath, secondPath := fs.diskCache.wholePath(first, int64(len(data))), fs.diskCache.wholePath(second, int64(len(data)))
 			require.True(t, fs.diskCache.cache.Contains(firstPath) && fs.diskCache.cache.Contains(secondPath))
-			require.NotEmpty(t, fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey(second)))
+			require.NotEmpty(t, fs.diskCache.ranges.of(fs.diskCache.objectKey(second)))
 			firstShard := filepath.Dir(firstPath)
 			require.NotEqual(t, firstShard, filepath.Dir(secondPath))
 			if tc.readOnly {
@@ -122,7 +122,7 @@ func TestBatchDeleteRemovesOtherDiskCacheObjects(t *testing.T) {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "policy %v: %v", policy, err)
 			}
 			require.False(t, fs.diskCache.cache.Contains(secondPath), "the second object's whole-object entry is removed")
-			require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.rangeObjectKey(second)), "the second object's range files are removed")
+			require.Empty(t, fs.diskCache.ranges.of(fs.diskCache.objectKey(second)), "the second object's range files are removed")
 		})
 	}
 }

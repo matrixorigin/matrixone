@@ -138,7 +138,7 @@ func TestPrefetchRangeDoesNotJoinUncachedObject(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
 	require.Eventually(t, func() bool {
-		_, cached := d.ranges.covering(d.rangeObjectKey("object"), 0, unit)
+		_, cached := d.ranges.covering(d.objectKey("object"), 0, unit)
 		return cached
 	}, 10*time.Second, time.Millisecond, "the read's own prefetch range is cached")
 	close(held)
@@ -150,7 +150,7 @@ func TestPrefetchRangeDoesNotJoinUncachedObject(t *testing.T) {
 func TestDeleteDuringWholeObjectReadReadsRange(t *testing.T) {
 	fs, storage, data := newDownloadContractFS(t, time.Hour)
 	done := storage.readAsync(fs, 6<<20, 17)
-	require.Eventually(t, func() bool { return fs.diskCache.download(fs.diskCache.pathForFile("object")) != nil },
+	require.Eventually(t, func() bool { return fs.diskCache.download(fs.diskCache.objectKey("object")) != nil },
 		10*time.Second, time.Millisecond)
 	require.NoError(t, fs.diskCache.DeletePaths(context.Background(), []string{"object"}))
 	require.Equal(t, data[6<<20:6<<20+17], requireReturns(t, done))

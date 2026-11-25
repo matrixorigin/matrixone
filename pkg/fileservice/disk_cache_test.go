@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	mrand "math/rand"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -387,7 +388,7 @@ func TestDiskCacheSetFileRepairsStaleIndex(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	diskPath := cache.pathForFile("foo")
+	diskPath := cache.wholePath("foo", 3)
 	require.NoError(t, os.Remove(diskPath))
 	require.True(t, cache.cache.Contains(diskPath))
 
@@ -435,7 +436,7 @@ func TestDiskCacheCanonicalizesFullFileKeys(t *testing.T) {
 			require.Equal(t, []byte("foo"), vector.Entries[0].Data)
 
 			require.NoError(t, cache.DeletePaths(ctx, []string{"foo"}))
-			require.False(t, cache.cache.Contains(cache.pathForFile("foo")))
+			require.False(t, cache.cache.Contains(cache.wholePath("foo", 3)))
 		})
 	}
 }
@@ -491,7 +492,7 @@ func TestDiskCacheEvictDefersPathBeingUpdated(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	diskPath := cache.pathForFile("foo")
+	diskPath := cache.wholePath("foo", 3)
 	doneUpdate := cache.startUpdate(diskPath)
 	cache.cache.Delete(ctx, diskPath)
 
@@ -516,7 +517,7 @@ func TestDiskCacheUpdateCleanupRemovesUnindexedFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	diskPath := cache.pathForFile("foo")
+	diskPath := cache.wholePath("foo", 3)
 	doneUpdate := cache.startUpdateWithCleanup(diskPath, func() error {
 		return cache.removeUnindexedFile(diskPath)
 	})
@@ -535,7 +536,7 @@ func TestDiskCacheReadSkipsFullFileWhileUpdating(t *testing.T) {
 	require.NoError(t, err)
 	defer cache.Close(ctx)
 
-	diskPath := cache.pathForFile("foo")
+	diskPath := cache.wholePath("foo", 3)
 	doneUpdate := cache.startUpdate(diskPath)
 	defer doneUpdate()
 
@@ -576,7 +577,7 @@ func TestDiskCacheReadWaitsForFullFileUpdateWithinShortWait(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	diskPath := cache.pathForFile("foo")
+	diskPath := cache.wholePath("foo", 6)
 	doneUpdate := cache.startUpdate(diskPath)
 	released := false
 	release := func() {
@@ -633,15 +634,19 @@ func TestDiskCacheStaleRepairReplacesCacheEntrySize(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	fooPath := cache.pathForFile("foo")
-	require.NoError(t, os.Remove(fooPath))
-	require.True(t, cache.cache.Contains(fooPath))
+	stalePath := cache.wholePath("foo", 3)
+	require.NoError(t, os.Remove(stalePath))
+	require.True(t, cache.cache.Contains(stalePath))
 
+	// A rewritten object of another size is another range file; the stale entry is
+	// evicted first.
 	err = cache.SetFile(ctx, "foo", func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("x"), 8192))), nil
 	})
 	require.NoError(t, err)
+	fooPath := cache.wholePath("foo", 8192)
 	require.True(t, cache.cache.Contains(fooPath))
+	require.False(t, cache.cache.Contains(stalePath))
 
 	err = cache.SetFile(ctx, "bar", func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader([]byte("xy"))), nil
@@ -649,7 +654,7 @@ func TestDiskCacheStaleRepairReplacesCacheEntrySize(t *testing.T) {
 	require.NoError(t, err)
 
 	require.False(t, cache.cache.Contains(fooPath))
-	require.True(t, cache.cache.Contains(cache.pathForFile("bar")))
+	require.True(t, cache.cache.Contains(cache.wholePath("bar", 2)))
 }
 
 func TestDiskCacheRemovesFileEvictedDuringWrite(t *testing.T) {
@@ -664,7 +669,7 @@ func TestDiskCacheRemovesFileEvictedDuringWrite(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	fooPath := cache.pathForFile("foo")
+	fooPath := cache.wholePath("foo", 8192)
 	require.False(t, cache.cache.Contains(fooPath))
 	_, err = os.Stat(fooPath)
 	require.True(t, os.IsNotExist(err))
@@ -1073,7 +1078,7 @@ func TestDiskCacheSetFromFile(t *testing.T) {
 
 	written, err := cache.writeFile(
 		ctx,
-		cache.pathForFile("foo"),
+		cache.wholePath("foo", 3),
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return os.Open(path)
 		},
@@ -1140,7 +1145,7 @@ func TestDiskCacheQuotaExceeded(t *testing.T) {
 
 	cache.writeFile(
 		ctx,
-		cache.pathForFile("bar"),
+		cache.wholePath("bar", 3),
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader([]byte("foo"))), errorStr("disk quota exceeded")
 		},
@@ -1154,13 +1159,25 @@ func TestDiskCacheLoadIndexesFilesAsOldest(t *testing.T) {
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(12<<10), nil, false, nil, "")
 	require.NoError(t, err)
 	defer cache.Close(ctx)
-	old := cache.pathForFile("old")
+	old := cache.wholePath("old", 8<<10)
 	require.NoError(t, os.MkdirAll(filepath.Dir(old), 0755))
 	require.NoError(t, os.WriteFile(old, make([]byte, 8<<10), 0644))
 
-	live := cache.pathForFile("live")
+	live := cache.wholePath("live", 8<<10)
 	cache.cache.Set(ctx, live, struct{}{}, 8<<10)
 	cache.loadCache(ctx)
 	require.True(t, cache.cache.Contains(live))
 	require.False(t, cache.cache.Contains(old))
+}
+
+// wholePath returns the range file of the whole object at filePath, of size bytes.
+func (d *DiskCache) wholePath(filePath string, size int64) string {
+	return d.pathForIOEntry(filePath, IOEntry{Size: size})
+}
+
+// objectFiles returns the range files on disk of the object at filePath.
+func (d *DiskCache) objectFiles(filePath string) []string {
+	filePath = pathpkg.Clean(filePath)
+	files, _ := filepath.Glob(filepath.Join(d.path, diskCacheShard(filePath), "[0-9]*-[0-9]*"+toOSPath(filePath)+cacheFileSuffix))
+	return files
 }

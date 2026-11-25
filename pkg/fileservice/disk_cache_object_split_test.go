@@ -55,7 +55,7 @@ func (s *statCountingStorage) Stat(ctx context.Context, key string) (int64, erro
 func newObjectSplitFS(t *testing.T, split objectSplitConfig, size int) (*S3FS, *countingStorage, []byte) {
 	fs, storage, data := newPrefetchRangeFS(t, 0, size)
 	fs.diskCache.objectSplit = split
-	fs.diskCache.prefetched.store(fs.diskCache.pathForFile("object"), int64(size))
+	fs.diskCache.prefetched.store(fs.diskCache.objectKey("object"), int64(size))
 	return fs, storage, data
 }
 
@@ -76,7 +76,7 @@ func TestS3FSObjectSplitDownloadReadsParts(t *testing.T) {
 	require.Equal(t, data[250<<10:250<<10+10], got)
 	require.Equal(t, int64(2), storage.reads.Load())
 	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts)
-	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 
 	got, err = readFullObjectOf(fs, 0, int64(len(data)))
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestS3FSObjectSplitFailedPartPublishesNothing(t *testing.T) {
 	fs.storage = failing
 	_, err := readFullObjectOf(fs, 10, 10)
 	require.Error(t, err)
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 
 	failing.fail.Store(false)
 	got, err := readFullObjectOf(fs, 10, 10)
@@ -246,7 +246,7 @@ func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	require.Equal(t, int64(2), storage.reads.Load())
 	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts, "the split stays with one connection free")
 	require.Equal(t, int64(1), d.conns.held.Load(), "its connections are released")
-	require.True(t, d.cache.Contains(d.pathForFile("object")))
+	require.True(t, d.cache.Contains(d.wholePath("object", int64(len(data)))))
 }
 
 // A download with no connection free waits for one, and downloads once one is released.
@@ -266,11 +266,11 @@ func TestS3FSDownloadWaitsForConn(t *testing.T) {
 		defer d.conns.mu.Unlock()
 		return d.conns.freed.ch != nil
 	}, 10*time.Second, time.Millisecond, "the download waits for a connection")
-	require.False(t, d.cache.Contains(d.pathForFile("object")))
-	require.False(t, d.isUpdating(d.pathForFile("object")), "waiting for a connection holds no update of the path")
+	require.False(t, d.cache.Contains(d.wholePath("object", int64(len(data)))))
+	require.False(t, d.isUpdating(d.objectKey("object")), "waiting for a connection holds no update of the path")
 	d.conns.release()
 	require.Equal(t, data[100:110], <-done)
-	require.True(t, d.cache.Contains(d.pathForFile("object")))
+	require.True(t, d.cache.Contains(d.wholePath("object", int64(len(data)))))
 	require.Zero(t, d.conns.held.Load())
 }
 
@@ -298,7 +298,7 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 			d := fs.diskCache
 			d.conns.max = 1
 			d.conns.held.Store(1)
-			diskPath := d.pathForFile("object")
+			diskPath := d.objectKey("object")
 			done := make(chan []byte, 1)
 			go func() {
 				got, err := readFullObjectOf(fs, 100, 10)
@@ -316,7 +316,7 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 			}
 			require.Equal(t, data[100:110], <-done)
 			require.False(t, waitingForConn(d, diskPath))
-			require.False(t, d.cache.Contains(diskPath))
+			require.Empty(t, d.objectFiles("object"))
 			require.Equal(t, int64(1), d.conns.held.Load(), "it took no connection")
 		})
 	}
@@ -355,7 +355,7 @@ func TestS3FSPrefetchWaitingForPublicationSlotEndsOnDelete(t *testing.T) {
 		t.Fatal("the prefetch of the deleted object still waits for a slot")
 	}
 	require.Zero(t, storage.reads.Load())
-	require.False(t, d.cache.Contains(d.pathForFile("object")))
+	require.Empty(t, d.objectFiles("object"))
 	require.Zero(t, d.conns.held.Load())
 }
 
@@ -364,13 +364,13 @@ func TestS3FSPrefetchWaitingForPublicationSlotEndsOnDelete(t *testing.T) {
 func TestWholeObjectDownloadDeletedBeforeItBegins(t *testing.T) {
 	fs, storage, _ := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
 	d := fs.diskCache
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	mark := d.deletes.now()
 	d.deletes.deleted(diskPath)
 	err := fs.PrefetchFile(withDeletesMark(context.Background(), mark), "object")
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, storage.reads.Load())
-	require.False(t, d.cache.Contains(diskPath))
+	require.Empty(t, d.objectFiles("object"))
 }
 
 // Deleting an object forgets the size a prefetch told of: after the path is written again
@@ -379,7 +379,7 @@ func TestDeleteForgetsPrefetchedSize(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	ctx := context.Background()
 	require.NoError(t, fs.Delete(ctx, "object"))
-	_, known := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
+	_, known := fs.diskCache.prefetched.size(fs.diskCache.objectKey("object"))
 	require.False(t, known)
 
 	longer := make([]byte, 2*len(data))
@@ -405,7 +405,7 @@ func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 	require.False(t, fs.prefetcher.isQueued("object"), "the delete drops the queued prefetch")
 
 	fs.prefetchObject(ctx, taken)
-	_, known := fs.diskCache.prefetched.size(fs.diskCache.pathForFile("object"))
+	_, known := fs.diskCache.prefetched.size(fs.diskCache.objectKey("object"))
 	require.False(t, known, "a prefetch made before the delete does not store its size")
 }
 
@@ -428,12 +428,12 @@ func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 		require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
 		d := fs.diskCache
 		d.objectSplit = objectSplitConfig{parts: 1}
-		d.prefetched.store(d.pathForFile("object"), int64(len(data)))
+		d.prefetched.store(d.objectKey("object"), int64(len(data)))
 		require.Equal(t, tc.limit, d.conns.max, "conns %d", tc.conns)
 		got, err := readFullObjectOf(fs, 100, 10)
 		require.NoError(t, err)
 		require.Equal(t, data[100:110], got)
-		require.Equal(t, tc.download, d.cache.Contains(d.pathForFile("object")), "conns %d", tc.conns)
+		require.Equal(t, tc.download, d.cache.Contains(d.wholePath("object", int64(len(data)))), "conns %d", tc.conns)
 		fs.Close(ctx)
 	}
 }
@@ -458,7 +458,7 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 			contents[i][j] = byte(i + j*13)
 		}
 		require.NoError(t, fs.Write(ctx, IOVector{FilePath: name, Entries: []IOEntry{{Size: size, Data: contents[i]}}, Policy: SkipDiskCache | SkipMemoryCache}))
-		fs.diskCache.prefetched.store(fs.diskCache.pathForFile(name), size)
+		fs.diskCache.prefetched.store(fs.diskCache.objectKey(name), size)
 	}
 	errs := make(chan error, objects)
 	for i := range objects {
@@ -516,7 +516,7 @@ func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
 func TestJoinableSkipsPartNotBegun(t *testing.T) {
 	fs, _, _ := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	p := newFilePrefetchObject(context.Background(), 0, 8)
 	f := &d.prefetchObjects
 	f.mu.Lock()

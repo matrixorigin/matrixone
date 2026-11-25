@@ -82,7 +82,7 @@ func newFilePrefetchObject(ctx context.Context, start, end int64) *filePrefetchO
 func (d *DiskCache) newFileObject(ctx context.Context, filePath string, start, end int64, open rangeOpener, needs flightNeeds) *filePrefetchObject {
 	p := newFilePrefetchObject(ctx, start, end)
 	needs.conn, needs.caching = true, true
-	p.prefetchTarget = prefetchTarget{d: d, filePath: filePath, diskPath: d.pathForFile(filePath), open: open, needs: needs}
+	p.prefetchTarget = prefetchTarget{d: d, filePath: filePath, diskPath: d.objectKey(filePath), open: open, needs: needs}
 	return p
 }
 
@@ -335,7 +335,7 @@ func (d *DiskCache) downloadFile(ctx, closing context.Context, filePath string, 
 	if err != nil {
 		if size := objectEnd.Load(); size > start {
 			// A later run of the object ends at its size.
-			d.storePrefetchedSize(d.pathForFile(filePath), size, readDeletes-1)
+			d.storePrefetchedSize(d.objectKey(filePath), size, readDeletes-1)
 		}
 		err = d.observeWriteResult(diskPath, err)
 		return false, err

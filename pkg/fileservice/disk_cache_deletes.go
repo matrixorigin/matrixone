@@ -127,7 +127,7 @@ func (d *DiskCache) publishUnlessDeleted(
 	if err != nil {
 		return write(claim)
 	}
-	return d.publishUnlessDeletedSince(d.pathForFile(path.File), entry.readDeletes-1, claim, write)
+	return d.publishUnlessDeletedSince(d.objectKey(path.File), entry.readDeletes-1, claim, write)
 }
 
 // publishUnlessDeletedSince runs write with a claim that also fails when the object at

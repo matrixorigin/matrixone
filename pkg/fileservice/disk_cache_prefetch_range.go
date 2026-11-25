@@ -200,8 +200,8 @@ func (d *DiskCache) prefetchRead(
 	// No run of the read starts after a delete of the object counted since it began, and
 	// no bytes it read across one are returned.
 	deletes := d.deletes.now()
-	diskPath := d.pathForFile(filePath)
-	ranges := d.ranges.of(d.rangeObjectKey(filePath))
+	diskPath := d.objectKey(filePath)
+	ranges := d.ranges.of(d.objectKey(filePath))
 
 	n := int((windowEnd - windowStart) / block)
 	needed := make([]bool, n)
@@ -865,7 +865,7 @@ type flightNeeds struct {
 // filePath, read through open, with what needs asks for; it is not registered.
 func (d *DiskCache) newFlight(filePath string, start, end int64, policy Policy, open rangeOpener, needs flightNeeds) *memoryPrefetchObject {
 	fl := newMemoryPrefetchObject(start, end, time.Time{})
-	fl.prefetchTarget = prefetchTarget{d: d, filePath: filePath, diskPath: d.pathForFile(filePath), open: open, needs: needs}
+	fl.prefetchTarget = prefetchTarget{d: d, filePath: filePath, diskPath: d.objectKey(filePath), open: open, needs: needs}
 	fl.policy, fl.skipCache = policy, !needs.caching
 	return fl
 }
@@ -989,7 +989,7 @@ func admit(ctx context.Context, o waitingObject) (prefetchObject, error) {
 	start, end := o.span()
 	var key string
 	if needs.caching {
-		key = d.rangeObjectKey(t.filePath)
+		key = d.objectKey(t.filePath)
 	}
 	f := &d.prefetchObjects
 	waited := false
@@ -1096,7 +1096,7 @@ func (f *memoryPrefetchObject) fitsLocked() bool {
 // without its bytes, is left to the caller. A read that caches its bytes joins only flights
 // that cache theirs.
 func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector *IOVector, caches bool) error {
-	diskPath := d.pathForFile(filePath)
+	diskPath := d.objectKey(filePath)
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	if len(f.m[diskPath]) == 0 {
@@ -1154,10 +1154,10 @@ func (d *DiskCache) readFromFlights(ctx context.Context, filePath string, vector
 }
 
 // readCachedBytes reads len(dst) bytes at offset of the object at filePath from what the
-// disk cache holds of them: the smallest cached range holding them, the cached ranges
-// holding them together, or the cached whole object. It reports whether it read them.
+// disk cache holds of them: the smallest cached range holding them, or the cached ranges
+// holding them together. It reports whether it read them.
 func (d *DiskCache) readCachedBytes(ctx context.Context, filePath string, offset int64, dst []byte, deadline *time.Time) bool {
-	key, end := d.rangeObjectKey(filePath), offset+int64(len(dst))
+	key, end := d.objectKey(filePath), offset+int64(len(dst))
 	if r, ok := smallestContaining(d.ranges.of(key), offset, int64(len(dst)), nil); ok && d.cache.Contains(r.diskPath) {
 		return d.readCachedRange(ctx, r, offset, dst, deadline)
 	}
@@ -1170,13 +1170,11 @@ func (d *DiskCache) readCachedBytes(ctx context.Context, filePath string, offset
 		}
 		return true
 	}
-	whole := d.pathForFile(filePath)
-	return d.cache.Contains(whole) && d.readCachedRange(ctx, cachedRange{diskPath: whole}, offset, dst, deadline)
+	return false
 }
 
-// readCachedRange reads len(dst) bytes at offset of the object from the cached range r, or
-// from the cached whole object when r has no size. A range it cannot read is dropped, and
-// a whole object it cannot open.
+// readCachedRange reads len(dst) bytes at offset of the object from the cached range r. A
+// range it cannot read is dropped.
 func (d *DiskCache) readCachedRange(ctx context.Context, r cachedRange, offset int64, dst []byte, deadline *time.Time) bool {
 	generation, ok := d.paths.startRead(ctx, r.diskPath, deadline)
 	if !ok {
@@ -1190,9 +1188,7 @@ func (d *DiskCache) readCachedRange(ctx context.Context, r cachedRange, offset i
 	}
 	if _, err := opened.file.ReadAt(dst, offset-r.offset); err != nil {
 		d.paths.close(r.diskPath, opened)
-		if r.size > 0 {
-			d.dropCachedRange(ctx, r.diskPath)
-		}
+		d.dropCachedRange(ctx, r.diskPath)
 		return false
 	}
 	d.paths.close(r.diskPath, opened)

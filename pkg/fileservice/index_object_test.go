@@ -99,7 +99,7 @@ func TestIndexObjectServesReads(t *testing.T) {
 	require.Equal(t, data[3000:3010], readIndexObjectRange(t, fs, IndexFileObject|SkipAllCache, 3000, 10))
 	require.NotZero(t, storage.reads.Load(), "a read that skips every cache skips the index-file cache")
 	storage.reads.Store(0)
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.Empty(t, fs.diskCache.objectFiles("object"))
 
 	readIndexObjectRange(t, fs, 0, 250<<10, 10)
 	require.NotZero(t, storage.reads.Load(), "a read without IndexFileObject does not use the entry")
@@ -209,7 +209,7 @@ func TestIndexObjectReadFillsIndexFileCache(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(diskPath, IndexObjectFile))
 	require.NoError(t, err)
 	require.Equal(t, data, got)
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")), "not in the disk cache")
+	require.Empty(t, fs.diskCache.objectFiles("object"), "not in the disk cache")
 
 	reads := storage.reads.Load()
 	require.Equal(t, data[7000:7010], readIndexObjectRange(t, fs, IndexFileObject, 7000, 10))
@@ -218,11 +218,11 @@ func TestIndexObjectReadFillsIndexFileCache(t *testing.T) {
 
 // A fill without IndexFileObject publishes into the disk cache as before.
 func TestNonIndexObjectFillUsesDiskCache(t *testing.T) {
-	fs, _, _ := newIndexObjectFS(t, true)
+	fs, _, data := newIndexObjectFS(t, true)
 	require.NoError(t, fs.PrefetchFile(context.Background(), "object"))
 	_, cached := fs.indexObjectCached("object")
 	require.False(t, cached)
-	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 }
 
 // A queued whole-object prefetch of an IndexFileObject request publishes into the
@@ -242,7 +242,7 @@ func TestIndexObjectPrefetchFillsIndexFileCache(t *testing.T) {
 	fs.prefetchObject(context.Background(), req)
 	_, cached := fs.indexObjectCached("object")
 	require.True(t, cached)
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.Empty(t, fs.diskCache.objectFiles("object"))
 	require.True(t, fs.haveObject(req))
 }
 
@@ -268,7 +268,7 @@ func TestIndexObjectMissReadStreamsIntoIndexFileCache(t *testing.T) {
 	require.Equal(t, data[1000:1010], readIndexObjectRange(t, fs, IndexFileObject, 1000, 10))
 	_, cached := fs.indexObjectCached("object")
 	require.True(t, cached)
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.Empty(t, fs.diskCache.objectFiles("object"))
 	reads := storage.reads.Load()
 	require.Equal(t, data[9000:9010], readIndexObjectRange(t, fs, IndexFileObject, 9000, 10))
 	require.Equal(t, reads, storage.reads.Load())
@@ -300,7 +300,7 @@ func TestIndexObjectAsyncFillPublishes(t *testing.T) {
 	fs.FlushCache(context.Background())
 	_, cached := fs.indexObjectCached("object")
 	require.True(t, cached)
-	require.False(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+	require.Empty(t, fs.diskCache.objectFiles("object"))
 }
 
 // An index-object fill writes its file in the index-file cache's directory, so publishing
@@ -313,7 +313,7 @@ func TestIndexObjectFillWritesInIndexFileCache(t *testing.T) {
 	require.NoError(t, cleanupDiskCacheTempFile(f))
 
 	var published []string
-	objectPath := fs.diskCache.pathForFile("object")
+	objectPath := fs.diskCache.objectKey("object")
 	fs.diskCache.hooks.beforeFilePublication = func() {
 		if o := fs.diskCache.download(objectPath); o != nil {
 			o.mu.Lock()

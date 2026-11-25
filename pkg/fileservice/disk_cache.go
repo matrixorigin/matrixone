@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -74,6 +75,8 @@ type DiskCache struct {
 	// the largest whole-object file written.
 	wholeFills   atomic.Int64
 	wholeFileMax atomic.Int64
+	// wholePublications holds, by range file, the whole-object fills publishing it.
+	wholePublications sync.Map
 	// statFilesystem overrides statDiskCacheFilesystem in tests.
 	statFilesystem func(path string) (diskCacheFilesystemStat, bool)
 
@@ -228,14 +231,12 @@ func newDiskCache(
 	ret.trash.limit.Store(-1)
 
 	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
-		// The file of a whole object is the one its fill publishes, while it is registered.
-		var o *objectDownload
-		if p := ret.wholeFill(path, false); p != nil {
-			o = p.joinableDownload()
-		}
-		ret.preloads.cachedDownload(path, o)
-		if o != nil {
-			if n := o.takeServed(); n > 0 {
+		// The file of a whole object is the one its fill publishes.
+		if v, ok := ret.wholePublications.Load(path); ok {
+			pub := v.(wholePublication)
+			o := pub.download
+			ret.preloads.cachedDownload(path, pub.key, o)
+			if n := o.creditTo(func(n int64) { ret.preloads.readDownload(path, o, n) }); n > 0 {
 				ret.preloads.readDownload(path, o, n)
 			}
 		}
@@ -314,7 +315,7 @@ func newDiskCache(
 func (d *DiskCache) loadFile(ctx context.Context, diskPath string, info fs.FileInfo) {
 	objectPath := diskPath
 	if key, _, _, ok := parseRangeFile(d.path, diskPath, info.Size()); ok {
-		objectPath = fullPathOfRangeKey(d.path, key)
+		objectPath = key
 	}
 	runPathHook(d.hooks.beforeLoadFile, diskPath)
 	if !d.indexLoadedFile(ctx, objectPath, diskPath, info) {
@@ -332,6 +333,23 @@ func (d *DiskCache) indexLoadedFile(ctx context.Context, objectPath, diskPath st
 		return false
 	}
 	d.cache.SetOldest(ctx, diskPath, struct{}{}, int64(fileSize(info)))
+	return true
+}
+
+// indexFoundFile indexes the file at diskPath the cache does not hold and reports true,
+// unless its object was deleted since the cache was created.
+func (d *DiskCache) indexFoundFile(ctx context.Context, diskPath string, info fs.FileInfo) bool {
+	objectPath := diskPath
+	if key, _, _, ok := parseRangeFile(d.path, diskPath, info.Size()); ok {
+		objectPath = key
+	}
+	stripe := d.deletes.stripe(objectPath)
+	stripe.RLock()
+	defer stripe.RUnlock()
+	if d.deletes.since(objectPath, 0) {
+		return false
+	}
+	d.cache.Set(ctx, diskPath, struct{}{}, fileSize(info))
 	return true
 }
 
@@ -490,6 +508,11 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 
 		} else {
 			// plain files
+			if d.isOldWholeFile(path) {
+				_ = os.Remove(path)
+				numDeleted++
+				return nil
+			}
 			if !strings.HasSuffix(entry.Name(), cacheFileSuffix) {
 				// not cache file
 				if strings.HasSuffix(entry.Name(), cacheFileTempSuffix) {
@@ -549,6 +572,19 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 
 }
 
+// isOldWholeFile reports whether the file at diskPath is a whole-object cache file of an
+// earlier version: "full" and the object path, in a shard directory or the cache's.
+func (d *DiskCache) isOldWholeFile(diskPath string) bool {
+	rel, err := filepath.Rel(d.path, diskPath)
+	if err != nil {
+		return false
+	}
+	if shard, rest, ok := strings.Cut(rel, string(filepath.Separator)); ok && isDiskCacheShard(shard) {
+		rel = rest
+	}
+	return strings.HasPrefix(rel, "full") && strings.HasSuffix(rel, cacheFileSuffix)
+}
+
 var _ IOVectorCache = new(DiskCache)
 
 func (d *DiskCache) Read(
@@ -562,7 +598,7 @@ func (d *DiskCache) Read(
 		return nil
 	}
 
-	var numHit, numRead, numOpenIOEntry, numOpenFull, numError int64
+	var numHit, numRead, numOpenIOEntry, numError int64
 	defer func() {
 		LogEvent(ctx, str_update_metrics_begin)
 
@@ -617,19 +653,12 @@ func (d *DiskCache) Read(
 		return opened, true, true
 	}
 
-	var rangeKey string
+	var key string
 	objectKey := func() string {
-		if rangeKey == "" {
-			rangeKey = d.rangeObjectKey(path.File)
+		if key == "" {
+			key = d.objectKey(path.File)
 		}
-		return rangeKey
-	}
-	var fullPath string
-	objectPath := func() string {
-		if fullPath == "" {
-			fullPath = d.pathForFile(path.File)
-		}
-		return fullPath
+		return key
 	}
 
 	fillEntry := func(entry *IOEntry) error {
@@ -663,14 +692,10 @@ func (d *DiskCache) Read(
 		}
 
 		var downloading bool
-		if !openedOK {
-			// try full file
-			diskPath = objectPath()
+		// The reads of a download join no other, nor does a large streamed entry.
+		if !openedOK && !isDownload(ctx) && entry.materializes(d.memoryPrefetchMax) {
 			var filled bool
-			// The reads of a download join no other, nor does a large streamed entry.
-			if !isDownload(ctx) && entry.materializes(d.memoryPrefetchMax) {
-				downloading, filled, err = d.readFromDownload(ctx, diskPath, vector.indexTier, entry, vector)
-			}
+			downloading, filled, err = d.readFromDownload(ctx, objectKey(), vector.indexTier, entry, vector)
 			if err != nil {
 				return err
 			}
@@ -679,15 +704,6 @@ func (d *DiskCache) Read(
 				entry.fromCache = d
 				numHit++
 				return nil
-			}
-			if !downloading {
-				if f, newlyOpened, ok := openPath(diskPath); ok {
-					if newlyOpened {
-						numOpenFull++
-					}
-					opened = f
-					openedOK = true
-				}
 			}
 		}
 
@@ -775,7 +791,7 @@ func (d *DiskCache) Read(
 
 		LogEvent(ctx, str_disk_cache_update_states_begin)
 		if _, ok := d.cache.Get(ctx, diskPath); !ok {
-			readable, err := d.reindexRead(ctx, diskPath, objectPath(), opened.generation, file)
+			readable, err := d.reindexRead(ctx, diskPath, objectKey(), opened.generation, file)
 			if err != nil {
 				return err
 			}
@@ -786,8 +802,8 @@ func (d *DiskCache) Read(
 		LogEvent(ctx, str_disk_cache_update_states_end)
 
 		readOffset, readSize := rangeOffset, entry.Size
-		if diskPath == objectPath() {
-			readOffset = entry.Offset
+		// Only a file from the object's start can be its whole object.
+		if readOffset == entry.Offset {
 			d.preloads.read(diskPath, entry.Size)
 		}
 		// Reads of a file kept open share it, so each reads at its own offset.
@@ -853,7 +869,7 @@ func (d *DiskCache) Update(
 	if err != nil {
 		return err
 	}
-	if d.wholeFill(d.pathForFile(path.File), false) != nil {
+	if d.wholeFill(d.objectKey(path.File), false) != nil {
 		// The fill of the whole object caches it.
 		return nil
 	}
@@ -1108,7 +1124,11 @@ func (d *DiskCache) writeFileTo(
 		}
 		ctx, releaseConns = whole.ctx, whole.releaseConn
 		w.releaseConns = releaseConns
-		if bounds, lead, taken = whole.splitParts(objectSize); taken {
+		bounds, lead, taken = whole.splitParts(objectSize)
+		if t, ok := target.(*wholeFillTarget); ok && whole.end != math.MaxInt64 {
+			t.sizeAt(whole.end)
+		}
+		if taken {
 			defer func() {
 				if taken {
 					d.prefetchObjects.downloads.n.Add(-1)
@@ -1161,10 +1181,13 @@ func (d *DiskCache) writeFileTo(
 			own = d.newContentFill(diskPath)
 		}
 		download = newObjectDownload(f.Name(), own.measured() && !unpublished, bounds)
+		if t, ok := target.(*wholeFillTarget); ok {
+			t.download = download
+		}
 		if unpublished {
 			defer download.retire()
 		} else {
-			d.startDownload(diskPath, own, download, taken)
+			d.startDownload(own, download, taken)
 			taken = false
 			w.owner.first(func() { d.finishDownload(download, own) })
 		}
@@ -1227,6 +1250,11 @@ func (d *DiskCache) writeFileTo(
 
 	if unpublished {
 		return false, nil
+	}
+	if t, ok := target.(*wholeFillTarget); ok {
+		if placed, err := t.place(ctx, n, &w, asyncFinalize && !prefetchFill(ctx)); !placed {
+			return false, err
+		}
 	}
 	if download != nil && fill != rangeFill {
 		target.noteWritten(n)
@@ -1427,7 +1455,7 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 	// Different spellings of the same object path (for example "foo/./bar"
 	// and "foo/bar") must land on the same disk path, or a delete issued
 	// with one spelling leaves a stale entry reachable under another.
-	// filepath.Join below already cleans the "full..."/"N-N..." component,
+	// filepath.Join below already cleans the "N-N..." component,
 	// so the shard has to be derived from the same cleaned form or the two
 	// spellings would be sharded apart even though the filename collides.
 	path = pathpkg.Clean(path)
@@ -1436,46 +1464,6 @@ func (d *DiskCache) pathForIOEntry(path string, entry IOEntry) string {
 		diskCacheShard(path),
 		fmt.Sprintf("%d-%d%s%s", entry.Offset, entry.Size, toOSPath(path), cacheFileSuffix),
 	)
-}
-
-func (d *DiskCache) pathForFile(path string) string {
-	path = pathpkg.Clean(path)
-	return filepath.Join(
-		d.path,
-		diskCacheShard(path),
-		fmt.Sprintf("full%s%s", toOSPath(path), cacheFileSuffix),
-	)
-}
-
-// legacyPathForFile reproduces the pre-sharding on-disk name for path, i.e.
-// what pathForFile returned before shard directories were introduced. It is
-// never written to going forward; it exists solely so removeOnePath can find
-// and invalidate a leftover legacy-layout cache file on delete.
-func (d *DiskCache) legacyPathForFile(path string) string {
-	return filepath.Join(
-		d.path,
-		fmt.Sprintf("full%s%s", toOSPath(path), cacheFileSuffix),
-	)
-}
-
-var ErrNotCacheFile = errorStr("not a cache file")
-
-// decodeFilePath accepts both the sharded layout and the unsharded layout
-// written by earlier versions, which may still be present after an upgrade.
-func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
-	path, err := filepath.Rel(d.path, diskPath)
-	if err != nil {
-		return "", err
-	}
-	if shard, rest, ok := strings.Cut(path, string(filepath.Separator)); ok && isDiskCacheShard(shard) {
-		path = rest
-	}
-	if !strings.HasPrefix(path, "full") {
-		return "", ErrNotCacheFile
-	}
-	path = strings.TrimPrefix(path, "full")
-	path = strings.TrimSuffix(path, cacheFileSuffix)
-	return fromOSPath(path), nil
 }
 
 func (d *DiskCache) removeEvictedFile(path string, size int64) error {
@@ -1524,7 +1512,7 @@ func (d *DiskCache) setFile(
 	return d.fillFile(ctx, filePath, openReader, asyncFinalize, storageFill, nil)
 }
 
-// setFileContent caches content already in memory as the whole file of filePath.
+// setFileContent caches content already in memory as the whole object of filePath.
 func (d *DiskCache) setFileContent(
 	ctx context.Context,
 	filePath string,
@@ -1579,15 +1567,14 @@ func (d *DiskCache) fillFileTo(
 	if err != nil {
 		return err
 	}
-	diskPath := d.pathForFile(path.File)
+	diskPath := d.objectKey(path.File)
 	// Only a fill published into the disk cache takes its room.
 	if target == nil {
+		target = d.newWholeFillTarget(ctx, path.File)
 		d.wholeFills.Add(1)
+		defer d.wholeFills.Add(-1)
 	}
 	written, writeErr := d.writeFileTo(ctx, diskPath, openReader, asyncFinalize, nil, fill, objectSize, target, nil)
-	if target == nil {
-		d.wholeFills.Add(-1)
-	}
 	if writeErr != nil {
 		return d.observeWriteResult(diskPath, writeErr)
 	}
@@ -1620,68 +1607,25 @@ func (d *DiskCache) DeletePaths(
 }
 
 func (d *DiskCache) deletePath(ctx context.Context, path string) error {
-	diskPath := d.pathForFile(path)
+	key := d.objectKey(path)
 	// Counted first: an entry read before it and cached after it is retracted.
-	d.deletes.deleted(diskPath)
+	d.deletes.deleted(key)
 	d.async.mu.Lock()
 	d.async.wakeFreedLocked()
 	d.async.mu.Unlock()
 	// No prefetch object of the object caches its bytes after the delete; one under
 	// way is canceled rather than waited for.
-	if err := d.dropPrefetches(ctx, diskPath); err != nil {
+	if err := d.dropPrefetches(ctx, key); err != nil {
 		return err
 	}
-	err := d.removeOnePath(ctx, path)
-	if err == nil {
-		d.prefetched.forget(diskPath)
-	}
-	return errors.Join(err, d.removeRangeFiles(ctx, path))
-}
-
-func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) {
-	diskPath := d.pathForFile(path)
-	owner, err := d.paths.acquire(ctx, diskPath, nil)
-	if err != nil {
-		return err
-	}
-	defer owner.release()
-	if err = os.Remove(diskPath); err != nil {
-		if !os.IsNotExist(err) {
-			return
-		}
-		err = nil
-	}
-	if d.cache.Contains(diskPath) {
-		d.preloads.deleted(diskPath)
-	}
-	d.cache.Delete(ctx, diskPath)
-
-	// A pre-upgrade binary may have left a legacy, unsharded cache file for this
-	// path (see the sharding comment on pathForFile). Legacy files are never
-	// migrated, but they must still be invalidated on delete: otherwise
-	// restoreFromDiskCache's directory walk (triggered by -fs-fix-missing /
-	// MO_FS_FIX_MISSING) can later read the orphaned legacy file back and
-	// resurrect data that was explicitly deleted.
-	if legacyPath := d.legacyPathForFile(path); legacyPath != diskPath {
-		if err = os.Remove(legacyPath); err != nil {
-			if !os.IsNotExist(err) {
-				return
-			}
-			err = nil
-		}
-		if d.cache.Contains(legacyPath) {
-			d.preloads.deleted(legacyPath)
-		}
-		d.cache.Delete(ctx, legacyPath)
-	}
-
-	return
+	d.prefetched.forget(key)
+	return d.removeRangeFiles(ctx, path)
 }
 
 // removeRangeFiles deletes the cached range files of the object at path, each one
 // whatever the others return, and returns their errors joined.
 func (d *DiskCache) removeRangeFiles(ctx context.Context, path string) error {
-	ranges := d.ranges.of(d.rangeObjectKey(path))
+	ranges := d.ranges.of(d.objectKey(path))
 	errs := make([]error, 0, len(ranges))
 	for _, r := range ranges {
 		errs = append(errs, d.removeRangeFile(ctx, r.diskPath))
@@ -1697,6 +1641,9 @@ func (d *DiskCache) removeRangeFile(ctx context.Context, diskPath string) error 
 	defer owner.release()
 	if err := os.Remove(diskPath); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	if d.cache.Contains(diskPath) {
+		d.preloads.deleted(diskPath)
 	}
 	d.ranges.remove(diskPath)
 	d.cache.Delete(ctx, diskPath)

@@ -201,7 +201,7 @@ func TestIndexPrefetchWhileDiskPrefetchRunning(t *testing.T) {
 			require.NoError(t, fs.PrefetchObject(indexCtx, req))
 			resume()
 			waitPrefetcherIdle(t, fs)
-			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile(req.FilePath)))
+			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath(req.FilePath, int64(len(data)))))
 			_, cached := fs.indexObjectCached(req.FilePath)
 			require.True(t, cached, "the index-object prefetch should fill its own cache tier")
 		})
@@ -254,7 +254,7 @@ func TestIndexQuotaErrorDoesNotEvictTableCache(t *testing.T) {
 			fs, _, data := newIndexObjectFS(t, true)
 			d := fs.diskCache
 			require.NoError(t, d.setFileContent(ctx, "bystander", data, false))
-			warmFile := d.pathForFile("bystander")
+			warmFile := d.wholePath("bystander", int64(len(data)))
 			require.FileExists(t, warmFile)
 			if quotaExceeded {
 				syncFile := d.fileSync
@@ -357,7 +357,7 @@ func TestIndexReadSeesConcurrentPublication(t *testing.T) {
 				require.NoError(t, fillErr)
 				_, cached := fs.indexObjectCached("object")
 				require.True(t, cached)
-				require.Nil(t, fs.diskCache.download(fs.diskCache.pathForFile("object")))
+				require.Nil(t, fs.diskCache.download(fs.diskCache.objectKey("object")))
 			}
 			unblockJoin()
 			<-readDone

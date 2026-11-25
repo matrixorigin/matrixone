@@ -176,7 +176,7 @@ func flightRefs(fs *S3FS, offset int64) int {
 	f := &fs.diskCache.prefetchObjects
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, o := range f.m[fs.diskCache.pathForFile("object")] {
+	for _, o := range f.m[fs.diskCache.objectKey("object")] {
 		if fl, ok := o.(*memoryPrefetchObject); ok && fl.start == offset {
 			fl.mu.Lock()
 			defer fl.mu.Unlock()
@@ -346,7 +346,7 @@ func TestFlightTransitionColumnReadJoinedFailedFlightFails(t *testing.T) {
 	fs.storage = s
 	ctx := context.Background()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 1 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, func() bool {
 		_, ok := fs.diskCache.fastestPrefetch(diskPath, ranges[0].Offset, ranges[0].Offset+ranges[0].Size)
 		return ok
@@ -376,7 +376,7 @@ func TestFlightTransitionRangeReadJoinedFailedFlightFails(t *testing.T) {
 		}
 		return err
 	}
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	a, b := make(chan error, 1), make(chan error, 1)
 	go func() { a <- read(1000, 100) }()
 	require.Eventually(t, func() bool { return memoryWaiters(fs, diskPath) == 1 }, 5*time.Second, time.Millisecond)
@@ -405,7 +405,7 @@ func TestFlightTransitionPrefetchReadJoinedFailedFlightFails(t *testing.T) {
 		}
 		return err
 	}
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	a, b := make(chan error, 1), make(chan error, 1)
 	go func() { a <- read(unit+10, 100) }()
 	require.Eventually(t, func() bool { return memoryWaiters(fs, diskPath) == 1 }, 5*time.Second, time.Millisecond)
@@ -456,7 +456,7 @@ func TestFlightTransitionIdleFlightFreesBudgetAndConn(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return !fs.prefetcher.isRunning("object") && prefetchBytes(fs) == 0 && fs.diskCache.conns.held.Load() == 0
 	}, 5*time.Second, time.Millisecond)
-	_, ok := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey("object"), ranges[0].Offset, ranges[0].Size)
+	_, ok := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), ranges[0].Offset, ranges[0].Size)
 	require.False(t, ok)
 }
 
@@ -479,7 +479,7 @@ func TestFlightTransitionDeleteStopsWaitingFlight(t *testing.T) {
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Zero(t, prefetchBytes(fs))
 	require.Zero(t, fs.diskCache.conns.held.Load())
-	rk := fs.diskCache.rangeObjectKey("object")
+	rk := fs.diskCache.objectKey("object")
 	for _, r := range ranges {
 		_, ok := fs.diskCache.ranges.covering(rk, r.Offset, r.Size)
 		require.False(t, ok, "no range cached after the delete")

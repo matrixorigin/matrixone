@@ -30,9 +30,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +62,7 @@ func TestDiskCacheSpreadsFilesAcrossShards(t *testing.T) {
 	perDir := make(map[string]int)
 	for i := 0; i < numObjects; i++ {
 		path := fmt.Sprintf("01a1396b-%04x-7682-af2b-%012x_%05d", i%65536, i*7919, i%10)
-		full := cache.pathForFile(path)
+		full := cache.objectKey(path)
 		entry := cache.pathForIOEntry(path, IOEntry{Offset: 10, Size: 20})
 
 		shardDir := filepath.Join(cache.path, diskCacheShard(path))
@@ -81,20 +79,20 @@ func TestDiskCacheSpreadsFilesAcrossShards(t *testing.T) {
 	// Object paths with directories still land below a shard, not directly in
 	// a directory shared by every object of that prefix.
 	path := "query_result/ws_1_2_3.blk"
-	rel, err := filepath.Rel(cache.path, cache.pathForFile(path))
+	rel, err := filepath.Rel(cache.path, cache.objectKey(path))
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(diskCacheShard(path), "fullquery_result", "ws_1_2_3.blk"+cacheFileSuffix), rel)
+	require.Equal(t, filepath.Join(diskCacheShard(path), "query_result", "ws_1_2_3.blk"+cacheFileSuffix), rel)
 }
 
 func TestDiskCachePathsNormalizeDotSegments(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	// "foo/./bar" and "foo/bar" name the same backing object (this mirrors
 	// how S3 and the rest of fileservice treat them, see ParsePath/path.Clean
-	// elsewhere in this package). filepath.Join cleans the "full..."/"N-N..."
+	// elsewhere in this package). filepath.Join cleans the "N-N..."
 	// filename component for free, so the shard has to be derived from the
 	// same cleaned form, or the two spellings would be sharded apart and a
 	// delete issued through one spelling would leave the other reachable.
-	require.Equal(t, cache.pathForFile("foo/bar"), cache.pathForFile("foo/./bar"))
+	require.Equal(t, cache.objectKey("foo/bar"), cache.objectKey("foo/./bar"))
 	require.Equal(t,
 		cache.pathForIOEntry("foo/bar", IOEntry{Offset: 1, Size: 2}),
 		cache.pathForIOEntry("foo/./bar", IOEntry{Offset: 1, Size: 2}),
@@ -147,26 +145,6 @@ func TestDiskCacheS3AliasDelete(t *testing.T) {
 	require.Equal(t, []byte("new"), v.Entries[0].Data, "reading rewritten S3 object must not return its deleted predecessor")
 }
 
-func TestDiskCacheDecodeFilePathAcceptsBothLayouts(t *testing.T) {
-	cache := newLifecycleTestDiskCache(t)
-
-	for _, path := range []string{"foo", "query_result/ws_1_2_3.blk", "a/b/c"} {
-		decoded, err := cache.decodeFilePath(cache.pathForFile(path))
-		require.NoError(t, err)
-		require.Equal(t, path, decoded)
-
-		legacy := filepath.Join(cache.path, "full"+toOSPath(path)+cacheFileSuffix)
-		decoded, err = cache.decodeFilePath(legacy)
-		require.NoError(t, err)
-		require.Equal(t, path, decoded)
-
-		_, err = cache.decodeFilePath(cache.pathForIOEntry(path, IOEntry{Offset: 1, Size: 2}))
-		require.ErrorIs(t, err, ErrNotCacheFile)
-		_, err = cache.decodeFilePath(filepath.Join(cache.path, "1-2"+toOSPath(path)+cacheFileSuffix))
-		require.ErrorIs(t, err, ErrNotCacheFile)
-	}
-}
-
 func TestDiskCacheLegacyLayoutFilesAreAgedOut(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -186,9 +164,12 @@ func TestDiskCacheLegacyLayoutFilesAreAgedOut(t *testing.T) {
 	require.NoError(t, err)
 	defer cache.Close(ctx)
 
-	// Legacy files are accounted for, so they cannot push the cache over its
-	// capacity, but they are never served.
-	require.True(t, cache.cache.Contains(legacyFull))
+	// The whole file of an earlier version is removed at startup. The unsharded
+	// range file is accounted for, so it cannot push the cache over its capacity,
+	// but it is never served.
+	require.False(t, cache.cache.Contains(legacyFull))
+	_, err = os.Stat(legacyFull)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	require.True(t, cache.cache.Contains(legacyEntry))
 	vector := &IOVector{
 		FilePath: "foo",
@@ -371,58 +352,4 @@ func TestDiskCacheConcurrentDiskFullFailuresEvictOnce(t *testing.T) {
 	cache.cache.Evict(context.Background(), done, 0)
 	<-done
 	require.Equal(t, used-n, cache.cache.Used())
-}
-
-func TestDiskCacheDeleteRemovesLegacyLayoutFile(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-
-	// A pre-upgrade binary left a legacy, unsharded cache file on disk; the
-	// fix never migrates it, only ages it out (option B), so it is still
-	// present when the current binary starts up and indexes it.
-	legacyFull := filepath.Join(dir, "fullfoo"+cacheFileSuffix)
-	require.NoError(t, os.WriteFile(legacyFull, []byte("stale"), 0o644))
-
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
-	require.NoError(t, err)
-	defer cache.Close(ctx)
-	require.True(t, cache.cache.Contains(legacyFull))
-
-	require.NoError(t, cache.DeletePaths(ctx, []string{"foo"}))
-
-	_, err = os.Stat(legacyFull)
-	require.True(t, os.IsNotExist(err), "delete must remove the leftover legacy-layout file, not just the new sharded path")
-	require.False(t, cache.cache.Contains(legacyFull))
-}
-
-func TestDiskCacheDeleteInvalidatesLegacyLayoutBeforeRestore(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-
-	// Same setup as TestDiskCacheDeleteRemovesLegacyLayoutFile: a legacy
-	// full-file cache entry left over from before an upgrade.
-	legacyFull := filepath.Join(dir, "fullfoo"+cacheFileSuffix)
-	require.NoError(t, os.WriteFile(legacyFull, []byte("stale"), 0o644))
-
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
-	require.NoError(t, err)
-	defer cache.Close(ctx)
-	require.True(t, cache.cache.Contains(legacyFull))
-
-	s, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, DisabledCacheConfig, nil, true, false)
-	require.NoError(t, err)
-	t.Cleanup(func() { s.Close(ctx) })
-	s.diskCache = cache
-
-	require.NoError(t, s.Delete(ctx, "foo"))
-
-	// Without the fix, the orphaned legacy file is still on disk here, and
-	// the directory walk below treats it as live cache content.
-	counterSet := new(perfcounter.CounterSet)
-	ctx = perfcounter.WithCounterSet(ctx, counterSet)
-	s.restoreFromDiskCache(ctx)
-	require.Equal(t, int64(0), counterSet.FileService.S3.Put.Load(), "restoring from disk cache must not resurrect an explicitly deleted object from a stale legacy cache file")
-
-	err = s.Read(ctx, &IOVector{FilePath: "foo", Entries: []IOEntry{{Size: 3}}})
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }

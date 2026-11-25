@@ -101,9 +101,9 @@ func (s *rangeSnapshot) startingBy(pos int64) int {
 	return n
 }
 
-// rangeObjectKey returns the key of the range files of filePath: their disk path without
-// the offset and size.
-func (d *DiskCache) rangeObjectKey(filePath string) string {
+// objectKey returns the key of the object at filePath: the disk path of its range files
+// without the offset and size. No file is published under it.
+func (d *DiskCache) objectKey(filePath string) string {
 	filePath = pathpkg.Clean(filePath)
 	return filepath.Join(d.path, diskCacheShard(filePath), toOSPath(filePath)+cacheFileSuffix)
 }
@@ -140,14 +140,6 @@ func parseRangeFile(root, diskPath string, length int64) (key string, offset, si
 		}
 	}
 	return "", 0, 0, false
-}
-
-// fullPathOfRangeKey returns the whole-object file of the object whose range files have
-// key under the cache directory root.
-func fullPathOfRangeKey(root, key string) string {
-	rel, _ := filepath.Rel(root, key)
-	shard, name, _ := strings.Cut(rel, string(filepath.Separator))
-	return filepath.Join(root, shard, "full"+name)
 }
 
 // add indexes the range file at diskPath under root, if it is one.
@@ -238,6 +230,12 @@ func (c *cachedRanges) containing(key string, offset, size int64, tried []string
 		return cachedRange{}, false
 	}
 	return smallestContaining(s.ranges[:s.startingBy(offset)], offset, size, tried)
+}
+
+// startsAt0 reports whether a cached range of the object with key starts at offset 0.
+func (c *cachedRanges) startsAt0(key string) bool {
+	s := c.snapshot(key)
+	return s != nil && len(s.ranges) > 0 && s.ranges[0].offset == 0
 }
 
 // of returns a copy of the cached ranges of the object with key.

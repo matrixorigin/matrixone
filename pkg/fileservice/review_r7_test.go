@@ -89,7 +89,7 @@ func TestPrefetchDiskTierAfterIndex(t *testing.T) {
 
 			require.True(t, fs.indexObjectHeld(req.FilePath), "the index prefetch should fill the index-file cache")
 			_, _, reads := storage.counts(fs.pathToKey(req.FilePath))
-			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile(req.FilePath)),
+			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath(req.FilePath, int64(len(data)))),
 				"the disk prefetch should fill the disk cache (storage opens: %d)", reads)
 			require.Equal(t, 2, reads)
 		})
@@ -124,7 +124,7 @@ func TestPrefetchBothQueuedTiers(t *testing.T) {
 			waitReviewPrefetchIdle(t, fs)
 
 			require.True(t, fs.indexObjectHeld(indexReq.FilePath), "the index prefetch should fill the index-file cache")
-			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile(req.FilePath)),
+			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath(req.FilePath, int64(len(data)))),
 				"the disk prefetch should fill the disk cache (storage opens: %d)", storage.reads.Load())
 			require.EqualValues(t, 2, storage.reads.Load())
 		})
@@ -177,7 +177,7 @@ func TestIndexPrefetchAfterAsyncDiskDownload(t *testing.T) {
 				resumePublication()
 				waitReviewPrefetchIdle(t, fs)
 				fs.diskCache.Flush(ctx)
-				require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile(req.FilePath)))
+				require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath(req.FilePath, int64(len(data)))))
 				if !tc.overlap {
 					require.NoError(t, fs.PrefetchObject(indexCtx, req))
 					waitReviewPrefetchIdle(t, fs)
@@ -215,7 +215,7 @@ func TestQueuedRangeMergeChargesOnlyUniqueBytes(t *testing.T) {
 			waitReviewPrefetchIdle(t, fs)
 
 			d := fs.diskCache
-			key := d.rangeObjectKey("object")
+			key := d.objectKey("object")
 			_, prefixCached := d.ranges.covering(key, 0, 128)
 			require.True(t, prefixCached)
 			_, unionCached := d.ranges.covering(key, 0, total)

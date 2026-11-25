@@ -105,7 +105,7 @@ func joinedColumnRead(t *testing.T, fileBacked bool, r PrefetchRange, answer fun
 		got = b
 		result <- err
 	}()
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, func() bool {
 		if !fileBacked {
 			return memoryWaiters(fs, diskPath) == 1
@@ -189,7 +189,7 @@ func TestStreamedReadFallsBackOnUnreadableDownloadFile(t *testing.T) {
 	defer vec.Release()
 	result := make(chan error, 1)
 	go func() { result <- fs.Read(ctx, vec) }()
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	var download *objectDownload
 	require.Eventually(t, func() bool {
 		if download = d.download(diskPath); download == nil {
@@ -226,7 +226,7 @@ func stalledWholeDownload(t *testing.T, fs *S3FS) (*objectDownload, func()) {
 	})
 	var download *objectDownload
 	require.Eventually(t, func() bool {
-		download = d.download(d.pathForFile("object"))
+		download = d.download(d.objectKey("object"))
 		return download != nil
 	}, 5*time.Second, time.Millisecond)
 	return download, release
@@ -334,7 +334,7 @@ func TestCachedBytesAcrossRangesAndWholeObject(t *testing.T) {
 		require.True(t, d.readCachedBytes(ctx, "object", part-16, dst, &deadline))
 		require.Equal(t, data[part-16:part+16], dst)
 		require.False(t, d.readCachedBytes(ctx, "object", int64(len(data))-16, dst, &deadline), "bytes past the object's end")
-		require.True(t, d.cache.Contains(d.pathForFile("object")), "a read past its end keeps the whole object")
+		require.True(t, d.cache.Contains(d.wholePath("object", int64(len(data)))), "a read past its end keeps the whole object")
 	})
 }
 
@@ -422,10 +422,10 @@ func TestIndexObjectReadSkippingDiskReadsJoinsIndexDownload(t *testing.T) {
 	go func() { filled <- fs.PrefetchFile(WithFileServicePolicy(ctx, IndexFileObject), "object") }()
 	var download *objectDownload
 	require.Eventually(t, func() bool {
-		download = d.download(d.pathForFile("object"))
+		download = d.download(d.objectKey("object"))
 		return download != nil
 	}, 5*time.Second, time.Millisecond)
-	require.NotNil(t, d.wholeFill(d.pathForFile("object"), true), "the download is of the index-file cache")
+	require.NotNil(t, d.wholeFill(d.objectKey("object"), true), "the download is of the index-file cache")
 	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipDiskCacheReads | SkipMemoryCache,
 		Entries: []IOEntry{{Offset: 100, Size: 4096}}}
 	defer vec.Release()
@@ -461,7 +461,7 @@ func TestUncachingReadJoinsUncachingFlight(t *testing.T) {
 	defer first.Release()
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- fs.Read(ctx, first) }()
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, s.hit.Load, 5*time.Second, time.Millisecond)
 	var out bytes.Buffer
 	second := &IOVector{FilePath: "object", Policy: ColumnPrefetch | SkipFullFilePreloads | SkipDiskCacheWrites | SkipMemoryCache,
@@ -484,7 +484,7 @@ func TestFileDownloadPicksFastestLiveObject(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 64<<10)
 	d := fs.diskCache
 	<-d.load.done
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	tempPath := t.TempDir() + "/download"
 	require.NoError(t, os.WriteFile(tempPath, make([]byte, 64<<10), 0600))
 	object := func(written int64, stopped bool) *filePrefetchObject {
@@ -603,7 +603,7 @@ func TestStreamedEntryPastPrefetchBufferReadsItself(t *testing.T) {
 			defer cancel()
 			r := PrefetchRange{Size: max + 1<<20}
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: r.Size, Ranges: []PrefetchRange{r}}))
-			diskPath := d.pathForFile("object")
+			diskPath := d.objectKey("object")
 			var download *objectDownload
 			require.Eventually(t, func() bool {
 				download, _ = d.fileDownload(diskPath, 0, r.Size)

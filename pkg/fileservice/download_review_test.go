@@ -68,7 +68,7 @@ func TestCloseCancelsUnclaimedPrefetchPublication(t *testing.T) {
 			if tc.name != "ordinary_async_entry" {
 				objects := &d.prefetchObjects
 				objects.mu.Lock()
-				active := slices.Clone(objects.m[d.pathForFile("object")])
+				active := slices.Clone(objects.m[d.objectKey("object")])
 				objects.mu.Unlock()
 				require.Len(t, active, 1)
 				switch flight := active[0].(type) {
@@ -194,7 +194,7 @@ func TestFileRangeRespectsZeroExtraWait(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			download, _ := d.fileDownload(d.pathForFile("object"), 16, 80)
+			download, _ := d.fileDownload(d.objectKey("object"), 16, 80)
 			require.NotNil(t, download)
 			_, eta := download.estimate(16, 80)
 			require.Greater(t, eta, rangeReadCosts.cost(64))
@@ -313,7 +313,7 @@ func TestExactReadsShareLargeRange(t *testing.T) {
 				objects := &fs.diskCache.prefetchObjects
 				objects.mu.Lock()
 				defer objects.mu.Unlock()
-				for _, object := range objects.m[fs.diskCache.pathForFile("object")] {
+				for _, object := range objects.m[fs.diskCache.objectKey("object")] {
 					var waiters int
 					switch flight := object.(type) {
 					case *memoryPrefetchObject:

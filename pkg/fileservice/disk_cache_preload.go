@@ -16,8 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -96,9 +94,10 @@ type pendingPreloadRemoval struct {
 // before the file is evicted, and reports per group whether that share is low.
 type preloadUsage struct {
 	mu        sync.Mutex
-	served    map[string]int64 // cached whole-object file -> bytes read from it
+	served    map[string]int64  // cached whole-object file -> bytes read from it
+	keys      map[string]string // cached whole-object file -> key of its object
 	deleting  map[string]struct{}
-	objects   map[string]uint64 // whole-object file -> group of the narrow reads of it
+	objects   map[string]uint64 // object key -> group of the narrow reads of it
 	downloads map[string]*objectDownload
 	pending   map[*objectDownload]*pendingPreloadRemoval
 	groups    map[uint64]*groupUsage
@@ -108,6 +107,7 @@ type preloadUsage struct {
 func newPreloadUsage() *preloadUsage {
 	return &preloadUsage{
 		served:    make(map[string]int64),
+		keys:      make(map[string]string),
 		deleting:  make(map[string]struct{}),
 		objects:   make(map[string]uint64),
 		downloads: make(map[string]*objectDownload),
@@ -117,26 +117,22 @@ func newPreloadUsage() *preloadUsage {
 	}
 }
 
-func isFullFileCachePath(diskPath string) bool {
-	return strings.HasPrefix(filepath.Base(diskPath), "full")
+// cached starts tracking the file at diskPath, the whole object of key, that entered the
+// cache.
+func (p *preloadUsage) cached(diskPath, key string) {
+	p.cachedDownload(diskPath, key, nil)
 }
 
-// cached starts tracking a whole-object file that entered the cache.
-func (p *preloadUsage) cached(diskPath string) {
-	p.cachedDownload(diskPath, nil)
-}
-
-// cachedDownload associates a cached file with its download generation. Credits
-// from an older download can then never be applied to a newer file at the same path.
-func (p *preloadUsage) cachedDownload(diskPath string, o *objectDownload) {
+// cachedDownload associates a cached file of the whole object of key with its download
+// generation. Credits from an older download can then never be applied to a newer file at
+// the same path.
+func (p *preloadUsage) cachedDownload(diskPath, key string, o *objectDownload) {
 	if p == nil {
-		return
-	}
-	if !isFullFileCachePath(diskPath) {
 		return
 	}
 	p.mu.Lock()
 	p.served[diskPath] = 0
+	p.keys[diskPath] = key
 	if o == nil {
 		delete(p.downloads, diskPath)
 	} else {
@@ -182,7 +178,8 @@ func (p *preloadUsage) deleted(diskPath string) {
 	}
 	p.mu.Lock()
 	delete(p.served, diskPath)
-	delete(p.objects, diskPath)
+	delete(p.objects, p.keys[diskPath])
+	delete(p.keys, diskPath)
 	delete(p.downloads, diskPath)
 	p.deleting[diskPath] = struct{}{}
 	p.mu.Unlock()
@@ -215,8 +212,10 @@ func (p *preloadUsage) prepareRemoval(diskPath string, size int64) *objectDownlo
 		return nil
 	}
 	delete(p.served, diskPath)
-	group, hasGroup := p.objects[diskPath]
-	delete(p.objects, diskPath)
+	key := p.keys[diskPath]
+	delete(p.keys, diskPath)
+	group, hasGroup := p.objects[key]
+	delete(p.objects, key)
 	o := p.downloads[diskPath]
 	delete(p.downloads, diskPath)
 	if !hasGroup || size <= 0 {
@@ -329,23 +328,23 @@ func (p *preloadUsage) forgetIdleGroups(now time.Time) {
 	}
 }
 
-// narrowRead maps diskPath to group and reports whether group's whole-object
+// narrowRead maps the object of key to group and reports whether group's whole-object
 // files are evicted before most of their bytes are read. Group 0 is no group.
 // Thrashing ends only when fits reports room for another whole object: a group
 // that reads ranges evicts no whole-object file, whether or not its objects fit.
-func (p *preloadUsage) narrowRead(diskPath string, group uint64, fits func() bool) bool {
+func (p *preloadUsage) narrowRead(key string, group uint64, fits func() bool) bool {
 	if p == nil || group == 0 {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, ok := p.objects[diskPath]; !ok && len(p.objects) >= preloadObjectsMax {
-		for path := range p.objects {
-			delete(p.objects, path)
+	if _, ok := p.objects[key]; !ok && len(p.objects) >= preloadObjectsMax {
+		for k := range p.objects {
+			delete(p.objects, k)
 			break
 		}
 	}
-	p.objects[diskPath] = group
+	p.objects[key] = group
 	g := p.groups[group]
 	if g == nil {
 		return false

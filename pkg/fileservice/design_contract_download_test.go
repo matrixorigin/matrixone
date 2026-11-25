@@ -154,7 +154,7 @@ func TestDesignDownloadFetchedOnce(t *testing.T) {
 
 	leader := requireReturns(t, storage.readAsync(fs, 1024, 4))
 	require.Equal(t, data[1024:1028], leader, "the first reader returned before the download finished")
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	require.NotNil(t, fs.diskCache.download(diskPath), "the download continues in the background")
 
 	written := requireReturns(t, storage.readAsync(fs, 4096, 13))
@@ -172,7 +172,7 @@ func TestDesignDownloadFetchedOnce(t *testing.T) {
 
 	fs.FlushCache(context.Background())
 	require.Equal(t, int64(1), storage.opens.Load(), "the object was fetched from storage once")
-	require.FileExists(t, diskPath)
+	require.FileExists(t, fs.diskCache.wholePath("object", int64(len(data))))
 }
 
 // "Otherwise it reads its range at once": with no margin, a read far behind the download
@@ -191,5 +191,5 @@ func TestDesignDownloadFarBehindReadsRange(t *testing.T) {
 	far := requireReturns(t, storage.readAsync(fs, 6<<20, 17))
 	require.Equal(t, data[6<<20:6<<20+17], far)
 	require.Greater(t, storage.ranges.Load(), ranges, "the read fetched its range")
-	require.NotNil(t, fs.diskCache.download(fs.diskCache.pathForFile("object")), "without waiting for the stalled download")
+	require.NotNil(t, fs.diskCache.download(fs.diskCache.objectKey("object")), "without waiting for the stalled download")
 }

@@ -71,10 +71,20 @@ func (o *objectDownload) serve(n int64) {
 		o.mu.Unlock()
 		return
 	}
+	credit := o.credit
 	o.mu.Unlock()
-	if o.credit != nil {
-		o.credit(n)
+	if credit != nil {
+		credit(n)
 	}
+}
+
+// creditTo has credit count the bytes readers take from now, and returns the bytes they
+// took so far.
+func (o *objectDownload) creditTo(credit func(n int64)) int64 {
+	o.mu.Lock()
+	o.credit = credit
+	o.mu.Unlock()
+	return o.takeServed()
 }
 
 // takeServed returns the bytes readers took so far; readers count later bytes
@@ -807,11 +817,10 @@ func (c *downloadCount) take(limit int64) bool {
 	}
 }
 
-// startDownload counts o, the download of the cache file at diskPath of the fill p, in
-// flight, and registers p when it is a fill of bytes the write path holds; taken is set
-// when downloadCount.take counted it already.
-func (d *DiskCache) startDownload(diskPath string, p *filePrefetchObject, o *objectDownload, taken bool) {
-	o.credit = func(n int64) { d.preloads.readDownload(diskPath, o, n) }
+// startDownload counts o, the download of the fill p, in flight, and registers p when it
+// is a fill of bytes the write path holds; taken is set when downloadCount.take counted it
+// already.
+func (d *DiskCache) startDownload(p *filePrefetchObject, o *objectDownload, taken bool) {
 	if !taken {
 		d.prefetchObjects.downloads.n.Add(1)
 	}

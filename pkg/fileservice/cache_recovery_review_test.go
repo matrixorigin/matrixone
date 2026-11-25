@@ -167,7 +167,7 @@ func TestColumnReadPropagatesJoinedPrefetchSourceError(t *testing.T) {
 				_, err := readColumnRange(ctx, fs, r)
 				result <- err
 			}()
-			diskPath := fs.diskCache.pathForFile("object")
+			diskPath := fs.diskCache.objectKey("object")
 			require.Eventually(t, func() bool {
 				if !tc.fileBacked {
 					return memoryWaiters(fs, diskPath) == 1
@@ -234,7 +234,7 @@ func TestRangeIndexSurvivesOlderEviction(t *testing.T) {
 			}))
 			waitPrefetcherIdle(t, fs)
 			path := d.pathForIOEntry("object", r.entry())
-			key := d.rangeObjectKey("object")
+			key := d.objectKey("object")
 			require.True(t, d.cache.Contains(path))
 			require.FileExists(t, path)
 

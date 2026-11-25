@@ -53,12 +53,12 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 		http.DefaultServeMux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/debug/prefetch_objects", nil))
 		return w.Body.String()
 	}
-	objectPath := fs.diskCache.pathForFile("object")
+	objectPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, func() bool {
 		return strings.Contains(page(), "memory "+objectPath+" [0, 1024) waiting for a connection")
 	}, 5*time.Second, time.Millisecond, "the waiting object is listed")
 	out := page()
-	require.Contains(t, out, "file "+fs.diskCache.pathForFile("other")+" [0, ")
+	require.Contains(t, out, "file "+fs.diskCache.objectKey("other")+" [0, ")
 	require.Contains(t, out, "download connections 1 of 1")
 	require.GreaterOrEqual(t, testutil.ToFloat64(metric.FSPrefetchObjectWaitingConnection), waiting+1)
 	release()

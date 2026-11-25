@@ -45,7 +45,7 @@ func TestDiskCacheTransitionFileRunJoinsSlowWholeDownload(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: size, Scan: &PrefetchScan{}}))
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, func() bool {
 		cur, _, _ := g.counts(key)
 		return cur == 1 && fs.diskCache.download(diskPath) != nil
@@ -118,7 +118,7 @@ func TestDiskCacheTransitionAbandonedStalledDownloadFreesResources(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, data[10:20], got)
 	d := fs.diskCache
-	diskPath := d.pathForFile("object")
+	diskPath := d.objectKey("object")
 	require.Eventually(t, func() bool {
 		d.async.mu.Lock()
 		pending := len(d.async.mu.pending)
@@ -126,7 +126,7 @@ func TestDiskCacheTransitionAbandonedStalledDownloadFreesResources(t *testing.T)
 		return d.conns.held.Load() == 0 && !d.isUpdating(diskPath) && d.download(diskPath) == nil &&
 			pending == 0 && len(backgroundFills) == 0
 	}, 5*time.Second, time.Millisecond)
-	require.False(t, d.cache.Contains(diskPath))
+	require.Empty(t, d.objectFiles("object"))
 }
 
 // An entry read before a delete, whose async publication waits while the object is

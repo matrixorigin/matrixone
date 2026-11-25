@@ -324,7 +324,7 @@ func (s *S3FS) readIndexDownload(ctx context.Context, vector *IOVector) error {
 		return nil
 	}
 	d := s.diskCache
-	diskPath := d.pathForFile(p.File)
+	diskPath := d.objectKey(p.File)
 	for i := range vector.Entries {
 		e := &vector.Entries[i]
 		if !e.ranged() || !e.materializes(d.memoryPrefetchMax) {

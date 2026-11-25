@@ -39,7 +39,7 @@ func TestStartupLoadPreservesRefilledFile(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			d := newLifecycleTestDiskCache(t)
-			path := d.pathForFile("object")
+			path := d.wholePath("object", 3)
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte("old"), 0o644))
 
@@ -65,7 +65,7 @@ func TestStartupLoadPreservesRefilledFile(t *testing.T) {
 			require.NoError(t, d.DeletePaths(ctx, []string{tc.deletePath}))
 			want := "old"
 			if tc.deletePath == "object" {
-				want = "replacement"
+				want = "new"
 				require.NoError(t, d.SetFile(ctx, "object", func(context.Context) (io.ReadCloser, error) {
 					return io.NopCloser(strings.NewReader(want)), nil
 				}))

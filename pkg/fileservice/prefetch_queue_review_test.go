@@ -32,7 +32,7 @@ func TestIndexPrefetchWarmsIndexTierWithWarmDiskCache(t *testing.T) {
 			ctx := context.Background()
 			fs, _, data := newIndexObjectFS(t, true)
 			require.NoError(t, fs.PrefetchFile(ctx, "object"))
-			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+			require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 			_, cached := fs.indexObjectCached("object")
 			require.False(t, cached)
 
@@ -73,13 +73,13 @@ func TestFilePrefetchRetriesKnownObjectEnd(t *testing.T) {
 			submitAndWait()
 			require.EqualValues(t, 1, storage.reads.Load())
 			if tc.overshoot > 0 {
-				size, ok := fs.diskCache.prefetched.size(fs.diskCache.pathForFile(req.FilePath))
+				size, ok := fs.diskCache.prefetched.size(fs.diskCache.objectKey(req.FilePath))
 				require.True(t, ok)
 				require.EqualValues(t, len(data), size, "the first download should learn the real size")
 			}
 			submitAndWait()
 
-			_, cached := fs.diskCache.ranges.covering(fs.diskCache.rangeObjectKey(req.FilePath), 0, int64(len(data)))
+			_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey(req.FilePath), 0, int64(len(data)))
 			require.True(t, cached, "the retry should cache the range through the known EOF")
 		})
 	}

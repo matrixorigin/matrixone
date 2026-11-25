@@ -72,7 +72,7 @@ func TestJoinedReadOfIdleStoppedFlightReadsItsBytes(t *testing.T) {
 			Entries: []IOEntry{{Offset: 100, Size: 10}}}
 		readErr <- fs.Read(context.Background(), vec)
 	}()
-	diskPath := fs.diskCache.pathForFile("object")
+	diskPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, func() bool {
 		f := &fs.diskCache.prefetchObjects
 		f.mu.Lock()

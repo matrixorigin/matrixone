@@ -174,6 +174,18 @@ func (o *pathOwner) first(f func()) {
 	}
 }
 
+// releasesFirst has other released first on release.
+func (o *pathOwner) releasesFirst(other *pathOwner) {
+	cleanup := o.cleanup
+	o.cleanup = func() error {
+		err := other.release()
+		if cleanup != nil {
+			err = errors.Join(err, cleanup())
+		}
+		return err
+	}
+}
+
 // release runs the cleanup, removes the files evicted meanwhile and frees the path. Only
 // the first call takes effect.
 func (o *pathOwner) release() error {

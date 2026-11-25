@@ -49,7 +49,9 @@ func newReplayWriteTestFS(t *testing.T) *S3FS {
 
 func readReplayCache(t *testing.T, fs *S3FS, path string) []byte {
 	t.Helper()
-	got, err := os.ReadFile(fs.diskCache.pathForFile(path))
+	files := fs.diskCache.objectFiles(path)
+	require.Len(t, files, 1)
+	got, err := os.ReadFile(files[0])
 	require.NoError(t, err)
 	return got
 }
@@ -139,8 +141,7 @@ func TestReplayWriteShortSuccessAndError(t *testing.T) {
 				}
 				if fail {
 					require.ErrorIs(t, err, io.ErrUnexpectedEOF)
-					_, statErr := os.Stat(fs.diskCache.pathForFile("partial"))
-					require.True(t, os.IsNotExist(statErr))
+					require.Empty(t, fs.diskCache.objectFiles("partial"))
 				} else {
 					require.NoError(t, err)
 					require.Equal(t, []byte("123"), readReplayCache(t, fs, "partial"))
@@ -205,7 +206,12 @@ func TestReplayWriteConcurrentIndependentInputs(t *testing.T) {
 				return
 			}
 			clear(source)
-			got, err := os.ReadFile(fs.diskCache.pathForFile(path))
+			files := fs.diskCache.objectFiles(path)
+			if len(files) != 1 {
+				errs <- fmt.Errorf("cache files of %s: %v", path, files)
+				return
+			}
+			got, err := os.ReadFile(files[0])
 			if err != nil {
 				errs <- err
 				return
@@ -227,8 +233,7 @@ func TestReplayWriteSkipCacheAndCanceledContext(t *testing.T) {
 	fs := newReplayWriteTestFS(t)
 	vector := IOVector{FilePath: "skip", Policy: SkipDiskCacheWrites, Entries: []IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}}}
 	require.NoError(t, writeReplayableData(ctx, fs, vector))
-	_, err := os.Stat(fs.diskCache.pathForFile("skip"))
-	require.True(t, os.IsNotExist(err))
+	require.Empty(t, fs.diskCache.objectFiles("skip"))
 	r, err := fs.storage.Read(ctx, fs.pathToKey("skip"), nil, nil)
 	require.NoError(t, err)
 	got, err := io.ReadAll(r)
@@ -241,8 +246,7 @@ func TestReplayWriteSkipCacheAndCanceledContext(t *testing.T) {
 	vector.FilePath = "canceled"
 	vector.Policy = 0
 	require.ErrorIs(t, writeReplayableData(canceled, fs, vector), context.Canceled)
-	_, err = os.Stat(fs.diskCache.pathForFile("canceled"))
-	require.True(t, os.IsNotExist(err))
+	require.Empty(t, fs.diskCache.objectFiles("canceled"))
 }
 
 func TestReplayWritePreservesExistingCacheBehavior(t *testing.T) {
@@ -327,7 +331,7 @@ func TestReplayWriteAsyncFinalizeDoesNotRetainInput(t *testing.T) {
 	}
 	clear(source)
 	unblock()
-	require.Eventually(t, func() bool { _, err := os.Stat(fs.diskCache.pathForFile("async")); return err == nil }, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return len(fs.diskCache.objectFiles("async")) == 1 }, 10*time.Second, 10*time.Millisecond)
 	require.Equal(t, want, readReplayCache(t, fs, "async"))
 }
 
@@ -361,8 +365,7 @@ func TestReplayWriteCanceledDuringUpload(t *testing.T) {
 				err = writeReplayableData(ctx, fs, vector)
 			}
 			require.ErrorIs(t, err, context.Canceled)
-			_, statErr := os.Stat(fs.diskCache.pathForFile("cancel-upload"))
-			require.True(t, os.IsNotExist(statErr))
+			require.Empty(t, fs.diskCache.objectFiles("cancel-upload"))
 		})
 	}
 }
@@ -405,7 +408,7 @@ func TestReplayWriteDiskCacheFailureParity(t *testing.T) {
 	failures := make([]bool, 0, 2)
 	for _, mode := range []string{"ordinary", "replay"} {
 		fs := newReplayWriteTestFS(t)
-		cacheFile := fs.diskCache.pathForFile("readonly.mofscache/object")
+		cacheFile := fs.diskCache.wholePath("readonly.mofscache/object", 4)
 		// The cache loader retains this suffix; a regular file cannot be a parent directory.
 		blocker := filepath.Dir(cacheFile)
 		require.Eventually(t, func() bool {

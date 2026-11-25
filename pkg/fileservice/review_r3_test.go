@@ -133,7 +133,7 @@ func TestJoinedWholeReadFallsBackAfterPartIdleTimeout(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("prefetch part did not hit its idle timeout")
 			}
-			download := fs.diskCache.download(fs.diskCache.pathForFile("object"))
+			download := fs.diskCache.download(fs.diskCache.objectKey("object"))
 			require.NotNil(t, download)
 			vector := &IOVector{FilePath: "object", Policy: ExactColumnsRead | SkipMemoryCache, Entries: []IOEntry{{Offset: 0, Size: 16}}}
 			readDone := make(chan struct{})

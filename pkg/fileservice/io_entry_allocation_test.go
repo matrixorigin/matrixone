@@ -306,7 +306,7 @@ func TestDiskCacheDownloadAllocationFailure(t *testing.T) {
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	require.NoError(t, err)
 	t.Cleanup(func() { cache.Close(ctx) })
-	diskPath := cache.pathForFile("obj")
+	diskPath := cache.objectKey("obj")
 	download := newPreloadGeneration(t, cache.preloads, diskPath, []byte("xy"))
 	registerWholeFill(cache, diskPath, download)
 	download.advance(0, 2)

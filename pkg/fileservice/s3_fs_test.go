@@ -835,89 +835,6 @@ func TestSequentialS3Read(t *testing.T) {
 
 }
 
-func TestS3RestoreFromCache(t *testing.T) {
-	t.Skip("no longer valid since we delete cache files when calling Delete")
-	ctx := context.Background()
-
-	cacheDir := t.TempDir()
-	fs, err := NewS3FS(
-		ctx,
-		ObjectStorageArguments{
-			Name:      "s3",
-			Endpoint:  "disk",
-			Bucket:    t.TempDir(),
-			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
-		},
-		CacheConfig{
-			DiskPath: ptrTo(cacheDir),
-		},
-		nil,
-		false,
-		false,
-	)
-	assert.Nil(t, err)
-
-	// write file
-	err = fs.Write(ctx, IOVector{
-		FilePath: "foo/bar",
-		Entries: []IOEntry{
-			{
-				Size: 3,
-				Data: []byte("foo"),
-			},
-		},
-	})
-	assert.Nil(t, err)
-
-	// write file without full file cache
-	err = fs.Write(ctx, IOVector{
-		FilePath: "quux",
-		Entries: []IOEntry{
-			{
-				Size: 3,
-				Data: []byte("foo"),
-			},
-		},
-		Policy: SkipFullFilePreloads,
-	})
-	assert.Nil(t, err)
-	err = fs.Read(ctx, &IOVector{
-		FilePath: "quux",
-		Entries: []IOEntry{
-			{
-				Size: 3,
-			},
-		},
-	})
-	assert.Nil(t, err)
-
-	err = fs.Delete(ctx, "foo/bar")
-	assert.Nil(t, err)
-
-	logutil.Info("cache dir", zap.Any("dir", cacheDir))
-
-	counterSet := new(perfcounter.CounterSet)
-	ctx = perfcounter.WithCounterSet(ctx, counterSet)
-	fs.restoreFromDiskCache(ctx)
-
-	if n := counterSet.FileService.S3.Put.Load(); n != 1 {
-		t.Fatalf("got %v", n)
-	}
-
-	vec := &IOVector{
-		FilePath: "foo/bar",
-		Entries: []IOEntry{
-			{
-				Size: -1,
-			},
-		},
-	}
-	err = fs.Read(ctx, vec)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("foo"), vec.Entries[0].Data)
-
-}
-
 func TestS3PrefetchFile(t *testing.T) {
 	ctx := context.Background()
 	var pcSet perfcounter.CounterSet
@@ -1049,7 +966,7 @@ func TestS3PrefetchFileDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
 		t.Fatalf("prefetch waited for disk finalization: %v", <-prefetchDone)
 	}
 
-	diskPath := fs.diskCache.pathForFile("foo/bar")
+	diskPath := fs.diskCache.wholePath("foo/bar", 11)
 	_, err = os.Stat(diskPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.True(t, fs.diskCache.isUpdating(diskPath))
@@ -1115,7 +1032,7 @@ func TestS3FSWriteDiskCacheFinalizeMode(t *testing.T) {
 				t.Fatal("disk-cache finalization did not start")
 			}
 
-			diskPath := fs.diskCache.pathForFile("foo/bar")
+			diskPath := fs.diskCache.wholePath("foo/bar", 11)
 			require.True(t, fs.diskCache.isUpdating(diskPath))
 			if test.async {
 				select {
@@ -1393,7 +1310,7 @@ func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	updatingPath := fs.diskCache.pathForFile("foo/bar")
+	updatingPath := fs.diskCache.objectKey("foo/bar")
 	doneUpdate := fs.diskCache.startUpdate(updatingPath)
 	released := false
 	release := func() {
@@ -1549,7 +1466,7 @@ func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) 
 		assert.Nil(t, result.err)
 		assert.Equal(t, data[123:130], result.data)
 		assert.True(t, fs.ioMerger.IsMerging(fs.readMergeKey(fullObjectVec)))
-		assert.False(t, fs.diskCache.isUpdating(fs.diskCache.pathForFile("foo/bar")))
+		assert.False(t, fs.diskCache.isUpdating(fs.diskCache.objectKey("foo/bar")))
 		read, ok := recorder.lastRead()
 		assert.True(t, ok)
 		if assert.NotNil(t, read.min) {
@@ -2322,7 +2239,7 @@ func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotWaitForAsyncFinalize(t *te
 	// The streaming helper fills Data but leaves done unchanged for its caller,
 	// matching the existing full-object streaming contract.
 	require.False(t, vector.Entries[0].done)
-	require.True(t, cache.isUpdating(cache.pathForFile("foo/bar")))
+	require.True(t, cache.isUpdating(cache.objectKey("foo/bar")))
 
 	unblock()
 	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
@@ -2397,7 +2314,7 @@ func TestS3FSReadIOMergerReleaseMatchesDiskFinalizeMode(t *testing.T) {
 					t.Fatalf("async full-object read waited for disk finalization: %v", <-readDone)
 				}
 				require.False(t, fs.ioMerger.IsMerging(mergeKey))
-				require.True(t, fs.diskCache.isUpdating(fs.diskCache.pathForFile("foo/bar")))
+				require.True(t, fs.diskCache.isUpdating(fs.diskCache.objectKey("foo/bar")))
 			} else {
 				require.True(t, fs.ioMerger.IsMerging(mergeKey))
 				select {
@@ -2598,13 +2515,13 @@ func TestS3FSReadFullObjectToDiskCacheStreamingReturnsOnceCaptured(t *testing.T)
 
 	require.NoError(t, waitResult(t, done))
 	require.Equal(t, []byte("ell"), vector.Entries[0].Data)
-	require.True(t, cache.isUpdating(cache.pathForFile("foo/bar")))
+	require.True(t, cache.isUpdating(cache.objectKey("foo/bar")))
 
 	close(release)
 	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 	defer cancel()
 	cache.Flush(flushCtx)
-	require.True(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+	require.True(t, cache.cache.Contains(cache.wholePath("foo/bar", 11)))
 }
 
 // A download that fails after the ranges were captured does not fail the read, and
@@ -2620,7 +2537,7 @@ func TestS3FSReadFullObjectToDiskCacheStreamingErrorAfterCapture(t *testing.T) {
 	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
 	defer cancel()
 	cache.Flush(flushCtx)
-	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+	require.Empty(t, cache.objectFiles("foo/bar"))
 }
 
 // Cancelling the read before its ranges are captured cancels the download.
@@ -2638,7 +2555,7 @@ func TestS3FSReadFullObjectToDiskCacheStreamingCancelBeforeCapture(t *testing.T)
 
 	cancel()
 	require.ErrorIs(t, waitResult(t, done), context.Canceled)
-	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+	require.Empty(t, cache.objectFiles("foo/bar"))
 }
 
 // With every background slot taken, a reader waits for its download as before.
@@ -3317,7 +3234,7 @@ func TestS3FSReadFullObjectToDiskCacheStreamingCancelWhileWaiting(t *testing.T) 
 	}
 	cancel()
 	require.Error(t, waitResult(t, done))
-	require.False(t, cache.cache.Contains(cache.pathForFile("foo/bar")))
+	require.Empty(t, cache.objectFiles("foo/bar"))
 }
 
 // With every background slot taken, a download that fails after the reader captured its
@@ -4230,7 +4147,7 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 					disk, err = NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 					require.NoError(t, err)
 					t.Cleanup(func() { disk.Close(context.Background()) })
-					path := disk.pathForFile("obj")
+					path := disk.objectKey("obj")
 					require.True(t, disk.reserveAsyncFileFinalize(ctx, path, nil))
 					t.Cleanup(func() { disk.releaseAsyncFileFinalizeReservation(path) })
 				}

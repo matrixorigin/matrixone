@@ -69,7 +69,7 @@ func TestIndexPrefetchWithDirectDiskDownload(t *testing.T) {
 				}
 				waitPrefetcherIdle(t, fs)
 
-				require.True(t, fs.diskCache.cache.Contains(fs.diskCache.pathForFile("object")))
+				require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 				require.True(t, fs.indexObjectHeld("object"),
 					"index prefetch must warm its own tier after the direct disk fill (backend reads: %d)", storage.reads.Load())
 				require.EqualValues(t, 2, storage.reads.Load())

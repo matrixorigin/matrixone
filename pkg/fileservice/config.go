@@ -18,8 +18,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
@@ -47,9 +49,12 @@ type Config struct {
 	Cache CacheConfig `toml:"cache"`
 	// DataDir used to create fileservice using DISK as the backend
 	DataDir string `toml:"data-dir"`
-	// FixMissing inidicates the file service to try its best to fix missing files
+	// FixMissing is accepted and ignored.
 	FixMissing bool `toml:"fix-missing"`
 }
+
+// fixMissingDeprecated logs the deprecation of FixMissing once.
+var fixMissingDeprecated sync.Once
 
 // NewFileServicesFunc creates a new *FileServices
 type NewFileServicesFunc = func(defaultName string) (*FileServices, error)
@@ -186,9 +191,10 @@ func newS3FileService(
 		return nil, err
 	}
 
-	if cfg.FixMissing || *fixMissingFlag || fixMissingFromEnv {
-		//TODO use context.WithoutCancel(ctx)
-		go fs.restoreFromDiskCache(context.Background())
+	if cfg.FixMissing {
+		fixMissingDeprecated.Do(func() {
+			logutil.Warn("fileservice: fix-missing is deprecated and ignored")
+		})
 	}
 
 	return fs, nil

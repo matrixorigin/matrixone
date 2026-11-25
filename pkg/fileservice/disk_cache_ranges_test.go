@@ -55,7 +55,6 @@ func TestParseRangeFile(t *testing.T) {
 	require.Equal(t, filepath.Join(root, diskCacheShard("dir/obj"), "dir", "obj"+cacheFileSuffix), key)
 	require.Equal(t, int64(10), offset)
 	require.Equal(t, int64(7), size)
-	require.Equal(t, filepath.Join(root, diskCacheShard("dir/obj"), "fulldir", "obj"+cacheFileSuffix), fullPathOfRangeKey(root, key))
 
 	for name, path := range map[string]string{
 		"no size prefix equals the length": in("123obj", "10-100123obj"),
@@ -150,9 +149,10 @@ func TestDiskCacheReadPassesOverStaleRange(t *testing.T) {
 	require.False(t, indexed)
 }
 
-// A read inside a cached range of an object whose whole file is cached reads the whole
-// file, which counts the bytes toward the file's read share.
-func TestDiskCacheReadPrefersWholeFileOverContainingRange(t *testing.T) {
+// A whole object is one cached range: a read inside a smaller cached range reads the
+// smallest range holding it, and the bytes read from the whole object count toward its
+// read share.
+func TestDiskCacheReadOfWholeObjectAmongRanges(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	require.NoError(t, err)
@@ -164,14 +164,19 @@ func TestDiskCacheReadPrefersWholeFileOverContainingRange(t *testing.T) {
 	require.NoError(t, cache.SetFile(ctx, "123obj", func(context.Context) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(data)), nil
 	}))
+	whole := cache.wholePath("123obj", int64(len(data)))
+	require.True(t, cache.cache.Contains(whole))
 
 	e := readEntry(t, cache, 130, 30)
 	require.True(t, e.done)
 	require.Equal(t, data[130:160], e.Data)
+	e = readEntry(t, cache, 30, 20)
+	require.True(t, e.done)
+	require.Equal(t, data[30:50], e.Data)
 	cache.preloads.mu.Lock()
-	served := cache.preloads.served[cache.pathForFile("123obj")]
+	served := cache.preloads.served[whole]
 	cache.preloads.mu.Unlock()
-	require.Equal(t, int64(30), served)
+	require.Equal(t, int64(20), served)
 }
 
 // A read that no single cached range contains is served from cached ranges that hold it

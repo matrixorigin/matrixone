@@ -221,6 +221,8 @@ because there is one kind of fill and one way to open a connection.
   so the first reads of them download them again. Range files keep their names and stay.
 - Configuration is unchanged, except that the extra-wait setting is accepted and ignored,
   with a deprecation log. The publisher adds queue-depth and wait metrics.
+- Fix-missing no longer restores objects from the disk cache: the `fix-missing` setting is
+  accepted and ignored, with a deprecation log.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
 
 ## Validation and acceptance
