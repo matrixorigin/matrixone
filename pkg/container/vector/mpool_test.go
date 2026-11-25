@@ -58,7 +58,7 @@ func TestReadOnlyVectorIsImmutable(t *testing.T) {
 	require.True(t, byteSlicesOverlap(ro.GetData(), encoded))
 
 	require.Error(t, AppendFixed(ro, int64(4), false, mp))
-	require.Error(t, ro.Shrink([]int64{0}, false, mp))
+	require.Error(t, ro.ShrinkByRows([]int64{0}, mp))
 	require.Equal(t, 3, ro.Length())
 
 	// The window of a read-only vector is another read-only reference.

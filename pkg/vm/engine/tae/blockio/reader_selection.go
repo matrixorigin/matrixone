@@ -67,7 +67,7 @@ func publishReaderSelection(output *batch.Batch, positions []int, res engine.Rea
 		if res.Mask != nil {
 			err = vec.ShrinkByMask(res.Mask, false, 0, vec.MPool())
 		} else {
-			err = vec.Shrink(res.Sels, false, vec.MPool())
+			err = vec.ShrinkByRows(res.Sels, vec.MPool())
 		}
 		if err != nil {
 			return err

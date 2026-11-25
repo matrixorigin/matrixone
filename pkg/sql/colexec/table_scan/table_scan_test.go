@@ -567,7 +567,7 @@ func TestInlineFilter(t *testing.T) {
 // TestShrinkPopulatedVecs_SkipsUnmaterializedColumn reproduces the batch the vector-TopN
 // pushdown hands the reader filter: blockio.materializeVectorTopNRows loads only the
 // selected rows and then CleanOnlyData()s the ORDER BY vector column itself, so that one
-// column sits at 0 rows among siblings that hold the block's rows. batch.Shrink assumes
+// column sits at 0 rows among siblings that hold the block's rows. batch.ShrinkByMask assumes
 // every vector holds RowCount() rows and panicked with "index out of range [N] with
 // length 0", killing the query. Every populated vector must still be shrunk.
 func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
@@ -596,7 +596,7 @@ func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
 	require.Equal(t, 0, bat.Vecs[1].Length(), "the unmaterialized column is left alone")
 }
 
-// TestShrinkPopulatedVecs_NoOpAndEmptyBatch: selecting every row is a no-op (batch.Shrink
+// TestShrinkPopulatedVecs_NoOpAndEmptyBatch: selecting every row is a no-op (batch.ShrinkByMask
 // has the same short-circuit), and a batch with no rows must not be walked at all.
 func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	mp := mpool.MustNewZero()

@@ -19,6 +19,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -553,7 +554,7 @@ func blockDataReadWithExactMembershipTopK(
 func CopyBlockData(
 	ctx context.Context,
 	location objectio.Location,
-	deletes []int64,
+	deletes *bitmap.Bitmap,
 	seqnums []uint16,
 	colTypes []types.Type,
 	outputBat *batch.Batch,
@@ -577,7 +578,9 @@ func CopyBlockData(
 	); err != nil {
 		return
 	}
-	err = outputBat.Shrink(deletes, true, mp)
+	if deletes != nil && !deletes.IsEmpty() {
+		err = outputBat.ShrinkByMask(deletes, true, 0, mp)
+	}
 	return
 }
 
@@ -686,28 +689,32 @@ func BlockDataReadBackup(
 			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 		}
 	}
-	visibleRows := make([]int64, 0, len(commitTSs))
+	var hidden bitmap.Bitmap
+	hidden.Init(mp)
+	defer hidden.Free()
+	if err = hidden.InitWithSize(int64(len(commitTSs)), mp); err != nil {
+		return
+	}
 	for row, commitTS := range commitTSs {
 		if (!ts.IsEmpty() && commitTS.GT(&ts)) ||
 			commitTS.Equal(&txnif.UncommitTS) ||
 			(aborts != nil && aborts[row]) ||
 			tombstones.Contains(uint64(row)) {
-			continue
+			hidden.Add(uint64(row))
 		}
-		visibleRows = append(visibleRows, int64(row))
 	}
-	if len(visibleRows) != len(commitTSs) {
+	if !hidden.IsEmpty() {
 		// The decoded columns reference the cache; shrink owned copies.
 		if err = loaded.OwnReadOnlyVectors(mp); err != nil {
 			return
 		}
-		if err = loaded.Shrink(visibleRows, false, mp); err != nil {
+		if err = loaded.ShrinkByMask(&hidden, true, 0, mp); err != nil {
 			return
 		}
 		logutil.Info("[BlockDataReadBackup]",
 			zap.String("ts", ts.ToString()),
 			zap.String("location", location.String()),
-			zap.Int("rows", len(visibleRows)))
+			zap.Int("rows", len(commitTSs)-hidden.Count()))
 	}
 	return
 }
@@ -1365,7 +1372,7 @@ func blockDataReadWithFilter(
 				outputBat.Vecs[pos].CleanOnlyData()
 				continue
 			}
-			if err := outputBat.Vecs[pos].Shrink(winnerPositions, false, mp); err != nil {
+			if err := outputBat.Vecs[pos].ShrinkByRows(winnerPositions, mp); err != nil {
 				return err
 			}
 		}
@@ -1549,7 +1556,7 @@ func blockDataReadWithSelectedFilterTopK(
 			outputBat.Vecs[pos].CleanOnlyData()
 			continue
 		}
-		if err := outputBat.Vecs[pos].Shrink(winnerPositions, false, mp); err != nil {
+		if err := outputBat.Vecs[pos].ShrinkByRows(winnerPositions, mp); err != nil {
 			return err
 		}
 	}

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -595,14 +596,22 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	}
 	vec.tryCOW()
 
-	var dels []int64
+	size := int64(vec.wrapped.Length())
+	if last := int64(deletes.Maximum()) + 1; last > size {
+		size = last
+	}
+	var dels bitmap.Bitmap
+	dels.Init(vec.mpool)
+	defer dels.Free()
+	if err := dels.InitWithSize(size, vec.mpool); err != nil {
+		panic(err)
+	}
 	itr := deletes.Iterator()
 	for itr.HasNext() {
-		r := itr.Next()
-		dels = append(dels, int64(r))
+		dels.Add(uint64(itr.Next()))
 	}
 
-	if err := vec.wrapped.Shrink(dels, true, vec.mpool); err != nil {
+	if err := vec.wrapped.ShrinkByMask(&dels, true, 0, vec.mpool); err != nil {
 		panic(err)
 	}
 }

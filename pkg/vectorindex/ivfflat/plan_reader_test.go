@@ -26,6 +26,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -981,7 +982,7 @@ func TestFilterRelationBatchAppliesResidualBeforeTop(t *testing.T) {
 	executor, err := colexec.NewExpressionExecutor(proc, filter)
 	require.NoError(t, err)
 	defer executor.Free()
-	require.NoError(t, filterRelationBatch(proc, executor, bat))
+	require.NoError(t, filterRelationBatch(proc, executor, bat, relationKeep(t, proc)))
 	defer bat.Clean(mp)
 	require.Equal(t, 1, bat.RowCount())
 	require.Equal(t, "version", bat.Vecs[0].GetStringAt(0))
@@ -1008,11 +1009,11 @@ func TestRelationFilterAndTopHelpersCoverEmptyAndDescendingCases(t *testing.T) {
 		return bat
 	}
 	all := makeBatch("keep", "keep")
-	require.NoError(t, filterRelationBatch(proc, executor, all))
+	require.NoError(t, filterRelationBatch(proc, executor, all, relationKeep(t, proc)))
 	require.Equal(t, 2, all.RowCount())
 	all.Clean(mp)
 	none := makeBatch("drop")
-	require.NoError(t, filterRelationBatch(proc, executor, none))
+	require.NoError(t, filterRelationBatch(proc, executor, none, relationKeep(t, proc)))
 	require.Zero(t, none.RowCount())
 	none.Clean(mp)
 
@@ -1433,7 +1434,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	if err != nil {
 		return false, err
 	}
-	selected := filtered.Sels
+	selected := filtered.RowList(nil)
 	if filtered.All {
 		selected = []int64{0, 1, 2}
 	}
@@ -1499,7 +1500,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 	if err != nil {
 		return false, false, err
 	}
-	if !slices.Equal(filtered.Sels, []int64{1}) {
+	if !slices.Equal(filtered.RowList(nil), []int64{1}) {
 		return false, false, errors.New("exact filter did not run before Top-K")
 	}
 	if err = vector.AppendFixed(out.Vecs[0], int64(2), false, mp); err != nil {
@@ -2892,4 +2893,12 @@ func TestIvfInInt64ExprPublishesSortedMembershipSet(t *testing.T) {
 
 	col := vector.MustFixedColWithTypeCheck[int64](published)
 	require.Equal(t, []int64{7, 42, 900}, col)
+}
+
+// relationKeep returns a selection bitmap freed when the test ends.
+func relationKeep(t *testing.T, proc *process.Process) *bitmap.Bitmap {
+	keep := new(bitmap.Bitmap)
+	keep.Init(proc.Mp())
+	t.Cleanup(keep.Free)
+	return keep
 }

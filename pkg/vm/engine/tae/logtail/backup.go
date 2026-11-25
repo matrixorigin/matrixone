@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -79,10 +80,11 @@ func visibleAppendableRows(
 	bat *batch.Batch,
 	layout objectio.SpecialColumnLayout,
 	ts *types.TS,
-) ([]int64, error) {
+	visible *bitmap.Bitmap,
+) error {
 	commitPos, err := validateBackupTombstoneBatch(ctx, bat, layout)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	commitVec := bat.Vecs[commitPos]
 	commitTSs, err := ioutil.ValidateTombstoneCommitTSColumn(
@@ -90,7 +92,7 @@ func visibleAppendableRows(
 		commitVec,
 	)
 	if err != nil {
-		return nil, moerr.NewInternalErrorf(
+		return moerr.NewInternalErrorf(
 			ctx,
 			"appendable tombstone has invalid commit timestamp column: %v",
 			err,
@@ -101,15 +103,17 @@ func visibleAppendableRows(
 		abortVec = bat.Vecs[abortPos]
 	}
 	rowCount := bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].Length()
-	rows := make([]int64, 0, rowCount)
+	if err = visible.InitWithSize(int64(rowCount), common.DebugAllocator); err != nil {
+		return err
+	}
 	for row := range rowCount {
 		commitTS := commitTSs.At(row)
 		if commitVec.IsNull(uint64(row)) {
-			return nil, moerr.NewInternalErrorf(ctx, "appendable tombstone commit timestamp row %d is null", row)
+			return moerr.NewInternalErrorf(ctx, "appendable tombstone commit timestamp row %d is null", row)
 		}
 		if abortVec != nil {
 			if abortVec.IsNull(uint64(row)) {
-				return nil, moerr.NewInternalErrorf(ctx, "appendable tombstone abort row %d is null", row)
+				return moerr.NewInternalErrorf(ctx, "appendable tombstone abort row %d is null", row)
 			}
 			if vector.GetFixedAtNoTypeCheck[bool](abortVec, row) {
 				continue
@@ -118,9 +122,21 @@ func visibleAppendableRows(
 		if ts != nil && commitTS.GT(ts) {
 			continue
 		}
-		rows = append(rows, int64(row))
+		visible.Add(uint64(row))
 	}
-	return rows, nil
+	return nil
+}
+
+// removeRowRange removes rows [start, end) of bat.
+func removeRowRange(bat *batch.Batch, start, end int) error {
+	var rows bitmap.Bitmap
+	rows.Init(common.DebugAllocator)
+	defer rows.Free()
+	if err := rows.InitWithSize(int64(end), common.DebugAllocator); err != nil {
+		return err
+	}
+	rows.AddRange(uint64(start), uint64(end))
+	return bat.ShrinkByMask(&rows, true, 0, common.DebugAllocator)
 }
 
 func validateBackupTombstoneBatch(
@@ -304,17 +320,15 @@ func GetTombstonesByBlockId(
 			if start == end {
 				continue
 			}
-			deleteRows := make([]int64, 0, end-start)
 			for i := start; i < end; i++ {
 				row := rowids[i].GetRowOffset()
 				deleteMask.Add(uint64(row))
-				deleteRows = append(deleteRows, int64(i))
 			}
 
 			// Shrink the tombstone batch, Because the rowid in the tombstone is no longer needed after apply,
 			// it cannot be written to disk
 			if needShrink {
-				if err := oData.data[idx].Shrink(deleteRows, true, common.DebugAllocator); err != nil {
+				if err := removeRowRange(oData.data[idx], start, end); err != nil {
 					return false, err
 				}
 			}
@@ -331,6 +345,10 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 ) (deletedRows objectio.Bitmap, err error) {
 	// PXU TODO: temp use GetNoReuseBitmap here
 	deletedRows = objectio.GetNoReuseBitmap()
+	// The visible rows of each appendable tombstone block, reused per block.
+	var visible bitmap.Bitmap
+	visible.Init(common.DebugAllocator)
+	defer visible.Free()
 	if len(d.tombstones) > 0 {
 		if err = buildDS(
 			func(tombstone objectio.ObjectStats) (bool, error) {
@@ -355,18 +373,17 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 							bat.Clean(common.DebugAllocator)
 							return false, err
 						}
-						visibleRows, err := visibleAppendableRows(ctx, bat, layout, &d.ts)
-						if err != nil {
+						if err := visibleAppendableRows(ctx, bat, layout, &d.ts, &visible); err != nil {
 							bat.Clean(common.DebugAllocator)
 							return false, err
 						}
-						if len(visibleRows) != bat.Vecs[0].Length() {
+						if visible.Count() != bat.Vecs[0].Length() {
 							// The loaded columns reference the cache; shrink owned copies.
 							if err := bat.OwnReadOnlyVectors(common.DebugAllocator); err != nil {
 								bat.Clean(common.DebugAllocator)
 								return false, err
 							}
-							if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+							if err := bat.ShrinkByMask(&visible, false, 0, common.DebugAllocator); err != nil {
 								bat.Clean(common.DebugAllocator)
 								return false, err
 							}
@@ -476,22 +493,28 @@ func trimTombstoneData(
 			bat.Clean(common.DebugAllocator)
 			return err
 		}
-		visibleRows, err := visibleAppendableRows(ctx, bat, layout, &ts)
+		var visible bitmap.Bitmap
+		visible.Init(common.DebugAllocator)
+		err = visibleAppendableRows(ctx, bat, layout, &ts, &visible)
 		if err != nil {
+			visible.Free()
 			bat.Clean(common.DebugAllocator)
 			return err
 		}
-		if len(visibleRows) != bat.Vecs[0].Length() {
+		if visible.Count() != bat.Vecs[0].Length() {
 			// The loaded columns reference the cache; shrink owned copies.
 			if err := bat.OwnReadOnlyVectors(common.DebugAllocator); err != nil {
+				visible.Free()
 				bat.Clean(common.DebugAllocator)
 				return err
 			}
-			if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+			if err := bat.ShrinkByMask(&visible, false, 0, common.DebugAllocator); err != nil {
+				visible.Free()
 				bat.Clean(common.DebugAllocator)
 				return err
 			}
 		}
+		visible.Free()
 		canonical, err := canonicalizeBackupTombstone(ctx, bat, layout)
 		if err != nil {
 			bat.Clean(common.DebugAllocator)

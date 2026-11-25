@@ -1227,25 +1227,6 @@ func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, 
 	return nil
 }
 
-func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
-	if !negate {
-		if len(sels) == bat.rowCount {
-			return nil
-		}
-	}
-	for _, vec := range bat.Vecs {
-		if err := vec.Shrink(sels, negate, mp); err != nil {
-			return err
-		}
-	}
-	if negate {
-		bat.rowCount -= len(sels)
-		return nil
-	}
-	bat.rowCount = len(sels)
-	return nil
-}
-
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
 	if len(sels) > 0 {
 		mp := make(map[*vector.Vector]uint8)

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -393,8 +394,6 @@ func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) (
 	}
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
-	slices.Sort(sels)
-	sels = slices.Compact(sels)
 	txn.unaccountWorkspaceEntryLocked(entry)
 	txn.unaccountInsertKeyOffsetsLocked(entry)
 	if err := shrinkBatchWithRowids(bat, sels, wmp); err != nil {
@@ -4488,13 +4487,20 @@ func (txn *Transaction) deleteBatch(
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	var (
-		mp             = make(map[types.Rowid]uint8)
-		deleteBlkId    = make(map[types.Blockid]bool)
-		rowids         = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
-		min1           = uint32(math.MaxUint32)
-		max1           = uint32(0)
-		cnRowIdOffsets = make([]int64, 0, len(rowids))
+		mp          = make(map[types.Rowid]uint8)
+		deleteBlkId = make(map[types.Blockid]bool)
+		rowids      = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
+		min1        = uint32(math.MaxUint32)
+		max1        = uint32(0)
+		// Rows removed from bat: first the CN-written rows, then the rows
+		// that delete uncommitted workspace writes.
+		dels bitmap.Bitmap
 	)
+	dels.Init(batMP)
+	defer dels.Free()
+	if err := dels.InitWithSize(int64(len(rowids)), batMP); err != nil {
+		return bat, err
+	}
 	server := colexec.MustGetServer(txn.engine.service)
 
 	for i, rowid := range rowids {
@@ -4506,7 +4512,7 @@ func (txn *Transaction) deleteBatch(
 
 		if server.GetCnSegmentType(rowid.BorrowSegmentID(), tableId, txn.op.Txn().ID) == colexec.TxnWorkspaceUnCommitType {
 			txn.deletedBlocks.addDeletedBlocks(tableId, &blkid, []int64{int64(rowOffset)})
-			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
+			dels.Add(uint64(i))
 			continue
 		}
 
@@ -4520,24 +4526,25 @@ func (txn *Transaction) deleteBatch(
 		// update workspace
 	}
 	// cn rowId antiShrink
-	if err := bat.Shrink(cnRowIdOffsets, true, batMP); err != nil {
+	if err := bat.ShrinkByMask(&dels, true, 0, batMP); err != nil {
 		return bat, err
 	}
 	if bat.RowCount() == 0 {
 		return bat, nil
 	}
-	var sels []int64
-	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
+	txn.deleteTableWrites(databaseId, tableId, nil, deleteBlkId, min1, max1, mp)
 
-	sels = sels[:0]
 	rowids = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
+	if err := dels.InitWithSize(int64(len(rowids)), batMP); err != nil {
+		return bat, err
+	}
 	for k, rowid := range rowids {
-		// put rowid to be deleted into sels.
+		// mark the rowids deleted in the workspace.
 		if mp[rowid] != 0 {
-			sels = append(sels, int64(k))
+			dels.Add(uint64(k))
 		}
 	}
-	if err := bat.Shrink(sels, true, batMP); err != nil {
+	if err := bat.ShrinkByMask(&dels, true, 0, batMP); err != nil {
 		return bat, err
 	}
 	return bat, nil

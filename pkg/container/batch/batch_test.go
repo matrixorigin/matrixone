@@ -578,9 +578,9 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 func TestBatchShrink(t *testing.T) {
 	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
 	mp := bat.Vecs[0].MPool()
-	require.NoError(t, bat.Shrink([]int64{0}, true, mp))
+	require.NoError(t, shrinkRows(t, bat, []int64{0}, true, mp))
 	require.Equal(t, 3, bat.rowCount)
-	require.NoError(t, bat.Shrink([]int64{0, 2}, false, mp))
+	require.NoError(t, shrinkRows(t, bat, []int64{0, 2}, false, mp))
 	require.Equal(t, 2, bat.rowCount)
 }
 
@@ -1846,7 +1846,7 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 				sels.AddMany([]uint64{1, 2})
 				require.Error(t, bat.ShrinkByMask(&sels, false, 0, mp))
 			} else {
-				require.Error(t, bat.Shrink([]int64{1, 2}, false, mp))
+				require.Error(t, shrinkRows(t, bat, []int64{1, 2}, false, mp))
 			}
 			require.Equal(t, 3, bat.RowCount())
 			require.Equal(t, []int64{20, 30}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
@@ -1957,4 +1957,13 @@ func TestBatchUnionByMask(t *testing.T) {
 	src.Clean(mp)
 	mask.Free()
 	require.Zero(t, mp.CurrNB())
+}
+
+// shrinkRows keeps (or, with negate, removes) the listed rows through a mask.
+func shrinkRows(t testing.TB, bat *Batch, rows []int64, negate bool, mp *mpool.MPool) error {
+	var mask bitmap.Bitmap
+	mask.Init(mp)
+	defer mask.Free()
+	require.NoError(t, mask.InitWithRows(int64(bat.RowCount()), rows, mp))
+	return bat.ShrinkByMask(&mask, negate, 0, mp)
 }

@@ -585,31 +585,27 @@ func Filter(nsp *Nulls, sels []int64, negate bool) (err error) {
 	return nil
 }
 
-// FilterInPlaceOrdered is Filter for strictly increasing, non-negative sels,
-// the contract of Vector.Shrink. It rewrites the bitmap in place.
+// FilterInPlaceOrdered keeps the rows sels, which must be strictly
+// increasing and non-negative (the contract of Vector.ShrinkByRows). It
+// rewrites the bitmap in place.
 // @ requires nsp != nil ==> nsp.np.Inv()
 // @ requires (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2)) && bitmap.SortedRows(seq(sels))
 // @ ensures nsp != nil ==> nsp.np.Inv()
 // @ ensures (forall k int :: {&sels[k]} 0 <= k && k < len(sels) ==> acc(&sels[k], 1/2))
 // @ ensures old(nsp.IsEmpty()) ==> nsp.NLen() == old(nsp.NLen()) && forall i int :: {nsp.Has(i)} nsp.Has(i) == old(nsp.Has(i))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> nsp.NLen() == (old(nsp.NLen()) < int64(len(sels)) ? old(nsp.NLen()) : int64(len(sels)))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> forall i int :: {nsp.Has(i)} 0 <= i && i < len(sels) ==>
+// @ ensures !old(nsp.IsEmpty()) ==> nsp.NLen() == (old(nsp.NLen()) < int64(len(sels)) ? old(nsp.NLen()) : int64(len(sels)))
+// @ ensures !old(nsp.IsEmpty()) ==> forall i int :: {nsp.Has(i)} 0 <= i && i < len(sels) ==>
 // @ 	nsp.Has(i) == old(sels[i] >= 0 && nsp.Has(int(sels[i])))
-// @ ensures !old(nsp.IsEmpty()) && !negate ==> forall i int :: {nsp.Has(i)} len(sels) <= i ==> !nsp.Has(i)
-// @ ensures !old(nsp.IsEmpty()) && negate ==> nsp.NLen() == old(nsp.NLen())
-// @ ensures !old(nsp.IsEmpty()) && negate ==> forall s int :: {old(nsp.Has(s))} 0 <= s && s < int(old(nsp.NLen())) &&
-// @ 	bitmap.Rank(seq(sels), int64(s+1)) == bitmap.Rank(seq(sels), int64(s)) ==>
-// @ 	nsp.Has(s-bitmap.Rank(seq(sels), int64(s))) == old(nsp.Has(s))
-// @ ensures !old(nsp.IsEmpty()) && negate ==> forall i int :: {nsp.Has(i)} int(old(nsp.NLen()))-bitmap.Rank(seq(sels), old(nsp.NLen())) <= i ==> !nsp.Has(i)
+// @ ensures !old(nsp.IsEmpty()) ==> forall i int :: {nsp.Has(i)} len(sels) <= i ==> !nsp.Has(i)
 // @ decreases
-func FilterInPlaceOrdered(nsp *Nulls, sels []int64, negate bool) {
+func FilterInPlaceOrdered(nsp *Nulls, sels []int64) {
 	if nsp.IsEmpty() {
 		return
 	}
 	// @ assert forall i int :: {sels[i]} 0 <= i && i < len(sels) ==> seq(sels)[i] == sels[i] && sels[i] >= 0
-	// Without negate the length becomes min(Len, len(sels)). Rows past Len
-	// read as clear, so the bitmap is not grown (an allocation) to cover them.
-	nsp.np.RemapOrderedUnchecked(sels, negate)
+	// The length becomes min(Len, len(sels)). Rows past Len read as clear,
+	// so the bitmap is not grown (an allocation) to cover them.
+	nsp.np.RemapOrderedUnchecked(sels, false)
 }
 
 // @ requires nsp != nil ==> nsp.np.Inv()

@@ -113,7 +113,7 @@ func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, col
 				if selected.Mask != nil {
 					err = destination.ShrinkByMask(selected.Mask, false, 0, mp)
 				} else {
-					err = destination.Shrink(selected.Sels, false, mp)
+					err = destination.ShrinkByRows(selected.Sels, mp)
 				}
 				if err != nil {
 					return err

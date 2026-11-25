@@ -296,8 +296,6 @@ func TestFilterInPlaceOrderedMatchesFilter(t *testing.T) {
 	}{
 		{"select-across-words", []int64{0, 2, 64, 65, 129}, false},
 		{"select-trailing-clear", []int64{1, 63, 130, 131}, false},
-		{"remove-across-words", []int64{1, 63, 128}, true},
-		{"remove-after-bitmap", []int64{130, 131}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			legacy := mustNulls(source.Clone(testMP))
@@ -305,7 +303,7 @@ func TestFilterInPlaceOrderedMatchesFilter(t *testing.T) {
 			var inPlace Nulls
 			inPlace.Init(testMP)
 			mustOK(inPlace.InitWith(source, testMP))
-			FilterInPlaceOrdered(&inPlace, test.sels, test.negate)
+			FilterInPlaceOrdered(&inPlace, test.sels)
 
 			require.True(t, inPlace.GetBitmap().IsSame(legacy.GetBitmap()))
 			require.Equal(t, legacy.GetBitmap().Len(), inPlace.GetBitmap().Len())
@@ -335,7 +333,10 @@ func TestOrderedFilterSparseTail(t *testing.T) {
 				}
 				mustOK(Filter(legacy, sels, negate))
 				if mode == "slice" {
-					FilterInPlaceOrdered(inPlace, sels, negate)
+					if negate {
+						return
+					}
+					FilterInPlaceOrdered(inPlace, sels)
 				} else {
 					FilterByMaskInPlaceWithOffset(inPlace, &mask, negate, offset)
 				}
@@ -576,9 +577,11 @@ func TestFilterVariantsMatchReference(t *testing.T) {
 			mustOK(Filter(got, sels, negate))
 			requireSameNulls(t, want, got, "Filter "+msg)
 
-			got = mustNulls(src.Clone(testMP))
-			FilterInPlaceOrdered(got, sels, negate)
-			requireSameNulls(t, want, got, "FilterInPlaceOrdered "+msg)
+			if !negate {
+				got = mustNulls(src.Clone(testMP))
+				FilterInPlaceOrdered(got, sels)
+				requireSameNulls(t, want, got, "FilterInPlaceOrdered "+msg)
+			}
 
 			var mask bitmap.Bitmap
 

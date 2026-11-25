@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1328,26 +1329,30 @@ func DedupSortedBatches(
 	var (
 		curr, last []byte
 	)
-	var sels []int64
+	var dups bitmap.Bitmap
+	dups.Init(mp)
+	defer dups.Free()
 	for i := 0; i < len(batches); i++ {
 		uniqueKey := batches[i].Vecs[uniqueIdx]
+		if err := dups.InitWithSize(int64(uniqueKey.Length()), mp); err != nil {
+			return err
+		}
 		for j := 0; j < uniqueKey.Length(); j++ {
 			if i == 0 && j == 0 {
 				last = uniqueKey.GetRawBytesAt(j)
 			} else {
 				curr = uniqueKey.GetRawBytesAt(j)
 				if bytes.Equal(curr, last) {
-					sels = append(sels, int64(j))
+					dups.Add(uint64(j))
 				} else {
 					last = curr
 				}
 			}
 		}
-		if len(sels) > 0 {
-			if err := batches[i].Shrink(sels, true, mp); err != nil {
+		if !dups.IsEmpty() {
+			if err := batches[i].ShrinkByMask(&dups, true, 0, mp); err != nil {
 				return err
 			}
-			sels = sels[:0]
 		}
 	}
 	return nil

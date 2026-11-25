@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -876,6 +877,11 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		earlyColumns = relationFilterEarlyColumns(tableDef, req.Columns, req.Filter)
 	}
 
+	// The rows each batch keeps, reinitialized per batch. A filter result
+	// lends it to the reader until the next batch.
+	var keep bitmap.Bitmap
+	keep.Init(s.proc.Mp())
+	defer keep.Free()
 	for _, reader := range readers {
 		if !req.PostFilterTopOnly && !req.FilterBeforeTopK {
 			reader.SetIndexParam(req.IndexParam)
@@ -898,7 +904,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 						req.Columns,
 						earlyColumns,
 						&engine.ReaderFilterRequest{Apply: func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
-							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
+							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns, &keep)
 						}},
 						req.IndexParam,
 						s.proc.Mp(),
@@ -911,7 +917,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 						req.Columns,
 						earlyColumns,
 						&engine.ReaderFilterRequest{Apply: func(filtered *batch.Batch, loadedColumns []int) (engine.ReaderFilterResult, error) {
-							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns)
+							return filterRelationBatchRows(s.proc, filterExecutor, filtered, loadedColumns, &keep)
 						}},
 						s.proc.Mp(),
 						bat,
@@ -938,7 +944,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 					len(bat.Vecs), len(req.Columns)+1)
 			}
 			if filterExecutor != nil && !filterApplied && !bat.IsEmpty() {
-				if readErr = filterRelationBatch(s.proc, filterExecutor, bat); readErr != nil {
+				if readErr = filterRelationBatch(s.proc, filterExecutor, bat, &keep); readErr != nil {
 					bat.Clean(s.proc.Mp())
 					return res, readErr
 				}
@@ -1033,55 +1039,55 @@ func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataColl
 	return engine.Policy_CollectAllData
 }
 
-func filterRelationBatch(proc *process.Process, executor colexec.ExpressionExecutor, bat *batch.Batch) error {
-	_, err := filterRelationBatchRows(proc, executor, bat, nil)
+func filterRelationBatch(proc *process.Process, executor colexec.ExpressionExecutor, bat *batch.Batch, keep *bitmap.Bitmap) error {
+	_, err := filterRelationBatchRows(proc, executor, bat, nil, keep)
 	return err
 }
 
+// filterRelationBatchRows keeps the rows of bat where the filter is TRUE. keep
+// is the caller's bitmap, reinitialized here; a Mask result borrows it.
 func filterRelationBatchRows(
 	proc *process.Process,
 	executor colexec.ExpressionExecutor,
 	bat *batch.Batch,
 	loadedColumns []int,
+	keep *bitmap.Bitmap,
 ) (engine.ReaderFilterResult, error) {
 	result, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return engine.ReaderFilterResult{}, err
 	}
-	values := vector.GenerateFunctionFixedTypeParameter[bool](result)
-	sels := make([]int64, 0, bat.RowCount())
-	for row := 0; row < bat.RowCount(); row++ {
-		value, isNull := values.GetValue(uint64(row))
-		if !isNull && value {
-			sels = append(sels, int64(row))
-		}
+	if err = colexec.InitBoolSelection(keep, result, bat.RowCount(), proc.Mp()); err != nil {
+		return engine.ReaderFilterResult{}, err
 	}
-	return selectRelationBatchRows(bat, sels, loadedColumns, proc.Mp())
+	return selectRelationBatchRows(bat, keep, loadedColumns, proc.Mp())
 }
 
-// selectRelationBatchRows preserves unloaded slots when columns were materialized
-// selectively. A nil column list denotes a fully materialized batch.
-func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int, mp *mpool.MPool) (engine.ReaderFilterResult, error) {
-	if len(sels) == bat.RowCount() {
+// selectRelationBatchRows keeps the rows set in keep. It preserves unloaded
+// slots when columns were materialized selectively. A nil column list denotes
+// a fully materialized batch.
+func selectRelationBatchRows(bat *batch.Batch, keep *bitmap.Bitmap, loadedColumns []int, mp *mpool.MPool) (engine.ReaderFilterResult, error) {
+	kept := keep.Count()
+	if kept == bat.RowCount() {
 		return engine.ReaderFilterResult{All: true}, nil
 	}
-	if len(sels) == 0 {
+	if kept == 0 {
 		bat.CleanOnlyData()
-		return engine.ReaderFilterResult{Sels: sels}, nil
+		return engine.ReaderFilterResult{Mask: keep}, nil
 	}
 	if loadedColumns == nil {
-		if err := bat.Shrink(sels, false, mp); err != nil {
+		if err := bat.ShrinkByMask(keep, false, 0, mp); err != nil {
 			return engine.ReaderFilterResult{}, err
 		}
 	} else {
 		for _, pos := range loadedColumns {
-			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+			if err := bat.Vecs[pos].ShrinkByMask(keep, false, 0, mp); err != nil {
 				return engine.ReaderFilterResult{}, err
 			}
 		}
-		bat.SetRowCount(len(sels))
+		bat.SetRowCount(kept)
 	}
-	return engine.ReaderFilterResult{Sels: sels}, nil
+	return engine.ReaderFilterResult{Mask: keep}, nil
 }
 
 // relationFilterEarlyColumns returns the output positions that must be loaded

@@ -238,8 +238,8 @@ func TestShrinkAssertsAscendingSelsUnderRace(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		require.NoError(t, AppendFixed(v, int64(i), false, mp))
 	}
-	require.Panics(t, func() { _ = v.Shrink([]int64{2, 1}, false, mp) })
-	require.Panics(t, func() { _ = v.Shrink([]int64{1, 1}, true, mp) })
-	require.NoError(t, v.Shrink([]int64{0, 2}, false, mp))
+	require.Panics(t, func() { _ = v.ShrinkByRows([]int64{2, 1}, mp) })
+	require.Panics(t, func() { _ = v.ShrinkByRows([]int64{1, 1}, mp) })
+	require.NoError(t, v.ShrinkByRows([]int64{0, 2}, mp))
 	v.Free(mp)
 }

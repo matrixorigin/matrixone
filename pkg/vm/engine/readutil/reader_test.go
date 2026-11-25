@@ -476,7 +476,10 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			require.NoError(t, bat.Shrink(sels, false, queryMP))
+			for _, vec := range bat.Vecs {
+				require.NoError(t, vec.ShrinkByRows(sels, queryMP))
+			}
+			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
 		testVectorTopKParam(1, 1),
@@ -1185,7 +1188,7 @@ func testReaderTemporalResidualAfterOptionalPKFilter(t *testing.T, reverse bool)
 							selected = append(selected, int64(i))
 						}
 					}
-					if err := bat.Vecs[0].Shrink(selected, false, proc.Mp()); err != nil {
+					if err := bat.Vecs[0].ShrinkByRows(selected, proc.Mp()); err != nil {
 						return engine.ReaderFilterResult{}, err
 					}
 					bat.SetRowCount(len(selected))

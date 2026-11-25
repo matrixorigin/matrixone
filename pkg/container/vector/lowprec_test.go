@@ -269,7 +269,7 @@ func TestLowPrecFloatGetMinMaxSkipsNaN(t *testing.T) {
 
 // TestLowPrecFloatAccessMovement exercises the access/movement/string switches for the
 // scalar low-precision float types (bf16/float16/float8/float4) so each per-type arm is
-// covered: GetAny/AppendAny round-trip, Shrink, ShrinkByMask, Shuffle, ShuffleWithBuf,
+// covered: GetAny/AppendAny round-trip, ShrinkByRows, ShrinkByMask, Shuffle, ShuffleWithBuf,
 // String, RowToString, and NewFunctionResultWrapper (#20567).
 func TestLowPrecFloatAccessMovement(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
@@ -318,12 +318,12 @@ func TestLowPrecFloatAccessMovement(t *testing.T) {
 			require.Equal(t, c.mk(3.0), GetAny(v2, 0, true))
 			v2.Free(mp)
 
-			// Shrink keeps selected rows.
+			// ShrinkByRows keeps selected rows.
 			v3 := NewVec(c.oid.ToType(), mp)
 			for _, f := range []float32{1.0, 2.0, 3.0, 4.0} {
 				require.NoError(t, AppendAny(v3, c.mk(f), false, mp))
 			}
-			require.NoError(t, v3.Shrink([]int64{0, 2}, false, mp))
+			require.NoError(t, v3.ShrinkByRows([]int64{0, 2}, mp))
 			require.Equal(t, 2, v3.Length())
 			require.Equal(t, c.mk(1.0), GetAny(v3, 0, true))
 			require.Equal(t, c.mk(3.0), GetAny(v3, 1, true))

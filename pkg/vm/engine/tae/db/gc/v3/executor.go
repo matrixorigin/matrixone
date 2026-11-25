@@ -125,10 +125,9 @@ type GCExecutor struct {
 	config struct {
 		canGCCacheSize int
 	}
-	mp   *mpool.MPool
-	fs   fileservice.FileService
-	bm   bitmap.Bitmap
-	sels []int64
+	mp *mpool.MPool
+	fs fileservice.FileService
+	bm bitmap.Bitmap
 }
 
 func (exec *GCExecutor) doFilter(
@@ -175,12 +174,10 @@ func (exec *GCExecutor) doFilter(
 			return err
 		}
 		// 3. sink the batch to the corresponding sinker
-		exec.sels = exec.sels[:0]
-		bitmap.ToArray(&exec.bm, &exec.sels)
-		if err := canGCBat.Union(bat, exec.sels, exec.mp); err != nil {
+		if err := canGCBat.UnionByMask(bat, &exec.bm, exec.mp); err != nil {
 			return err
 		}
-		if err := bat.Shrink(exec.sels, true, exec.mp); err != nil {
+		if err := bat.ShrinkByMask(&exec.bm, true, 0, exec.mp); err != nil {
 			return err
 		}
 		if err := cannotGCSinker(ctx, bat); err != nil {
@@ -299,6 +296,5 @@ func (exec *GCExecutor) Close() error {
 	exec.bm.Free()
 	exec.bm = bitmap.Bitmap{}
 	exec.mp = nil
-	exec.sels = nil
 	return nil
 }

@@ -286,7 +286,7 @@ func padCharColumnsToFullLength(bat *batch.Batch, mp *mpool.MPool) error {
 // shrinkPopulatedVecs applies the surviving-row selection to every vector the reader
 // actually materialized, and skips any it left empty.
 //
-// batch.Shrink walks all of bat.Vecs and assumes each holds bat.RowCount() rows. The
+// batch.ShrinkByMask walks all of bat.Vecs and assumes each holds bat.RowCount() rows. The
 // vector-TopN pushdown breaks that: blockio.materializeVectorTopNRows loads only the rows
 // the in-block Top-K selected and then CleanOnlyData()s the ORDER BY vector column itself
 // (outputBat.Vecs[topColPos]) — its values were already consumed to compute the distances,
@@ -330,7 +330,7 @@ func shrinkPopulatedVecs(bat *batch.Batch, sels []int64, mp *mpool.MPool) error 
 		if vec == nil || (vec.Length() == 0 && rowCount != 0) {
 			continue
 		}
-		if err := vec.Shrink(sels, false, mp); err != nil {
+		if err := vec.ShrinkByRows(sels, mp); err != nil {
 			return err
 		}
 	}

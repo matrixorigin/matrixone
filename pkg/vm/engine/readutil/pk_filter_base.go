@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -816,13 +817,15 @@ func normalizePKInVector(vec *vector.Vector, mp *mpool.MPool) error {
 		return nil
 	}
 	if vec.GetNulls().Any() {
-		sels := make([]int64, 0, vec.Length()-vec.GetNulls().Count())
-		for row := 0; row < vec.Length(); row++ {
-			if !vec.IsNull(uint64(row)) {
-				sels = append(sels, int64(row))
-			}
+		// Drop the NULL rows. The mask is a copy: shrinking rewrites the
+		// vector's own null bitmap.
+		var nullRows bitmap.Bitmap
+		nullRows.Init(mp)
+		defer nullRows.Free()
+		if err := nullRows.InitWith(vec.GetNulls().GetBitmap(), mp); err != nil {
+			return err
 		}
-		if err := vec.Shrink(sels, false, mp); err != nil {
+		if err := vec.ShrinkByMask(&nullRows, true, 0, mp); err != nil {
 			return err
 		}
 	}

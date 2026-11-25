@@ -125,6 +125,19 @@ The kernels' own masking paths (`FunctionSelectList` with `AnyNull`) are no long
 
 Left for later: the set operators' `[]uint8` flags (built per 256-row hash chunk, so a bitmap needs an offset gather and showed no clear gain), the join gathers (RemapList, PR 10), `data_branch_hashdiff` (its removal lists come from conflict checks and one relies on ORDER BY), and the storage and TAE sites (logtail replay, checkpoint reader, collector, GC). PR 6 removes the list APIs, which forces the rest.
 
+**Removing the list APIs (PR 6).** `Vector.Shrink(sels, negate)`, `Batch.Shrink` and the negate form of `nulls.FilterInPlaceOrdered` are gone. Every caller that built a delete list or a selection a row at a time now fills a bitmap and calls `ShrinkByMask`:
+
+- TAE: `containers.vectorWrapper.Compact` (from its roaring deletes), the sorted-batch dedup, the GC executor (which already held a bitmap and listed it twice), and the backup reader's visible rows and tombstone ranges.
+- disttae: `deleteBatch`'s CN rows and workspace deletes, the workspace entry shrink (its pending delete offsets may be unordered and repeat; the mask takes each once, so the sort and compact are gone), and the object rewrite's per-block deletes (`blockio.CopyBlockData` takes a mask).
+- Logtail replay (`change_handle.go`): the cancelled-change filter and the three commit-time filters.
+- readutil's PK `IN` normalization drops NULL rows through a copy of the null bitmap.
+- IVF-FLAT's relation filters build their kept rows with `InitBoolSelection` and return `ReaderFilterResult.Mask`.
+- `data_branch_hashdiff` turns its probe and conflict lists into a mask once (`shrinkBatchByRowList`). The LCA probe no longer relies on `ORDER BY` for ascending rows.
+
+One keep-only gather by list stays, as `Vector.ShrinkByRows(sels, mp)`: rows that arrive as a list from a storage search, a membership filter or a TopN (see "Storage search results stay lists"). Its callers are blockio's reader selection, scoped owned read and TopN winner positions, and table_scan's local-domain membership. PR 7 folds it into the RemapList gather.
+
+Not in PR 6: the kernels' `FunctionSelectList` masking paths (about 3,500 references under `pkg/sql/plan/function`), dead since PR 4, go in their own PR.
+
 ## Design: RemapList
 
 Every list that reorders or repeats rows does one of five things, and the first four fit one type.
@@ -185,7 +198,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 | 3 | Bitmap | Scan, filter, projection | the selection stays a bitmap from blockio through filter and projection; compaction uses `UnionByMask` | filtered scan benchmark; conversions per batch reach zero |
 | 4 | Bitmap | Expression evaluation | `Eval` takes the bitmap; `evalSelectedRows` gathers and scatters by mask; the `FunctionSelectList` copy goes away | expression benchmarks under partial selection |
 | 5 | Bitmap | Remaining selections | DML operators, join finalize, set operators' `[]uint8` flags, frontend loops; contiguous ranges become window copies | per-operator benchmarks; BVT |
-| 6 | Bitmap | Remove list APIs | delete `Shrink([]int64)`, `Union`-as-filter and `FilterInPlaceOrdered` | build and full test run |
+| 6 | Bitmap | Remove list APIs | delete `Shrink([]int64)` and the negate form of `FilterInPlaceOrdered`; a keep-only `ShrinkByRows` stays for search and TopN lists | build and full test run |
 | 7 | RemapList | Type and gather | new package `pkg/common/remaplist` with `remaplist.List`; generic `Vector.Gather` / `Batch.Gather` with the null remap in the same pass | gather microbenchmarks against `Union` and `Shuffle` |
 | 8 | RemapList | Buckets | shuffle, spill and partition use `BuildBuckets` | shuffle and spill benchmarks |
 | 9 | RemapList | Sorts | order, mergeorder, top, mergetop, window, mergesort and logtail sorts use `Identity` → sort → `Gather`; remove `Shuffle`, `ShuffleWithBuf`, `UnionInt32` | sort and top-k benchmarks |

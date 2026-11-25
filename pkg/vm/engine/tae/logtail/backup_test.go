@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -178,10 +179,10 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			input := test.newBatch()
 			defer input.Clean(common.DebugAllocator)
-			visibleRows, err := visibleAppendableRows(
-				context.Background(), input, test.layout, &test.cutoff)
-			require.NoError(t, err)
-			require.NoError(t, input.Shrink(visibleRows, false, common.DebugAllocator))
+			visible := newVisibleRows(t)
+			require.NoError(t, visibleAppendableRows(
+				context.Background(), input, test.layout, &test.cutoff, visible))
+			require.NoError(t, input.ShrinkByMask(visible, false, 0, common.DebugAllocator))
 			result, err := canonicalizeBackupTombstone(context.Background(), input, test.layout)
 			require.NoError(t, err)
 			defer result.Clean(common.DebugAllocator)
@@ -209,16 +210,17 @@ func TestVisibleAppendableRowsBroadcastsConstantCommitTS(t *testing.T) {
 	require.NoError(t, err)
 	defer input.Clean(common.DebugAllocator)
 
-	visibleRows, err := visibleAppendableRows(
+	visible := newVisibleRows(t)
+	require.NoError(t, visibleAppendableRows(
 		context.Background(),
 		input,
 		backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition),
 		ptrTo(types.BuildTS(15, 0)),
-	)
-	require.NoError(t, err)
-	require.Equal(t, []int64{0, 1, 2}, visibleRows)
+		visible,
+	))
+	require.Equal(t, []uint64{0, 1, 2}, visible.ToArray())
 
-	require.NoError(t, input.Shrink(visibleRows, false, common.DebugAllocator))
+	require.NoError(t, input.ShrinkByMask(visible, false, 0, common.DebugAllocator))
 	result, err := canonicalizeBackupTombstone(
 		context.Background(),
 		input,
@@ -285,8 +287,7 @@ func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 				test.mutate(input)
 			}
 
-			_, err := visibleAppendableRows(context.Background(), input, test.layout, nil)
-			require.Error(t, err)
+			require.Error(t, visibleAppendableRows(context.Background(), input, test.layout, nil, newVisibleRows(t)))
 		})
 	}
 }
@@ -298,10 +299,10 @@ func TestBackupTombstoneWriterPreservesHiddenCommitTS(t *testing.T) {
 	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_Rowid, types.T_TS, types.T_bool})
 	defer input.Clean(common.DebugAllocator)
 	layout := backupTombstoneLayout(3, 2, 4)
-	visibleRows, err := visibleAppendableRows(ctx, input, layout, ptrTo(types.BuildTS(15, 0)))
-	require.NoError(t, err)
-	require.Equal(t, []int64{0}, visibleRows)
-	require.NoError(t, input.Shrink(visibleRows, false, common.DebugAllocator))
+	visible := newVisibleRows(t)
+	require.NoError(t, visibleAppendableRows(ctx, input, layout, ptrTo(types.BuildTS(15, 0)), visible))
+	require.Equal(t, []uint64{0}, visible.ToArray())
+	require.NoError(t, input.ShrinkByMask(visible, false, 0, common.DebugAllocator))
 
 	output, err := canonicalizeBackupTombstone(ctx, input, layout)
 	require.NoError(t, err)
@@ -629,4 +630,28 @@ func backupTombstoneLayout(commit, physical, abort uint16) objectio.SpecialColum
 
 func ptrTo[T any](value T) *T {
 	return &value
+}
+
+func newVisibleRows(t *testing.T) *bitmap.Bitmap {
+	visible := new(bitmap.Bitmap)
+	visible.Init(common.DebugAllocator)
+	t.Cleanup(visible.Free)
+	return visible
+}
+
+func TestRemoveRowRange(t *testing.T) {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), common.DebugAllocator)
+	defer bat.Clean(common.DebugAllocator)
+	for i := range 70 {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, common.DebugAllocator))
+	}
+	bat.SetRowCount(70)
+	// The range crosses a word boundary.
+	require.NoError(t, removeRowRange(bat, 60, 66))
+	require.Equal(t, 64, bat.RowCount())
+	values := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+	require.Equal(t, int64(59), values[59])
+	require.Equal(t, int64(66), values[60])
+	require.Equal(t, int64(69), values[63])
 }

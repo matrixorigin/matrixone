@@ -269,7 +269,7 @@ func TestBatchAccountedReaderAcceptsBitmapCapacityBeyondLogicalRows(t *testing.T
 	view := state.view(t, mp)
 	source := newBatchAllocationTestSource(t, mp)
 	source.Vecs[0].GetNulls().Add(31)
-	require.NoError(t, source.Shrink([]int64{0, 1, 2, 3, 4}, false, mp))
+	require.NoError(t, shrinkRows(t, source, []int64{0, 1, 2, 3, 4}, false, mp))
 
 	var encoded bytes.Buffer
 	require.NoError(t, source.MarshalBinaryTo(&encoded))
@@ -479,9 +479,9 @@ func TestBatchSetChargesCopiesToView(t *testing.T) {
 	view := state.view(t, mp)
 	set := NewBatchSet(16)
 	first := newBatchAllocationTestSource(t, mp)
-	require.NoError(t, first.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
+	require.NoError(t, shrinkRows(t, first, []int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
 	second := newBatchAllocationTestSource(t, mp)
-	require.NoError(t, second.Shrink([]int64{
+	require.NoError(t, shrinkRows(t, second, []int64{
 		0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
 		10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 	}, false, mp))
@@ -501,7 +501,7 @@ func TestBatchSetChargesCopiesToView(t *testing.T) {
 		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view,
 	)
 	third := newBatchAllocationTestSource(t, mp)
-	require.NoError(t, third.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
+	require.NoError(t, shrinkRows(t, third, []int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
 	consumed, err := set.Extend(view, third, reuse)
 	require.NoError(t, err)
 	require.True(t, consumed)

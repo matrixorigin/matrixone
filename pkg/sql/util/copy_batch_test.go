@@ -44,7 +44,7 @@ func TestCopyBatchCompactsAndFlattens(t *testing.T) {
 	varlen := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(varlen, dead, false, mp))
 	require.NoError(t, vector.AppendBytes(varlen, live, false, mp))
-	require.NoError(t, varlen.Shrink([]int64{1}, false, mp))
+	require.NoError(t, varlen.ShrinkByRows([]int64{1}, mp))
 	require.Greater(t, len(varlen.GetArea()), len(live))
 
 	constVec, err := vector.NewConstBytes(
@@ -137,7 +137,7 @@ func BenchmarkCopyBatchCompact(b *testing.B) {
 		for row := 0; row < 1024; row += 8 {
 			sels = append(sels, int64(row))
 		}
-		require.NoError(b, vec.Shrink(sels, false, mp))
+		require.NoError(b, vec.ShrinkByRows(sels, mp))
 		src.SetVector(int32(col), vec)
 	}
 	src.SetRowCount(128)

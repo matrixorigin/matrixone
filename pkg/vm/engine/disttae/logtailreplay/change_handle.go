@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -3948,8 +3949,17 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	indexKeys(dataPK, 0)
 	indexKeys(tombstonePK, dataRows)
 
-	dataRowsToDelete := make([]int64, 0)
-	tombstoneRowsToDelete := make([]int64, 0)
+	var dataRowsToDelete, tombstoneRowsToDelete bitmap.Bitmap
+	dataRowsToDelete.Init(mp)
+	defer dataRowsToDelete.Free()
+	tombstoneRowsToDelete.Init(mp)
+	defer tombstoneRowsToDelete.Free()
+	if err = dataRowsToDelete.InitWithSize(int64(dataRows), mp); err != nil {
+		return err
+	}
+	if err = tombstoneRowsToDelete.InitWithSize(int64(tombstonePK.Length()), mp); err != nil {
+		return err
+	}
 
 	// Deletes precede inserts at the same timestamp.
 	less := func(left, right rowInfo) bool {
@@ -3998,22 +4008,20 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 		}
 		for _, row := range rowInfos[removeFrom:removeTo] {
 			if row.isDelete {
-				tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(row.row))
+				tombstoneRowsToDelete.Add(uint64(row.row))
 			} else {
-				dataRowsToDelete = append(dataRowsToDelete, int64(row.row))
+				dataRowsToDelete.Add(uint64(row.row))
 			}
 		}
 	}
 
-	if len(tombstoneRowsToDelete) > 0 {
-		slices.Sort(tombstoneRowsToDelete)
-		if err = tombstone.Shrink(tombstoneRowsToDelete, true, mp); err != nil {
+	if !tombstoneRowsToDelete.IsEmpty() {
+		if err = tombstone.ShrinkByMask(&tombstoneRowsToDelete, true, 0, mp); err != nil {
 			return err
 		}
 	}
-	if len(dataRowsToDelete) > 0 {
-		slices.Sort(dataRowsToDelete)
-		err = data.Shrink(dataRowsToDelete, true, mp)
+	if !dataRowsToDelete.IsEmpty() {
+		err = data.ShrinkByMask(&dataRowsToDelete, true, 0, mp)
 	}
 	return
 }
@@ -4157,21 +4165,26 @@ func applyTSFilterForBatch(bat *batch.Batch, sortIdx int, skipTS map[types.TS]st
 		panic(fmt.Sprintf("logic error, batch attrs %v, sort idx %d", bat.Attrs, sortIdx))
 	}
 	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[sortIdx])
-	deletes := make([]int64, 0)
+	var deletes bitmap.Bitmap
+	deletes.Init(mp)
+	defer deletes.Free()
+	if err := deletes.InitWithSize(int64(len(commitTSs)), mp); err != nil {
+		return err
+	}
 	for i, ts := range commitTSs {
 		if ts.LT(&start) || ts.GT(&end) {
-			deletes = append(deletes, int64(i))
+			deletes.Add(uint64(i))
 		} else {
 			if skipTS != nil {
 				_, ok := skipTS[ts]
 				if ok {
-					deletes = append(deletes, int64(i))
+					deletes.Add(uint64(i))
 				}
 			}
 		}
 	}
 	for _, vec := range bat.Vecs {
-		if err := vec.Shrink(deletes, true, mp); err != nil {
+		if err := vec.ShrinkByMask(&deletes, true, 0, mp); err != nil {
 			return err
 		}
 	}
@@ -4718,14 +4731,19 @@ func updatePersistedTombstoneBatch(
 			return moerr.NewInternalErrorNoCtx("persisted tombstone abort column length mismatch")
 		}
 	}
-	deletes := make([]int64, 0)
+	var deletes bitmap.Bitmap
+	deletes.Init(mp)
+	defer deletes.Free()
+	if err := deletes.InitWithSize(int64(len(commits)), mp); err != nil {
+		return err
+	}
 	for i, ts := range commits {
 		if commitTSVec.IsNull(uint64(i)) || (aborts != nil && abortVec.IsNull(uint64(i))) {
 			return moerr.NewInternalErrorNoCtx("persisted tombstone special column contains null")
 		}
 		_, skip := skipTS[ts]
 		if (aborts != nil && aborts[i]) || ts.LT(&start) || ts.GT(&end) || skip {
-			deletes = append(deletes, int64(i))
+			deletes.Add(uint64(i))
 		}
 	}
 
@@ -4750,7 +4768,7 @@ func updatePersistedTombstoneBatch(
 		bat.Attrs = []string{objectio.TombstoneAttr_PK_Attr, objectio.DefaultCommitTS_Attr}
 	}
 	for _, vec := range bat.Vecs {
-		if err := vec.Shrink(deletes, true, mp); err != nil {
+		if err := vec.ShrinkByMask(&deletes, true, 0, mp); err != nil {
 			return err
 		}
 	}
@@ -4892,13 +4910,18 @@ func updatePersistedDataBatch(
 			return moerr.NewInternalErrorNoCtx("persisted appendable object abort column length mismatch")
 		}
 	}
-	deletes := make([]int64, 0)
+	var deletes bitmap.Bitmap
+	deletes.Init(mp)
+	defer deletes.Free()
+	if err := deletes.InitWithSize(int64(len(commits)), mp); err != nil {
+		return err
+	}
 	for i, ts := range commits {
 		if commitTSVec.IsNull(uint64(i)) || (aborts != nil && abortVec.IsNull(uint64(i))) {
 			return moerr.NewInternalErrorNoCtx("persisted appendable object special column contains null")
 		}
 		if (aborts != nil && aborts[i]) || ts.LT(&start) || ts.GT(&end) {
-			deletes = append(deletes, int64(i))
+			deletes.Add(uint64(i))
 		}
 	}
 
@@ -4962,7 +4985,7 @@ func updatePersistedDataBatch(
 		bat.Attrs = filteredAttrs
 	}
 	for _, vec := range bat.Vecs {
-		if err := vec.Shrink(deletes, true, mp); err != nil {
+		if err := vec.ShrinkByMask(&deletes, true, 0, mp); err != nil {
 			return err
 		}
 	}

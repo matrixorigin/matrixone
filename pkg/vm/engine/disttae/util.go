@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -901,7 +902,7 @@ func fillTsVecForSysTableQueryBatchWithAppend(bat *batch.Batch, ts types.TS, m *
 //	[blk0-0, blk0-1, blk0-2, blk0-3, blk0-4]
 //	[1, 2, 3, 4, 5]
 //
-// toDeleteOffsets: [1, 3]
+// toDeleteOffsets: [1, 3], in any order, possibly repeated
 // result:
 //
 //	[blk0-0, blk0-1, blk0-2]
@@ -911,7 +912,14 @@ func shrinkBatchWithRowids(
 	toDeleteOffsets []int64,
 	mp *mpool.MPool,
 ) error {
-	if err := bat.Shrink(toDeleteOffsets, true, mp); err != nil {
+	// The offsets may be unordered and repeat; the mask takes each row once.
+	var dels bitmap.Bitmap
+	dels.Init(mp)
+	defer dels.Free()
+	if err := dels.InitWithRows(int64(bat.RowCount()), toDeleteOffsets, mp); err != nil {
+		return err
+	}
+	if err := bat.ShrinkByMask(&dels, true, 0, mp); err != nil {
 		return err
 	}
 	if bat.RowCount() == 0 {

@@ -19,7 +19,7 @@ package vector
 import "fmt"
 
 // assertAscendingSels panics, in race builds only, when sels is not strictly
-// increasing and non-negative. Shrink and the ordered null filters assume it
+// increasing and non-negative. ShrinkByRows and the ordered null filter assume it
 // without checking; a selection moving to a bitmap relies on it too (#33181).
 const raceBuild = true
 

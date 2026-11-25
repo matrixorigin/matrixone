@@ -48,8 +48,8 @@ func shrinkMask(t testing.TB, rng *rand.Rand, maskLen int, p float64, mp *mpool.
 	return &m, rows
 }
 
-// TestShrinkByMaskMatchesShrink checks ShrinkByMask against Shrink with the
-// same rows as a list, for keep and remove, with and without an offset.
+// TestShrinkByMaskMatchesShrink checks ShrinkByMask against ShrinkByRows with the
+// same rows as a list (their complement for remove), with and without an offset.
 func TestShrinkByMaskMatchesShrink(t *testing.T) {
 	mp := mpool.MustNewZero()
 	rng := rand.New(rand.NewSource(7))
@@ -76,7 +76,11 @@ func TestShrinkByMaskMatchesShrink(t *testing.T) {
 						require.NoError(t, err)
 						got, err := src.Dup(mp)
 						require.NoError(t, err)
-						require.NoError(t, want.Shrink(rows, negate, mp), name)
+						keep := rows
+						if negate {
+							keep = complementRows(n, rows)
+						}
+						require.NoError(t, want.ShrinkByRows(keep, mp), name)
 						require.NoError(t, got.ShrinkByMask(mask, negate, uint64(offset), mp), name)
 						requireSameRows(t, want, got)
 						want.Free(mp)
@@ -91,15 +95,12 @@ func TestShrinkByMaskMatchesShrink(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func BenchmarkShrinkDeletesByList(b *testing.B)   { benchShrinkDeletes(b, false, 0.01) }
-func BenchmarkShrinkDeletesByMask(b *testing.B)   { benchShrinkDeletes(b, true, 0.01) }
-func BenchmarkShrinkDeletes30ByList(b *testing.B) { benchShrinkDeletes(b, false, 0.3) }
-func BenchmarkShrinkDeletes30ByMask(b *testing.B) { benchShrinkDeletes(b, true, 0.3) }
+func BenchmarkShrinkDeletesByMask(b *testing.B)   { benchShrinkDeletes(b, 0.01) }
+func BenchmarkShrinkDeletes30ByMask(b *testing.B) { benchShrinkDeletes(b, 0.3) }
 
 // benchShrinkDeletes removes a fraction p of 8192 int64 rows, as the reader
-// does with a block's delete mask. The list path includes ToI64Array, which
-// the reader ran before every Shrink. Refilling the vector is not timed.
-func benchShrinkDeletes(b *testing.B, byMask bool, p float64) {
+// does with a block's delete mask. Refilling the vector is not timed.
+func benchShrinkDeletes(b *testing.B, p float64) {
 	const n = 8192
 	mp := mpool.MustNewZero()
 	rng := rand.New(rand.NewSource(1))
@@ -115,19 +116,13 @@ func benchShrinkDeletes(b *testing.B, byMask bool, p float64) {
 		require.NoError(b, AppendFixed(src, int64(i), i%17 == 0, mp))
 	}
 	dst := NewVec(types.T_int64.ToType(), mp)
-	var list []int64
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		dst.CleanOnlyData()
 		require.NoError(b, dst.UnionBatch(src, 0, n, nil, mp))
 		b.StartTimer()
-		if byMask {
-			require.NoError(b, dst.ShrinkByMask(&mask, true, 0, mp))
-		} else {
-			list = mask.ToI64Array(&list)
-			require.NoError(b, dst.Shrink(list, true, mp))
-		}
+		require.NoError(b, dst.ShrinkByMask(&mask, true, 0, mp))
 	}
 }
 
@@ -224,4 +219,18 @@ func TestMaskGatherWithViewMask(t *testing.T) {
 	owned.Free()
 	parent.Free()
 	require.Zero(t, mp.CurrNB())
+}
+
+// complementRows returns the rows of [0, n) not in rows, which is ascending.
+func complementRows(n int, rows []int64) []int64 {
+	out := make([]int64, 0, n-len(rows))
+	j := 0
+	for r := 0; r < n; r++ {
+		if j < len(rows) && rows[j] == int64(r) {
+			j++
+			continue
+		}
+		out = append(out, int64(r))
+	}
+	return out
 }

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -636,12 +637,11 @@ func handleDelsOnLCA(
 		}
 		tBat.SetRowCount(0)
 	} else {
-		for i := range tBat.Vecs {
-			if err := tBat.Vecs[i].Shrink(sels, false, ses.proc.Mp()); err != nil {
-				return nil, err
-			}
-		}
+		// The probe returns target row indexes in any order.
 		tBat.SetRowCount(tBat.Vecs[0].Length())
+		if err := shrinkBatchByRowList(tBat, sels, false, ses.proc.Mp()); err != nil {
+			return nil, err
+		}
 	}
 	logutil.Debug(
 		"DataBranch-LCA-PostProcess-Done",
@@ -1274,7 +1274,7 @@ func hashDiffIfHasLCA(
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return nil
 			}
-			if err := wrapped.batch.Shrink(keep, true, ses.proc.Mp()); err != nil {
+			if err := shrinkBatchByRowList(wrapped.batch, keep, true, ses.proc.Mp()); err != nil {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return err
 			}
@@ -1429,13 +1429,13 @@ func hashDiffIfHasLCA(
 					return
 				} else {
 					if len(sels1) != 0 {
-						if err3 = wrapped.batch.Shrink(sels1, true, ses.proc.Mp()); err3 != nil {
+						if err3 = shrinkBatchByRowList(wrapped.batch, sels1, true, ses.proc.Mp()); err3 != nil {
 							return
 						}
 					}
 
 					if len(sels2) != 0 {
-						if err3 = baseWrapped.batch.Shrink(sels2, true, ses.proc.Mp()); err3 != nil {
+						if err3 = shrinkBatchByRowList(baseWrapped.batch, sels2, true, ses.proc.Mp()); err3 != nil {
 							return
 						}
 					}
@@ -1861,7 +1861,7 @@ func splitDataBranchBatchForNativeUpdate(
 	}
 
 	nativeBat.SetRowCount(nativeBat.Vecs[0].Length())
-	if err := bat.Shrink(nativeRowIdxes, true, ses.proc.Mp()); err != nil {
+	if err := shrinkBatchByRowList(bat, nativeRowIdxes, true, ses.proc.Mp()); err != nil {
 		tblStuff.retPool.releaseRetBatch(nativeBat, false)
 		return nil, err
 	}
@@ -2913,7 +2913,7 @@ func buildHashmapForTable(
 						return // all rows filtered out
 					}
 					if len(sels) < bat.RowCount() {
-						if taskErr = bat.Shrink(sels, false, mp); taskErr != nil {
+						if taskErr = shrinkBatchByRowList(bat, sels, false, mp); taskErr != nil {
 							atomicErr.Store(taskErr)
 							return
 						}
@@ -3653,4 +3653,26 @@ func projectDataBranchBatchToTarget(
 	out.SetAttributes(dataBranchTargetLayoutAttrs(tblStuff, hasCommitTS))
 	sourceBat.Clean(mp)
 	return out
+}
+
+// shrinkBatchByRowList keeps (or, with negate, removes) the rows listed in
+// rows, which may be in any order and may repeat. The lists here come from
+// probe queries and conflict checks, so they are turned into a mask once.
+func shrinkBatchByRowList(bat *batch.Batch, rows []int64, negate bool, mp *mpool.MPool) error {
+	length := int64(bat.RowCount())
+	for _, row := range rows {
+		if row < 0 {
+			return moerr.NewInternalErrorNoCtxf("negative row index %d", row)
+		}
+		if row >= length {
+			length = row + 1
+		}
+	}
+	var mask bitmap.Bitmap
+	mask.Init(mp)
+	defer mask.Free()
+	if err := mask.InitWithRows(length, rows, mp); err != nil {
+		return err
+	}
+	return bat.ShrinkByMask(&mask, negate, 0, mp)
 }

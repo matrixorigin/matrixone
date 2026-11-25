@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"math"
 	"slices"
 	"strings"
@@ -26,8 +25,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2429,6 +2431,10 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	var stats []objectio.ObjectStats
 	var infoBat *batch.Batch
 	var rowsBat *batch.Batch
+	// One delete mask for every block of the object, reinitialized per block.
+	var deleteMask bitmap.Bitmap
+	deleteMask.Init(tbl.getTxn().proc.GetMPool())
+	defer deleteMask.Free()
 
 	defer func() {
 		// The rows batch is the rewrite's scratch — its surviving rows
@@ -2448,8 +2454,16 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		true,
 		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			// The mask only needs to reach the last deleted row: rows past
+			// it are kept. (blkMeta is not loaded here.)
 			deletes := blockDeletes[blk.BlockID]
-			slices.Sort(deletes)
+			var maskLen int64
+			for _, row := range deletes {
+				maskLen = max(maskLen, row+1)
+			}
+			if err = deleteMask.InitWithRows(maskLen, deletes, tbl.getTxn().proc.GetMPool()); err != nil {
+				return false
+			}
 			if rowsBat == nil {
 				rowsBat = batch.NewWithSize(len(tbl.seqnums))
 			}
@@ -2458,7 +2472,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 			if err = blockio.CopyBlockData(
 				tbl.getTxn().proc.Ctx,
 				blk.MetaLoc[:],
-				deletes,
+				&deleteMask,
 				tbl.seqnums,
 				tbl.typs,
 				rowsBat,

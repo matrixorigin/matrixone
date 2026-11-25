@@ -19,6 +19,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -582,12 +583,17 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	// makes `1 < 1` false and drops the row (#29040). Conservative float32 widening belongs only in the
 	// storage/candidate gate (squareL2BoundOutward), never here.
 
+	var keep bitmap.Bitmap
+	keep.Init(mp)
+	defer keep.Free()
 	for _, bat := range res.Batches {
 		if bat == nil || bat.RowCount() == 0 || len(bat.Vecs) == 0 {
 			continue
 		}
 		distVec := bat.Vecs[len(bat.Vecs)-1]
-		sels := make([]int64, 0, bat.RowCount())
+		if err := keep.InitWithSize(int64(bat.RowCount()), mp); err != nil {
+			return err
+		}
 		for row := 0; row < bat.RowCount(); row++ {
 			if distVec.IsNull(uint64(row)) {
 				continue
@@ -595,10 +601,10 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 			distance := vector.GetFixedAtNoTypeCheck[float64](distVec, row)
 			distance = idx.scoreFromQuantized(distance, origFuncName, metricType)
 			if vectorDistanceInRange(distance, distRange, lower, hasLower, upper, hasUpper) {
-				sels = append(sels, int64(row))
+				keep.Add(uint64(row))
 			}
 		}
-		if _, err := selectRelationBatchRows(bat, sels, loadedColumns, mp); err != nil {
+		if _, err := selectRelationBatchRows(bat, &keep, loadedColumns, mp); err != nil {
 			return err
 		}
 	}

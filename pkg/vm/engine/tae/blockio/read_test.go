@@ -176,7 +176,7 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	failureOutput := batch.NewWithSize(1)
 	failureOutput.Vecs[0] = vector.NewVec(typs[0], selectionFailure)
 	t.Cleanup(func() { failureOutput.Clean(selectionFailure) })
-	err = CopyBlockData(ctx, info.MetaLocation(), []int64{0}, []uint16{0}, typs[:1], failureOutput, countingFS, selectionFailure)
+	err = CopyBlockData(ctx, info.MetaLocation(), copyDeletes(t, []int64{0}), []uint16{0}, typs[:1], failureOutput, countingFS, selectionFailure)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Positive(t, countingFS.acquired)
 	require.Equal(t, countingFS.acquired, countingFS.released)
@@ -1156,7 +1156,10 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					rows = append(rows, int64(row))
 				}
 			}
-			require.NoError(t, bat.Shrink(rows, false, queryMP))
+			for _, vec := range bat.Vecs {
+				require.NoError(t, vec.ShrinkByRows(rows, queryMP))
+			}
+			bat.SetRowCount(len(rows))
 			return engine.ReaderFilterResult{}, nil
 		}}
 		_, err := BlockDataReadWithFilter(ctx, &info, ds, []uint16{0, 1}, colTypes, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-fallback-test", output, cacheVectors, queryMP, fs, []int{0, 1}, request)
@@ -1178,7 +1181,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 					sels = append(sels, int64(i))
 				}
 			}
-			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
+			require.NoError(t, bat.Vecs[0].ShrinkByRows(sels, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}))
@@ -1268,7 +1271,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			[]int{0},
 			&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 				sels := []int64{1}
-				require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
+				require.NoError(t, bat.Vecs[0].ShrinkByRows(sels, queryMP))
 				bat.SetRowCount(1)
 				return engine.ReaderFilterResult{Sels: sels}, nil
 			}},
@@ -1301,7 +1304,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 			[]int{0},
 			&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 				sels := []int64{1, 2}
-				require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
+				require.NoError(t, bat.Vecs[0].ShrinkByRows(sels, queryMP))
 				bat.SetRowCount(len(sels))
 				return engine.ReaderFilterResult{Sels: sels}, nil
 			}},
@@ -1393,7 +1396,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
+			require.NoError(t, bat.Vecs[0].ShrinkByRows(sels, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
@@ -1429,7 +1432,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			require.NoError(t, bat.Vecs[0].Shrink(sels, false, queryMP))
+			require.NoError(t, bat.Vecs[0].ShrinkByRows(sels, queryMP))
 			bat.SetRowCount(len(sels))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
@@ -1545,7 +1548,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 						return engine.ReaderFilterResult{All: true}, nil
 					}
 					inputRows := bat.RowCount()
-					require.NoError(t, bat.Vecs[0].Shrink(tc.filterSels, false, queryMP))
+					require.NoError(t, bat.Vecs[0].ShrinkByRows(tc.filterSels, queryMP))
 					bat.SetRowCount(len(tc.filterSels))
 					if asMask {
 						require.NoError(t, mask.InitWithRows(int64(inputRows), tc.filterSels, queryMP))
@@ -1874,7 +1877,7 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 				visibleRowids[1].GetRowOffset(),
 			})
 			sels := []int64{1}
-			require.NoError(t, bat.Vecs[1].Shrink(sels, false, queryMP))
+			require.NoError(t, bat.Vecs[1].ShrinkByRows(sels, queryMP))
 			bat.SetRowCount(1)
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
@@ -2830,4 +2833,21 @@ func TestBlockDataReadInnerOrderedLimitFallbackAppliesDeletes(t *testing.T) {
 	}
 	freeTestBatchWithOwnPools(output)
 	require.Zero(t, mp.CurrNB())
+}
+
+// copyDeletes returns a delete mask over the listed rows for CopyBlockData.
+func copyDeletes(t *testing.T, rows []int64) *bitmap.Bitmap {
+	mp := mpool.MustNewZero()
+	deletes := new(bitmap.Bitmap)
+	deletes.Init(mp)
+	t.Cleanup(func() {
+		deletes.Free()
+		mpool.DeleteMPool(mp)
+	})
+	var length int64
+	for _, row := range rows {
+		length = max(length, row+1)
+	}
+	require.NoError(t, deletes.InitWithRows(length, rows, mp))
+	return deletes
 }
