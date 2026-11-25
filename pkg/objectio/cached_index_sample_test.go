@@ -117,7 +117,7 @@ func TestReadCachedInt32RowsRequiresAllColumnsAndReleases(t *testing.T) {
 		read := fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{
 			newColumnIOEntry(Extent(block.Extents[i][:]), columnCacheConstructorFactory),
 		}}
-		defer read.ReleaseReadResultOnError()
+		defer read.Release()
 		require.NoError(t, fs.Read(ctx, &read))
 	}
 	dst := make([]CachedInt32Row, 3)
