@@ -167,6 +167,11 @@ because there is one kind of fill.
 - A fresh independent review of the change finds none of the bug families listed in the
   problem statement.
 
+## Rollout (decision 2026-11-25)
+
+The change lands in PR #32812, which adds the code it replaces, rather than as a
+follow-up PR.
+
 ## Open questions
 
-- Whether this lands in PR #32812 or as a follow-up PR.
+None.
