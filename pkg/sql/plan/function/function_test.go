@@ -1559,6 +1559,10 @@ func TestFunctionLookupRejectsInvalidOverload(t *testing.T) {
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 
+	powerArgs := []*plan.Expr{notNull, notNull}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(POW, 0), powerArgs))
+	require.False(t, DeduceNotNullable(EncodeOverloadID(POW, 1), powerArgs))
+
 	for _, tt := range []struct {
 		name     string
 		fid      int32
@@ -1568,7 +1572,6 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
-		{name: "power domain or overflow", fid: POW, argCount: 2},
 		{name: "exponential overflow", fid: EXP, argCount: 1},
 		{name: "cotangent zero", fid: COT, argCount: 1},
 		{name: "inverse hyperbolic cosine domain", fid: ACOSH, argCount: 1},

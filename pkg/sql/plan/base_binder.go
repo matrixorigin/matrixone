@@ -12925,23 +12925,27 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
 	// don't cast 0xXXXX as float64, use the uint64
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		ctx := b.GetContext()
+		if typ.IsEmpty() {
+			return makePlan2DecimalExprWithType(ctx, val)
+		}
+		if function.LegacyPowerForTableDump(ctx) {
+			return appendCastBeforeExpr(ctx, makePlan2ReleasedDecimalSourceExpr(val), typ)
+		}
 		canonical := val
 		var normalizedWidth int32
 		if normalized, width, _, ok := normalizePlainDecimalLiteral(val); ok {
 			canonical = normalized
 			normalizedWidth = width
 		}
-		if !typ.IsEmpty() {
-			source := canonical
-			isDecimalTarget := types.T(typ.Id).IsDecimal()
-			if !isDecimalTarget {
-				source = val
-			}
-			return appendCastBeforeExpr(b.GetContext(),
-				makePlan2DecimalSourceExpr(source,
-					isDecimalTarget && decimalLiteralRequiresV82(val, canonical, normalizedWidth)), typ)
+		source := canonical
+		isDecimalTarget := types.T(typ.Id).IsDecimal()
+		if !isDecimalTarget {
+			source = val
 		}
-		return makePlan2DecimalExprWithType(b.GetContext(), val)
+		return appendCastBeforeExpr(ctx,
+			makePlan2DecimalSourceExpr(source,
+				isDecimalTarget && decimalLiteralRequiresV82(val, canonical, normalizedWidth)), typ)
 	}
 
 	returnRawLiteralExpr := func(val string, form plan.StringLiteralForm) (*Expr, error) {

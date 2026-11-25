@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -91,6 +92,121 @@ func TestTableDumpExactBaseSpecialIntegerBindings(t *testing.T) {
 			tampered.Cols[2].GeneratedCol.Expr = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "forged"}}}}
 			_, err = AnalyzeTableDumpBindings(compiler, target, tampered)
 			require.ErrorContains(t, err, "cannot verify bound generated expression")
+		})
+	}
+}
+
+func TestTableDumpPowerOverloads(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(a double, b double, constraint ck check (pow(a,b) + power(a,b) > 0))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false, nil)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	powerRefs := func(table *planpb.TableDef) []*planpb.ObjectRef {
+		t.Helper()
+		var refs []*planpb.ObjectRef
+		require.NoError(t, planpb.VisitExprTree(table.Checks[0].Check, func(expr *planpb.Expr) error {
+			if ref := expr.GetF().GetFunc(); ref != nil && ref.ObjName == "power" {
+				refs = append(refs, ref)
+			}
+			return nil
+		}))
+		require.Len(t, refs, 2)
+		return refs
+	}
+	for _, ref := range powerRefs(current) {
+		require.Equal(t, function.EncodeOverloadID(149, 1), ref.Obj)
+	}
+	// Nullable DOUBLE operands let the fixture use the unchanged physical
+	// argument and result descriptors while pinning the released identity.
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	for _, ref := range powerRefs(legacy) {
+		ref.Obj = function.EncodeOverloadID(149, 0)
+	}
+
+	for _, pair := range [][2]*planpb.TableDef{{legacy, legacy}, {current, legacy}, {current, current}} {
+		sensitive, err := AnalyzeTableDumpBindings(compiler, pair[0], pair[1])
+		require.NoError(t, err)
+		require.True(t, sensitive, "the manifest must retain bound expressions")
+	}
+	sensitive, err := AnalyzeTableDumpBindings(compiler, legacy, nil)
+	require.NoError(t, err)
+	require.False(t, sensitive, "an SQL-only manifest can load into the released binding")
+	_, err = AnalyzeTableDumpBindings(compiler, current, nil)
+	require.ErrorContains(t, err, "cannot verify bound check expression")
+
+	mixed := proto.Clone(legacy).(*planpb.TableDef)
+	powerRefs(mixed)[0].Obj = function.EncodeOverloadID(149, 1)
+	_, err = AnalyzeTableDumpBindings(compiler, current, mixed)
+	require.ErrorContains(t, err, "cannot verify bound check expression")
+}
+
+func TestTableDumpReleasedPowerChecks(t *testing.T) {
+	// CheckDef bytes from field 18 of mo_tables.extra_info on the official
+	// v4.2.9 server (6c05e42f9f66). Fresh declarations use the normal binder.
+	for _, tc := range []struct {
+		name, columns string
+		released      string
+	}{
+		{"root", "i int primary key, b double",
+			"0a0a5f5f6d6f5f63686b5f3112d3010a02080a3acc010a0920808080802042013e128f010a02081f3a88010a0e2080808080d0124205706f77657212130a0d081f28ffffffffffffffffff012a02100112610a06081f100128013a570a0d2080808080d002420463617374123a0a0808201001200228013a2e0a0d2080808080d002420463617374120f0a06083d1001200312055a03302e35120c0a0808201001200228015a00120a0a06081f100128015a00122d0a04081f10013a250a0d2080808080d002420463617374120a0a04081710011202280012080a04081f10015a001a13504f574552286062602c20302e3529203e2030"},
+		{"exp", "i int primary key, b double, p double",
+			"0a0a5f5f6d6f5f63686b5f311282010a02080a3a7c0a0920808080802042013e12400a02081f3a3a0a0e2080808080d0124205706f77657212130a0d081f28ffffffffffffffffff012a02100112130a0d081f28ffffffffffffffffff012a021002122d0a04081f10013a250a0d2080808080d002420463617374120a0a04081710011202280012080a04081f10015a001a11504f57286062602c2060706029203e2030"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decode := func(encoded string) *planpb.CheckDef {
+				t.Helper()
+				data, err := hex.DecodeString(encoded)
+				require.NoError(t, err)
+				check := new(planpb.CheckDef)
+				require.NoError(t, check.Unmarshal(data))
+				return check
+			}
+			released := decode(tc.released)
+			compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+			compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table t("+tc.columns+", constraint "+released.Name+" check ("+released.OriginSql+"))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false, nil)
+			require.NoError(t, err)
+			current := built.GetDdl().GetCreateTable().GetTableDef()
+			legacy := proto.Clone(current).(*planpb.TableDef)
+			legacy.Checks = []*planpb.CheckDef{released}
+
+			sensitive, err := AnalyzeTableDumpBindings(compiler, legacy, nil)
+			require.NoError(t, err)
+			require.False(t, sensitive)
+			_, err = AnalyzeTableDumpBindings(compiler, current, nil)
+			require.ErrorContains(t, err, "cannot verify bound check expression")
+
+			// LOAD can replay either complete bound payload against the same
+			// declaration. Names are part of the shared schema and stay stable.
+			for _, source := range []*planpb.TableDef{legacy, current} {
+				sensitive, err := AnalyzeTableDumpBindings(compiler, source, source)
+				require.NoError(t, err)
+				require.True(t, sensitive)
+				sensitive, err = AnalyzeTableDumpBindings(compiler, current, source)
+				require.NoError(t, err)
+				require.True(t, sensitive)
+			}
+
+			if tc.name == "root" {
+				forged := proto.Clone(legacy).(*planpb.TableDef)
+				pow := forged.Checks[0].Check.GetF().Args[0].GetF()
+				exponent := pow.Args[1].GetF().Args[0]
+				require.EqualValues(t, 2, exponent.Typ.Width)
+				literal := exponent.GetF().Args[0].GetLit()
+				require.Equal(t, "0.5", literal.GetSval())
+				literal.Value = &planpb.Literal_Sval{Sval: "0.6"}
+				_, err = AnalyzeTableDumpBindings(compiler, current, forged)
+				require.ErrorContains(t, err, "cannot verify bound check expression")
+			}
 		})
 	}
 }

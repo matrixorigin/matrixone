@@ -5665,6 +5665,99 @@ func TestPowerNegativeFractionalExponentReturnsNull(t *testing.T) {
 	}
 }
 
+func TestPowerOverloadBinding(t *testing.T) {
+	floatType := types.T_float64.ToType()
+	for _, name := range []string{"pow", "power"} {
+		t.Run(name, func(t *testing.T) {
+			nilContextBound, err := GetFunctionByName(nil, name, []types.Type{floatType, floatType})
+			require.NoError(t, err)
+			require.Equal(t, EncodeOverloadID(149, 1), nilContextBound.GetEncodedOverloadID())
+			for _, inputs := range [][]types.Type{
+				{floatType, floatType},
+				{types.T_bool.ToType(), types.T_int64.ToType()},
+				{types.New(types.T_decimal64, 10, 2), floatType},
+			} {
+				bound, err := GetFunctionByName(t.Context(), name, inputs)
+				require.NoError(t, err)
+				require.Equal(t, EncodeOverloadID(149, 1), bound.GetEncodedOverloadID())
+				require.Equal(t, floatType, bound.GetReturnType())
+				speculative, ok := GetFunctionByNameWithoutError(name, inputs)
+				require.True(t, ok)
+				require.Equal(t, bound, speculative)
+				targets, needsCast := bound.ShouldDoImplicitTypeCast()
+				require.Equal(t, inputs[0].Oid != types.T_float64 || inputs[1].Oid != types.T_float64, needsCast)
+				for _, target := range targets {
+					require.Equal(t, types.T_float64, target.Oid)
+				}
+			}
+			_, err = GetFunctionByName(t.Context(), name, []types.Type{floatType})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), "%v", err)
+			_, err = GetFunctionByNameWithOverload(t.Context(), name, []types.Type{floatType, floatType}, 0)
+			require.ErrorContains(t, err, "legacy execution only")
+		})
+	}
+}
+
+func TestPowerLegacyOverload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	floatType := types.T_float64.ToType()
+	// This is the identity in v4.2.9 catalog expressions.
+	legacy, err := GetFunctionById(t.Context(), EncodeOverloadID(149, 0))
+	require.NoError(t, err)
+	evaluate, _, _, _ := legacy.GetExecuteMethod()
+
+	for _, tc := range []struct {
+		name           string
+		base, exponent float64
+		expression     string
+	}{
+		{"negative fractional power", -2, 0.5, "pow(-2,0.5)"},
+		{"overflow", 2, 1024, "pow(2,1024)"},
+		{"zero to negative power", 0, -1, "pow(0,-1)"},
+		{"non-finite result from NaN input", math.NaN(), 2, "pow(NaN,2)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(floatType, []float64{tc.base, tc.base}, nil),
+				NewFunctionTestConstInput(floatType, []float64{tc.exponent, tc.exponent}, nil),
+			}, NewFunctionTestResult(floatType, false, nil, nil), evaluate)
+			defer tcc.Free()
+			require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+			err := evaluate(tcc.parameters, tcc.result, proc, tcc.fnLength, nil)
+			var sqlErr *moerr.Error
+			require.ErrorAs(t, err, &sqlErr)
+			require.True(t, moerr.IsMoErrCode(sqlErr, moerr.ErrOutOfRange))
+			require.Equal(t, uint16(1690), sqlErr.MySQLCode())
+			require.Equal(t, "22003", sqlErr.SqlState())
+			require.ErrorContains(t, sqlErr, "DOUBLE value is out of range in '"+tc.expression+"'")
+
+			require.NoError(t, tcc.result.PreExtendAndReset(0))
+			require.NoError(t, evaluate(tcc.parameters, tcc.result, proc, 0, nil))
+			require.Zero(t, tcc.result.GetResultVector().Length())
+		})
+	}
+
+	t.Run("mixed values respect the mask and input nulls", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(floatType, []float64{-2, 0, -2, 2}, nil),
+			NewFunctionTestInput(floatType, []float64{0.5, -1, 3, -1075}, []bool{false, true, false, false}),
+		}, NewFunctionTestResult(floatType, false, []float64{0, 0, -8, 0}, []bool{true, true, false, false}), evaluate).
+			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}})
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("all constant rows masked", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestConstInput(floatType, []float64{-2, -2}, nil),
+			NewFunctionTestConstInput(floatType, []float64{0.5, 0.5}, nil),
+		}, NewFunctionTestResult(floatType, false, []float64{0, 0}, []bool{true, true}), evaluate).
+			WithSelectList(&FunctionSelectList{AllNull: true})
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, info)
+	})
+}
+
 func TestPowerEmptyBatchEvaluatesNoRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tcc := NewFunctionTestCase(

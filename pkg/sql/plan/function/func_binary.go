@@ -8953,6 +8953,40 @@ func evalRight(str string, length int64) string {
 	return string(runeStr[strLength-rightLength:])
 }
 
+const powerNullOnNonFiniteOverload = 1
+
+// powerLegacy evaluates persisted POW overload 0 using its released error contract.
+func powerLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	base := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
+	exponent := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	rs := vector.MustFunctionResult[float64](result)
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		b, baseNull := base.GetValue(row)
+		e, exponentNull := exponent.GetValue(row)
+		if baseNull || exponentNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value := math.Pow(b, e)
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return moerr.NewOutOfRangeNoCtxf(
+				"float64", "DOUBLE value is out of range in 'pow(%v,%v)'", b, e)
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var errNonFinitePowerResult = moerr.NewOutOfRangeNoCtx("float64", "non-finite power result")
 
 func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

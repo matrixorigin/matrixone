@@ -195,6 +195,7 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f, "result should be a function")
 		// "pow" is remapped to "power"
 		require.Equal(t, "power", f.Func.GetObjName())
+		require.Equal(t, function.EncodeOverloadID(149, 1), f.Func.GetObj())
 	})
 
 	t.Run("power with two int args", func(t *testing.T) {
@@ -207,6 +208,7 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		f := result.GetF()
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
+		require.Equal(t, function.EncodeOverloadID(149, 1), f.Func.GetObj())
 	})
 }
 

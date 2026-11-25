@@ -54,6 +54,7 @@ type tableDumpExpressionVisitor struct {
 	hasDivision           bool
 	hasIntegerDivision    bool
 	hasSpecial            bool
+	hasPower              bool
 	hasTimestampAdd       bool
 	hasUnixTimestamp      bool
 	hasJSON               bool
@@ -74,6 +75,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 		switch numericAstFunctionName(fn) {
 		case "format", "makedate", "maketime":
 			v.hasSpecial = true
+		case "pow", "power":
+			v.hasPower = true
 		case "time":
 			v.hasTimeString = true
 		case "timestampadd":
@@ -253,6 +256,7 @@ const (
 	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
 	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
 	tableDumpBindingPreTimeNullability       tableDumpBindingMode = 1 << 17
+	tableDumpBindingPrePowerNullResults      tableDumpBindingMode = 1 << 18
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -438,7 +442,10 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability | tableDumpBindingPrePowerNullResults)
+	if mode&tableDumpBindingPrePowerNullResults != 0 {
+		bindCtx = function.WithLegacyPowerForTableDump(bindCtx)
+	}
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -785,7 +792,8 @@ func matchTableDumpTimestampDefault(want, candidate *planpb.Expr, zone *time.Loc
 // AnalyzeTableDumpBindings proves that every supplied bound expression is
 // reachable from its SQL origin through ordinary DDL binding. It reports
 // whether a binding varies across supported migration eras or division precision.
-// A nil supplied definition classifies a v1 target without trusting a payload.
+// A nil supplied definition checks a v1 target against the bindings available
+// to SQL-only manifests.
 func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.TableDef) (bool, error) {
 	return analyzeTableDumpBindingsWithCandidateVisitLimit(ctx, target, supplied, tableDumpMaxCandidateVisits)
 }
@@ -1090,6 +1098,19 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 			}
+			primaryMode := tableDumpBindingCurrent
+			if visit.hasPower && supplied == nil {
+				// POW plans in SQL-only v1 manifests predate the NULL-producing
+				// overload. Require their binding on the target before loading.
+				primaryMode |= tableDumpBindingPrePowerNullResults
+				for i := range modes {
+					modes[i] |= tableDumpBindingPrePowerNullResults
+				}
+			} else if visit.hasPower {
+				for _, mode := range modes {
+					modes = append(modes, mode|tableDumpBindingPrePowerNullResults)
+				}
+			}
 			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.
 			var fatal error
@@ -1204,7 +1225,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 							modes = append(modes, era|tableDumpBindingPreIntegerDecimal)
 						}
 					}
-					if mode == tableDumpBindingCurrent && dependency.observed {
+					if mode == primaryMode && dependency.observed {
 						needsIncompleteEra = dependency.incompleteTemporal
 					}
 					if item.kind == "default" && dependency.opaqueJSONFolding && !foldingCandidatesAdded {

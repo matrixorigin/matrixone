@@ -25,6 +25,24 @@ type legacyTimestampAddSecondContextKey struct{}
 type legacyDecimalIntegerDivContextKey struct{}
 type legacyUnixTimestampDatetimeContextKey struct{}
 
+type legacyPowerContextKey struct{}
+
+// WithLegacyPowerForTableDump selects the released POW and decimal literal
+// bindings only while verifying an expression's SQL origin in DUMP/LOAD.
+func WithLegacyPowerForTableDump(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyPowerContextKey{}, true)
+}
+
+// LegacyPowerForTableDump reports whether DUMP/LOAD is reconstructing a
+// released POW expression and its numeric literal bindings.
+func LegacyPowerForTableDump(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	legacy, _ := ctx.Value(legacyPowerContextKey{}).(bool)
+	return legacy
+}
+
 // WithLegacyUnixTimestampDatetime reconstructs pre-DATETIME-overload trees
 // only while verifying persisted table expressions during DUMP/LOAD.
 func WithLegacyUnixTimestampDatetime(ctx context.Context) context.Context {

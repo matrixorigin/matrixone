@@ -65,23 +65,35 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 	}
 }
 
+// A DUMP/LOAD origin proof for v4.2 CHECKs reconstructs the original numeric
+// token and string carrier before binding its casts.
+func makePlan2ReleasedDecimalSourceExpr(value string, isBin ...bool) *plan.Expr {
+	expr := makePlan2StringConstExprWithType(value, isBin...)
+	expr.Typ.Charset = uint32(types.CharsetLegacy)
+	expr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
+	return expr
+}
+
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	var typ plan.Type
 	canonical := v
 	width := decimalLiteralPrecision(v)
 	plain := isPlainDecimalLiteral(v)
+	legacy := function.LegacyPowerForTableDump(ctx)
 	requiresV82 := false
-	if normalized, normalizedWidth, _, ok := normalizePlainDecimalLiteral(v); ok {
-		canonical = normalized
-		width = normalizedWidth
-		requiresV82 = decimalLiteralRequiresV82(v, canonical, width)
+	if !legacy {
+		if normalized, normalizedWidth, _, ok := normalizePlainDecimalLiteral(v); ok {
+			canonical = normalized
+			width = normalizedWidth
+			requiresV82 = decimalLiteralRequiresV82(v, canonical, width)
+		}
 	}
 	// Parse128 rounds the first digit after its 38-digit physical boundary and
 	// still returns nil error. Select the wide carrier from the source token
 	// before parsing so an exact DECIMAL256 literal is never materialized from
 	// an already-rounded Decimal128 value. Scientific notation keeps the
 	// existing parser path because its effective precision is exponent-sensitive.
-	if isPlainDecimalLiteral(v) && width > types.T_decimal128.ToType().Width {
+	if !legacy && plain && width > types.T_decimal128.ToType().Width {
 		if width > types.T_decimal256.ToType().Width {
 			return nil, moerr.NewInvalidInputNoCtxf(
 				"%s beyond the range, can't be converted to Decimal256.", v)
@@ -125,6 +137,9 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 			Scale:       scale,
 			NotNullable: true,
 		}
+	}
+	if legacy {
+		return appendCastBeforeExpr(ctx, makePlan2ReleasedDecimalSourceExpr(v, isBin...), typ)
 	}
 	return appendCastBeforeExpr(ctx,
 		makePlan2DecimalSourceExpr(canonical, requiresV82 && plain, isBin...), typ)
