@@ -600,16 +600,31 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return ndv
 }
 
-// Statistics may overestimate NDV across overlapping objects. For small integer
-// keys, exactly represented min/max values provide an independent domain bound.
-// This affects profitability only; catalog proofs still establish legality.
+// Keep the outer-count estimate on its original set of small integer types.
 func boundNDVByIntegerSpan(ndv float64, keyType types.T, lo, hi float64, includeNull bool) float64 {
-	if !finitePositive(ndv) || math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) ||
-		lo > hi || math.Trunc(lo) != lo || math.Trunc(hi) != hi || lo == 0 && hi == 0 {
-		// UpdateStatsInfo also uses [0,0] for an uninitialized zone map.
-		// Do not treat that ambiguous sentinel as a proven singleton domain.
+	if keyType == types.T_int64 || keyType == types.T_uint64 {
 		return ndv
 	}
+	return boundNDVByExactIntegerSpan(ndv, keyType, lo, hi, includeNull)
+}
+
+// Exactly represented min/max values cap NDV overestimates from overlapping objects.
+func boundNDVByExactIntegerSpan(ndv float64, keyType types.T, lo, hi float64, includeNull bool) float64 {
+	span, ok := exactIntegerStatsSpan(keyType, lo, hi)
+	if !ok || !finitePositive(ndv) {
+		return ndv
+	}
+	if includeNull {
+		span++
+	}
+	return math.Min(ndv, span)
+}
+
+// With endpoints strictly within ±2^52, their inclusive span and an optional
+// NULL group also fit exactly in the float64 statistics representation.
+const maxExactIntegerStatsEndpoint = 1<<52 - 1
+
+func exactIntegerStatsSpan(keyType types.T, lo, hi float64) (float64, bool) {
 	var lower, upper float64
 	switch keyType {
 	case types.T_int8:
@@ -624,17 +639,19 @@ func boundNDVByIntegerSpan(ndv float64, keyType types.T, lo, hi float64, include
 		upper = math.MaxUint16
 	case types.T_uint32:
 		upper = math.MaxUint32
+	case types.T_int64:
+		lower, upper = -maxExactIntegerStatsEndpoint, maxExactIntegerStatsEndpoint
+	case types.T_uint64:
+		upper = maxExactIntegerStatsEndpoint
 	default:
-		return ndv
+		return 0, false
 	}
-	if lo < lower || hi > upper {
-		return ndv
+	// UpdateStatsInfo uses [0,0] for an uninitialized zone map.
+	if !(lo >= lower && lo <= hi && hi <= upper) ||
+		math.Trunc(lo) != lo || math.Trunc(hi) != hi || lo == 0 && hi == 0 {
+		return 0, false
 	}
-	span := hi - lo + 1
-	if includeNull {
-		span++
-	}
-	return math.Min(ndv, span)
+	return hi - lo + 1, true
 }
 
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
@@ -982,6 +999,35 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 	return 0, false
 }
 
+// estimateSingleIntegerRangeSelectivity counts the discrete values that a
+// comparison keeps inside a trusted integer range.
+func estimateSingleIntegerRangeSelectivity(op string, lo, hi float64, typ types.T, lit *plan.Literal) (float64, bool) {
+	span, ok := exactIntegerStatsSpan(typ, lo, hi)
+	if !ok || lit == nil || lit.Isnull || lit.Src != nil {
+		return 0, false
+	}
+	value, ok := getFloat64Value(typ, lit)
+	if !ok || math.Abs(value) > maxExactIntegerStatsEndpoint {
+		return 0, false
+	}
+	switch op {
+	case ">":
+		lo = math.Max(lo, value+1)
+	case ">=":
+		lo = math.Max(lo, value)
+	case "<":
+		hi = math.Min(hi, value-1)
+	case "<=":
+		hi = math.Min(hi, value)
+	default:
+		return 0, false
+	}
+	if lo > hi {
+		return 0.00000001, true
+	}
+	return (hi - lo + 1) / span, true
+}
+
 func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *QueryBuilder) float64 {
 	// only filter like func(colRef)>1 , or (colRef=1) or (colRef=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
@@ -1016,6 +1062,17 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 
 		switch colFnName {
 		case "":
+			if typ.IsInteger() && typ == litType && StatsInfoUsableForCache(s) {
+				if selectivity, ok := estimateSingleIntegerRangeSelectivity(funcName, minVal, maxVal, typ, literals[0]); ok {
+					if expr.GetF().Args[0].Typ.NotNullable {
+						return selectivity
+					}
+					nulls, known := s.NullCntMap[colRef.Name]
+					if known && s.TableCnt > 0 && float64(nulls) <= s.TableCnt {
+						return math.Max(1e-8, selectivity*(1-float64(nulls)/s.TableCnt))
+					}
+				}
+			}
 			// CRITICAL FIX: For decimal types, we need to pass the expr to get scale information
 			// Decimal literals store internal scaled values, need proper conversion
 			if typ == types.T_decimal64 || typ == types.T_decimal128 {

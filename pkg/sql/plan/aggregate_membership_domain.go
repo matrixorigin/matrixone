@@ -258,18 +258,18 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	if !finitePositive(costDomainRows) {
 		return false
 	}
-	fullDomain := reestimated && costDomainRows == domain.Stats.TableCnt
 	domainNDV := getExprNdv(DeepCopyExpr(domainKey), builder)
-	if reestimated && (fullDomain || !finitePositive(domainNDV)) &&
-		containsAllSQLEqualityCompatiblePKs([]int32{domainKey.GetCol().ColPos}, domain.TableDef) {
-		// With no key NDV, charge the complete primary key domain even when
-		// the remaining predicates have a heuristic discount.
-		costDomainRows = domain.Stats.TableCnt
+	if reestimated && containsAllSQLEqualityCompatiblePKs([]int32{domainKey.GetCol().ColPos}, domain.TableDef) {
+		if !finitePositive(domainNDV) {
+			// Charge the complete domain when the remaining predicates
+			// lack reliable column statistics.
+			costDomainRows = domain.Stats.TableCnt
+		}
+		// Each estimated candidate row contributes a distinct primary key.
 		domainNDV = costDomainRows
-		fullDomain = true
 	}
 	domainNDV = math.Min(domainNDV, costDomainRows)
-	factNDV := builder.aggregateMembershipFactNDV(fact, key, fullDomain)
+	factNDV := builder.aggregateMembershipFactNDV(fact, key, reestimated)
 	if !aggregateMembershipCostAllows(agg, fact, domain, factNDV, domainNDV, costDomainRows, key.Typ, domainKey.Typ) {
 		return false
 	}
@@ -322,13 +322,13 @@ func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) (r
 	return stats.TableCnt * selectivity, true
 }
 
-func (builder *QueryBuilder) aggregateMembershipFactNDV(fact *plan.Node, key *plan.Expr, fullDomain bool) float64 {
+func (builder *QueryBuilder) aggregateMembershipFactNDV(fact *plan.Node, key *plan.Expr, reestimated bool) float64 {
 	if fact.Stats == nil {
 		return -1
 	}
 	key = DeepCopyExpr(key)
 	ndv := math.Min(getExprNdv(key, builder), fact.Stats.Outcnt)
-	if !fullDomain {
+	if !reestimated {
 		return ndv
 	}
 	col := key.GetCol()
@@ -347,7 +347,7 @@ func (builder *QueryBuilder) aggregateMembershipFactNDV(fact *plan.Node, key *pl
 		return ndv
 	}
 	// An equality SEMI does not match NULL keys.
-	return boundNDVByIntegerSpan(ndv, types.T(key.Typ.Id), lo, hi, false)
+	return boundNDVByExactIntegerSpan(ndv, types.T(key.Typ.Id), lo, hi, false)
 }
 
 func membershipPredicateMatchesAll(expr *plan.Expr, scanTag int32) bool {

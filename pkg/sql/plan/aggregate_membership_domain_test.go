@@ -157,6 +157,8 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 		name           string
 		predicate      string
 		partRows       float64
+		partKeyNDV     float64
+		keyType        types.T
 		metadataStats  bool
 		missingPartNDV bool
 		restricted     bool
@@ -165,6 +167,20 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 		{name: "single-percent", predicate: "p_name like '%'"},
 		{name: "small-domain-single-percent", predicate: "p_name like '%'", partRows: 1000, restricted: true},
 		{name: "metadata-full-domain", predicate: "p_name like '%'", metadataStats: true},
+		{name: "metadata-near-full-domain", predicate: "p_name like '%' and p_partkey between 1 and 19998", metadataStats: true},
+		{name: "metadata-near-full-domain-underestimated-primary-key", predicate: "p_name like '%' and p_partkey between 1 and 19998",
+			partKeyNDV: 1000, metadataStats: true},
+		{name: "metadata-bigint-full-domain", predicate: "p_name like '%'", keyType: types.T_int64, metadataStats: true},
+		{name: "metadata-unsigned-near-full-domain", predicate: "p_name like '%' and p_partkey between 1 and 19998",
+			keyType: types.T_uint64, metadataStats: true},
+		{name: "metadata-inclusive-lower-bound", predicate: "p_name like '%' and p_partkey >= 1", metadataStats: true},
+		{name: "metadata-inclusive-upper-bound", predicate: "p_name like '%' and p_partkey <= 20000", metadataStats: true},
+		{name: "metadata-strict-outside-bound", predicate: "p_name like '%' and p_partkey > 0", metadataStats: true},
+		{name: "metadata-strict-edge-bound", predicate: "p_name like '%' and p_partkey < 20000", metadataStats: true},
+		{name: "metadata-nested-range-disjunction", predicate: "p_name like '%' and (p_partkey >= 1 or p_name = 'cherry')", metadataStats: true},
+		{name: "metadata-selective-single-range", predicate: "p_name like '%' and p_partkey <= 1000", metadataStats: true, restricted: true},
+		{name: "metadata-selective-range", predicate: "p_name like '%' and p_partkey between 1 and 1000", metadataStats: true, restricted: true},
+		{name: "metadata-range-without-wildcard", predicate: "p_partkey between 1 and 19998", metadataStats: true, restricted: true},
 		{name: "metadata-small-primary-key-domain", predicate: "p_name like '%'", partRows: 1000, metadataStats: true, missingPartNDV: true, restricted: true},
 		{name: "metadata-small-primary-key-domain-with-range", predicate: "p_name like '%' and p_partkey between 1 and 1000",
 			partRows: 1000, metadataStats: true, missingPartNDV: true, restricted: true},
@@ -191,11 +207,22 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 				rows := map[string]float64{"part": partRows, "partsupp": 80000, "lineitem": 6000000, "supplier": 1000, "nation": 25}[name]
 				s := &statsinfo.StatsInfo{TableCnt: rows, BlockNumber: 1, TableName: name,
 					NdvMap: map[string]float64{}, SizeMap: map[string]uint64{}, DataTypeMap: map[string]uint64{}}
+				keyName := map[string]string{"part": "p_partkey", "partsupp": "ps_partkey", "lineitem": "l_partkey"}[name]
 				for _, col := range table.Cols {
+					if tc.keyType != types.T_any && col.Name == keyName {
+						col.Typ.Id = int32(tc.keyType)
+					}
 					s.NdvMap[col.Name], s.SizeMap[col.Name], s.DataTypeMap[col.Name] = rows, uint64(rows*8), uint64(col.Typ.Id)
 				}
 				switch name {
 				case "part":
+					if tc.partKeyNDV > 0 {
+						s.NdvMap["p_partkey"] = tc.partKeyNDV
+					}
+					if tc.metadataStats && !tc.missingPartNDV {
+						s.MinValMap = map[string]float64{"p_partkey": 1}
+						s.MaxValMap = map[string]float64{"p_partkey": partRows}
+					}
 					if tc.missingPartNDV {
 						// A small table can have a transient row count before column statistics are published.
 						delete(s.NdvMap, "p_partkey")
@@ -492,16 +519,16 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 
 func TestAggregateMembershipFactNDVRequiresPublishedRange(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		tableName  string
-		tableRows  float64
-		fullDomain bool
-		wantNDV    float64
+		name        string
+		tableName   string
+		tableRows   float64
+		reestimated bool
+		wantNDV     float64
 	}{
-		{name: "published", tableName: "fact", tableRows: 100000, fullDomain: true, wantNDV: 20000},
-		{name: "transient", tableRows: 100000, fullDomain: true, wantNDV: 60144},
-		{name: "inconsistent-row-count", tableName: "fact", tableRows: 100001, fullDomain: true, wantNDV: 60144},
-		{name: "filtered-domain", tableName: "fact", tableRows: 100000, wantNDV: 60144},
+		{name: "published", tableName: "fact", tableRows: 100000, reestimated: true, wantNDV: 20000},
+		{name: "transient", tableRows: 100000, reestimated: true, wantNDV: 60144},
+		{name: "inconsistent-row-count", tableName: "fact", tableRows: 100001, reestimated: true, wantNDV: 60144},
+		{name: "original-scan-estimate", tableName: "fact", tableRows: 100000, wantNDV: 60144},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, _ := aggregateMembershipTestBuilder(t)
@@ -514,7 +541,7 @@ func TestAggregateMembershipFactNDVRequiresPublishedRange(t *testing.T) {
 				MaxValMap:   map[string]float64{"part": 20000},
 				DataTypeMap: map[string]uint64{"part": uint64(types.T_int32)},
 			})
-			require.Equal(t, tc.wantNDV, b.aggregateMembershipFactNDV(fact, agg.GroupBy[0], tc.fullDomain))
+			require.Equal(t, tc.wantNDV, b.aggregateMembershipFactNDV(fact, agg.GroupBy[0], tc.reestimated))
 		})
 	}
 }
