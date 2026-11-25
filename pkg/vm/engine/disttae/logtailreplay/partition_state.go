@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"go.uber.org/zap"
 
@@ -399,7 +398,7 @@ func (p *PartitionState) GetEnd() types.TS {
 }
 
 func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
-	data, _ := batch.ProtoBatchToBatch(entry.Bat, nil)
+	data, _ := batch.ViewBinary(entry.Bat)
 	logutil.Info(
 		msg,
 		zap.String("table-name", entry.TableName),
@@ -683,7 +682,7 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			p.replayImmutableInsert(ctx, entry.Bat, primarySeqnum, packer, keys...)
+			p.HandleRowsInsert(ctx, entry.Bat, entry.Attrs, primarySeqnum, packer, pool, keys...)
 		}
 
 	case api.Entry_Delete:
@@ -716,24 +715,12 @@ func (p *PartitionState) HandleDataObjectList(
 
 	var numDeleted, blockDeleted int64
 
-	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
-	defer statsVec.Free(pool)
-
-	vec := mustVectorFromProto(ee.Bat.Vecs[5])
-	defer vec.Free(pool)
-	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[6])
-	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[7])
-	defer vec.Free(pool)
-	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[9])
-	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
+	objBat := mustViewEntryBatch(ee.Bat)
+	statsVec := objBat.Vecs[2]
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[7])
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[9])
 
 	for idx := 0; idx < statsVec.Length(); idx++ {
 		if t := commitTSCol[idx]; t.GT(&p.lastFlushTimestamp) {
@@ -838,24 +825,12 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	var clusterPacker types.Packer
 	defer clusterPacker.Close()
 
-	statsVec := mustVectorFromProto(ee.Bat.Vecs[2])
-	defer statsVec.Free(pool)
-
-	vec := mustVectorFromProto(ee.Bat.Vecs[5])
-	defer vec.Free(pool)
-	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[6])
-	defer vec.Free(pool)
-	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[7])
-	defer vec.Free(pool)
-	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
-
-	vec = mustVectorFromProto(ee.Bat.Vecs[9])
-	defer vec.Free(pool)
-	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](vec)
+	objBat := mustViewEntryBatch(ee.Bat)
+	statsVec := objBat.Vecs[2]
+	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
+	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])
+	startTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[7])
+	commitTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[9])
 
 	var tbIter = p.inMemTombstoneRowIdIndex.Copy().Iter()
 	defer tbIter.Release()
@@ -942,24 +917,21 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 func (p *PartitionState) HandleRowsDelete(
 	ctx context.Context,
-	input *api.Batch,
+	input []byte,
 	packer *types.Packer,
 	_ *mpool.MPool,
 ) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleRowsDelete")
 	defer task.End()
 
-	sourceBatch, err := batch.ProtoBatchToBatch(input, nil)
-	if err != nil {
-		panic(err)
-	}
+	sourceBatch := mustViewEntryBatch(input)
 	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
 	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
 	tbRowIdVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[3])
 	replayed := &ReplayBatch{Batch: sourceBatch}
 
 	var primaryKeys [][]byte
-	if len(input.Vecs) > 2 {
+	if len(sourceBatch.Vecs) > 2 {
 		// has primary key
 		primaryKeys = readutil.EncodePrimaryKeyVector(
 			sourceBatch.Vecs[2],
@@ -1042,27 +1014,16 @@ func (p *PartitionState) HandleRowsDelete(
 	})
 }
 
+// HandleRowsInsert replays an encoded batch of inserted rows whose columns
+// attrs names. The partition state keeps read-only views of input, so input
+// must not be modified afterwards.
 func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
-	input *api.Batch,
+	input []byte,
+	attrs []string,
 	primarySeqnum int,
 	packer *types.Packer,
 	_ *mpool.MPool,
-	keys ...*readutil.ClusterKeyDescriptor,
-) [][]byte {
-	// Local callers (notably catalog bootstrap) can pass a shallow
-	// BatchToProtoBatch view of mutable engine vectors. Detach before retaining.
-	if !p.noData {
-		input = proto.Clone(input).(*api.Batch)
-	}
-	return p.replayImmutableInsert(ctx, input, primarySeqnum, packer, keys...)
-}
-
-func (p *PartitionState) replayImmutableInsert(
-	ctx context.Context,
-	input *api.Batch,
-	primarySeqnum int,
-	packer *types.Packer,
 	keys ...*readutil.ClusterKeyDescriptor,
 ) (
 	primaryKeys [][]byte,
@@ -1072,18 +1033,15 @@ func (p *PartitionState) replayImmutableInsert(
 
 	// Snapshots share RowEntry batches. Their immutable payload must follow
 	// Go reachability: removing a row is not a last-owner notification.
-	sourceBatch, err := batch.ProtoBatchToBatch(input, nil)
-	if err != nil {
-		panic(err)
-	}
+	sourceBatch := mustViewEntryBatch(input)
 	rowIDVector := vector.MustFixedColWithTypeCheck[types.Rowid](sourceBatch.Vecs[0])
 	timeVector := vector.MustFixedColWithTypeCheck[types.TS](sourceBatch.Vecs[1])
-	replayed := &ReplayBatch{Batch: sourceBatch, Attrs: input.Attrs}
+	replayed := &ReplayBatch{Batch: sourceBatch, Attrs: attrs}
 	primaryKeys = readutil.EncodePrimaryKeyVector(
 		sourceBatch.Vecs[2+primarySeqnum],
 		packer,
 	)
-	clusterKeys := p.encodeClusterKeys(sourceBatch, input.Attrs, packer, keys)
+	clusterKeys := p.encodeClusterKeys(sourceBatch, attrs, packer, keys)
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
@@ -1136,7 +1094,7 @@ func (p *PartitionState) replayImmutableInsert(
 		}
 	}
 	if !p.noData {
-		// ProtoBatchToBatch borrows the input vector bytes. RowEntry owns
+		// The decoded vectors are views of the input bytes. RowEntry owns
 		// the physical RowID and commit time, so release the decoded vectors'
 		// references after the entire replay loop has consumed them. Their
 		// types and positions remain for existing in-memory column readers.

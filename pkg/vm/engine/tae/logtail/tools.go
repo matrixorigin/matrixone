@@ -20,12 +20,10 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -205,7 +203,18 @@ func filterAbortedLogtailRows(src *containers.BatchWithVersion) {
 	}
 }
 
-func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.ToCNBatch(bat)
-	return batch.BatchToProtoBatch(mobat, bat.Attrs)
+// marshalContainersBatch encodes bat for an api.Entry, whose attrs are
+// bat.Attrs. The bytes are a copy: the entry does not alias bat.
+//
+// A dropped column's placeholder (AppendPlaceholder) is an empty vector; it
+// is encoded as a constant null of the batch's length, so every vector of
+// the entry holds its row count and the column keeps its seqnum position.
+func marshalContainersBatch(bat *containers.Batch) ([]byte, error) {
+	cnBat := containers.ToCNBatch(bat)
+	for i, vec := range bat.Vecs {
+		if vec == containers.EMPTY_VECTOR {
+			cnBat.Vecs[i] = vector.NewConstNull(*vec.GetType(), bat.Length(), nil)
+		}
+	}
+	return cnBat.MarshalBinary()
 }

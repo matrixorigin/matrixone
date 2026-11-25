@@ -21,6 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
@@ -178,18 +182,42 @@ func runLegacyDualDecode(req *txnpb.TxnCommitRequest) {
 }
 
 func makeBenchmarkPayload(entryCount int) []byte {
-	vecs := make([]api.Vector, 4)
+	// Four 64-row columns: fixed int32 data and a varchar with an area, about
+	// the size of the payload this benchmark has always decoded.
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vecs := make([]*vector.Vector, 4)
 	for i := range vecs {
-		vecs[i] = api.Vector{Data: make([]byte, 256), Area: make([]byte, 512), Len: 64}
+		if i%2 == 0 {
+			vecs[i] = vector.NewVec(types.T_int32.ToType(), mp)
+		} else {
+			vecs[i] = vector.NewVec(types.T_varchar.ToType(), mp)
+		}
+		for row := 0; row < 64; row++ {
+			var err error
+			if i%2 == 0 {
+				err = vector.AppendFixed(vecs[i], int32(row), false, mp)
+			} else {
+				err = vector.AppendBytes(vecs[i], make([]byte, 32), false, mp)
+			}
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+	bat, err := batch.MarshalVectors(vecs)
+	for _, vec := range vecs {
+		vec.Free(mp)
+	}
+	if err != nil {
+		panic(err)
 	}
 	entries := make([]*api.Entry, entryCount)
 	for i := range entries {
 		entries[i] = &api.Entry{
 			PkCheckByTn: int32(i % 2),
-			Bat: &api.Batch{
-				Attrs: []string{"a", "b", "c", "d"},
-				Vecs:  vecs,
-			},
+			Attrs:       []string{"a", "b", "c", "d"},
+			Bat:         bat,
 		}
 	}
 	payload, err := (&api.PrecommitWriteCmd{EntryList: entries}).MarshalBinary()

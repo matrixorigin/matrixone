@@ -199,12 +199,13 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		ebat = e.bat
 		eattrs = e.attrs
 	}
-	bat, err := toPBBatch(ebat, eattrs)
+	bat, err := batch.MarshalVectors(ebat.Vecs)
 	if err != nil {
 		return nil, err
 	}
 	return &api.Entry{
 		Bat:                bat,
+		Attrs:              eattrs,
 		EntryType:          typ,
 		TableId:            e.tableId,
 		DatabaseId:         e.databaseId,
@@ -215,22 +216,6 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		AutoIncrEpoch:      e.autoIncrEpoch,
 		AutoIncrEpochKnown: e.autoIncrEpochKnown,
 	}, nil
-}
-
-func toPBBatch(bat *batch.Batch, attrs []string) (*api.Batch, error) {
-	rbat := new(api.Batch)
-	rbat.Attrs = attrs
-	if len(bat.Vecs) > 0 {
-		rbat.Vecs = make([]api.Vector, len(bat.Vecs))
-	}
-	for i, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			return nil, err
-		}
-		rbat.Vecs[i] = pbVector
-	}
-	return rbat, nil
 }
 
 func getSql(ctx context.Context) string {
@@ -288,9 +273,10 @@ func genTableKey(
 }
 
 // PXU TODO: optimize me
-// fillRandomRowidAndZeroTs modifies the input batch and returns the proto batch as a shallow copy.
-// batAttrs names bat's columns.
-func fillRandomRowidAndZeroTs(bat *batch.Batch, batAttrs []string, m *mpool.MPool) (*api.Batch, error) {
+// fillRandomRowidAndZeroTs puts a random rowid and a zero commit-ts vector
+// in front of bat's vectors, and returns the result encoded as a batch,
+// together with its column names. batAttrs names bat's columns.
+func fillRandomRowidAndZeroTs(bat *batch.Batch, batAttrs []string, m *mpool.MPool) ([]byte, []string, error) {
 	var attrs []string
 	vecs := make([]*vector.Vector, 0, 2)
 
@@ -300,7 +286,7 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, batAttrs []string, m *mpool.MPoo
 			val := types.RandomRowid()
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				vec.Free(m)
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		vecs = append(vecs, vec)
@@ -314,14 +300,18 @@ func fillRandomRowidAndZeroTs(bat *batch.Batch, batAttrs []string, m *mpool.MPoo
 			if err := vector.AppendFixed(vec, val, false, m); err != nil {
 				vecs[0].Free(m)
 				vec.Free(m)
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		vecs = append(vecs, vec)
 		attrs = append(attrs, catalog.TableTailAttrCommitTs)
 	}
 	bat.Vecs = append(vecs, bat.Vecs...)
-	return batch.BatchToProtoBatch(bat, append(attrs, batAttrs...))
+	data, err := batch.MarshalVectors(bat.Vecs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, append(attrs, batAttrs...), nil
 }
 
 // PXU TODO: refactor me

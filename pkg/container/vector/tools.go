@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -237,63 +236,6 @@ func extendWithBitmaps(
 	}
 	v.data = v.data[:cap(v.data)]
 	return nil
-}
-
-func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
-	nsp, err := vec.nsp.Show()
-	if err != nil {
-		return
-	}
-	sz := vec.typ.TypeSize()
-	physicalRows := vec.length
-	if vec.IsConst() {
-		physicalRows = min(physicalRows, 1)
-		if vec.IsConstNull() {
-			physicalRows = 0
-		}
-	}
-	return api.Vector{
-		Nsp:      nsp,
-		Nullable: true,
-		Area:     vec.area,
-		IsConst:  vec.IsConst(),
-		Len:      uint32(vec.length),
-		Type:     TypeToProtoType(vec.typ),
-		// Data:     vec.data,
-		Data: vec.data[:physicalRows*sz],
-	}, nil
-}
-
-// ProtoVectorToVector copies vec into a new vector allocated from mp. With a
-// nil mp the result is a read-only reference to vec's buffers.
-func ProtoVectorToVector(vec api.Vector, mp *mpool.MPool) (*Vector, error) {
-	typ, err := types.TypeFromPlan(vec.Type)
-	if err != nil {
-		return nil, err
-	}
-	var decoded Vector
-	decoded.area = vec.Area
-	decoded.length = int(vec.Len)
-	decoded.typ = typ
-	if vec.IsConst {
-		decoded.class = CONSTANT
-	} else {
-		decoded.class = FLAT
-	}
-	if err := decoded.nsp.Read(vec.Nsp); err != nil {
-		return nil, err
-	}
-	if !decoded.IsConst() || !decoded.nsp.Contains(0) {
-		decoded.data = vec.Data
-	}
-	if mp == nil {
-		return &decoded, nil
-	}
-	rvec := NewVec(typ, mp)
-	if err := rvec.copyDecoded(&decoded); err != nil {
-		return nil, err
-	}
-	return rvec, nil
 }
 
 func TypeToProtoType(typ types.Type) plan.Type {

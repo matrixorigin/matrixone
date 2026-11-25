@@ -15,41 +15,47 @@
 package batch
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-// BatchToProtoBatch converts bat to its protobuf form. attrs names bat's
-// columns on the wire: a batch carries no names of its own.
-func BatchToProtoBatch(bat *Batch, attrs []string) (*api.Batch, error) {
-	rbat := new(api.Batch)
-	rbat.Attrs = attrs
-	if len(bat.Vecs) > 0 {
-		rbat.Vecs = make([]api.Vector, len(bat.Vecs))
+// MarshalVectors encodes vecs as one batch whose row count is the length of
+// the first vector. Only the vectors are encoded: no extra buffer, and a
+// zero Recursive and ShuffleIDX.
+func MarshalVectors(vecs []*vector.Vector) ([]byte, error) {
+	bat := Batch{Vecs: vecs}
+	if len(vecs) > 0 {
+		bat.rowCount = vecs[0].Length()
 	}
-	for i, vec := range bat.Vecs {
-		pbVector, err := vector.VectorToProtoVector(vec)
-		if err != nil {
-			return nil, err
-		}
-		rbat.Vecs[i] = pbVector
-	}
-	return rbat, nil
-
+	return bat.MarshalBinary()
 }
 
-// ProtoBatchToBatch copies bat into vectors of mp. With a nil mp the vectors
-// are read-only references to bat's buffers.
-func ProtoBatchToBatch(bat *api.Batch, mp *mpool.MPool) (*Batch, error) {
-	rbat := NewWithSize(len(bat.Vecs))
-	for i, v := range bat.Vecs {
-		vec, err := vector.ProtoVectorToVector(v, mp)
-		if err != nil {
-			return nil, err
-		}
-		rbat.SetVector(int32(i), vec)
+// ViewBinary decodes data, a MarshalBinary encoding, into a new batch whose
+// vectors and extra buffer are read-only views of data. Every vector must
+// hold the batch's row count.
+func ViewBinary(data []byte) (*Batch, error) {
+	bat := NewWithSize(0)
+	if err := bat.UnmarshalBinary(data); err != nil {
+		return nil, err
 	}
-	rbat.SetRowCount(rbat.GetVector(0).Length())
-	return rbat, nil
+	if err := bat.CheckLength(); err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("batch vector length does not match row count")
+	}
+	return bat, nil
+}
+
+// EncodedRowCount returns the row count of a MarshalBinary encoding without
+// decoding its vectors.
+func EncodedRowCount(data []byte) (int, error) {
+	if len(data) < 8 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	rows := types.DecodeInt64(data[:8])
+	if rows < 0 || int64(int(rows)) != rows {
+		return 0, moerr.NewInvalidInputNoCtx("invalid batch row count")
+	}
+	return int(rows), nil
 }

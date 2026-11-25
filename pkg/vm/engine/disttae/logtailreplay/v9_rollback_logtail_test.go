@@ -61,13 +61,13 @@ func TestV9RollbackSentinelDoesNotReachPartitionState(t *testing.T) {
 
 	logtailBatch := logtail.DataChangeToLogtailBatch(src)
 	require.Equal(t, 1, logtailBatch.Length())
-	protoBatch, err := batch.BatchToProtoBatch(containers.ToCNBatch(logtailBatch), logtailBatch.Attrs)
+	encoded, err := batch.MarshalVectors(containers.ToCNBatch(logtailBatch).Vecs)
 	require.NoError(t, err)
 
 	state := logtailreplay.NewPartitionState("test", false, 42, false)
 	packer := types.NewPacker()
 	defer packer.Close()
-	state.HandleRowsInsert(context.Background(), protoBatch, 0, packer, mp)
+	state.HandleRowsInsert(context.Background(), encoded, logtailBatch.Attrs, 0, packer, mp)
 
 	packer.Reset()
 	abortedKey := readutil.EncodePrimaryKey(int64(42), packer)

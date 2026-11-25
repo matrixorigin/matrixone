@@ -3235,7 +3235,7 @@ func (e *Engine) captureReplayClusterKey(tail *logtail.TableLogtail, at timestam
 		if entry.EntryType != api.Entry_Insert || entry.Bat == nil || logtailreplay.IsMetaEntry(entry.TableName) {
 			continue
 		}
-		for _, attr := range entry.Bat.Attrs {
+		for _, attr := range entry.Attrs {
 			if strings.HasPrefix(attr, catalog.PrefixCBColName) {
 				candidate = true
 				break

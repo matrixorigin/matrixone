@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -55,10 +56,15 @@ func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail
 	for _, tail := range tails {
 		s = fmt.Sprintf("%s\nts %v, dbid %d, tid %d,entries cnt %d", s, tail.Ts, tail.Table.DbId, tail.Table.TbId, len(tail.Commands))
 		for _, entry := range tail.Commands {
+			bat, err := batch.ViewBinary(entry.Bat)
+			if err != nil {
+				s = fmt.Sprintf("%s\n    db name %s, table name %s: %v", s, entry.DatabaseName, entry.TableName, err)
+				continue
+			}
 			s = fmt.Sprintf("%s\n    db name %s, table name %s, insert %v, batch length %d\n    %v",
-				s, entry.DatabaseName, entry.TableName, entry.EntryType == api.Entry_Insert, entry.Bat.Vecs[0].Len, entry.Bat.Attrs)
-			for i, vec := range entry.Bat.Vecs {
-				s = fmt.Sprintf("%s\n        %v, type %v, len %d", s, entry.Bat.Attrs[i], vec.Type, vec.Len)
+				s, entry.DatabaseName, entry.TableName, entry.EntryType == api.Entry_Insert, bat.RowCount(), entry.Attrs)
+			for i, vec := range bat.Vecs {
+				s = fmt.Sprintf("%s\n        %v, type %v, len %d", s, entry.Attrs[i], vec.GetType(), vec.Length())
 			}
 		}
 	}

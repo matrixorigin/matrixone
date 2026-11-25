@@ -57,14 +57,14 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Insert {
-			return &CreateDatabaseReq{Bat: bat, Attrs: e.Bat.Attrs, Cmds: genCreateDatabases(GenRows(bat))}, es[1:], nil
+			return &CreateDatabaseReq{Bat: bat, Attrs: e.Attrs, Cmds: genCreateDatabases(GenRows(bat))}, es[1:], nil
 		}
-		return &DropDatabaseReq{Bat: bat, Attrs: e.Bat.Attrs, Cmds: genDropDatabases(GenRows(bat))}, es[1:], nil
+		return &DropDatabaseReq{Bat: bat, Attrs: e.Attrs, Cmds: genDropDatabases(GenRows(bat))}, es[1:], nil
 	}
 
 	if e.DatabaseId == MO_CATALOG_ID && e.TableId == MO_TABLES_ID {
 		if e.TableName == "alter" {
-			bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
+			bat, err := batch.ViewBinary(e.Bat)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -80,15 +80,15 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 				return &CreateTableReq{
 					TableBat:    bat,
 					ColumnBat:   []*batch.Batch{colBat},
-					TableAttrs:  e.Bat.Attrs,
-					ColumnAttrs: [][]string{es[1].Bat.Attrs},
+					TableAttrs:  e.Attrs,
+					ColumnAttrs: [][]string{es[1].Attrs},
 				}, es[2:], nil
 			} else {
 				return &DropTableReq{
 					TableBat:    bat,
 					ColumnBat:   []*batch.Batch{colBat},
-					TableAttrs:  e.Bat.Attrs,
-					ColumnAttrs: [][]string{es[1].Bat.Attrs},
+					TableAttrs:  e.Attrs,
+					ColumnAttrs: [][]string{es[1].Attrs},
 				}, es[2:], nil
 			}
 		}
@@ -105,7 +105,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		if e.TableName == MO_COLUMNS_UPDATE {
 			return e, es[1:], nil
 		}
-		bat, _ := batch.ProtoBatchToBatch(e.Bat, nil)
+		bat, _ := batch.ViewBinary(e.Bat)
 		batstr := ""
 		if bat != nil {
 			batstr = common.MoBatchToString(bat, 5)
@@ -113,7 +113,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		return nil, nil, moerr.NewInternalErrorNoCtxf("bad write format %q, %v, batch %s", e.EntryType, len(es), batstr)
 	}
 	if e.EntryType == api.Entry_Alter {
-		bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
+		bat, err := batch.ViewBinary(e.Bat)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -141,54 +141,34 @@ func parseDatabaseEntryBatch(e *api.Entry) (*batch.Batch, error) {
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry type %d", e.EntryType)
 	}
-	if e.Bat == nil || len(e.Bat.Vecs) != len(attrs) || len(e.Bat.Attrs) != len(attrs) {
+	if len(e.Attrs) != len(attrs) {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry width: expected %d columns", len(attrs))
 	}
 	for i, attr := range attrs {
-		if e.Bat.Attrs[i] != attr {
+		if e.Attrs[i] != attr {
 			return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry column %d", i)
 		}
-		// ProtoBatchToBatch decodes types and null bitmaps with unchecked
-		// indexing. Reject malformed DDL vectors before that conversion.
-		vec := &e.Bat.Vecs[i]
-		if types.T(vec.Type.Id) != oids[i] || len(vec.Nsp) != 0 {
-			return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry vector %d", i)
-		}
 	}
-	bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
+	// ViewBinary checks the encoding itself: data sizes, varlen offsets and
+	// that every vector holds the row count.
+	bat, err := batch.ViewBinary(e.Bat)
 	if err != nil {
 		return nil, err
 	}
-	rows := bat.RowCount()
+	if len(bat.Vecs) != len(attrs) {
+		return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry width: expected %d columns", len(attrs))
+	}
 	for i, oid := range oids {
 		vec := bat.Vecs[i]
-		if vec == nil || vec.GetType().Oid != oid || vec.IsConst() || vec.Length() != rows || vec.GetNulls().Any() {
+		if vec.GetType().Oid != oid || vec.IsConst() || vec.GetNulls().Any() {
 			return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry vector %d", i)
-		}
-		size := vec.GetType().TypeSize()
-		data := vec.GetData()
-		if size <= 0 || rows > len(data)/size {
-			return nil, moerr.NewInvalidInputNoCtxf("short mo_database entry vector %d", i)
-		}
-		if oid == types.T_varchar {
-			area := vec.GetArea()
-			for row := 0; row < rows; row++ {
-				var value types.Varlena
-				copy(value[:], data[row*size:(row+1)*size])
-				if !value.IsSmall() {
-					offset, length := value.OffsetLen()
-					if uint64(offset)+uint64(length) > uint64(len(area)) {
-						return nil, moerr.NewInvalidInputNoCtxf("invalid mo_database entry value in column %d", i)
-					}
-				}
-			}
 		}
 	}
 	return bat, nil
 }
 
 func parseDeleteTable(es []*api.Entry) (any, []*api.Entry, error) {
-	bat, err := batch.ProtoBatchToBatch(es[0].Bat, nil)
+	bat, err := batch.ViewBinary(es[0].Bat)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -201,13 +181,13 @@ func parseDeleteTable(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		colBatch = append(colBatch, cbat)
-		colAttrs = append(colAttrs, es[i+1].Bat.Attrs)
+		colAttrs = append(colAttrs, es[i+1].Attrs)
 	}
 	req := &DropTableReq{
 		Cmds:        cmds,
 		TableBat:    bat,
 		ColumnBat:   colBatch,
-		TableAttrs:  es[0].Bat.Attrs,
+		TableAttrs:  es[0].Attrs,
 		ColumnAttrs: colAttrs,
 	}
 
@@ -215,7 +195,7 @@ func parseDeleteTable(es []*api.Entry) (any, []*api.Entry, error) {
 }
 
 func parseCreateTable(es []*api.Entry) (any, []*api.Entry, error) {
-	bat, err := batch.ProtoBatchToBatch(es[0].Bat, nil)
+	bat, err := batch.ViewBinary(es[0].Bat)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -229,13 +209,13 @@ func parseCreateTable(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		colBatch = append(colBatch, cbat)
-		colAttrs = append(colAttrs, es[i+1].Bat.Attrs)
+		colAttrs = append(colAttrs, es[i+1].Attrs)
 	}
 	req := &CreateTableReq{
 		Cmds:        cmds,
 		TableBat:    bat,
 		ColumnBat:   colBatch,
-		TableAttrs:  es[0].Bat.Attrs,
+		TableAttrs:  es[0].Attrs,
 		ColumnAttrs: colAttrs,
 	}
 
@@ -243,7 +223,7 @@ func parseCreateTable(es []*api.Entry) (any, []*api.Entry, error) {
 }
 
 func getColumnBatch(e *api.Entry) (*batch.Batch, error) {
-	bat, err := batch.ProtoBatchToBatch(e.Bat, nil)
+	bat, err := batch.ViewBinary(e.Bat)
 	if err != nil {
 		return nil, err
 	}

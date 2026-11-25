@@ -26,6 +26,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -1068,8 +1069,8 @@ func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLo
 	metaChanges := 0
 	for i := range tail.Commands {
 		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
-			if tail.Commands[i].Bat != nil && len(tail.Commands[i].Bat.Vecs) > 0 {
-				metaChanges += int(tail.Commands[i].Bat.Vecs[0].Len)
+			if rows, err := batch.EncodedRowCount(tail.Commands[i].Bat); err == nil {
+				metaChanges += rows
 			}
 		}
 	}

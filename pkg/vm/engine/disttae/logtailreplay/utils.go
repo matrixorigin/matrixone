@@ -17,8 +17,7 @@ package logtailreplay
 import (
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 func IsMetaEntry(tblName string) bool {
@@ -60,18 +59,12 @@ func IsTransferredDels(name string) bool {
 	return strings.HasPrefix(name, "trans_del")
 }
 
-func mustVectorFromProto(v api.Vector) *vector.Vector {
-	ret, err := vector.ProtoVectorToVector(v, nil)
+// mustViewEntryBatch decodes the batch of a logtail entry as read-only views
+// of data. A malformed entry is a TN bug, and replay cannot continue past it.
+func mustViewEntryBatch(data []byte) *batch.Batch {
+	bat, err := batch.ViewBinary(data)
 	if err != nil {
 		panic(err)
 	}
-	return ret
-}
-
-func mustVectorToProto(v *vector.Vector) api.Vector {
-	ret, err := vector.VectorToProtoVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
+	return bat
 }

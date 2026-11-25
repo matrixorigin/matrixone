@@ -486,7 +486,7 @@ func (h *Handle) apiEntryToWriteEntry(
 	prefetch bool,
 ) *cmd_util.WriteReq {
 
-	moBat, err := batch.ProtoBatchToBatch(pe.GetBat(), nil)
+	moBat, err := batch.ViewBinary(pe.GetBat())
 	if err != nil {
 		panic(err)
 	}
@@ -501,7 +501,7 @@ func (h *Handle) apiEntryToWriteEntry(
 		AutoIncrEpochKnown: pe.GetAutoIncrEpochKnown(),
 		FileName:           pe.GetFileName(),
 		Batch:              moBat,
-		Attrs:              pe.GetBat().GetAttrs(),
+		Attrs:              pe.GetAttrs(),
 		PkCheck:            cmd_util.PKCheckType(pe.GetPkCheckByTn()),
 	}
 

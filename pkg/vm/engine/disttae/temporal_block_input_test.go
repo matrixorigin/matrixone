@@ -515,15 +515,15 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(rows.Vecs[2], uint64(1), false, mp))
 				require.NoError(t, vector.AppendFixed(rows.Vecs[3], id, false, mp))
 				rows.SetRowCount(1)
-				proto, err := batch.BatchToProtoBatch(rows, nil)
+				encoded, err := rows.MarshalBinary()
 				require.NoError(t, err)
 				packer := types.NewPacker()
 				defer packer.Close()
 				if tombstone {
-					ps.HandleRowsDelete(f.ctx, proto, packer, mp)
+					ps.HandleRowsDelete(f.ctx, encoded, packer, mp)
 					require.Positive(t, ps.ApproxInMemTombstones())
 				} else {
-					ps.HandleRowsInsert(f.ctx, proto, 0, packer, mp)
+					ps.HandleRowsInsert(f.ctx, encoded, nil, 0, packer, mp)
 					require.Positive(t, ps.ApproxInMemRows())
 				}
 			}()

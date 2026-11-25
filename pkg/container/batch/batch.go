@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -66,8 +67,55 @@ func (bat *Batch) CheckLength() error {
 // run the same binary (shutdown upgrade only) and the bytes are never
 // persisted, so the format carries no version or legacy sections.
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	var w bytes.Buffer
-	return bat.MarshalBinaryWithBuffer(&w, false)
+	var w binaryAppender
+	if err := bat.MarshalBinaryTo(&w); err != nil {
+		return nil, err
+	}
+	return w.buf, nil
+}
+
+// binaryAppender is the writer MarshalBinary encodes into. MarshalBinaryTo
+// sizes it exactly through EnsureCapacity, and the typed writes keep the
+// small headers from escaping to the heap through io.Writer.
+type binaryAppender struct {
+	buf []byte
+}
+
+func (a *binaryAppender) Len() int { return len(a.buf) }
+
+func (a *binaryAppender) EnsureCapacity(n int) error {
+	a.buf = slices.Grow(a.buf, n-len(a.buf))
+	return nil
+}
+
+func (a *binaryAppender) Write(p []byte) (int, error) {
+	a.buf = append(a.buf, p...)
+	return len(p), nil
+}
+
+func (a *binaryAppender) WriteByte(v byte) error {
+	a.buf = append(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteUint32(v uint32) error {
+	a.buf = binary.NativeEndian.AppendUint32(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteInt32(v int32) error {
+	a.buf = binary.NativeEndian.AppendUint32(a.buf, uint32(v))
+	return nil
+}
+
+func (a *binaryAppender) WriteUint64(v uint64) error {
+	a.buf = binary.NativeEndian.AppendUint64(a.buf, v)
+	return nil
+}
+
+func (a *binaryAppender) WriteInt64(v int64) error {
+	a.buf = binary.NativeEndian.AppendUint64(a.buf, uint64(v))
+	return nil
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
