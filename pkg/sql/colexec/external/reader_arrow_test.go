@@ -615,6 +615,106 @@ func TestExternalArrowRetainsRecordOnlyForBorrowedOutput(t *testing.T) {
 		"only a borrowed batch keeps its own record's range admitted beside the next one")
 }
 
+// An import whose output is fully materialized needs one record's budget, not
+// one per record: the reader does not keep a record its published batch does
+// not borrow from, so reading ahead never holds two records' ranges at once.
+// The account limit is the peak usage of a one-record import of the same
+// shape; a multi-record import must complete within it. Date32 -> DATE always
+// materializes; the forced case materializes columns that could borrow.
+func TestExternalArrowMaterializedImportFitsOneRecordBudget(t *testing.T) {
+	type load struct {
+		peak uint64
+		rows int
+	}
+	run := func(t *testing.T, payload []byte, newParam func(fileservice.FileService, string, int64) *ExternalParam, limit uint64) (load, error) {
+		fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		path := "etl:materialized-budget.arrow"
+		require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+			FilePath: path,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(payload)), Data: payload}},
+		}))
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		proc := newArrowLoadTestProc(t)
+		arg := NewArgument().WithEs(newParam(fs, path, int64(len(payload))))
+		require.NoError(t, arg.SetAllocationAccount(account))
+		require.NoError(t, arg.Prepare(proc))
+
+		var got load
+		var runErr error
+		for {
+			result, err := arg.Call(proc)
+			if err != nil {
+				runErr = err
+				break
+			}
+			if result.Status == vm.ExecStop {
+				break
+			}
+			got.rows += result.Batch.RowCount()
+		}
+		arg.Free(proc, false, nil)
+		got.peak = account.Snapshot().Peak
+		require.Zero(t, account.Snapshot().Used, "every path releases the account")
+		require.NoError(t, arg.ClearAllocationAccount(account))
+		arg.Release()
+		account.Seal()
+		_, err = registry.Finalize(account)
+		require.NoError(t, err)
+		return got, runErr
+	}
+
+	cases := []struct {
+		name     string
+		payload  func(records int) []byte
+		newParam func(fileservice.FileService, string, int64) *ExternalParam
+	}{
+		{
+			name: "date32",
+			payload: func(records int) []byte {
+				return makeExternalArrowDate32IPC(t, records, 64)
+			},
+			newParam: func(fs fileservice.FileService, path string, size int64) *ExternalParam {
+				param := externalArrowParam(fs, path, size, tree.ARROW_CONTAINER_FILE)
+				param.Attrs = []plan.ExternAttr{{ColName: "d", ColIndex: 0, ColFieldIndex: 0}}
+				param.Cols = []*plan.ColDef{{Name: "d", Typ: plan.Type{Id: int32(types.T_date)}}}
+				return param
+			},
+		},
+		{
+			name: "forced",
+			payload: func(records int) []byte {
+				batches := make([][]int64, records)
+				for i := range batches {
+					batches[i] = []int64{int64(2*i + 1), int64(2*i + 2)}
+				}
+				return makeExternalArrowIPCWithRows(t, tree.ARROW_CONTAINER_FILE, batches)
+			},
+			newParam: func(fs fileservice.FileService, path string, size int64) *ExternalParam {
+				param := externalArrowParam(fs, path, size, tree.ARROW_CONTAINER_FILE)
+				param.ArrowForceMaterialize = true
+				return param
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			one, err := run(t, tc.payload(1), tc.newParam, 64<<20)
+			require.NoError(t, err)
+			require.Positive(t, one.peak)
+
+			const records = 3
+			many, err := run(t, tc.payload(records), tc.newParam, one.peak)
+			require.NoError(t, err, "a materialized import must fit one record's budget")
+			require.Equal(t, records*one.rows, many.rows)
+			require.LessOrEqual(t, many.peak, one.peak)
+		})
+	}
+}
+
 func TestExternalArrowPrepareFailsClosedBeforeIO(t *testing.T) {
 	proc := newArrowLoadTestProc(t)
 	for _, test := range []struct {
@@ -1251,5 +1351,28 @@ func makeExternalArrowIPCWithRows(t *testing.T, container string, batches [][]in
 		writeRecords(writer.Write)
 		require.NoError(t, writer.Close())
 	}
+	return append([]byte(nil), output.Bytes()...)
+}
+
+// makeExternalArrowDate32IPC writes an Arrow IPC file of records record
+// batches, each with rowsPerRecord Date32 values in column "d".
+func makeExternalArrowDate32IPC(t *testing.T, records, rowsPerRecord int) []byte {
+	t.Helper()
+	allocator := memory.NewGoAllocator()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "d", Type: arrow.FixedWidthTypes.Date32, Nullable: true}}, nil)
+	var output bytes.Buffer
+	writer, err := ipc.NewFileWriter(&output, ipc.WithSchema(schema), ipc.WithAllocator(allocator))
+	require.NoError(t, err)
+	for record := 0; record < records; record++ {
+		builder := array.NewRecordBuilder(allocator, schema)
+		for row := 0; row < rowsPerRecord; row++ {
+			builder.Field(0).(*array.Date32Builder).Append(arrow.Date32(19000 + record*rowsPerRecord + row))
+		}
+		batch := builder.NewRecordBatch()
+		require.NoError(t, writer.Write(batch))
+		batch.Release()
+		builder.Release()
+	}
+	require.NoError(t, writer.Close())
 	return append([]byte(nil), output.Bytes()...)
 }
