@@ -21,8 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -149,7 +147,7 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		err = rbat.UnmarshalBinary(data)
 		require.NoError(t, err)
 
-		require.Equal(t, tc.bat.ExtraBuf, rbat.ExtraBuf)
+		require.Equal(t, tc.bat.extraBuf, rbat.extraBuf)
 
 		for i, vec := range rbat.Vecs {
 			require.Equal(t, vector.MustFixedColWithTypeCheck[int8](tc.bat.Vecs[i]), vector.MustFixedColWithTypeCheck[int8](vec))
@@ -631,7 +629,7 @@ func newBatch(ts []types.Type, rows int) *Batch {
 		}
 	}
 
-	bat.ExtraBuf = []byte("extra buf")
+	bat.extraBuf = []byte("extra buf")
 	return bat
 }
 
@@ -1158,7 +1156,7 @@ func TestSpillStreamingRejectsBatchMetadata(t *testing.T) {
 			source := NewWithSize(1)
 			source.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
-			source.ExtraBuf = test.extra
+			source.extraBuf = test.extra
 			source.SetRowCount(1)
 			var wire bytes.Buffer
 			_, err := source.MarshalBinaryWithBufferAndNames(&wire, false, test.attrs)
@@ -1327,9 +1325,7 @@ func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
 			require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
 			values := []int64{1, 2, 3}
 			data := types.EncodeSlice(values)
-			lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
-			require.NoError(t, err)
-			t.Cleanup(lease.Release)
+			var err error
 			bat.Vecs[1], err = vector.NewVecWithData(types.T_int64.ToType(), len(values), data, nil, nil), error(nil)
 			require.NoError(t, err)
 			bat.SetRowCount(3)
@@ -1381,7 +1377,7 @@ func TestBatchShrinkByMaskRowCount(t *testing.T) {
 
 // When a later Dup fails, OwnReadOnlyVectors still frees the read-only
 // originals it already replaced; one of them owns its nulls bitmap.
-func TestOwnReadOnlyVectorsFreesReplacedOnDupError(t *testing.T) {
+func TestOwnReadOnlyVectorsLeavesBatchOnDupError(t *testing.T) {
 	srcMP := mpool.MustNewZero()
 	nspMP := mpool.MustNewZero()
 	dstMP, err := mpool.NewMPool("own_read_only_cap", 1<<20, mpool.NoFixed)
@@ -1404,15 +1400,19 @@ func TestOwnReadOnlyVectorsFreesReplacedOnDupError(t *testing.T) {
 	w2, err := big.Window(0, big.Length())
 	require.NoError(t, err)
 
-	bat := NewWithSize(2)
-	bat.Vecs[0], bat.Vecs[1] = w1, w2
+	// w1 sits in two columns, around the column whose copy fails.
+	bat := NewWithSize(3)
+	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = w1, w2, w1
 	require.Error(t, bat.OwnReadOnlyVectors(dstMP))
 
-	require.Zero(t, nspMP.CurrNB(), "the replaced original's nulls are freed")
-	require.False(t, bat.Vecs[0].IsReadOnly(), "the first column was copied")
-	require.Same(t, w2, bat.Vecs[1], "the failed column is left in place")
-	bat.Vecs[0].Free(dstMP)
-	require.Zero(t, dstMP.CurrNB())
+	require.Same(t, w1, bat.Vecs[0], "a failed call leaves the batch unchanged")
+	require.Same(t, w2, bat.Vecs[1])
+	require.Same(t, w1, bat.Vecs[2])
+	require.Equal(t, 8, w1.Length(), "the aliased original stays intact")
+	require.True(t, w1.GetNulls().Contains(0))
+	require.Zero(t, dstMP.CurrNB(), "the copies already made are freed")
+	w1.Free(nil)
+	require.Zero(t, nspMP.CurrNB())
 	small.Free(srcMP)
 	big.Free(srcMP)
 	require.Zero(t, srcMP.CurrNB())

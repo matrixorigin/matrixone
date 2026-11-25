@@ -18,6 +18,7 @@ import (
 	"io"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,8 +59,10 @@ func (bat *Batch) MarshalBinaryForSpillTo(w io.Writer) error {
 
 func (bat *Batch) spillView() Batch {
 	metadataFree := *bat
-	metadataFree.ExtraBuf = nil
-	metadataFree.extraBufMP = nil
+	metadataFree.extraBuf = nil
+	metadataFree.mp = nil
+	// The view may read bat's selection but never owns its storage.
+	metadataFree.ownSel = bitmap.Bitmap{}
 	return metadataFree
 }
 

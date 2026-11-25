@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -167,7 +166,7 @@ func (bat *Batch) prepareMarshalBinary(
 	}
 	if uint64(len(bat.Vecs)) > uint64(^uint32(0)>>1) ||
 		uint64(len(names)) > uint64(^uint32(0)>>1) ||
-		uint64(len(bat.ExtraBuf)) > uint64(^uint32(0)>>1) {
+		uint64(len(bat.extraBuf)) > uint64(^uint32(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch field exceeds marshal format",
 		)
@@ -204,7 +203,7 @@ func (bat *Batch) prepareMarshalBinary(
 			)
 		}
 	}
-	if !add(uint64(len(bat.ExtraBuf))) {
+	if !add(uint64(len(bat.extraBuf))) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch marshal size exceeds platform limit",
 		)
@@ -280,11 +279,11 @@ func (bat *Batch) marshalBinaryTo(w io.Writer, names []string) error {
 		}
 	}
 
-	extraSize := int32(len(bat.ExtraBuf))
+	extraSize := int32(len(bat.extraBuf))
 	if err := writeBatchMarshalInt32(w, extraSize); err != nil {
 		return err
 	}
-	if err := types.WriteFull(w, bat.ExtraBuf); err != nil {
+	if err := types.WriteFull(w, bat.extraBuf); err != nil {
 		return err
 	}
 
@@ -876,8 +875,6 @@ func WireNames(data []byte) ([]string, error) {
 }
 
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
-	// Decoding replaces every column; no previous lent backing stays aliased.
-	bat.leases.Release()
 	cursor := batchUnmarshalCursor{data: data}
 	rowCount, err := cursor.readInt64()
 	if err != nil {
@@ -1004,8 +1001,17 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if err != nil {
 		return err
 	}
-	bat.releaseExtraBuf()
-	bat.ExtraBuf = append(bat.ExtraBuf, extraBuf...)
+	// With a nil mp the decoded vectors are read-only references to data;
+	// extraBuf borrows data the same way.
+	if mp == nil {
+		bat.releaseExtraBuf()
+		bat.mp = nil
+		if len(extraBuf) != 0 {
+			bat.extraBuf = extraBuf
+		}
+	} else if err := bat.SetExtraBuf(mp, extraBuf); err != nil {
+		return err
+	}
 
 	bat.Recursive, err = cursor.readInt32()
 	if err != nil {
@@ -1031,8 +1037,6 @@ func (bat *Batch) unmarshalFromReader(
 	if bat == nil || r == nil {
 		return io.ErrClosedPipe
 	}
-	// Decoding replaces every column; no previous lent backing stays aliased.
-	bat.leases.Release()
 	i64, err := types.ReadInt64(r)
 	if err != nil {
 		return err
@@ -1087,11 +1091,10 @@ func (bat *Batch) unmarshalFromReader(
 		}
 	}
 
-	// ExtraBuf is a data-scaled Go-heap field in the stable Batch codec. Spill
+	// extraBuf is a data-scaled field in the stable Batch codec. Spill
 	// records do not use it and reject it before allocating its payload.
 	if allowMetadata {
-		bat.releaseExtraBuf()
-		if bat.ExtraBuf, err = readBatchSizedBytes(r); err != nil {
+		if err = bat.readExtraBuf(r, mp); err != nil {
 			return err
 		}
 	} else {
@@ -1137,6 +1140,43 @@ func readBatchSizedBytes(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// readExtraBuf reads a size-prefixed extraBuf from r into memory allocated
+// from mp, or into Go-heap memory the batch does not own when mp is nil.
+func (bat *Batch) readExtraBuf(r io.Reader, mp *mpool.MPool) error {
+	bat.releaseExtraBuf()
+	bat.mp = mp
+	if mp == nil {
+		data, err := readBatchSizedBytes(r)
+		bat.extraBuf = data
+		return err
+	}
+	size, err := types.ReadInt32AsInt(r)
+	if err != nil {
+		return err
+	}
+	if size < 0 {
+		return moerr.NewInvalidInputNoCtx("negative batch buffer size")
+	}
+	if limited, ok := r.(*io.LimitedReader); ok && int64(size) > limited.N {
+		return io.ErrUnexpectedEOF
+	}
+	if lengthAware, ok := r.(interface{ Len() int }); ok && size > lengthAware.Len() {
+		return io.ErrUnexpectedEOF
+	}
+	if size == 0 {
+		return nil
+	}
+	data, err := mp.Alloc(size, true)
+	if err != nil {
+		return err
+	}
+	bat.extraBuf = data
+	if _, err = io.ReadFull(r, data); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateReaderElementCount(
@@ -1222,6 +1262,9 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 }
 
 func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	if err := requireCompacted("ShrinkByMask", bat); err != nil {
+		return err
+	}
 	if !negate {
 		if sels.Count() == bat.rowCount {
 			return nil
@@ -1243,6 +1286,9 @@ func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, 
 }
 
 func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
+	if err := requireCompacted("Shrink", bat); err != nil {
+		return err
+	}
 	if !negate {
 		if len(sels) == bat.rowCount {
 			return nil
@@ -1262,6 +1308,9 @@ func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
+	if err := requireCompacted("Shuffle", bat); err != nil {
+		return err
+	}
 	if len(sels) > 0 {
 		mp := make(map[*vector.Vector]uint8)
 		for _, vec := range bat.Vecs {
@@ -1295,6 +1344,47 @@ func (bat *Batch) VectorCount() int {
 	return len(bat.Vecs)
 }
 
+// ExtraBuf returns the batch's opaque payload, or nil. The bytes stay owned
+// by the batch and are valid until it releases or replaces them.
+func (bat *Batch) ExtraBuf() []byte {
+	if bat == nil {
+		return nil
+	}
+	return bat.extraBuf
+}
+
+// SetExtraBuf replaces the payload with a copy of data allocated from mp.
+// data may alias the current payload.
+func (bat *Batch) SetExtraBuf(mp *mpool.MPool, data []byte) error {
+	if bat == nil || mp == nil {
+		return moerr.NewInternalErrorNoCtx("batch extra buffer needs a batch and a pool")
+	}
+	var copied []byte
+	if len(data) != 0 {
+		var err error
+		if copied, err = mp.Alloc(len(data), true); err != nil {
+			return err
+		}
+		copy(copied, data)
+	}
+	bat.AdoptExtraBuf(mp, copied)
+	return nil
+}
+
+// AdoptExtraBuf replaces the payload with data, an allocation from mp that the
+// batch now owns and releases.
+func (bat *Batch) AdoptExtraBuf(mp *mpool.MPool, data []byte) {
+	bat.releaseExtraBuf()
+	bat.mp = mp
+	if len(data) == 0 {
+		if mp != nil && cap(data) != 0 {
+			mp.Free(data)
+		}
+		return
+	}
+	bat.extraBuf = data
+}
+
 // SetAccountedExtraBuffer transfers one accounted byte buffer into the Batch.
 // Clean releases it exactly once; MoveExtraBufferFrom preserves ownership when
 // a pipeline spool moves the payload to another Batch object.
@@ -1306,72 +1396,82 @@ func (bat *Batch) SetAccountedExtraBuffer(buffer *mpool.AccountedBuffer) error {
 	if err != nil {
 		return err
 	}
-	bat.releaseExtraBuf()
-	bat.ExtraBuf = data
-	bat.extraBufMP = pool
+	bat.AdoptExtraBuf(pool, data)
 	return nil
 }
 
-func (bat *Batch) HasAccountedExtraBuffer() bool {
-	return bat != nil && bat.extraBufMP != nil
-}
-
-func (bat *Batch) MoveExtraBufferFrom(source *Batch) {
+// MoveExtraBufferFrom moves source's payload, and the pool that owns it, to
+// bat; bat's previous payload is released first. When source only borrows its
+// payload (a view, or a batch decoded without a pool), bat gets a copy
+// allocated from mp instead, so it never outlives the real owner's memory.
+func (bat *Batch) MoveExtraBufferFrom(source *Batch, mp *mpool.MPool) error {
 	if bat == nil || source == nil || bat == source {
-		return
+		return nil
+	}
+	if len(source.extraBuf) != 0 && source.mp == nil {
+		return bat.SetExtraBuf(mp, source.extraBuf)
 	}
 	bat.releaseExtraBuf()
-	bat.ExtraBuf = source.ExtraBuf
-	bat.extraBufMP = source.extraBufMP
-	source.ExtraBuf = nil
-	source.extraBufMP = nil
+	bat.extraBuf = source.extraBuf
+	bat.mp = source.mp
+	source.extraBuf = nil
+	return nil
 }
 
-// DropExtraBuffer releases an accounted payload or drops an ordinary Go-heap
-// payload. It is used by reusable pipeline batches before entering a cache.
+// DropExtraBuffer releases the payload. It is used by reusable pipeline
+// batches before entering a cache.
 func (bat *Batch) DropExtraBuffer() {
 	if bat != nil {
 		bat.releaseExtraBuf()
 	}
 }
 
+// releaseExtraBuf frees extraBuf through mp when the batch owns it. It keeps
+// mp: the pool belongs to the batch, not to one payload.
 func (bat *Batch) releaseExtraBuf() {
-	if bat.extraBufMP != nil && cap(bat.ExtraBuf) != 0 {
-		bat.extraBufMP.Free(bat.ExtraBuf)
+	if bat.mp != nil && cap(bat.extraBuf) != 0 {
+		bat.mp.Free(bat.extraBuf)
 	}
-	bat.ExtraBuf = nil
-	bat.extraBufMP = nil
+	bat.extraBuf = nil
 }
 
 // OwnReadOnlyVectors replaces every read-only (reference) vector of bat with
 // a copy in mp, so the batch can be mutated in place. A vector shared by
 // several columns is copied once.
+//
+// It copies every vector before replacing any: a vector can sit in several
+// columns, and on a failed copy bat is left unchanged, its originals intact,
+// while the copies already made are freed.
 func (bat *Batch) OwnReadOnlyVectors(mp *mpool.MPool) error {
 	var copied map[*vector.Vector]*vector.Vector
-	// The replaced originals are no longer referenced by bat, also when a
-	// later Dup fails. A read-only vector can still own its nulls bitmap.
-	defer func() {
-		for vec := range copied {
-			vec.Free(nil)
-		}
-	}()
-	for i, vec := range bat.Vecs {
+	for _, vec := range bat.Vecs {
 		if vec == nil || !vec.IsReadOnly() {
 			continue
 		}
-		if owned, ok := copied[vec]; ok {
-			bat.Vecs[i] = owned
+		if _, ok := copied[vec]; ok {
 			continue
 		}
 		owned, err := vec.Dup(mp)
 		if err != nil {
+			for _, c := range copied {
+				c.Free(mp)
+			}
 			return err
 		}
 		if copied == nil {
 			copied = make(map[*vector.Vector]*vector.Vector)
 		}
 		copied[vec] = owned
-		bat.Vecs[i] = owned
+	}
+	for i, vec := range bat.Vecs {
+		if owned, ok := copied[vec]; ok {
+			bat.Vecs[i] = owned
+		}
+	}
+	// No column references the originals now. A read-only vector can still
+	// own its nulls bitmap.
+	for vec := range copied {
+		vec.Free(nil)
 	}
 	return nil
 }
@@ -1423,6 +1523,7 @@ func (bat *Batch) FreeWindow() {
 		}
 	}
 	bat.Vecs = nil
+	bat.FreeSelection()
 	bat.rowCount = 0
 }
 
@@ -1439,6 +1540,7 @@ func (bat *Batch) CleanOwned() {
 		}
 	}
 	bat.Vecs = nil
+	bat.FreeSelection()
 	bat.rowCount = 0
 }
 
@@ -1478,6 +1580,9 @@ func (bat *Batch) CloneSelectedColumnsTo(
 	toBat *Batch,
 	mp *mpool.MPool,
 ) (err error) {
+	if err = requireCompacted("CloneSelectedColumnsTo", bat, toBat); err != nil {
+		return err
+	}
 	for idx, sourceIdx := range selectCols {
 		toVec := toBat.Vecs[idx]
 		toVec.ResetWithNewType(bat.Vecs[sourceIdx].GetType())
@@ -1501,16 +1606,16 @@ func (bat *Batch) CloneSelectedColumnsTo(
 }
 
 // ViewInto makes dst a view of bat: the same vectors, attributes, row count
-// and selection. dst owns nothing it references (no vectors, leases or
+// and selection. dst owns nothing it references (no vectors, selection or
 // ExtraBuf); it is valid while bat is, and is released by dropping it.
 func (bat *Batch) ViewInto(dst *Batch) {
 	dst.Recursive = bat.Recursive
 	dst.ShuffleIDX = bat.ShuffleIDX
 	dst.Vecs = append(dst.Vecs[:0], bat.Vecs...)
-	dst.ExtraBuf = bat.ExtraBuf
+	dst.extraBuf = bat.extraBuf
+	dst.mp = nil // a view owns nothing
 	dst.rowCount = bat.rowCount
 	dst.selection = bat.selection
-	dst.physicalRows = bat.physicalRows
 }
 
 func (bat *Batch) SelectColumns(cols []int) *Batch {
@@ -1534,12 +1639,11 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 			vec.Free(m)
 		}
 	}
-	bat.leases.Release()
 
 	bat.Vecs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
-	bat.selection, bat.physicalRows = nil, 0
+	bat.FreeSelection()
 }
 
 func (bat *Batch) Last() bool {
@@ -1564,9 +1668,8 @@ func (bat *Batch) CleanOnlyData() {
 			vec.CleanOnlyData()
 		}
 	}
-	bat.leases.Release()
 	bat.rowCount = 0
-	bat.selection, bat.physicalRows = nil, 0
+	bat.selection = nil
 }
 
 func (bat *Batch) FreeColumns(m *mpool.MPool) {
@@ -1574,46 +1677,6 @@ func (bat *Batch) FreeColumns(m *mpool.MPool) {
 		if vec != nil {
 			vec.Free(m)
 		}
-	}
-	bat.leases.Release()
-}
-
-// HoldLease makes the batch the lender of lease: it keeps one reference until
-// the batch next drops or reuses its column data. Vectors installed into this
-// batch may alias lease's bytes until then.
-func (bat *Batch) HoldLease(lease bufferlease.BufferLease) error {
-	if bat == nil {
-		return moerr.NewInternalErrorNoCtx("cannot hold a buffer lease in a nil batch")
-	}
-	return bat.leases.Hold(lease)
-}
-
-// MoveLeasesFrom transfers source's lease references to bat, together with
-// the vectors (or aliases of them) the caller moves from source to bat. bat's
-// previous references are released first: the caller has already dropped or
-// replaced the columns that aliased them.
-func (bat *Batch) MoveLeasesFrom(source *Batch) {
-	if bat == nil || source == nil || bat == source {
-		return
-	}
-	bat.leases.Release()
-	bat.leases, source.leases = source.leases, bat.leases
-}
-
-// HeldLeases reports how many lease references the batch holds.
-func (bat *Batch) HeldLeases() int {
-	if bat == nil {
-		return 0
-	}
-	return bat.leases.Len()
-}
-
-// ReleaseLeases drops the batch's lease references. The caller guarantees no
-// vector of the batch still aliases a lent backing (they were reset, freed or
-// materialized).
-func (bat *Batch) ReleaseLeases() {
-	if bat != nil {
-		bat.leases.Release()
 	}
 }
 
@@ -1647,6 +1710,9 @@ func (bat *Batch) Clone(mp *mpool.MPool) (*Batch, error) {
 }
 
 func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
+	if err = requireCompacted("CloneTo", bat, toBat); err != nil {
+		return err
+	}
 	for i, srcVec := range bat.Vecs {
 		toVec := toBat.Vecs[i]
 		toVec.ResetWithNewType(srcVec.GetType())
@@ -1669,6 +1735,9 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 }
 
 func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
+	if err := requireCompacted("Union", bat, bat2); err != nil {
+		return err
+	}
 	for i, vec := range bat.Vecs {
 		if err := vec.Union(bat2.Vecs[i], sels, m); err != nil {
 			return err
@@ -1681,6 +1750,9 @@ func (bat *Batch) Union(bat2 *Batch, sels []int64, m *mpool.MPool) error {
 }
 
 func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) error {
+	if err := requireCompacted("UnionWindow", bat, bat2); err != nil {
+		return err
+	}
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionBatch(bat2.Vecs[i], int64(offset), cnt, nil, m); err != nil {
 			return err
@@ -1691,6 +1763,9 @@ func (bat *Batch) UnionWindow(bat2 *Batch, offset, cnt int, m *mpool.MPool) erro
 }
 
 func (bat *Batch) UnionOne(bat2 *Batch, pos int64, m *mpool.MPool) error {
+	if err := requireCompacted("UnionOne", bat, bat2); err != nil {
+		return err
+	}
 	for i, vec := range bat.Vecs {
 		if err := vec.UnionOne(bat2.Vecs[i], pos, m); err != nil {
 			return err
@@ -1713,6 +1788,9 @@ func (bat *Batch) PreExtend(mp *mpool.MPool, rows int) error {
 // ensures that the batch structure is consistent and copies all vector data to the target batch.
 // WARING: this function will cause a memory allocation.
 func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
+	if err := requireCompacted("AppendWithCopy", bat, b); err != nil {
+		return nil, err
+	}
 	if bat == nil {
 		return b.Dup(mp)
 	}
@@ -1734,6 +1812,9 @@ func (bat *Batch) AppendWithCopy(ctx context.Context, mp *mpool.MPool, b *Batch)
 }
 
 func (bat *Batch) Append(ctx context.Context, mp *mpool.MPool, b *Batch) (*Batch, error) {
+	if err := requireCompacted("Append", bat, b); err != nil {
+		return nil, err
+	}
 	if bat == nil {
 		return b, nil
 	}
@@ -1760,7 +1841,7 @@ func (bat *Batch) AddRowCount(rowCount int) {
 
 func (bat *Batch) SetRowCount(rowCount int) {
 	bat.rowCount = rowCount
-	bat.selection, bat.physicalRows = nil, 0
+	bat.selection = nil
 }
 
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector, startIndex int) {

@@ -872,7 +872,10 @@ func (r *reader) read(
 	readerFilter *engine.ReaderFilterRequest,
 	filterBeforeTopK bool,
 ) (isEnd bool, lateMaterialized bool, err error) {
+	// Reusing the output batch for the next block drops the cache pins its
+	// borrowed columns aliased.
 	outBatch.CleanOnlyData()
+	readerFilter.ReleasePins()
 
 	var dataState engine.DataState
 	var blkInfo *objectio.BlockInfo

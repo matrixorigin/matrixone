@@ -29,16 +29,56 @@ import (
 //
 // Only an operator that declares it accepts a selection on that input edge
 // receives one (see vm.SelectionConsumer); every other consumer, codec and
-// remote boundary gets compacted data. A selected batch borrows its vectors
-// and its bitmap from the producer, so it is valid until the producer's next
-// Call, the same as any other operator output.
+// remote boundary gets compacted data. A selected batch is valid until the
+// producer's next Call, the same as any other operator output.
+//
+// A batch's selection is owned or borrowed, like its vectors. A producer, or a
+// consumer that narrows its input's selection, fills the output batch's own
+// storage (OwnSelection). A consumer that forwards a selection unchanged, and
+// every view, borrows the input's bitmap read-only. Copy only to modify.
+
+// OwnSelection returns the batch's own selection storage, cleared and sized to
+// physicalRows, with its words allocated from mp. The caller fills it, or
+// copies an input selection into it and narrows it, and then publishes it with
+// SetSelection. The storage is reused across calls with the same mp and is
+// released by Clean or FreeSelection. A batch copied by value shares its
+// original's storage and must not call OwnSelection.
+func (bat *Batch) OwnSelection(mp *mpool.MPool, physicalRows int) (*bitmap.Bitmap, error) {
+	if bat.selection == &bat.ownSel {
+		bat.ClearSelection()
+	}
+	if bat.ownSel.MPool() != mp {
+		// A pool change (a new execution) releases the old words first.
+		bat.ownSel.Free()
+		bat.ownSel = bitmap.Bitmap{}
+	}
+	if err := bat.ownSel.InitWithSize(int64(physicalRows), mp); err != nil {
+		return nil, err
+	}
+	return &bat.ownSel, nil
+}
+
+// FreeSelection drops the selection and returns the batch's own selection
+// storage to its pool. A batch that is never Cleaned, such as a view kept in
+// operator state, calls it when its owner is freed.
+func (bat *Batch) FreeSelection() {
+	bat.ClearSelection()
+	bat.ownSel.Free()
+	bat.ownSel = bitmap.Bitmap{}
+}
+
+// HoldsSelectionMemory reports whether the batch's own selection storage
+// still holds pool words, which Clean or FreeSelection must return.
+func (bat *Batch) HoldsSelectionMemory() bool {
+	return bat != nil && bat.ownSel.CapWords() > 0
+}
 
 // SetSelection publishes the set bits of sel as this batch's logical rows over
-// its physical vectors. sel must have length physicalRows and must not be
-// modified while the batch is published; the producer keeps ownership.
-func (bat *Batch) SetSelection(physicalRows int, sel *bitmap.Bitmap) {
+// its physical vectors. sel's length (sel.Len()) must be the vectors' physical
+// row count. sel is either the batch's own storage (OwnSelection) or a bitmap
+// borrowed from the producer, which must not change it until its next Call.
+func (bat *Batch) SetSelection(sel *bitmap.Bitmap) {
 	bat.selection = sel
-	bat.physicalRows = physicalRows
 	bat.rowCount = sel.Count()
 }
 
@@ -47,9 +87,8 @@ func (bat *Batch) ClearSelection() {
 	if bat.selection == nil {
 		return
 	}
-	bat.rowCount = bat.physicalRows
+	bat.rowCount = int(bat.selection.Len())
 	bat.selection = nil
-	bat.physicalRows = 0
 }
 
 // HasSelection reports whether the batch's logical rows are a selection of
@@ -79,7 +118,7 @@ func (bat *Batch) SelectionRows(dst []int64) []int64 {
 // PhysicalRowCount returns the number of rows in the batch's vectors.
 func (bat *Batch) PhysicalRowCount() int {
 	if bat.selection != nil {
-		return bat.physicalRows
+		return int(bat.selection.Len())
 	}
 	return bat.rowCount
 }
@@ -91,9 +130,9 @@ func (bat *Batch) PhysicalView(dst *Batch) {
 	dst.Recursive = bat.Recursive
 	dst.ShuffleIDX = bat.ShuffleIDX
 	dst.Vecs = bat.Vecs
-	dst.ExtraBuf = bat.ExtraBuf
+	dst.extraBuf = bat.extraBuf
+	dst.mp = nil // a view owns nothing
 	dst.selection = nil
-	dst.physicalRows = 0
 	dst.rowCount = bat.PhysicalRowCount()
 }
 
@@ -145,7 +184,7 @@ func (bat *Batch) SelectionMask(mask []bool) []bool {
 	if bat.selection == nil {
 		return nil
 	}
-	return SelectionMaskOf(bat.selection, bat.physicalRows, mask)
+	return SelectionMaskOf(bat.selection, int(bat.selection.Len()), mask)
 }
 
 // SelectionMaskOf expands sel into a per-row mask of length physicalRows.
@@ -155,4 +194,17 @@ func SelectionMaskOf(sel *bitmap.Bitmap, physicalRows int, mask []bool) []bool {
 
 func errSelectedBatch() error {
 	return moerr.NewInternalErrorNoCtx("selected batch reached a boundary that requires compacted rows")
+}
+
+// requireCompacted rejects a selected batch in an operation that reads or
+// rewrites physical rows as if they were the logical rows. Such an operation
+// would keep a stale selection or count rows the selection excludes, so it
+// fails loudly instead; the caller compacts first (CompactInto).
+func requireCompacted(op string, bats ...*Batch) error {
+	for _, bat := range bats {
+		if bat.HasSelection() {
+			return moerr.NewInternalErrorNoCtxf("batch %s: selected batch requires compacted rows", op)
+		}
+	}
+	return nil
 }

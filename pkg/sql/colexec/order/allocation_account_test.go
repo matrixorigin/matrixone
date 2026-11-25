@@ -960,7 +960,7 @@ func TestAccountedOrderRejectsExtraBufferBeforeRetainingInput(t *testing.T) {
 	)
 	state := installOrderTestAllocation(t, op, 64<<20, nil)
 	input := newOrderPairBatch(t, proc, []int64{1}, []int64{2})
-	input.ExtraBuf = []byte("aggregate payload")
+	require.NoError(t, input.SetExtraBuf(proc.Mp(), []byte("aggregate payload")))
 	op.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 	require.NoError(t, op.Prepare(proc))
 

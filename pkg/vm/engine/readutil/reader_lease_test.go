@@ -96,6 +96,8 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 
 	request := &engine.ReaderFilterRequest{
 		OutputAllocation: allocation,
+		// The scan is the lender of the retained column: borrowing is opt-in.
+		ColumnUses: []engine.ReaderColumnUse{engine.ReaderColumnOwned, engine.ReaderColumnRetain},
 		Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
 			t.Fatal("the selected read must not run Apply")
 			return engine.ReaderFilterResult{}, nil
@@ -118,15 +120,21 @@ func TestReaderBorrowedPinsStayBoundedAcrossBlocks(t *testing.T) {
 			require.Equal(t, payload, output.Vecs[1].GetBytesAt(row))
 		}
 		if perBlockLeases < 0 {
-			perBlockLeases, perBlockUsed = output.HeldLeases(), account.Snapshot().Used
+			perBlockLeases, perBlockUsed = heldPins(request), account.Snapshot().Used
 			require.Positive(t, perBlockLeases)
 			require.Positive(t, perBlockUsed, "the pinned capacity is charged to the scan's account")
 			continue
 		}
-		require.Equal(t, perBlockLeases, output.HeldLeases(), "block %d: pins must not accumulate", block)
+		require.Equal(t, perBlockLeases, heldPins(request), "block %d: pins must not accumulate", block)
 		require.Equal(t, perBlockUsed, account.Snapshot().Used, "block %d: pin reservations must not accumulate", block)
 	}
+	// The scan, the lender, releases the pins once it is done with the batch.
 	output.CleanOnlyData()
-	require.Zero(t, output.HeldLeases())
+	request.ReleasePins()
+	require.Zero(t, heldPins(request))
 	require.Less(t, account.Snapshot().Used, perBlockUsed, "reuse returns the pin reservation; only owned scratch capacity stays")
+}
+
+func heldPins(request *engine.ReaderFilterRequest) int {
+	return request.Pins().Len()
 }

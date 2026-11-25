@@ -240,7 +240,7 @@ func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error
 	if s == nil || bat == nil {
 		return stats, nil
 	}
-	if len(bat.ExtraBuf) != 0 {
+	if len(bat.ExtraBuf()) != 0 {
 		return stats, moerr.NewInternalErrorNoCtx(
 			"materialized sink source requires finalized positional batches",
 		)
@@ -981,7 +981,7 @@ func spillBatchSizeWithLimit(
 		return 0, 0, moerr.NewInternalErrorNoCtx("nil materialized sink spill batch")
 	}
 	serialized = 1 + 8 + 4 + 4 + 4 + 4 + 4
-	if len(bat.Vecs) > math.MaxInt32 || len(bat.ExtraBuf) > math.MaxInt32 {
+	if len(bat.Vecs) > math.MaxInt32 || len(bat.ExtraBuf()) > math.MaxInt32 {
 		return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch exceeds encoding limit")
 	}
 	for _, vec := range bat.Vecs {
@@ -1032,7 +1032,7 @@ func spillBatchSizeWithLimit(
 			}
 		}
 	}
-	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf)))
+	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf())))
 	if err != nil {
 		return 0, 0, err
 	}

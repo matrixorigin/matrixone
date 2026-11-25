@@ -38,6 +38,19 @@ type IBatchBuffer interface {
 	Usage() (int, int, int, int)
 }
 
+// MarkNull marks an existing row in an owned mutable vector as NULL. Unlike
+// UpdateValue, it returns bitmap allocation errors to the caller.
+func MarkNull(vec *vector.Vector, row uint32) error {
+	mask := vec.GetNulls()
+	if int64(row) >= mask.Len() {
+		if err := nulls.TryExpand(mask, int(row)+1); err != nil {
+			return err
+		}
+	}
+	mask.Add(uint64(row))
+	return nil
+}
+
 type GeneralBatchBuffer struct {
 	sync.Mutex
 	offHeap          bool

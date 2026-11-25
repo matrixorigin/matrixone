@@ -20,8 +20,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -401,15 +399,12 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	rows[0].SetRowOffset(0)
 	rows[1].SetRowOffset(1)
 	data := types.EncodeSlice(rows[:])
-	lease, err := bufferlease.NewRefCounted(data, int64(cap(data)), nil)
-	require.NoError(t, err)
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0], err = vector.NewVecWithData(types.T_Rowid.ToType(), len(rows), data, nil, nil), error(nil)
 	require.NoError(t, err)
 	bat.SetRowCount(len(rows))
 	defer func() {
 		bat.Clean(proc.Mp())
-		lease.Release()
 		account.Seal()
 		_, finalErr := registry.Finalize(account)
 		require.NoError(t, finalErr)

@@ -607,7 +607,7 @@ func cloneBatch(t *testing.T, proc *process.Process, bat *batch.Batch) *batch.Ba
 
 	cloned, err := bat.Dup(proc.Mp())
 	require.NoError(t, err)
-	cloned.ExtraBuf = append(cloned.ExtraBuf[:0], bat.ExtraBuf...)
+	require.NoError(t, cloned.SetExtraBuf(proc.Mp(), bat.ExtraBuf()))
 	return cloned
 }
 
@@ -828,13 +828,13 @@ func TestMergeGroupPartialWireCompatibility(t *testing.T) {
 			})
 			setGroupProtocolVersionForTest(t, proc, tc.writerVersion)
 			partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{rows: 1})
-			require.Equal(t, -1, bytes.LastIndex(partial.ExtraBuf, []byte{
+			require.Equal(t, -1, bytes.LastIndex(partial.ExtraBuf(), []byte{
 				rowMetadataTrailerMagic0,
 				rowMetadataTrailerMagic1,
 				rowMetadataTrailerMagic2,
 			}), "current writers must not emit the retired trailer")
 			if tc.legacyTrailer {
-				partial.ExtraBuf = append(partial.ExtraBuf, legacyRowMetadataTrailerForTest()...)
+				require.NoError(t, partial.SetExtraBuf(proc.Mp(), append(append([]byte(nil), partial.ExtraBuf()...), legacyRowMetadataTrailerForTest()...)))
 			}
 			moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 				moruntime.MOProtocolVersion, tc.readerVersion)
@@ -871,7 +871,7 @@ func TestOrdinaryGroupPartialKeepsLegacyWireFormat(t *testing.T) {
 	current := buildPartialH0Batch(t, proc, []int32{1, 2})
 	t.Cleanup(func() { current.Clean(proc.Mp()) })
 
-	require.Equal(t, legacy.ExtraBuf, current.ExtraBuf)
+	require.Equal(t, legacy.ExtraBuf(), current.ExtraBuf())
 }
 
 func TestPartialMergeFollowsAllAggregateStates(t *testing.T) {
@@ -981,9 +981,9 @@ func TestMergeGroupRejectsInvalidLegacyRowMetadataTrailer(t *testing.T) {
 			setGroupProtocolVersionForTest(t, proc, defines.MORPCVersion12)
 
 			partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{rows: 1})
-			trailerOffset := len(partial.ExtraBuf)
-			partial.ExtraBuf = append(partial.ExtraBuf, legacyRowMetadataTrailerForTest()...)
-			partial.ExtraBuf = tc.mutate(partial.ExtraBuf, trailerOffset)
+			trailerOffset := len(partial.ExtraBuf())
+			require.NoError(t, partial.SetExtraBuf(proc.Mp(), append(append([]byte(nil), partial.ExtraBuf()...), legacyRowMetadataTrailerForTest()...)))
+			require.NoError(t, partial.SetExtraBuf(proc.Mp(), tc.mutate(partial.ExtraBuf(), trailerOffset)))
 
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
 			t.Cleanup(func() { child.Free(proc, false, nil) })
@@ -2892,7 +2892,7 @@ func TestGroupStreamingDoesNotPublishAfterInputCancellation(t *testing.T) {
 	require.Equal(t, vm.Eval, g.ctr.state)
 	require.Zero(t, g.ctr.currBatchIdx)
 	require.NotEmpty(t, g.ctr.groupByBatches)
-	require.Empty(t, g.ctr.groupByBatches[0].ExtraBuf)
+	require.Empty(t, g.ctr.groupByBatches[0].ExtraBuf())
 
 	g.Reset(proc, true, context.Canceled)
 	require.Nil(t, g.ctr.mp)
@@ -3510,7 +3510,7 @@ func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
 	extra.Write(types.EncodeBool(&nullable))
 	nAggs := int32(0)
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	merge := newMergeGroupOp(nil)
 	t.Cleanup(func() {
@@ -3547,7 +3547,7 @@ func TestMergeGroupKeepsLegacyShortCharH8PaddingBeforeV78(t *testing.T) {
 	extra.Write(types.EncodeBool(&nullable))
 	nAggs := int32(0)
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	merge := newMergeGroupOp(nil)
 	t.Cleanup(func() {
@@ -3581,7 +3581,7 @@ func TestMergeGroupKeepsLegacyLongHStrCompatibleBeforeV78(t *testing.T) {
 	extra.Write(types.EncodeBool(&nullable))
 	nAggs := int32(0)
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	merge := newMergeGroupOp(nil)
 	t.Cleanup(func() {
@@ -3669,7 +3669,7 @@ func TestMergeGroupRejectsHashMetadataIncompatibleWithVectors(t *testing.T) {
 		extra.Write(types.EncodeInt32(&mtyp))
 		extra.Write(types.EncodeBool(&nullable))
 		extra.Write(types.EncodeInt32(&nAggs))
-		partial.ExtraBuf = extra.Bytes()
+		require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 		return partial
 	}
 	makePartial := func(vectors ...*vector.Vector) *batch.Batch {
@@ -4040,7 +4040,7 @@ func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	extra.Write(types.EncodeInt32(&mtyp))
 	extra.Write(types.EncodeBool(&nullable))
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	proc.Ctx = ctx
@@ -4069,7 +4069,7 @@ func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
 	freshPartial := batch.NewWithSize(1)
 	freshPartial.Vecs[0] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
 	freshPartial.SetRowCount(3)
-	freshPartial.ExtraBuf = append(freshPartial.ExtraBuf[:0], extra.Bytes()...)
+	require.NoError(t, freshPartial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{freshPartial})
 	merge.Children = nil
 	merge.AppendChild(child)
@@ -4094,7 +4094,7 @@ func TestMergeGroupSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 	extra.Write(types.EncodeInt32(&mtyp))
 	extra.Write(types.EncodeBool(&nullable))
 	extra.Write(types.EncodeInt32(&nAggs))
-	partial.ExtraBuf = extra.Bytes()
+	require.NoError(t, partial.SetExtraBuf(proc.Mp(), extra.Bytes()))
 
 	ctx, cancel := context.WithCancel(baseCtx)
 	proc.Ctx = ctx
@@ -4167,7 +4167,7 @@ func TestMergeGroupRejectsAggregateStateRowCountMismatch(t *testing.T) {
 	twoRows.Clean(proc.Mp())
 	require.Len(t, partials, 2)
 
-	partials[0].ExtraBuf = append(partials[0].ExtraBuf[:0], partials[1].ExtraBuf...)
+	require.NoError(t, partials[0].SetExtraBuf(proc.Mp(), partials[1].ExtraBuf()))
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
 	require.NoError(t, merge.Prepare(proc))
 	_, err := merge.buildOneBatch(proc, partials[0])
@@ -4235,13 +4235,13 @@ func TestMergeGroupRejectsMissingOrChangedPartialMetadataAcrossSpill(t *testing.
 	first.Clean(proc.Mp())
 	second.Clean(proc.Mp())
 	require.Len(t, partials, 2)
-	require.GreaterOrEqual(t, len(partials[1].ExtraBuf), 4)
-	firstType := int32(binary.LittleEndian.Uint32(partials[0].ExtraBuf[:4]))
+	require.GreaterOrEqual(t, len(partials[1].ExtraBuf()), 4)
+	firstType := int32(binary.LittleEndian.Uint32(partials[0].ExtraBuf()[:4]))
 	changedType := int32(H8)
 	if firstType == changedType {
 		changedType = HStr
 	}
-	binary.LittleEndian.PutUint32(partials[1].ExtraBuf[:4], uint32(changedType))
+	binary.LittleEndian.PutUint32(partials[1].ExtraBuf()[:4], uint32(changedType))
 
 	merge = newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
 	merge.SpillMem = 1

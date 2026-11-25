@@ -311,8 +311,10 @@ func appendableRows(dst, src *batch.Batch, start, rows int, limit int64) int {
 			}
 			continue
 		}
+		// Even if descriptors overlap, one row copies at most the source area's
+		// size. If that bound is too large, count just the selected rows.
 		area := int64(len(vec.GetArea()))
-		if area == 0 || (vec.VarlenaAreaIsDisjoint() && area <= available) || area <= available/int64(rows) {
+		if area == 0 || area <= available/int64(rows) {
 			continue
 		}
 		for row := 0; row < rows; row++ {
