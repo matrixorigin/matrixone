@@ -137,11 +137,14 @@ type AggFuncExec interface {
 	// PreAllocateGroups pre-allocates more additional groups to reduce garbage collection overhead.
 	PreAllocateGroups(more int) error
 
-	// XXX: WTF.
+	// Fill adds a logical input row to an existing zero-based group. It owns
+	// any required admission; callers do not run batch preflight for Fill.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
 	BulkFill(groupIndex int, vectors []*vector.Vector) error
 
-	// BatchFill : add values to the aggregation for multiple groups at once.
+	// BatchFill maps input offset+i to groups[i]-1 (zero skips the row).
+	// Accounted Group callers reserve capacity for the same work unit through
+	// BatchCapacityPreflight before publishing the batch.
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
 	// XXX: WTF.

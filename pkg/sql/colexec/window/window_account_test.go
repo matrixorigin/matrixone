@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,105 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
+
+type rejectBitmapWindowGrowth struct {
+	calls  int
+	failAt int
+}
+
+func (r *rejectBitmapWindowGrowth) AcquireAllocationCapacity(uint64) error {
+	r.calls++
+	if r.calls == r.failAt {
+		return mpool.ErrAllocationAccountCapacity
+	}
+	return nil
+}
+
+func (*rejectBitmapWindowGrowth) ReleaseAllocationCapacity(uint64) {}
+
+func TestAccountedBitmapWindow(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		name := "sliding"
+		if full {
+			name = "full partitions"
+		}
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, mp.CurrNB()) })
+			registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+			require.NoError(t, err)
+			controller := &rejectBitmapWindowGrowth{}
+			account, err := registry.OpenWithController(1<<20, controller)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				terminal, _, err := registry.CompleteTerminal(account)
+				require.NoError(t, err)
+				require.Zero(t, terminal.Used)
+				require.Zero(t, terminal.LiveAllocations)
+			})
+			typ := types.T_varbinary.ToType()
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(typ, mp)
+			t.Cleanup(func() { input.Clean(mp) })
+			for _, values := range [][]uint32{{99}, {1, 2}, {2, 3}, {4, 5, 6}, {8}, {8, 9}} {
+				data, err := roaring.BitmapOf(values...).ToBytes()
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], data, false, mp))
+			}
+			input.SetRowCount(6)
+			spec := makeAggWindowSpec("bitmap_or_agg")
+			spec.GetW().Frame = &plan.FrameClause{
+				Type:  plan.FrameClause_ROWS,
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 1}}}}},
+				End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			}
+			expression := &plan.Expr{Typ: plan.Type{Id: int32(typ.Oid)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{
+				aggexec.MakeAggFunctionExpression(aggexec.AggIdOfBitmapOr, false, []*plan.Expr{expression}, nil),
+			}}
+			require.NoError(t, arg.SetAllocationAccount(account))
+			t.Cleanup(func() { arg.Free(proc, false, nil) })
+			ctr := &arg.ctr
+			evaluate := func() (*vector.Vector, error) {
+				// This evaluator fixture borrows the input; only aggregate and result state belong to Window.
+				ctr.bat, ctr.ps = input, []int64{0, 1, 4}
+				ctr.aggVecs = []colexec.ExprEvalVector{{Vec: input.Vecs}}
+				defer func() { ctr.bat, ctr.aggVecs = nil, nil }()
+				if full {
+					return ctr.evaluateFullPartitions(0, arg, proc, 1, 6, false)
+				}
+				return ctr.processAggregateFuncRange(0, arg, proc, 2, 6)
+			}
+			want := [][]uint32{{1, 2, 3}, {2, 3, 4, 5, 6}, {8}, {8, 9}}
+			if full {
+				want = [][]uint32{{1, 2, 3, 4, 5, 6}, {8, 9}}
+			}
+			check := func() {
+				out, err := evaluate()
+				require.NoError(t, err)
+				defer out.Free(out.MPool())
+				require.Equal(t, len(want), out.Length())
+				for row, expected := range want {
+					bm := roaring.New()
+					require.NoError(t, bm.UnmarshalBinary(out.GetBytesAt(row)))
+					require.Equal(t, expected, bm.ToArray())
+				}
+			}
+			check()
+			// Bitmap aggregate group storage is on the Go heap; the first two
+			// account acquisitions are the first row and its union with the second.
+			controller.failAt = controller.calls + 2
+			out, err := evaluate()
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Nil(t, out)
+			require.Nil(t, ctr.batAggs)
+			arg.Reset(proc, true, err)
+			require.Zero(t, account.Snapshot().Used)
+			check()
+		})
+	}
+}
 
 func TestWindowResetReleasesAccountedBuffers(t *testing.T) {
 	for _, tc := range []struct {

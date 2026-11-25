@@ -26,3 +26,21 @@ from bitmappanic order by col2;
 65538  ¦  2  𝄀
 131072  ¦  1
 drop table if EXISTS bitmappanic;
+drop table if exists bitmap_window_union_input;
+drop table if exists bitmap_window_union_seed;
+create table bitmap_window_union_seed (p int, id int, bit int);
+insert into bitmap_window_union_seed values (1,1,1),(1,1,2),(1,2,2),(1,2,3),(1,3,4),(1,3,5),(1,3,6),(2,4,8),(2,5,8),(2,5,9);
+create table bitmap_window_union_input as select p, id, bitmap_construct_agg(cast(bit as unsigned)) as bm from bitmap_window_union_seed group by p, id;
+select p, id,
+hex(bitmap_or_agg(bm) over ()) as whole_union,
+hex(bitmap_or_agg(bm) over (partition by p)) as partition_union,
+hex(bitmap_or_agg(bm) over (partition by p order by id rows between 1 preceding and current row)) as sliding_union
+from bitmap_window_union_input order by p, id;
+➤ p[4,32,0]  ¦  id[4,32,0]  ¦  whole_union[-1,16383,0]  ¦  partition_union[-1,16383,0]  ¦  sliding_union[-1,16383,0]  𝄀
+1  ¦  1  ¦  3A30000001000000000007001000000001000200030004000500060008000900  ¦  3A300000010000000000050010000000010002000300040005000600  ¦  3A30000001000000000001001000000001000200  𝄀
+1  ¦  2  ¦  3A30000001000000000007001000000001000200030004000500060008000900  ¦  3A300000010000000000050010000000010002000300040005000600  ¦  3A300000010000000000020010000000010002000300  𝄀
+1  ¦  3  ¦  3A30000001000000000007001000000001000200030004000500060008000900  ¦  3A300000010000000000050010000000010002000300040005000600  ¦  3A30000001000000000004001000000002000300040005000600  𝄀
+2  ¦  4  ¦  3A30000001000000000007001000000001000200030004000500060008000900  ¦  3A30000001000000000001001000000008000900  ¦  3A3000000100000000000000100000000800  𝄀
+2  ¦  5  ¦  3A30000001000000000007001000000001000200030004000500060008000900  ¦  3A30000001000000000001001000000008000900  ¦  3A30000001000000000001001000000008000900
+drop table bitmap_window_union_input;
+drop table bitmap_window_union_seed;
