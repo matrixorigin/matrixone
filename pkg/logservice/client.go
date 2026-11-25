@@ -178,32 +178,45 @@ func NewStandbyClient(ctx context.Context, sid string, cfg ClientConfig) (Standb
 func NewStandbyClientWithRetry(
 	ctx context.Context, sid string, cfg ClientConfig,
 ) StandbyClient {
-	var c StandbyClient
-	createFn := func() error {
+	createFn := func() (StandbyClient, error) {
 		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseNewStandbyClientWithRetry)
 		defer cancel()
 		lc, err := NewStandbyClient(ctx, sid, cfg)
 		if err != nil {
 			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("failed to create logservice client: %v", err)
-			return err
+			return nil, err
 		}
-		c = lc
-		return nil
+		return lc, nil
 	}
 	timer := time.NewTimer(time.Minute * 3)
 	defer timer.Stop()
+	return retryStandbyClient(ctx, timer.C, createFn)
+}
+
+func retryStandbyClient(
+	ctx context.Context,
+	timeout <-chan time.Time,
+	createFn func() (StandbyClient, error),
+) StandbyClient {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 
-		case <-timer.C:
+		case <-timeout:
 			panic("failed to create logservice client")
 
 		default:
-			if err := createFn(); err != nil {
-				time.Sleep(time.Second * 3)
+			c, err := createFn()
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-timeout:
+					panic("failed to create logservice client")
+				case <-time.After(time.Second * 3):
+				}
 				continue
 			}
 			return c

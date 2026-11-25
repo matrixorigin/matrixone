@@ -23,6 +23,8 @@ import (
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestTestClient(t *testing.T) {
@@ -73,6 +75,31 @@ func TestTestClient(t *testing.T) {
 	ccfg.LogShardID = 0
 	client4 := NewStandbyClientWithRetry(ctx, "", ccfg)
 	assert.Nil(t, client4)
+}
+
+func TestNewStandbyClientWithRetryCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	attempted := make(chan struct{})
+	result := make(chan StandbyClient, 1)
+	go func() {
+		result <- retryStandbyClient(
+			ctx,
+			make(chan time.Time),
+			func() (StandbyClient, error) {
+				close(attempted)
+				return nil, moerr.NewInternalErrorNoCtx("retry")
+			},
+		)
+	}()
+
+	<-attempted
+	cancel()
+	select {
+	case client := <-result:
+		require.Nil(t, client)
+	case <-time.After(time.Second):
+		t.Fatal("retry backoff did not observe cancellation")
+	}
 }
 
 func TestNewTestServicesUseIndependentPorts(t *testing.T) {
