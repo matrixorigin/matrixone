@@ -162,4 +162,13 @@ group by id
 order by id
 limit 10;
 
+-- BIT inequality can filter rows before bounded primary-key grouping.
+create table bit_values (id int primary key, b8 bit(8), b64 bit(64));
+insert into bit_values values (1, 1, 1), (2, null, 1), (3, 1, 9223372036854775809);
+select id, count(*)
+from bit_values
+where b8 <> b64
+group by id
+limit 1;
+
 drop database pk_group_limit_bvt;
