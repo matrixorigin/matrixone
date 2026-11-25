@@ -178,6 +178,13 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 		{"single-percent", "p_name like '%'", false},
 		{"multiple-percent", "p_name like '%%'", false},
 		{"no-filter", "true", false},
+		{"negated-wildcard", "not (p_name like '%')", true},
+		{"not-like-wildcard", "p_name not like '%'", true},
+		{"double-negated-wildcard", "not (not (p_name like '%'))", false},
+		{"wildcard-is-true", "(p_name like '%') is true", false},
+		{"wildcard-dominates-or", "p_partkey = 1 or p_name like '%'", false},
+		{"selective-or", "(p_partkey = 1 and p_name like '%') or p_partkey = 2", true},
+		{"selective-and-is-true", "(p_name like '%' and p_name like 'forest%') is true", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(ctx.GetContext(), strings.Replace(sql, "p_name like 'forest%'", tc.predicate, 1), 1)
@@ -292,7 +299,7 @@ func TestAggregateMembershipMatchAllPattern(t *testing.T) {
 			if tc.escape != nil {
 				like.Args = append(like.Args, tc.escape)
 			}
-			require.Equal(t, tc.wantMatch, containsMembershipMatchAllLike(filter, tag))
+			require.Equal(t, tc.wantMatch, membershipPredicateMatchesAll(filter, tag))
 		})
 	}
 }
@@ -307,19 +314,24 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 		keyNDV          float64
 		groups          float64
 		removeStats     bool
+		useScanRows     bool
 		wantRestriction bool
 	}{
 		{name: "only-wildcard-exact-ndv", keyNDV: 5000},
 		{name: "only-wildcard-nullable-ndv-drift", nullCount: 8000, keyNDV: 4000},
 		{name: "only-wildcard-not-null-ndv-drift", notNullable: true, keyNDV: 4000},
 		{name: "nested-or-only", form: "or", keyNDV: 5000},
-		{name: "nested-not-only", form: "not", keyNDV: 5000},
+		{name: "nested-not-only", form: "not", nullCount: 8000, keyNDV: 5000, useScanRows: true},
+		{name: "nested-not-is-true", form: "not-istrue", nullCount: 8000, keyNDV: 5000, useScanRows: true},
+		{name: "nested-double-not", form: "double-not", nullCount: 8000, keyNDV: 4000},
+		{name: "nested-is-true", form: "istrue", nullCount: 8000, keyNDV: 4000},
+		{name: "or-of-two-positive-filters", form: "or-of-and", keyNDV: 4000},
 		{name: "strong-range", form: "and", lower: 10, upper: 20, keyNDV: 5000, wantRestriction: true},
 		{name: "full-range-ndv-drift", form: "and", lower: 1, upper: 5000, keyNDV: 4000},
 		{name: "weak-range", form: "and", lower: 1, upper: 4500, keyNDV: 5000},
 		{name: "build-cost-boundary", form: "and", lower: 1, upper: 2000, keyNDV: 5000, groups: 25000},
 		{name: "nested-or-with-strong-range", form: "or", lower: 10, upper: 20, keyNDV: 5000, wantRestriction: true},
-		{name: "nested-not-with-strong-range", form: "not", lower: 10, upper: 20, keyNDV: 5000, wantRestriction: true},
+		{name: "nested-not-with-strong-range", form: "not", lower: 10, upper: 20, keyNDV: 5000, useScanRows: true, wantRestriction: true},
 		{name: "mixed-with-missing-key-ndv", form: "and", lower: 10, upper: 20},
 		{name: "mixed-with-missing-stats", form: "and", lower: 10, upper: 20, keyNDV: 5000, removeStats: true},
 	} {
@@ -342,6 +354,16 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 				filter = bind("or", wildcard, bind("=", key, makePlan2Int32ConstExprWithType(42)))
 			case "not":
 				filter = bind("not", wildcard)
+			case "not-istrue":
+				filter = bind("not", bind("istrue", wildcard))
+			case "double-not":
+				filter = bind("not", bind("not", wildcard))
+			case "istrue":
+				filter = bind("istrue", wildcard)
+			case "or-of-and":
+				both := bind("and", wildcard, DeepCopyExpr(wildcard))
+				key := GetColExpr(domain.TableDef.Cols[0].Typ, tag, 0)
+				filter = bind("or", both, bind("=", key, makePlan2Int32ConstExprWithType(42)))
 			}
 			domain.FilterList = []*plan.Expr{filter}
 			var independent []*plan.Expr
@@ -352,8 +374,8 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 					bind("<=", key(), makePlan2Int32ConstExprWithType(tc.upper)),
 				}
 				if tc.form == "and" {
-					domain.FilterList[0] = bind("and", filter, DeepCopyExpr(independent[0]))
-					domain.FilterList = append(domain.FilterList, DeepCopyExpr(independent[1]))
+					rangeFilter := bind("and", DeepCopyExpr(independent[0]), DeepCopyExpr(independent[1]))
+					domain.FilterList[0] = bind("and", filter, rangeFilter)
 				} else {
 					domain.FilterList = append(domain.FilterList, DeepCopyExprList(independent)...)
 				}
@@ -383,7 +405,9 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 
 			before := proto.Clone(b.qry)
 			wantRows := float64(0)
-			if len(independent) > 0 && !tc.removeStats {
+			if tc.useScanRows {
+				wantRows = domain.Stats.Outcnt
+			} else if len(independent) > 0 && !tc.removeStats {
 				control := DeepCopyNode(domain)
 				control.FilterList = independent
 				control.Stats = calcScanStats(control, b)

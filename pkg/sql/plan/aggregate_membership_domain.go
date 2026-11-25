@@ -281,25 +281,25 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	return true
 }
 
-// aggregateMembershipDomainRows prices the duplicate scan without crediting
-// LIKE patterns that only exclude NULLs. A predicate containing such a LIKE
-// inside OR/NOT cannot provide an independent reduction either. Leave the
-// shared scan statistics and execution predicates as they were.
+// aggregateMembershipDomainRows omits the cost discount of each conjunct
+// proven true when its match-all LIKE inputs are non-NULL. It prices the
+// remaining conjuncts using the scan's existing statistics.
 func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) float64 {
 	if domain.Stats == nil {
 		return 0
 	}
-	containsMatchAll := func(expr *plan.Expr) bool {
-		return containsMembershipMatchAllLike(expr, domain.BindingTags[0])
+	matchesAll := func(expr *plan.Expr) bool {
+		return membershipPredicateMatchesAll(expr, domain.BindingTags[0])
 	}
-	if !slices.ContainsFunc(domain.FilterList, containsMatchAll) {
+	conjuncts := splitPlanConjunctions(domain.FilterList)
+	remaining := slices.DeleteFunc(conjuncts, matchesAll)
+	if len(remaining) == len(conjuncts) {
 		return domain.Stats.Outcnt
 	}
-	conjuncts := slices.DeleteFunc(splitPlanConjunctions(domain.FilterList), containsMatchAll)
-	if len(conjuncts) == 0 {
+	if len(remaining) == 0 {
 		return 0
 	}
-	// Reuse the planning pass's scan statistics without another storage read.
+	// Use the statistics already cached by the planning pass.
 	cached := builder.getStatsInfoByTableID(domain.TableDef.TblId)
 	if cached == nil {
 		return 0
@@ -308,20 +308,24 @@ func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) fl
 	if stats == nil || !finitePositive(stats.TableCnt) || stats.TableCnt != domain.Stats.TableCnt {
 		return 0
 	}
-	selectivity := estimateAndSelectivity(DeepCopyExprList(conjuncts), builder, stats)
+	selectivity := estimateAndSelectivity(DeepCopyExprList(remaining), builder, stats)
 	if selectivity >= 1 {
 		return 0
 	}
 	return domain.Stats.TableCnt * selectivity
 }
 
-func containsMembershipMatchAllLike(expr *plan.Expr, scanTag int32) bool {
+func membershipPredicateMatchesAll(expr *plan.Expr, scanTag int32) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
 	}
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
-	if id == function.LIKE && len(fn.Args) == 2 {
+	switch id {
+	case function.LIKE:
+		if len(fn.Args) != 2 {
+			return false
+		}
 		col := fn.Args[0].GetCol()
 		source := types.T(fn.Args[0].Typ.Id)
 		if col == nil || col.RelPos != scanTag || (source != types.T_char && source != types.T_varchar) {
@@ -338,10 +342,26 @@ func containsMembershipMatchAllLike(expr *plan.Expr, scanTag int32) bool {
 			}
 		}
 		return true
+	case function.AND:
+		return len(fn.Args) == 2 && membershipPredicateMatchesAll(fn.Args[0], scanTag) &&
+			membershipPredicateMatchesAll(fn.Args[1], scanTag)
+	case function.OR:
+		return len(fn.Args) == 2 && (membershipPredicateMatchesAll(fn.Args[0], scanTag) ||
+			membershipPredicateMatchesAll(fn.Args[1], scanTag))
+	case function.ISTRUE:
+		return len(fn.Args) == 1 && membershipPredicateMatchesAll(fn.Args[0], scanTag)
+	case function.NOT:
+		// Adjacent negations cancel in SQL three-valued logic. An intervening
+		// IS TRUE can turn NULL into FALSE, so it cannot cancel a negation.
+		if len(fn.Args) == 1 {
+			inner := fn.Args[0].GetF()
+			if inner != nil && inner.Func != nil && len(inner.Args) == 1 {
+				innerID, _ := function.DecodeOverloadID(inner.Func.Obj)
+				return innerID == function.NOT && membershipPredicateMatchesAll(inner.Args[0], scanTag)
+			}
+		}
 	}
-	return slices.ContainsFunc(fn.Args, func(arg *plan.Expr) bool {
-		return containsMembershipMatchAllLike(arg, scanTag)
-	})
+	return false
 }
 
 func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domainNDV, domainRows float64, key, domainKey plan.Type) bool {
