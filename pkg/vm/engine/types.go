@@ -1001,6 +1001,13 @@ type DataSource interface {
 		bat *batch.Batch,
 	) (*objectio.BlockInfo, DataState, error)
 
+	// ApplyTombstones removes the deleted rows from rowsOffset and returns the rest.
+	//
+	// The rows stay a sorted []int64 on purpose (issue #33181): they come from
+	// storage searches, which are sparse hit lists built natively as lists and
+	// gathered by list downstream, and a bitmap measured slower here at every density. The
+	// performance is to be re-examined later; see "Storage search results stay
+	// lists" in docs/design/20261124-row-selection-bitmap-remaplist.md.
 	ApplyTombstones(
 		ctx context.Context,
 		bid *objectio.Blockid,

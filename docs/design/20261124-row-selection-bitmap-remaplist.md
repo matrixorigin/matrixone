@@ -188,7 +188,7 @@ The mask loop's `word &= word-1` is a serial dependency, while a list gather's i
 
 - **The tombstone chain stays on the list.** On a list of k hits, each pass costs O(k), and the chain stops as soon as the list is empty. The bitmap form (`GetTombstones`, then AND NOT) always runs every pass.
 
-Decision 1 therefore does not cover storage search results: they are sparse hit lists, and they stay lists.
+Decision 1 therefore does not cover storage search results for now: they are sparse hit lists, and they stay lists. The code comments at `ReadFilterSearchFuncType`, `engine.DataSource.ApplyTombstones` and `blockio.ReadDataByFilter` point here. This is to be re-examined later, for example after PR 3 makes the scan selection a bitmap end to end, or if a faster mask gather closes the gap.
 
 ## Risks and open questions
 

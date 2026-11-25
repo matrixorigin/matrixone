@@ -39,6 +39,12 @@ import (
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 // Right now, it cannot support filter by physical address column.
 // len(columns) == len(colTypes) >= 1 (supports multiple columns for optimization)
+//
+// Search results are kept as a sorted []int64 on purpose (issue #33181):
+// they are sparse hit lists, built natively by the searches and gathered by
+// list downstream, and a bitmap measured slower here at every density. The
+// performance is to be re-examined later; see "Storage search results stay
+// lists" in docs/design/20261124-row-selection-bitmap-remaplist.md.
 func ReadDataByFilter(
 	ctx context.Context,
 	tableName string,

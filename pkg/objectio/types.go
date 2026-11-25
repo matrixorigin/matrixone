@@ -47,6 +47,13 @@ type ColumnMetaFetcher interface {
 	MustGetColumn(seqnum uint16) ColumnMeta
 }
 
+// ReadFilterSearchFuncType returns the offsets of the block rows that match.
+//
+// Search results are kept as a sorted []int64 on purpose (issue #33181):
+// they are sparse hit lists, built natively by the searches and gathered by
+// list downstream, and a bitmap measured slower here at every density. The
+// performance is to be re-examined later; see "Storage search results stay
+// lists" in docs/design/20261124-row-selection-bitmap-remaplist.md.
 type ReadFilterSearchFuncType func(containers.Vectors) []int64
 
 type readFilterSearchKind uint8
