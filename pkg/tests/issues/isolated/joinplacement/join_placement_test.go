@@ -187,6 +187,46 @@ func TestSingleRemoteWorkerJoinPlacement(t *testing.T) {
 		return len(states) == 2 && states[ingressID] == metadata.WorkState_Draining &&
 			states[peer.ServiceID()] == metadata.WorkState_Working
 	}, 20*time.Second, 100*time.Millisecond, "expected draining SQL ingress and one working peer")
+	t.Run("read_own_appendable_changes", func(t *testing.T) {
+		// Row 42 is committed but still appendable. A remote worker with a
+		// fresh workspace would see 42 and miss the replacement row 43.
+		for _, tc := range []struct {
+			name     string
+			db       *sql.DB
+			eligible bool
+		}{{"draining_owner", db, false}, {"working_owner", peerDB, true}} {
+			t.Run(tc.name, func(t *testing.T) {
+				conn, err := tc.db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.ExecContext(ctx, "set session query_max_workers=1")
+				require.NoError(t, err)
+				tx, err := conn.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				defer tx.Rollback()
+				r, err := tx.ExecContext(ctx, "delete from "+schema+".append_only where k=42")
+				require.NoError(t, err)
+				deleted, err := r.RowsAffected()
+				require.NoError(t, err)
+				require.EqualValues(t, 1, deleted)
+				_, err = tx.ExecContext(ctx, "insert into "+schema+".append_only values(43)")
+				require.NoError(t, err)
+
+				oldForce := plan.GetForceScanOnMultiCN()
+				plan.SetForceScanOnMultiCN(true)
+				defer plan.SetForceScanOnMultiCN(oldForce)
+				var key, count int
+				err = tx.QueryRowContext(ctx, "select k,count(*) over() from "+schema+".append_only order by k").Scan(&key, &count)
+				if !tc.eligible {
+					require.ErrorContains(t, err, "current-cn-draining", "ineligible workspace owner must not yield a stale row (got %d)", key)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, 43, key)
+				require.Equal(t, 1, count)
+			})
+		}
+	})
 	t.Run("remote_appendable_range", func(t *testing.T) {
 		conn := connections[2]
 		const q = "select k,row_number() over(order by k) rn from append_only"
