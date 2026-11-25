@@ -43,7 +43,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -11792,6 +11791,7 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 
 const userLevelLockTableID uint64 = 1 << 62
 
+const userLevelLockLookupTimeout = 10 * time.Second
 const userLevelLockCloseTimeout = 5 * time.Second
 const userLevelLockDetachedCleanupAttemptTimeout = time.Second
 const userLevelLockDetachedCleanupInitialBackoff = 10 * time.Millisecond
@@ -12068,22 +12068,6 @@ func userLevelLockFailedAttemptCleanupKey(ls lockservice.LockService, owner stri
 func userLevelLockTxnIDOld(owner, name string) []byte {
 	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
 }
-
-func userLevelLockProbeTxnID(owner string, connID uint64, name, probeType string) []byte {
-	sequence := userLevelLockProbeTxnIDSequence.Add(1)
-	prefix := userLevelLockProbeTxnIDPrefix(owner, connID, name, probeType)
-	var attempt [16]byte
-	if _, err := rand.Read(attempt[:]); err == nil {
-		return append(prefix, []byte(fmt.Sprintf("\x00%d\x00%s", sequence, hex.EncodeToString(attempt[:])))...)
-	}
-	return append(prefix, []byte(fmt.Sprintf("\x00%d\x00%d", sequence, time.Now().UnixNano()))...)
-}
-
-func userLevelLockProbeTxnIDPrefix(owner string, connID uint64, name, probeType string) []byte {
-	return []byte(fmt.Sprintf("mo-user-level-lock-probe\x00%s\x00%s\x00%s\x00%d", probeType, owner, name, connID))
-}
-
-var userLevelLockProbeTxnIDSequence atomic.Uint64
 
 func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
 	return userLevelLockConnectionIDFromTxnIDWithFallback(txnID, 0, false)
@@ -13073,29 +13057,6 @@ func queueDetachedUserLevelLockCleanupLocked() {
 	}
 }
 
-func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name, probeType string, txnID []byte) error {
-	attemptCtx, cancel := userLevelLockCleanupAttemptContext(ctx)
-	err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID)
-	cancel()
-	if err == nil {
-		return nil
-	}
-	key := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:"+probeType, txnID)
-	if handoffDetachedUserLevelLockTxnCleanup(
-		ctx,
-		ls,
-		key,
-		[][]byte{txnID},
-	) {
-		releaseRetainedUserLevelLockTxnCleanupSlot(key)
-		return err
-	}
-	if !retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
-		return moerr.NewInternalErrorNoCtxf("user-level lock probe cleanup queue is full for %s", name)
-	}
-	return err
-}
-
 func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
 	return lockpb.LockOptions{
 		Granularity: lockpb.Granularity_Row,
@@ -13114,12 +13075,6 @@ func userLevelLockContext(proc *process.Process, timeoutSeconds uint32) (context
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	return ctx, cancel, lockpb.WaitPolicy_Wait
-}
-
-func userLevelLockConflictOrTimeout(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
-		errors.Is(err, lockservice.ErrLockConflict) ||
-		errors.Is(err, context.DeadlineExceeded)
 }
 
 func userLevelLockTimedOut(err error) bool {
@@ -13408,46 +13363,8 @@ func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, b
 	connID := userLevelLockConnectionID(proc)
 	count := userLevelLockRefCount(owner, name)
 	if count == 0 {
-		probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "release")
-		probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:release", probeTxnID)
-		if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
-			return 0, false, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
-		}
-		if err := registerUserLevelLockTxn(ls, probeTxnID); err != nil {
-			releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
-			return 0, false, err
-		}
-		// Probe the lockservice to distinguish "lock does not exist" (NULL)
-		// from "lock exists but held by another session" (0).
-		_, probeErr := ls.Lock(
-			proc.Ctx,
-			userLevelLockTableID,
-			[][]byte{userLevelLockRow(proc, name)},
-			probeTxnID,
-			userLevelLockOptions(lockpb.WaitPolicy_FastFail))
-		if probeErr != nil {
-			cleanupErr := cleanupFailedUserLevelLockTxn(
-				proc.Ctx,
-				ls,
-				probeCleanupKey,
-				probeTxnID,
-			)
-			if cleanupErr != nil {
-				return 0, false, cleanupErr
-			}
-			if userLevelLockConflictOrTimeout(probeErr) {
-				// Lock exists but is held by another session.
-				return 0, false, nil
-			}
-			return 0, false, probeErr
-		}
-		// Lock did not exist — we acquired it via the probe. Release it and
-		// return NULL to signal the lock was already free.
-		if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "release", probeTxnID); err != nil {
-			return 0, false, err
-		}
-		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
-		return 0, true, nil
+		held, err := lookupUserLevelLockHeld(proc, ls, name)
+		return 0, err == nil && !held, err
 	}
 	if count > 1 {
 		untrackUserLevelLock(owner, name)
@@ -13465,43 +13382,20 @@ func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, er
 	if err != nil {
 		return 0, err
 	}
-	owner := userLevelLockOwner(proc)
-	connID := userLevelLockConnectionID(proc)
-	probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "is_free")
-	probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:is_free", probeTxnID)
-	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
-		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
-	}
-	if err := registerUserLevelLockTxn(ls, probeTxnID); err != nil {
-		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
+	held, err := lookupUserLevelLockHeld(proc, ls, name)
+	if err != nil || held {
 		return 0, err
 	}
-	_, err = ls.Lock(
-		proc.Ctx,
-		userLevelLockTableID,
-		[][]byte{userLevelLockRow(proc, name)},
-		probeTxnID,
-		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
-	if err != nil {
-		cleanupErr := cleanupFailedUserLevelLockTxn(
-			proc.Ctx,
-			ls,
-			probeCleanupKey,
-			probeTxnID,
-		)
-		if cleanupErr != nil {
-			return 0, cleanupErr
-		}
-		if userLevelLockConflictOrTimeout(err) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "is_free", probeTxnID); err != nil {
-		return 0, err
-	}
-	releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 	return 1, nil
+}
+
+func lookupUserLevelLockHeld(proc *process.Process, ls lockservice.LockService, name string) (bool, error) {
+	// The owner lookup can retry on stale bindings and transport errors.
+	ctx, cancel := context.WithTimeout(proc.Ctx, userLevelLockLookupTimeout)
+	defer cancel()
+	_, held, err := ls.GetLockHolder(ctx, userLevelLockTableID, userLevelLockRow(proc, name),
+		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
+	return held, err
 }
 
 func isUserLevelLockUsedValidated(name string, proc *process.Process) (uint64, bool, error) {
