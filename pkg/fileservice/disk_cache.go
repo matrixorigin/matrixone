@@ -1577,36 +1577,40 @@ func (d *DiskCache) fillFileTo(
 	return d.observeWriteResult(diskPath, nil)
 }
 
+// DeletePaths deletes the entries of every path of paths, whatever the others return,
+// and returns their errors joined.
 func (d *DiskCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
-) (err error) {
+) error {
 	canonical, err := canonicalFilePaths(paths)
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, path := range canonical {
-		diskPath := d.pathForFile(path)
-		// Counted first: an entry read before it and cached after it is retracted.
-		d.deletes.deleted(diskPath)
-		d.async.mu.Lock()
-		d.async.wakeFreedLocked()
-		d.async.mu.Unlock()
-		// No prefetch object of the object caches its bytes after the delete; one under
-		// way is canceled rather than waited for.
-		if err = d.dropPrefetches(ctx, diskPath); err != nil {
-			return
-		}
-		if err = d.removeOnePath(ctx, path); err != nil {
-			return
-		}
-		d.prefetched.forget(diskPath)
-		if err = d.removeRangeFiles(ctx, path); err != nil {
-			return
-		}
+		errs = append(errs, d.deletePath(ctx, path))
 	}
+	return errors.Join(errs...)
+}
 
-	return
+func (d *DiskCache) deletePath(ctx context.Context, path string) error {
+	diskPath := d.pathForFile(path)
+	// Counted first: an entry read before it and cached after it is retracted.
+	d.deletes.deleted(diskPath)
+	d.async.mu.Lock()
+	d.async.wakeFreedLocked()
+	d.async.mu.Unlock()
+	// No prefetch object of the object caches its bytes after the delete; one under
+	// way is canceled rather than waited for.
+	if err := d.dropPrefetches(ctx, diskPath); err != nil {
+		return err
+	}
+	err := d.removeOnePath(ctx, path)
+	if err == nil {
+		d.prefetched.forget(diskPath)
+	}
+	return errors.Join(err, d.removeRangeFiles(ctx, path))
 }
 
 func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) {
@@ -1649,14 +1653,14 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 	return
 }
 
-// removeRangeFiles deletes the cached range files of the object at path.
+// removeRangeFiles deletes the cached range files of the object at path, each one
+// whatever the others return, and returns their errors joined.
 func (d *DiskCache) removeRangeFiles(ctx context.Context, path string) error {
+	var errs []error
 	for _, r := range d.ranges.of(d.rangeObjectKey(path)) {
-		if err := d.removeRangeFile(ctx, r.diskPath); err != nil {
-			return err
-		}
+		errs = append(errs, d.removeRangeFile(ctx, r.diskPath))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (d *DiskCache) removeRangeFile(ctx context.Context, diskPath string) error {

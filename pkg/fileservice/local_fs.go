@@ -991,13 +991,21 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 		span.End()
 	}()
 
+	nativePaths := make([]string, 0, len(filePaths))
 	for _, filePath := range filePaths {
-		if err := l.deleteSingle(ctx, filePath); err != nil {
+		path, err := parseFilePathAtService(filePath, l.name)
+		if err != nil {
 			return err
 		}
+		nativePaths = append(nativePaths, l.toNativeFilePath(path.File))
+	}
+	var errs []error
+	for _, nativePath := range nativePaths {
+		errs = append(errs, deleteLocalFile(&l.RWMutex, l.dirFiles, nativePath))
 	}
 
 	return errors.Join(
+		errors.Join(errs...),
 		func() error {
 			if l.memCache == nil {
 				return nil
@@ -1017,14 +1025,6 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 			return l.remoteCache.DeletePaths(ctx, filePaths)
 		}(),
 	)
-}
-
-func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return err
-	}
-	return deleteLocalFile(&l.RWMutex, l.dirFiles, l.toNativeFilePath(path.File))
 }
 
 func deleteLocalFile(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath string) error {
