@@ -445,8 +445,12 @@ func (d *DiskCache) read(
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return openedFullFile, ctxErr
 			}
-			// ignore error
 			numError++
+			// Retrying a read after allocation exhaustion can allocate again
+			// in the backing store's cache-data conversion.
+			if errors.Is(err, syscall.ENOMEM) {
+				return openedFullFile, err
+			}
 			logutil.Warn(
 				"read disk cache error",
 				zap.Any("error", err),
