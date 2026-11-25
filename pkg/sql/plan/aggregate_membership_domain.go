@@ -254,14 +254,22 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	// keys disappeared: a date predicate may retain nearly every part key.
 	// Use the available key NDV bounded by surviving rows, without assuming
 	// uniform key loss from that row predicate.
-	costDomainRows := builder.aggregateMembershipDomainRows(domain)
+	costDomainRows, reestimated := builder.aggregateMembershipDomainRows(domain)
 	if !finitePositive(costDomainRows) {
 		return false
 	}
-	factNDV, domainNDV := float64(-1), math.Min(getExprNdv(DeepCopyExpr(domainKey), builder), costDomainRows)
-	if fact.Stats != nil {
-		factNDV = math.Min(getExprNdv(DeepCopyExpr(key), builder), fact.Stats.Outcnt)
+	fullDomain := reestimated && costDomainRows == domain.Stats.TableCnt
+	domainNDV := getExprNdv(DeepCopyExpr(domainKey), builder)
+	if reestimated && (fullDomain || !finitePositive(domainNDV)) &&
+		containsAllSQLEqualityCompatiblePKs([]int32{domainKey.GetCol().ColPos}, domain.TableDef) {
+		// With no key NDV, charge the complete primary key domain even when
+		// the remaining predicates have a heuristic discount.
+		costDomainRows = domain.Stats.TableCnt
+		domainNDV = costDomainRows
+		fullDomain = true
 	}
+	domainNDV = math.Min(domainNDV, costDomainRows)
+	factNDV := builder.aggregateMembershipFactNDV(fact, key, fullDomain)
 	if !aggregateMembershipCostAllows(agg, fact, domain, factNDV, domainNDV, costDomainRows, key.Typ, domainKey.Typ) {
 		return false
 	}
@@ -282,11 +290,13 @@ func (builder *QueryBuilder) copyAggregateMembership(
 }
 
 // aggregateMembershipDomainRows omits the cost discount of each conjunct
-// proven true when its match-all LIKE inputs are non-NULL. It prices the
-// remaining conjuncts using the scan's existing statistics.
-func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) float64 {
+// proven true when its match-all LIKE inputs are non-NULL. The complete
+// candidate table can still exclude fact keys when no conjunct remains.
+// Price any remaining conjuncts using the scan's existing statistics. The flag
+// marks estimates made after removing at least one such conjunct.
+func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) (rows float64, reestimated bool) {
 	if domain.Stats == nil {
-		return 0
+		return 0, false
 	}
 	matchesAll := func(expr *plan.Expr) bool {
 		return membershipPredicateMatchesAll(expr, domain.BindingTags[0])
@@ -294,25 +304,50 @@ func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) fl
 	conjuncts := splitPlanConjunctions(domain.FilterList)
 	remaining := slices.DeleteFunc(conjuncts, matchesAll)
 	if len(remaining) == len(conjuncts) {
-		return domain.Stats.Outcnt
-	}
-	if len(remaining) == 0 {
-		return 0
+		return domain.Stats.Outcnt, false
 	}
 	// Use the statistics already cached by the planning pass.
 	cached := builder.getStatsInfoByTableID(domain.TableDef.TblId)
 	if cached == nil {
-		return 0
+		return 0, false
 	}
 	stats := cached.GetStats()
 	if stats == nil || !finitePositive(stats.TableCnt) || stats.TableCnt != domain.Stats.TableCnt {
-		return 0
+		return 0, false
+	}
+	if len(remaining) == 0 {
+		return stats.TableCnt, true
 	}
 	selectivity := estimateAndSelectivity(DeepCopyExprList(remaining), builder, stats)
-	if selectivity >= 1 {
-		return 0
+	return stats.TableCnt * selectivity, true
+}
+
+func (builder *QueryBuilder) aggregateMembershipFactNDV(fact *plan.Node, key *plan.Expr, fullDomain bool) float64 {
+	if fact.Stats == nil {
+		return -1
 	}
-	return domain.Stats.TableCnt * selectivity
+	key = DeepCopyExpr(key)
+	ndv := math.Min(getExprNdv(key, builder), fact.Stats.Outcnt)
+	if !fullDomain {
+		return ndv
+	}
+	col := key.GetCol()
+	cached := builder.getStatsInfoByCol(col)
+	if cached == nil {
+		return ndv
+	}
+	stats := cached.GetStats()
+	// Transient estimates can borrow older column bounds while including newer rows.
+	if !StatsInfoUsableForCache(stats) || stats.TableCnt != fact.Stats.TableCnt {
+		return ndv
+	}
+	lo, hasLo := stats.MinValMap[col.Name]
+	hi, hasHi := stats.MaxValMap[col.Name]
+	if !hasLo || !hasHi || stats.DataTypeMap[col.Name] != uint64(key.Typ.Id) {
+		return ndv
+	}
+	// An equality SEMI does not match NULL keys.
+	return boundNDVByIntegerSpan(ndv, types.T(key.Typ.Id), lo, hi, false)
 }
 
 func membershipPredicateMatchesAll(expr *plan.Expr, scanTag int32) bool {

@@ -600,6 +600,43 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return ndv
 }
 
+// Statistics may overestimate NDV across overlapping objects. For small integer
+// keys, exactly represented min/max values provide an independent domain bound.
+// This affects profitability only; catalog proofs still establish legality.
+func boundNDVByIntegerSpan(ndv float64, keyType types.T, lo, hi float64, includeNull bool) float64 {
+	if !finitePositive(ndv) || math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) ||
+		lo > hi || math.Trunc(lo) != lo || math.Trunc(hi) != hi || lo == 0 && hi == 0 {
+		// UpdateStatsInfo also uses [0,0] for an uninitialized zone map.
+		// Do not treat that ambiguous sentinel as a proven singleton domain.
+		return ndv
+	}
+	var lower, upper float64
+	switch keyType {
+	case types.T_int8:
+		lower, upper = math.MinInt8, math.MaxInt8
+	case types.T_int16:
+		lower, upper = math.MinInt16, math.MaxInt16
+	case types.T_int32:
+		lower, upper = math.MinInt32, math.MaxInt32
+	case types.T_uint8:
+		upper = math.MaxUint8
+	case types.T_uint16:
+		upper = math.MaxUint16
+	case types.T_uint32:
+		upper = math.MaxUint32
+	default:
+		return ndv
+	}
+	if lo < lower || hi > upper {
+		return ndv
+	}
+	span := hi - lo + 1
+	if includeNull {
+		span++
+	}
+	return math.Min(ndv, span)
+}
+
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
 	switch exprImpl := arg.Expr.(type) {
 	case *plan.Expr_Col:
