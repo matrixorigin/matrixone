@@ -27,6 +27,7 @@ import (
 	"github.com/prashantv/gostub"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -76,6 +78,41 @@ func appendBatchesConcurrently(
 	}
 	close(start)
 	wg.Wait()
+}
+
+func TestGetBackupFileNames(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+		want    []string
+	}{
+		{"valid", `{"result":["checkpoint-one;;checkpoint-two;","checkpoint-three"]}`, []string{"checkpoint-one", "checkpoint-two", "checkpoint-three"}},
+		{"malformed JSON", `{"result":`, nil},
+		{"invalid result element", `{"result":[123]}`, nil},
+		{"missing result", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t, "select mo_ctl('dn','Backup','')", sql)
+				res := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+				if tc.payload != "" {
+					res.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendStringRows(res, 0, []string{tc.payload}))
+				}
+				return res.GetResult(), nil
+			})
+			names, err := getBackupFileNames(context.Background(), exec, executor.Options{})
+			require.Zero(t, mp.CurrNB())
+			if tc.want == nil {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, names)
+		})
+	}
 }
 
 func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
