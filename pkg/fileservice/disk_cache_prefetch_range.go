@@ -1522,6 +1522,8 @@ type prefetchObjects struct {
 	bytes  int64
 	freed  freedSignal
 	closed bool
+	// downloads counts the downloads of file fills in flight.
+	downloads downloadCount
 	// waiting are the prefetch objects of runs waiting for their resources.
 	waiting map[waitingObject]struct{}
 	reads   sync.WaitGroup // reads of runs and their cache writes

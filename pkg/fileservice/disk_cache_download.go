@@ -48,6 +48,7 @@ type objectDownload struct {
 	readers     int
 	onReadsDone []func() // eviction accounting deferred until active readers finish
 	retired     bool
+	finished    bool          // finishDownload ended it
 	served      int64         // bytes readers took from the download before credited
 	credited    bool          // the cached file counts the bytes readers take
 	credit      func(n int64) // counts n bytes read toward the published file
@@ -787,64 +788,32 @@ func copyPart(ctx context.Context, f *os.File, download *objectDownload, open ra
 	return nil
 }
 
-// diskCacheDownloads indexes the whole-object downloads in flight by disk path.
-type diskCacheDownloads struct {
-	m sync.Map // diskPath -> *objectDownload
+// downloadCount counts the downloads of file fills in flight.
+type downloadCount struct {
 	n atomic.Int64
 }
 
-func (s *diskCacheDownloads) store(diskPath string, o *objectDownload) {
-	if _, loaded := s.m.Swap(diskPath, o); !loaded {
-		s.n.Add(1)
-	}
-}
-
-// storeTaken registers o, which take counted.
-func (s *diskCacheDownloads) storeTaken(diskPath string, o *objectDownload) {
-	if _, loaded := s.m.Swap(diskPath, o); loaded {
-		s.n.Add(-1)
-	}
-}
-
-// take counts a download about to register while fewer than limit are counted, so a
-// decision bounded by the downloads in flight and the registration are one step.
-func (s *diskCacheDownloads) take(limit int64) bool {
+// take counts a download about to start while fewer than limit are counted, so a decision
+// bounded by the downloads in flight and the start are one step.
+func (c *downloadCount) take(limit int64) bool {
 	for {
-		n := s.n.Load()
+		n := c.n.Load()
 		if n >= limit {
 			return false
 		}
-		if s.n.CompareAndSwap(n, n+1) {
+		if c.n.CompareAndSwap(n, n+1) {
 			return true
 		}
 	}
 }
 
-func (s *diskCacheDownloads) remove(diskPath string, o *objectDownload) {
-	if s.m.CompareAndDelete(diskPath, o) {
-		s.n.Add(-1)
-	}
-}
-
-func (s *diskCacheDownloads) load(diskPath string) *objectDownload {
-	if s.n.Load() == 0 {
-		return nil
-	}
-	if o, ok := s.m.Load(diskPath); ok {
-		return o.(*objectDownload)
-	}
-	return nil
-}
-
-// startDownload registers o, the download of the cache file at diskPath of the fill p,
-// which a fill of bytes the write path holds registers with; taken is set when
-// diskCacheDownloads.take counted it already.
+// startDownload counts o, the download of the cache file at diskPath of the fill p, in
+// flight, and registers p when it is a fill of bytes the write path holds; taken is set
+// when downloadCount.take counted it already.
 func (d *DiskCache) startDownload(diskPath string, p *filePrefetchObject, o *objectDownload, taken bool) {
 	o.credit = func(n int64) { d.preloads.readDownload(diskPath, o, n) }
-	if taken {
-		d.downloads.storeTaken(diskPath, o)
-	} else {
-		d.downloads.store(diskPath, o)
+	if !taken {
+		d.prefetchObjects.downloads.n.Add(1)
 	}
 	if p.content {
 		f := &d.prefetchObjects
@@ -854,12 +823,19 @@ func (d *DiskCache) startDownload(diskPath string, p *filePrefetchObject, o *obj
 	}
 }
 
-// finishDownload ends the download o of the fill p of the object at diskPath, once its
-// file is published or dropped: p is forgotten, and a fill of bytes the write path holds
-// ends.
-func (d *DiskCache) finishDownload(diskPath string, o *objectDownload, p *filePrefetchObject) {
+// finishDownload ends the download o of the fill p, once its file is published or
+// dropped: o no longer counts in flight, p is forgotten, and a fill of bytes the write path
+// holds ends. Only the first call takes effect.
+func (d *DiskCache) finishDownload(o *objectDownload, p *filePrefetchObject) {
+	o.mu.Lock()
+	finished := o.finished
+	o.finished = true
+	o.mu.Unlock()
+	if finished {
+		return
+	}
 	o.end(false)
-	d.downloads.remove(diskPath, o)
+	d.prefetchObjects.downloads.n.Add(-1)
 	if p != nil {
 		d.forgetFill(p.diskPath, p)
 		if p.content {
@@ -870,9 +846,9 @@ func (d *DiskCache) finishDownload(diskPath string, o *objectDownload, p *filePr
 	o.retire()
 }
 
-// downloading returns the number of whole-object downloads in flight.
+// downloading returns the number of downloads of file fills in flight.
 func (d *DiskCache) downloading() int {
-	return int(d.downloads.n.Load())
+	return int(d.prefetchObjects.downloads.n.Load())
 }
 
 // prefetchWorkers is the most prefetches run at once, a quarter of the connections
@@ -968,10 +944,6 @@ func (s *freedSignal) notifyLocked() {
 		close(s.ch)
 		s.ch = nil
 	}
-}
-
-func (d *DiskCache) download(diskPath string) *objectDownload {
-	return d.downloads.load(diskPath)
 }
 
 // readFromDownload fills entry from the file fill of the object at diskPath, of the

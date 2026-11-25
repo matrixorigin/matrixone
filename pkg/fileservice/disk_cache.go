@@ -62,7 +62,6 @@ type DiskCache struct {
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
 	diskFullEviction     atomic.Bool
-	downloads            diskCacheDownloads
 	downloadMaxExtraWait time.Duration
 	prefetchRange        prefetchRangeConfig
 	objectSplit          objectSplitConfig
@@ -1112,7 +1111,7 @@ func (d *DiskCache) writeFileTo(
 		if bounds, lead, taken = whole.splitParts(objectSize); taken {
 			defer func() {
 				if taken {
-					d.downloads.n.Add(-1)
+					d.prefetchObjects.downloads.n.Add(-1)
 				}
 			}()
 		}
@@ -1167,7 +1166,7 @@ func (d *DiskCache) writeFileTo(
 		} else {
 			d.startDownload(diskPath, own, download, taken)
 			taken = false
-			w.owner.first(func() { d.finishDownload(diskPath, download, own) })
+			w.owner.first(func() { d.finishDownload(download, own) })
 		}
 		// Its lead part holds the connection the download took.
 		download.begin(lead)

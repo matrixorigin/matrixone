@@ -100,7 +100,7 @@ func TestS3FSObjectSplitSkipsSharedLink(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
 	for i := 0; i < DefaultDiskPrefetchObjectSplitDownloads; i++ {
-		d.downloads.store(fmt.Sprintf("other-%d", i), newObjectDownload("", false, nil))
+		d.prefetchObjects.downloads.n.Add(1)
 	}
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)

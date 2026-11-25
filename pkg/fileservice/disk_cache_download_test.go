@@ -715,6 +715,19 @@ func acquireCapture(t *testing.T, read *fullObjectDiskCacheReader, download *obj
 	}
 }
 
+// download returns the download of the registered fill of the whole object at diskPath,
+// of either cache.
+func (d *DiskCache) download(diskPath string) *objectDownload {
+	p := d.wholeFill(diskPath, false)
+	if p == nil {
+		p = d.wholeFill(diskPath, true)
+	}
+	if p == nil {
+		return nil
+	}
+	return p.joinableDownload()
+}
+
 // registerWholeFill registers o as the download of a fill of the whole object at diskPath.
 func registerWholeFill(d *DiskCache, diskPath string, o *objectDownload) *filePrefetchObject {
 	p := d.newContentFill(diskPath)

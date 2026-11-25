@@ -139,7 +139,7 @@ func (p *filePrefetchObject) splitParts(layout objectLayout) (bounds []int64, le
 	p.endAt(size)
 	d := p.d
 	b := d.objectSplit.bounds(size, splitAt)
-	if b == nil || !d.downloads.take(int64(cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))) {
+	if b == nil || !d.prefetchObjects.downloads.take(int64(cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))) {
 		return nil, 0, false
 	}
 	return b, leadPart(b, splitAt), true
