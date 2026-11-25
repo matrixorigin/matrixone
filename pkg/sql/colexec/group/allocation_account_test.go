@@ -2883,6 +2883,43 @@ func TestAccountedMergeGroupCapacityPressureSpillsAndRetriesPartial(t *testing.T
 	}
 }
 
+// Without an allocation account the partial output is still written into
+// memory from the process pool, and it follows the batch: moving it keeps it
+// alive past the Group, and cleaning the receiving batch frees it.
+func TestUnaccountedStreamingGroupWritesPartialOutputFromPool(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 1, 3}, nil, proc.Mp())
+	input.SetRowCount(4)
+
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()},
+	)
+	g.NeedEval = false
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, g.Prepare(proc))
+	require.Nil(t, g.ctr.allocationAccount)
+
+	result, err := vm.Exec(g, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.NotEmpty(t, result.Batch.ExtraBuf())
+	payload := append([]byte(nil), result.Batch.ExtraBuf()...)
+	destination := batch.NewWithSize(0)
+	require.NoError(t, destination.MoveExtraBufferFrom(result.Batch, proc.Mp()))
+	require.Empty(t, result.Batch.ExtraBuf())
+
+	g.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+	require.True(t, bytes.Equal(payload, destination.ExtraBuf()))
+	require.Positive(t, proc.Mp().CurrNB(), "the moved payload is pool memory")
+	destination.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestAccountedStreamingGroupOwnsPartialOutputBuffer(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -2903,19 +2940,17 @@ func TestAccountedStreamingGroupOwnsPartialOutputBuffer(t *testing.T) {
 	result, err := vm.Exec(g, proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
-	require.NotEmpty(t, result.Batch.ExtraBuf)
-	require.True(t, result.Batch.HasAccountedExtraBuffer())
+	require.NotEmpty(t, result.Batch.ExtraBuf())
 	require.Positive(t, allocation.account.Snapshot().Used)
-	payload := append([]byte(nil), result.Batch.ExtraBuf...)
+	payload := append([]byte(nil), result.Batch.ExtraBuf()...)
 	destination := batch.NewWithSize(0)
-	destination.MoveExtraBufferFrom(result.Batch)
-	require.False(t, result.Batch.HasAccountedExtraBuffer())
+	require.NoError(t, destination.MoveExtraBufferFrom(result.Batch, proc.Mp()))
+	require.Empty(t, result.Batch.ExtraBuf())
 
 	g.Free(proc, false, nil)
 	// A pipeline spool may outlive the Group's no-lock MPool. The moved
 	// partial remains owned by the statement MPool until the consumer drops it.
-	require.True(t, bytes.Equal(payload, destination.ExtraBuf))
-	require.True(t, destination.HasAccountedExtraBuffer())
+	require.True(t, bytes.Equal(payload, destination.ExtraBuf()))
 	require.Positive(t, allocation.account.Snapshot().Used)
 	destination.Clean(proc.Mp())
 	require.Zero(t, allocation.account.Snapshot().Used)
@@ -3143,7 +3178,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 						// The transport copy outlives this producer's allocation account.
 						cloned, err := result.Batch.Dup(proc.Mp())
 						require.NoError(t, err)
-						cloned.ExtraBuf = append([]byte(nil), result.Batch.ExtraBuf...)
+						require.NoError(t, cloned.SetExtraBuf(proc.Mp(), result.Batch.ExtraBuf()))
 						partials = append(partials, cloned)
 					}
 					require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])

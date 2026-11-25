@@ -96,10 +96,10 @@ func TestBatchAccountedExtraBufferMoveAndClean(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var nilBatch *Batch
 	require.ErrorIs(t, nilBatch.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
-	nilBatch.MoveExtraBufferFrom(nil)
+	require.NoError(t, nilBatch.MoveExtraBufferFrom(nil, mp))
 	empty := NewWithSize(0)
 	require.ErrorIs(t, empty.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
-	empty.MoveExtraBufferFrom(empty)
+	require.NoError(t, empty.MoveExtraBufferFrom(empty, mp))
 	empty.Clean(mp)
 	buffer, err := mpool.NewAccountedBuffer(mp, state.account, 1, 5)
 	require.NoError(t, err)
@@ -114,9 +114,9 @@ func TestBatchAccountedExtraBufferMoveAndClean(t *testing.T) {
 	require.Equal(t, used, state.account.Snapshot().Used)
 
 	destination := NewWithSize(0)
-	destination.MoveExtraBufferFrom(source)
-	require.Empty(t, source.ExtraBuf)
-	require.Len(t, destination.ExtraBuf, 4096)
+	require.NoError(t, destination.MoveExtraBufferFrom(source, mp))
+	require.Empty(t, source.extraBuf)
+	require.Len(t, destination.extraBuf, 4096)
 	source.Clean(mp)
 	require.Equal(t, used, state.account.Snapshot().Used)
 	destination.Clean(mp)
@@ -317,19 +317,19 @@ func TestBatchSpillCodecRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	view := state.view(t, mp)
 	source := newBatchAllocationTestSource(t, mp)
-	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
+	source.extraBuf = bytes.Repeat([]byte("x"), 1<<20)
 
 	var encoded bytes.Buffer
 	spillSize, err := source.MarshalBinaryForSpillSize()
 	require.NoError(t, err)
 	stableSize, err := source.MarshalBinarySize()
 	require.NoError(t, err)
-	require.Greater(t, stableSize-spillSize, len(source.ExtraBuf)/2)
+	require.Greater(t, stableSize-spillSize, len(source.extraBuf)/2)
 	require.NoError(t, source.MarshalBinaryForSpillTo(&encoded))
 	decoded := NewWithSize(0)
 	require.NoError(t, decoded.UnmarshalFromReaderForSpill(&encoded, view))
 	require.Empty(t, decoded.Attrs)
-	require.Empty(t, decoded.ExtraBuf)
+	require.Empty(t, decoded.extraBuf)
 	require.Equal(t, source.RowCount(), decoded.RowCount())
 	require.Len(t, decoded.Vecs, len(source.Vecs))
 	require.Equal(t,
@@ -375,7 +375,7 @@ func TestBatchSpillCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			source := NewWithSize(0)
 			source.Attrs = test.attrs
-			source.ExtraBuf = test.extra
+			source.extraBuf = test.extra
 			var payload bytes.Buffer
 			require.NoError(t, source.MarshalBinaryTo(&payload))
 			var encoded bytes.Buffer

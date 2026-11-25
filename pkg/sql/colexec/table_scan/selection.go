@@ -15,7 +15,6 @@
 package table_scan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,16 +23,18 @@ import (
 )
 
 // selectionState lets the scan publish filtered blocks without copying them.
-// The reader keeps every column a read-only reference to the cache (pinned by
-// the scan's output batch until its next CleanOnlyData) and records the rows
-// the filter kept in rows. The scan's projection then runs on the physical
-// rows, masked to the selection, and the result either keeps the selection,
-// when the parent reads selected batches, or is compacted into compact, a
-// batch owned by the scan's pool. Either way it is valid until the next Call.
+// The reader keeps every column a read-only reference to the cache and records
+// the rows the filter kept as the output batch's own selection. The cache pins
+// belong to the scan's ReaderFilterRequest, the lender: the reader releases
+// them before it reuses the output batch for the next block, and the scan
+// releases them in Reset and Free. The scan's projection then runs on the
+// physical rows, masked to the selection, and the result either keeps the
+// selection, when the parent reads selected batches, or is compacted into
+// compact, a batch owned by the scan's pool. Either way it is valid until the
+// next Call.
 type selectionState struct {
 	// output is set by the parent's preparation (vm.SelectionProducer).
 	output   bool
-	rows     bitmap.Bitmap
 	mask     []bool
 	physical batch.Batch
 	compact  *batch.Batch
@@ -100,7 +101,7 @@ func (tableScan *TableScan) execSelectedProjection(proc *process.Process, input 
 // Columns the reader left empty (unused after the filter) stay empty.
 func (s *selectionState) compactInto(out *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
 	if s.compact == nil || len(s.compact.Vecs) != len(out.Vecs) {
-		// out may still read s.rows: free only the compact batch.
+		// out may still read its selection: free only the compact batch.
 		s.freeCompact(mp)
 		s.compact = batch.NewWithSize(len(out.Vecs))
 	}
@@ -144,7 +145,6 @@ func (s *selectionState) reset() {
 
 func (s *selectionState) free(mp *mpool.MPool) {
 	s.uses = nil
-	s.rows.Free()
 	s.freeCompact(mp)
 }
 

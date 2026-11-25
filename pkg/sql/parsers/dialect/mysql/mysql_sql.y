@@ -8205,7 +8205,7 @@ where_expression_opt:
     }
 |   WHERE expression
     {
-        $$ = &tree.Where{Type: tree.AstWhere, Expr: $2}
+        $$ = yylex.(*Lexer).whereClause($2, $<pos>1, yyrcvr.Lookahead() >= 0)
     }
 
 select_expression_list:
@@ -12311,11 +12311,11 @@ row_format_options:
     }
 
 charset_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 collate_name:
-    name_string
+    name_string { $$ = yylex.(*Lexer).rewriteMergeName($1) }
 |   BINARY
 
 table_name_list:

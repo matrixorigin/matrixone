@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -71,6 +73,34 @@ func TestWindowTemporalIntervals(t *testing.T) {
 			require.Equal(t, one, query(t, frameQuery("'0:01' minute_second")))
 			require.Equal(t, one, query(t, frameQuery("true second")))
 			require.Equal(t, zero, query(t, frameQuery("false second")))
+		})
+		t.Run("preceding_overflow", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "set time_zone = '+00:00'")
+			defer execSQLRequire(t, ctx, db, "set time_zone = default")
+			for _, tc := range []struct {
+				name, key, interval, aggregates string
+				want                            []string
+			}{
+				{"date", "cast(at as date)", "999999999 day", ",avg(v) over w,first_value(v) over w", []string{"1:0:NULL:NULL:NULL", "2:0:NULL:NULL:NULL", "3:0:NULL:NULL:NULL"}},
+				{"datetime", "at", "293000000000 day", "", []string{"1:0:NULL", "2:0:NULL", "3:0:NULL"}},
+				{"timestamp", "cast(at as timestamp(6))", "9223372036854775807 microsecond", "", []string{"1:0:NULL", "2:0:NULL", "3:0:NULL"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					q := "select id,count(*) over w,sum(v) over w" + tc.aggregates +
+						" from dt where id <= 3 window w as (order by " + tc.key +
+						" range between interval " + tc.interval + " preceding and current row) order by id"
+					require.Equal(t, tc.want, query(t, q))
+				})
+			}
+			t.Run("invalid_end", func(t *testing.T) {
+				_, err := db.ExecContext(ctx, `select count(*) over (
+					order by cast(at as date)
+					range between interval 999999999 day preceding and interval 8796093022208 day following
+				) from dt where id = 1`)
+				var intervalErr *mysql.MySQLError
+				require.ErrorAs(t, err, &intervalErr)
+				require.Equal(t, moerr.ErrInvalidArg, intervalErr.Number)
+			})
 		})
 		t.Run("NULL interval consumers", func(t *testing.T) {
 			for _, typ := range []string{"date", "time(6)", "datetime(6)", "timestamp(6)"} {

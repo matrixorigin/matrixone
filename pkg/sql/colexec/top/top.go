@@ -294,7 +294,7 @@ func (top *Top) Call(
 			top.ctr.buildBat.Recursive = bat.Recursive
 			top.ctr.buildBat.ShuffleIDX = bat.ShuffleIDX
 			top.ctr.buildBat.Attrs = bat.Attrs
-			if len(bat.ExtraBuf) > 0 {
+			if len(bat.ExtraBuf()) > 0 {
 				return result, moerr.NewInternalError(proc.Ctx, "top build should not have extra buffers")
 			}
 			copy(top.ctr.buildBat.Vecs, bat.Vecs)
@@ -839,7 +839,7 @@ func (ctr *container) spillBatch(
 	if bat == nil || ctr.n < 0 || ctr.n > len(bat.Vecs) {
 		return spillRecordRef{}, moerr.NewInvalidInputNoCtx("invalid top spill batch")
 	}
-	if len(bat.ExtraBuf) != 0 {
+	if len(bat.ExtraBuf()) != 0 {
 		return spillRecordRef{}, moerr.NewInvalidInputNoCtx("top spill batch has extra buffers")
 	}
 
