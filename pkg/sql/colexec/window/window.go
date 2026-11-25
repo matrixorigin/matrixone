@@ -2124,14 +2124,19 @@ func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowId
 }
 
 func (ctr *container) buildInterval(proc *process.Process, rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
+	left, right, _, err := ctr.buildIntervalBounds(proc, rowIdx, start, end, frame)
+	return left, right, err
+}
+
+func (ctr *container) buildIntervalBounds(proc *process.Process, rowIdx, start, end int, frame *plan.FrameClause) (left, right int, arithmeticNull bool, err error) {
 	// FrameClause_ROWS
 	if frame.Type == plan.FrameClause_ROWS {
 		start, end = ctr.buildRowsInterval(rowIdx, start, end, frame)
-		return start, end, nil
+		return start, end, false, nil
 	}
 
 	if len(ctr.orderVecs) == 0 {
-		return start, end, nil
+		return start, end, false, nil
 	}
 
 	// FrameClause_Range
@@ -2147,8 +2152,8 @@ func (ctr *container) buildIntervalRows(
 	rowIdx, start, end int,
 	frame *plan.FrameClause,
 ) (left, right int, selection *timestampRangeSelection, err error) {
-	left, right, err = ctr.buildInterval(proc, rowIdx, start, end, frame)
-	if err != nil || frame.Type != plan.FrameClause_RANGE || len(ctr.orderVecs) != 1 {
+	left, right, arithmeticNull, err := ctr.buildIntervalBounds(proc, rowIdx, start, end, frame)
+	if err != nil || arithmeticNull || frame.Type != plan.FrameClause_RANGE || len(ctr.orderVecs) != 1 {
 		return left, right, nil, err
 	}
 
@@ -2635,19 +2640,19 @@ func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.
 }
 
 func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
-	return ctr.buildRangeIntervalWithLocation(time.Local, rowIdx, start, end, frame)
+	left, right, _, err := ctr.buildRangeIntervalWithLocation(time.Local, rowIdx, start, end, frame)
+	return left, right, err
 }
 
-func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
+func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx int, start, end int, frame *plan.FrameClause) (left, right int, arithmeticNull bool, err error) {
 	if hasNullIntervalBound(frame) {
 		vec := ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0]
 		// NULL current keys still form their ordinary peer group. Only a
 		// non-NULL temporal key has NULL interval arithmetic and an empty frame.
 		if !vec.IsConstNull() && !vec.GetNulls().Contains(uint64(rowIdx)) {
-			return rowIdx, rowIdx, nil
+			return rowIdx, rowIdx, true, nil
 		}
 	}
-	var err error
 	var desc bool
 	if len(ctr.desc) > 0 {
 		desc = ctr.desc[len(ctr.desc)-1]
@@ -2659,20 +2664,25 @@ func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx 
 		} else {
 			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
 			if err != nil {
-				return start, end, err
+				return start, end, false, err
 			}
 		}
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
-			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc)
+			start, err = searchLeftBound(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc, &arithmeticNull)
 			if err != nil {
-				return start, end, err
+				return start, end, false, err
+			}
+			if arithmeticNull {
+				// Use the start of the non-NULL segment so subsequent valid
+				// frames can slide forward from this empty interval.
+				return start, start, true, nil
 			}
 		}
 	case plan.FrameBound_FOLLOWING:
 		start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
 		if err != nil {
-			return start, end, err
+			return start, end, false, err
 		}
 	}
 
@@ -2683,23 +2693,23 @@ func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx 
 		} else {
 			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
 			if err != nil {
-				return start, end, err
+				return start, end, false, err
 			}
 		}
 	case plan.FrameBound_PRECEDING:
 		end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
 		if err != nil {
-			return start, end, err
+			return start, end, false, err
 		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
 			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false, desc)
 			if err != nil {
-				return start, end, err
+				return start, end, false, err
 			}
 		}
 	}
-	return start, end, nil
+	return start, end, false, nil
 }
 
 // buildPeerInterval returns the peer group containing rowIdx. orderBoundaries
@@ -3154,6 +3164,12 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 }
 
 func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
+	return searchLeftBound(loc, start, end, rowIdx, vec, expr, plus, desc, nil)
+}
+
+// A bounded PRECEDING frame start can request the arithmetic NULL result
+// alongside the lower insertion point used by the ordinary search callers.
+func searchLeftBound(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool, arithmeticNull *bool) (int, error) {
 	if start >= end {
 		return start, nil
 	}
@@ -3182,7 +3198,7 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 	// logical rows. Evaluate the one physical row and project its boundary back
 	// to this logical interval instead of indexing the scalar column by mid.
 	if vec.IsConst() && (start != 0 || end != 1 || rowIdx != 0) {
-		boundary, err := searchLeftWithLocation(loc, 0, 1, 0, vec, expr, plus, desc)
+		boundary, err := searchLeftBound(loc, 0, 1, 0, vec, expr, plus, desc, arithmeticNull)
 		if err != nil || boundary == 0 {
 			return start, err
 		}
@@ -3456,6 +3472,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						if arithmeticNull != nil && !desc {
+							*arithmeticNull = temporalPrecedingOutsideMySQLDomain(col[rowIdx].ToDatetime(), diff, types.IntervalType(unit))
+						}
 						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return left, err
@@ -3487,6 +3506,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						if arithmeticNull != nil && !desc {
+							*arithmeticNull = temporalPrecedingOutsideMySQLDomain(col[rowIdx], diff, types.IntervalType(unit))
+						}
 						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return left, err
@@ -3549,6 +3571,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
 					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						if arithmeticNull != nil && !desc {
+							*arithmeticNull = temporalPrecedingOutsideMySQLDomain(col[rowIdx].ToDatetime(loc), diff, types.IntervalType(unit))
+						}
 						return temporalRangeIntervalOverflowBoundary(start, end, false, diff, desc), nil
 					}
 					return left, err
@@ -4233,27 +4258,64 @@ func checkedMicrosecondArithmetic(start, diff int64, subtract bool) (int64, bool
 	return start + diff, true
 }
 
-// temporalRangeIntervalConversionOK prevents fixed-duration units from
-// wrapping while AddInterval converts them to microseconds. The magnitude
-// check accepts values that fit in an int64, but their later conversion can
-// still overflow before AddInterval validates the temporal domain.
-func temporalRangeIntervalConversionOK(diff int64, unit types.IntervalType) bool {
-	var multiplier int64
+// temporalRangeFixedUnitMicros gives the conversion factor for fixed offsets.
+// Calendar units have no fixed microsecond conversion.
+func temporalRangeFixedUnitMicros(unit types.IntervalType) int64 {
 	switch unit {
+	case types.MicroSecond:
+		return 1
 	case types.Second:
-		multiplier = types.MicroSecsPerSec
+		return types.MicroSecsPerSec
 	case types.Minute:
-		multiplier = types.MicroSecsPerSec * types.SecsPerMinute
+		return types.MicroSecsPerSec * types.SecsPerMinute
 	case types.Hour:
-		multiplier = types.MicroSecsPerSec * types.SecsPerHour
+		return types.MicroSecsPerSec * types.SecsPerHour
 	case types.Day:
-		multiplier = types.MicroSecsPerSec * types.SecsPerDay
+		return types.MicroSecsPerSec * types.SecsPerDay
 	case types.Week:
-		multiplier = types.MicroSecsPerSec * types.SecsPerWeek
+		return types.MicroSecsPerSec * types.SecsPerWeek
 	default:
+		return 0
+	}
+}
+
+// temporalRangeIntervalConversionOK prevents accepted fixed-unit offsets from
+// wrapping while AddInterval converts them to microseconds.
+func temporalRangeIntervalConversionOK(diff int64, unit types.IntervalType) bool {
+	multiplier := temporalRangeFixedUnitMicros(unit)
+	return multiplier == 0 || (diff <= math.MaxInt64/multiplier && diff >= math.MinInt64/multiplier)
+}
+
+// MySQL can compare temporary year-zero frame bounds even though MatrixOne
+// dates start at year one. A positive subtraction beyond that extra year
+// produces NULL, so the current row has an empty frame.
+func temporalPrecedingOutsideMySQLDomain(civil types.Datetime, diff int64, unit types.IntervalType) bool {
+	if diff <= 0 {
+		return false
+	}
+	if civil == types.ZeroDatetime {
+		// Subtracting a positive interval from a stored all-zero date yields NULL.
 		return true
 	}
-	return diff <= math.MaxInt64/multiplier && diff >= math.MinInt64/multiplier
+	if multiplier := temporalRangeFixedUnitMicros(unit); multiplier != 0 {
+		const yearZeroMicros = 366 * types.SecsPerDay * types.MicroSecsPerSec
+		return diff > (int64(civil)+yearZeroMicros)/multiplier
+	}
+
+	var monthsPerUnit int64
+	switch unit {
+	case types.Month, types.Year_Month:
+		monthsPerUnit = 1
+	case types.Quarter:
+		monthsPerUnit = 3
+	case types.Year:
+		monthsPerUnit = 12
+	default:
+		return false
+	}
+	year, month, _, _ := civil.ToDate().Calendar(true)
+	months := 12*int64(year) + int64(month) - 1
+	return diff > months/monthsPerUnit
 }
 
 // temporalRangeCalendarIntervalInDomain evaluates calendar arithmetic in the
