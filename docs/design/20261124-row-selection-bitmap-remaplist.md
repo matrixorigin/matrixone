@@ -79,15 +79,32 @@ The batch selection that already exists is the starting point, with one change: 
 
 ```go
 // OwnSelection returns the batch's own selection storage, cleared and sized to
-// physicalRows. The caller fills it (or copies an input selection into it and
-// narrows it) and then publishes it with SetSelection.
-func (bat *Batch) OwnSelection(physicalRows int) *bitmap.Bitmap
+// physicalRows, with its words allocated from mp. The caller fills it (or
+// copies an input selection into it and narrows it) and then publishes it with
+// SetSelection. It fails only when mp cannot allocate the words; the batch is
+// then left unselected.
+func (bat *Batch) OwnSelection(mp *mpool.MPool, physicalRows int) (*bitmap.Bitmap, error)
 // SetSelection publishes sel as the batch's logical rows. sel is either the
 // batch's own storage (from OwnSelection) or a borrowed bitmap that stays valid
 // and unmodified until the producer's next Call.
 func (bat *Batch) SetSelection(sel *bitmap.Bitmap)
 func (bat *Batch) Selection() *bitmap.Bitmap // read-only; nil when the batch is not selected
 func (bat *Batch) ClearSelection()           // not selected; keeps the storage
+// FreeSelection drops the selection and returns the own storage's words to
+// their pool, for a batch that is never Cleaned (a view kept in operator state).
+func (bat *Batch) FreeSelection()
+func (bat *Batch) HoldsSelectionMemory() bool // the own storage still holds pool words
+```
+
+A producer handles the error like any other allocation failure in `Call`:
+
+```go
+sel, err := out.OwnSelection(mp, physicalRows)
+if err != nil {
+	return nil, err
+}
+// fill sel ...
+out.SetSelection(sel)
 ```
 
 The batch owns its selection exactly when `Selection()` is its own storage; no flag records it.
@@ -106,19 +123,22 @@ The batch owns its selection exactly when `Selection()` is its own storage; no f
 **Ownership and allocation.** A batch holds at most 8192 rows, so a full selection bitmap is 128 words (1 KiB).
 
 1. A batch's own selection storage lives in the batch and is reused for every batch it carries. Producers reuse their output batches, so in practice it is allocated once per producer.
-2. Each batch re-initializes the storage to that batch's row count by clearing the existing words. It never reallocates.
-3. `Clean` releases the storage. Producers and consumers neither allocate nor free it.
+2. The words come from the pool passed to `OwnSelection`. Each call with the same pool clears the existing words and reuses them when their capacity covers the new row count, and reallocates from the pool otherwise. A call with a different pool (a new execution) first returns the old words to their pool.
+3. The batch's release paths return the words to their pool: `Clean`, `FreeWindow` and `CleanOwned`. A batch that is never Cleaned, such as a filter's output view kept in operator state, calls `FreeSelection` when its owner is freed or reset. `ClearSelection`, `SetRowCount` and `CleanOnlyData` keep the words for the next batch.
+4. An operator whose output batch owns selection words frees them in `Reset` as well as `Free`, since nothing reads the output after `Reset`. Its allocation-account checks count those words as live memory (`HoldsSelectionMemory`).
 
 Other bitmaps and RemapLists follow the producer rule: the owner allocates once, in `Prepare` or on the first `Call`, re-initializes per batch, and frees in `Free`.
 
-Both rules need `InitWithSize` to reuse capacity the way `InitWithRows` already does (PR 1). Until then, `OwnSelection` allocates new words for each batch, as filter and table_scan do on main. Both rules also fit the pool-owned bitmaps of #33144, where every bitmap has one owner that frees it. For a batch's own selection that owner is the batch: once #33144 lands, the storage comes from `Batch.mp` and `Clean` frees it there.
+Both rules fit the pool-owned bitmaps of #33144, where every bitmap has one owner that frees it. For a batch's own selection that owner is the batch.
+
+Operations that treat physical rows as the logical rows (`Shrink`, `ShrinkByMask`, `Shuffle`, `Union*`, `CloneTo`/`Clone`/`Dup`, `CloneSelectedColumnsTo`, `Append*`) return an error on a selected batch, like the codecs. A caller compacts first.
 
 **Borrowed vectors and pins.** Selections and vectors follow the same lending rule, and so does the memory under a borrowed vector:
 
 | Lender | What it lends | How it keeps it alive |
 | --- | --- | --- |
 | table_scan via blockio | columns borrowed from the FileService cache | the scan's `ReaderFilterRequest` holds the cache pins in an `objectio.CachePins` (`Pins`), a plain list of cache entries and their capacity reservations. The reader releases them before it reuses the output batch for the next block; the scan releases them in `Reset` and `Free`. Borrowing is opt-in: only columns the request explicitly retains (`ColumnUses`) are borrowed, so a caller that keeps batches (ivfflat) gets owned copies. |
-| Arrow external reader | columns aliasing its record batch | retains the record it published from until `ReleaseBatch`; varlen descriptors live in its reusable `arrowbridge.Descriptors` scratch |
+| Arrow external reader | columns aliasing its record batch | retains the record it published from until `ReleaseBatch`, only when the batch has a borrowed (read-only) column; a fully materialized batch borrows nothing, so its record is not kept while the next one is read. Varlen descriptors live in its reusable `arrowbridge.Descriptors` scratch |
 | sirius | columns aliasing the native result window | nothing: the window stays valid for the callback that consumes and cleans the batch |
 
 Every path that keeps a batch past the producer's next `Call` already copies: pSpool, the remote codec, spill, and operators that buffer their input.
@@ -127,7 +147,7 @@ Every path that keeps a batch past the producer's next `Call` already copies: pS
 
 | Primitive | Replaces | Used by |
 | --- | --- | --- |
-| `InitWithSize` that reuses words | per-batch `make` | every owner |
+| `InitWithSize` that reuses words (done in #33144: reuses words from the same pool when their capacity suffices) | per-batch `make` | every owner |
 | Build from a bool vector, a word at a time | per-row `Add` loops | filter, table_scan, frontend, DML |
 | `Vector.UnionByMask` / `Batch.UnionByMask` (append selected rows) | `Union(sels)` used as a filter, `UnionBatch` flags | compaction at every boundary |
 | Compose (map a selection over live rows back to physical rows) | rank/select loops over the delete mask | blockio (`read.go:1270`, `positionsOfSelectedRows`), `compactInvisibleAppendRows` |

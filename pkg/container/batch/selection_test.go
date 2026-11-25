@@ -213,9 +213,6 @@ func TestBatchReleasesFreeOwnSelection(t *testing.T) {
 
 // Operations that read or rewrite physical rows as the logical rows reject a
 // selected batch on either side and leave it unchanged: the selection would
-
-// Operations that read or rewrite physical rows as the logical rows reject a
-// selected batch on either side and leave it unchanged: the selection would
 // go stale or the row count would include rows it excludes. One-batch
 // operations still work on an unselected batch.
 func TestBatchRowOpsRejectSelectedBatch(t *testing.T) {
