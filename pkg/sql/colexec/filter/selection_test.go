@@ -19,7 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -175,4 +177,59 @@ func TestFilterSelectionEdgeConfiguration(t *testing.T) {
 	parent.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+// boolLit is a constant BOOL filter condition; null makes it NULL.
+func boolLit(v, null bool) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: null, Value: &plan.Literal_Bval{Bval: v}}},
+	}
+}
+
+// A constant condition keeps every row or none, on the compacting path, the
+// selection path, and after a partial predicate.
+func TestFilterConstantConditions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		konst *plan.Expr
+		keep  bool
+	}{{"true", boolLit(true, false), true}, {"false", boolLit(false, false), false}, {"null", boolLit(false, true), false}} {
+		for _, output := range []bool{false, true} {
+			for _, afterPartial := range []bool{false, true} {
+				base := makeTestCases(t)[0] // a > 10
+				arg, proc := base.arg, base.proc
+				exprs := []*plan.Expr{tc.konst}
+				if afterPartial {
+					exprs = []*plan.Expr{arg.FilterExprs[0], tc.konst}
+				}
+				arg.FilterExprs = exprs
+				resetChildren(arg, proc)
+				require.NoError(t, arg.Prepare(proc))
+				arg.SetSelectionOutput(output)
+				got, _ := runFilter(t, arg, proc, output)
+				rows := 0
+				for _, b := range got {
+					rows += len(b)
+				}
+				switch {
+				case !tc.keep:
+					require.Zero(t, rows, "%s output=%v after=%v", tc.name, output, afterPartial)
+				case afterPartial:
+					require.Positive(t, rows)
+				default:
+					mock := MakeFilterMockBatchs(proc.Mp())
+					require.Equal(t, 2*mock.RowCount(), rows) // two input batches
+					mock.Clean(proc.Mp())
+				}
+				for _, child := range arg.Children {
+					child.Reset(proc, false, nil)
+					child.Free(proc, false, nil)
+				}
+				arg.Reset(proc, false, nil)
+				arg.Free(proc, false, nil)
+				proc.Free()
+			}
+		}
+	}
 }
