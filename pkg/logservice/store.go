@@ -269,9 +269,8 @@ type zombieKey struct {
 // HAKeeper has no elected leader.
 var getShardMembershipFn = getShardMembership
 
-// getHAKeeperStateForZombieCheckFn is overridable in tests. Production uses a
-// HAKeeper leader read, which is authoritative for the membership decisions
-// made by the LogService checker.
+// getHAKeeperStateForZombieCheckFn is overridable in tests. Production reads
+// HAKeeper's replicated state, whose shard membership comes from heartbeats.
 var getHAKeeperStateForZombieCheckFn = getHAKeeperStateForZombieCheck
 
 var zombieSelfCheckTimeout = 2 * time.Second
@@ -340,16 +339,14 @@ func classifyZombiesFromHAKeeperState(
 // rule through a reverse proxy. In that mode the check instead uses discovery
 // to locate the current HAKeeper leader and performs a linearizable
 // GET_CLUSTER_STATE read. The returned LogState is the same membership state
-// used by HAKeeper's LogService checker, so it is authoritative rather than a
-// randomly selected peer's eventually-consistent gossip view.
+// used by HAKeeper's LogService checker, but it can lag a recent Raft change.
 //
 // Every peer's gossip-backed membership view is eventually consistent. A
 // partial set of replies cannot establish absence: the only answering peer
-// might not have learned that this replica joined. Probe every configured
-// peer; when some peers confirm absence and others cannot answer, consult
-// replicated HAKeeper membership within the same startup budget. Even
-// unanimous gossip can lag a recent membership change, so that branch remains
-// a conservative best-effort startup check, not a Raft membership proof.
+// might not have learned that this replica joined. The replicated HAKeeper
+// membership can also lag that ADD because it comes from asynchronous
+// heartbeats, so it cannot resolve the partial result. Even unanimous gossip
+// can lag a recent membership change; this remains a best-effort check.
 //
 // The check is best-effort: if neither gossip nor the HAKeeper leader can
 // confirm removal, the shard is treated as "not a zombie" so legitimate
@@ -389,16 +386,10 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 	}
 
 	logger := l.runtime.Logger()
-	ctx, cancel := context.WithTimeoutCause(ctx, zombieSelfCheckTimeout, moerr.CauseGetCheckerState)
+	ctx, cancel := context.WithTimeout(ctx, zombieSelfCheckTimeout)
 	defer cancel()
-	// Keep part of the startup budget for a replicated membership read when
-	// gossip is incomplete, even if one concrete peer stops answering.
-	gossipCtx, cancelGossip := context.WithTimeout(ctx, zombieSelfCheckTimeout/2)
-	defer cancelGossip()
-	var unresolved []metadata.LogShard
-	responsive := make(map[string]struct{}, len(addresses))
 	for _, rec := range shards {
-		if gossipCtx.Err() != nil {
+		if ctx.Err() != nil {
 			break
 		}
 		if rec.NonVoting {
@@ -406,14 +397,14 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 		}
 		var completeReplies, presentReplies int
 		for i, address := range addresses {
-			if gossipCtx.Err() != nil {
+			if ctx.Err() != nil {
 				break
 			}
 			// Divide the remaining gossip time among peers, so an isolated
 			// address cannot prevent probing the later healthy addresses.
-			deadline, _ := gossipCtx.Deadline()
+			deadline, _ := ctx.Deadline()
 			probeCtx, cancelProbe := context.WithTimeout(
-				gossipCtx, time.Until(deadline)/time.Duration(len(addresses)-i),
+				ctx, time.Until(deadline)/time.Duration(len(addresses)-i),
 			)
 			members, ok, err := getShardMembershipFn(probeCtx, l.cfg.UUID, address, rec.ShardID)
 			cancelProbe()
@@ -428,7 +419,6 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 			if !ok {
 				continue
 			}
-			responsive[address] = struct{}{}
 			completeReplies++
 			if _, present := members[rec.ReplicaID]; present {
 				presentReplies++
@@ -436,54 +426,6 @@ func (l *store) checkZombieReplicas(ctx context.Context, shards []metadata.LogSh
 		}
 		if completeReplies == len(addresses) && presentReplies == 0 {
 			zombies[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
-		} else if completeReplies > 0 && completeReplies < len(addresses) && presentReplies == 0 {
-			// Gossip cannot prove absence with missing peers. The replicated
-			// HAKeeper membership can resolve this ambiguity if a leader is up.
-			unresolved = append(unresolved, rec)
-		}
-	}
-	if len(unresolved) > 0 && ctx.Err() == nil {
-		// Try peers that answered gossip first. Query them individually so a
-		// blackholed address cannot consume the entire leader-read budget.
-		candidates := make([]string, 0, len(addresses))
-		for _, address := range addresses {
-			if _, ok := responsive[address]; ok {
-				candidates = append(candidates, address)
-			}
-		}
-		for _, address := range addresses {
-			if _, ok := responsive[address]; !ok {
-				candidates = append(candidates, address)
-			}
-		}
-		cfg := l.cfg.GetHAKeeperClientConfig()
-		// Concrete peers are available here. Avoid sending the authoritative
-		// fallback through a discovery proxy that may select the same isolated
-		// peer, and exclude this store whose server has not started yet.
-		cfg.DiscoveryAddress = ""
-		deadline, _ := ctx.Deadline()
-		for i, address := range candidates {
-			if ctx.Err() != nil {
-				break
-			}
-			readCtx, cancelRead := context.WithTimeout(
-				ctx, time.Until(deadline)/time.Duration(len(candidates)-i),
-			)
-			cfg.ServiceAddresses = []string{address}
-			state, err := getHAKeeperStateForZombieCheckFn(readCtx, l.cfg.UUID, cfg)
-			if err != nil {
-				err = moerr.AttachCause(readCtx, err)
-			}
-			cancelRead()
-			if err == nil {
-				for key := range classifyZombiesFromHAKeeperState(unresolved, state) {
-					zombies[key] = struct{}{}
-				}
-				break
-			}
-			logger.Warn("zombie self-check: get HAKeeper state failed",
-				zap.String("address", address),
-				zap.Error(err))
 		}
 	}
 	return zombies

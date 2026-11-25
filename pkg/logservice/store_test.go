@@ -2123,33 +2123,25 @@ func TestCheckZombieReplicas_DiscoveryOnlyUsesHAKeeperState(t *testing.T) {
 		"discovery-only mode must use HAKeeper state, not one proxy-selected gossip view")
 }
 
-func TestCheckZombieReplicas_PartialGossipUsesHAKeeperState(t *testing.T) {
+func TestCheckZombieReplicas_PartialGossipDefersStaleHAKeeperState(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	origMembership := getShardMembershipFn
-	defer func() { getShardMembershipFn = origMembership }()
+	originalMembership := getShardMembershipFn
+	defer func() { getShardMembershipFn = originalMembership }()
+	var queried []string
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		queried = append(queried, address)
 		if address == "10.0.0.1:32001" {
 			return map[uint64]string{8: "other"}, true, nil
 		}
 		return nil, false, moerr.NewInternalErrorNoCtx("peer unavailable")
 	}
-	origState := getHAKeeperStateForZombieCheckFn
-	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
-	mode := 0
-	var queried []string
+	originalState := getHAKeeperStateForZombieCheckFn
+	defer func() { getHAKeeperStateForZombieCheckFn = originalState }()
+	stateReads := 0
 	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
-		require.Empty(t, cfg.DiscoveryAddress)
-		require.Len(t, cfg.ServiceAddresses, 1)
-		queried = append(queried, cfg.ServiceAddresses[0])
-		deadline, ok := ctx.Deadline()
-		require.True(t, ok)
-		require.LessOrEqual(t, time.Until(deadline), zombieSelfCheckTimeout)
-		if mode == 2 || (mode == 1 && cfg.ServiceAddresses[0] == "10.0.0.1:32001") {
-			return pb.CheckerState{}, moerr.NewNoHAKeeper(ctx)
-		}
+		stateReads++
 		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
 			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{8: "other"}},
-			4: {ShardID: 4, Epoch: 2, Replicas: map[uint64]string{7: "uuid-1", 8: "other"}},
 		}}}, nil
 	}
 	l := &store{cfg: Config{
@@ -2160,44 +2152,34 @@ func TestCheckZombieReplicas_PartialGossipUsesHAKeeperState(t *testing.T) {
 		},
 	}}
 	l.runtime = runtime.DefaultRuntime()
-	shards := []metadata.LogShard{
-		{LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7},
-		{LogShardRecord: metadata.LogShardRecord{ShardID: 4}, ReplicaID: 7},
-	}
-	require.Equal(t, map[zombieKey]struct{}{{shardID: 3, replicaID: 7}: {}},
-		l.checkZombieReplicas(context.Background(), shards))
-	require.Equal(t, []string{"10.0.0.1:32001"}, queried,
-		"one replicated read resolves all uncertain replicas")
-	mode, queried = 1, nil
-	require.Equal(t, map[zombieKey]struct{}{{shardID: 3, replicaID: 7}: {}},
-		l.checkZombieReplicas(context.Background(), shards))
-	require.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001"}, queried,
-		"failure to query one peer must leave time for another")
-	mode, queried = 2, nil
+	shards := []metadata.LogShard{{LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7}}
 	require.Empty(t, l.checkZombieReplicas(context.Background(), shards),
-		"without a HAKeeper leader, partial gossip must preserve cold-start replicas")
+		"an older HAKeeper report cannot prove removal after partial gossip")
+	require.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001"}, queried)
+	require.Zero(t, stateReads, "the heartbeat-fed HAKeeper view is not a freshness fence")
 }
 
-func TestCheckZombieReplicas_BlackholedPeerLeavesHAKeeperBudget(t *testing.T) {
+func TestCheckZombieReplicas_BlackholedPeerDefersWithinBudget(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	origTimeout := zombieSelfCheckTimeout
-	defer func() { zombieSelfCheckTimeout = origTimeout }()
+	originalTimeout := zombieSelfCheckTimeout
+	defer func() { zombieSelfCheckTimeout = originalTimeout }()
 	zombieSelfCheckTimeout = 200 * time.Millisecond
-	origMembership := getShardMembershipFn
-	defer func() { getShardMembershipFn = origMembership }()
+	originalMembership := getShardMembershipFn
+	defer func() { getShardMembershipFn = originalMembership }()
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		if address == "10.0.0.1:32001" {
 			return map[uint64]string{8: "other"}, true, nil
 		}
+		_, ok := ctx.Deadline()
+		require.True(t, ok)
 		<-ctx.Done()
 		return nil, false, ctx.Err()
 	}
-	origState := getHAKeeperStateForZombieCheckFn
-	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
+	originalState := getHAKeeperStateForZombieCheckFn
+	defer func() { getHAKeeperStateForZombieCheckFn = originalState }()
 	stateReads := 0
 	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
 		stateReads++
-		require.NoError(t, ctx.Err(), "the blackholed peer must leave time for the leader read")
 		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
 			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{8: "other"}},
 		}}}, nil
@@ -2209,12 +2191,12 @@ func TestCheckZombieReplicas_BlackholedPeerLeavesHAKeeperBudget(t *testing.T) {
 		},
 	}}
 	l.runtime = runtime.DefaultRuntime()
-	shards := []metadata.LogShard{{
-		LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7,
-	}}
-	require.Equal(t, map[zombieKey]struct{}{{shardID: 3, replicaID: 7}: {}},
-		l.checkZombieReplicas(context.Background(), shards))
-	require.Equal(t, 1, stateReads)
+	shards := []metadata.LogShard{{LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7}}
+	started := time.Now()
+	require.Empty(t, l.checkZombieReplicas(context.Background(), shards))
+	require.Zero(t, stateReads)
+	require.Less(t, time.Since(started), time.Second,
+		"an isolated peer must not hold startup beyond the bounded check")
 }
 
 func TestCheckZombieReplicas_DiscoveryFailurePreservesColdStart(t *testing.T) {
@@ -2308,7 +2290,7 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 }
 
 // An unanswered peer may be the one with a newer membership view. Continue
-// probing every address, then use replicated membership to resolve the gap.
+// probing every address, then defer when any view is missing.
 func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	var probed []string
@@ -2329,10 +2311,10 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	}
 	origState := getHAKeeperStateForZombieCheckFn
 	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
+	stateReads := 0
 	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
-		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
-			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{7: "uuid-1", 8: "other"}},
-		}}}, nil
+		stateReads++
+		return pb.CheckerState{}, nil
 	}
 
 	l := &store{cfg: Config{
@@ -2350,9 +2332,10 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
 	assert.False(t, isZombie,
-		"HAKeeper confirms that the missing peer's newer membership includes the replica")
+		"missing peer views cannot prove removal")
 	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001", "10.0.0.3:32001"}, probed,
 		"every address must be probed; the check does not short-circuit on a single answer")
+	assert.Zero(t, stateReads, "partial gossip must not read stale HAKeeper membership")
 }
 
 // TestCheckZombieReplicas_ProbesAllAddresses protects the new unanimous-absence
