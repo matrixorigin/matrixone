@@ -58,7 +58,7 @@ downloaded:
 | Parameter | Values | Chosen by |
 |---|---|---|
 | Backing | memory buffer, or temporary cache file | the range's size against the memory limit, as today |
-| Parts | one, or several read at once | the split policy (below) |
+| Parts | one, or several read at once for a whole object | the split policy (below) |
 | Cache | disk cache, or index-file cache | the request's tier, as today |
 | Starter | a read, a prefetch, or the write path caching bytes it holds | who makes it |
 
@@ -105,13 +105,12 @@ fill that is canceled, stops for lack of bytes from its source, or ends short of
 range leaves its readers to read their own bytes. A fill never makes a read wait past the
 read's own context.
 
-### Split policy (decision)
+### Split policy (decision 2026-11-25)
 
-Splitting a fill into parts is a property of any fill large enough, not of whole objects
-only. The existing limits apply unchanged: a minimum size, a number of parts, a limit on
-fills in flight, alignment, and connections taken part by part. Whether ranges smaller
-than a whole object split is the developer's decision before implementation; until then,
-only fills of whole objects split, as today.
+Only a fill of a whole object splits into parts, as today; a fill of a smaller range is
+one part. The existing limits apply unchanged: a minimum size, a number of parts, a limit
+on fills in flight, alignment, and connections taken part by part. Splitting is a
+parameter of the fill, so the rule lives in one place.
 
 ### Publication and the cached form (decision)
 
@@ -153,8 +152,7 @@ because there is one kind of fill.
 - No persisted data format changes; only the disk cache's own file layout does.
 - After an upgrade, whole objects cached by the earlier version are removed at startup,
   so the first reads of them download them again. Range files keep their names and stay.
-- Configuration, metrics and the connection budget are unchanged. If splitting is later
-  extended to ranges, the existing split settings apply to them.
+- Configuration, metrics and the connection budget are unchanged.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
 
 ## Validation and acceptance
@@ -171,5 +169,4 @@ because there is one kind of fill.
 
 ## Open questions
 
-- Whether ranges smaller than a whole object may split into parts.
 - Whether this lands in PR #32812 or as a follow-up PR.
