@@ -16,6 +16,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strconv"
@@ -113,6 +114,25 @@ func TestGetBackupFileNames(t *testing.T) {
 			require.Equal(t, tc.want, names)
 		})
 	}
+}
+
+func TestBackupDataReturnsControlQueryError(t *testing.T) {
+	sid := t.Name()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+
+	queryErr := errors.New("backup control query failed")
+	calls := 0
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Equal(t, "select mo_ctl('dn','Backup','')", sql)
+		calls++
+		return executor.Result{}, queryErr
+	}))
+
+	err := BackupData(t.Context(), sid, nil, nil, "", &Config{}, nil)
+	require.ErrorIs(t, err, queryErr)
+	require.Equal(t, 1, calls)
 }
 
 func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
