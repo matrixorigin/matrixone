@@ -16,12 +16,44 @@ set sql_mode = 'PIPES_AS_CONCAT';
 create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
 set sql_mode = default;
 
+-- A Starlark procedure that executes a literal mo.sql query must bind the
+-- clone just like the equivalent SQL procedure body.
+create table db0.clone_probe(id int primary key, v varchar(32));
+insert into db0.clone_probe values (1, 'source-v1');
+create procedure db0.p_clone_probe_sql() 'begin select v as answer from db0.clone_probe where id = 1; end';
+create procedure db0.p_clone_probe_starlark(out answer varchar) language 'starlark'
+$$
+rows, err = mo.sql("select v from db0.clone_probe where id = 1")
+out_answer = "ERR" if err != None else rows[0][0]
+$$;
+create procedure db0.p_clone_probe_starlark_lhs(out answer varchar) language 'starlark'
+$$
+values = {}
+values[mo.sql("select v from db0.clone_probe where id = 1")[0][0][0]] = 1
+out_answer = list(values)[0]
+$$;
+create procedure db0.p_clone_probe_starlark_for() language 'starlark'
+$$
+values = {}
+for values[mo.sql("update db0.clone_probe set v = 'clone-for' where id = 1")[1]] in [1]: pass
+$$;
+
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure db0.p_clone_probe_starlark_literal(out answer varchar) language 'starlark'
+$$
+rows, err = mo.sql("""select concat(v, ':"x"'), 1 || 0 from db0.clone_probe where id = 1""")
+out_answer = "ERR" if err != None else rows[0][0] + ":" + rows[0][1]
+$$;
+set sql_mode = default;
+
 -- Functions are catalog metadata too. They must be restored before a view that
 -- binds them, and source-qualified routine queries must bind the clone.
 create function db0.f_clone_answer() returns int language sql as 'select count(*) from db0.s1';
 create view db0.v_clone_answer as select f_clone_answer() as answer;
 
 create database db0_copy_0 clone db0;
+update db0.clone_probe set v = 'source-v2' where id = 1;
+update db0_copy_0.clone_probe set v = 'clone-v2' where id = 1;
 show tables from db0_copy_0;
 select * from db0_copy_0.s1;
 select name from mo_catalog.mo_stored_procedure
@@ -34,6 +66,18 @@ call db0_copy_0.p_answer();
 call db0_copy_0.p_double(21, @db0_copy_double);
 select @db0_copy_double;
 call db0_copy_0.p_sql_mode();
+call db0_copy_0.p_clone_probe_sql();
+call db0_copy_0.p_clone_probe_starlark(@db0_clone_starlark);
+select @db0_clone_starlark;
+call db0_copy_0.p_clone_probe_starlark_lhs(@db0_clone_starlark_lhs);
+select @db0_clone_starlark_lhs;
+call db0.p_clone_probe_starlark_literal(@src_literal);
+select @src_literal;
+call db0_copy_0.p_clone_probe_starlark_literal(@clone_literal);
+select @clone_literal;
+call db0_copy_0.p_clone_probe_starlark_for();
+select v from db0.clone_probe where id = 1;
+select v from db0_copy_0.clone_probe where id = 1;
 
 create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;
@@ -56,10 +100,37 @@ create database db_alter_clone_source;
 create table db_alter_clone_source.parent (id int primary key);
 create table db_alter_clone_source.child (parent_id int);
 create procedure db_alter_clone_source.p_add_fk() 'begin alter table db_alter_clone_source.child add constraint fk_child_parent foreign key (parent_id) references db_alter_clone_source.parent(id); end';
+create procedure db_alter_clone_source.`order`() 'begin insert into db_alter_clone_source.child values (null); end';
+create procedure db_alter_clone_source.p_quoted_call() language 'starlark'
+$$
+rows, err = mo.sql("call db_alter_clone_source.`order`()")
+$$;
 create database db_alter_clone_copy clone db_alter_clone_source;
 drop database db_alter_clone_source;
 call db_alter_clone_copy.p_add_fk();
+call db_alter_clone_copy.p_quoted_call();
+select count(*) as quoted_call_rows from db_alter_clone_copy.child;
 drop database db_alter_clone_copy;
+
+-- Rejected SQL must roll back the cloned database and all copied metadata.
+create database db_clone_unaudited;
+create table db_clone_unaudited.probe(id int);
+create procedure db_clone_unaudited.p() language 'starlark'
+$$
+rows, err = mo.sql("execute prepared_probe")
+$$;
+create database db_clone_unaudited_copy clone db_clone_unaudited;
+select count(*) as target_databases from mo_catalog.mo_database where datname = 'db_clone_unaudited_copy';
+select count(*) as target_tables from mo_catalog.mo_tables where reldatabase = 'db_clone_unaudited_copy';
+select count(*) as target_procedures from mo_catalog.mo_stored_procedure where db = 'db_clone_unaudited_copy';
+drop procedure db_clone_unaudited.p;
+create procedure db_clone_unaudited.p() language 'starlark'
+$$
+rows, err = mo.sql("select * from metadata_scan('fixture.probe', '*')")
+$$;
+create database db_clone_unaudited_copy clone db_clone_unaudited;
+select count(*) as target_databases from mo_catalog.mo_database where datname = 'db_clone_unaudited_copy';
+drop database db_clone_unaudited;
 
 -- View dependency sorting runs before the restore loop. Its UDF lookup must
 -- therefore use the source snapshot, even after the live source is gone.

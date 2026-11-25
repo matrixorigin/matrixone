@@ -45,9 +45,14 @@ create procedure issue_27103_live_src.p_control() 'begin select count(*) as answ
 create procedure issue_27103_live_src.p_external() 'begin select count(*) as answer from issue_27103_live_src.ext_t; end';
 create procedure issue_27103_live_src.p_transitive() 'begin call issue_27103_live_src.p_external(); end';
 create procedure issue_27103_live_src.p_view() 'begin select count(*) as answer from issue_27103_live_src.ext_v; end';
+create procedure issue_27103_live_src.p_starlark_control() language 'starlark'
+$$
+rows, err = mo.sql("select 1")
+$$;
 select count(*) as source_external_rows from issue_27103_live_src.ext_t;
 
 create database issue_27103_live_dst clone issue_27103_live_src;
+show warnings;
 select count(*) as live_target_database from mo_catalog.mo_database
 where datname = 'issue_27103_live_dst';
 show tables from issue_27103_live_dst;
@@ -73,6 +78,7 @@ select count(*) as live_independent_procedures from mo_catalog.mo_stored_procedu
 where db = 'issue_27103_live_dst' and name = 'p_control';
 select count(*) as live_external_procedures from mo_catalog.mo_stored_procedure
 where db = 'issue_27103_live_dst' and name in ('p_external', 'p_transitive', 'p_view');
+select count(*) as omitted_starlark_procedures from mo_catalog.mo_stored_procedure where db = 'issue_27103_live_dst' and name = 'p_starlark_control';
 select count(*) as source_external_rows_after_clone from issue_27103_live_src.ext_t;
 
 create database issue_27103_snapshot_src;
