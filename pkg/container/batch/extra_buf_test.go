@@ -17,7 +17,6 @@ package batch
 import (
 	"bytes"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,7 +35,7 @@ func newExtraBufTestBatch(t *testing.T, mp *mpool.MPool, payload []byte) *Batch 
 }
 
 func sameBacking(a, b []byte) bool {
-	return len(a) != 0 && len(b) != 0 && unsafe.SliceData(a) == unsafe.SliceData(b)
+	return len(a) != 0 && len(b) != 0 && &a[0] == &b[0]
 }
 
 func TestExtraBufSetCopiesFromPoolAndCleanFrees(t *testing.T) {
