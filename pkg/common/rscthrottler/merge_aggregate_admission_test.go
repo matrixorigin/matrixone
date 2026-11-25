@@ -40,9 +40,9 @@ func TestMergeAggregateAdmissionKeepsHeadroom(t *testing.T) {
 
 	// With 80 bytes of live headroom, the existing two-thirds safety margin
 	// must cover *all* concurrent Merge reservations, not each in isolation.
-	left, granted := m.Acquire(40)
+	_, granted := m.Acquire(40)
 	require.True(t, granted)
-	left, granted = m.Acquire(14)
+	left, granted := m.Acquire(14)
 	require.False(t, granted)
 	require.Equal(t, int64(13), left)
 	require.Equal(t, int64(40), m.reserved.Load())
