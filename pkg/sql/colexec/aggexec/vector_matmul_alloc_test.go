@@ -26,20 +26,25 @@ import (
 )
 
 // A malformed or over-limit vecblock JSON text is rejected before its elements are
-// collected: the decode makes about as many allocations for 100 objects before the error
-// as for 10,000. Collecting would regrow a slice at least once per doubling (7 or more
-// extra allocations); the tolerance only absorbs sync.Pool refills (json.Valid's scanner),
-// which vary under -race because the race runtime drops some pool puts on purpose.
+// collected: the decode makes as many allocations for 100 objects before the error as for
+// 10,000. Collecting would regrow a slice at least once per doubling (7 or more extra
+// allocations). A decode's count is the least over several runs: a sync.Pool refill
+// (json.Valid's scanner, fmt's printer) only adds allocations, and under -race the race
+// runtime drops pool puts on purpose, so a run's count varies by several.
 // TestVectorMatmulVecblockJSONRejectedBeforeCollecting covers the errors.
 func TestVectorMatmulVecblockJSONAllocationsIndependentOfLength(t *testing.T) {
-	const poolRefillTolerance = 3
+	const tolerance = 1
 	typ := types.New(types.T_array_float8, 4, 0)
 	allocs := func(text string) float64 {
-		return testing.AllocsPerRun(3, func() { _, _ = decodeVectorMatmulCells(text, false, typ) })
+		least := math.Inf(1)
+		for range 20 {
+			least = min(least, testing.AllocsPerRun(1, func() { _, _ = decodeVectorMatmulCells(text, false, typ) }))
+		}
+		return least
 	}
-	require.InDelta(t, allocs(vmVecblockMalformed(100)), allocs(vmVecblockMalformed(10000)), poolRefillTolerance)
+	require.InDelta(t, allocs(vmVecblockMalformed(100)), allocs(vmVecblockMalformed(10000)), tolerance)
 	overLimit := "[" + strings.Repeat("{},", vectorMatmulMaxQueries) + "{}]"
-	require.InDelta(t, allocs(overLimit), allocs("["+strings.Repeat("{},", 20000)+"{}]"), poolRefillTolerance)
+	require.InDelta(t, allocs(overLimit), allocs("["+strings.Repeat("{},", 20000)+"{}]"), tolerance)
 }
 
 // The executor reserves the bound before parsing and commits the configuration's bytes

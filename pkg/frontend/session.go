@@ -605,57 +605,22 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
-	return ses.setUserDefinedVarWithTypeAndKind(
-		name, value, sql, isBin, inferUserDefinedVarType(value), prepareParamKindFromValue(value))
+	return ses.setUserDefinedVarWithType(name, value, sql, isBin, inferUserDefinedVarType(value))
 }
 
 func (ses *Session) setUserDefinedVarWithType(name string, value interface{}, sql string, isBin bool, typ plan.Type) error {
-	return ses.setUserDefinedVarWithTypeAndKind(
-		name, value, sql, isBin, typ, prepareParamKindFromType(types.T(typ.Id)))
+	return ses.setUserDefinedVarWithTypeAndReplayability(name, value, sql, isBin, typ, false)
 }
 
-func (ses *Session) setUserDefinedVarWithKind(
-	name string,
-	value interface{},
-	sql string,
-	isBin bool,
-	kind types.StringConversionKind,
-) error {
-	return ses.setUserDefinedVarWithTypeAndKind(
-		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
-}
-
-func (ses *Session) setUserDefinedVarWithKindAndReplayability(
-	name string,
-	value interface{},
-	sql string,
-	isBin bool,
-	kind types.StringConversionKind,
-	replayable bool,
-) error {
-	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		name, value, sql, isBin, inferUserDefinedVarType(value), kind, replayable)
-}
-
-func (ses *Session) setUserDefinedVarWithTypeAndKind(
+// setUserDefinedVarWithTypeAndReplayability stores a user variable. Its type
+// is the only record of what the value is: a prepared parameter's conversion
+// kind is derived from it (see plan.ParamValueKind), never stored beside it.
+func (ses *Session) setUserDefinedVarWithTypeAndReplayability(
 	name string,
 	value interface{},
 	sql string,
 	isBin bool,
 	typ plan.Type,
-	kind types.StringConversionKind,
-) error {
-	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		name, value, sql, isBin, typ, kind, false)
-}
-
-func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
-	name string,
-	value interface{},
-	sql string,
-	isBin bool,
-	typ plan.Type,
-	kind types.StringConversionKind,
 	replayable bool,
 	runtimeDomains ...types.RuntimeStringDomain,
 ) error {
@@ -698,7 +663,6 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 		IsBin:               isBin,
 		Type:                typ,
 		RegexpStringResult:  regexpStringResult,
-		PrepareParamKind:    kind,
 		RuntimeStringDomain: runtimeDomain,
 		Replayable:          replayable,
 	}

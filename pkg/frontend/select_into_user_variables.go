@@ -241,8 +241,8 @@ func setUserDefinedVarWithTypeAndDomain(
 ) error {
 	switch session := ses.(type) {
 	case *Session:
-		return session.setUserDefinedVarWithTypeAndKindAndReplayability(
-			name, value, sql, isBin, typ, prepareParamKindFromType(types.T(typ.Id)), false, runtimeDomain)
+		return session.setUserDefinedVarWithTypeAndReplayability(
+			name, value, sql, isBin, typ, false, runtimeDomain)
 	case *backSession:
 		if session.upstream == nil {
 			return moerr.NewInternalError(context.Background(), "do not support set user defined var in background exec")

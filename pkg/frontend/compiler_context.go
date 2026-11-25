@@ -1478,7 +1478,7 @@ func (tcc *TxnCompilerContext) ResolveVariablePrepareParamKind(
 		// prepared-parameter conversion category.
 		return types.StringConversionString, nil
 	}
-	return udVar.PrepareParamKind, nil
+	return udVar.prepareParamKind(), nil
 }
 
 func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {

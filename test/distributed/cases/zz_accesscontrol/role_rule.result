@@ -112,12 +112,14 @@ select * from db1.v_t1;
 100  ¦  30
 create table db1.t_columns(id int, tenant int, amount int, secret varchar(20));
 create table db1.t_hidden(id int, secret varchar(20));
+create table db1.t_columns_unruled(id int, public_note varchar(20));
 insert into db1.t_columns values (1, 1, 100, 's1'), (2, 2, 200, 's2');
 create role test_rule_role_columns;
 alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1" on table db1.t_columns;
 create user test_rule_user_columns identified by '123456' default role test_rule_role_columns;
 grant connect on account * to test_rule_role_columns;
 grant select on table db1.t_columns to test_rule_role_columns;
+grant select on table db1.t_columns_unruled to test_rule_role_columns;
 set enable_remap_hint = 1;
 select * from db1.t_columns order by id;
 ➤ id[4,32,0]  ¦  amount[4,32,0]  𝄀
@@ -126,14 +128,57 @@ select column_name from information_schema.columns where table_schema = 'db1' an
 ➤ column_name[12,256,0]  𝄀
 id  𝄀
 amount
+desc db1.t_columns;
+internal error: do not have privilege to execute the statement
+show create table db1.t_columns;
+internal error: do not have privilege to execute the statement
+use db1;
+desc t_columns;
+internal error: do not have privilege to execute the statement
+show create table t_columns;
+internal error: do not have privilege to execute the statement
+desc db1.t_hidden;
+internal error: do not have privilege to execute the statement
+show create table db1.t_hidden;
+internal error: do not have privilege to execute the statement
 select count(*) from information_schema.columns where table_schema = 'db1' and table_name = 't_hidden';
 ➤ count(*)[-5,64,0]  𝄀
 0
+desc db1.t_columns_unruled;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+public_note  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table db1.t_columns_unruled;
+➤ Table[12,17,0]  ¦  Create Table[12,102,0]  𝄀
+t_columns_unruled  ¦  CREATE TABLE `t_columns_unruled` (
+  `id` int DEFAULT NULL,
+  `public_note` varchar(20) DEFAULT NULL
+)
 set enable_remap_hint = 0;
 select column_name from information_schema.columns where table_schema = 'db1' and table_name = 't_columns' order by ordinal_position;
 ➤ column_name[12,256,0]  𝄀
 id  𝄀
 amount
+grant show databases on account * to test_rule_role_columns;
+desc db1.t_columns;
+internal error: do not have privilege to execute the statement
+show create table db1.t_columns;
+internal error: do not have privilege to execute the statement
+revoke show databases on account * from test_rule_role_columns;
+desc db1.t_columns;
+➤ Field[12,64,0]  ¦  Type[-1,16777215,0]  ¦  Null[12,3,0]  ¦  Key[1,3,0]  ¦  Default[-1,65535,0]  ¦  Extra[12,256,0]  ¦  Comment[-1,6144,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tenant  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+amount  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+secret  ¦  varchar(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table db1.t_columns;
+➤ Table[12,9,0]  ¦  Create Table[12,147,0]  𝄀
+t_columns  ¦  CREATE TABLE `t_columns` (
+  `id` int DEFAULT NULL,
+  `tenant` int DEFAULT NULL,
+  `amount` int DEFAULT NULL,
+  `secret` varchar(20) DEFAULT NULL
+)
 show rules on role test_rule_role_columns;
 ➤ rule_name[12,0,0]  ¦  rule[12,0,0]  𝄀
 db1.t_columns  ¦  select id, amount from db1.t_columns where tenant = 1
@@ -543,8 +588,8 @@ select count(*) from mo_catalog.mo_role where role_name in ('test_rule_role','te
 select count(*) from mo_catalog.mo_role_rule where rule_name in ('db1.t1','db2.t2','db1.t_rename_legacy','db1. t_rename_legacy','db1.t_dup','db1.t_columns','db1.t_rename_rule_dependency');
 ➤ count(*)[-5,64,0]
 0
-select count(*) from mo_catalog.mo_tables where reldatabase in ('db1','db2') and relname in ('t_rename_no_rule','t_rename_no_rule_after','t.with.dot','t.with.dot.after','t_rename_chain_ok_a','t_rename_chain_ok_a_after','t_rename_chain_ok_b','t_rename_chain_ok_b_after','t_rename_chain_guard','t_rename_chain_guard_after','t_rename_legacy','t_rename_legacy_after','t_rename_rule_dependency','t_rename_rule_allowlist','t_rename_rule_allowlist_old','t_columns','t_hidden');
-➤ count(*)[-5,64,0]
+select count(*) from mo_catalog.mo_tables where reldatabase in ('db1','db2') and relname in ('t_rename_no_rule','t_rename_no_rule_after','t.with.dot','t.with.dot.after','t_rename_chain_ok_a','t_rename_chain_ok_a_after','t_rename_chain_ok_b','t_rename_chain_ok_b_after','t_rename_chain_guard','t_rename_chain_guard_after','t_rename_legacy','t_rename_legacy_after','t_rename_rule_dependency','t_rename_rule_allowlist','t_rename_rule_allowlist_old','t_columns','t_hidden','t_columns_unruled');
+➤ count(*)[-5,64,0]  𝄀
 0
 select count(*) from mo_catalog.mo_database where datname in ('db1','db2');
 ➤ count(*)[-5,64,0]
