@@ -1123,6 +1123,36 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 		require.Equal(t, 1, observed)
 		require.Equal(t, []int32{2, 4, 5, 6, 7}, vector.MustFixedColNoTypeCheck[int32](target.Vecs[0]))
 	})
+	t.Run("exact selection treats a fully tombstoned block as empty", func(t *testing.T) {
+		intType := colTypes[0]
+		target := batch.NewWithSize(1)
+		target.Vecs[0] = vector.NewVec(intType, queryMP)
+		t.Cleanup(func() { target.Clean(queryMP) })
+		state := objectio.NewExactScanState(objectio.NewExactScanFilter([]objectio.ExactScanPredicate{{Column: 0, Type: intType, Op: objectio.ExactScanGE, Value: 0}}))
+		t.Cleanup(state.Close)
+		deleted := make([]uint64, 8)
+		for row := range deleted {
+			deleted[row] = uint64(row)
+		}
+		observed := 0
+		request := &engine.ReaderFilterRequest{
+			Exact: state,
+			Apply: func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+				t.Fatal("eligible exact filtering must not fall back to the generic filter")
+				return engine.ReaderFilterResult{}, nil
+			},
+			Observe: func(stats objectio.ExactScanStats) {
+				observed++
+				require.Zero(t, stats.InputRows)
+				require.Zero(t, stats.OutputRows)
+			},
+		}
+		_, err := BlockDataReadWithFilter(ctx, &info, &blockReadTestDataSource{deleted: deleted}, []uint16{0}, []types.Type{intType}, -1, timestamp.Timestamp{}, nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0), "exact-all-tombstones-test", target, cacheVectors, queryMP, fs, []int{0}, request)
+		require.NoError(t, err)
+		require.Equal(t, 1, observed)
+		require.Zero(t, target.RowCount())
+		require.Zero(t, target.Vecs[0].Length())
+	})
 	t.Run("exact unsupported projection reuses generic filtering", func(t *testing.T) {
 		// Earlier subtests left output vectors of their own (now sealed)
 		// accounts; the remaining subtests read through queryMP.
