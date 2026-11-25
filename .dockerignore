@@ -57,3 +57,6 @@ optools/gpu/.pixi/
 
 # Never send locally generated native artifacts back into a container build.
 thirdparties/install/
+
+# The native image build only needs the inputs to thirdparties/Makefile.
+thirdparties/sirius/
