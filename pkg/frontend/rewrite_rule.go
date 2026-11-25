@@ -85,6 +85,7 @@ type rewritePolicySnapshot struct {
 	sessionRules        map[string]string
 	sessionRemapDb      map[string]string
 	lowerCaseTableNames int64
+	defaultDatabase     string
 }
 
 func normalizeRewriteRules(
@@ -216,7 +217,8 @@ func preparedPolicyAlreadyRefreshedLocked(ctx context.Context, ses *Session) boo
 	defer r.mu.Unlock()
 	r.valid = r.valid && !r.ended && ctx.Err() == nil && r.stamp.identity == identity &&
 		r.stamp.generation == ses.rewritePolicyGeneration && r.stamp.revision == ses.ruleCacheRevision &&
-		(len(ses.ruleVariants.sources()) == 0 || ses.ruleCacheLowerCaseTableNames == parserLowerCaseTableNames(ses))
+		(len(ses.ruleVariants.sources()) == 0 || ses.ruleCacheLowerCaseTableNames == parserLowerCaseTableNames(ses) &&
+			ses.ruleCacheDatabase == roleRuleDefaultDatabase(ses))
 	return r.valid
 }
 
@@ -242,6 +244,13 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 func refreshPreparedRewritePolicy(ctx context.Context, ses *Session) error {
 	_, err := refreshRewritePolicy(ctx, ses, ses.ruleCacheVersionProvider, false)
 	return err
+}
+
+func roleRuleDefaultDatabase(ses *Session) string {
+	if compiler := ses.GetTxnCompileCtx(); compiler != nil {
+		return compiler.GetDatabase()
+	}
+	return ""
 }
 
 func refreshRewritePolicy(ctx context.Context, ses *Session,
@@ -284,7 +293,9 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		}
 		identity := rewriteRuleSessionIdentity(ses)
 		lower := parserLowerCaseTableNames(ses)
+		db := roleRuleDefaultDatabase(ses)
 		policy.lowerCaseTableNames = lower
+		policy.defaultDatabase = db
 		ses.ruleCacheMu.RLock()
 		generation := ses.rewritePolicyGeneration
 		loaded := ses.ruleCache != nil
@@ -292,7 +303,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		revision := ses.ruleCacheRevision
 		cachedIdentity := ses.ruleCacheIdentity
 		cachedLower := ses.ruleCacheLowerCaseTableNames
-		modeMatches := len(ses.ruleVariants.sources()) == 0 || lower == cachedLower
+		scopeMatches := len(ses.ruleVariants.sources()) == 0 || lower == cachedLower && db == ses.ruleCacheDatabase
 		ses.ruleCacheMu.RUnlock()
 
 		var version any
@@ -322,8 +333,8 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 			cached, ok := cachedVersion.(disttae.PrivilegeCacheVersion)
 			versionMatches = ok && typedVersion != (disttae.PrivilegeCacheVersion{}) && typedVersion == cached
 		}
-		if loaded && modeMatches && identity == cachedIdentity && (ses.GetTenantInfo() == nil || versionMatches) {
-			if identity != rewriteRuleSessionIdentity(ses) || lower != parserLowerCaseTableNames(ses) {
+		if loaded && scopeMatches && identity == cachedIdentity && (ses.GetTenantInfo() == nil || versionMatches) {
+			if identity != rewriteRuleSessionIdentity(ses) || lower != parserLowerCaseTableNames(ses) || db != roleRuleDefaultDatabase(ses) {
 				continue
 			}
 			ses.ruleCacheMu.RLock()
@@ -350,7 +361,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		if err != nil {
 			return fail(err)
 		}
-		if identity != rewriteRuleSessionIdentity(ses) || lower != parserLowerCaseTableNames(ses) {
+		if identity != rewriteRuleSessionIdentity(ses) || lower != parserLowerCaseTableNames(ses) || db != roleRuleDefaultDatabase(ses) {
 			continue
 		}
 		ses.mu.Lock()
@@ -360,7 +371,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 			ses.mu.Unlock()
 			continue
 		}
-		if loaded && (!modeMatches || !maps.Equal(ses.ruleCache, rules) || !maps.EqualFunc(ses.ruleVariants.sources(), variants.sources(), slices.Equal)) {
+		if loaded && (!scopeMatches || !maps.Equal(ses.ruleCache, rules) || !maps.EqualFunc(ses.ruleVariants.sources(), variants.sources(), slices.Equal)) {
 			ses.rewritePolicyGeneration++
 			ses.invalidateAllPreparedRewriteStatementsLocked()
 		}
@@ -371,6 +382,7 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		ses.ruleVariants = variants
 		ses.ruleCacheIdentity = identity
 		ses.ruleCacheLowerCaseTableNames = lower
+		ses.ruleCacheDatabase = db
 		ses.ruleCacheRevision++
 		policy.generation = ses.rewritePolicyGeneration
 		roleRulesActive = len(rules) > 0
@@ -512,7 +524,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		return sql, err
 	}
 	resolveRoleRules := sync.OnceValues(func() (map[string]string, error) {
-		return policy.roleVariants.forMode(ctx, policy.roleRules, policy.lowerCaseTableNames, sqlMode)
+		return policy.roleVariants.forMode(ctx, policy.roleRules, policy.lowerCaseTableNames, sqlMode, policy.defaultDatabase)
 	})
 	rewrite := func(fragment string) (string, error) {
 		var roleRules map[string]string
@@ -1105,9 +1117,10 @@ type roleRuleVariants struct {
 }
 
 type mergedRoleRules struct {
-	mode  mysql.SQLModeFlags
-	lower int64
-	rules map[string]string
+	mode          mysql.SQLModeFlags
+	lower         int64
+	systemDefault bool
+	rules         map[string]string
 }
 
 func (c *roleRuleVariants) sources() map[string][]string {
@@ -1117,24 +1130,25 @@ func (c *roleRuleVariants) sources() map[string][]string {
 	return c.byName
 }
 
-func (c *roleRuleVariants) forMode(ctx context.Context, defaults map[string]string, lower int64, sqlMode string) (map[string]string, error) {
+func (c *roleRuleVariants) forMode(ctx context.Context, defaults map[string]string, lower int64, sqlMode, defaultDatabase string) (map[string]string, error) {
 	if c == nil {
 		return defaults, nil
 	}
 	mode := mysql.ParseSQLModeFlags(sqlMode)
-	if mode == 0 && !c.hasNonUTF8 {
+	systemDefault := lower != 1 && slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(defaultDatabase))
+	if mode == 0 && !systemDefault && !c.hasNonUTF8 {
 		return defaults, nil
 	}
-	if last := c.last.Load(); last != nil && last.mode == mode && last.lower == lower {
+	if last := c.last.Load(); last != nil && last.mode == mode && last.lower == lower && last.systemDefault == systemDefault {
 		return last.rules, nil
 	}
 	rules := maps.Clone(defaults)
-	if mode != 0 {
+	if mode != 0 || systemDefault {
 		for name, sources := range c.byName {
 			result := sources[0]
 			for _, rule := range sources[1:] {
 				var err error
-				result, err = mergeRewriteRulesInMode(ctx, result, rule, lower, mode)
+				result, err = mergeRewriteRulesInMode(ctx, result, rule, lower, mode, systemDefault)
 				if err != nil {
 					return nil, err
 				}
@@ -1151,7 +1165,7 @@ func (c *roleRuleVariants) forMode(ctx context.Context, defaults map[string]stri
 			rules[name] = sql
 		}
 	}
-	c.last.Store(&mergedRoleRules{mode, lower, rules})
+	c.last.Store(&mergedRoleRules{mode, lower, systemDefault, rules})
 	return rules, nil
 }
 
@@ -1259,7 +1273,7 @@ func loadRuleCache(ctx context.Context, ses *Session, lower int64) (_ map[string
 			variants.hasNonUTF8 = true
 		}
 		if existingRule, ok := rules[row.ruleName]; ok {
-			mergedRule, err := mergeRewriteRulesInMode(ctx, existingRule, row.rule, lower, 0)
+			mergedRule, err := mergeRewriteRulesInMode(ctx, existingRule, row.rule, lower, 0, false)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1375,10 +1389,10 @@ func getSqlForRoleRulesOfRoleIDs(roleIDs []int64) string {
 }
 
 func mergeRewriteRules(ctx context.Context, leftRule, rightRule string) (string, error) {
-	return mergeRewriteRulesInMode(ctx, leftRule, rightRule, 1, 0)
+	return mergeRewriteRulesInMode(ctx, leftRule, rightRule, 1, 0, false)
 }
 
-func mergeRewriteRulesInMode(ctx context.Context, leftRule, rightRule string, lower int64, mode mysql.SQLModeFlags) (string, error) {
+func mergeRewriteRulesInMode(ctx context.Context, leftRule, rightRule string, lower int64, mode mysql.SQLModeFlags, systemDefault bool) (string, error) {
 	leftRule = trimRewriteRuleForMerge(leftRule)
 	rightRule = trimRewriteRuleForMerge(rightRule)
 
@@ -1386,7 +1400,7 @@ func mergeRewriteRulesInMode(ctx context.Context, leftRule, rightRule string, lo
 		return leftRule, nil
 	}
 
-	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule, lower, mode)
+	mergedRule, ok, err := mergeRewriteRulesSafely(ctx, leftRule, rightRule, lower, mode, systemDefault)
 	if err != nil {
 		return "", err
 	}
@@ -1417,7 +1431,7 @@ type rewriteRuleMergeShape struct {
 // filters expresses that row union directly. This is intentionally not a
 // UNION DISTINCT equivalent for partial projections; two visible base rows that
 // project to the same values should both remain visible.
-func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string, lower int64, mode mysql.SQLModeFlags) (string, bool, error) {
+func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string, lower int64, mode mysql.SQLModeFlags, systemDefault bool) (string, bool, error) {
 	leftShape, ok, err := rewriteRuleMergeShapeForRule(ctx, leftRule, lower, mode)
 	if err != nil {
 		return "", false, err
@@ -1434,7 +1448,7 @@ func mergeRewriteRulesSafely(ctx context.Context, leftRule, rightRule string, lo
 		return "", false, nil
 	}
 
-	if !sameRewriteTableSource(ctx, leftShape.table, rightShape.table) {
+	if !sameRewriteTableSource(ctx, leftShape.table, rightShape.table, systemDefault) {
 		return "", false, nil
 	}
 	if !slices.EqualFunc(leftShape.clause.Exprs, rightShape.clause.Exprs, sameRewriteProjection) {
@@ -1638,7 +1652,7 @@ func rewriteRuleSelectExprIsStar(expr tree.Expr) bool {
 	}
 }
 
-func sameRewriteTableSource(ctx context.Context, a, b *tree.AliasedTableExpr) bool {
+func sameRewriteTableSource(ctx context.Context, a, b *tree.AliasedTableExpr, systemDefault bool) bool {
 	// Aliases follow the parser mode even when the catalog ignores case.
 	if a.As.Alias != b.As.Alias {
 		return false
@@ -1646,6 +1660,9 @@ func sameRewriteTableSource(ctx context.Context, a, b *tree.AliasedTableExpr) bo
 	relation := func(expr *tree.AliasedTableExpr) tree.TableName {
 		name := *expr.Expr.(*tree.TableName)
 		db, table := normalizeSystemRelationNames(string(name.Schema()), string(name.Name()))
+		if !name.ExplicitSchema && systemDefault {
+			table = strings.ToLower(table)
+		}
 		name.SchemaName, name.ObjectName = tree.Identifier(db), tree.Identifier(table)
 		return name
 	}

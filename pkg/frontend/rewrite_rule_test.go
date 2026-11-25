@@ -2182,7 +2182,7 @@ func TestMergeRewriteRulesProjectionIdentity(t *testing.T) {
 	} {
 		left := "select " + tc.left + " as x from db.t where id = 1"
 		right := "select " + tc.right + " as x from db.t where id = 2"
-		got, err := mergeRewriteRulesInMode(t.Context(), left, right, 1, mysql.ParseSQLModeFlags(tc.mode))
+		got, err := mergeRewriteRulesInMode(t.Context(), left, right, 1, mysql.ParseSQLModeFlags(tc.mode), false)
 		require.NoError(t, err, tc)
 		if tc.merge {
 			assert.Equal(t, "select "+tc.left+" as x from db.t where (id = 1) or (id = 2)", got, tc)
@@ -2256,7 +2256,7 @@ func TestMergeRewriteRulesTableNameMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			left := "select trim(`Code`) as code from " + tc.left + " where id = 1"
 			right := "select trim(code) as code from " + tc.right + " where x.id = 2"
-			got, err := mergeRewriteRulesInMode(t.Context(), left, right, tc.lower, mysql.ParseSQLModeFlags("ANSI_QUOTES"))
+			got, err := mergeRewriteRulesInMode(t.Context(), left, right, tc.lower, mysql.ParseSQLModeFlags("ANSI_QUOTES"), false)
 			require.NoError(t, err)
 			if tc.merge {
 				require.Equal(t, "select trim(`Code`) as code from "+tc.left+" where (id = 1) or (x.id = 2)", got)
@@ -2306,6 +2306,34 @@ func TestMergeRewriteRulesIcebergSource(t *testing.T) {
 				require.Equal(t, right, got)
 			}
 		})
+	}
+}
+
+func TestRoleRuleEffectiveDefaultDatabase(t *testing.T) {
+	const key = "information_schema.character_sets"
+	const left = "select id from character_sets where id = 1"
+	const right = "select id from CHARACTER_SETS where id = 2"
+	policy := &rewritePolicySnapshot{
+		enabled: true, sessionEnabled: true, defaultDatabase: "information_schema",
+		roleRules:    map[string]string{key: right},
+		roleVariants: &roleRuleVariants{byName: map[string][]string{key: {left, right}}},
+	}
+	for _, lower := range []int64{0, 2} {
+		for _, mode := range []string{"", "ANSI_QUOTES"} {
+			policy.lowerCaseTableNames = lower
+			sql := "select * from information_schema.character_sets"
+			merged, err := policy.rewrite(t.Context(), sql, mode)
+			require.NoError(t, err)
+			require.Contains(t, merged, "(id = 1) or (id = 2)")
+			policy.defaultDatabase = "other"
+			unmerged, err := policy.rewrite(t.Context(), sql, mode)
+			require.NoError(t, err)
+			require.Contains(t, unmerged, right)
+			policy.defaultDatabase = "information_schema"
+			mergedAgain, err := policy.rewrite(t.Context(), sql, mode)
+			require.NoError(t, err)
+			require.Equal(t, merged, mergedAgain)
+		}
 	}
 }
 

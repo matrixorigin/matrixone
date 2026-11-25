@@ -261,7 +261,7 @@ func TestPreparedRefreshDoesNotMaterializeOrAliasPolicy(t *testing.T) {
 func TestRewriteRuleCacheFreshness(t *testing.T) {
 	for _, materialize := range []bool{true, false} {
 		t.Run(fmt.Sprintf("materialize_%v", materialize), func(t *testing.T) {
-			for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "changed competing source", "table name mode", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
+			for _, scenario := range []string{"stable", "unrelated catalog change", "changed rules", "changed competing source", "table name mode", "default database", "unknown proof", "proof error", "proof and read error", "proof canceled", "proof deadline", "pre-read stamp", "account change", "role change", "secondary roles"} {
 				t.Run(scenario, func(t *testing.T) {
 					ctx := context.Background()
 					ses := newSes(&privilege{}, gomock.NewController(t))
@@ -297,6 +297,14 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 							{10, "db.t", "select id from db.t as x where x.id = 2"},
 						})
 					}
+					if scenario == "default database" {
+						ctx = context.WithValue(ctx, rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: ses})
+						ses.sesSysVars.Set("lower_case_table_names", int64(0))
+						bh.sql2result[query] = newMrsForRewriteRules([][]interface{}{
+							{10, "information_schema.character_sets", "select id from character_sets where id = 1"},
+							{10, "information_schema.character_sets", "select id from CHARACTER_SETS where id = 2"},
+						})
+					}
 					initial := capture()
 					if scenario == "table name mode" {
 						require.Contains(t, ses.ruleCache["db.t"], "or (x.id = 2)")
@@ -322,6 +330,10 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 							{10, "db.t", `select "East" from db.t where a = 1`},
 							{10, "db.t", "select east from db.t where a = 2"},
 						})
+					case "default database":
+						require.True(t, preparedPolicyAlreadyRefreshed(ctx, ses))
+						ses.SetDatabaseName("information_schema")
+						require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses))
 					case "table name mode":
 						ses.sesSysVars.Set("lower_case_table_names", int64(0))
 						require.False(t, preparedPolicyAlreadyRefreshed(ctx, ses))
@@ -368,7 +380,16 @@ func TestRewriteRuleCacheFreshness(t *testing.T) {
 					if scenario == "table name mode" {
 						require.Equal(t, "select id from db.t as x where x.id = 2", ses.ruleCache["db.t"])
 					}
-					changed := scenario == "table name mode" || scenario == "changed rules" || scenario == "changed competing source" || scenario == "unknown proof" || scenario == "proof error"
+					if scenario == "default database" && materialize {
+						query := "select id from information_schema.character_sets"
+						before, err := initial.rewrite(ctx, query, "")
+						require.NoError(t, err)
+						require.NotContains(t, before, " or ")
+						after, err := refreshed.rewrite(ctx, query, "")
+						require.NoError(t, err)
+						require.Contains(t, after, "(id = 1) or (id = 2)")
+					}
+					changed := scenario == "default database" || scenario == "table name mode" || scenario == "changed rules" || scenario == "changed competing source" || scenario == "unknown proof" || scenario == "proof error"
 					require.Equal(t, changed, old.rewritePolicyInvalidated.Load())
 					if changed {
 						require.NotEmpty(t, ses.ruleCache)

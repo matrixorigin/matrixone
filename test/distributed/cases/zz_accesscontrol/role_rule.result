@@ -359,6 +359,15 @@ select id from db1.t_rule_text order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
 4
+create table db1.t_rule_lookup(code varchar(20));
+insert into db1.t_rule_lookup values ('0001'), ('1');
+grant select on table db1.t_rule_lookup to test_rule_role_inherit_a;
+alter role test_rule_role_inherit_a add rule "select * from db1.t_rule_text where code in (select code from db1.t_rule_lookup where code in ('0001'))" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select * from db1.t_rule_text where code = '销售订单'" on table db1.t_rule_text;
+select id, code from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  code[12,20,0]  𝄀
+1  ¦  0001  𝄀
+3  ¦  销售订单
 alter role test_rule_role_inherit_a add rule 'select "code" as x from db1.t_rule_text where (select true)' on table db1.t_rule_text;
 alter role test_rule_role_inherit_b add rule "select 'code' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
 set session sql_mode = '';
@@ -437,6 +446,8 @@ select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
 ➤ id[4,32,0]  ¦  hex(x)[12,536870911,0]  ¦  length(x)[-5,64,0]  ¦  x is null[-6,8,0]  𝄀
 1  ¦    ¦  0  ¦  0  𝄀
 3  ¦    ¦  0  ¦  0
+set @role_rule_saved_lctn = @@global.lower_case_table_names;
+set global lower_case_table_names = 1;
 alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
 alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
 select id from db1.t_rule_text order by id;
@@ -482,7 +493,20 @@ select character_set_name from information_schema.character_sets where character
 ➤ character_set_name[12,64,0]  𝄀
 binary  𝄀
 utf8mb4
-set global lower_case_table_names = 1;
+alter role test_rule_role_inherit_a add rule "select character_set_name, maxlen from character_sets where maxlen = 1" on table information_schema.character_sets;
+alter role test_rule_role_inherit_b add rule "select character_set_name, maxlen from CHARACTER_SETS where maxlen = 4" on table information_schema.character_sets;
+use information_schema;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+➤ character_set_name[12,64,0]  𝄀
+binary  𝄀
+utf8mb4
+set global lower_case_table_names = 0;
+use information_schema;
+select character_set_name from information_schema.character_sets where character_set_name in ('binary', 'utf8mb4') order by character_set_name;
+➤ character_set_name[12,64,0]  𝄀
+binary  𝄀
+utf8mb4
+set global lower_case_table_names = @role_rule_saved_lctn;
 create role test_rule_role_validate;
 alter role test_rule_role_validate add rule "select a, age from db1.t1 where age > 28" on table db1.t1;
 alter role test_rule_role_validate add rule "delete from db1.t1 where a = 1" on table db1.t1;
