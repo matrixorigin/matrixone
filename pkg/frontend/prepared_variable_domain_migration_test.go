@@ -107,8 +107,8 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	scratch.rewritePolicyCaptured = true
 	scratch.rewritePolicyGeneration = ses.rewritePolicyGeneration
 	staticType := plan.Type{Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary)}
-	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
-		"bound_s", "你", "", false, staticType, types.StringConversionString, false, types.RuntimeStringInherit))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
+		"bound_s", "你", "", false, staticType, false, types.RuntimeStringInherit))
 	stmt := tree.NewPrepareString("bound_migration", "select charset(@bound_s), char_length(coalesce(@bound_s, ?))")
 	defer stmt.Free()
 	p, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, stmt)
@@ -131,10 +131,9 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 
 	for _, value := range []string{"你", "你好"} {
 		// Migration's current snapshot differs from the frozen type and row domain.
-		require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		require.NoError(t, ses.setUserDefinedVarWithTypeAndReplayability(
 			"bound_s", value, "", false,
-			plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)},
-			types.StringConversionString, false, types.RuntimeStringInherit))
+			plan.Type{Id: int32(types.T_text), Charset: uint32(types.CharsetUTF8)}, false, types.RuntimeStringInherit))
 		resp := &query.MigrateConnFromResponse{}
 		err := rt.migrateConnectionFrom(resp)
 		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
