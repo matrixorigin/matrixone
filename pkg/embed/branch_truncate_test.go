@@ -628,6 +628,34 @@ func TestDataBranchClearBoundaryAfterGC(t *testing.T) {
 	t.Logf("copy materialization objects reclaimed: %v", initial)
 	require.NoError(t, db.QueryRowContext(ctx, diff).Scan(&count))
 	require.Equal(t, 1001, count)
+
+	exec("create table clear_root(k int primary key, v int)")
+	exec("insert into clear_root values (1,10),(2,20),(3,30)")
+	exec("data branch create table clear_src from clear_root")
+	const clearIDSQL = "select rel_id from mo_catalog.mo_tables where reldatabase='bd_boundary_gc' and relname='clear_src'"
+	_, queryBeforeRestart := branchClearSQL(t, db)
+	beforeClear := queryBeforeRestart(clearIDSQL, 1)
+	require.Len(t, beforeClear, 1)
+	exec("select mo_ctl('dn','flush','bd_boundary_gc.clear_src')")
+	exec("truncate table clear_src")
+	exec("insert into clear_src values (2,20),(3,31)")
+	assertTruncateDiff := func(query func(string, int) [][]string) {
+		t.Helper()
+		afterClear := query(clearIDSQL, 1)
+		require.Len(t, afterClear, 1)
+		require.NotEqual(t, beforeClear[0][0], afterClear[0][0])
+		require.Equal(t, [][]string{{beforeClear[0][0], "truncate:table"}}, query(
+			"select p_table_id, level from mo_catalog.mo_branch_metadata where not table_deleted and table_id="+afterClear[0][0], 2))
+		require.ElementsMatch(t, [][]string{{"clear_src", "DELETE", "1", "10"}, {"clear_src", "UPDATE", "3", "31"}},
+			query("data branch diff bd_boundary_gc.clear_src against bd_boundary_gc.clear_root", 4))
+		require.Equal(t, [][]string{{"1", "10"}, {"2", "20"}, {"3", "30"}},
+			query("select k,v from bd_boundary_gc.clear_root order by k", 2))
+	}
+	assertTruncateDiff(queryBeforeRestart)
+	assertDiskGCReclaimsProbe(t, ctx, db, c, branchRestartScenario{
+		database: "bd_boundary_gc", reclaimProbeTable: "truncate_gc_probe",
+	})
+	assertTruncateDiff(queryBeforeRestart)
 	require.NoError(t, db.Close())
 	require.NoError(t, c.Stop())
 	require.NoError(t, c.Start())
@@ -636,6 +664,7 @@ func TestDataBranchClearBoundaryAfterGC(t *testing.T) {
 	restarted := recoverySQLClient(t, cn)
 	defer restarted.Close()
 	_, query := branchClearSQL(t, restarted)
+	assertTruncateDiff(query)
 	rows := query("data branch diff bd_boundary_gc.m2 against bd_boundary_gc.m1", 5)
 	require.Len(t, rows, 1001)
 	want := make(map[string][]string, 1001)
@@ -723,7 +752,8 @@ func assertBranchClearFixture(t *testing.T, db *sql.DB, path string) {
 		}
 		require.Equal(t, strings.Fields(stmt+";"), strings.Fields(strings.Join(lines, " ")))
 		switch {
-		case stmt == "truncate table txn_branch", stmt == "data branch diff dynamic_src against dynamic_dst":
+		case stmt == "truncate table txn_branch", stmt == "data branch diff dynamic_src against dynamic_dst",
+			strings.HasPrefix(stmt, "data branch pick reinsert_clear ") && strings.HasSuffix(stmt, "when conflict fail"):
 			require.Contains(t, nextLine(), "@regex")
 			want := nextLine()
 			_, err := db.ExecContext(t.Context(), stmt)

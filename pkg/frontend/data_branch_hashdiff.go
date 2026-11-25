@@ -1908,7 +1908,33 @@ func hashDiffIfHasLCA(
 		}
 	}
 
-	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
+	var baseUpdates []databranchutils.BranchHashmap
+	if copt.preservePickConflicts && tblStuff.def.pkKind != fakeKind && tarDataHashmap.ItemCount() != 0 {
+		// Updates consumed by phase 2 are no longer needed. The remaining
+		// ones can conflict with source inserts that have no old row in the
+		// PICK window, so include their live values in the final key match.
+		for _, slot := range []int{clearUpdate, clearNativeUpdate} {
+			if rows := baseClearChanges[slot].rows; rows != nil && rows.ItemCount() != 0 {
+				baseUpdates = append(baseUpdates, rows)
+			}
+		}
+		if len(baseUpdateBatches) != 0 {
+			rows, createErr := databranchutils.NewBranchHashmap(
+				databranchutils.WithBranchHashmapAllocator(tblStuff.hashmapAllocator),
+			)
+			if createErr != nil {
+				return createErr
+			}
+			defer func() { err = errors.Join(err, rows.Close()) }()
+			for _, update := range baseUpdateBatches {
+				if err := rows.PutByVectors(update.batch.Vecs, clearKeyIdxes); err != nil {
+					return err
+				}
+			}
+			baseUpdates = append(baseUpdates, rows)
+		}
+	}
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap, baseUpdates)
 }
 
 func hashDiffIfNoLCA(
@@ -1927,7 +1953,7 @@ func hashDiffIfNoLCA(
 	// In particular, a bounded UPDATE produces a same-commit data+tombstone
 	// pair; removing the data merely because the marker remains would erase the
 	// update before the two independent tables are compared.
-	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
+	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap, nil)
 }
 
 func compareRowInWrappedBatches(
@@ -2478,6 +2504,7 @@ func diffDataHelper(
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
+	baseUpdates []databranchutils.BranchHashmap,
 ) (err error) {
 
 	parallelism := -1
@@ -2513,6 +2540,17 @@ func diffDataHelper(
 		}
 	}
 
+	compareIdxes := tblStuff.def.commonIdxes
+	if len(compareIdxes) == 0 {
+		compareIdxes = tblStuff.def.visibleIdxes
+	}
+	if baseline := tblStuff.tarClearBaseline; baseline != nil && baseline.upperColumns != nil {
+		// NULL padding for columns absent at hi is not a source value.
+		compareIdxes = slices.DeleteFunc(slices.Clone(compareIdxes), func(idx int) bool {
+			return baseline.upperColumns[idx] == nil
+		})
+	}
+
 	if err = tarDataHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
 			err2               error
@@ -2544,12 +2582,18 @@ func diffDataHelper(
 			default:
 			}
 
-			if tblStuff.def.pkKind == fakeKind {
-				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
-					return err2
+			matchedRows := baseDataHashmap
+			checkRet, err2 = matchedRows.PopByEncodedKey(key, false)
+			if err2 != nil {
+				return err2
+			}
+			for _, updates := range baseUpdates {
+				if checkRet.Exists {
+					break
 				}
-			} else {
-				if checkRet, err2 = baseDataHashmap.PopByEncodedKey(key, false); err2 != nil {
+				matchedRows = updates
+				checkRet, err2 = matchedRows.PopByEncodedKey(key, false)
+				if err2 != nil {
 					return err2
 				}
 			}
@@ -2574,15 +2618,11 @@ func diffDataHelper(
 						return err2
 					}
 
-					if baseTuple, _, err2 = baseDataHashmap.DecodeRow(checkRet.Rows[0]); err2 != nil {
+					if baseTuple, _, err2 = matchedRows.DecodeRow(checkRet.Rows[0]); err2 != nil {
 						return err2
 					}
 
 					notSame := false
-					compareIdxes := tblStuff.def.commonIdxes
-					if len(compareIdxes) == 0 {
-						compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
-					}
 					for _, idx := range compareIdxes {
 						if slices.Index(tblStuff.def.pkColIdxes, idx) != -1 {
 							// pk columns already compared
@@ -2659,11 +2699,12 @@ func diffDataHelper(
 
 		if baseDeleteBat != nil {
 			if stop, err3 := emitBatch(emit, batchWithKind{
-				batch:      baseDeleteBat,
-				kind:       diffDelete,
-				name:       tblStuff.baseRel.GetTableName(),
-				side:       diffSideBase,
-				fromUpdate: true,
+				batch:          baseDeleteBat,
+				kind:           diffDelete,
+				name:           tblStuff.baseRel.GetTableName(),
+				side:           diffSideBase,
+				fromUpdate:     true,
+				hasReplacement: copt.preservePickConflicts,
 			}, false, tblStuff.retPool); err3 != nil {
 				return err3
 			} else if stop {

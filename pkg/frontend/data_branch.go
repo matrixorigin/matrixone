@@ -2309,8 +2309,14 @@ func constructChangeHandle(
 	if tables.tarVisibleState {
 		if betweenFrom != nil && betweenTo != nil {
 			candidates := dedupeBranchIdentities(tarIdent, baseIdent)
+			// The surviving segments may start after lo because the destination
+			// already inherited the source prefix at its fork.
+			baselineAt := *betweenFrom
+			if first := tarRange.from[0].Prev(); first.GT(&baselineAt) {
+				baselineAt = first
+			}
 			if tables.tarClearBaseline, err = dataBranchSourceAt(
-				ctx, ses, bh, candidates, branchInfo, *betweenFrom,
+				ctx, ses, bh, candidates, branchInfo, baselineAt,
 			); err != nil {
 				return
 			}
@@ -2353,6 +2359,12 @@ func constructChangeHandle(
 	if tables.tarClearBaseline != nil && (!branchInfo.hasLCA() || tables.lcaHasZeroHistory) {
 		// An unrelated destination has no fork baseline. Compare its visible
 		// rows to the source's lower snapshot when matching picked changes.
+		tables.baseVisibleState = true
+	}
+	if tables.tarVisibleState && branchInfo.hasLCA() && tables.def.pkKind == fakeKind {
+		// Once a clear invalidates the source's hidden row identities, both
+		// sides must match duplicates by value and retain live destination
+		// identities for any excess source deletions.
 		tables.baseVisibleState = true
 	}
 	if tables.baseVisibleState {

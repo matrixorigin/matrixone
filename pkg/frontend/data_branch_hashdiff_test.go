@@ -568,6 +568,7 @@ func TestDiffDataHelper_Basic(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -603,6 +604,7 @@ func TestDiffDataHelperClosesMigratedHashmaps(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, baseHashmap.migrateCalls)
@@ -678,6 +680,7 @@ func TestDiffDataHelperFakePKUsesCommonVisibleColumnsAsKey(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Empty(t, got)
@@ -832,6 +835,7 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(7), "after", "target"}}, got["INSERT-1"])
@@ -899,6 +903,7 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdateWithSparseCommonIdxes(t *testi
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(7), "same-extra", "target-update"}}, got["INSERT-1"])

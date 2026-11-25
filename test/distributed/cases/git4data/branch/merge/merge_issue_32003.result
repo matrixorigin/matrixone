@@ -87,4 +87,91 @@ not supported: DATA BRANCH cannot establish historical value for column "ts" acr
 select k,v from dynamic_dst order by k;
 ➤ k[4,32,0]  ¦  v[12,10,0]  𝄀
 1  ¦  same
+create table bags_dst (v int);
+insert into bags_dst values (8),(8),(8);
+data branch create table bags_src from bags_dst;
+truncate table bags_src;
+insert into bags_src values (8),(8);
+delete from bags_dst where v=8 limit 1;
+data branch merge bags_src into bags_dst when conflict accept;
+select v,count(*) as copies from bags_dst group by v;
+➤ v[4,32,0]  ¦  copies[-5,64,0]  𝄀
+8  ¦  2
+create table fewer_dst (v int);
+insert into fewer_dst values (8),(8),(8),(9);
+data branch create table fewer_src from fewer_dst;
+truncate table fewer_src;
+insert into fewer_src values (8),(9);
+delete from fewer_dst where v=8 limit 1;
+data branch merge fewer_src into fewer_dst when conflict accept;
+select v,count(*) as copies from fewer_dst group by v order by v;
+➤ v[4,32,0]  ¦  copies[-5,64,0]  𝄀
+8  ¦  1  𝄀
+9  ¦  1
+create table fork_src (k int primary key, v int);
+insert into fork_src values (1,10);
+create snapshot issue32003_fork_lo for account sys;
+insert into fork_src values (2,20);
+data branch create table fork_dst from fork_src;
+truncate table fork_src;
+create snapshot issue32003_fork_hi for account sys;
+data branch pick fork_src into fork_dst between snapshot issue32003_fork_lo and issue32003_fork_hi when conflict accept;
+select count(*) as remaining from fork_dst;
+➤ remaining[-5,64,0]  𝄀
+0
+drop snapshot issue32003_fork_hi;
+drop snapshot issue32003_fork_lo;
+create table upper_dst (k int primary key, v int);
+data branch create table upper_src from upper_dst;
+create snapshot issue32003_upper_lo for account sys;
+truncate table upper_src;
+insert into upper_src values (1,10);
+create snapshot issue32003_upper_hi for account sys;
+alter table upper_src add column note int;
+alter table upper_dst add column note int;
+insert into upper_dst values (1,10,42);
+data branch pick upper_src into upper_dst between snapshot issue32003_upper_lo and issue32003_upper_hi when conflict fail;
+select k,v,note from upper_dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  ¦  note[4,32,0]  𝄀
+1  ¦  10  ¦  42
+drop snapshot issue32003_upper_hi;
+drop snapshot issue32003_upper_lo;
+create table reinsert_root (k int primary key, v int);
+insert into reinsert_root values (1,10);
+data branch create table reinsert_clear from reinsert_root;
+data branch create table reinsert_dml from reinsert_root;
+data branch create table reinsert_dst from reinsert_root;
+delete from reinsert_clear where k=1;
+delete from reinsert_dml where k=1;
+create snapshot issue32003_reinsert_lo for account sys;
+truncate table reinsert_clear;
+insert into reinsert_clear values (1,99);
+insert into reinsert_dml values (1,99);
+create snapshot issue32003_reinsert_hi for account sys;
+update reinsert_dst set v=42 where k=1;
+data branch pick reinsert_clear into reinsert_dst between snapshot issue32003_reinsert_lo and issue32003_reinsert_hi when conflict fail;
+-- @regex("conflict: reinsert_clear INSERT and reinsert_dst INSERT", true)
+conflict: reinsert_clear INSERT and reinsert_dst INSERT on pk(1) with different values
+select k,v from reinsert_dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  42
+data branch pick reinsert_clear into reinsert_dst between snapshot issue32003_reinsert_lo and issue32003_reinsert_hi when conflict skip;
+select k,v from reinsert_dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  42
+data branch pick reinsert_clear into reinsert_dst between snapshot issue32003_reinsert_lo and issue32003_reinsert_hi when conflict accept;
+select k,v from reinsert_dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  99
+update reinsert_dst set v=42 where k=1;
+data branch pick reinsert_dml into reinsert_dst between snapshot issue32003_reinsert_lo and issue32003_reinsert_hi when conflict skip;
+select k,v from reinsert_dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  42
+data branch pick reinsert_dml into reinsert_dst between snapshot issue32003_reinsert_lo and issue32003_reinsert_hi when conflict accept;
+select k,v from reinsert_dst order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  99
+drop snapshot issue32003_reinsert_hi;
+drop snapshot issue32003_reinsert_lo;
 drop database issue32003;
