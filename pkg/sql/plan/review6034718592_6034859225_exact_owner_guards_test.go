@@ -174,9 +174,20 @@ func TestRestoredLegacyInnerWindowInferenceShapeIsExact(t *testing.T) {
 		t.Fatalf("the exact witnessed dual-window shape must select the inner inference input")
 	}
 
-	// Excluded shapes keep the previous complete binding.
+	// The adjacent inner-LIMIT-without-ORDER marker-free shape is inside the
+	// released boundary: v4.2.9 authors it (CREATE rc 0, marker-free ViewDef,
+	// SHOW COLUMNS a BIGINT NOT NULL) while its own reader rejects the
+	// duplicate-clause combination at query time - exactly the released
+	// semantics the restored inference now defers to (see the release witness
+	// receipt in this review's phase evidence).
+	innerLimit := "(select count(*) as a from tw_src interval(ts, 1, minute) limit 3) interval(ts, 2, minute) limit 5"
+	bindDefinition(markerFree)
+	if inner, ok := restoredLegacyInnerWindow(mc, "pg", "v", stmtOf(innerLimit)); !ok || inner == nil {
+		t.Fatalf("the released-witnessed inner-LIMIT shape must select the inner inference input")
+	}
+	// Excluded shapes keep the complete binding: a body without its own
+	// window is outside the released dual-window boundary.
 	excluded := []string{
-		"(select count(*) as a from tw_src interval(ts, 1, minute) limit 3) interval(ts, 2, minute) limit 5",
 		"(select count(*) as a from tw_src) interval(ts, 2, minute) limit 5",
 	}
 	for _, sql := range excluded {

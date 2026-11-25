@@ -1,0 +1,20 @@
+-- review 6063106971 / issue 32542: bare END in the LOAD DATA column list
+create table le606(id int, `end` int);
+insert into le606 values (1, 11);
+load data infile {'filepath'='$resources/load_data/review6063106971_bare_end.csv', 'format'='csv'} into table le606(id, end);
+select * from le606 order by id, `end`;
+load data infile {'filepath'='$resources/load_data/review6063106971_bare_end.csv', 'format'='csv'} into table le606(id, `end`);
+select count(*) from le606;
+create table le606_ddl(id int, end varbinary(16));
+insert into le606_ddl values (1, x'0a');
+select id, hex(end) from le606_ddl order by id;
+create table le606_ddlq(id int, `end` varbinary(16));
+insert into le606_ddlq values (2, x'0b');
+select id, hex(`end`) from le606_ddlq order by id;
+create table le606_bad(id int, `end` int);
+load data infile {'filepath'='$resources/load_data/review6063106971_bare_end.csv', 'format'='csv'} into table le606_bad(id, other);
+select count(*) from le606_bad;
+drop table le606_ddl;
+drop table le606_ddlq;
+drop table le606;
+drop table le606_bad;

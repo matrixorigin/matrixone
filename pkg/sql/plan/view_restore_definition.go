@@ -117,19 +117,18 @@ func restoredLegacyInnerWindow(ctx CompilerContext, database, name string, stmt 
 	if !ok || paren.Select == nil {
 		return nil, false
 	}
-	if paren.Select.With != nil || paren.Select.TimeWindow == nil || paren.Select.Limit != nil {
-		return nil, false
-	}
 	inner := paren.Select
-	// An authored ORDER BY is accepted on exactly one side of the recorded
-	// window shape: the directly-authored outer ORDER BY (the already
-	// accepted projection ordering over the inner window) or, symmetric to
-	// it, an authored inner ORDER BY inside the parenthesized window body —
-	// but never both, which the release-era reads and the current binders
-	// treat as duplicate ORDER clauses. Only the inference boundary widens:
-	// the handoff still binds the inner Select alone and ordinary/marked
-	// current-generation paths keep full validation.
-	if inner.OrderBy != nil && stmt.OrderBy != nil {
+	// The released CREATE inference binds the parenthesized body's inner
+	// select alone for schema and dependencies, so every clause that
+	// release authorized inside that body - a WITH, a competing LIMIT, and
+	// ORDER BY alone or paired - is an inference input only here: the
+	// handoff passes the inner Select unchanged and the readers keep the
+	// released execution semantics (the duplicate ORDER pair still reads
+	// exactly as the release does, with its duplicate-clause error at query
+	// time) instead of aborting restore/dependency planning. Only this
+	// marker-free inference boundary changes; authored current-generation
+	// definitions keep the complete defining select and its validation.
+	if inner.TimeWindow == nil {
 		return nil, false
 	}
 	if inner.RankOption != nil || inner.Ep != nil || inner.IntoVars != nil || inner.DeprecatedInto || inner.SelectLockInfo != nil || inner.RewriteOption != nil || inner.IsPerform {

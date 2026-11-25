@@ -71,6 +71,7 @@ type viewRegenerationContext struct {
 	rootSQL             string
 	lowerCaseTableNames int64
 	legacyCTEScope      bool
+	restoredLegacy      restoredViewDefinition
 }
 
 // GetContext injects the persisted generation marker so every binding that
@@ -80,6 +81,9 @@ func (c *viewRegenerationContext) GetContext() context.Context {
 	binding := c.CompilerContext.GetContext()
 	if c.legacyCTEScope {
 		binding = defines.WithLegacyViewCTEScope(binding)
+	}
+	if c.restoredLegacy.definition != "" {
+		return context.WithValue(binding, restoredViewDefinitionKey{}, c.restoredLegacy)
 	}
 	return binding
 }
@@ -262,6 +266,12 @@ func parsePersistedViewDefinition(
 		rootSQL:             viewData.Stmt,
 		lowerCaseTableNames: lowerCaseTableNames,
 		legacyCTEScope:      viewData.CTEScopeProtocol == nil,
+	}
+	regenerationCtx.restoredLegacy = restoredViewDefinition{
+		database:   viewDatabase,
+		name:       viewName,
+		definition: persistedViewData,
+		createSQL:  viewData.Stmt,
 	}
 	parsed.ctx, parsed.data = regenerationCtx, viewData
 	parsed.selectStmt, parsed.columnNames = selectStmt, columnNames

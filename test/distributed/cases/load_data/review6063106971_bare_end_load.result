@@ -1,0 +1,32 @@
+create table le606(id int, `end` int);
+insert into le606 values (1, 11);
+load data infile {'filepath'='$resources/load_data/review6063106971_bare_end.csv', 'format'='csv'} into table le606(id, end);
+select * from le606 order by id, `end`;
+➤ id[4,32,0]  ¦  end[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  11  𝄀
+2  ¦  20
+load data infile {'filepath'='$resources/load_data/review6063106971_bare_end.csv', 'format'='csv'} into table le606(id, `end`);
+select count(*) from le606;
+➤ count(*)[-5,64,0]  𝄀
+5
+create table le606_ddl(id int, end varbinary(16));
+insert into le606_ddl values (1, x'0a');
+select id, hex(end) from le606_ddl order by id;
+➤ id[4,32,0]  ¦  hex(end)[12,32,0]  𝄀
+1  ¦  0A
+create table le606_ddlq(id int, `end` varbinary(16));
+insert into le606_ddlq values (2, x'0b');
+select id, hex(`end`) from le606_ddlq order by id;
+➤ id[4,32,0]  ¦  hex(end)[12,32,0]  𝄀
+2  ¦  0B
+create table le606_bad(id int, `end` int);
+load data infile {'filepath'='$resources/load_data/review6063106971_bare_end.csv', 'format'='csv'} into table le606_bad(id, other);
+internal error: column 'other' does not exist
+select count(*) from le606_bad;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table le606_ddl;
+drop table le606_ddlq;
+drop table le606;
+drop table le606_bad;

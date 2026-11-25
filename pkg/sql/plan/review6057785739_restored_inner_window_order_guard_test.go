@@ -48,26 +48,28 @@ func restoredGuardSelect(t *testing.T, body string) (*tree.Select, bool) {
 }
 
 func TestRestoredInnerWindowOrderGuardAdmitsSingleInnerOrOuterOnly(t *testing.T) {
-	// the release-authored inner ORDER shape (no outer ORDER): admitted
-	inner, ok := restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute) order by a) interval(ts, 2, minute) limit 5")
+	// The released CREATE inference binds the parenthesized body alone, so
+	// every clause the release authorized inside that body is an inference
+	// input only here: the dual-window marker-free restored shapes with an
+	// inner WITH, an inner LIMIT, and an ORDER BY on one or both sides all
+	// admit the released one-level boundary.
+	_, ok := restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute) order by a) interval(ts, 2, minute) limit 5")
 	require.True(t, ok)
-	require.NotNil(t, inner)
-	// the already-accepted sole outer ORDER shape: admitted
 	_, ok = restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute)) interval(ts, 2, minute) order by a limit 5")
 	require.True(t, ok)
-	// no ORDER at all: admitted
 	_, ok = restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute)) interval(ts, 2, minute) limit 5")
 	require.True(t, ok)
-	// duplicate ORDER (inner+outer): rejected before any inference
+	// the review 6063106971 marker-free variants
+	_, ok = restoredGuardSelect(t, "(with c as (select ts from t) select count(*) as a from c interval(ts, 1, minute)) interval(ts, 2, minute) limit 5")
+	require.True(t, ok)
+	_, ok = restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute) order by a limit 3) interval(ts, 2, minute) order by a limit 5")
+	require.True(t, ok)
 	_, ok = restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute) order by a) interval(ts, 2, minute) order by a limit 5")
+	require.True(t, ok)
+	// an inner WITH still rejects when it hides the inner window itself
+	_, ok = restoredGuardSelect(t, "(with c as (select ts from t) select count(*) as a from c) interval(ts, 2, minute) limit 5")
 	require.False(t, ok)
-	// inner LIMIT: still vetoed
-	_, ok = restoredGuardSelect(t, "(select count(*) as a from t interval(ts, 1, minute) order by a limit 3) interval(ts, 2, minute) limit 5")
-	require.False(t, ok)
-	// an inner WITH: still rejected
-	_, ok = restoredGuardSelect(t, "(with x as (select 1 as b) select count(*) from x, t interval(ts, 1, minute) order by a) interval(ts, 2, minute) limit 5")
-	require.False(t, ok)
-	// a shape outside the restored-window family entirely: no gate effect
+	// a non-window outside-family shape: no gate effect
 	_, ok = restoredGuardSelect(t, "select a from t")
 	require.False(t, ok)
 }
