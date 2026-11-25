@@ -264,7 +264,10 @@ The merged entry keeps the sooner due time and the larger share, and serves both
 scans. It is dropped only when both scans have ended. A request for bytes the running
 download of its object does not download is queued once that download ends (decision
 2026-11-18, v9): before, it was counted as merged and lost, and its scan read those
-columns block by block. Such a request is kept only within the queue's bytes, which the
+columns block by block. Only the bytes it asks for that the running download's ranges,
+together, do not hold are queued and counted; the cache check of a queued request drops
+it only when the bytes it found cached hold all the request then asks for. Such a request
+is kept only within the queue's bytes, which the
 requests deferred behind all running downloads count toward, and only for scans that have
 not ended; one whose scans all ended gives up its bytes to a request that needs them, before a live queued download is dropped, and is not merged into a later request.
 

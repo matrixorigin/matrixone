@@ -98,23 +98,48 @@ func (r ObjectPrefetch) merge(o ObjectPrefetch) ObjectPrefetch {
 	return r
 }
 
+// need returns what of o, of the same key, the download of r does not download, and
+// false when it downloads all of it: o whole when o asks for the whole object and r for
+// ranges, otherwise the bytes of the ranges of o that no range of r holds, of their size.
+func (r ObjectPrefetch) need(o ObjectPrefetch) (ObjectPrefetch, bool) {
+	if len(r.Ranges) == 0 {
+		return ObjectPrefetch{}, false
+	}
+	if len(o.Ranges) == 0 {
+		return o, true
+	}
+	held, _ := unionRanges(r.Ranges, nil)
+	var left []PrefetchRange
+	var size int64
+	for _, x := range o.Ranges {
+		pos, end := x.Offset, x.Offset+x.Size
+		for _, y := range held {
+			if y.Offset+y.Size <= pos || y.Offset >= end {
+				continue
+			}
+			if y.Offset > pos {
+				left = append(left, PrefetchRange{Offset: pos, Size: y.Offset - pos})
+				size += y.Offset - pos
+			}
+			pos = max(pos, y.Offset+y.Size)
+		}
+		if pos < end {
+			left = append(left, PrefetchRange{Offset: pos, Size: end - pos})
+			size += end - pos
+		}
+	}
+	if len(left) == 0 {
+		return ObjectPrefetch{}, false
+	}
+	o.Ranges, o.Size = left, size
+	return o, true
+}
+
 // covers reports whether the download of r downloads every byte o, of the same key, asks
 // for.
 func (r ObjectPrefetch) covers(o ObjectPrefetch) bool {
-	if len(r.Ranges) == 0 {
-		return true
-	}
-	if len(o.Ranges) == 0 {
-		return false
-	}
-	for _, x := range o.Ranges {
-		if !slices.ContainsFunc(r.Ranges, func(y PrefetchRange) bool {
-			return y.Offset <= x.Offset && x.Offset+x.Size <= y.Offset+y.Size
-		}) {
-			return false
-		}
-	}
-	return true
+	_, needed := r.need(o)
+	return !needed
 }
 
 // unionRanges returns the ranges holding the bytes of a and of b, in order, those that
@@ -311,10 +336,11 @@ func (p *prefetcher) addLocked(req ObjectPrefetch, have bool) {
 			return
 		}
 		metric.FSPrefetchMergedCounter.Inc()
-		if e.queue == nil && !e.req.covers(req) {
-			// The running download does not download what req asks for: it is queued once
-			// the download ends. Past the queues' bytes, what it asks for is not kept. What
+		if needed, ok := e.req.need(req); e.queue == nil && ok {
+			// The running download does not download what req asks for: what it does not is
+			// queued once the download ends. Past the queues' bytes, it is not kept. What
 			// scans that all ended asked for is dropped, not merged into req.
+			req := needed
 			var next ObjectPrefetch
 			var grow int64
 			for {
@@ -564,8 +590,8 @@ func (p *prefetcher) startQueueLocked(q *fetchQueue) {
 				p.mu.Unlock()
 				if deferred != nil && p.have(*next) {
 					p.mu.Lock()
-					// Unless it started, or another request grew it, meanwhile.
-					if p.entries[next.key()] == deferred && deferred.queue != nil && deferred.req.Size == next.Size {
+					// Unless it started meanwhile, or asks for bytes the check did not find.
+					if p.entries[next.key()] == deferred && deferred.queue != nil && next.covers(deferred.req) {
 						metric.FSPrefetchCachedCounter.Inc()
 						p.removeLocked(deferred)
 					}
