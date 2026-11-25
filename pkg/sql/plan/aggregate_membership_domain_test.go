@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
@@ -198,6 +199,8 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 		keyType        types.T
 		metadataStats  bool
 		missingPartNDV bool
+		nullableName   bool
+		partNameNulls  uint64
 		restricted     bool
 	}{
 		{name: "selective-prefix", predicate: "p_name like 'forest%'", restricted: true},
@@ -221,6 +224,8 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 		{name: "metadata-small-primary-key-domain", predicate: "p_name like '%'", partRows: 1000, metadataStats: true, missingPartNDV: true, restricted: true},
 		{name: "metadata-small-primary-key-domain-with-range", predicate: "p_name like '%' and p_partkey between 1 and 1000",
 			partRows: 1000, metadataStats: true, missingPartNDV: true, restricted: true},
+		{name: "nullable-name-high-null-count", predicate: "p_name like '%'", nullableName: true, partNameNulls: 16000, restricted: true},
+		{name: "nullable-name-no-nulls", predicate: "p_name like '%'", nullableName: true},
 		{name: "multiple-percent", predicate: "p_name like '%%'"},
 		{name: "no-filter", predicate: "true"},
 		{name: "negated-wildcard", predicate: "not (p_name like '%')", restricted: true},
@@ -246,6 +251,10 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 					NdvMap: map[string]float64{}, SizeMap: map[string]uint64{}, DataTypeMap: map[string]uint64{}}
 				keyName := map[string]string{"part": "p_partkey", "partsupp": "ps_partkey", "lineitem": "l_partkey"}[name]
 				for _, col := range table.Cols {
+					if name == "part" && tc.nullableName && col.Name == "p_name" {
+						col.Typ.NotNullable = false
+						s.NullCntMap = map[string]uint64{"p_name": tc.partNameNulls}
+					}
 					if tc.keyType != types.T_any && col.Name == keyName {
 						col.Typ.Id = int32(tc.keyType)
 					}
@@ -402,6 +411,11 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 		lower, upper      int32
 		notNullable       bool
 		nullCount         uint64
+		unpublished       bool
+		snapshot          bool
+		wrongStatsType    bool
+		secondNullCount   uint64
+		wantWildcardRows  float64
 		keyNDV            float64
 		tableRows         float64
 		groups            float64
@@ -412,14 +426,30 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 		wantRestriction   bool
 	}{
 		{name: "only-wildcard-exact-ndv", keyNDV: 5000},
-		{name: "only-wildcard-nullable-ndv-drift", nullCount: 8000, keyNDV: 4500},
-		{name: "only-wildcard-not-null-ndv-drift", notNullable: true, keyNDV: 4500},
+		{name: "only-wildcard-nullable-published", nullCount: 8000, wantWildcardRows: 2000, keyNDV: 4500, wantRestriction: true},
+		{name: "only-wildcard-nullable-all-nulls", nullCount: 10000, wantWildcardRows: 1, keyNDV: 4500, wantRestriction: true},
+		{name: "only-wildcard-nullable-unpublished", nullCount: 8000, keyNDV: 4500, unpublished: true},
+		{name: "only-wildcard-nullable-absent-column-stat", keyNDV: 4500},
+		{name: "only-wildcard-nullable-invalid-null-count", nullCount: 10001, keyNDV: 4500},
+		{name: "only-wildcard-nullable-inconsistent-type", nullCount: 8000, keyNDV: 4500, wrongStatsType: true},
+		{name: "only-wildcard-nullable-snapshot", nullCount: 8000, keyNDV: 4500, snapshot: true},
+		{name: "only-wildcard-not-null-ndv-drift", notNullable: true, nullCount: 8000, keyNDV: 4500},
+		{name: "repeated-wildcard-same-column", form: "duplicate", nullCount: 8000, wantWildcardRows: 2000, keyNDV: 4500, wantRestriction: true},
+		{name: "wildcards-on-two-columns", nullCount: 8000, secondNullCount: 9000, wantWildcardRows: 1000, keyNDV: 4500, wantRestriction: true},
+		{name: "nullable-wildcard-caps-residual", form: "and", lower: 1, upper: 5000,
+			nullCount: 8000, wantWildcardRows: 2000, keyNDV: 4500, wantRestriction: true},
+		{name: "selective-residual-caps-nullable-wildcard", form: "and", lower: 10, upper: 20,
+			nullCount: 8000, wantWildcardRows: 2000, keyNDV: 4500, wantRestriction: true},
+		{name: "nullable-wildcard-with-missing-primary-key-ndv", form: "and", lower: 10, upper: 20,
+			nullCount: 8000, wantWildcardRows: 2000, noPrimaryKeyStats: true, wantRestriction: true},
+		{name: "missing-primary-key-ndv-keeps-only-null-bound", form: "and", lower: 10, upper: 20,
+			nullCount: 5000, wantWildcardRows: 5000, noPrimaryKeyStats: true},
 		{name: "only-wildcard-small-key-domain", notNullable: true, keyNDV: 1000, wantRestriction: true},
 		{name: "only-wildcard-expensive-build", keyNDV: 1000, tableRows: 100000},
 		{name: "only-wildcard-missing-key-ndv"},
 		{name: "only-wildcard-missing-table-stats", keyNDV: 1000, removeStats: true},
 		{name: "only-wildcard-inconsistent-stats", keyNDV: 1000, differentScanRows: true},
-		{name: "nested-or-only", form: "or", keyNDV: 5000},
+		{name: "nested-or-only", form: "or", nullCount: 8000, keyNDV: 5000},
 		{name: "nested-not-only", form: "not", nullCount: 8000, keyNDV: 5000, useScanRows: true},
 		{name: "nested-not-is-true", form: "not-istrue", nullCount: 8000, keyNDV: 5000, useScanRows: true},
 		{name: "nested-double-not", form: "double-not", nullCount: 8000, keyNDV: 4500},
@@ -453,6 +483,8 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 			wildcard := bind("like", name, makePlan2StringConstExprWithType("%"))
 			filter := wildcard
 			switch tc.form {
+			case "duplicate":
+				filter = bind("and", wildcard, DeepCopyExpr(wildcard))
 			case "or":
 				key := GetColExpr(domain.TableDef.Cols[0].Typ, tag, 0)
 				filter = bind("or", wildcard, bind("=", key, makePlan2Int32ConstExprWithType(42)))
@@ -470,6 +502,13 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 				filter = bind("or", both, bind("=", key, makePlan2Int32ConstExprWithType(42)))
 			}
 			domain.FilterList = []*plan.Expr{filter}
+			if tc.secondNullCount > 0 {
+				colPos := int32(len(domain.TableDef.Cols))
+				typ := domain.TableDef.Cols[1].Typ
+				domain.TableDef.Cols = append(domain.TableDef.Cols, &plan.ColDef{Name: "other_name", Typ: typ})
+				other := bind("like", GetColExpr(typ, tag, colPos), makePlan2StringConstExprWithType("%%"))
+				domain.FilterList = append(domain.FilterList, other)
+			}
 			var independent []*plan.Expr
 			if tc.upper > 0 {
 				key := func() *plan.Expr { return GetColExpr(domain.TableDef.Cols[0].Typ, tag, 0) }
@@ -490,7 +529,7 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 				tableRows = 10000
 			}
 			stats := &statsinfo.StatsInfo{
-				TableCnt: tableRows, BlockNumber: 2,
+				TableCnt: tableRows, BlockNumber: 2, TableName: "domain",
 				NdvMap: map[string]float64{}, DataTypeMap: map[string]uint64{"part": uint64(types.T_int32)},
 				MinValMap: map[string]float64{"part": 1}, MaxValMap: map[string]float64{"part": 5000},
 			}
@@ -503,6 +542,20 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 			}
 			if tc.nullCount > 0 {
 				stats.NullCntMap = map[string]uint64{"name": tc.nullCount}
+				stats.DataTypeMap["name"] = uint64(types.T_varchar)
+				if tc.wrongStatsType {
+					stats.DataTypeMap["name"] = uint64(types.T_char)
+				}
+			}
+			if tc.secondNullCount > 0 {
+				stats.NullCntMap["other_name"] = tc.secondNullCount
+				stats.DataTypeMap["other_name"] = uint64(types.T_varchar)
+			}
+			if tc.snapshot {
+				domain.ScanSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1}}
+			}
+			if tc.unpublished {
+				stats.TableName = ""
 			}
 			b.compCtx.GetStatsCache().Set(domain.TableDef.TblId, stats)
 			domain.Stats = calcScanStats(domain, b)
@@ -519,6 +572,10 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 			}
 
 			before := proto.Clone(b.qry)
+			wantWildcardRows := tc.wantWildcardRows
+			if wantWildcardRows == 0 && !tc.useScanRows && !tc.removeStats && !tc.differentScanRows {
+				wantWildcardRows = tableRows
+			}
 			var wantRows float64
 			switch {
 			case tc.useScanRows:
@@ -526,7 +583,7 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 			case tc.removeStats || tc.differentScanRows:
 				wantRows = 0
 			case len(independent) == 0:
-				wantRows = domain.Stats.TableCnt
+				wantRows = wantWildcardRows
 			default:
 				control := DeepCopyNode(domain)
 				control.FilterList = independent
@@ -536,10 +593,11 @@ func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
 				} else if tc.lower == 1 && tc.upper == 5000 {
 					require.Equal(t, 1.0, control.Stats.Selectivity, "the range alone retains the whole table")
 				}
-				wantRows = control.Stats.Outcnt
+				wantRows = min(wantWildcardRows, control.Stats.Outcnt)
 			}
-			rows, reestimated := b.aggregateMembershipDomainRows(domain)
+			rows, wildcardRows, reestimated := b.aggregateMembershipDomainRows(domain)
 			require.InDelta(t, wantRows, rows, 1e-9)
+			require.Equal(t, wantWildcardRows, wildcardRows)
 			require.Equal(t, !tc.useScanRows && !tc.removeStats && !tc.differentScanRows, reestimated)
 			require.Equal(t, tc.wantRestriction, b.restrictAggregateMembership(root))
 			if !tc.wantRestriction {
@@ -650,7 +708,7 @@ func TestAggregateMembershipCostsOnlyPublishedIntegerBounds(t *testing.T) {
 			domain.FilterList = append(domain.FilterList, expr)
 			domain.Stats = &plan.Stats{TableCnt: 100000, Outcnt: 2000}
 			before := proto.Clone(domain)
-			rows, reestimated := b.aggregateMembershipDomainRows(domain)
+			rows, _, reestimated := b.aggregateMembershipDomainRows(domain)
 			require.True(t, reestimated)
 			require.InDelta(t, tc.want*domain.Stats.TableCnt, rows, 1e-9)
 			require.True(t, proto.Equal(before, domain), "the scan and predicate caches keep their original values")
@@ -694,7 +752,7 @@ func TestAggregateMembershipRefreshesCachedBooleanRanges(t *testing.T) {
 	require.Equal(t, 0.02, left.GetF().Args[1].Selectivity)
 	require.Equal(t, 1.0, right.Selectivity)
 
-	rows, reestimated := b.aggregateMembershipDomainRows(domain)
+	rows, _, reestimated := b.aggregateMembershipDomainRows(domain)
 	require.True(t, reestimated)
 	require.Equal(t, domain.Stats.TableCnt, rows)
 	require.True(t, proto.Equal(before, domain))

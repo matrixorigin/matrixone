@@ -255,16 +255,16 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	// keys disappeared: a date predicate may retain nearly every part key.
 	// Use the available key NDV bounded by surviving rows, without assuming
 	// uniform key loss from that row predicate.
-	costDomainRows, reestimated := builder.aggregateMembershipDomainRows(domain)
+	costDomainRows, wildcardRows, reestimated := builder.aggregateMembershipDomainRows(domain)
 	if !finitePositive(costDomainRows) {
 		return false
 	}
 	domainNDV := getExprNdv(DeepCopyExpr(domainKey), builder)
 	if reestimated && containsAllSQLEqualityCompatiblePKs([]int32{domainKey.GetCol().ColPos}, domain.TableDef) {
 		if !finitePositive(domainNDV) {
-			// Charge the complete domain when the remaining predicates
-			// lack reliable column statistics.
-			costDomainRows = domain.Stats.TableCnt
+			// Only keep the row bound supplied by match-all LIKE filters
+			// when the remaining predicates lack reliable key statistics.
+			costDomainRows = wildcardRows
 		}
 		// Each estimated candidate row contributes a distinct primary key.
 		domainNDV = costDomainRows
@@ -290,43 +290,74 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	return true
 }
 
-// aggregateMembershipDomainRows omits the cost discount of each conjunct
-// proven true when its match-all LIKE inputs are non-NULL. The complete
-// candidate table can still exclude fact keys when no conjunct remains.
-// Price any remaining conjuncts using the scan's existing statistics. The flag
-// marks estimates made after removing at least one such conjunct.
-func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) (rows float64, reestimated bool) {
+// aggregateMembershipDomainRows estimates the candidate rows and the row bound
+// supplied by positive match-all LIKE conjuncts. A bare LIKE can reject NULLs
+// even when its pattern matches every non-NULL string.
+func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) (rows, wildcardRows float64, reestimated bool) {
 	if domain.Stats == nil {
-		return 0, false
+		return 0, 0, false
 	}
-	matchesAll := func(expr *plan.Expr) bool {
-		return membershipPredicateMatchesAll(expr, domain.BindingTags[0])
-	}
+	tag := domain.BindingTags[0]
 	conjuncts := splitPlanConjunctions(domain.FilterList)
-	remaining := slices.DeleteFunc(conjuncts, matchesAll)
+	var wildcardCols []*plan.Expr
+	remaining := slices.DeleteFunc(conjuncts, func(expr *plan.Expr) bool {
+		if col := membershipMatchAllLikeColumn(expr, tag); col != nil {
+			wildcardCols = append(wildcardCols, col)
+			return true
+		}
+		return membershipPredicateMatchesAll(expr, tag)
+	})
 	if len(remaining) == len(conjuncts) {
-		return domain.Stats.Outcnt, false
+		return domain.Stats.Outcnt, 0, false
 	}
 	// Use the statistics already cached by the planning pass.
 	cached := builder.getStatsInfoByTableID(domain.TableDef.TblId)
 	if cached == nil {
-		return 0, false
+		return 0, 0, false
 	}
 	stats := cached.GetStats()
 	if stats == nil || !finitePositive(stats.TableCnt) || stats.TableCnt != domain.Stats.TableCnt {
-		return 0, false
+		return 0, 0, false
+	}
+
+	wildcardRows = stats.TableCnt
+	published := StatsInfoUsableForCache(stats)
+	if len(wildcardCols) != 0 && published && StatsCacheEligible(builder.compCtx.GetProcess(), domain.ScanSnapshot) {
+		// Inspect only bare top-level conjuncts. Different filters may reject
+		// the same rows, so their row bounds must not be multiplied.
+		for _, col := range wildcardCols {
+			wildcardRows = math.Min(wildcardRows, membershipLikeNonNullRows(col, domain, stats))
+		}
 	}
 	if len(remaining) == 0 {
-		return stats.TableCnt, true
+		return wildcardRows, wildcardRows, true
 	}
 	remaining = DeepCopyExprList(remaining)
-	if StatsInfoUsableForCache(stats) {
+	if published {
 		for _, expr := range remaining {
 			reestimateMembershipIntegerRanges(expr, domain, stats)
 		}
 	}
 	selectivity := estimateAndSelectivity(remaining, builder, stats)
-	return stats.TableCnt * selectivity, true
+	return math.Min(wildcardRows, stats.TableCnt*selectivity), wildcardRows, true
+}
+
+func membershipLikeNonNullRows(expr *plan.Expr, domain *plan.Node, stats *statsinfo.StatsInfo) float64 {
+	ref := expr.GetCol()
+	if expr.Typ.NotNullable || ref.ColPos < 0 || int(ref.ColPos) >= len(domain.TableDef.Cols) {
+		return stats.TableCnt
+	}
+	col := domain.TableDef.Cols[ref.ColPos]
+	if col == nil || col.Typ.NotNullable || col.Typ.Id != expr.Typ.Id || col.Name == "" ||
+		(ref.Name != "" && ref.Name != col.Name) || stats.DataTypeMap[col.Name] != uint64(col.Typ.Id) {
+		return stats.TableCnt
+	}
+	nulls, known := stats.NullCntMap[col.Name]
+	if !known || float64(nulls) > stats.TableCnt {
+		return stats.TableCnt
+	}
+	// Even an all-NULL estimate must go through the positive-row cost gate.
+	return math.Min(stats.TableCnt, math.Max(1, stats.TableCnt-float64(nulls)))
 }
 
 // Refresh one-sided integer estimates only on copied membership predicates.
@@ -439,6 +470,36 @@ func (builder *QueryBuilder) aggregateMembershipFactNDV(fact *plan.Node, key *pl
 	return boundNDVByExactIntegerSpan(ndv, types.T(key.Typ.Id), lo, hi, false)
 }
 
+// membershipMatchAllLikeColumn returns the direct scan input of a two-argument
+// LIKE whose constant pattern consists entirely of percent wildcards.
+func membershipMatchAllLikeColumn(expr *plan.Expr, scanTag int32) *plan.Expr {
+	fn := expr.GetF()
+	if fn.GetFunc() == nil || len(fn.Args) != 2 {
+		return nil
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.LIKE {
+		return nil
+	}
+	input := fn.Args[0]
+	col := input.GetCol()
+	source := types.T(input.Typ.Id)
+	if col == nil || col.RelPos != scanTag || (source != types.T_char && source != types.T_varchar) {
+		return nil
+	}
+	lit := membershipPatternLiteral(fn.Args[1])
+	if lit == nil || lit.Isnull || lit.GetSval() == "" {
+		return nil
+	}
+	pattern := lit.GetSval()
+	for i := range pattern {
+		if pattern[i] != '%' {
+			return nil
+		}
+	}
+	return input
+}
+
 func membershipPredicateMatchesAll(expr *plan.Expr, scanTag int32) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
@@ -447,25 +508,7 @@ func membershipPredicateMatchesAll(expr *plan.Expr, scanTag int32) bool {
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
 	switch id {
 	case function.LIKE:
-		if len(fn.Args) != 2 {
-			return false
-		}
-		col := fn.Args[0].GetCol()
-		source := types.T(fn.Args[0].Typ.Id)
-		if col == nil || col.RelPos != scanTag || (source != types.T_char && source != types.T_varchar) {
-			return false
-		}
-		lit := membershipPatternLiteral(fn.Args[1])
-		if lit == nil || lit.Isnull || lit.GetSval() == "" {
-			return false
-		}
-		pattern := lit.GetSval()
-		for i := range pattern {
-			if pattern[i] != '%' {
-				return false
-			}
-		}
-		return true
+		return membershipMatchAllLikeColumn(expr, scanTag) != nil
 	case function.AND:
 		return len(fn.Args) == 2 && membershipPredicateMatchesAll(fn.Args[0], scanTag) &&
 			membershipPredicateMatchesAll(fn.Args[1], scanTag)
