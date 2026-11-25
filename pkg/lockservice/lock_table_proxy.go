@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -180,6 +181,7 @@ func (lp *localLockTableProxy) unlockWithContext(
 	n := rows.len()
 	var remoteMutations []pb.ExtraMutation
 	var updates []holderUpdate
+	var newPending []string
 	lp.mu.Lock()
 	defer lp.mu.Unlock()
 	rows.iter(func(key []byte) bool {
@@ -254,8 +256,10 @@ func (lp *localLockTableProxy) unlockWithContext(
 				remoteReplacement = nil
 			} else if len(remoteReplacement) > 0 {
 				lp.mu.pendingRemoteHolders[row] = remoteReplacement
+				newPending = append(newPending, row)
 			} else {
 				lp.mu.pendingLastHolderUnlocks[row] = struct{}{}
+				newPending = append(newPending, row)
 			}
 			remoteMutations = append(remoteMutations,
 				pb.ExtraMutation{
@@ -282,6 +286,15 @@ func (lp *localLockTableProxy) unlockWithContext(
 		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
 	}
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+			// The owner rejected this handoff during staging. Only undo
+			// markers created by this attempt, since earlier sends may have
+			// completed remotely even when their replies were lost.
+			for _, row := range newPending {
+				delete(lp.mu.pendingRemoteHolders, row)
+				delete(lp.mu.pendingLastHolderUnlocks, row)
+			}
+		}
 		return err
 	}
 

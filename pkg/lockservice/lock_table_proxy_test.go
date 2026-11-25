@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
@@ -834,4 +835,178 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			require.NoError(t, s1.Unlock(ctx, exclusiveTxn, timestamp.Timestamp{}))
 		},
 	)
+}
+
+func TestSameOwnerProxyHandoffSurvivesOrdinaryTableRelease(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, services []*service) {
+		owner, source := services[0], services[1]
+		source.cfg.EnableRemoteLocalProxy = true
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const ordinary, shared = 990, 991
+		row := []byte("same-row")
+		rows := [][]byte{row}
+		exclusive := newTestRowExclusiveOptions()
+		exclusive.Policy = pb.WaitPolicy_FastFail
+		for _, table := range []uint64{ordinary, shared} {
+			_, err := owner.Lock(ctx, table, rows, []byte("seed"), exclusive)
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+		}
+
+		representative, surviving := []byte("representative"), []byte("surviving")
+		_, err := source.Lock(ctx, ordinary, rows, representative, exclusive)
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, shared, rows, representative, newTestRowSharedOptions())
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, shared, rows, surviving, newTestRowSharedOptions())
+		require.NoError(t, err)
+		require.NoError(t, source.Unlock(ctx, representative, timestamp.Timestamp{}))
+
+		holder, held, err := owner.GetLockHolder(ctx, shared, row, exclusive)
+		require.NoError(t, err)
+		require.True(t, held)
+		require.Equal(t, surviving, holder.TxnID)
+		owner.mu.RLock()
+		refs := owner.mu.lockTableRef[0][shared]
+		owner.mu.RUnlock()
+		require.EqualValues(t, 1, refs)
+		_, err = owner.Lock(ctx, shared, rows, []byte("challenger"), exclusive)
+		require.Error(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("challenger"), timestamp.Timestamp{}))
+
+		require.NoError(t, source.Unlock(ctx, surviving, timestamp.Timestamp{}))
+		_, err = owner.Lock(ctx, shared, rows, []byte("challenger"), exclusive)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("challenger"), timestamp.Timestamp{}))
+	})
+}
+
+func TestHandoffStagesAllReplacementLedgersBeforeChangingOwner(t *testing.T) {
+	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		s := nodes[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1032
+		a, b, c := []byte("old"), []byte("replacement-1"), []byte("replacement-2")
+		row1, row2, row3 := []byte{1}, []byte{2}, []byte{3}
+		opts := newTestRowSharedOptions()
+		_, err := s.Lock(ctx, table, [][]byte{row1, row2}, a, opts)
+		require.NoError(t, err)
+		_, err = s.Lock(ctx, table, [][]byte{row3}, c, opts)
+		require.NoError(t, err)
+		bind := s.tableGroups.get(0, table).getBind()
+		cTxn := s.activeTxnHolder.getActiveTxn(c, false, "")
+		request := pb.UnlockRequest{TxnID: a, Mutations: []pb.ExtraMutation{
+			{Key: row1, ReplaceTo: b},
+			{Key: row2, ReplaceTo: c},
+		}}
+		check := func(row, expected []byte) {
+			holder, ok, err := s.GetLockHolder(ctx, table, row, opts)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, expected, holder.TxnID)
+		}
+
+		cTxn.Lock()
+		err = s.unlockRemoteTable(ctx, bind, request)
+		cTxn.Unlock()
+		require.ErrorIs(t, err, ErrLockTimeout)
+		require.False(t, s.activeTxnHolder.hasActiveTxn(b), "failed preflight registered an empty holder")
+		check(row1, a)
+		check(row2, a)
+
+		cTxn.Lock()
+		originalPool := cTxn.fsp
+		cTxn.fsp = newFixedSlicePool(1)
+		cTxn.Unlock()
+		err = s.unlockRemoteTable(ctx, bind, request)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade), "%v", err)
+		require.False(t, s.activeTxnHolder.hasActiveTxn(b), "failed reservation registered an empty holder")
+		check(row1, a)
+		check(row2, a)
+
+		cTxn.Lock()
+		cTxn.fsp = originalPool
+		cTxn.Unlock()
+		require.NoError(t, s.unlockRemoteTable(ctx, bind, request))
+		check(row1, b)
+		check(row2, c)
+		require.NoError(t, s.unlockRemoteTable(ctx, bind, pb.UnlockRequest{TxnID: b}))
+		require.NoError(t, s.unlockRemoteTable(ctx, bind, pb.UnlockRequest{TxnID: c}))
+		for _, row := range [][]byte{row1, row2, row3} {
+			_, held, err := s.GetLockHolder(ctx, table, row, opts)
+			require.NoError(t, err)
+			require.False(t, held)
+		}
+	})
+}
+
+type handoffReservationProbe struct {
+	Client
+	rejected chan struct{}
+}
+
+func (c *handoffReservationProbe) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if req.Method == pb.Method_Unlock && moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		select {
+		case c.rejected <- struct{}{}:
+		default:
+		}
+	}
+	return resp, err
+}
+
+func TestProxyHandoffCapacityAllowsReplacementCleanup(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner, source := nodes[0], nodes[1]
+		source.cfg.EnableRemoteLocalProxy = true
+		probe := &handoffReservationProbe{Client: source.remote.client, rejected: make(chan struct{}, 1)}
+		source.remote.client = probe
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const table = 1033
+		a, b := []byte("old-holder"), []byte("replacement")
+		row1, row2 := []byte{1}, []byte{2}
+		opts := newTestRowSharedOptions()
+		_, err := owner.Lock(ctx, table, [][]byte{row1}, []byte("seed"), opts)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+
+		_, err = source.Lock(ctx, table, [][]byte{row2}, b, opts)
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, table, [][]byte{row1}, a, opts)
+		require.NoError(t, err)
+		_, err = source.Lock(ctx, table, [][]byte{row1}, b, opts)
+		require.NoError(t, err)
+
+		bOwner := owner.activeTxnHolder.getActiveTxn(b, false, "")
+		bOwner.Lock()
+		bOwner.fsp = newFixedSlicePool(1)
+		bOwner.Unlock()
+
+		aDone := make(chan error, 1)
+		go func() { aDone <- source.Unlock(ctx, a, timestamp.Timestamp{}) }()
+		select {
+		case <-probe.rejected:
+		case <-ctx.Done():
+			t.Fatal("handoff did not reach the owner capacity limit")
+		}
+		bDone := make(chan error, 1)
+		go func() { bDone <- source.Unlock(ctx, b, timestamp.Timestamp{}) }()
+		for _, done := range []chan error{bDone, aDone} {
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatal("proxy blocked cleanup of a replacement after definite rejection")
+			}
+		}
+		for _, row := range [][]byte{row1, row2} {
+			_, held, err := owner.GetLockHolder(ctx, table, row, opts)
+			require.NoError(t, err)
+			require.False(t, held)
+		}
+	})
 }

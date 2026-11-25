@@ -1711,13 +1711,12 @@ func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
 			localTable := l1.tableGroups.get(0, 0)
 			bind := localTable.getBind()
 			client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
-			l1.tableGroups.Lock()
-			l1.tableGroups.holders[0].tables[0] = &remoteLockTable{
-				bind:   bind,
-				client: client,
-				logger: l1.logger,
-			}
-			l1.tableGroups.Unlock()
+			txn := l1.activeTxnHolder.getActiveTxn(txnID, false, "")
+			txn.Lock()
+			txn.lockHolders[0].tableBindIntents[0] = lockTableIntent{bind: bind, table: &remoteLockTable{
+				bind: bind, client: client, logger: l1.logger,
+			}}
+			txn.Unlock()
 
 			unlockCtx, unlockCancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 			defer unlockCancel()
@@ -1725,9 +1724,9 @@ func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
 
-			l1.tableGroups.Lock()
-			l1.tableGroups.holders[0].tables[0] = localTable
-			l1.tableGroups.Unlock()
+			txn.Lock()
+			txn.lockHolders[0].tableBindIntents[0] = lockTableIntent{bind: bind, table: localTable}
+			txn.Unlock()
 			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
 			require.Nil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
 		},
@@ -2557,10 +2556,13 @@ func TestCheckTxnTimeout(t *testing.T) {
 				[]byte("txn2"),
 				option)
 			require.NoError(t, err)
-			l1.tableGroups.removeWithFilter(func(_ uint64, v lockTable) bool {
-				return true
-			}, closeReasonBindChanged)
-			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+			// Simulate loss of source transaction state without an Unlock
+			// request reaching the owner.
+			txn := l1.activeTxnHolder.deleteActiveTxn([]byte("txn2"))
+			require.NotNil(t, txn)
+			txn.Lock()
+			reuse.Free(txn, nil)
+			txn.Unlock()
 
 			require.False(t, l2.activeTxnHolder.empty())
 
@@ -6824,7 +6826,7 @@ func TestDrainWaitsForTxnCloseLinearization(t *testing.T) {
 			txnID := []byte("blocking-drain-close")
 			txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.True(t, txn.lockTableBindTouched(bind))
+			require.True(t, txn.lockTableBindTouched(bind, nil))
 			s.incRef(bind.Group, bind.Table)
 			require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, s.logger))
 			txn.Unlock()
@@ -6860,7 +6862,7 @@ func TestRetryableUnknownCommitCloseReleasesAllDrainRefs(t *testing.T) {
 			txn.Lock()
 			for table, lt := range tables {
 				s.tableGroups.set(0, table, lt)
-				require.True(t, txn.lockTableBindTouched(lt.bind))
+				require.True(t, txn.lockTableBindTouched(lt.bind, lt))
 				s.incRef(lt.bind.Group, lt.bind.Table)
 				require.NoError(t, txn.lockAdded(0, lt.bind, [][]byte{{byte(table)}}, s.logger))
 			}

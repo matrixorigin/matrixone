@@ -36,6 +36,7 @@ import (
 
 var (
 	remoteRetryInitialBackoff = 100 * time.Millisecond
+	remoteLockAdmissionWindow = defaultRPCTimeout
 	remoteRetryMaxBackoff     = 5 * time.Second
 	// Bound one remote wait-for lookup without limiting the number of lock keys
 	// or transactions that a deadlock check can traverse.
@@ -135,8 +136,20 @@ func (l *remoteLockTable) lock(
 		return
 	}
 
-	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
-	// after rpc completed
+	if txn.closing.Load() {
+		cb(pb.Result{}, ErrTxnNotFound)
+		return
+	}
+	cutoff := time.Now().Add(remoteLockAdmissionWindow).UnixNano()
+	if deadline := opts.LockWaitDeadline; deadline > 0 {
+		cutoff = min(cutoff, deadline)
+	}
+	req.Lock.AdmissionDeadline = cutoff
+	txn.remoteInFlight++
+	defer txn.finishRemoteLock()
+
+	// Lock and its callback keep the transaction generation alive while the
+	// RPC is in flight. Closing joins this operation before releasing locks.
 	txn.Unlock()
 
 	// Bound the RPC by the absolute lock deadline plus transport slack so the
@@ -155,12 +168,26 @@ func (l *remoteLockTable) lock(
 
 	txn.Lock()
 
-	// txn closed
-	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
-		cb(pb.Result{}, ErrTxnNotFound)
-		return
+	// A response from the owner completes this request even when earlier
+	// rows in a multi-row Lock still need release. A transport error leaves
+	// both delivery and completion uncertain.
+	if err != nil && !remoteLockRejectedBeforeAdmission(err) {
+		if remoteLockResponseCompleted(err) {
+			cutoff = 0
+		}
+		txn.retainRemoteCleanup(l, cutoff)
+		_ = txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger)
 	}
-	if txn.bindChanged {
+
+	if txn.bindChanged || txn.closing.Load() {
+		if err == nil {
+			defer releaseResponse(resp)
+			if resp.NewBind == nil {
+				if err := txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger); err != nil {
+					txn.retainRemoteCleanup(l, 0)
+				}
+			}
+		}
 		cb(pb.Result{}, ErrLockTableBindChanged)
 		return
 	}
@@ -185,15 +212,14 @@ func (l *remoteLockTable) lock(
 		}
 
 		err = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+		if err != nil {
+			txn.retainRemoteCleanup(l, 0)
+		}
 		logRemoteLockAdded(l.logger, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, err)
 		return
 	}
 
-	// The request may have reached the remote owner and acquired locks even if
-	// the response was lost or the client-side context timed out. Keep local
-	// bookkeeping so normal transaction close can send the remote unlock.
-	_ = txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger)
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
 		cb(pb.Result{}, err)
@@ -232,6 +258,18 @@ func (l *remoteLockTable) lock(
 	cb(pb.Result{}, err)
 }
 
+func remoteLockRejectedBeforeAdmission(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound)
+}
+
+func remoteLockResponseCompleted(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout)
+}
+
 func (l *remoteLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
@@ -251,6 +289,7 @@ func (l *remoteLockTable) unlockWithContext(
 		txn,
 		l.bind,
 	)
+	_, hasUncertainRoute := txn.remoteCutoffs[l]
 	retryCount := 0
 	backoff := remoteRetryInitialBackoff
 	for {
@@ -259,9 +298,22 @@ func (l *remoteLockTable) unlockWithContext(
 		}
 		err := l.doUnlock(ctx, txn, commitTS, mutations...)
 		if err == nil {
+			if hasUncertainRoute {
+				delete(txn.remoteCutoffs, l)
+			}
 			return nil
 		}
 
+		if moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+			return err
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) {
+			if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
+				return err
+			}
+			backoff = nextRemoteRetryBackoff(backoff)
+			continue
+		}
 		retryCount++
 		// Rate limit unlock error logs: log first 3, then every 100th
 		if retryCount <= 3 || retryCount%100 == 0 {
@@ -280,6 +332,9 @@ func (l *remoteLockTable) unlockWithContext(
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
 		if err := l.handleErrorWithContext(ctx, err, false); err == nil {
+			if hasUncertainRoute {
+				delete(txn.remoteCutoffs, l)
+			}
 			return nil
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
@@ -400,6 +455,8 @@ func (l *remoteLockTable) doUnlock(
 	req.Unlock.TxnID = txn.txnID
 	req.Unlock.CommitTS = commitTS
 	req.Unlock.Mutations = mutations
+	req.Unlock.AdmissionDeadline = txn.remoteCutoffs[l]
+	req.Unlock.TableScoped = true
 
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {

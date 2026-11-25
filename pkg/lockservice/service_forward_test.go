@@ -212,3 +212,87 @@ func TestDeadLockWithForward(t *testing.T) {
 		},
 	)
 }
+
+func TestLocalRollbackRechecksRouteAfterForwardedLock(t *testing.T) {
+	type rollbackKey struct{}
+	immediateEntered := make(chan struct{}, 1)
+	resumeImmediate := make(chan struct{})
+	resume := sync.OnceFunc(func() { close(resumeImmediate) })
+	runLockServiceTests(t, []string{"coordinator", "mirror", "owner"},
+		func(_ *lockTableAllocator, services []*service) {
+			defer resume()
+			coordinator, mirror, owner := services[0], services[1], services[2]
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			const localTable, remoteTable = 1050, 1051
+			row := []byte{1}
+			rows := [][]byte{row}
+			id := []byte("forward-vs-local-rollback")
+			coordinator.cfg.ForwardedLockAdmission = func([]byte) bool { return true }
+			coordinator.cfg.EnableRemoteLocalProxy = true
+
+			_, err := coordinator.Lock(ctx, localTable, rows, id, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			_, err = owner.Lock(ctx, remoteTable, rows, []byte("seed"), newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+			table, err := coordinator.getLockTableWithCreate(ctx, 0, remoteTable, rows, pb.Sharding_None)
+			require.NoError(t, err)
+			proxy := table.(*localLockTableProxy)
+
+			immediate := make(chan error, 1)
+			go func() {
+				immediate <- coordinator.unlockTransaction(context.WithValue(ctx, rollbackKey{}, true),
+					id, timestamp.Timestamp{}, localRollbackCleanup)
+			}()
+			select {
+			case <-immediateEntered:
+			case <-ctx.Done():
+				t.Fatal("rollback did not reach the close boundary")
+			}
+
+			options := newTestRowSharedOptions()
+			options.ForwardTo = coordinator.serviceID
+			_, err = mirror.Lock(ctx, remoteTable, rows, id, options)
+			require.NoError(t, err)
+
+			// A rollback must see the remote route under its transaction mutex
+			// and exit without trying to acquire the proxy mutex.
+			proxy.mu.Lock()
+			resume()
+			select {
+			case err := <-immediate:
+				proxy.mu.Unlock()
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-time.After(time.Second):
+				proxy.mu.Unlock()
+				t.Fatal("foreground rollback entered proxy cleanup")
+			}
+
+			resolved := make(chan struct{})
+			pending, err := coordinator.ResolveRollbackCleanup(id, func() { close(resolved) })
+			require.NoError(t, err)
+			require.True(t, pending)
+			select {
+			case <-resolved:
+			case <-ctx.Done():
+				t.Fatal("resolver did not release forwarded lock")
+			}
+			_, held, err := owner.GetLockHolder(ctx, remoteTable, row, options)
+			require.NoError(t, err)
+			require.False(t, held)
+		},
+		WithWait(func(ctx context.Context) error {
+			if ctx.Value(rollbackKey{}) == nil {
+				return nil
+			}
+			immediateEntered <- struct{}{}
+			select {
+			case <-resumeImmediate:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}),
+	)
+}

@@ -58,6 +58,7 @@ type lockContext struct {
 	rangeLastWaitKey   []byte
 	lockWaitDeadline   time.Time
 	lockWaitTimeoutErr error
+	txnGeneration      uint64
 }
 
 func (l *localLockTable) newLockContext(
@@ -70,6 +71,7 @@ func (l *localLockTable) newLockContext(
 	c := reuse.Alloc[lockContext](nil)
 	c.ctx = ctx
 	c.txn = txn
+	c.txnGeneration = txn.generation
 	c.rows = rows
 	c.waitTxn = txn.toWaitTxn(l.bind.ServiceID, true)
 	c.opts = opts

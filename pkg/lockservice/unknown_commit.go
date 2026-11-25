@@ -55,6 +55,7 @@ type unknownCommitResolver struct {
 }
 
 type unknownCommitTxn struct {
+	rollback   bool
 	id         []byte
 	deadline   time.Time
 	sequence   uint64
@@ -104,6 +105,37 @@ func (s *service) ResolveCommitUnknown(
 	)
 }
 
+func (s *service) ResolveRollbackCleanup(txnID []byte, onResolved func()) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	err := s.unlockTransaction(ctx, txnID, timestamp.Timestamp{}, localRollbackCleanup)
+	cancel()
+	if err == nil {
+		return false, nil
+	}
+	if !s.beginResolverAdmission() {
+		return false, ErrLockTableBindChanged
+	}
+	defer s.endResolverAdmission()
+	r := s.unknownCommitResolver
+	if r == nil {
+		return false, ErrLockTableBindChanged
+	}
+	return true, r.enqueue(txnID, time.Time{}, 0, onResolved)
+}
+
+// Remote cleanup can wait on a proxy mutex or a transport writer. Transfer
+// that work before synchronously entering either on a frontend rollback.
+func (s *service) canCloseRollbackLocallyLocked(txn *activeTxn) bool {
+	if txn.remoteInFlight != 0 || len(txn.remoteCutoffs) != 0 || len(txn.blockedWaiters) != 0 {
+		return false
+	}
+	local := true
+	txn.iterLockTableBindsLocked(func(_ uint32, _ uint64, bind pb.LockTable) {
+		local = local && bind.ServiceID == s.serviceID
+	})
+	return local
+}
+
 func (r *unknownCommitResolver) enqueue(
 	txnID []byte,
 	commitDeadline time.Time,
@@ -120,6 +152,7 @@ func (r *unknownCommitResolver) enqueue(
 			onResolved = old.onResolved
 		}
 		r.mu.pending[key] = unknownCommitTxn{
+			rollback:   commitDeadline.IsZero(),
 			id:         id,
 			deadline:   commitDeadline,
 			sequence:   commitSequence,
@@ -177,6 +210,15 @@ func (r *unknownCommitResolver) resolvePending(ctx context.Context) {
 	}
 
 	for _, txn := range txns {
+		if txn.rollback {
+			unlockCtx, cancel := context.WithTimeout(ctx, time.Second)
+			err := r.service.unlockTransaction(unlockCtx, txn.id, timestamp.Timestamp{}, resolverCleanup)
+			cancel()
+			if err == nil {
+				r.remove(txn.id)
+			}
+			continue
+		}
 		committing, fenceTS, ok := r.service.canUnlockUnknownCommits(
 			ctx,
 			[][]byte{txn.id},

@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -558,7 +559,8 @@ func TestLockRemoteChecksBindChangedAfterRPC(t *testing.T) {
 			err := <-errC
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			txn.Lock()
-			require.Empty(t, txn.getHoldLocksLocked(0).tableBinds)
+			require.Equal(t, l.bind.Table, txn.getHoldLocksLocked(0).tableBinds[l.bind.Table].Table)
+			require.NotEmpty(t, txn.getHoldLocksLocked(0).uncertainLockKeys[l.bind.Table])
 			txn.Unlock()
 		},
 		func(lt pb.LockTable) {},
@@ -1620,5 +1622,89 @@ func runRemoteLockTableTests(
 		)
 		defer l.close(closeReasonServiceClose)
 		fn(l, s)
+	})
+}
+
+type grantedLockResponseGate struct {
+	Client
+	acquired, release chan struct{}
+	lost              bool
+}
+
+func (c *grantedLockResponseGate) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if req.Method == pb.Method_Lock && err == nil {
+		close(c.acquired)
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+		}
+		if c.lost {
+			releaseResponse(resp)
+			return nil, context.Canceled
+		}
+	}
+	return resp, err
+}
+func TestFencedRemoteGrantIsReleasedWithOrWithoutReply(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		name := "reply"
+		if lost {
+			name = "lost"
+		}
+		t.Run(name, func(t *testing.T) {
+			testFencedRemoteGrantRelease(t, lost)
+		})
+	}
+}
+
+func testFencedRemoteGrantRelease(t *testing.T, lost bool) {
+	previous := remoteLockAdmissionWindow
+	remoteLockAdmissionWindow = 500 * time.Millisecond
+	defer func() { remoteLockAdmissionWindow = previous }()
+
+	runLockServiceTests(t, []string{"origin", "owner"}, func(_ *lockTableAllocator, ss []*service) {
+		origin, owner := ss[0], ss[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		id, row := []byte("txn"), []byte("row")
+		opts := newTestRowExclusiveOptions()
+		_, err := origin.Lock(ctx, 201, [][]byte{{1}}, id, opts)
+		require.NoError(t, err)
+		_, err = owner.Lock(ctx, 202, [][]byte{row}, []byte("seed"), opts)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
+		l, err := origin.getLockTableWithCreate(ctx, 0, 202, [][]byte{row}, pb.Sharding_None)
+		require.NoError(t, err)
+		gate := &grantedLockResponseGate{Client: origin.remote.client, acquired: make(chan struct{}), release: make(chan struct{}), lost: lost}
+		resume := sync.OnceFunc(func() { close(gate.release) })
+		defer resume()
+		remote := newRemoteLockTable(origin.serviceID, time.Second, l.getBind(), gate, origin.handleBindChanged, origin.logger)
+		txn := origin.activeTxnHolder.getActiveTxn(id, false, "")
+		done := make(chan error, 1)
+		go func() {
+			txn.Lock()
+			defer txn.Unlock()
+			remote.lock(ctx, txn, [][]byte{row}, LockOptions{LockOptions: opts}, func(_ pb.Result, e error) { done <- e })
+		}()
+		select {
+		case <-gate.acquired:
+		case <-ctx.Done():
+			t.Fatal("owner did not grant")
+		}
+		holder, found, err := owner.GetLockHolder(ctx, 202, row, opts)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, id, holder.TxnID)
+		changed := origin.tableGroups.get(0, 201).getBind()
+		changed.Version++
+		require.True(t, txn.fenceByBindChanged(changed, origin.logger))
+		resume()
+		require.True(t, moerr.IsMoErrCode(<-done, moerr.ErrLockTableBindChanged))
+		require.NoError(t, origin.Unlock(ctx, id, timestamp.Timestamp{}))
+		_, retained, err := owner.GetLockHolder(ctx, 202, row, opts)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, id, timestamp.Timestamp{}))
+		require.False(t, retained, "owner still holds the granted row after source transaction unlock")
 	})
 }

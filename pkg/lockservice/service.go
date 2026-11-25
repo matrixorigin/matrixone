@@ -49,6 +49,7 @@ func WithWait(wait func(context.Context) error) Option {
 }
 
 type service struct {
+	txnClosureAdmissions  [txnClosureAdmissionShards]txnClosureAdmissionShard
 	cfg                   Config
 	serviceID             string
 	tableGroups           *lockTableHolders
@@ -249,7 +250,7 @@ func (s *service) Lock(
 	// and getLock. The doAcquireLock and getLock operations of the same transaction
 	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
 	txn.Lock()
-	if !bytes.Equal(txn.txnID, txnID) {
+	if txn.closing.Load() || !bytes.Equal(txn.txnID, txnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrTxnNotFound
@@ -278,7 +279,7 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
-	if txn.lockTableBindTouched(bind) &&
+	if txn.lockTableBindTouched(bind, l) &&
 		bind.ServiceID == s.serviceID &&
 		!admission.consume(bind) {
 		s.incRef(bind.Group, bind.Table)
@@ -407,52 +408,206 @@ func (s *service) Unlock(
 	txnID []byte,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
+	for {
+		err := s.unlockTransaction(context.Background(), txnID, commitTS, normalCleanup, mutations...)
+		if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+			return err
+		}
+		// A replacement could not reserve its ledger. Retry outside the
+		// transaction and proxy locks so another local holder can finish.
+		time.Sleep(remoteRetryInitialBackoff)
+	}
+}
+
+type txnCleanupMode uint8
+
+const (
+	normalCleanup txnCleanupMode = iota
+	resolverCleanup
+	localRollbackCleanup
+)
+
+func (s *service) unlockTransaction(
+	ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mode txnCleanupMode, mutations ...pb.ExtraMutation,
+) error {
 	serviceCtx, admitted := s.beginTxnClosure()
 	if !admitted {
-		// Close owns every remaining local and remote lock once service
-		// admission is sealed.
 		return nil
 	}
 	defer s.endTxnClosure()
 
-	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
-	// completion even when the caller's request context has ended. Service
-	// shutdown is the one terminal cancellation owner.
-	unlockCtx := serviceCtx
-	if unlockCtx == nil {
-		unlockCtx = context.Background()
-	}
+	ctx, cancelServiceClose := contextWithServiceClose(ctx, serviceCtx)
+	defer cancelServiceClose()
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	if err := s.wait(unlockCtx); err != nil {
+	if err := s.wait(ctx); err != nil {
 		return err
 	}
 
-	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	closure, err := s.acquireTxnClosureAdmission(ctx, txnID, mutations)
+	if err != nil {
+		return err
+	}
+	defer closure.release()
+	// Keep the holder discoverable while releasing its locks. An Unlock
+	// retry must not acknowledge an empty holder before release finishes.
+	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
 	if txn == nil {
 		return nil
 	}
 
-	txn.Lock()
+	if mode != normalCleanup {
+		if !txn.TryLock() {
+			return ErrLockTimeout
+		}
+	} else {
+		txn.Lock()
+	}
 	defer txn.Unlock()
 	if !bytes.Equal(txn.txnID, txnID) {
 		return nil
 	}
 
+	if mode == localRollbackCleanup && !s.canCloseRollbackLocallyLocked(txn) {
+		return ErrLockTimeout
+	}
 	defer logUnlockTxn(s.logger, txn)()
+	if err := txn.joinRemoteLocksLocked(ctx); err != nil {
+		return err
+	}
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
 	binds := txn.lockTableBindsLocked()
-	if err := txn.closeWithContext(unlockCtx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
-		return s.getLockTable(unlockCtx, group, table)
-	}, s.logger, mutations...); err != nil {
+	if err := txn.closeWithContextInternal(ctx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
+		return s.getLockTable(ctx, group, table)
+	}, s.logger, false, mode == localRollbackCleanup, mutations...); err != nil {
 		return err
 	}
 	s.reduceCanMoveGroupTables(binds)
-	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
+	s.activeTxnHolder.deleteActiveTxn(txnID)
+	s.tryCompleteDrain()
+	reuse.Free(txn, nil)
 	return nil
+}
+
+// unlockRemoteTable uses the same txn mutex as owner-wide Unlock. Proxy
+// mutations and drain references belong to one table, even when an owner
+// serves several tables for the same transaction.
+func (s *service) unlockRemoteTable(ctx context.Context, bind pb.LockTable, req pb.UnlockRequest) error {
+	serviceCtx, admitted := s.beginTxnClosure()
+	if !admitted {
+		return ErrLockTableBindChanged
+	}
+	defer s.endTxnClosure()
+	ctx, cancel := contextWithServiceClose(ctx, serviceCtx)
+	defer cancel()
+	if err := s.wait(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cutoff := req.AdmissionDeadline; cutoff > 0 && !s.activeTxnHolder.retireRemoteAdmission(req.TxnID, cutoff) {
+		return ErrLockTimeout
+	}
+	closure, err := s.acquireTxnClosureAdmission(ctx, req.TxnID, req.Mutations)
+	if err != nil {
+		return err
+	}
+	defer closure.release()
+	txn := s.activeTxnHolder.getActiveTxn(req.TxnID, false, "")
+	if txn == nil {
+		return nil
+	}
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, req.TxnID) {
+		return nil
+	}
+	defer func() {
+		if len(txn.lockHolders) == 0 {
+			s.deadlockDetector.txnClosed(req.TxnID)
+			s.activeTxnHolder.deleteActiveTxn(req.TxnID)
+			s.tryCompleteDrain()
+			reuse.Free(txn, nil)
+		}
+	}()
+	txn.closing.Store(true)
+	h := txn.lockHolders[bind.Group]
+	if h == nil {
+		return nil
+	}
+	intent, ownsRef := h.tableBindIntents[bind.Table]
+	recorded, holdsTable := h.tableBinds[bind.Table]
+	if !holdsTable {
+		recorded = intent.bind
+	}
+	if !holdsTable && !ownsRef {
+		return nil
+	}
+	if !recorded.Equal(bind) {
+		return ErrLockTableBindChanged
+	}
+
+	// Wake owner waiters before exposing a released table. Any competing
+	// resumed handler must recheck its context and holder generation.
+	txn.cancelBlocks(s.logger)
+	if keys := h.tableKeys[bind.Table]; keys != nil {
+		table := intent.table
+		if table == nil {
+			table = s.tableGroups.get(bind.Group, bind.Table)
+			if table == nil || !table.getBind().Equal(bind) {
+				return ErrLockTableBindChanged
+			}
+		}
+		local, ok := table.(*localLockTable)
+		if !ok {
+			return ErrLockTableBindChanged
+		}
+		if err := local.releaseLocks(txn, keys, req.CommitTS, handoffLocalUnlock, req.Mutations...); err != nil {
+			return err
+		}
+		s.adoptRemoteHandoffRefs(bind, table, req.Mutations)
+		txn.removeClosedLockTable(bind.Group, bind.Table, keys)
+	}
+	delete(h.tableBindIntents, bind.Table)
+	if ownsRef {
+		s.reduceCanMoveGroupTables([]pb.LockTable{bind})
+	}
+	if len(h.tableBindIntents) == 0 && len(h.tableKeys) == 0 {
+		delete(txn.lockHolders, bind.Group)
+	}
+	return nil
+}
+
+func (s *service) adoptRemoteHandoffRefs(bind pb.LockTable, table lockTable, mutations []pb.ExtraMutation) {
+	for _, mutation := range mutations {
+		if mutation.Skip || len(mutation.ReplaceTo) == 0 {
+			continue
+		}
+		replacement := s.activeTxnHolder.getActiveTxn(mutation.ReplaceTo, false, "")
+		if replacement == nil {
+			continue
+		}
+		replacement.Lock()
+		if bytes.Equal(replacement.txnID, mutation.ReplaceTo) {
+			if h := replacement.lockHolders[bind.Group]; h != nil {
+				if actual, ok := h.tableBinds[bind.Table]; ok && actual.Equal(bind) &&
+					replacement.lockTableBindTouched(bind, table) {
+					s.incRef(bind.Group, bind.Table)
+				}
+			}
+		}
+		replacement.Unlock()
+	}
 }
 
 func (s *service) UnlockWithContext(
@@ -470,127 +625,17 @@ func (s *service) unlockUnknownCommit(
 	ctx context.Context,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
-	mutations ...pb.ExtraMutation) error {
-	serviceCtx, admitted := s.beginTxnClosure()
-	if !admitted {
-		return nil
-	}
-	defer s.endTxnClosure()
-	ctx, cancelServiceClose := contextWithServiceClose(ctx, serviceCtx)
-	defer cancelServiceClose()
-
-	start := time.Now()
-	defer func() {
-		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := s.wait(ctx); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	// Keep the source transaction registered until every owner-side unlock has
-	// acknowledged. In particular, a local proxy must not publish a replacement
-	// holder before its ReplaceTo mutation reaches the remote owner. Retaining
-	// the active transaction on a bounded-attempt failure makes orphan cleanup
-	// fail closed; the resolver retries it later.
-	txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
-	if txn == nil {
-		return nil
-	}
-
-	txn.Lock()
-	defer txn.Unlock()
-	if !bytes.Equal(txn.txnID, txnID) {
-		return nil
-	}
-
-	defer logUnlockTxn(s.logger, txn)()
-	binds := txn.lockTableBindsLocked()
-	if err := txn.closeWithoutFreeWithContext(
-		ctx,
-		txnID,
-		commitTS,
-		func(group uint32, table uint64) (lockTable, error) {
-			return s.getLockTable(ctx, group, table)
-		},
-		s.logger,
-		mutations...,
-	); err != nil {
-		return err
-	}
-
-	if s.activeTxnHolder.deleteActiveTxn(txnID) != txn {
-		return nil
-	}
-	s.reduceCanMoveGroupTables(binds)
-	s.tryCompleteDrain()
-	s.deadlockDetector.txnClosed(txnID)
-	reuse.Free(txn, nil)
-	return nil
+) error {
+	return s.unlockTransaction(ctx, txnID, commitTS, normalCleanup)
 }
 
 func (s *service) unlockWithContext(
 	ctx context.Context,
 	txnID []byte,
 	commitTS timestamp.Timestamp,
-	mutations ...pb.ExtraMutation) error {
-	serviceCtx, admitted := s.beginTxnClosure()
-	if !admitted {
-		return nil
-	}
-	defer s.endTxnClosure()
-	ctx, cancelServiceClose := contextWithServiceClose(ctx, serviceCtx)
-	defer cancelServiceClose()
-
-	start := time.Now()
-	defer func() {
-		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := s.wait(ctx); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
-	if txn == nil {
-		return nil
-	}
-
-	txn.Lock()
-	defer txn.Unlock()
-	if !bytes.Equal(txn.txnID, txnID) {
-		return nil
-	}
-
-	defer logUnlockTxn(s.logger, txn)()
-	binds := txn.lockTableBindsLocked()
-	err := txn.closeWithoutFreeWithContext(ctx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
-		return s.getLockTable(ctx, group, table)
-	}, s.logger, mutations...)
-	if err != nil {
-		s.activeTxnHolder.restoreActiveTxn(txn)
-		return err
-	}
-	s.reduceCanMoveGroupTables(binds)
-	// The deadlock detector will hold the deadlocked transaction that is aborted
-	// to avoid the situation where the deadlock detection is interfered with by
-	// the abort transaction. When a transaction is unlocked, the deadlock detector
-	// needs to be notified to release memory.
-	s.deadlockDetector.txnClosed(txnID)
-	reuse.Free(txn, nil)
-	return nil
+	mutations ...pb.ExtraMutation,
+) error {
+	return s.unlockTransaction(ctx, txnID, commitTS, normalCleanup, mutations...)
 }
 
 func (s *service) IsOrphanTxn(
@@ -1390,7 +1435,7 @@ func (s *service) checkBindChangedBeforeLockSuccess(
 	txn.Lock()
 	defer s.bindChangeMu.RUnlock()
 
-	if !bytes.Equal(txn.txnID, txnID) {
+	if txn.closing.Load() || !bytes.Equal(txn.txnID, txnID) {
 		return ErrTxnNotFound
 	}
 	if txn.bindChanged {
@@ -1687,6 +1732,12 @@ type activeTxnHolder interface {
 	getAllTxnID() [][]byte
 	incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string)
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
+	admitRemoteTxn(txnID []byte, remoteService string, cutoff int64) *activeTxn
+	prepareHandoffTxn(txnID []byte, remoteService string) (*activeTxn, bool)
+	publishHandoffTxns(targets map[string]*lockHandoffTarget) bool
+	admitForwardedTxn(txnID []byte, live func([]byte) bool) *activeTxn
+	retireRemoteAdmission(txnID []byte, cutoff int64) bool
+	remoteAdmissionExpired(txnID []byte, cutoff int64) bool
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
 	restoreActiveTxn(txn *activeTxn) bool
@@ -1713,6 +1764,9 @@ type activeTxnEntry struct {
 type activeTxnShard struct {
 	sync.RWMutex
 	txns map[string]activeTxnEntry
+	// A backward wall clock change must not reopen a deadline already used
+	// to acknowledge cleanup. This watermark is shared by all IDs in the shard.
+	retiredAdmissionDeadline int64
 }
 
 type mapBasedTxnHolder struct {
@@ -1766,12 +1820,16 @@ func newMapBasedTxnHandler(
 }
 
 func (h *mapBasedTxnHolder) getActiveTxnShard(txnKey string) *activeTxnShard {
+	return &h.activeTxns[h.activeTxnShardIndex(txnKey)]
+}
+
+func (*mapBasedTxnHolder) activeTxnShardIndex(txnKey string) int {
 	hash := uint32(2166136261)
 	for i := 0; i < len(txnKey); i++ {
 		hash ^= uint32(txnKey[i])
 		hash *= 16777619
 	}
-	return &h.activeTxns[hash%activeTxnHolderShards]
+	return int(hash % activeTxnHolderShards)
 }
 
 func (h *mapBasedTxnHolder) getActiveTxn(
@@ -1779,25 +1837,118 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	create bool,
 	remoteService string,
 ) *activeTxn {
+	txn, _ := h.findOrCreateTxn(txnID, create, remoteService, 0, nil)
+	return txn
+}
+
+func (h *mapBasedTxnHolder) admitRemoteTxn(txnID []byte, remoteService string, cutoff int64) *activeTxn {
+	txn, _ := h.findOrCreateTxn(txnID, true, remoteService, cutoff, nil)
+	return txn
+}
+
+func (h *mapBasedTxnHolder) admitForwardedTxn(txnID []byte, live func([]byte) bool) *activeTxn {
+	txn, _ := h.findOrCreateTxn(txnID, true, "", 0, live)
+	return txn
+}
+
+func (h *mapBasedTxnHolder) prepareHandoffTxn(txnID []byte, remoteService string) (*activeTxn, bool) {
+	if txn := h.getActiveTxn(txnID, false, ""); txn != nil {
+		return txn, false
+	}
+	return newActiveTxnLocked(txnID, string(txnID), h.fsp, remoteService), true
+}
+
+// Publish only after every target has reserved its rows. If a real Lock
+// registered a replacement first, retry with its existing holder.
+func (h *mapBasedTxnHolder) publishHandoffTxns(targets map[string]*lockHandoffTarget) bool {
+	var shards [activeTxnHolderShards]bool
+	for key, target := range targets {
+		if target.created {
+			shards[h.activeTxnShardIndex(key)] = true
+		}
+	}
+	for i, needed := range shards {
+		if needed {
+			h.activeTxns[i].Lock()
+			defer h.activeTxns[i].Unlock()
+		}
+	}
+	for key, target := range targets {
+		if target.created {
+			if _, found := h.getActiveTxnShard(key).txns[key]; found {
+				return false
+			}
+		}
+	}
+	for key, target := range targets {
+		if target.created {
+			h.publishTxnLocked(h.getActiveTxnShard(key), target.txn)
+			target.created = false
+		}
+	}
+	return true
+}
+
+func (h *mapBasedTxnHolder) retireRemoteAdmission(txnID []byte, cutoff int64) bool {
+	shard := h.getActiveTxnShard(util.UnsafeBytesToString(txnID))
+	shard.Lock()
+	defer shard.Unlock()
+	if cutoff > shard.retiredAdmissionDeadline && cutoff > time.Now().UnixNano() {
+		return false
+	}
+	shard.retiredAdmissionDeadline = max(shard.retiredAdmissionDeadline, cutoff)
+	return true
+}
+
+func (h *mapBasedTxnHolder) remoteAdmissionExpired(txnID []byte, cutoff int64) bool {
+	if cutoff <= 0 {
+		return false
+	}
+	shard := h.getActiveTxnShard(util.UnsafeBytesToString(txnID))
+	shard.RLock()
+	defer shard.RUnlock()
+	return shard.admissionExpired(cutoff)
+}
+
+func (s *activeTxnShard) admissionExpired(cutoff int64) bool {
+	return cutoff > 0 && cutoff <= max(s.retiredAdmissionDeadline, time.Now().UnixNano())
+}
+
+func (h *mapBasedTxnHolder) findOrCreateTxn(
+	txnID []byte, create bool, remoteService string, cutoff int64, live func([]byte) bool,
+) (*activeTxn, bool) {
 	txnKey := util.UnsafeBytesToString(txnID)
 	shard := h.getActiveTxnShard(txnKey)
 	shard.RLock()
+	if shard.admissionExpired(cutoff) || (live != nil && !live(txnID)) {
+		shard.RUnlock()
+		return nil, false
+	}
 	entry, ok := shard.txns[txnKey]
 	shard.RUnlock()
 	if ok {
-		return entry.txn
+		return entry.txn, false
 	}
 	if !create {
-		return nil
+		return nil, false
 	}
 
 	shard.Lock()
 	defer shard.Unlock()
+	if shard.admissionExpired(cutoff) || (live != nil && !live(txnID)) {
+		return nil, false
+	}
 	if entry, ok := shard.txns[txnKey]; ok {
-		return entry.txn
+		return entry.txn, false
 	}
 
 	txn := newActiveTxn(txnID, txnKey, h.fsp, remoteService)
+	h.publishTxnLocked(shard, txn)
+	return txn, true
+}
+
+func (h *mapBasedTxnHolder) publishTxnLocked(shard *activeTxnShard, txn *activeTxn) {
+	txnKey, remoteService := txn.txnKey, txn.remoteService
 	// Publish the transaction count before the map entry. This keeps empty()
 	// conservative while a create is in flight: count == 0 always means that
 	// every shard is empty, which is required by the service drain transition.
@@ -1815,7 +1966,6 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 		h.mu.Unlock()
 	}
 	logTxnCreated(h.logger, txn)
-	return txn
 }
 
 func (h *mapBasedTxnHolder) hasActiveTxn(txnID []byte) bool {
@@ -1892,7 +2042,7 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 			for {
 				shard.RLock()
 				entry, ok := shard.txns[txnKey]
-				if !ok {
+				if !ok || entry.txn.closing.Load() {
 					shard.RUnlock()
 					break
 				}

@@ -211,15 +211,6 @@ func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 		service.incRef(bind.Group, bind.Table)
 
 		holder := service.activeTxnHolder.(*mapBasedTxnHolder)
-		fenceEntered := make(chan struct{}, 1)
-		holder.beforeFenceTxnLock = func(candidate *activeTxn) {
-			if candidate == txn {
-				select {
-				case fenceEntered <- struct{}{}:
-				default:
-				}
-			}
-		}
 		service.tableGroups.set(bind.Group, bind.Table, lockTable)
 
 		unlockDone := make(chan error, 1)
@@ -238,7 +229,13 @@ func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 		go func() {
 			fenceDone <- holder.fenceByBindChanged(changedBind)
 		}()
-		<-fenceEntered
+		select {
+		case count := <-fenceDone:
+			require.Zero(t, count)
+		case <-time.After(5 * time.Second):
+			close(lockTable.release)
+			t.Fatal("bind fencing waited for a closing transaction")
+		}
 		close(lockTable.release)
 
 		select {
@@ -246,11 +243,6 @@ func TestUnknownCommitCleanupDoesNotDeadlockBindFence(t *testing.T) {
 			require.NoError(t, err)
 		case <-time.After(5 * time.Second):
 			t.Fatal("unknown-commit cleanup deadlocked with bind fencing")
-		}
-		select {
-		case <-fenceDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("bind fencing deadlocked with unknown-commit cleanup")
 		}
 		require.False(t, holder.hasActiveTxn(txnID))
 	})
@@ -711,5 +703,103 @@ func TestServiceCloseCancelsOrdinaryRemoteUnlock(t *testing.T) {
 			require.FailNow(t, "service close did not cancel ordinary remote unlock")
 		}
 		require.ErrorIs(t, <-unlockDone, context.Canceled)
+	})
+}
+
+type unavailableRollbackOwner struct {
+	Client
+	unavailable atomic.Bool
+}
+
+func (c *unavailableRollbackOwner) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	if req.Method == pb.Method_Unlock && c.unavailable.Load() {
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	return c.Client.Send(ctx, req)
+}
+
+func TestRollbackCleanupRetainsConfirmedLockUntilOwnerRecovers(t *testing.T) {
+	runLockServiceTests(t, []string{"owner", "source"}, func(_ *lockTableAllocator, nodes []*service) {
+		owner, source := nodes[0], nodes[1]
+		gate := &unavailableRollbackOwner{Client: source.remote.client}
+		source.remote.client = gate
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		opts := newTestRowExclusiveOptions()
+		const table = 1024
+		row := []byte{2}
+		rows := [][]byte{row}
+		seed, id := []byte("seed"), []byte("rollback-confirmed")
+		_, err := owner.Lock(ctx, table, rows, seed, opts)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, seed, timestamp.Timestamp{}))
+		_, err = source.Lock(ctx, table, rows, id, opts)
+		require.NoError(t, err)
+
+		gate.unavailable.Store(true)
+		defer gate.unavailable.Store(false)
+		resolved := make(chan struct{})
+		pending, err := source.ResolveRollbackCleanup(id, func() { close(resolved) })
+		require.NoError(t, err)
+		require.True(t, pending)
+		require.True(t, source.activeTxnHolder.hasActiveTxn(id))
+		_, held, err := owner.GetLockHolder(ctx, table, row, opts)
+		require.NoError(t, err)
+		require.True(t, held)
+		select {
+		case <-resolved:
+			t.Fatal("cleanup completed before physical release")
+		default:
+		}
+		gate.unavailable.Store(false)
+		select {
+		case <-resolved:
+		case <-ctx.Done():
+			t.Fatal("owner recovery did not finish rollback cleanup")
+		}
+		_, held, err = owner.GetLockHolder(ctx, table, row, opts)
+		require.NoError(t, err)
+		require.False(t, held)
+	})
+}
+
+func TestRollbackCleanupTransfersBeforeWaitingOnLocalTable(t *testing.T) {
+	runLockServiceTests(t, []string{"owner"}, func(_ *lockTableAllocator, nodes []*service) {
+		s := nodes[0]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		const tableID = 1036
+		id, row := []byte("local-rollback"), []byte{1}
+		opts := newTestRowExclusiveOptions()
+		_, err := s.Lock(ctx, tableID, [][]byte{row}, id, opts)
+		require.NoError(t, err)
+		table := s.tableGroups.get(0, tableID).(*localLockTable)
+		resolved := make(chan struct{})
+		transferred := make(chan bool, 1)
+		failed := make(chan error, 1)
+
+		table.mu.Lock()
+		go func() {
+			scheduled, err := s.ResolveRollbackCleanup(id, func() { close(resolved) })
+			failed <- err
+			transferred <- scheduled
+		}()
+		select {
+		case scheduled := <-transferred:
+			table.mu.Unlock()
+			require.True(t, scheduled)
+			require.NoError(t, <-failed)
+		case <-time.After(time.Second):
+			table.mu.Unlock()
+			t.Fatal("rollback waited for a local table mutex before transferring")
+		}
+		select {
+		case <-resolved:
+		case <-ctx.Done():
+			t.Fatal("transferred rollback did not release the local row")
+		}
+		_, held, err := s.GetLockHolder(ctx, tableID, row, opts)
+		require.NoError(t, err)
+		require.False(t, held)
 	})
 }

@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -42,7 +43,12 @@ type tableLockHolder struct {
 	uncertainLockKeys map[uint64]map[string]struct{}
 	// tableBindIntents records bind versions touched before a lock attempt
 	// finishes, so bind-change fencing also covers failed in-flight attempts.
-	tableBindIntents map[uint64]pb.LockTable
+	tableBindIntents map[uint64]lockTableIntent
+}
+
+type lockTableIntent struct {
+	bind  pb.LockTable
+	table lockTable
 }
 
 // activeTxn one goroutine write, multi goroutine read
@@ -56,6 +62,12 @@ type activeTxn struct {
 	remoteService  string
 	deadlockFound  bool
 	bindChanged    bool
+	closing        atomic.Bool
+	generation     uint64
+
+	remoteInFlight int
+	remoteIdle     chan struct{}
+	remoteCutoffs  map[*remoteLockTable]int64
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
@@ -76,9 +88,16 @@ func newActiveTxn(
 	txnKey string,
 	fsp *fixedSlicePool,
 	remoteService string) *activeTxn {
+	txn := newActiveTxnLocked(txnID, txnKey, fsp, remoteService)
+	txn.Unlock()
+	return txn
+}
+
+func newActiveTxnLocked(
+	txnID []byte, txnKey string, fsp *fixedSlicePool, remoteService string,
+) *activeTxn {
 	txn := reuse.Alloc[activeTxn](nil)
 	txn.Lock()
-	defer txn.Unlock()
 	txn.txnID = txnID
 	txn.txnKey = txnKey
 	txn.fsp = fsp
@@ -86,7 +105,7 @@ func newActiveTxn(
 	return txn
 }
 
-func (txn activeTxn) TypeName() string {
+func (txn *activeTxn) TypeName() string {
 	return "lockservice.activeTxn"
 }
 
@@ -253,12 +272,12 @@ func (h *tableLockHolder) markNewLocksUncertain(
 	}
 }
 
-func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) bool {
+func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable, table lockTable) bool {
 	h := txn.getHoldLocksLocked(bind.Group)
 	if _, ok := h.tableBindIntents[bind.Table]; ok {
 		return false
 	}
-	h.tableBindIntents[bind.Table] = bind
+	h.tableBindIntents[bind.Table] = lockTableIntent{bind: bind, table: table}
 	return true
 }
 
@@ -272,9 +291,9 @@ func (txn *activeTxn) iterLockTableBindsLocked(
 		for table, bind := range h.tableBinds {
 			fn(group, table, bind)
 		}
-		for table, bind := range h.tableBindIntents {
+		for table, intent := range h.tableBindIntents {
 			if _, ok := h.tableBinds[table]; !ok {
-				fn(group, table, bind)
+				fn(group, table, intent.bind)
 			}
 		}
 	}
@@ -320,6 +339,7 @@ func (txn *activeTxn) closeWithContext(
 		lockTableFunc,
 		logger,
 		true,
+		false,
 		mutations...,
 	)
 }
@@ -339,6 +359,7 @@ func (txn *activeTxn) closeWithoutFreeWithContext(
 		lockTableFunc,
 		logger,
 		false,
+		false,
 		mutations...,
 	)
 }
@@ -349,7 +370,7 @@ func (txn *activeTxn) closeWithContextInternal(
 	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint32, uint64) (lockTable, error),
 	logger *log.MOLogger,
-	release bool,
+	release, immediateLocal bool,
 	mutations ...pb.ExtraMutation,
 ) error {
 	logTxnReadyToClose(logger, txn)
@@ -379,7 +400,11 @@ func (txn *activeTxn) closeWithContextInternal(
 	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
 	for group, h := range txn.lockHolders {
 		for table, cs := range h.tableKeys {
-			l, err := lockTableFunc(group, table)
+			l := h.tableBindIntents[table].table
+			var err error
+			if l == nil {
+				l, err = lockTableFunc(group, table)
+			}
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return ctxErr
@@ -406,7 +431,13 @@ func (txn *activeTxn) closeWithContextInternal(
 						table,
 					)
 					var err error
-					if unlocker, ok := l.(contextUnlocker); ok {
+					if immediateLocal {
+						if local, ok := l.(*localLockTable); ok {
+							err = local.releaseLocks(txn, cs, commitTS, immediateLocalUnlock)
+						} else {
+							err = ErrLockTimeout
+						}
+					} else if unlocker, ok := l.(contextUnlocker); ok {
 						err = unlocker.unlockWithContext(ctx, txn, cs, commitTS, mutations...)
 					} else {
 						l.unlock(txn, cs, commitTS, mutations...)
@@ -446,6 +477,17 @@ func (txn *activeTxn) closeWithContextInternal(
 		wg.Wait()
 	}
 
+	// Row bookkeeping can fail, and a proxy may skip release for a local
+	// sharer. Retire any remaining remote attempt via its original route.
+	if firstErr == nil {
+		for remote := range txn.remoteCutoffs {
+			if err := remote.unlockWithContext(ctx, txn, nil, commitTS); err != nil {
+				firstErr = err
+				break
+			}
+		}
+	}
+
 	if release {
 		reuse.Free(txn, nil)
 	}
@@ -479,6 +521,43 @@ func (txn *activeTxn) removeClosedLockTable(
 	}
 }
 
+// The caller holds txn.Lock. A closer that races a sent request keeps this
+// generation registered and waits for the callback to finish recording it.
+func (txn *activeTxn) joinRemoteLocksLocked(ctx context.Context) error {
+	txn.closing.Store(true)
+	if txn.remoteInFlight == 0 {
+		return nil
+	}
+	if txn.remoteIdle == nil {
+		txn.remoteIdle = make(chan struct{})
+	}
+	idle := txn.remoteIdle
+	txn.Unlock()
+	var err error
+	select {
+	case <-idle:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	txn.Lock()
+	return err
+}
+
+func (txn *activeTxn) retainRemoteCleanup(remote *remoteLockTable, cutoff int64) {
+	if txn.remoteCutoffs == nil {
+		txn.remoteCutoffs = make(map[*remoteLockTable]int64)
+	}
+	txn.remoteCutoffs[remote] = max(txn.remoteCutoffs[remote], cutoff)
+}
+
+func (txn *activeTxn) finishRemoteLock() {
+	txn.remoteInFlight--
+	if txn.remoteInFlight == 0 && txn.remoteIdle != nil {
+		close(txn.remoteIdle)
+		txn.remoteIdle = nil
+	}
+}
+
 func (txn *activeTxn) reset() {
 	for g, h := range txn.lockHolders {
 		for table, cs := range h.tableKeys {
@@ -494,12 +573,15 @@ func (txn *activeTxn) reset() {
 		delete(txn.lockHolders, g)
 	}
 
+	txn.generation++
 	txn.txnID = nil
 	txn.txnKey = ""
 	txn.blockedWaiters = txn.blockedWaiters[:0]
 	txn.remoteService = ""
 	txn.deadlockFound = false
 	txn.bindChanged = false
+	txn.closing.Store(false)
+	clear(txn.remoteCutoffs)
 }
 
 func (txn *activeTxn) abort(
@@ -541,7 +623,7 @@ func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MO
 	actual, actualOK := h.tableBinds[bind.Table]
 	intent, intentOK := h.tableBindIntents[bind.Table]
 	if (!actualOK || !actual.Changed(bind)) &&
-		(!intentOK || !intent.Changed(bind)) {
+		(!intentOK || !intent.bind.Changed(bind)) {
 		return false
 	}
 
@@ -762,7 +844,7 @@ func (txn *activeTxn) getHoldLocksLocked(group uint32) *tableLockHolder {
 	h = &tableLockHolder{
 		tableKeys:        make(map[uint64]*cowSlice),
 		tableBinds:       make(map[uint64]pb.LockTable),
-		tableBindIntents: make(map[uint64]pb.LockTable),
+		tableBindIntents: make(map[uint64]lockTableIntent),
 	}
 	txn.lockHolders[group] = h
 	return h

@@ -19,11 +19,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -215,8 +217,8 @@ func (l *localLockTable) doLock(
 
 		// txn closed between Unlock and get Lock again
 		e := v.err
-		if e == nil && (!bytes.Equal(oldTxnID, c.txn.txnID) ||
-			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
+		if c.txn.closing.Load() || c.txnGeneration != c.txn.generation || !bytes.Equal(oldTxnID, c.txn.txnID) ||
+			!bytes.Equal(c.w.txn.TxnID, oldTxnID) {
 			e = ErrTxnNotFound
 		}
 		if e != nil ||
@@ -304,11 +306,26 @@ func (l *localLockTable) detachFailedWaiter(c *lockContext, w *waiter) {
 	}
 }
 
+type localUnlockMode uint8
+
+const (
+	normalLocalUnlock localUnlockMode = iota
+	handoffLocalUnlock
+	immediateLocalUnlock
+)
+
 func (l *localLockTable) unlock(
 	txn *activeTxn,
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) {
+	_ = l.releaseLocks(txn, ls, commitTS, normalLocalUnlock, mutations...)
+}
+
+func (l *localLockTable) releaseLocks(
+	txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mode localUnlockMode,
+	mutations ...pb.ExtraMutation,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockBtreeTotalDurationHistogram.Observe(time.Since(start).Seconds())
@@ -332,12 +349,42 @@ func (l *localLockTable) unlock(
 	locks := ls.slice()
 	defer locks.unref()
 
-	l.mu.Lock()
+	if mode == immediateLocalUnlock {
+		if !l.mu.TryLock() {
+			return ErrLockTimeout
+		}
+	} else {
+		l.mu.Lock()
+	}
 	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
 
 	defer l.mu.Unlock()
 	if l.mu.closed {
-		return
+		return nil
+	}
+
+	var replacements map[string]*lockHandoffTarget
+	if mode == immediateLocalUnlock {
+		waiting := false
+		locks.iter(func(key []byte) bool {
+			lock, ok := l.mu.store.Get(key)
+			waiting = ok && lock.waiters != nil && lock.waiters.size() != 0
+			return !waiting
+		})
+		if waiting {
+			return ErrLockTimeout
+		}
+	}
+
+	if mode == handoffLocalUnlock && len(mutations) != 0 {
+		replacements = make(map[string]*lockHandoffTarget, len(mutations))
+		defer l.finishHandoffTargets(replacements)
+		if err := l.stageHandoffTargets(txn, locks, mutations, replacements); err != nil {
+			return err
+		}
+		if l.mu.closed {
+			return nil
+		}
 	}
 
 	b, ok := txn.getHoldLocksLocked(l.bind.Group).tableBinds[l.bind.Table]
@@ -394,10 +441,12 @@ func (l *localLockTable) unlock(
 				lock.holders.replace(txn.txnID,
 					pb.WaitTxn{TxnID: replaceTo, CreatedOn: txn.remoteService})
 				// cannot dead lock here, the replaceTo txn was created on the same cn.
-				replaceToTxn := l.txnHolder.getActiveTxn(mutations[idx].ReplaceTo, true, txn.remoteService)
-				replaceToTxn.Lock()
-				_ = replaceToTxn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
-				replaceToTxn.Unlock()
+				if mode != handoffLocalUnlock {
+					replaceToTxn := l.txnHolder.getActiveTxn(replaceTo, true, txn.remoteService)
+					replaceToTxn.Lock()
+					_ = replaceToTxn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
+					replaceToTxn.Unlock()
+				}
 				return true
 			}
 
@@ -421,6 +470,128 @@ func (l *localLockTable) unlock(
 	})
 	if l.mu.tableCommittedAt.Less(commitTS) {
 		l.mu.tableCommittedAt = commitTS
+	}
+	return nil
+}
+
+type lockHandoffTarget struct {
+	txn     *activeTxn
+	created bool
+	rows    [][]byte
+	staged  *cowSlice
+}
+
+// The caller holds table.mu and the old holder mutex. A busy replacement
+// can be waiting for table.mu, so reject this release attempt before mutation.
+func (l *localLockTable) stageHandoffTargets(
+	source *activeTxn, locks *fixedSlice, mutations []pb.ExtraMutation, targets map[string]*lockHandoffTarget,
+) error {
+	locks.iter(func(row []byte) bool {
+		for _, mutation := range mutations {
+			if !bytes.Equal(mutation.Key, row) {
+				continue
+			}
+			if !mutation.Skip && len(mutation.ReplaceTo) != 0 {
+				if lock, ok := l.mu.store.Get(row); ok && lock.holders.contains(source.txnID) {
+					key := string(mutation.ReplaceTo)
+					if targets[key] == nil {
+						targets[key] = &lockHandoffTarget{}
+					}
+					targets[key].rows = append(targets[key].rows, row)
+				}
+			}
+			break
+		}
+		return true
+	})
+
+	// Creating a replacement may need a pooled transaction's mutex. Do not
+	// hold the table mutex during that acquisition. The source transaction's
+	// mutex still protects its ownership, except for whole-table retirement.
+	l.mu.Unlock()
+	err := l.lockHandoffTargets(source, targets)
+	l.mu.Lock()
+	if err != nil {
+		return err
+	}
+	if l.mu.closed {
+		return nil
+	}
+
+	for _, target := range targets {
+		keys := append([][]byte(nil), target.rows...)
+		if group := target.txn.lockHolders[l.bind.Group]; group != nil {
+			if current := group.tableKeys[l.bind.Table]; current != nil {
+				if !group.tableBinds[l.bind.Table].Equal(l.bind) {
+					return ErrLockTableBindChanged
+				}
+				slice := current.slice()
+				slice.iter(func(key []byte) bool {
+					keys = append(keys, key)
+					return true
+				})
+				slice.unref()
+			}
+		}
+		staged, err := newCowSlice(target.txn.fsp, keys)
+		if err != nil {
+			return err
+		}
+		target.staged = staged
+	}
+	if !l.txnHolder.publishHandoffTxns(targets) {
+		return ErrLockTimeout
+	}
+	for _, target := range targets {
+		group := target.txn.getHoldLocksLocked(l.bind.Group)
+		if old := group.tableKeys[l.bind.Table]; old != nil {
+			old.close()
+		}
+		group.tableKeys[l.bind.Table] = target.staged
+		group.tableBinds[l.bind.Table] = l.bind
+		group.markLocksConfirmed(l.bind.Table, target.rows)
+		target.staged = nil
+	}
+	return nil
+}
+
+func (l *localLockTable) lockHandoffTargets(source *activeTxn, targets map[string]*lockHandoffTarget) error {
+	order := make([]string, 0, len(targets))
+	for key := range targets {
+		order = append(order, key)
+	}
+	sort.Strings(order)
+	for _, key := range order {
+		target := targets[key]
+		id := []byte(key)
+		if bytes.Equal(source.txnID, id) {
+			return ErrTxnNotFound
+		}
+		replacement, created := l.txnHolder.prepareHandoffTxn(id, source.remoteService)
+		if !created && !replacement.TryLock() {
+			return ErrLockTimeout
+		}
+		if !bytes.Equal(replacement.txnID, id) {
+			replacement.Unlock()
+			return ErrLockTimeout
+		}
+		target.txn, target.created = replacement, created
+	}
+	return nil
+}
+
+func (l *localLockTable) finishHandoffTargets(targets map[string]*lockHandoffTarget) {
+	for _, target := range targets {
+		if target.txn == nil {
+			continue
+		}
+		if target.staged != nil {
+			target.staged.close()
+		}
+		if target.created {
+			reuse.Free(target.txn, nil)
+		}
+		target.txn.Unlock()
 	}
 }
 
