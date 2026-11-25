@@ -850,8 +850,8 @@ func (d *DiskCache) Update(
 	if err != nil {
 		return err
 	}
-	if o := d.download(d.pathForFile(path.File)); o != nil && !o.indexFile {
-		// The download caches the whole object.
+	if d.wholeFill(d.pathForFile(path.File), false) != nil {
+		// The fill of the whole object caches it.
 		return nil
 	}
 
