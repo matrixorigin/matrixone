@@ -91,7 +91,7 @@ This relies on `InitWithSize` reusing capacity, which #33144 provides, and on th
 | Compose (map a selection over live rows back to physical rows) | rank/select loops over the delete mask | blockio (`read.go:1270`, `positionsOfSelectedRows`), `compactInvisibleAppendRows` |
 | Take the first N set bits | positional split of `ls.sels` | disttae workspace reads |
 
-**The verified core.** `bitmap.go` is formally verified with Gobra (`pkg/common/bitmap/gobra`). A new primitive that works on words (build from bools, compose, take first N) goes into `bitmap.go` with a contract stated in terms of `Has`, and the PR runs `gobra/verify.sh`. Code that needs `unsafe`, generics, or vector types stays out of the core: `UnionByMask` belongs to the vector package and only reads the bitmap through its verified methods.
+**The verified core.** `bitmap.go` is formally verified with Gobra (`pkg/common/bitmap/gobra`). A new primitive that works on words (build from bools, compose, take first N) is verified too, with a contract stated in terms of `Has`, and the PR runs `gobra/verify.sh`. New primitives live in `bitmap_select.go`, which `verify.sh` verifies with `bitmap.go` loaded but leaves out of the runs for `bitmap.go`'s own members, so they do not change existing proofs' context. Code that needs `unsafe`, generics, or vector types stays out of the core: `UnionByMask` belongs to the vector package and only reads the bitmap through its verified methods.
 
 **Expression evaluation.** `ExpressionExecutor.Eval` takes the bitmap instead of `[]bool`. `evalSelectedRows` gathers its inputs by mask and scatters the result by mask. The per-call copy into `FunctionSelectList` goes away, and the list becomes nil or a single "all rows" flag.
 
@@ -150,7 +150,7 @@ Eleven PRs in two tracks, bitmap and RemapList, each removing a conversion or a 
 
 | # | Track | PR | What changes | Measured by |
 | --- | --- | --- | --- | --- |
-| 1 | Bitmap | Primitives | build from bool vector word-wise; `UnionByMask`; compose; take-first-N (`InitWithSize` reuse is already in #33144); Gobra contracts for the `bitmap.go` additions | bitmap microbenchmarks; filter allocation count per batch; `gobra/verify.sh` |
+| 1 | Bitmap | Primitives | build from bool vector word-wise; `UnionByMask`; compose; take-first-N (`InitWithSize` reuse is already in #33144); all Gobra-verified, in `bitmap_select.go` | bitmap microbenchmarks; filter allocation count per batch; `gobra/verify.sh` |
 | 2 | Bitmap | Storage read path | delete masks via `ShrinkByMask`; search functions and bloom-filter hits fill a bitmap; tombstone chain works on the bitmap; TAE `CompactByBitmap` stops building lists | blockio and readutil benchmarks; TPC-H scan with deletes |
 | 3 | Bitmap | Scan, filter, projection | the selection stays a bitmap from blockio through filter and projection; compaction uses `UnionByMask` | filtered scan benchmark; conversions per batch reach zero |
 | 4 | Bitmap | Expression evaluation | `Eval` takes the bitmap; `evalSelectedRows` gathers and scatters by mask; the `FunctionSelectList` copy goes away | expression benchmarks under partial selection |

@@ -31,7 +31,7 @@ cd "$dir"
 
 if [ "${1:-}" = "--one" ]; then
 	shift
-	exec java $GOBRA_JAVA_OPTS -jar "$GOBRA_JAR" -I gobra/stubs -i types.go bitmap.go bitmap_mem.gobra bitmap_lemmas.gobra "$@"
+	exec java $GOBRA_JAVA_OPTS -jar "$GOBRA_JAR" -I gobra/stubs -i types.go bitmap.go bitmap_select.go bitmap_mem.gobra bitmap_lemmas.gobra "$@"
 fi
 
 run() { # run <label> <files...>; prints one result line
@@ -72,6 +72,14 @@ trap 'rm -f "$results"' EXIT
 	while read -r line name; do
 		echo "$name types.go bitmap.go@$line bitmap_mem.gobra bitmap_lemmas.gobra@1"
 	done <<<"$members"
+	# bitmap_select.go (row-selection primitives) is verified with bitmap.go
+	# loaded (bitmap.go@1 verifies none of its members). Runs for bitmap.go
+	# members leave this file out; see the note at the top of the file.
+	grep -n -E '^func ' bitmap_select.go |
+		sed -E 's/^([0-9]+):func (\([^)]*\) )?([A-Za-z0-9_]+).*/\1 \3/' |
+		while read -r line name; do
+			echo "select:$name types.go bitmap.go@1 bitmap_select.go@$line bitmap_mem.gobra bitmap_lemmas.gobra@1"
+		done
 } | xargs -P "$VERIFY_JOBS" -L 1 bash -c 'run "$@"' _ | tee "$results" || true
 if grep -q '^FAIL' "$results"; then
 	echo "verification failed"

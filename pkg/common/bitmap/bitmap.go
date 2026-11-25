@@ -1574,9 +1574,7 @@ func removedMask(sels []int64, selIdx int, w int64) (rm uint64, next int) {
 // @ requires 64*out+int(nbits) == e0-Rank(ss, int64(e0))
 // @ requires forall x int :: {data[x]} out <= x && x < len(data) ==> data[x] == orig[x]
 // @ requires seq(data) == sd0
-// @ requires forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e0 && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
-// @ 	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < 64*out+int(nbits) &&
-// @ 	OutB(sd0, pend, out, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+// @ requires 0 <= out && out <= len(sd0) && RemoveRel(ss, orig, oldLength, e0, sd0, pend, out, 64*out+int(nbits))
 // @ ensures forall i int :: {&data[i]} 0 <= i && i < len(data) ==> acc(&data[i])
 // @ ensures acc(sels, 1/2) && seq(sels) == ss && seq(data) == sd1
 // @ ensures selIdx <= selIdx1 && selIdx1 <= len(ss)
@@ -1586,9 +1584,7 @@ func removedMask(sels []int64, selIdx int, w int64) (rm uint64, next int) {
 // @ ensures forall k int :: {bits.Bit(pend1, k)} int(nbits1) <= k && k < 64 ==> !bits.Bit(pend1, k)
 // @ ensures 64*out1+int(nbits1) == e1-Rank(ss, int64(e1))
 // @ ensures forall x int :: {data[x]} out1 <= x && x < len(data) ==> data[x] == orig[x]
-// @ ensures forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e1 && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
-// @ 	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < 64*out1+int(nbits1) &&
-// @ 	OutB(sd1, pend1, out1, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+// @ ensures 0 <= out1 && out1 <= len(sd1) && RemoveRel(ss, orig, oldLength, e1, sd1, pend1, out1, 64*out1+int(nbits1))
 // @ decreases
 func removeOrderedWord(data []uint64, sels []int64, selIdx int, w int64, oldLength int64, pend, nbits uint64, out int /*@, ghost ss seq[int64], ghost orig seq[uint64], ghost e0 int, ghost e1 int, ghost sd0 seq[uint64] @*/) (pend1, nbits1 uint64, out1 int, selIdx1 int /*@, ghost sd1 seq[uint64] @*/) {
 	// @ ghost pos := 64*out + int(nbits)
@@ -1656,10 +1652,7 @@ func (n *Bitmap) removeOrdered(sels []int64) {
 	// @ invariant E == int(64*w < oldLength ? 64*w : oldLength)
 	// @ invariant 64*out+int(nbits) == E-Rank(ss, int64(E))
 	// @ invariant forall x int :: {n.data[x]} out <= x && x < len(orig) ==> n.data[x] == orig[x]
-	// @ invariant forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < E &&
-	// @ 	Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
-	// @ 	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < 64*out+int(nbits) &&
-	// @ 	OutB(SD, pend, out, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+	// @ invariant 0 <= out && out <= len(SD) && RemoveRel(ss, orig, oldLength, E, SD, pend, out, 64*out+int(nbits))
 	// @ decreases words - w
 	for w < words {
 		// @ ghost e1 := int(64*(w+1) < oldLength ? 64*(w+1) : oldLength)
@@ -2190,18 +2183,14 @@ func selectMaskWord(data []uint64, keep, at uint64, pend, nbits uint64, out int 
 // @ requires e0 == int(64*w < oldLength ? 64*w : oldLength) && e1 == int(64*(w+1) < oldLength ? 64*(w+1) : oldLength)
 // @ requires 64*out+int(nbits) == e0-RankOff(sq, snb, off, e0)
 // @ requires forall x int :: {data[x]} out <= x && x < len(data) ==> data[x] == orig[x]
-// @ requires forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e0 && !(s >= off && HasS(sq, snb, s-off)) ==>
-// @ 	0 <= s-RankOff(sq, snb, off, s) && s-RankOff(sq, snb, off, s) < 64*out+int(nbits) &&
-// @ 	OutB(seq(data), pend, out, s-RankOff(sq, snb, off, s)) == HasS(orig, oldLength, s)
+// @ requires 0 <= out && out <= len(data) && RemoveMaskRel(sq, snb, off, orig, oldLength, e0, seq(data), pend, out, 64*out+int(nbits))
 // @ ensures forall i int :: {&data[i]} 0 <= i && i < len(data) ==> acc(&data[i])
 // @ ensures acc(sels.Inv(), 1/2) && sels.ISeq() == sq && sels.Len() == snb
 // @ ensures 0 <= nbits1 && nbits1 < 64 && out <= out1 && out1 <= int(w)+1
 // @ ensures forall k int :: {bits.Bit(pend1, k)} int(nbits1) <= k && k < 64 ==> !bits.Bit(pend1, k)
 // @ ensures 64*out1+int(nbits1) == e1-RankOff(sq, snb, off, e1)
 // @ ensures forall x int :: {data[x]} out1 <= x && x < len(data) ==> data[x] == orig[x]
-// @ ensures forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e1 && !(s >= off && HasS(sq, snb, s-off)) ==>
-// @ 	0 <= s-RankOff(sq, snb, off, s) && s-RankOff(sq, snb, off, s) < 64*out1+int(nbits1) &&
-// @ 	OutB(seq(data), pend1, out1, s-RankOff(sq, snb, off, s)) == HasS(orig, oldLength, s)
+// @ ensures 0 <= out1 && out1 <= len(data) && RemoveMaskRel(sq, snb, off, orig, oldLength, e1, seq(data), pend1, out1, 64*out1+int(nbits1))
 // @ decreases
 func removeMaskWord(data []uint64, sels *Bitmap, w int64, offset uint64, oldLength int64, pend, nbits uint64, out int /*@, ghost sq seq[uint64], ghost snb int64, ghost orig seq[uint64], ghost off int, ghost e0 int, ghost e1 int @*/) (pend1, nbits1 uint64, out1 int) {
 	// @ ghost pos := 64*out + int(nbits)
@@ -2358,10 +2347,7 @@ func (n *Bitmap) removeMask(sels *Bitmap, offset uint64) {
 	// @ invariant E == int(64*w < oldLength ? 64*w : oldLength)
 	// @ invariant 64*out+int(nbits) == E-RankOff(sq, snb, off, E)
 	// @ invariant forall x int :: {n.data[x]} out <= x && x < len(orig) ==> n.data[x] == orig[x]
-	// @ invariant forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < E &&
-	// @ 	!(s >= off && HasS(sq, snb, s-off)) ==>
-	// @ 	0 <= s-RankOff(sq, snb, off, s) && s-RankOff(sq, snb, off, s) < 64*out+int(nbits) &&
-	// @ 	OutB(seq(n.data), pend, out, s-RankOff(sq, snb, off, s)) == HasS(orig, oldLength, s)
+	// @ invariant 0 <= out && out <= len(n.data) && RemoveMaskRel(sq, snb, off, orig, oldLength, E, seq(n.data), pend, out, 64*out+int(nbits))
 	// @ decreases words - w
 	for w < words {
 		// @ assert 64*w < oldLength && out <= len(n.data)

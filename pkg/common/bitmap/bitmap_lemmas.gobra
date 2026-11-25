@@ -625,13 +625,12 @@ requires forall p int :: {OutB(d1, p1, o1, p)} 0 <= p && p < pos0 ==> OutB(d1, p
 requires forall b int :: {bits.Bit(keep, b)} 0 <= b && b < 64 && bits.Bit(keep, b) ==>
 	0 <= bits.PcUpTo(keep, b) && bits.PcUpTo(keep, b) < bits.PcUpTo(keep, 64) &&
 	OutB(d1, p1, o1, pos0+bits.PcUpTo(keep, b)) == bits.Bit(src, b)
-requires forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e0 && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
-	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < pos0 &&
-	OutB(d0, p0, o0, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+requires RemoveRel(ss, orig, oldLength, e0, d0, p0, o0, pos0)
 ensures pos1 == e1-Rank(ss, int64(e1))
 ensures forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e1 && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
 	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < pos1 &&
 	OutB(d1, p1, o1, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+ensures 0 <= o1 && o1 <= len(d1) && RemoveRel(ss, orig, oldLength, e1, d1, p1, o1, pos1)
 decreases
 func removeStepRank(ss seq[int64], orig seq[uint64], oldLength int64, w int, V int, i0 int, rm, keep, src uint64, e0, e1 int,
 	d0 seq[uint64], p0 uint64, o0 int, pos0 int, d1 seq[uint64], p1 uint64, o1 int, pos1 int) {
@@ -718,13 +717,12 @@ requires forall p int :: {OutB(d1, p1, o1, p)} 0 <= p && p < pos0 ==> OutB(d1, p
 requires forall b int :: {bits.Bit(keep, b)} 0 <= b && b < 64 && bits.Bit(keep, b) ==>
 	0 <= bits.PcUpTo(keep, b) && bits.PcUpTo(keep, b) < bits.PcUpTo(keep, 64) &&
 	OutB(d1, p1, o1, pos0+bits.PcUpTo(keep, b)) == bits.Bit(src, b)
-requires forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e0 && !(s >= off && HasS(sq, snb, s-off)) ==>
-	0 <= s-RankOff(sq, snb, off, s) && s-RankOff(sq, snb, off, s) < pos0 &&
-	OutB(d0, p0, o0, s-RankOff(sq, snb, off, s)) == HasS(orig, oldLength, s)
+requires RemoveMaskRel(sq, snb, off, orig, oldLength, e0, d0, p0, o0, pos0)
 ensures pos1 == e1-RankOff(sq, snb, off, e1)
 ensures forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e1 && !(s >= off && HasS(sq, snb, s-off)) ==>
 	0 <= s-RankOff(sq, snb, off, s) && s-RankOff(sq, snb, off, s) < pos1 &&
 	OutB(d1, p1, o1, s-RankOff(sq, snb, off, s)) == HasS(orig, oldLength, s)
+ensures RemoveMaskRel(sq, snb, off, orig, oldLength, e1, d1, p1, o1, pos1)
 decreases
 func removeStepOff(sq seq[uint64], snb int64, off int, orig seq[uint64], oldLength int64, e0, e1 int, w int, V int, i0 int, rm, keep, src uint64,
 	d0 seq[uint64], p0 uint64, o0 int, pos0 int, d1 seq[uint64], p1 uint64, o1 int, pos1 int) {
@@ -759,9 +757,7 @@ func tailBits(s seq[uint64], nb int64) {
 // stream at the end of a step.
 ghost
 requires 0 <= o && o <= len(d)
-requires forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
-	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < pos &&
-	OutB(d, p, o, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+requires RemoveRel(ss, orig, oldLength, e, d, p, o, pos)
 ensures forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
 	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < pos &&
 	OutB(d, p, o, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
@@ -871,4 +867,157 @@ ensures Rank(sels, 0) == 0
 decreases
 func rankZero(sels seq[int64]) {
 	rankTail(sels, 0, len(sels), 0)
+}
+
+// No set bit in [a, b) leaves the prefix count unchanged across it.
+ghost
+requires 0 <= a && a <= b && b <= 64
+requires forall k int :: {bits.Bit(w, k)} a <= k && k < b ==> !bits.Bit(w, k)
+ensures bits.PcUpTo(w, b) == bits.PcUpTo(w, a)
+decreases b - a
+func pcFlat(w uint64, a, b int) {
+	if a < b {
+		pcFlat(w, a, b-1)
+	}
+}
+
+// A set bit's prefix count is below the word's count.
+ghost
+ensures forall b int :: {bits.Bit(w, b)} 0 <= b && b < 64 && bits.Bit(w, b) ==> bits.PcUpTo(w, b) < bits.Pc(w)
+decreases
+func pcBitBelow(w uint64) {
+	pcMonoAll(w, 64)
+	assert forall b int :: {bits.Bit(w, b)} 0 <= b && b < 64 ==> bits.PcUpTo(w, b+1) == bits.PcUpTo(w, b) + (bits.Bit(w, b) ? 1 : 0)
+}
+
+// Words that agree below m have the same count below m.
+ghost
+requires 0 <= m && m <= 64
+requires forall k int :: {bits.Bit(a, k)} {bits.Bit(b, k)} 0 <= k && k < m ==> bits.Bit(a, k) == bits.Bit(b, k)
+ensures bits.PcUpTo(a, m) == bits.PcUpTo(b, m)
+decreases m
+func pcSame(a, b uint64, m int) {
+	if m > 0 {
+		pcSame(a, b, m-1)
+	}
+}
+
+// keepFirstRows: keeping the first k set rows of s gives sf, where the word
+// i holding the k-th row keeps its r0 = k - SumPc(s, i) lowest set bits,
+// earlier words are unchanged and later words are zero.
+ghost
+requires 0 <= nb && len(s) == int((nb+63)/64) && TailClear(s, nb)
+requires 0 <= i && i < len(s) && len(sf) == len(s)
+requires forall x int :: {sf[x]} 0 <= x && x < len(s) ==> sf[x] == (x < i ? s[x] : (x == i ? kept : 0))
+requires 0 <= k-SumPc(s, i) && k-SumPc(s, i) < bits.Pc(s[i])
+requires forall b int :: {bits.Bit(kept, b)} 0 <= b && b < 64 ==> bits.Bit(kept, b) == (bits.Bit(s[i], b) && bits.PcUpTo(s[i], b) < k-SumPc(s, i))
+requires bits.Pc(kept) == k-SumPc(s, i)
+ensures TailClear(sf, nb)
+ensures SumPc(sf, len(sf)) == k
+ensures forall r int :: {HasS(sf, nb, r)} HasS(sf, nb, r) == (HasS(s, nb, r) && CntS(s, nb, r) < k)
+decreases
+func keepFirstRows(s, sf seq[uint64], nb int64, i int, kept uint64, k int) {
+	r0 := k - SumPc(s, i)
+	sumPrefix(sf, s, i)
+	assert SumPc(sf, i+1) == SumPc(s, i)+r0
+	sumZeroTail(sf, i+1, len(sf))
+	cntAllWords(s, nb, len(s))
+	cntWordAll(s, nb, i, 64)
+	cntMonoAll(s, nb, 64*len(s)+64)
+	pcMonoAll(s[i], 64)
+	assert SumPc(s, i+1) == SumPc(s, i)+bits.Pc(s[i])
+	if nb%64 != 0 && len(s) > 0 {
+		L := len(s) - 1
+		if L == i {
+			assert forall b int :: {bits.Bit(sf[L], b)} int(nb%64) <= b && b < 64 ==> !bits.Bit(s[L], b) && !bits.Bit(sf[L], b)
+		} else if L > i {
+			assert sf[L] == 0
+		} else {
+			assert sf[L] == s[L]
+		}
+	}
+	assert TailClear(sf, nb)
+	assert forall r int :: {HasS(sf, nb, r)} 0 <= r && r < 64*i ==> r/64 < i && sf[r/64] == s[r/64] && HasS(sf, nb, r) == HasS(s, nb, r) &&
+		(HasS(s, nb, r) ==> CntS(s, nb, r+1) == CntS(s, nb, r)+1 && CntS(s, nb, r+1) <= CntS(s, nb, 64*i))
+	assert forall r int :: {HasS(sf, nb, r)} 64*i <= r && r < 64*i+64 ==> r/64 == i && r == 64*i+r%64 && sf[i] == kept
+	assert forall r int :: {HasS(sf, nb, r)} 64*i+64 <= r ==> r/64 > i && (r/64 < len(sf) ==> sf[r/64] == 0) && !HasS(sf, nb, r) &&
+		(HasS(s, nb, r) ==> r < 64*len(s) && CntS(s, nb, 64*(i+1)) <= CntS(s, nb, r))
+}
+
+// depositWordRows: depositing a selection's bits at word i of base gives,
+// for each row of the word, "in base and the selection holds its rank".
+ghost
+requires 0 <= blen && len(bseq) == int((blen+63)/64) && TailClear(bseq, blen)
+requires 0 <= i && i < len(bseq)
+requires CntS(bseq, blen, 64*i) == SumPc(bseq, i) && rank == SumPc(bseq, i)
+requires forall b int :: {bits.Bit(s, b)} 0 <= b && b < 64 ==> bits.Bit(s, b) == (b < bits.Pc(bseq[i]) && HasS(sseq, slen, rank+b))
+requires forall b int :: {bits.Bit(word, b)} 0 <= b && b < 64 ==> bits.Bit(word, b) == (bits.Bit(bseq[i], b) && bits.Bit(s, bits.PcUpTo(bseq[i], b)))
+ensures forall b int :: {bits.Bit(word, b)} 0 <= b && b < 64 ==>
+	bits.Bit(word, b) == (HasS(bseq, blen, 64*i+b) && HasS(sseq, slen, CntS(bseq, blen, 64*i+b)))
+decreases
+func depositWordRows(bseq, sseq seq[uint64], blen, slen int64, i int, rank int, s, word uint64) {
+	cntWordAll(bseq, blen, i, 64)
+	pcBitBelow(bseq[i])
+	pcMonoAll(bseq[i], 64)
+	assert forall b int :: {bits.Bit(bseq[i], b)} 0 <= b && b < 64 ==> (64*i+b)/64 == i && (64*i+b)%64 == b
+	assert forall b int :: {bits.Bit(bseq[i], b)} 0 <= b && b < 64 && bits.Bit(bseq[i], b) ==> 64*i+b < int(blen)
+	assert forall b int :: {bits.Bit(word, b)} 0 <= b && b < 64 ==> HasS(bseq, blen, 64*i+b) == bits.Bit(bseq[i], b)
+}
+
+// depositStep: writing word i of the output keeps the row invariant, the
+// tail and the running popcount.
+ghost
+requires 0 <= nb && len(s0) == int((nb+63)/64) && TailClear(s0, nb)
+requires len(bseq) == len(s0) && 0 <= blen && blen == nb && TailClear(bseq, blen)
+requires 0 <= i && i < len(s0) && sn == s0[i = word]
+requires forall r int :: {HasS(s0, nb, r)} 0 <= r && r < 64*i ==>
+	HasS(s0, nb, r) == (HasS(bseq, blen, r) && HasS(sseq, slen, CntS(bseq, blen, r)))
+requires forall b int :: {bits.Bit(word, b)} 0 <= b && b < 64 ==>
+	bits.Bit(word, b) == (HasS(bseq, blen, 64*i+b) && HasS(sseq, slen, CntS(bseq, blen, 64*i+b)))
+ensures TailClear(sn, nb)
+ensures SumPc(sn, i+1) == SumPc(s0, i)+bits.Pc(word)
+ensures forall r int :: {HasS(sn, nb, r)} 0 <= r && r < 64*i+64 ==>
+	HasS(sn, nb, r) == (HasS(bseq, blen, r) && HasS(sseq, slen, CntS(bseq, blen, r)))
+decreases
+func depositStep(s0, sn, bseq, sseq seq[uint64], nb, blen, slen int64, i int, word uint64) {
+	sumUpdate(s0, i, word, i)
+	assert SumPc(sn, i+1) == SumPc(sn, i)+bits.Pc(word)
+	L := len(s0)
+	if nb%64 != 0 && L > 0 {
+		if i == L-1 {
+			assert forall b int :: {bits.Bit(sn[L-1], b)} int(nb%64) <= b && b < 64 ==> 64*i+b >= int(nb) && !HasS(bseq, blen, 64*i+b) && !bits.Bit(word, b)
+		} else {
+			assert sn[L-1] == s0[L-1]
+		}
+	}
+	assert TailClear(sn, nb)
+	assert forall r int :: {HasS(sn, nb, r)} 0 <= r && r < 64*i ==> r/64 != i && sn[r/64] == s0[r/64] && HasS(sn, nb, r) == HasS(s0, nb, r)
+	assert forall r int :: {HasS(sn, nb, r)} 64*i <= r && r < 64*i+64 ==> r/64 == i && r == 64*i+r%64 && sn[i] == word
+}
+
+// RemoveRel is removeOrdered's output relation after the input rows below
+// e: every kept row s (one not removed) is bit s-Rank(s) of the output
+// stream (d, p, o), and that position is below pos. Named, so that a
+// postcondition stating it is matched as one term rather than re-proved by
+// quantifier instantiation.
+ghost
+requires 0 <= o && o <= len(d)
+decreases
+pure func RemoveRel(ss seq[int64], orig seq[uint64], oldLength int64, e int, d seq[uint64], p uint64, o int, pos int) bool {
+	return forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
+		0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < pos &&
+		OutB(d, p, o, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+}
+
+// RemoveMaskRel is removeMask's output relation after the input rows below
+// e: every kept row s (one not selected by sq at offset off) is bit
+// s-RankOff(s) of the output stream (d, p, o), below pos. Named for the
+// same reason as RemoveRel.
+ghost
+requires 0 <= o && o <= len(d) && 0 <= off
+decreases
+pure func RemoveMaskRel(sq seq[uint64], snb int64, off int, orig seq[uint64], oldLength int64, e int, d seq[uint64], p uint64, o int, pos int) bool {
+	return forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e && !(s >= off && HasS(sq, snb, s-off)) ==>
+		0 <= s-RankOff(sq, snb, off, s) && s-RankOff(sq, snb, off, s) < pos &&
+		OutB(d, p, o, s-RankOff(sq, snb, off, s)) == HasS(orig, oldLength, s)
 }

@@ -1,6 +1,6 @@
 # Gobra verification of the bitmap core
 
-`bitmap.go` is formally verified with [Gobra](https://github.com/viperproject/gobra).
+`bitmap.go` and `bitmap_select.go` (the row-selection primitives) are formally verified with [Gobra](https://github.com/viperproject/gobra).
 `bitmap_ext.go` is not verified. It holds copy and clone, serialization and validation, conversions to arrays and strings, and the code using `unsafe` and generics.
 `bitmap_mem.go` (pool allocation) and `bitmap_view.go` (read-only bitmaps and views) are not verified either; `bitmap_mem.gobra` gives their contracts.
 
@@ -11,6 +11,10 @@ GOBRA_JAR=/path/to/gobra.jar Z3_EXE=/path/to/z3 ./gobra/verify.sh
 Needs Java 11+ and Z3 4.16. A run takes about 12 minutes.
 
 `verify.sh` gives every member of `bitmap.go` a Gobra run, and so a Z3 process, of its own, four at a time (`VERIFY_JOBS`). There are two exceptions. The lemmas get one run together. The pure functions, the predicates and `PeekNext` get one run together, because a pure function verified alone fails to check the predicate bodies it unfolds; the original proof behaves the same way. Viper verifies each member against the others' contracts, so separate runs prove the same as one run. In a single run, Silicon reuses each Z3 process across members, and several of these proofs then succeed or fail depending on which members that process verified before them. `verify.sh --one` does the single run anyway.
+
+`bitmap_select.go` gets one run per member too, with `bitmap.go` loaded but not re-verified (`bitmap.go@1`). Runs for `bitmap.go`'s members leave `bitmap_select.go` out, so new members do not change the proof context of existing ones. Nothing in `bitmap.go` calls into `bitmap_select.go`, so the split loses nothing.
+
+`removeOrderedWord`/`removeOrdered` and `removeMaskWord`/`removeMask` state their output relation through the named ghost functions `RemoveRel` and `RemoveMaskRel`. Spelled out as a quantifier in their contracts and loop invariants, these proofs passed or failed depending on unrelated edits elsewhere in `bitmap.go`, and even on the directory Gobra ran in, with identical files. With the relation named, each check is a match on one term, and all four members verify from every directory tried.
 
 To verify only some members, pass their line numbers, e.g. `-i types.go bitmap.go@889,1010 bitmap_mem.gobra bitmap_lemmas.gobra`. Gobra verifies all of `bitmap_lemmas.gobra` unless it is given as `bitmap_lemmas.gobra@1`.
 
@@ -49,6 +53,12 @@ For every method in `bitmap.go`:
   - `CountRange(start, end)`: the number of set rows in `[start, min(end, Len))`.
   - `AnySetNotIn(other, start, end)`: whether some row in `[start, end)` is set in `n` and not in `other`.
   - `CountIsRows`: `Count()` is the number of set rows. `EmptyIsNone`: `IsEmpty()` is true exactly when no row is set.
+  - Row-selection primitives (#33181):
+    - `InitWithBools(values, nulls)`: row `r` is set exactly when `values[r]` is true and `r` is not in `nulls`; the length is `len(values)`.
+    - `InitDeposit(base, sel)`: row `r` is set exactly when `r` is in `base` and `sel` holds `r`'s rank among `base`'s rows (`CntS`); the length is `base.Len()`.
+    - `KeepFirstN(k)`: a row stays set exactly when it was set and fewer than `k` set rows lie below it. `keepLowBits(w, r)` keeps the `r` lowest set bits of a word; the rank argument is the heap-free lemma `keepFirstRows`.
+    - `Word(i)`: bit `b` is row `64i+b`. `NumWords()` is `ceil(Len/64)`.
+    - `depositBits(w, s)`: bit `b` is set exactly when bit `b` of `w` is set and bit `PcUpTo(w, b)` of `s` is set.
 
 The `Init*` constructors and `Reset` take a `Raw` bitmap: the struct plus the words it owns, if it has a pool. The ghost method `Release` turns `Inv` into `Raw`, for callers about to reinitialize or free a bitmap. The ghost `Unowned` makes a pool-less struct (such as a zero `Bitmap`) `Raw`.
 
@@ -80,6 +90,11 @@ All lemmas in `bitmap_lemmas.gobra` are proven. None of them is trusted.
   - For a signed value, convert first (`uint64(x)/64`). Signed division adds a sign fix-up, which made `RemapOrdered` 25% slower until it was converted.
 - Write low masks as `^uint64(0) >> (64-t)`, not `(1<<t)-1`. The subtraction defeats the axiom triggers.
 - Avoid `min`, `max`, `clear`, and `range` over an int. Gobra rejects them.
+- The bit model has no axiom for unary minus or `w & (w-1)`. To visit set bits, use `t := bits.TrailingZeros64(w)` and `w &^= uint64(1) << uint(t)`; the compiler emits `TZCNT` and the cost is the same.
+- A quantified relation that crosses a call or a loop boundary (a postcondition the caller's loop invariant restates) is checked by quantifier instantiation, and Z3 may miss the instantiation for reasons as unrelated as the file path. Name such a relation with a ghost pure function, as `RemoveRel` does, and state contracts and invariants with it. The quantifier is still available where a proof needs it, through the function's definition.
+- Add new members in a separate file and verify them with `bitmap.go` loaded, as `bitmap_select.go` does, instead of growing `bitmap.go`.
+- Keep heavy rank reasoning out of methods that hold the heap. Written as one method, `KeepFirstN` did not finish in 40 minutes. With the word loop in the helper `keepLowBits` and the rank facts in the lemma `keepFirstRows` (over plain sequences), each part verifies in a few minutes.
+- A ghost call that takes a fraction of a predicate (`rowFacts`, `EmptyIsNone`) makes pure values read before it unrelated to those read after it. Call such lemmas before computing a pure value, such as `IsEmpty()`, that later reasoning depends on.
 - Over a slice, `for i := range d /*@ with i0 @*/` works, but Gobra cannot establish bounds on `i` or `i0` when `d` is empty. Guard them: `invariant len(d) > 0 ==> 0 <= i && i <= len(d) && 0 <= i0 && i0 <= len(d)`, and bound quantifiers by `x < len(d)` too. Keep the range form: `for i := range d { d[i] = 0 }` compiles to a memory clear.
 - Silicon proves a quantified precondition most reliably when it is the same term as a fact in context. Pass the caller's exact term (`64*out+int(nbits)`, not a ghost copy `pos`) and keep the output stream as a ghost `seq` (`SD`, `sd0`/`sd1`) rather than `seq(n.data)`; `removeOrdered` needed both, plus the identity lemma `carryRemove` at the end of the loop body.
 - Let lemmas and read-only methods take a smaller permission fraction than the caller holds, for example ⅛ or ¼. A callee that takes all of a caller's fraction makes Viper forget the bitmap's contents.
