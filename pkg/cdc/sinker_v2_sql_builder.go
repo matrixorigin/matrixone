@@ -71,11 +71,14 @@ func NewCDCStatementBuilder(
 	tableDef *plan.TableDef,
 	maxSQLSize uint64,
 	_ bool,
+	contract *CDCTargetGenerationContract,
 ) (*CDCStatementBuilder, error) {
 	if tableDef == nil {
 		return nil, moerr.NewInternalErrorNoCtx("tableDef is required")
 	}
-
+	if contract == nil {
+		return nil, moerr.NewInternalErrorNoCtx("generation contract is required: run the target admission verify first")
+	}
 	b := &CDCStatementBuilder{
 		maxSQLSize: maxSQLSize,
 	}
@@ -83,12 +86,13 @@ func NewCDCStatementBuilder(
 	insertColNames := make([]string, 0, len(tableDef.Cols))
 	visibleCols := 0
 
-	// Extract column types (excluding internal columns). Generated columns are
-	// computed by the target from the replicated base columns and must not
-	// appear in the INSERT column list or the upsert assignments, and their
-	// batch vectors must not even be decoded, so every replicated column
-	// records its source batch position here while generated columns only
-	// advance that position.
+	// Extract column types (excluding internal columns). The admission-captured
+	// generation contract owns the per-column fate: a contract-copied column
+	// is replicated with its source materialized value (an ordinary writable
+	// target, including a source-generated slot whose value the sinker must
+	// keep), while a contract-omitted column is a proven compatible generated
+	// target column computed by the target and never named in INSERT or the
+	// upsert assignments, and its batch vector is never decoded either.
 	for i, col := range tableDef.Cols {
 		if col == nil {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("column %d is nil", i))
@@ -100,8 +104,13 @@ func NewCDCStatementBuilder(
 			continue
 		}
 		srcIdx := visibleCols
+		if srcIdx >= len(contract.Copy) {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"generation contract has %d columns for table %q; expected at least %d",
+				len(contract.Copy), tableName, srcIdx+1))
+		}
 		visibleCols++
-		if col.GeneratedCol != nil {
+		if !contract.Copy[srcIdx] {
 			continue
 		}
 		b.insertColTypes = append(b.insertColTypes, &types.Type{

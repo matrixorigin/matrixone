@@ -44,7 +44,7 @@ func TestHandleBegin_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -84,7 +84,7 @@ func TestHandleBegin_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -128,7 +128,7 @@ func TestHandleBegin_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -174,7 +174,7 @@ func TestHandleBegin_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -220,7 +220,7 @@ func TestHandleBegin_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -263,7 +263,7 @@ func TestHandleCommit_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -306,7 +306,7 @@ func TestHandleCommit_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -343,7 +343,7 @@ func TestHandleCommit_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -389,7 +389,7 @@ func TestHandleCommit_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -435,7 +435,7 @@ func TestHandleCommit_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -481,7 +481,7 @@ func TestHandleCommit_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -529,7 +529,7 @@ func TestHandleRollback_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -572,7 +572,7 @@ func TestHandleRollback_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -609,7 +609,7 @@ func TestHandleRollback_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -655,7 +655,7 @@ func TestHandleRollback_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -701,7 +701,7 @@ func TestHandleRollback_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -745,7 +745,7 @@ func TestHandleRollback_Comprehensive(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -793,7 +793,7 @@ func TestTransactionLifecycle_RealWorldScenarios(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -834,7 +834,7 @@ func TestTransactionLifecycle_RealWorldScenarios(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -889,7 +889,7 @@ func TestTransactionLifecycle_RealWorldScenarios(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -944,7 +944,7 @@ func TestTransactionLifecycle_RealWorldScenarios(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 			Name2ColIndex: map[string]int32{"id": 0},
 		}
-		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 		require.NoError(t, err)
 
 		sinker := NewMysqlSinker2(
@@ -1013,7 +1013,7 @@ func BenchmarkHandleBegin(b *testing.B) {
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
-	builder, _ := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, _ := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	sinker := NewMysqlSinker2(
 		executor,
 		1,
@@ -1048,7 +1048,7 @@ func BenchmarkHandleCommit(b *testing.B) {
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
-	builder, _ := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, _ := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	sinker := NewMysqlSinker2(
 		executor,
 		1,
@@ -1083,7 +1083,7 @@ func BenchmarkHandleRollback(b *testing.B) {
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}},
 		Name2ColIndex: map[string]int32{"id": 0},
 	}
-	builder, _ := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, _ := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	sinker := NewMysqlSinker2(
 		executor,
 		1,

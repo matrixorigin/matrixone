@@ -449,6 +449,10 @@ func TestCDCTargetSetupRetryAdmission(t *testing.T) {
 				mock.ExpectBegin()
 				mock.ExpectQuery("CALL mo_cdc_target_identity").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(42))
 				mock.ExpectQuery("SELECT column_name, column_type").WillReturnRows(sqlmock.NewRows([]string{"column_name", "column_type", "collation_name", "numeric_scale"}).AddRow("id", "int", nil, nil))
+				// The attach-verify routes generation-free mappings through
+				// the object-privileged guarded SHOW metadata, alongside the
+				// other guarded metadata reads before the index check.
+				mock.ExpectQuery("SHOW FULL COLUMNS FROM").WillReturnRows(sqlmock.NewRows([]string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}).AddRow("id", "int(11)", "", "YES", "", nil, "", "select,insert,update,references", ""))
 				mock.ExpectQuery("SELECT index_name, non_unique").WillReturnRows(sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"}).AddRow("PRIMARY", 0, 1, "id", nil))
 				mock.ExpectRollback()
 				mock.ExpectQuery("SELECT RELEASE_LOCK").WillReturnError(tc.cause)

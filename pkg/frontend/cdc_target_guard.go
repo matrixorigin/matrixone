@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -33,6 +34,7 @@ import (
 
 const cdcTargetGuardCall = "mo_cdc_target_identity"
 const cdcTargetGuardCapabilityCall = "mo_cdc_target_guard_capability"
+const cdcTargetGenerationSignatureCall = "mo_cdc_target_generation_signature"
 
 // This operation runs inside the caller's target DML transaction. It locks
 // the same catalog name keys as DDL, then resolves the live physical ID.
@@ -42,6 +44,13 @@ func executeCDCTargetGuardCall(ctx context.Context, ses FeSession, call *tree.Ca
 			return nil, true, moerr.NewInvalidInput(ctx, "CDC target guard capability takes no arguments")
 		}
 		return nil, true, checkCDCTargetGuardTransaction(ctx, ses)
+	}
+	if isCDCGenerationSignatureCall(call) {
+		databaseName, tableName, err := parseCDCGenerationSignatureCall(ctx, call)
+		if err != nil {
+			return nil, true, err
+		}
+		return executeCDCGenerationSignatureCall(ctx, ses, databaseName, tableName)
 	}
 	databaseName, tableName, matched, err := parseCDCTargetGuardCall(ctx, call)
 	if !matched || err != nil {
@@ -60,18 +69,142 @@ func executeCDCTargetGuardCall(ctx context.Context, ses FeSession, call *tree.Ca
 	return []ExecResult{result}, true, nil
 }
 
+// isCDCGenerationSignatureCall matches the minimal scoped generation metadata
+// call of the target guard family.
+func isCDCGenerationSignatureCall(call *tree.CallStmt) bool {
+	return call != nil && call.Name != nil && call.Name.HasNoNameQualifier() &&
+		strings.EqualFold(tree.String(call.Name, dialect.MYSQL), cdcTargetGenerationSignatureCall)
+}
+
+// parseCDCGenerationSignatureCall keeps the same two string-literal argument
+// contract as the identity guard.
+func parseCDCGenerationSignatureCall(ctx context.Context, call *tree.CallStmt) (string, string, error) {
+	if len(call.Args) != 2 {
+		return "", "", moerr.NewInvalidInput(ctx, "CDC target generation signature requires database and table names")
+	}
+	args := [2]string{}
+	for i, expr := range call.Args {
+		switch value := expr.(type) {
+		case *tree.StrVal:
+			args[i] = value.String()
+		case *tree.NumVal:
+			if value.Kind() == tree.Str {
+				args[i] = value.String()
+			}
+		}
+		if args[i] == "" {
+			return "", "", moerr.NewInvalidInput(ctx, "CDC target generation signature requires string literal names")
+		}
+	}
+	return args[0], args[1], nil
+}
+
+// executeCDCGenerationSignatureCall runs inside the caller's target DML
+// transaction: the identity guard first takes the same catalog name locks as
+// DDL and advances the snapshot, then the complete engine tableDef classifies
+// every visible target column and digests its value-relevant typed semantics.
+// No bound expression ever crosses the wire: only the classification and the
+// canonical typed digest are returned, so an INSERT-only role learns whether a
+// column is writable or generated and nothing else.
+func executeCDCGenerationSignatureCall(
+	ctx context.Context, ses FeSession, databaseName, tableName string,
+) ([]ExecResult, bool, error) {
+	if err := checkCDCTargetGuardTransaction(ctx, ses); err != nil {
+		return nil, true, err
+	}
+	if _, err := lockCDCTargetIdentity(ctx, ses, databaseName, tableName); err != nil {
+		return nil, true, err
+	}
+	proc := ses.GetProc()
+	tenant := ses.GetTenantInfo()
+	if proc == nil || proc.GetTxnOperator() == nil || tenant == nil {
+		return nil, true, moerr.NewInternalError(ctx, "CDC target generation signature requires an active transaction session")
+	}
+	tenantCtx := defines.AttachAccountId(ctx, tenant.GetTenantID())
+	storage := proc.GetSessionInfo().StorageEngine
+	if storage == nil {
+		return nil, true, moerr.NewInternalError(ctx, "CDC target generation signature has no storage engine")
+	}
+	db, err := storage.Database(tenantCtx, databaseName, proc.GetTxnOperator())
+	if err != nil {
+		return nil, true, err
+	}
+	rel, err := db.Relation(tenantCtx, tableName, nil)
+	if err != nil {
+		return nil, true, err
+	}
+	def := rel.CopyTableDef(tenantCtx)
+	if def == nil {
+		return nil, true, moerr.NewInternalErrorf(ctx, "CDC target %s.%s has no table definition", databaseName, tableName)
+	}
+	result := &MysqlResultSet{}
+	for _, spec := range []struct {
+		name string
+		typ  defines.MysqlType
+	}{
+		{"column_ordinal", defines.MYSQL_TYPE_LONGLONG},
+		{"column_name", defines.MYSQL_TYPE_VARCHAR},
+		{"generation_class", defines.MYSQL_TYPE_VARCHAR},
+		{"not_null", defines.MYSQL_TYPE_LONGLONG},
+		{"typed_digest", defines.MYSQL_TYPE_LONGLONG},
+	} {
+		column := new(MysqlColumn)
+		column.SetName(spec.name)
+		column.SetColumnType(spec.typ)
+		result.AddColumn(column)
+	}
+	ordinal := int32(0)
+	for _, col := range def.Cols {
+		if col == nil {
+			return nil, true, moerr.NewInternalErrorf(ctx, "CDC target %s.%s has a nil column", databaseName, tableName)
+		}
+		if col.Hidden {
+			continue
+		}
+		if _, internal := catalog.InternalColumns[col.Name]; internal {
+			continue
+		}
+		class := cdc.CDCColumnOrdinary
+		if col.GetGeneratedCol() != nil {
+			if col.GetGeneratedCol().GetIsStored() {
+				class = cdc.CDCColumnGeneratedStored
+			} else {
+				class = cdc.CDCColumnGeneratedVirt
+			}
+		}
+		digest, complete := cdc.CDCColumnTypedDigestFromColDef(col, ordinal)
+		if !complete {
+			return nil, true, moerr.NewInternalErrorf(ctx,
+				"CDC target %s.%s column %s has an incomplete canonical generation signature: the bound expression contains a truncated or unhandled node",
+				databaseName, tableName, col.GetOriginCaseName())
+		}
+		result.AddRow([]interface{}{int64(ordinal), col.GetOriginCaseName(), string(class), col.GetNotNull(), int64(digest)})
+		ordinal++
+	}
+	return []ExecResult{result}, true, nil
+}
+
 func isCDCTargetGuardCapabilityCall(call *tree.CallStmt) bool {
 	return call != nil && call.Name != nil && call.Name.HasNoNameQualifier() &&
 		strings.EqualFold(tree.String(call.Name, dialect.MYSQL), cdcTargetGuardCapabilityCall)
 }
 
 func parseCDCTargetGuardCall(ctx context.Context, call *tree.CallStmt) (string, string, bool, error) {
-	if call == nil || call.Name == nil || !call.Name.HasNoNameQualifier() ||
-		!strings.EqualFold(tree.String(call.Name, dialect.MYSQL), cdcTargetGuardCall) {
+	if call == nil || call.Name == nil || !call.Name.HasNoNameQualifier() {
+		return "", "", false, nil
+	}
+	// Both protected CDC target guard statements share this strict parse and
+	// enter the same statement-authorization gate: the identity guard and the
+	// generation signature call hold the identical target-table INSERT
+	// privilege requirement over protected schemas. Neither name falls back
+	// to generic CALL database privileges.
+	callName := tree.String(call.Name, dialect.MYSQL)
+	if !strings.EqualFold(callName, cdcTargetGuardCall) &&
+		!strings.EqualFold(callName, cdcTargetGenerationSignatureCall) {
 		return "", "", false, nil
 	}
 	if len(call.Args) != 2 {
-		return "", "", true, moerr.NewInvalidInput(ctx, "CDC target identity guard requires database and table names")
+		return "", "", true, moerr.NewInvalidInput(ctx, "CDC target guard requires database and table names")
 	}
 	args := [2]string{}
 	for i, expr := range call.Args {

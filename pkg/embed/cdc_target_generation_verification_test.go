@@ -30,6 +30,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -293,6 +294,264 @@ func testCDCTenantCatalogGuardBlocksOtherCNDrop(t *testing.T, cluster Cluster) {
 	require.NoError(t, tx.Rollback())
 	_, err = ddlConn.ExecContext(ctx, "DROP TABLE cdc_guard_db.t")
 	require.NoError(t, err)
+}
+
+// TestCDCGenerationSignatureCallAuthority pins the least-privilege gate of the
+// guarded generation-signature call: it requires exactly the per-table
+// INSERT privilege over the protected target schema that the identity guard
+// requires, inside an explicit transaction of the owning tenant, and never
+// falls through to generic CALL database privileges.
+// TestCDCLegacyWireSignalAndRoleEvidence verifies on a real frontend the
+// exact wire signal the legacy fallback keys on, and the older scoped
+// catalog channel at the ACTUAL least-privilege CDC sink role (CONNECT +
+// target INSERT only). (1) Calling a routine the guarded dispatcher does
+// not know surfaces the doInterpretCall empty stored-procedure lookup as
+// the raw MySQL ER_CANT_FIND_UDF "function ... doesn't exist" - the same
+// code path a pre-signature frontend takes for
+// mo_cdc_target_generation_signature, which the pinned pre-signature main
+// lacks by source inspection. (2) The bound mo_columns.attr_has_generated
+// channel must be readable at the writer role and report the definitive
+// ordinary state for an all-ordinary target; any denial is recorded as the
+// exact legacy-route permission blocker for root.
+func TestCDCLegacyWireSignalAndRoleEvidence(t *testing.T) {
+	runCDCGenerationContract(t, 1, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := int(cn.GetServiceConfig().CN.Frontend.Port)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer root.Close()
+		require.NoError(t, execSQL(ctx, root, "CREATE ACCOUNT cdc_legacy_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'"))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cleanupCancel()
+			_, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_legacy_probe")
+			if cleanupErr != nil {
+				t.Errorf("drop CDC legacy probe account: %v", cleanupErr)
+				return
+			}
+			var remaining int
+			require.NoError(t, root.QueryRowContext(cleanupCtx,
+				"SELECT COUNT(*) FROM mo_catalog.mo_account WHERE account_name = 'cdc_legacy_probe'").Scan(&remaining))
+			require.Zero(t, remaining, "CDC legacy probe account must be removed before fixture reuse")
+		}()
+		admin, err := sql.Open("mysql", fmt.Sprintf("cdc_legacy_probe#admin:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer admin.Close()
+		require.NoError(t, execSQL(ctx, admin, "CREATE DATABASE cdc_legacy_db"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE TABLE cdc_legacy_db.t (id INT PRIMARY KEY, note VARCHAR(32))"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE ROLE cdc_legacy_writer"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE USER cdc_legacy_writer_user IDENTIFIED BY '111' DEFAULT ROLE cdc_legacy_writer"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT CONNECT ON ACCOUNT * TO cdc_legacy_writer"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT INSERT ON TABLE cdc_legacy_db.t TO cdc_legacy_writer"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT cdc_legacy_writer TO cdc_legacy_writer_user"))
+		writer, err := sql.Open("mysql", fmt.Sprintf("cdc_legacy_probe#cdc_legacy_writer_user#cdc_legacy_writer:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer writer.Close()
+
+		// (1a) The raw empty-lookup wire signal at an authorized caller:
+		// the doInterpretCall empty stored-procedure lookup surfaces as
+		// MySQL ER_CANT_FIND_UDF "function ... doesn't exist" - the same
+		// code path a pre-signature frontend takes for
+		// mo_cdc_target_generation_signature, which the pinned
+		// pre-signature main lacks by source inspection. The account admin
+		// selects the probe database first, mirroring the sink's own USE.
+		require.NoError(t, execSQL(ctx, admin, "USE cdc_legacy_db"))
+		adminTx, err := admin.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		err = func() error {
+			probeRows, queryErr := adminTx.QueryContext(ctx, "CALL mo_cdc_target_generation_signature_probe_missing('cdc_legacy_db', 't')")
+			if probeRows != nil {
+				defer func() { _ = probeRows.Close() }()
+				for probeRows.Next() {
+				}
+				_ = probeRows.Err()
+			}
+			return queryErr
+		}()
+		require.Error(t, err, "the empty stored-procedure lookup must fail")
+		var wire *mysql.MySQLError
+		if !errors.As(err, &wire) {
+			t.Fatalf("raw legacy wire signal must be a MySQL protocol error, got %T: %v", err, err)
+		}
+		require.EqualValues(t, moerr.ER_CANT_FIND_UDF, wire.Number,
+			"raw numbered legacy wire signal: %d %q", wire.Number, wire.Message)
+		require.Contains(t, wire.Message, "doesn't exist", "raw legacy wire message: %q", wire.Message)
+		t.Logf("RAW_LEGACY_WIRE_SIGNAL_ADMIN: code=%d message=%q", wire.Number, wire.Message)
+		require.NoError(t, adminTx.Rollback())
+
+		// (1b) At the ACTUAL least-privilege sink role the same unknown CALL
+		// is stopped by the execute-privilege gate before the lookup runs.
+		// This is the recorded role boundary: the missing-routine wire
+		// signal is not observable at the CDC sink role, so an older target
+		// is indistinguishable from a genuine denial there and the legacy
+		// fallback fails closed instead of guessing.
+		probeTx, err := writer.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		err = func() error {
+			probeRows, queryErr := probeTx.QueryContext(ctx, "CALL mo_cdc_target_generation_signature_probe_missing('cdc_legacy_db', 't')")
+			if probeRows != nil {
+				defer func() { _ = probeRows.Close() }()
+				for probeRows.Next() {
+				}
+				_ = probeRows.Err()
+			}
+			return queryErr
+		}()
+		require.Error(t, err, "the unknown CALL must not succeed at the sink role")
+		t.Logf("LEGACY_WIRE_SIGNAL_AT_SINK_ROLE: %v", err)
+		require.ErrorContains(t, err, "privilege",
+			"the sink-role observation must stay the recorded privilege boundary, not a lookup signal")
+		require.NoError(t, probeTx.Rollback())
+
+		// (2) The older scoped catalog channel at the actual sink role. The
+		// live guarded identity read binds the physical table first, then
+		// the bound attr_has_generated read reports the definitive state.
+		scopeTx, err := writer.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var tableID uint64
+		require.NoError(t, scopeTx.QueryRowContext(ctx,
+			"CALL mo_cdc_target_identity('cdc_legacy_db', 't')").Scan(&tableID))
+		require.NotZero(t, tableID, "the live guarded identity must report the physical table ID at the sink role")
+		rows, err := scopeTx.QueryContext(ctx,
+			"SELECT attname, attr_has_generated FROM mo_catalog.mo_columns WHERE att_database = 'cdc_legacy_db' AND att_relname = 't' AND att_relname_id = ? AND att_is_hidden = false ORDER BY attnum",
+			tableID)
+		if err != nil {
+			// The observed live boundary: the least-privilege sink role cannot
+			// read the bound catalog channel at all, so the legacy route can
+			// never positively prove ordinary at this role contract. This is
+			// the recorded product/permission blocker for root: enabling it
+			// would require a new privilege (SELECT on the bound
+			// mo_catalog.mo_columns projection) or a server feature outside
+			// this PR. The expectation stays exact and fails closed.
+			require.ErrorContains(t, err, "privilege",
+				"the channel denial at the sink role is the recorded boundary")
+			t.Logf("LEGACY_ROLE_BLOCKER: the least-privilege sink role cannot read the bound catalog channel (attr_has_generated) for its own target: %v; the legacy fallback fails closed for lack of a privilege outside the current CDC role contract", err)
+			require.NoError(t, scopeTx.Rollback())
+			return
+		}
+		defer func() { _ = rows.Close() }()
+		count := 0
+		for rows.Next() {
+			var name string
+			var hasGenerated sql.NullInt64
+			require.NoError(t, rows.Scan(&name, &hasGenerated))
+			t.Logf("LEGACY_ROLE_ROW: name=%q attr_has_generated=%v", name, hasGenerated)
+			require.True(t, hasGenerated.Valid, "the definitive generation state must not be NULL")
+			require.Zero(t, hasGenerated.Int64, "the ordinary fixture columns must report the definitive ordinary state")
+			count++
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, 2, count, "both visible columns must report through the bound channel")
+		t.Logf("LEGACY_ROLE_EVIDENCE: identity=%d rows=%d definitive-ordinary at CONNECT+INSERT role", tableID, count)
+		require.NoError(t, scopeTx.Rollback())
+	})
+}
+
+func TestCDCGenerationSignatureCallAuthority(t *testing.T) {
+	runCDCGenerationContract(t, 1, func(cluster Cluster) {
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := int(cn.GetServiceConfig().CN.Frontend.Port)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		root, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer root.Close()
+		require.NoError(t, execSQL(ctx, root, "CREATE ACCOUNT cdc_auth_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'"))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cleanupCancel()
+			_, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_auth_probe")
+			if cleanupErr != nil {
+				t.Errorf("drop CDC authority probe account: %v", cleanupErr)
+				return
+			}
+			var remaining int
+			require.NoError(t, root.QueryRowContext(cleanupCtx,
+				"SELECT COUNT(*) FROM mo_catalog.mo_account WHERE account_name = 'cdc_auth_probe'").Scan(&remaining))
+			require.Zero(t, remaining, "CDC authority probe account must be removed before fixture reuse")
+		}()
+		admin, err := sql.Open("mysql", fmt.Sprintf("cdc_auth_probe#admin:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer admin.Close()
+		require.NoError(t, execSQL(ctx, admin, "CREATE DATABASE cdc_auth_db"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE TABLE cdc_auth_db.t (id INT PRIMARY KEY, note VARCHAR(32))"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE TABLE cdc_auth_db.other (id INT PRIMARY KEY)"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE ROLE cdc_auth_writer"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE USER cdc_auth_writer_user IDENTIFIED BY '111' DEFAULT ROLE cdc_auth_writer"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT CONNECT ON ACCOUNT * TO cdc_auth_writer"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT INSERT ON TABLE cdc_auth_db.t TO cdc_auth_writer"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT cdc_auth_writer TO cdc_auth_writer_user"))
+		writer, err := sql.Open("mysql", fmt.Sprintf("cdc_auth_probe#cdc_auth_writer_user#cdc_auth_writer:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer writer.Close()
+
+		// 1) Least privilege allow: CONNECT + target INSERT only, inside an
+		// explicit transaction, reads the guarded signature and nothing else.
+		writerTx, err := writer.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		rows, err := writerTx.QueryContext(ctx, "CALL mo_cdc_target_generation_signature('cdc_auth_db', 't')")
+		require.NoError(t, err)
+		defer func() { _ = rows.Close() }()
+		count := 0
+		for rows.Next() {
+			var ordinal, notNull, digest int64
+			var name, class string
+			require.NoError(t, rows.Scan(&ordinal, &name, &class, &notNull, &digest))
+			require.Equal(t, int64(count), ordinal, "visible ordinals must be contiguous")
+			// Both fixture columns are ordinary writable slots; an INSERT-only
+			// role must never receive any bound expression data here.
+			require.Equal(t, "O", class)
+			count++
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, 2, count, "both visible columns must report")
+		require.NoError(t, writerTx.Rollback())
+
+		// 2) Autocommit without an explicit transaction is denied, while the
+		// same role in the same session is allowed under a transaction.
+		_, err = writer.ExecContext(ctx, "CALL mo_cdc_target_generation_signature('cdc_auth_db', 't')")
+		require.Error(t, err, "autocommit must not reach the guarded metadata")
+
+		// 3) A table without the INSERT grant is denied for this role.
+		denyTx, err := writer.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var denyScratch int64
+		err = denyTx.QueryRowContext(ctx, "CALL mo_cdc_target_generation_signature('cdc_auth_db', 'other')").Scan(&denyScratch)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "do not have privilege")
+		require.NoError(t, denyTx.Rollback())
+
+		// 4) An independent role in the same account without the target
+		// INSERT grant is denied even for the granted-schema table.
+		require.NoError(t, execSQL(ctx, admin, "CREATE ROLE cdc_auth_other_role"))
+		require.NoError(t, execSQL(ctx, admin, "CREATE USER cdc_auth_other_user IDENTIFIED BY '111' DEFAULT ROLE cdc_auth_other_role"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT CONNECT ON ACCOUNT * TO cdc_auth_other_role"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT CREATE VIEW ON DATABASE cdc_auth_db TO cdc_auth_other_role"))
+		require.NoError(t, execSQL(ctx, admin, "GRANT cdc_auth_other_role TO cdc_auth_other_user"))
+		other, err := sql.Open("mysql", fmt.Sprintf("cdc_auth_probe#cdc_auth_other_user#cdc_auth_other_role:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer other.Close()
+		otherTx, err := other.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var otherScratch int64
+		err = otherTx.QueryRowContext(ctx, "CALL mo_cdc_target_generation_signature('cdc_auth_db', 't')").Scan(&otherScratch)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "do not have privilege")
+		require.NoError(t, otherTx.Rollback())
+
+		// 5) A foreign account cannot address the protected schema at all:
+		// the sys-tenant connection has no such relation.
+		sysTx, err := root.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		var sysScratch int64
+		err = sysTx.QueryRowContext(ctx, "CALL mo_cdc_target_generation_signature('cdc_auth_db', 't')").Scan(&sysScratch)
+		require.Error(t, err)
+		require.NoError(t, sysTx.Rollback())
+	})
 }
 
 func execSQL(ctx context.Context, db *sql.DB, query string) error {

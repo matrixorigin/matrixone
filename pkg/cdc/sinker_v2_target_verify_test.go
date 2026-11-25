@@ -724,6 +724,15 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 				(tc.columns[1].typ == "varchar(20)" && tc.name != "changed text collation" ||
 					tc.name == "valid year display width" || tc.name == "valid MO float scale" ||
 					tc.name == "valid MO bool alias") {
+				// Classification routes generation-free mappings through the
+				// guarded SHOW metadata; ordinary rows keep the whole-block
+				// copy contract, then the index check follows.
+				showHeaders := []string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}
+				showRows := sqlmock.NewRows(showHeaders)
+				for _, col := range tc.columns {
+					showRows.AddRow(col.name, "int(11)", "", "YES", "", nil, "", "select,insert,update,references", "")
+				}
+				mock.ExpectQuery(regexp.QuoteMeta("SHOW FULL COLUMNS FROM `dst`.`t`")).WillReturnRows(showRows)
 				indexRows := sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"})
 				for _, idx := range tc.indexes {
 					indexRows.AddRow(idx.name, idx.nonUnique, idx.sequence, idx.column, idx.prefix)
@@ -731,7 +740,7 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 				mock.ExpectQuery(regexp.QuoteMeta(indexesSQL)).WithArgs("dst", "t").WillReturnRows(indexRows)
 			}
 			err = verifyCDCTargetTable(context.Background(), executor,
-				&DbTableInfo{SinkDbName: "dst", SinkTblName: "t", SourceTblId: 42}, def, CDCSinkType_MO)
+				&DbTableInfo{SinkDbName: "dst", SinkTblName: "t", SourceTblId: 42, TargetPreIdentity: absentCDCTargetIdentity}, def, CDCSinkType_MO)
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 			} else {

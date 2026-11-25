@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -74,8 +75,29 @@ func generatedSourceBatch(t *testing.T, mp *mpool.MPool, ids, gens, bases []int3
 	return bat
 }
 
+// omitGeneratedContractFor preserves the committed builder expectations: a
+// generated target accepted for recompute omits every source-generated slot,
+// so the admission-captured copy mask marks exactly the non-generated
+// ordinals for value copying.
+func omitGeneratedContractFor(tableDef *plan.TableDef) *CDCTargetGenerationContract {
+	contract := &CDCTargetGenerationContract{}
+	if tableDef == nil {
+		return contract
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
+		if _, internal := catalog.InternalColumns[col.Name]; internal || col.Hidden {
+			continue
+		}
+		contract.Copy = append(contract.Copy, col.GeneratedCol == nil)
+	}
+	return contract
+}
+
 func TestNewCDCStatementBuilderGeneratedColumnsProjection(t *testing.T) {
-	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", generatedMiddleTableDef(), 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", generatedMiddleTableDef(), 1024*1024, false, omitGeneratedContractFor(generatedMiddleTableDef()))
 	require.NoError(t, err)
 	// Visible batch slots are [0:id, 1:g, 2:a, 3:h]; only id and a replicate,
 	// and both must survive at their batch positions 0 and 2.
@@ -87,7 +109,7 @@ func TestNewCDCStatementBuilderGeneratedColumnsProjection(t *testing.T) {
 
 func TestBuildInsertSQLOmitsGeneratedColumnsMiddleAlignment(t *testing.T) {
 	mp := newBuilderTestMPool(t)
-	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", generatedMiddleTableDef(), 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", generatedMiddleTableDef(), 1024*1024, false, omitGeneratedContractFor(generatedMiddleTableDef()))
 	require.NoError(t, err)
 
 	// g and h values are far from any base value; a correct projection must
@@ -157,7 +179,7 @@ func generatedTailBatch(
 
 func TestBuildAtomicInsertSQLOmitsGeneratedColumnsMiddleAlignment(t *testing.T) {
 	mp := newBuilderTestMPool(t)
-	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", generatedMiddleTableDef(), 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", generatedMiddleTableDef(), 1024*1024, false, omitGeneratedContractFor(generatedMiddleTableDef()))
 	require.NoError(t, err)
 
 	// Tail batches carry user defined cols | cpk | commit-ts. The single pk id
@@ -184,7 +206,7 @@ func TestBuildAtomicInsertSQLOmitsGeneratedColumnsMiddleAlignment(t *testing.T) 
 func TestNewCDCStatementBuilderReplaceOmitsGeneratedColumns(t *testing.T) {
 	def := generatedMiddleTableDef()
 	def.Indexes = []*plan.IndexDef{{IndexName: "uk_a", Parts: []string{"a"}, Unique: true}}
-	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", def, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("gen_db", "gen_t", def, 1024*1024, false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	require.Equal(t, []byte("REPLACE INTO `gen_db`.`gen_t` (`id`,`a`) VALUES "), builder.insertStem)
 	require.Equal(t, []byte(";"), builder.insertSuffix)
@@ -202,7 +224,7 @@ func TestNewCDCStatementBuilderAllVisibleColumnsGenerated(t *testing.T) {
 		Name2ColIndex: map[string]int32{"id": 0, "g": 1},
 	}
 	// Insertable columns exist (id); the generated one is simply skipped.
-	builder, err := NewCDCStatementBuilder("gen_db", "all_gen", def, 1024, false)
+	builder, err := NewCDCStatementBuilder("gen_db", "all_gen", def, 1024, false, omitGeneratedContractFor(def))
 	require.NoError(t, err)
 	require.Equal(t, []byte("INSERT INTO `gen_db`.`all_gen` (`id`) VALUES "), builder.insertStem)
 
@@ -215,13 +237,13 @@ func TestNewCDCStatementBuilderAllVisibleColumnsGenerated(t *testing.T) {
 		Pkey:          &plan.PrimaryKeyDef{Names: []string{"g"}},
 		Name2ColIndex: map[string]int32{"g": 0},
 	}
-	_, err = NewCDCStatementBuilder("gen_db", "only_gen", onlyGenerated, 1024, false)
+	_, err = NewCDCStatementBuilder("gen_db", "only_gen", onlyGenerated, 1024, false, omitGeneratedContractFor(onlyGenerated))
 	require.ErrorContains(t, err, "no insertable columns")
 }
 
 func TestBuildInsertSQLGeneratedFreeTableUnchanged(t *testing.T) {
 	mp := newBuilderTestMPool(t)
-	builder, err := NewCDCStatementBuilder("test_db", "users", standardBuilderTableDef(), 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "users", standardBuilderTableDef(), 1024*1024, false, omitGeneratedContractFor(standardBuilderTableDef()))
 	require.NoError(t, err)
 
 	bat := directInsertBatch(t, mp, []int32{1, 2}, []string{"alice", "bob"})
@@ -303,7 +325,7 @@ func TestBuildInsertSQLSkipsDecodingDroppedGeneratedSlots(t *testing.T) {
 	}
 
 	t.Run("snapshot", func(t *testing.T) {
-		builder, err := NewCDCStatementBuilder("gen_db", "geo_gen_t", generatedGeometryTableDef(), 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("gen_db", "geo_gen_t", generatedGeometryTableDef(), 1024*1024, false, omitGeneratedContractFor(generatedGeometryTableDef()))
 		require.NoError(t, err)
 		bat, _ := geometryGeneratedSourceBatch(t, mp, []int32{5, 6}, []int32{50, 60})
 		sqls, err := builder.BuildInsertSQL(context.Background(), bat, builderFromTS, builderToTS)
@@ -313,7 +335,7 @@ func TestBuildInsertSQLSkipsDecodingDroppedGeneratedSlots(t *testing.T) {
 	})
 
 	t.Run("tail", func(t *testing.T) {
-		builder, err := NewCDCStatementBuilder("gen_db", "geo_gen_t", generatedGeometryTableDef(), 1024*1024, false)
+		builder, err := NewCDCStatementBuilder("gen_db", "geo_gen_t", generatedGeometryTableDef(), 1024*1024, false, omitGeneratedContractFor(generatedGeometryTableDef()))
 		require.NoError(t, err)
 		// The guarded acquisition cleanup covers failed appends; release()
 		// transfers ownership explicitly after Append so the AtomicBatch is

@@ -176,7 +176,7 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 				"id": 0, "b1": 1, "b5": 2, "b8": 3, "b64": 4, "k_txt": 5, "v": 6, "j": 7,
 			},
 		}
-		singleBuilder, err := cdc.NewCDCStatementBuilder("cdc_nbe_e2e", "t_single", singleDef, 1<<20, false)
+		singleBuilder, err := cdc.NewCDCStatementBuilder("cdc_nbe_e2e", "t_single", singleDef, 1<<20, false, cdc.CDCOmitGeneratedContractFor(singleDef))
 		require.NoError(t, err)
 
 		type singleRow struct {
@@ -323,7 +323,7 @@ func TestCDCSinkSessionStripsNBEAndPreservesTextJSONBit(t *testing.T) {
 			Pkey:          &plan.PrimaryKeyDef{Names: []string{"bpk", "spk"}},
 			Name2ColIndex: map[string]int32{"bpk": 0, "spk": 1, "v": 2},
 		}
-		compBuilder, err := cdc.NewCDCStatementBuilder("cdc_nbe_e2e", "t_comp", compDef, 1<<20, false)
+		compBuilder, err := cdc.NewCDCStatementBuilder("cdc_nbe_e2e", "t_comp", compDef, 1<<20, false, cdc.CDCOmitGeneratedContractFor(compDef))
 		require.NoError(t, err)
 
 		compRows := []struct {

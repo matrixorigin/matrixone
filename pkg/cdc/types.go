@@ -606,6 +606,11 @@ type DbTableInfo struct {
 	TargetPreIdentity string
 	TargetSinkType    string
 	targetIdentityAck func(context.Context, string) error
+	// GenerationContract is the admission-captured per-visible-column decision
+	// plus the canonical target signature it was derived from. Like
+	// ownerFence it is execution-local state: every admission verify rebuilds
+	// it before the builder runs.
+	GenerationContract *CDCTargetGenerationContract
 }
 
 func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {

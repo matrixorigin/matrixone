@@ -133,7 +133,7 @@ func createSinkerForInsertDeleteTest(t *testing.T) (*mysqlSinker2, *sql.DB, sqlm
 		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	sinker := NewMysqlSinker2(
@@ -162,7 +162,7 @@ func createSinkerWithTableDef(t *testing.T, tableDef *plan.TableDef, maxSQLSize 
 		retryDuration: 1 * time.Second,
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, uint64(maxSQLSize), false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, uint64(maxSQLSize), false, omitGeneratedContractFor(tableDef))
 	require.NoError(t, err)
 
 	sinker := NewMysqlSinker2(
@@ -728,7 +728,7 @@ func BenchmarkHandleInsertDeleteBatch(b *testing.B) {
 		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
 	}
 
-	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false)
+	builder, err := NewCDCStatementBuilder("test_db", "test", tableDef, 1024*1024, false, omitGeneratedContractFor(tableDef))
 	if err != nil {
 		b.Fatalf("Failed to create builder: %v", err)
 	}
