@@ -246,7 +246,10 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 		t.Helper()
 		var term uint64
 		wait("find a HAKeeper leader", 10*time.Second, 30*time.Millisecond, func(context.Context) error {
-			for _, service := range []*Service{a, b} {
+			for _, service := range services {
+				if service == nil {
+					continue
+				}
 				leader, current, err := service.store.isLeaderHAKeeper()
 				if err == nil && leader {
 					term = current
@@ -262,6 +265,9 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 	require.NoError(t, err)
 	batch, err := client.SendLogHeartbeat(ctx, c.store.getHeartbeatMessage())
 	require.NoError(t, err)
+	require.Len(t, batch.Commands, 1)
+	require.Positive(t, batch.Commands[0].ConfigChange.Replica.Epoch)
+	controlStart.ConfigChange.Replica.Epoch = batch.Commands[0].ConfigChange.Replica.Epoch
 	require.Equal(t, []pb.ScheduleCommand{controlStart}, batch.Commands)
 	require.NoError(t, b.Close())
 	services[1] = nil
@@ -295,7 +301,16 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 	start := pb.ScheduleCommand{UUID: c.ID(), ServiceType: pb.LogService,
 		ConfigChange: &pb.ConfigChange{ChangeType: pb.StartReplica, Replica: pb.Replica{ShardID: 1, ReplicaID: 3, UUID: c.ID()}}}
 	shutdown := pb.ScheduleCommand{UUID: c.ID(), ServiceType: pb.LogService, ShutdownStore: &pb.ShutdownStore{StoreID: c.ID()}}
-	c.handleCommands([]pb.ScheduleCommand{shutdown, start})
+	term = readLeaderTerm()
+	_, err = a.store.nh.SyncPropose(ctx, a.store.nh.GetNoOPSession(0), hakeeper.GetUpdateCommandsCmd(term, []pb.ScheduleCommand{shutdown, start}))
+	require.NoError(t, err)
+	batch, err = c.haClient.SendLogHeartbeat(ctx, c.store.getHeartbeatMessage())
+	require.NoError(t, err)
+	require.Len(t, batch.Commands, 2)
+	require.Positive(t, batch.Commands[1].ConfigChange.Replica.Epoch)
+	start.ConfigChange.Replica.Epoch = batch.Commands[1].ConfigChange.Replica.Epoch
+	require.Equal(t, []pb.ScheduleCommand{shutdown, start}, batch.Commands)
+	c.handleCommands(batch.Commands)
 	readMembership(c, 1, members)
 	var next uint64
 	wait("write after data quorum recovery", 10*time.Second, 30*time.Millisecond, func(phaseCtx context.Context) error {
@@ -358,6 +373,10 @@ func TestNonVotingStartReopensDisk(t *testing.T) {
 
 	open()
 	require.True(t, service.store.nh.HasNodeInfo(1, 2), "the original Raft bootstrap must remain on disk")
+	service.handleCommands([]pb.ScheduleCommand{start})
+	_, err := service.store.nh.GetNodeUser(1)
+	require.ErrorIs(t, err, dragonboat.ErrShardNotFound, "an old Start cannot reopen an orphaned bootstrap")
+	start.ConfigChange.Replica.Epoch = 1 // Simulate a confirmed heartbeat reply for the same non-voter.
 	service.handleCommands([]pb.ScheduleCommand{start})
 	var found bool
 	for _, local := range service.store.nh.GetNodeHostInfo(dragonboat.NodeHostInfoOption{SkipLogInfo: true}).ShardInfoList {

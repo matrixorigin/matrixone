@@ -280,7 +280,7 @@ func TestCollectStats(t *testing.T) {
 					Term:     0}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 1,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -288,7 +288,7 @@ func TestCollectStats(t *testing.T) {
 								LeaderID: 0,
 								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 2,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -458,7 +458,7 @@ func TestCollectStats(t *testing.T) {
 						Term:     0}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 1,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
@@ -466,7 +466,7 @@ func TestCollectStats(t *testing.T) {
 								LeaderID: 0,
 								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 2,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
@@ -474,7 +474,7 @@ func TestCollectStats(t *testing.T) {
 								LeaderID: 0,
 								Term:     0}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 3,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
@@ -651,7 +651,7 @@ func TestCollectStats(t *testing.T) {
 					}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 1,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -660,7 +660,7 @@ func TestCollectStats(t *testing.T) {
 								Term:     0,
 							}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 2,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -702,7 +702,7 @@ func TestCollectStats(t *testing.T) {
 					}},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 1,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:           1,
 								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -712,7 +712,7 @@ func TestCollectStats(t *testing.T) {
 								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f", 7: "g"},
 							}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 2,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:           1,
 								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -969,7 +969,7 @@ func TestCollectStats(t *testing.T) {
 				},
 				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 1,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:           1,
 								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -979,7 +979,7 @@ func TestCollectStats(t *testing.T) {
 								NonVotingReplicas: map[uint64]string{4: "d", 5: "e", 6: "f"},
 							}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []pb.LogReplicaInfo{{
+						Replicas: []pb.LogReplicaInfo{{ReplicaID: 2,
 							LogShardInfo: pb.LogShardInfo{
 								ShardID:           1,
 								Replicas:          map[uint64]string{1: "a", 2: "b", 3: "c"},

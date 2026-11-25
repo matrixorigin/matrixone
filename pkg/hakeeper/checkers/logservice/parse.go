@@ -177,31 +177,28 @@ func getReplicasToStart(
 	return toStart
 }
 
-// canScheduleMembershipChange requires a reporting majority when a configured
-// voter has expired. Starts remain eligible so missing voters can recover.
+// canScheduleMembershipChange counts only current voters that actually
+// report their configured replica. Store liveness alone is insufficient.
 func canScheduleMembershipChange(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, expired []string) bool {
-	for _, target := range shard.Replicas {
-		if !contains(expired, target) {
+	if len(shard.Replicas) == 0 {
+		return true // Bootstrap does not require an existing quorum.
+	}
+	reporting := 0
+	for replicaID, uuid := range shard.Replicas {
+		if contains(expired, uuid) {
 			continue
 		}
-		reporting := 0
-		for replicaID, uuid := range shard.Replicas {
-			if contains(expired, uuid) {
-				continue
-			}
-			for _, replica := range stores[uuid].Replicas {
-				if replica.ShardID == shard.ShardID && replica.ReplicaID == replicaID && !replica.IsNonVoting {
-					reporting++
-					break
-				}
-			}
-			if reporting > len(shard.Replicas)/2 {
-				return true
+		for _, replica := range stores[uuid].Replicas {
+			if replica.ShardID == shard.ShardID && replica.ReplicaID == replicaID && !replica.IsNonVoting {
+				reporting++
+				break
 			}
 		}
-		return false
+		if reporting > len(shard.Replicas)/2 {
+			return true
+		}
 	}
-	return true
+	return false
 }
 
 // parseLogShards collects stats for further use.
@@ -213,29 +210,28 @@ func parseLogShards(
 	normalStats, nonVotingStats := newStats(false), newStats(true)
 	for _, shardInfo := range infos.Shards {
 		shardID := shardInfo.ShardID
-		normalStats.toStart = append(normalStats.toStart, getReplicasToStart(shardID, shardInfo.Replicas, infos.Stores)...)
-		nonVotingStats.toStart = append(nonVotingStats.toStart, getReplicasToStart(shardID, shardInfo.NonVotingReplicas, infos.Stores)...)
-
-		if !canScheduleMembershipChange(shardInfo, infos.Stores, expired) {
-			continue
+		voters, nonVoters := shardInfo.Replicas, shardInfo.NonVotingReplicas
+		if canScheduleMembershipChange(shardInfo, infos.Stores, expired) {
+			record := getRecord(shardID, cluster.LogShards)
+			fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
+			voters, nonVoters = fixingNormal.replicas, fixingNonVoting.replicas
+			if fixingNormal.toAdd > 0 {
+				normalStats.toAdd[shardID] = fixingNormal.toAdd
+			}
+			if fixingNonVoting.toAdd > 0 {
+				nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
+			}
+			if removals := getReplicasToRemove(shardID, shardInfo.Replicas, voters); len(removals) > 0 {
+				normalStats.toRemove[shardID] = removals
+			}
+			if removals := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, nonVoters); len(removals) > 0 {
+				nonVotingStats.toRemove[shardID] = removals
+			}
 		}
-		record := getRecord(shardID, cluster.LogShards)
-		fixingNormal, fixingNonVoting := fixedLogShardInfo(record, nonVotingReplicaNum, shardInfo, expired)
-		toRemoveNormal := getReplicasToRemove(shardID, shardInfo.Replicas, fixingNormal.replicas)
-		toRemoveNonVoting := getReplicasToRemove(shardID, shardInfo.NonVotingReplicas, fixingNonVoting.replicas)
-
-		if fixingNormal.toAdd > 0 {
-			normalStats.toAdd[shardID] = fixingNormal.toAdd
-		}
-		if fixingNonVoting.toAdd > 0 {
-			nonVotingStats.toAdd[shardID] = fixingNonVoting.toAdd
-		}
-		if len(toRemoveNormal) > 0 {
-			normalStats.toRemove[shardID] = toRemoveNormal
-		}
-		if len(toRemoveNonVoting) > 0 {
-			nonVotingStats.toRemove[shardID] = toRemoveNonVoting
-		}
+		// Before quorum returns, every configured replica may be needed. Once
+		// removals are eligible, only start the identities the plan retains.
+		normalStats.toStart = append(normalStats.toStart, getReplicasToStart(shardID, voters, infos.Stores)...)
+		nonVotingStats.toStart = append(nonVotingStats.toStart, getReplicasToStart(shardID, nonVoters, infos.Stores)...)
 	}
 	// Check zombies
 	for uuid, storeInfo := range infos.Stores {

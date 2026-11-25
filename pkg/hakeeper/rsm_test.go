@@ -972,6 +972,37 @@ func TestGetCommandBatch(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestLogStartDeliveryUsesCurrentMembership(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	const store = "returning-store"
+	rsm.state.LogState.Shards[1] = pb.LogShardInfo{
+		ShardID: 1, Epoch: 9, Replicas: map[uint64]string{3: store, 5: "other-store"},
+		NonVotingReplicas: map[uint64]string{4: store},
+	}
+	start := func(kind pb.ConfigChangeType, shard, id uint64) pb.ScheduleCommand {
+		return pb.ScheduleCommand{UUID: store, ServiceType: pb.LogService, ConfigChange: &pb.ConfigChange{
+			ChangeType: kind, Replica: pb.Replica{UUID: store, ShardID: shard, ReplicaID: id},
+		}}
+	}
+	shutdown := pb.ScheduleCommand{UUID: store, ServiceType: pb.LogService, ShutdownStore: &pb.ShutdownStore{StoreID: store}}
+	voter := start(pb.StartReplica, 1, 3)
+	learner := start(pb.StartNonVotingReplica, 1, 4)
+	first := start(pb.StartReplica, 2, 6)
+	rsm.state.ScheduleCommands[store] = pb.CommandBatch{Commands: []pb.ScheduleCommand{
+		shutdown, start(pb.StartReplica, 1, 2), start(pb.StartReplica, 1, 5),
+		start(pb.StartNonVotingReplica, 1, 3), voter, learner, first,
+	}}
+	var delivered pb.CommandBatch
+	result := rsm.getCommandBatch(store)
+	require.NoError(t, delivered.Unmarshal(result.Data))
+	require.Zero(t, voter.ConfigChange.Replica.Epoch)
+	require.Zero(t, learner.ConfigChange.Replica.Epoch)
+	voter.ConfigChange.Replica.Epoch = 9
+	learner.ConfigChange.Replica.Epoch = 9
+	require.Equal(t, []pb.ScheduleCommand{shutdown, voter, learner, first}, delivered.Commands)
+	require.Empty(t, rsm.getCommandBatch(store).Data, "ordinary starts are consumed once")
+}
+
 func TestBootstrapReplicaCommandsRetriedUntilHeartbeatAcknowledges(t *testing.T) {
 	const (
 		storeID   = "store-1"

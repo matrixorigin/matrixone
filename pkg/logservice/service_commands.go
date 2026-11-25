@@ -103,12 +103,13 @@ func (s *Service) handleStartReplica(cmd pb.ScheduleCommand) {
 	change := cmd.ConfigChange
 	shardID, replicaID := change.Replica.ShardID, change.Replica.ReplicaID
 	nonVoting := change.ChangeType == pb.StartNonVotingReplica
-	if !s.store.canStartScheduledReplica(shardID, replicaID, nonVoting) {
-		s.store.runtime.Logger().Warn("ignoring Start for a replica skipped at startup",
+	persisted := s.store.nh.HasNodeInfo(shardID, replicaID)
+	if !s.store.canStartScheduledReplica(change.Replica, nonVoting, persisted) {
+		s.store.runtime.Logger().Warn("ignoring Start without current replica membership",
 			zap.Uint64("shardID", shardID), zap.Uint64("replicaID", replicaID))
 		return
 	}
-	join := len(change.InitialMembers) == 0 && !s.store.nh.HasNodeInfo(shardID, replicaID)
+	join := len(change.InitialMembers) == 0 && !persisted
 	var err error
 	switch {
 	case shardID == hakeeper.DefaultHAKeeperShardID && nonVoting:

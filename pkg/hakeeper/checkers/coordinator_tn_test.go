@@ -394,11 +394,28 @@ func TestCoordinatorRepairsAfterMissingReplicaReport(t *testing.T) {
 		}
 	}
 
+	// A restarted store's empty heartbeat clears expiry without restoring
+	// its voter. It still cannot turn one reporting voter into a majority.
+	expired := state.LogState.Stores["log-b"]
+	state.LogState.Stores["log-b"] = pb.LogStoreInfo{Tick: state.Tick}
+	returned := NewCoordinator("", hakeeper.Config{TNStoreTimeout: time.Minute})
+	cmds = returned.Check(alloc, state, false)
+	require.True(t, hasChange(cmds, pb.StartReplica, 1, "log-b"))
+	require.True(t, hasChange(cmds, pb.StartReplica, 4, "log-a"))
+	for _, cmd := range cmds {
+		if cc := cmd.ConfigChange; cc != nil && cc.Replica.ShardID == 1 {
+			require.Equal(t, pb.StartReplica, cc.ChangeType)
+		}
+	}
+	expired.Replicas = nil
+	state.LogState.Stores["log-b"] = expired
+
 	store := state.LogState.Stores["log-c"]
 	store.Replicas = append(store.Replicas, pb.LogReplicaInfo{LogShardInfo: data, ReplicaID: 3})
 	state.LogState.Stores["log-c"] = store
 	resumed := recoveryCommands()
 	require.True(t, hasChange(resumed, pb.RemoveReplica, 1, "log-b"))
+	require.False(t, hasChange(resumed, pb.StartReplica, 1, "log-b"), "do not start the replica selected for removal")
 	require.True(t, hasChange(resumed, pb.AddNonVotingReplica, 1, "log-d"))
 
 	control.Replicas = map[uint64]string{1: "log-a", 3: "log-c"}

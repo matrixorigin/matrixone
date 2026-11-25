@@ -338,6 +338,16 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
 	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
 
+	// The process loses its in-memory skip record, but cannot reopen a
+	// bootstrap whose metadata was retired from disk.
+	require.NoError(t, svc3b.Close())
+	svc3b = restartService3(t, cfg3, obsLogger)
+	_, skipped = svc3b.store.skippedZombieEpoch(hakeeper.DefaultHAKeeperShardID, 3)
+	require.False(t, skipped)
+	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
+	svc3b.handleCommands([]pb.ScheduleCommand{stale})
+	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	current, err := svc1.store.nh.SyncGetShardMembership(ctx, hakeeper.DefaultHAKeeperShardID)

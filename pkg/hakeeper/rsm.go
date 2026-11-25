@@ -501,7 +501,11 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 			if applied {
 				continue
 			}
-			deliver = append(deliver, cmd)
+			candidate, deliverable := s.logStartForDelivery(cmd)
+			if !deliverable {
+				continue
+			}
+			deliver = append(deliver, candidate)
 			if retryable {
 				pending = append(pending, cmd)
 			}
@@ -524,6 +528,35 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	}
 	return sm.Result{}
 
+}
+
+// logStartForDelivery binds an ordinary Start to the membership seen by
+// this replicated heartbeat. The epoch is carried only in the reply.
+func (s *stateMachine) logStartForDelivery(cmd pb.ScheduleCommand) (pb.ScheduleCommand, bool) {
+	change := cmd.ConfigChange
+	if cmd.ServiceType != pb.LogService || cmd.Bootstrapping || change == nil {
+		return cmd, true
+	}
+	shard, known := s.state.LogState.Shards[change.Replica.ShardID]
+	if !known || shard.Epoch == 0 {
+		return cmd, true
+	}
+	var members map[uint64]string
+	switch change.ChangeType {
+	case pb.StartReplica:
+		members = shard.Replicas
+	case pb.StartNonVotingReplica:
+		members = shard.NonVotingReplicas
+	default:
+		return cmd, true
+	}
+	if members[change.Replica.ReplicaID] != cmd.UUID {
+		return cmd, false
+	}
+	confirmed := *change
+	confirmed.Replica.Epoch = shard.Epoch
+	cmd.ConfigChange = &confirmed
+	return cmd, true
 }
 
 // bootstrapReplicaCommandStatus returns whether a bootstrap command must be

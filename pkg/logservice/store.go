@@ -397,18 +397,37 @@ func (l *store) skippedZombieEpoch(shardID, replicaID uint64) (uint64, bool) {
 
 // A newer local gossip view can correct a stale startup observation. Older
 // views must not let a delayed Start reopen the skipped replica.
-func (l *store) canStartScheduledReplica(shardID, replicaID uint64, nonVoting bool) bool {
+func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persisted bool) bool {
+	shardID, replicaID := replica.ShardID, replica.ReplicaID
 	epoch, skipped := l.skippedZombieEpoch(shardID, replicaID)
 	if !skipped {
-		return true
+		if !persisted {
+			return true
+		}
+		if replica.Epoch == 0 {
+			// Released Starts carry no membership epoch. Dragonboat may
+			// retain bootstrap data after MO removes its replica record.
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			for _, record := range l.mu.metadata.Shards {
+				if record.ShardID == shardID && record.ReplicaID == replicaID && record.NonVoting == nonVoting {
+					return true
+				}
+			}
+			return false
+		}
 	}
+
+	// A committed heartbeat can confirm an orphan even after quorum is lost.
+	// If local gossip already knows a later configuration, honor that view.
+	confirmed := replica.Epoch > epoch
 	registry, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
-		return false
+		return confirmed
 	}
 	shard, ok := registry.GetShardInfo(shardID)
-	if !ok || shard.ConfigChangeIndex <= epoch {
-		return false
+	if !ok || shard.ConfigChangeIndex <= epoch || shard.ConfigChangeIndex < replica.Epoch {
+		return confirmed
 	}
 	members := shard.Nodes
 	if nonVoting {
