@@ -202,6 +202,9 @@ func CheckMethodVersionWithRuntime[Req interface{ GetMethod() T }, T methodType]
 	if version, ok := versionMap[req.GetMethod()]; !ok {
 		return moerr.NewNotSupportedf(ctx, "%s not support in current version", req.GetMethod().String())
 	} else {
+		if rt == nil {
+			return moerr.NewInternalError(ctx, "service runtime is unavailable")
+		}
 		v, ok := rt.GetGlobalVariables(MOProtocolVersion)
 		if !ok {
 			return moerr.NewInternalError(ctx, "failed to get protocol version")
