@@ -40,9 +40,6 @@ import (
 
 const opName = "preinsert"
 
-const autoIncrementGeneratedAttr = "__mo_auto_increment_generated"
-const odkuInputOrdinalAttr = "__mo_odku_input_ordinal"
-
 func (preInsert *PreInsert) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	buf.WriteString(": pre processing insert")
