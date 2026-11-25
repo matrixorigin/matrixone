@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -318,8 +319,96 @@ func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) (r
 	if len(remaining) == 0 {
 		return stats.TableCnt, true
 	}
-	selectivity := estimateAndSelectivity(DeepCopyExprList(remaining), builder, stats)
+	remaining = DeepCopyExprList(remaining)
+	if StatsInfoUsableForCache(stats) {
+		for _, expr := range remaining {
+			reestimateMembershipIntegerRanges(expr, domain, stats)
+		}
+	}
+	selectivity := estimateAndSelectivity(remaining, builder, stats)
 	return stats.TableCnt * selectivity, true
+}
+
+// Refresh one-sided integer estimates only on copied membership predicates.
+// Invalidate cached conjunctions and disjunctions when an input was refreshed.
+func reestimateMembershipIntegerRanges(expr *plan.Expr, domain *plan.Node, stats *statsinfo.StatsInfo) bool {
+	fn := expr.GetF()
+	if fn.GetFunc() == nil {
+		return false
+	}
+	op := fn.Func.ObjName
+	switch op {
+	case "and", "or":
+		changed := false
+		for _, arg := range fn.Args {
+			if reestimateMembershipIntegerRanges(arg, domain, stats) {
+				changed = true
+			}
+		}
+		if changed {
+			expr.Selectivity = 0
+		}
+		return changed
+	case ">", ">=", "<", "<=":
+	default:
+		return false
+	}
+	if len(fn.Args) != 2 {
+		return false
+	}
+	key, threshold := fn.Args[0], fn.Args[1]
+	col := key.GetCol()
+	if col == nil || col.RelPos != domain.BindingTags[0] || col.ColPos < 0 || int(col.ColPos) >= len(domain.TableDef.Cols) {
+		return false
+	}
+	name := domain.TableDef.Cols[col.ColPos].GetName()
+	lo, hasLo := stats.MinValMap[name]
+	hi, hasHi := stats.MaxValMap[name]
+	if !hasLo || !hasHi || stats.DataTypeMap[name] != uint64(key.Typ.Id) || key.Typ.Id != threshold.Typ.Id {
+		return false
+	}
+	selectivity, ok := estimateSingleIntegerRangeSelectivity(op, lo, hi, types.T(key.Typ.Id), threshold.GetLit())
+	if !ok {
+		return false
+	}
+	if !key.Typ.NotNullable {
+		nulls, known := stats.NullCntMap[name]
+		if !known || float64(nulls) > stats.TableCnt {
+			return false
+		}
+		selectivity = math.Max(1e-8, selectivity*(1-float64(nulls)/stats.TableCnt))
+	}
+	expr.Selectivity = selectivity
+	return true
+}
+
+// estimateSingleIntegerRangeSelectivity counts the discrete values that a
+// comparison keeps inside a trusted integer range.
+func estimateSingleIntegerRangeSelectivity(op string, lo, hi float64, typ types.T, lit *plan.Literal) (float64, bool) {
+	span, ok := exactIntegerStatsSpan(typ, lo, hi)
+	if !ok || lit == nil || lit.Isnull || lit.Src != nil {
+		return 0, false
+	}
+	value, ok := getFloat64Value(typ, lit)
+	if !ok || math.Abs(value) > maxExactIntegerStatsEndpoint {
+		return 0, false
+	}
+	switch op {
+	case ">":
+		lo = math.Max(lo, value+1)
+	case ">=":
+		lo = math.Max(lo, value)
+	case "<":
+		hi = math.Min(hi, value-1)
+	case "<=":
+		hi = math.Min(hi, value)
+	default:
+		return 0, false
+	}
+	if lo > hi {
+		return 0.00000001, true
+	}
+	return (hi - lo + 1) / span, true
 }
 
 func (builder *QueryBuilder) aggregateMembershipFactNDV(fact *plan.Node, key *plan.Expr, reestimated bool) float64 {

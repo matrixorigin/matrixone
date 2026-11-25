@@ -139,6 +139,43 @@ func TestAggregateMembershipRejectsUnsafeOrUnprofitableDomains(t *testing.T) {
 	}
 }
 
+func TestOrdinaryScanPreservesIntegerRangeFilterOrder(t *testing.T) {
+	ctx := &fixedStatsCompilerContext{&statsCacheCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), statsCache: NewStatsCache(),
+	}}
+	part := ctx.tables["part"]
+	ctx.statsCache.Set(part.TblId, &statsinfo.StatsInfo{
+		TableName: "part", TableCnt: 3, BlockNumber: 1,
+		NdvMap:      map[string]float64{"p_partkey": 3},
+		MinValMap:   map[string]float64{"p_partkey": 1},
+		MaxValMap:   map[string]float64{"p_partkey": 20},
+		DataTypeMap: map[string]uint64{"p_partkey": uint64(types.T_int32)},
+	})
+	for _, tc := range []struct{ name, filter string }{
+		{"range-first", "p_partkey > 1 and regexp_like('a', p_name)"},
+		{"regexp-first", "regexp_like('a', p_name) and p_partkey > 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx.GetContext(), "select p_partkey from part where "+tc.filter, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(ctx, stmt, false, nil)
+			require.NoError(t, err)
+			var scan *plan.Node
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN {
+					require.Nil(t, scan)
+					scan = node
+				}
+			}
+			require.NotNil(t, scan)
+			require.Len(t, scan.FilterList, 2)
+			require.Equal(t, ">", scan.FilterList[0].GetF().Func.ObjName)
+			require.Equal(t, "regexp_like", scan.FilterList[1].GetF().Func.ObjName)
+		})
+	}
+}
+
 func TestAggregateMembershipSQLReachability(t *testing.T) {
 	sql := `select s_name, s_address from supplier, nation
 		where s_suppkey in (
@@ -544,4 +581,121 @@ func TestAggregateMembershipFactNDVRequiresPublishedRange(t *testing.T) {
 			require.Equal(t, tc.wantNDV, b.aggregateMembershipFactNDV(fact, agg.GroupBy[0], tc.reestimated))
 		})
 	}
+}
+
+func TestEstimateSingleIntegerRangeSelectivity(t *testing.T) {
+	for _, tc := range []struct {
+		name, op    string
+		lo, hi      float64
+		value       int64
+		want        float64
+		unavailable bool
+	}{
+		{name: "inclusive-at-min", op: ">=", lo: 1, hi: 20, value: 1, want: 1},
+		{name: "inclusive-at-max", op: "<=", lo: 1, hi: 20, value: 20, want: 1},
+		{name: "strict-before-min", op: ">", lo: 1, hi: 20, value: 0, want: 1},
+		{name: "strict-after-max", op: "<", lo: 1, hi: 20, value: 21, want: 1},
+		{name: "strict-at-min", op: ">", lo: 1, hi: 20, value: 1, want: 0.95},
+		{name: "strict-at-max", op: "<", lo: 1, hi: 20, value: 20, want: 0.95},
+		{name: "narrow-inclusive", op: "<=", lo: 1, hi: 20, value: 2, want: 0.1},
+		{name: "singleton-strict", op: ">", lo: 1, hi: 1, value: 1, want: 1e-8},
+		{name: "missing-bounds", op: ">=", lo: 0, hi: 0, unavailable: true},
+		{name: "inexact-stats", op: "<", lo: 1 << 53, hi: 1<<53 + 2, value: 1<<53 + 1, unavailable: true},
+		{name: "inexact-literal", op: "<", lo: 1, hi: 20, value: 1<<53 + 1, unavailable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sel, ok := estimateSingleIntegerRangeSelectivity(tc.op, tc.lo, tc.hi, types.T_int64, makePlan2Int64ConstExprWithType(tc.value).GetLit())
+			require.Equal(t, !tc.unavailable, ok)
+			require.InDelta(t, tc.want, sel, 1e-12)
+		})
+	}
+}
+
+func TestAggregateMembershipCostsOnlyPublishedIntegerBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name, tableName string
+		upperBounds     map[string]float64
+		nullable        bool
+		nullCounts      map[string]uint64
+		want            float64
+	}{
+		{name: "published", tableName: "fact", upperBounds: map[string]float64{"part": 20}, want: 1},
+		{name: "transient", upperBounds: map[string]float64{"part": 20}, want: 0.1},
+		{name: "missing-upper-bound", tableName: "fact", want: 0.1},
+		{name: "nullable", tableName: "fact", upperBounds: map[string]float64{"part": 20}, nullable: true,
+			nullCounts: map[string]uint64{"part": 75000}, want: 0.25},
+		{name: "nullable-missing-null-count", tableName: "fact", upperBounds: map[string]float64{"part": 20},
+			nullable: true, want: 0.1},
+		{name: "nullable-invalid-null-count", tableName: "fact", upperBounds: map[string]float64{"part": 20},
+			nullable: true, nullCounts: map[string]uint64{"part": 100001}, want: 0.1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := aggregateMembershipTestBuilder(t)
+			domain := b.qry.Nodes[1]
+			keyType := domain.TableDef.Cols[0].Typ
+			keyType.NotNullable = !tc.nullable
+			key := GetColExpr(keyType, domain.BindingTags[0], 0)
+			expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), ">=", []*plan.Expr{key, makePlan2Int32ConstExprWithType(1)})
+			require.NoError(t, err)
+			b.compCtx.GetStatsCache().Set(domain.TableDef.TblId, &statsinfo.StatsInfo{
+				TableName: tc.tableName, TableCnt: 100000,
+				MinValMap:   map[string]float64{"part": 1},
+				MaxValMap:   tc.upperBounds,
+				NullCntMap:  tc.nullCounts,
+				DataTypeMap: map[string]uint64{"part": uint64(types.T_int32)},
+			})
+			require.Equal(t, 0.1, estimateNonEqualitySelectivity(DeepCopyExpr(expr), ">=", b), "ordinary scan costing")
+			expr.Selectivity = 0.1 // The ordinary scan has already priced this predicate.
+			domain.FilterList[0].GetF().Args[1] = makePlan2StringConstExprWithType("%")
+			domain.FilterList = append(domain.FilterList, expr)
+			domain.Stats = &plan.Stats{TableCnt: 100000, Outcnt: 2000}
+			before := proto.Clone(domain)
+			rows, reestimated := b.aggregateMembershipDomainRows(domain)
+			require.True(t, reestimated)
+			require.InDelta(t, tc.want*domain.Stats.TableCnt, rows, 1e-9)
+			require.True(t, proto.Equal(before, domain), "the scan and predicate caches keep their original values")
+		})
+	}
+}
+
+func TestAggregateMembershipRefreshesCachedBooleanRanges(t *testing.T) {
+	b, _ := aggregateMembershipTestBuilder(t)
+	domain := b.qry.Nodes[1]
+	key := func() *plan.Expr { return GetColExpr(domain.TableDef.Cols[0].Typ, domain.BindingTags[0], 0) }
+	bind := func(name string, selectivity float64, args ...*plan.Expr) *plan.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+		require.NoError(t, err)
+		expr.Selectivity = selectivity
+		return expr
+	}
+	constant := makePlan2Int32ConstExprWithType
+	leftRange := bind(">=", 0.1, key(), constant(1))
+	equality := bind("=", 0.02, key(), constant(7))
+	rightRange := bind("<=", 0.1, key(), constant(20))
+	residual := bind("or", 0.15, bind("and", 0.01, leftRange, equality), rightRange)
+	domain.FilterList[0].GetF().Args[1] = makePlan2StringConstExprWithType("%")
+	domain.FilterList = append(domain.FilterList, residual)
+	domain.Stats = &plan.Stats{TableCnt: 100000, Outcnt: 3000}
+	stats := &statsinfo.StatsInfo{
+		TableName: "domain", TableCnt: 100000,
+		MinValMap:   map[string]float64{"part": 1},
+		MaxValMap:   map[string]float64{"part": 20},
+		DataTypeMap: map[string]uint64{"part": uint64(types.T_int32)},
+	}
+	b.compCtx.GetStatsCache().Set(domain.TableDef.TblId, stats)
+	before := proto.Clone(domain)
+
+	copy := DeepCopyExpr(residual)
+	require.True(t, reestimateMembershipIntegerRanges(copy, domain, stats))
+	left, right := copy.GetF().Args[0], copy.GetF().Args[1]
+	require.Zero(t, copy.Selectivity)
+	require.Zero(t, left.Selectivity)
+	require.Equal(t, 1.0, left.GetF().Args[0].Selectivity)
+	require.Equal(t, 0.02, left.GetF().Args[1].Selectivity)
+	require.Equal(t, 1.0, right.Selectivity)
+
+	rows, reestimated := b.aggregateMembershipDomainRows(domain)
+	require.True(t, reestimated)
+	require.Equal(t, domain.Stats.TableCnt, rows)
+	require.True(t, proto.Equal(before, domain))
 }

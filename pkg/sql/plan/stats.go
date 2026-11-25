@@ -999,35 +999,6 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 	return 0, false
 }
 
-// estimateSingleIntegerRangeSelectivity counts the discrete values that a
-// comparison keeps inside a trusted integer range.
-func estimateSingleIntegerRangeSelectivity(op string, lo, hi float64, typ types.T, lit *plan.Literal) (float64, bool) {
-	span, ok := exactIntegerStatsSpan(typ, lo, hi)
-	if !ok || lit == nil || lit.Isnull || lit.Src != nil {
-		return 0, false
-	}
-	value, ok := getFloat64Value(typ, lit)
-	if !ok || math.Abs(value) > maxExactIntegerStatsEndpoint {
-		return 0, false
-	}
-	switch op {
-	case ">":
-		lo = math.Max(lo, value+1)
-	case ">=":
-		lo = math.Max(lo, value)
-	case "<":
-		hi = math.Min(hi, value-1)
-	case "<=":
-		hi = math.Min(hi, value)
-	default:
-		return 0, false
-	}
-	if lo > hi {
-		return 0.00000001, true
-	}
-	return (hi - lo + 1) / span, true
-}
-
 func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *QueryBuilder) float64 {
 	// only filter like func(colRef)>1 , or (colRef=1) or (colRef=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
@@ -1062,17 +1033,6 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 
 		switch colFnName {
 		case "":
-			if typ.IsInteger() && typ == litType && StatsInfoUsableForCache(s) {
-				if selectivity, ok := estimateSingleIntegerRangeSelectivity(funcName, minVal, maxVal, typ, literals[0]); ok {
-					if expr.GetF().Args[0].Typ.NotNullable {
-						return selectivity
-					}
-					nulls, known := s.NullCntMap[colRef.Name]
-					if known && s.TableCnt > 0 && float64(nulls) <= s.TableCnt {
-						return math.Max(1e-8, selectivity*(1-float64(nulls)/s.TableCnt))
-					}
-				}
-			}
 			// CRITICAL FIX: For decimal types, we need to pass the expr to get scale information
 			// Decimal literals store internal scaled values, need proper conversion
 			if typ == types.T_decimal64 || typ == types.T_decimal128 {
