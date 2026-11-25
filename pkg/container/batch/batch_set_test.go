@@ -555,6 +555,23 @@ func TestBatchSetExtendReuseBuf(t *testing.T) {
 	fullIn.Clean(mp)
 	queue.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+
+	// Path 4: inBatch overflows the partial last batch — the tail rows go to
+	// reuseBuf, taken as a new batch while filling.
+	queue = NewBatchSet(TestBatchMaxRow)
+	partial = makeTestBatch(3, mp)
+	overflow := makeTestBatch(TestBatchMaxRow-1, mp)
+	reuse = makeTestBatch(3, mp)
+	_, _ = queue.Extend(mp, partial, nil)
+	partial.Clean(mp)
+	consumed, err = queue.Extend(mp, overflow, reuse)
+	require.NoError(t, err)
+	require.True(t, consumed)
+	require.Equal(t, 2, queue.Length())
+	require.Equal(t, TestBatchMaxRow+2, queue.RowCount())
+	overflow.Clean(mp)
+	queue.Clean(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 // TestBatchSetUnionReuseBuf verifies that Union consumes reuseBuf when provided.

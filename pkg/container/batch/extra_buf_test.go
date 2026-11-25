@@ -113,6 +113,17 @@ func TestExtraBufDecodeOwnership(t *testing.T) {
 func TestExtraBufMoveFromOwnerAndFromView(t *testing.T) {
 	mp := mpool.MustNewZero()
 
+	t.Run("nil and self moves are no-ops", func(t *testing.T) {
+		var nilBatch *Batch
+		require.NoError(t, nilBatch.MoveExtraBufferFrom(nil, mp))
+		bat := newExtraBufTestBatch(t, mp, []byte("kept"))
+		require.NoError(t, bat.MoveExtraBufferFrom(nil, mp))
+		require.NoError(t, bat.MoveExtraBufferFrom(bat, mp))
+		require.Equal(t, []byte("kept"), bat.ExtraBuf())
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
 	t.Run("owner moves its payload", func(t *testing.T) {
 		source := newExtraBufTestBatch(t, mp, []byte("owned"))
 		backing := source.ExtraBuf()
