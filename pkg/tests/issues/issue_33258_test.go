@@ -91,7 +91,9 @@ func TestIssue33258CompositeEnumAndYearIndexLookup(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					rows, err := conn.QueryContext(ctx, tc.sql)
 					require.NoError(t, err, tc.sql)
+					defer rows.Close()
 					require.Equal(t, tc.want, readIDs(t, rows))
+					require.NoError(t, rows.Err())
 				})
 			}
 
@@ -115,7 +117,9 @@ func TestIssue33258CompositeEnumAndYearIndexLookup(t *testing.T) {
 					defer stmt.Close()
 					rows, err := stmt.QueryContext(ctx, tc.args...)
 					require.NoError(t, err, tc.query)
+					defer rows.Close()
 					require.Equal(t, tc.want, readIDs(t, rows))
+					require.NoError(t, rows.Err())
 				})
 			}
 		}
