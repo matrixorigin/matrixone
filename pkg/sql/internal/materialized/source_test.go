@@ -754,7 +754,7 @@ func TestSharedMaterializedSourceRejectsUnfinalizedBatchMetadata(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	bat := testInt64Batch(t, mp, 1)
-	bat.ExtraBuf = []byte("partial aggregate state")
+	require.NoError(t, bat.SetExtraBuf(mp, []byte("partial aggregate state")))
 	t.Cleanup(func() { bat.Clean(mp) })
 
 	source := newSource(1, sharedMaterializedSourceMaxBytes)

@@ -15,7 +15,6 @@
 package group
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"math"
@@ -1345,6 +1344,40 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	}
 }
 
+// pooledWriter is an io.Writer over memory allocated from mp, for partial
+// results written without an allocation account. detach hands the bytes to a
+// new owner; free releases whatever was not detached.
+type pooledWriter struct {
+	mp   *mpool.MPool
+	data []byte
+}
+
+func (w *pooledWriter) Write(p []byte) (int, error) {
+	n := len(w.data)
+	if n+len(p) > cap(w.data) {
+		grown, err := w.mp.Grow(w.data, n+len(p), true)
+		if err != nil {
+			return 0, err
+		}
+		w.data = grown
+	}
+	w.data = append(w.data[:n], p...)
+	return len(p), nil
+}
+
+func (w *pooledWriter) detach() []byte {
+	data := w.data
+	w.data = nil
+	return data
+}
+
+func (w *pooledWriter) free() {
+	if cap(w.data) != 0 {
+		w.mp.Free(w.data)
+	}
+	w.data = nil
+}
+
 func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallResult, bool, error) {
 	// the groupby batches are now in groupbybatches, partial agg result is in agglist.
 	// now, we need to stream the partial results in the group by batch as aggs.
@@ -1363,10 +1396,11 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	// dump group state to a vector and put the vector into the batch.
 	// But well,
 	var (
-		legacyBuffer bytes.Buffer
-		accounted    *mpool.AccountedBuffer
-		writer       io.Writer = &legacyBuffer
+		pooled    = pooledWriter{mp: proc.Mp()}
+		accounted *mpool.AccountedBuffer
+		writer    io.Writer = &pooled
 	)
+	defer pooled.free()
 	if group.ctr.allocationAccount != nil {
 		var err error
 		accounted, err = mpool.NewAccountedBuffer(
@@ -1423,8 +1457,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			return vm.CancelResult, false, err
 		}
 	} else {
-		batch.DropExtraBuffer()
-		batch.ExtraBuf = legacyBuffer.Bytes()
+		batch.AdoptExtraBuf(pooled.mp, pooled.detach())
 	}
 
 	res := vm.NewCallResult()

@@ -17,6 +17,7 @@ package pSpool
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -69,7 +70,6 @@ func (c *batchCache) put(bat *batch.Batch, aliased bool) {
 		dedupVectors(bat.Vecs)
 	}
 	bat.DropExtraBuffer()
-	bat.ReleaseLeases()
 	bat.SetRowCount(0)
 
 	c.mu.Lock()
@@ -140,6 +140,12 @@ func (c *batchCache) copyBatch(src *batch.Batch) (dst *batch.Batch, owned, alias
 	if src == nil || src == batch.EmptyBatch || src == batch.CteEndBatch {
 		return src, false, false, nil
 	}
+	// A selection is borrowed for one operator edge; pipeline roots compact
+	// (vm.ConfigureSelectionEdges). Copying a selected batch would keep the
+	// physical rows under the logical row count.
+	if src.HasSelection() {
+		return nil, false, false, moerr.NewInternalErrorNoCtx("selected batch reached a pipeline spool; it requires compacted rows")
+	}
 
 	cached := c.get()
 	dst, aliased, err = c.copyInto(cached, src)
@@ -154,7 +160,10 @@ func (c *batchCache) copyBatch(src *batch.Batch) (dst *batch.Batch, owned, alias
 		}
 	}
 
-	dst.MoveExtraBufferFrom(src)
+	if err = dst.MoveExtraBufferFrom(src, c.mp); err != nil {
+		c.put(dst, aliased)
+		return nil, false, false, err
+	}
 	dst.SetRowCount(src.RowCount())
 	return dst, true, aliased, nil
 }
