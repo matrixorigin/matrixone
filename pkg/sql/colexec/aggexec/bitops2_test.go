@@ -465,12 +465,16 @@ func TestBitOpsBytes(t *testing.T) {
 						capped.Free(b)
 					}
 				})
-				for {
-					b, e := capped.Alloc(4096, true)
-					if e != nil {
-						break
+				// Fill the pool down to the last few bytes, so that no
+				// value allocation can succeed.
+				for _, size := range []int{4096, 256, 16, 1} {
+					for {
+						b, e := capped.Alloc(size, true)
+						if e != nil {
+							break
+						}
+						exhaust = append(exhaust, b)
 					}
-					exhaust = append(exhaust, b)
 				}
 
 				// Input vector from a normal (unlimited) mpool.
@@ -540,12 +544,16 @@ func TestBitOpsBytes(t *testing.T) {
 						capped.Free(b)
 					}
 				})
-				for {
-					b, e := capped.Alloc(4096, true)
-					if e != nil {
-						break
+				// Fill the pool down to the last few bytes, so that no
+				// value allocation can succeed.
+				for _, size := range []int{4096, 256, 16, 1} {
+					for {
+						b, e := capped.Alloc(size, true)
+						if e != nil {
+							break
+						}
+						exhaust = append(exhaust, b)
 					}
-					exhaust = append(exhaust, b)
 				}
 
 				err = exec1.Merge(exec2, 0, 0)

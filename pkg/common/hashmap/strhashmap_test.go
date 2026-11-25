@@ -1264,7 +1264,7 @@ func newVectors(ts []types.Type, random bool, n int, m *mpool.MPool) []*vector.V
 	vecs := make([]*vector.Vector, len(ts))
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
-		vecs[i].GetNulls().InitWithSize(n)
+		mustBitmapOK(vecs[i].GetNulls().InitWithSize(n, m))
 	}
 	return vecs
 }
@@ -1274,7 +1274,7 @@ func newVectorsWithNull(ts []types.Type, random bool, n int, m *mpool.MPool) []*
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
 		nsp := vecs[i].GetNulls()
-		nsp.InitWithSize(n)
+		mustBitmapOK(nsp.InitWithSize(n, m))
 		for j := 0; j < n; j++ {
 			if j%2 == 0 {
 				nsp.Set(uint64(j))

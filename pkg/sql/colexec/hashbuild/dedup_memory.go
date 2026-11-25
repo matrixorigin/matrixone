@@ -48,24 +48,29 @@ func freeDedupSlice[T any](hb *HashmapBuilder, values []T, mp *mpool.MPool) {
 	}
 }
 
-// newDedupBitmap creates a Go-owned bitmap sized for rows bits.
+// newDedupBitmap creates a bitmap of rows bits allocated from mp.
 func (hb *HashmapBuilder) newDedupBitmap(
 	rows int,
-	_ *mpool.MPool,
+	mp *mpool.MPool,
 	_ mpool.AllocationSite,
 ) (*bitmap.Bitmap, error) {
 	if rows < 0 || rows > math.MaxInt-63 {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	bm := &bitmap.Bitmap{}
-	bm.InitWithSize(int64(rows))
+	if err := bm.InitWithSize(int64(rows), mp); err != nil {
+		return nil, err
+	}
 	return bm, nil
 }
 
 func (hb *HashmapBuilder) freeIgnoreRows(mp *mpool.MPool) {
+	hb.IgnoreRows.Free()
 	hb.IgnoreRows = nil
 }
 
+// freeDelRows frees DelRows unless the join map took it.
 func (hb *HashmapBuilder) freeDelRows(mp *mpool.MPool) {
+	hb.DelRows.Free()
 	hb.DelRows = nil
 }

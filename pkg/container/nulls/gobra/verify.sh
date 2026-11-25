@@ -13,8 +13,9 @@ root=$(cd "$dir/../../.." && pwd)
 : "${GOBRA_JAR:?set GOBRA_JAR to the path of gobra.jar}"
 : "${Z3_EXE:?set Z3_EXE to the path of z3}"
 export Z3_EXE
+: "${GOBRA_JAVA_OPTS:=-Xss128m -Xmx2g}"
 cd "$dir"
-exec java -Xss128m -jar "$GOBRA_JAR" \
+exec java $GOBRA_JAVA_OPTS -jar "$GOBRA_JAR" \
 	-o -m github.com/matrixorigin/matrixone \
 	-I "$root/pkg/common/bitmap/gobra/stubs" -I "$root" \
 	-i nulls.go "$@"

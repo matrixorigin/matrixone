@@ -335,7 +335,7 @@ func TestLowPrecFloatAccessMovement(t *testing.T) {
 				require.NoError(t, AppendAny(v4, c.mk(f), false, mp))
 			}
 			var bm bitmap.Bitmap
-			bm.InitWithSize(4)
+			require.NoError(t, bm.InitWithSize(4, mpool.MustNewZero()))
 			bm.Add(1)
 			bm.Add(3)
 			require.NoError(t, v4.ShrinkByMask(&bm, false, 0, mp))
