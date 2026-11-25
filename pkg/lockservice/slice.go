@@ -95,15 +95,16 @@ func (cs *cowSlice) slice() *fixedSlice {
 		// In either case, if we get an incorrect fs, the following atomic operation
 		// will not succeed, the data will not be read.
 		fs := cs.mustGet()
-		fs.ref()
 		if cs.hack.slice != nil {
 			cs.hack.slice()
+		}
+		if !fs.tryRef() {
+			continue
 		}
 		if cs.v.CompareAndSwap(v, v+1) {
 			return fs
 		}
-		// anyway, adding a ref does not produce an error. When we find that the fs we
-		// get is incorrect, we unref
+		// When we find that the fs we get is incorrect, we unref.
 		fs.unref()
 	}
 }
@@ -169,8 +170,22 @@ func (s *fixedSlice) cap() int {
 	return cap(s.values)
 }
 
-func (s *fixedSlice) ref() {
-	s.atomic.ref.Add(1)
+func (s *fixedSlice) initRef() {
+	if !s.atomic.ref.CompareAndSwap(0, 1) {
+		panic("BUG: invalid initial ref count")
+	}
+}
+
+func (s *fixedSlice) tryRef() bool {
+	for {
+		v := s.atomic.ref.Load()
+		if v <= 0 {
+			return false
+		}
+		if s.atomic.ref.CompareAndSwap(v, v+1) {
+			return true
+		}
+	}
 }
 
 func (s *fixedSlice) unref() {
@@ -226,7 +241,7 @@ func (sp *fixedSlicePool) acquire(n int) (*fixedSlice, error) {
 		return nil, moerr.NewLockNeedUpgradeNoCtx()
 	}
 	s := sp.slices[i].Get().(*fixedSlice)
-	s.ref()
+	s.initRef()
 	return s, nil
 }
 
