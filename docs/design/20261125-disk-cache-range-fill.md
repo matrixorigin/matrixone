@@ -1,6 +1,6 @@
 # Disk cache range fill
 
-Version: v1, 2026-11-25. Builds on [object prefetcher](20261110-object-prefetcher.md),
+Version: v2, 2026-11-25. Builds on [object prefetcher](20261110-object-prefetcher.md),
 [index objects in the index-file cache](20261111-index-objects-in-index-file-cache.md) and
 [file-service cache ownership](20261106-fileservice-cache-ownership.md).
 
@@ -41,9 +41,8 @@ Non-goals:
   while in flight; that is a parameter of the fill, not a second kind.
 - Merging the index-file cache into the disk cache. Fills still publish into either
   cache; the cache is part of the fill's identity.
-- Changing column-range prefetch, the prefetcher's queue, async publication, trash or the
-  connection budget. Those keep their own designs; this one only changes what they
-  start, find and publish.
+- Changing column-range prefetch or trash. Those keep their own designs; this one only
+  changes what they start, find and publish.
 
 ## Architecture
 
@@ -85,13 +84,24 @@ whole-object downloads.
 - The prefetcher's rules for not queueing what is queued, downloading or cached keep
   holding, with "downloading" meaning a registered fill of that cache.
 
-### How a read joins (decision)
+### How a read joins, without a cost model (decision 2026-11-25)
 
-A read that misses the cache joins a registered fill of its own cache that holds the
-bytes it needs, whatever the fill's backing, parts or starter, and waits until its own
-context ends or the fill's source stops sending bytes. Otherwise it starts a fill of its
-own, or reads object storage without caching, as today. There is one rule for which fill
-a read may join, applied the same way at every place a read looks:
+- A read that misses the cache joins every fill of its own cache that holds bytes it
+  needs, waiting or running, whatever the fill's backing, parts or starter, and makes
+  fills of its own only for the bytes no fill holds, or reads object storage without
+  caching, as today.
+- Joining a waiting fill makes it foreground: it orders before every background fill, may
+  take any free token, and is no longer charged to the background bytes. A waiting fill of
+  a whole object large enough to split starts its first part at the first block the first
+  joined read needs.
+- A joined read waits until its own context ends or the fill stops; a fill that is
+  canceled, sends no bytes within the idle timeout, or ends short of its range leaves the
+  read to make a fill of its own. There is no estimate of when bytes will arrive, no
+  extra-wait budget and no duplicate-size rule; the extra-wait setting is accepted and
+  ignored.
+
+There is one rule for which fill a read may join, applied the same way at every place a
+read looks:
 - a read that caches what it reads joins only a fill that ends with its bytes cached;
 - a read that caches nothing may join any fill of its cache;
 - a fill's own reads of object storage join no fill;
@@ -119,11 +129,68 @@ indexes it like any range. A whole object is the range `[0, size)`: there is no 
 whole-file name. A read finds cached bytes in one index, whether a whole object, a range,
 or several ranges that together cover its bytes.
 
-### Deletes and eviction
+### Every connection from the governor (decision 2026-11-25)
 
-A delete of an object stops every fill of the object in both caches, then removes every
-cached range of it, then forgets them, in that order; a range whose file is not removed
-stays indexed until it is. Eviction removes ranges; a whole object is one range.
+- Every request the file service makes to object storage (reads, writes, listings, deletes,
+  metadata) takes a token from the governor before it opens a connection, and returns it
+  when the connection is released. No request opens a connection any other way.
+- The governor's size is the configured connections per host and storage concurrency, the
+  smaller of the two. More throughput comes from raising them in the configuration, not
+  from reserving pools or letting one kind of request take another's.
+- Waiting requests get tokens in priority order: foreground before background. A request
+  never takes a token another request holds; it waits for one to be returned.
+- Background work holds at most half of the tokens, so foreground requests always find
+  tokens free while background downloads run.
+
+### The queue is the waiting fills (decision 2026-11-25)
+
+- A fill is waiting, running or ended, and every fill in any state is in the one registry.
+  There is no separate prefetch queue, live queue or worker pool.
+- A prefetch makes waiting background fills for the bytes it asks for. A request for bytes a
+  waiting fill of the same cache already holds merges into it: the sooner due time, the
+  larger share, and both scans. Bytes a running fill holds need nothing more. Other bytes
+  of the same object get fills of their own at once.
+- The governor starts the first waiting fill in order: class, then share, then due time,
+  then arrival. A started fill checks the cache first and ends without downloading when
+  its bytes are cached.
+- Waiting background fills are bounded by bytes. When a new one does not fit, fills whose
+  scans all ended are dropped first, then the last in order, if the new one orders before
+  it. A waiting fill whose scans all end, with no read joined, is dropped.
+
+### Files are immutable (decision 2026-11-25)
+
+- A cache file is written once, under a temporary name, and published by renaming it into
+  place. It is never changed in place; it is removed only by unlinking it.
+- A read that opened a cache file reads that file's bytes, whatever is published or
+  removed at its path afterwards.
+
+### One publisher per cache (decision 2026-11-25)
+
+- Every finished fill and every entry a read caches is published by the one publisher of
+  its cache, which makes the file durable, renames it into place, indexes it, and evicts to
+  make room. Nothing publishes inline.
+- The publisher's queue is bounded. When it is full, a submission waits for room; it is
+  not dropped. A wait for room ends with the submitter's context, and the entry is then not
+  cached.
+- A submission waiting for room holds no connection token, buffer or path the publisher
+  needs, so the publisher never waits on a waiting submitter.
+- The publisher's queue depth and wait times are reported, and long waits are logged at a
+  bounded rate.
+- There is no synchronous mode; tests wait for the publisher instead.
+
+### One writer per path (decision 2026-11-25)
+
+Only the publisher writes, renames or removes a published path. Readers hold nothing on a
+path; fills are kept apart by the registry, not by owning paths.
+
+### Deletes and eviction (decision 2026-11-25)
+
+- A delete of an object stops every fill of the object in both caches, then has the
+  publisher remove every cached range of it and forget them, in that order. It is ordered
+  with the publications of that object: no publication submitted before the delete is
+  published after it.
+- A range whose file is not removed stays indexed until it is.
+- Eviction removes ranges; a whole object is one range.
 
 ### Startup (decision 2026-11-25)
 
@@ -132,10 +199,10 @@ startup removes them as stale cache. The cache refills them on use.
 
 ## Bounds and ownership of resources
 
-Unchanged from the object-prefetcher design: memory-backed fills count against the flight
-memory budget, file-backed fills against the disk cache, every fill's parts against the
-download connections. What changes is only that each bound is charged in one place,
-because there is one kind of fill.
+Memory-backed fills count against the flight memory budget, file-backed fills against the
+disk cache, waiting background fills against the queue's byte bound, and every
+object-storage request against the governor's tokens. Each bound is charged in one place,
+because there is one kind of fill and one way to open a connection.
 
 ## Alternatives
 
@@ -152,7 +219,8 @@ because there is one kind of fill.
 - No persisted data format changes; only the disk cache's own file layout does.
 - After an upgrade, whole objects cached by the earlier version are removed at startup,
   so the first reads of them download them again. Range files keep their names and stay.
-- Configuration, metrics and the connection budget are unchanged.
+- Configuration is unchanged, except that the extra-wait setting is accepted and ignored,
+  with a deprecation log. The publisher adds queue-depth and wait metrics.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
 
 ## Validation and acceptance
