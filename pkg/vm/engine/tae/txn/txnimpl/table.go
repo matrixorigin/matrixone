@@ -2309,9 +2309,14 @@ func (tbl *txnTable) contains(
 		idx := indexwrapper.NewImmutIndex(stats.SortKeyZoneMap(), bf, stats.ObjectLocation())
 		for i := uint16(0); i < uint16(blkCount); i++ {
 			sel, err := idx.BatchDedup(ctx, keys, keysZM, tbl.store.rt, true, uint32(i), common.WorkspaceAllocator)
-			if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+			if err == nil {
 				sel.Free()
 				continue
+			}
+			if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+				// A failed probe proves nothing about the block's keys.
+				sel.Free()
+				return err
 			}
 
 			var blkRow uint32
