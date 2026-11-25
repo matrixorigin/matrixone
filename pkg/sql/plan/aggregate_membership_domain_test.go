@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -155,37 +156,251 @@ func TestAggregateMembershipSQLReachability(t *testing.T) {
 		s.NdvMap["ps_suppkey"], s.NdvMap["l_suppkey"] = 1000, 1000
 		ctx.statsCache.Set(table.TblId, s)
 	}
-	sql := `select s_name,s_address from supplier,nation where s_suppkey in
-		(select ps_suppkey from partsupp where ps_partkey in
-		 (select p_partkey from part where p_name like 'lime%')
-		 and ps_availqty > (select .5*sum(l_quantity) from lineitem
-		 where l_partkey=ps_partkey and l_suppkey=ps_suppkey
-		 and l_shipdate>=date '1993-01-01' and l_shipdate<date '1994-01-01'))
-		 and s_nationkey=n_nationkey and n_name='VIETNAM' order by s_name`
-	stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
-	require.NoError(t, err)
-	t.Cleanup(stmt.Free)
-	p, err := BuildPlan(ctx, stmt, false, nil)
-	require.NoError(t, err)
-	query := p.GetQuery()
-	seen := make(map[int32]bool)
-	parts := 0
-	var visit func(int32)
-	visit = func(id int32) {
-		if seen[id] {
-			return
-		}
-		seen[id] = true
-		n := query.Nodes[id]
-		if n.NodeType == plan.Node_TABLE_SCAN && n.TableDef.Name == "part" {
-			parts++
-		}
-		for _, child := range n.Children {
-			visit(child)
-		}
+	sql := `select s_name, s_address from supplier, nation
+		where s_suppkey in (
+			select ps_suppkey from partsupp
+			where ps_partkey in (select p_partkey from part where p_name like 'forest%')
+			and ps_availqty > (
+				select 0.5 * sum(l_quantity) from lineitem
+				where l_partkey = ps_partkey and l_suppkey = ps_suppkey
+				and l_shipdate >= date '1994-01-01'
+				and l_shipdate < date '1994-01-01' + interval '1' year
+			)
+		)
+		and s_nationkey = n_nationkey and n_name = 'CANADA'
+		order by s_name`
+	for _, tc := range []struct {
+		name       string
+		predicate  string
+		restricted bool
+	}{
+		{"selective-prefix", "p_name like 'forest%'", true},
+		{"single-percent", "p_name like '%'", false},
+		{"multiple-percent", "p_name like '%%'", false},
+		{"no-filter", "true", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx.GetContext(), strings.Replace(sql, "p_name like 'forest%'", tc.predicate, 1), 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(ctx, stmt, false, nil)
+			require.NoError(t, err)
+			query := p.GetQuery()
+			var aggregate *plan.Node
+			seen := make(map[int32]bool)
+			var visit func(int32)
+			visit = func(id int32) {
+				if seen[id] {
+					return
+				}
+				seen[id] = true
+				n := query.Nodes[id]
+				if n.NodeType == plan.Node_AGG {
+					for _, expr := range n.AggList {
+						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "sum" {
+							require.Nil(t, aggregate, "Q20 has one reachable SUM")
+							aggregate = n
+						}
+					}
+				}
+				for _, child := range n.Children {
+					visit(child)
+				}
+			}
+			for _, root := range query.Steps {
+				visit(root)
+			}
+			require.NotNil(t, aggregate)
+			require.Len(t, aggregate.Children, 1)
+			input := query.Nodes[aggregate.Children[0]]
+			if !tc.restricted {
+				require.Equal(t, plan.Node_TABLE_SCAN, input.NodeType, "SUM(l_quantity) input: %s", input)
+				require.Equal(t, "lineitem", input.TableDef.Name)
+				return
+			}
+			require.Equal(t, plan.Node_JOIN, input.NodeType)
+			require.Len(t, input.Children, 2)
+			require.Equal(t, plan.Node_SEMI, input.JoinType)
+			factSide, domainSide := 0, 1
+			if input.IsRightJoin {
+				factSide, domainSide = 1, 0
+			}
+			fact, domain := query.Nodes[input.Children[factSide]], query.Nodes[input.Children[domainSide]]
+			require.Equal(t, plan.Node_TABLE_SCAN, fact.NodeType)
+			require.Equal(t, "lineitem", fact.TableDef.Name)
+			require.Equal(t, plan.Node_TABLE_SCAN, domain.NodeType)
+			require.Equal(t, "part", domain.TableDef.Name)
+			require.Len(t, input.OnList, 1)
+			fn := input.OnList[0].GetF()
+			require.NotNil(t, fn)
+			require.True(t, IsEqualFunc(fn.Func.Obj))
+			require.Len(t, fn.Args, 2)
+			first, second := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+			require.NotNil(t, first)
+			require.NotNil(t, second)
+			require.ElementsMatch(t, []string{"lineitem.l_partkey", "part.p_partkey"}, []string{first.Name, second.Name})
+		})
 	}
-	for _, root := range query.Steps {
-		visit(root)
+}
+
+func TestAggregateMembershipMatchAllPattern(t *testing.T) {
+	b, _ := aggregateMembershipTestBuilder(t)
+	domain := b.qry.Nodes[1]
+	tag := domain.BindingTags[0]
+	literal := makePlan2StringConstExprWithType
+	cast := func(id int32, value string, width int32) *plan.Expr {
+		source := literal(value)
+		target := source.Typ
+		target.Width = width
+		return &plan.Expr{Typ: target, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: int64(id) << 32},
+			Args: []*plan.Expr{source, {Typ: target, Expr: &plan.Expr_T{T: &plan.TargetType{}}}},
+		}}}
 	}
-	require.Equal(t, 2, parts, "unchanged Q20 must copy the part domain below its aggregate: %s", query.String())
+	withSource := literal("%")
+	withSource.GetLit().Src = &plan.Expr{Typ: withSource.Typ, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	null := literal("%")
+	null.GetLit().Isnull = true
+	for _, tc := range []struct {
+		name      string
+		pattern   *plan.Expr
+		escape    *plan.Expr
+		binding   int32
+		wantMatch bool
+	}{
+		{"single-percent", literal("%"), nil, tag, true},
+		{"multiple-percent", literal("%%%"), nil, tag, true},
+		{"literal-cast", cast(function.CAST, "%", 8), nil, tag, true},
+		{"literal-strict-cast", cast(function.CAST_STRICT, "%%", 8), nil, tag, true},
+		{"truncating-cast", cast(function.CAST, "%%", 1), nil, tag, false},
+		{"non-ASCII-cast", cast(function.CAST, "％", 8), nil, tag, false},
+		{"empty", literal(""), nil, tag, false},
+		{"prefix", literal("lime%"), nil, tag, false},
+		{"single-character", literal("%_%"), nil, tag, false},
+		{"escaped-percent", literal(`\%`), nil, tag, false},
+		{"explicit-escape", literal("%"), literal("%"), tag, false},
+		{"parameter", withSource.GetLit().Src, nil, tag, false},
+		{"execution-literal-source", withSource, nil, tag, false},
+		{"NULL", null, nil, tag, false},
+		{"foreign-binding", literal("%"), nil, b.qry.Nodes[0].BindingTags[0], false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := DeepCopyExpr(domain.FilterList[0])
+			like := filter.GetF()
+			like.Args[0].GetCol().RelPos = tc.binding
+			like.Args[1] = tc.pattern
+			if tc.escape != nil {
+				like.Args = append(like.Args, tc.escape)
+			}
+			require.Equal(t, tc.wantMatch, containsMembershipMatchAllLike(filter, tag))
+		})
+	}
+}
+
+func TestAggregateMembershipPricesIndependentConjuncts(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		form            string
+		lower, upper    int32
+		notNullable     bool
+		nullCount       uint64
+		keyNDV          float64
+		groups          float64
+		removeStats     bool
+		wantRestriction bool
+	}{
+		{name: "only-wildcard-exact-ndv", keyNDV: 5000},
+		{name: "only-wildcard-nullable-ndv-drift", nullCount: 8000, keyNDV: 4000},
+		{name: "only-wildcard-not-null-ndv-drift", notNullable: true, keyNDV: 4000},
+		{name: "nested-or-only", form: "or", keyNDV: 5000},
+		{name: "nested-not-only", form: "not", keyNDV: 5000},
+		{name: "strong-range", form: "and", lower: 10, upper: 20, keyNDV: 5000, wantRestriction: true},
+		{name: "full-range-ndv-drift", form: "and", lower: 1, upper: 5000, keyNDV: 4000},
+		{name: "weak-range", form: "and", lower: 1, upper: 4500, keyNDV: 5000},
+		{name: "build-cost-boundary", form: "and", lower: 1, upper: 2000, keyNDV: 5000, groups: 25000},
+		{name: "nested-or-with-strong-range", form: "or", lower: 10, upper: 20, keyNDV: 5000, wantRestriction: true},
+		{name: "nested-not-with-strong-range", form: "not", lower: 10, upper: 20, keyNDV: 5000, wantRestriction: true},
+		{name: "mixed-with-missing-key-ndv", form: "and", lower: 10, upper: 20},
+		{name: "mixed-with-missing-stats", form: "and", lower: 10, upper: 20, keyNDV: 5000, removeStats: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, root := aggregateMembershipTestBuilder(t)
+			domain, agg := b.qry.Nodes[1], b.qry.Nodes[4]
+			tag := domain.BindingTags[0]
+			domain.TableDef.Cols[1].Typ.NotNullable = tc.notNullable
+			bind := func(name string, args ...*plan.Expr) *plan.Expr {
+				expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
+				require.NoError(t, err)
+				return expr
+			}
+			name := GetColExpr(domain.TableDef.Cols[1].Typ, tag, 1)
+			wildcard := bind("like", name, makePlan2StringConstExprWithType("%"))
+			filter := wildcard
+			switch tc.form {
+			case "or":
+				key := GetColExpr(domain.TableDef.Cols[0].Typ, tag, 0)
+				filter = bind("or", wildcard, bind("=", key, makePlan2Int32ConstExprWithType(42)))
+			case "not":
+				filter = bind("not", wildcard)
+			}
+			domain.FilterList = []*plan.Expr{filter}
+			var independent []*plan.Expr
+			if tc.upper > 0 {
+				key := func() *plan.Expr { return GetColExpr(domain.TableDef.Cols[0].Typ, tag, 0) }
+				independent = []*plan.Expr{
+					bind(">=", key(), makePlan2Int32ConstExprWithType(tc.lower)),
+					bind("<=", key(), makePlan2Int32ConstExprWithType(tc.upper)),
+				}
+				if tc.form == "and" {
+					domain.FilterList[0] = bind("and", filter, DeepCopyExpr(independent[0]))
+					domain.FilterList = append(domain.FilterList, DeepCopyExpr(independent[1]))
+				} else {
+					domain.FilterList = append(domain.FilterList, DeepCopyExprList(independent)...)
+				}
+			}
+
+			stats := &statsinfo.StatsInfo{
+				TableCnt: 10000, BlockNumber: 2,
+				NdvMap: map[string]float64{}, DataTypeMap: map[string]uint64{"part": uint64(types.T_int32)},
+				MinValMap: map[string]float64{"part": 1}, MaxValMap: map[string]float64{"part": 5000},
+			}
+			if tc.keyNDV > 0 {
+				stats.NdvMap["part"] = tc.keyNDV
+			}
+			if tc.nullCount > 0 {
+				stats.NullCntMap = map[string]uint64{"name": tc.nullCount}
+			}
+			b.compCtx.GetStatsCache().Set(domain.TableDef.TblId, stats)
+			domain.Stats = calcScanStats(domain, b)
+			require.Equal(t, stats.TableCnt, domain.Stats.TableCnt)
+			require.True(t, membershipDomainScanTotal(domain), "each case must reach the cost gate")
+			if tc.groups > 0 {
+				agg.Stats.Outcnt = tc.groups
+			}
+			if tc.removeStats {
+				b.compCtx.GetStatsCache().Delete(domain.TableDef.TblId)
+			}
+
+			before := proto.Clone(b.qry)
+			wantRows := float64(0)
+			if len(independent) > 0 && !tc.removeStats {
+				control := DeepCopyNode(domain)
+				control.FilterList = independent
+				control.Stats = calcScanStats(control, b)
+				if control.Stats.Selectivity < 1 {
+					wantRows = control.Stats.Outcnt
+				}
+			}
+			require.InDelta(t, wantRows, b.aggregateMembershipDomainRows(domain), 1e-9)
+			require.Equal(t, tc.wantRestriction, b.restrictAggregateMembership(root))
+			if !tc.wantRestriction {
+				require.True(t, proto.Equal(before, b.qry), "rejection retains all original expressions and statistics")
+				return
+			}
+			require.True(t, proto.Equal(before.(*plan.Query).Nodes[1], domain), "costing must not modify the original scan")
+			input := b.qry.Nodes[agg.Children[0]]
+			require.Equal(t, plan.Node_SEMI, input.JoinType)
+			require.Len(t, b.qry.Nodes[input.Children[1]].FilterList, len(domain.FilterList), "the copy evaluates the original predicates")
+		})
+	}
 }

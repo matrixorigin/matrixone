@@ -254,14 +254,15 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	// keys disappeared: a date predicate may retain nearly every part key.
 	// Use the available key NDV bounded by surviving rows, without assuming
 	// uniform key loss from that row predicate.
-	factNDV, domainNDV := float64(-1), float64(-1)
+	costDomainRows := builder.aggregateMembershipDomainRows(domain)
+	if !finitePositive(costDomainRows) {
+		return false
+	}
+	factNDV, domainNDV := float64(-1), math.Min(getExprNdv(DeepCopyExpr(domainKey), builder), costDomainRows)
 	if fact.Stats != nil {
 		factNDV = math.Min(getExprNdv(DeepCopyExpr(key), builder), fact.Stats.Outcnt)
 	}
-	if domain.Stats != nil {
-		domainNDV = math.Min(getExprNdv(DeepCopyExpr(domainKey), builder), domain.Stats.Outcnt)
-	}
-	if !aggregateMembershipCostAllows(agg, fact, domain, factNDV, domainNDV, key.Typ, domainKey.Typ) {
+	if !aggregateMembershipCostAllows(agg, fact, domain, factNDV, domainNDV, costDomainRows, key.Typ, domainKey.Typ) {
 		return false
 	}
 	copy := DeepCopyNode(domain)
@@ -280,11 +281,74 @@ func (builder *QueryBuilder) copyAggregateMembership(
 	return true
 }
 
-func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domainNDV float64, key, domainKey plan.Type) bool {
+// aggregateMembershipDomainRows prices the duplicate scan without crediting
+// LIKE patterns that only exclude NULLs. A predicate containing such a LIKE
+// inside OR/NOT cannot provide an independent reduction either. Leave the
+// shared scan statistics and execution predicates as they were.
+func (builder *QueryBuilder) aggregateMembershipDomainRows(domain *plan.Node) float64 {
+	if domain.Stats == nil {
+		return 0
+	}
+	containsMatchAll := func(expr *plan.Expr) bool {
+		return containsMembershipMatchAllLike(expr, domain.BindingTags[0])
+	}
+	if !slices.ContainsFunc(domain.FilterList, containsMatchAll) {
+		return domain.Stats.Outcnt
+	}
+	conjuncts := slices.DeleteFunc(splitPlanConjunctions(domain.FilterList), containsMatchAll)
+	if len(conjuncts) == 0 {
+		return 0
+	}
+	// Reuse the planning pass's scan statistics without another storage read.
+	cached := builder.getStatsInfoByTableID(domain.TableDef.TblId)
+	if cached == nil {
+		return 0
+	}
+	stats := cached.GetStats()
+	if stats == nil || !finitePositive(stats.TableCnt) || stats.TableCnt != domain.Stats.TableCnt {
+		return 0
+	}
+	selectivity := estimateAndSelectivity(DeepCopyExprList(conjuncts), builder, stats)
+	if selectivity >= 1 {
+		return 0
+	}
+	return domain.Stats.TableCnt * selectivity
+}
+
+func containsMembershipMatchAllLike(expr *plan.Expr, scanTag int32) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id == function.LIKE && len(fn.Args) == 2 {
+		col := fn.Args[0].GetCol()
+		source := types.T(fn.Args[0].Typ.Id)
+		if col == nil || col.RelPos != scanTag || (source != types.T_char && source != types.T_varchar) {
+			return false
+		}
+		lit := membershipPatternLiteral(fn.Args[1])
+		if lit == nil || lit.Isnull || lit.GetSval() == "" {
+			return false
+		}
+		pattern := lit.GetSval()
+		for i := range pattern {
+			if pattern[i] != '%' {
+				return false
+			}
+		}
+		return true
+	}
+	return slices.ContainsFunc(fn.Args, func(arg *plan.Expr) bool {
+		return containsMembershipMatchAllLike(arg, scanTag)
+	})
+}
+
+func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domainNDV, domainRows float64, key, domainKey plan.Type) bool {
 	if agg.Stats == nil || fact.Stats == nil || domain.Stats == nil ||
 		!finitePositive(factNDV) || !finitePositive(domainNDV) || domainNDV >= factNDV ||
 		!finitePositive(fact.Stats.Outcnt) || !finitePositive(agg.Stats.Outcnt) ||
-		!finitePositive(domain.Stats.TableCnt) || !finitePositive(domain.Stats.Outcnt) {
+		!finitePositive(domain.Stats.TableCnt) {
 		return false
 	}
 	groupTypes := make([]plan.Type, 0, len(agg.GroupBy))
@@ -313,7 +377,7 @@ func aggregateMembershipCostAllows(agg, fact, domain *plan.Node, factNDV, domain
 	// aggregate-key traffic and resident hash/state work. Actual executors still
 	// enforce their existing memory account and spill limits.
 	saved := (1 - selectivity) * (fact.Stats.Outcnt*keyWidth + agg.Stats.Outcnt*math.Max(64, stateWidth+32))
-	extra := domain.Stats.TableCnt*domainWidth + domain.Stats.Outcnt*math.Max(32, domainWidth+16) + fact.Stats.Outcnt*domainWidth
+	extra := domain.Stats.TableCnt*domainWidth + domainRows*math.Max(32, domainWidth+16) + fact.Stats.Outcnt*domainWidth
 	return finitePositive(saved) && finitePositive(extra) && saved > extra
 }
 
@@ -357,7 +421,7 @@ func membershipDomainPredicateTotal(expr *plan.Expr) bool {
 	case function.AND, function.OR:
 		return len(fn.Args) == 2 && membershipDomainPredicateTotal(fn.Args[0]) && membershipDomainPredicateTotal(fn.Args[1])
 	case function.LIKE, function.PREFIX_EQ:
-		if len(fn.Args) != 2 || fn.Args[0].GetCol() == nil || !membershipLiteralPattern(fn.Args[1]) {
+		if len(fn.Args) != 2 || fn.Args[0].GetCol() == nil || membershipPatternLiteral(fn.Args[1]) == nil {
 			return false
 		}
 		source, pattern := fn.Args[0].Typ, fn.Args[1].Typ
@@ -370,35 +434,38 @@ func membershipDomainPredicateTotal(expr *plan.Expr) bool {
 	}
 }
 
-func membershipLiteralPattern(expr *plan.Expr) bool {
+func membershipPatternLiteral(expr *plan.Expr) *plan.Literal {
 	if lit := expr.GetLit(); lit != nil {
-		return lit.Src == nil && !lit.IsBin
+		if lit.Src == nil && !lit.IsBin {
+			return lit
+		}
+		return nil
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1].GetT() == nil ||
 		!isSameColumnType(fn.Args[1].Typ, expr.Typ) {
-		return false
+		return nil
 	}
 	id, _ := function.DecodeOverloadID(fn.Func.Obj)
 	if id != function.CAST && id != function.CAST_STRICT {
-		return false
+		return nil
 	}
 	source := fn.Args[0]
 	lit := source.GetLit()
 	if lit == nil || lit.Src != nil || lit.IsBin || expr.Typ.Width <= 0 ||
 		types.T(source.Typ.Id) != types.T_varchar || types.T(expr.Typ.Id) != types.T_varchar {
-		return false
+		return nil
 	}
 	value, ok := lit.Value.(*plan.Literal_Sval)
 	if !ok || len(value.Sval) > int(expr.Typ.Width) {
-		return false
+		return nil
 	}
 	// The binder can add a literal-only collation cast. ASCII fits both text
 	// domains unchanged and cannot produce conversion/width diagnostics.
 	for i := range value.Sval {
 		if value.Sval[i] >= 128 {
-			return false
+			return nil
 		}
 	}
-	return true
+	return lit
 }
