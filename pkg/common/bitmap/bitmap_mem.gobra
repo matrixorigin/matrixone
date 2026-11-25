@@ -1,0 +1,124 @@
+// +gobra
+
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Contracts for the code bitmap.go calls in bitmap_mem.go and
+// bitmap_view.go. Go ignores .gobra files, and Gobra does not read those two
+// .go files, so each function below is declared here without a body.
+package bitmap
+
+import "github.com/matrixorigin/matrixone/pkg/common/mpool"
+
+// Trusted memory primitives (bitmap_mem.go). They replace the make and copy
+// built-ins the proof relied on before bitmaps owned their words, and they
+// are the only trusted code besides the bit-operation model.
+
+// errNoPool returns a non-nil error.
+ensures err != nil
+decreases
+func errNoPool() (err error)
+
+// allocWords returns words zero words, with room for at least capWords, from
+// n's pool. The words are fresh: the caller gains permission to all of them.
+requires acc(&n.mp, 1/4) && n.mp != nil && 0 <= words && words <= capWords
+ensures acc(&n.mp, 1/4)
+ensures err == nil ==> len(res) == words && capWords <= cap(res)
+ensures err == nil ==> forall i int :: {&res[i]} 0 <= i && i < len(res) ==> acc(&res[i]) && res[i] == 0
+ensures err == nil ==> forall i int :: {&res[:cap(res)][i]} len(res) <= i && i < cap(res) ==> acc(&res[:cap(res)][i]) && res[:cap(res)][i] == 0
+decreases
+func (n *Bitmap) allocWords(words, capWords int) (res []uint64, err error)
+
+// replaceWords returns n's words to its pool, giving up permission to them,
+// and installs words as n's storage.
+requires acc(&n.data) && acc(&n.mp, 1/4) && n.mp != nil
+requires forall i int :: {&n.data[i]} 0 <= i && i < len(n.data) ==> acc(&n.data[i])
+requires forall i int :: {&n.data[:cap(n.data)][i]} len(n.data) <= i && i < cap(n.data) ==> acc(&n.data[:cap(n.data)][i])
+ensures acc(&n.data) && acc(&n.mp, 1/4) && n.data === words
+decreases
+func (n *Bitmap) replaceWords(words []uint64)
+
+// Free returns n's words, if it owns any, and empties n, keeping its pool.
+requires n.Raw()
+ensures acc(n) && n.data == nil && n.numBits == 0 && n.popCount == 0 && n.shift == 0
+ensures n.mp == old(unfolding n.Raw() in n.mp)
+decreases
+func (n *Bitmap) Free()
+
+// prepareInit makes n owned by mp, or fails and leaves n unchanged. A
+// read-only n drops the words it referenced; an owned n must already
+// belong to mp and keeps its words.
+requires n.Raw()
+ensures n.Raw()
+ensures err == nil ==> mp != nil && unfolding n.Raw() in n.mp == mp
+decreases
+func (n *Bitmap) prepareInit(mp *mpool.MPool) (err error)
+
+// mustWrite panics when n is read-only. An owned bitmap (Inv) is never
+// read-only, so for the proof it does nothing.
+requires acc(n.Inv(), 1/8)
+ensures acc(n.Inv(), 1/8) && n.Len() == old(n.Len()) && n.ISeq() == old(n.ISeq())
+decreases
+func (n *Bitmap) mustWrite()
+
+// MPool returns n's pool.
+requires acc(n.Inv(), 1/8)
+ensures acc(n.Inv(), 1/8) && n.Len() == old(n.Len()) && n.ISeq() == old(n.ISeq())
+decreases
+func (n *Bitmap) MPool() (res *mpool.MPool)
+
+// Read-only views (bitmap_view.go). Inv implies an owned bitmap, so the
+// verified code never reaches these: each requires false, which the proof
+// must establish at every call. Nothing about them is trusted.
+
+requires false
+decreases
+pure
+func (n *Bitmap) shiftedContains(row uint64) (res bool)
+
+requires false
+decreases
+func (n *Bitmap) lword(i int) (res uint64)
+
+requires false
+decreases
+func (n *Bitmap) lbitsFrom(pos int64) (res uint64)
+
+requires false
+decreases
+func (n *Bitmap) shiftedNextSet(i uint64) (res uint64)
+
+requires false
+decreases
+func (n *Bitmap) shiftedCountRange(start, end uint64) (res int)
+
+requires false
+decreases
+func anySetNotInWords(n, other *Bitmap, start, end uint64) (res bool)
+
+requires false
+decreases
+func isSameWords(n, b *Bitmap) (res bool)
+
+requires false
+decreases
+func (n *Bitmap) orBoundedWords(b *Bitmap, lim int64)
+
+requires false
+decreases
+func (n *Bitmap) andWords(b *Bitmap)
+
+requires false
+decreases
+func (n *Bitmap) initWithReadOnly(m *Bitmap, mp *mpool.MPool) (err error)

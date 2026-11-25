@@ -226,6 +226,10 @@ func freeWorkerJoinMsg(msg *WorkerJoinMsg) {
 		freeCapturedVecs(msg.capturedVecs, msg.capturedMP)
 		msg.capturedVecs = nil
 		msg.capturedMP = nil
+		msg.matched.Free()
+		msg.captured.Free()
+		msg.matched = nil
+		msg.captured = nil
 	}
 }
 
@@ -618,6 +622,7 @@ func (ctr *container) cleanCaptured(proc *process.Process) {
 	}
 	ctr.capturedMP = nil
 	ctr.capturedVecs = nil
+	ctr.captured.Free()
 	ctr.captured = nil
 	ctr.captureResultIdx = nil
 }
@@ -651,6 +656,7 @@ func (ctr *container) cleanBucketState(proc *process.Process) {
 	ctr.cleanHashMap()
 	ctr.batches = nil
 	ctr.batchRowCount = 0
+	ctr.matched.Free()
 	ctr.matched = nil
 	ctr.resetActionReplayCursors()
 }

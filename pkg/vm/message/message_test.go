@@ -411,7 +411,8 @@ func TestIsDeleted(t *testing.T) {
 
 	t.Run("with_bitmap", func(t *testing.T) {
 		var bm bitmap.Bitmap
-		bm.InitWithSize(64)
+		bm.Init(bitmapTestMP)
+		mustBitmapOK(bm.InitWithSize(64, bitmapTestMP))
 		bm.Add(5)
 		bm.Add(42)
 
