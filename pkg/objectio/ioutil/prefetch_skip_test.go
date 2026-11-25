@@ -45,16 +45,17 @@ func TestPrefetchSkipped(t *testing.T) {
 	require.True(t, PrefetchSkipped(kept, fs, fileservice.SkipFullFilePreloads, &blk))
 }
 
-// Merged prefetches of an object keep the policy bits of each.
+// Merged prefetches of an object into one cache keep the policy bits of each.
 func TestMergePrefetchKeepsPolicy(t *testing.T) {
 	objID := types.Objectid{2}
 	stats := objectio.NewObjectStatsWithObjectID(&objID, false, true, true)
 	blk := stats.ConstructBlockInfo(0)
 	loc := blk.MetaLocation()
 	merged := mergePrefetch([]PrefetchParams{
+		{key: loc, typ: PrefetchFileType, policy: fileservice.IndexFileObject | fileservice.NarrowRead},
 		{key: loc, typ: PrefetchFileType, policy: fileservice.IndexFileObject},
-		{key: loc, typ: PrefetchFileType},
 	})
 	require.Len(t, merged, 1)
-	require.Equal(t, fileservice.Policy(fileservice.IndexFileObject), merged[loc.Name().String()].policy)
+	require.Equal(t, fileservice.Policy(fileservice.IndexFileObject|fileservice.NarrowRead),
+		merged[prefetchTarget{name: loc.Name().String(), index: true}].policy)
 }

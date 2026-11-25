@@ -527,7 +527,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 
 	// load to disk cache, or to the index-file cache for an object it keeps
 	if err := s.diskCache.fillFileTo(
-		ctx, path.File,
+		withPrefetchFill(ctx), path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},

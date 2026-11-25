@@ -1027,6 +1027,18 @@ func (d *DiskCache) writeFileWithFinalizeMode(
 
 // writeFileTo writes the file of the object at diskPath and publishes it into target, the
 // disk cache when nil. copied, when set, is called once the bytes are read.
+type prefetchFillKey struct{}
+
+// withPrefetchFill returns ctx under which a whole-object fill is a prefetch's.
+func withPrefetchFill(ctx context.Context) context.Context {
+	return context.WithValue(ctx, prefetchFillKey{}, true)
+}
+
+func prefetchFill(ctx context.Context) bool {
+	_, ok := ctx.Value(prefetchFillKey{}).(bool)
+	return ok
+}
+
 func (d *DiskCache) writeFileTo(
 	ctx context.Context,
 	diskPath string,
@@ -1105,10 +1117,9 @@ func (d *DiskCache) writeFileTo(
 	// of its path the read declined: it then publishes nothing.
 	p, readStarted := ctx.Value(fileDownloadKey{}).(*filePrefetchObject)
 	unpublished := false
-	// A fill of the index-file cache waits for the path a pending publication of the
-	// object into the disk cache holds, and fills its own cache after it.
-	_, index := target.(indexFillTarget)
-	if asyncFinalize && !index {
+	// A prefetch's fill waits for the path a fill of the object into either cache holds,
+	// and fills its own cache after it; a read's async fill does not wait for it.
+	if asyncFinalize && !prefetchFill(ctx) {
 		var ok bool
 		if w.owner, ok = d.paths.tryAcquire(diskPath, cleanup); !ok {
 			return false, nil

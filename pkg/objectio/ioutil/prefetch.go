@@ -70,12 +70,20 @@ func buildPrefetchParams(service fileservice.FileService, key objectio.Location)
 	}
 }
 
-func mergePrefetch(processes []PrefetchParams) map[string]PrefetchParams {
-	pc := make(map[string]PrefetchParams)
+// prefetchTarget identifies the prefetch of an object into one cache: the index-file
+// cache for an IndexFileObject prefetch, the disk cache otherwise.
+type prefetchTarget struct {
+	name  string
+	index bool
+}
+
+// mergePrefetch merges the prefetches of each object into one per cache it fills.
+func mergePrefetch(processes []PrefetchParams) map[prefetchTarget]PrefetchParams {
+	pc := make(map[prefetchTarget]PrefetchParams)
 	for _, p := range processes {
-		name := p.key.Name().String()
-		p.policy |= pc[name].policy
-		pc[name] = p
+		key := prefetchTarget{name: p.key.Name().String(), index: p.policy.Any(fileservice.IndexFileObject)}
+		p.policy |= pc[key].policy
+		pc[key] = p
 	}
 	return pc
 }
