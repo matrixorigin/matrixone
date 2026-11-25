@@ -178,9 +178,12 @@ func observeArrowError(err error) {
 
 // ArrowReader is the LOAD-only adapter between the format-neutral External
 // operator and the canonical Arrow-to-MO bridge. The reader owns everything a
-// published batch borrows: it retains the record the batch was converted from
-// (the IPC reader releases its current record at the next Next call) and owns
-// the varlen descriptor scratch, so no per-column lease is needed.
+// published batch borrows: when the batch has borrowed columns it retains the
+// record the batch was converted from (the IPC reader releases its current
+// record at the next Next call), and it owns the varlen descriptor scratch, so
+// no per-column lease is needed. A fully materialized batch borrows nothing,
+// so its record is not retained and the next read does not hold two records'
+// ranges at once.
 type ArrowReader struct {
 	param                 *ExternalParam
 	reader                arrowio.Reader
@@ -199,7 +202,8 @@ type ArrowReader struct {
 	// operator's current output.
 	published *batch.Batch
 	// publishedRecord is the record published was converted from, retained
-	// until published is released.
+	// until published is released. It is nil when published borrows nothing
+	// from it (every column materialized).
 	publishedRecord arrow.RecordBatch
 	// descriptors is the reusable varlena descriptor scratch of borrowed
 	// varlen columns. It lives until the reader is closed and its last batch
@@ -633,10 +637,15 @@ func (r *ArrowReader) convertNext(ctx context.Context, proc *process.Process) (*
 		converted.Clean(r.allocation)
 		return nil, false, err
 	}
-	// The batch borrows record's buffers. Retain it before advancing: the IPC
-	// reader releases its current record at the next Next call.
-	record.Retain()
-	r.publishedRecord = record
+	// A borrowed column references record's buffers: retain it before
+	// advancing, since the IPC reader releases its current record at the next
+	// Next call. A fully materialized batch references none of them, so the
+	// record is left to the IPC reader and its range is released before the
+	// next record's is admitted.
+	if borrowsArrowBuffers(converted) {
+		record.Retain()
+		r.publishedRecord = record
+	}
 	fileFinished := false
 	if end < record.NumRows() {
 		r.rowOffset = end
@@ -648,6 +657,21 @@ func (r *ArrowReader) convertNext(ctx context.Context, proc *process.Process) (*
 		}
 	}
 	return converted, fileFinished, nil
+}
+
+// borrowsArrowBuffers reports whether bat references Arrow memory. The bridge
+// aliases Arrow buffers only in read-only vectors (borrowed fixed-width values
+// and borrowed varlen areas); materialized vectors and every null bitmap are
+// copies in the reader's pool. A read-only varlen vector whose values are all
+// inline references only the descriptor scratch, which is conservatively
+// treated as borrowing too.
+func borrowsArrowBuffers(bat *batch.Batch) bool {
+	for _, vec := range bat.Vecs {
+		if vec != nil && vec.IsReadOnly() {
+			return true
+		}
+	}
+	return false
 }
 
 func fitArrowBatchToWireBudget(

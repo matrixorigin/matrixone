@@ -543,6 +543,78 @@ func TestExternalArrowSkipsZeroRowRecordBatches(t *testing.T) {
 	}
 }
 
+// The reader keeps a record only while its published batch borrows from it.
+// A fully materialized batch borrows nothing, so publishing it does not keep
+// its record's range admitted while the next record is read: the IPC reader
+// releases it at the next Next. A borrowed batch retains its record, so its
+// range stays admitted alongside the next one.
+func TestExternalArrowRetainsRecordOnlyForBorrowedOutput(t *testing.T) {
+	// Two records of the same shape and size, read through range admission.
+	payload := makeExternalArrowIPCWithRows(t, tree.ARROW_CONTAINER_FILE, [][]int64{{1, 2}, {3, 4}})
+	pinnedNow := func() int64 {
+		arrowPinnedMetricState.Lock()
+		defer arrowPinnedMetricState.Unlock()
+		return arrowPinnedMetricState.current
+	}
+	run := func(t *testing.T, materialize bool) (retained bool, pinned int64) {
+		fs, err := fileservice.NewMemoryFS("etl", fileservice.DisabledCacheConfig, nil)
+		require.NoError(t, err)
+		path := "etl:retain-record.arrow"
+		require.NoError(t, fs.Write(context.Background(), fileservice.IOVector{
+			FilePath: path,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(payload)), Data: payload}},
+		}))
+		registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+		require.NoError(t, err)
+		account, err := registry.Open(64 << 20)
+		require.NoError(t, err)
+		proc := newArrowLoadTestProc(t)
+		param := externalArrowParam(fs, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE)
+		param.ArrowForceMaterialize = materialize
+		arg := NewArgument().WithEs(param)
+		require.NoError(t, arg.SetAllocationAccount(account))
+		require.NoError(t, arg.Prepare(proc))
+		before := pinnedNow()
+
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecNext, result.Status)
+		require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+		reader, ok := arg.reader.(*ArrowReader)
+		require.True(t, ok)
+		retained = reader.publishedRecord != nil
+		// The next record has already been read: the first record's range
+		// is still admitted only if the reader retained it.
+		pinned = pinnedNow() - before
+
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecNext, result.Status)
+		require.Equal(t, []int64{3, 4}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+		result, err = arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecStop, result.Status)
+
+		arg.Free(proc, false, nil)
+		require.Equal(t, before, pinnedNow(), "every range lease is released")
+		require.Zero(t, account.Snapshot().Used)
+		require.NoError(t, arg.ClearAllocationAccount(account))
+		arg.Release()
+		account.Seal()
+		_, err = registry.Finalize(account)
+		require.NoError(t, err)
+		return retained, pinned
+	}
+
+	materializedRetained, materializedPinned := run(t, true)
+	borrowedRetained, borrowedPinned := run(t, false)
+	require.False(t, materializedRetained, "a materialized batch borrows nothing from its record")
+	require.True(t, borrowedRetained, "a borrowed batch keeps its record alive")
+	require.Positive(t, materializedPinned, "the prefetched next record is admitted")
+	require.Equal(t, 2*materializedPinned, borrowedPinned,
+		"only a borrowed batch keeps its own record's range admitted beside the next one")
+}
+
 func TestExternalArrowPrepareFailsClosedBeforeIO(t *testing.T) {
 	proc := newArrowLoadTestProc(t)
 	for _, test := range []struct {
