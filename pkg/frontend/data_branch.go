@@ -2301,9 +2301,10 @@ func constructChangeHandle(
 		// The lower bound can trim a parent range before the source fork.
 		// Only a lower bound after the fork can supply a source before image.
 		tarForkTS, _ := branchInfo.lcaProbeSnapshots(tarSnapshot, baseSnapshot, true)
-		useWindowStart := branchInfo.hasLCA() && betweenFrom.GT(&tarForkTS)
+		hasLCA := branchInfo.hasLCA()
+		useWindowStart := !hasLCA || betweenFrom.GT(&tarForkTS)
 		sourceGenerations := branchInfo.pathFromLCAToTar
-		if useWindowStart {
+		if useWindowStart && hasLCA {
 			// The last real fork starts the source branch. All following
 			// COPY ALTER generations still belong to that branch.
 			lineageOnly := branchInfo.pathFromLCAToTarLineageOnly
@@ -2346,7 +2347,7 @@ func constructChangeHandle(
 							snapshot = tarRange.end[seg]
 						}
 					}
-					if seg >= 0 && snapshot.GT(&tarForkTS) {
+					if seg >= 0 && (!hasLCA || snapshot.GT(&tarForkTS)) {
 						ident := tarRange.segmentIdentity(seg, tarIdent)
 						id := tarRange.rel[seg].GetTableID(identityCtx(ctx, ident))
 						if slices.Contains(sourceGenerations, id) {

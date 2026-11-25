@@ -1113,6 +1113,14 @@ func hashDiff(
 
 	diffStart := time.Now()
 	if !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory {
+		if !dagInfo.hasLCA() && tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
+			tarDataHashmap.ItemCount() > 0 && tarTombstoneHashmap.ItemCount() > 0 {
+			if err = pruneUnchangedPickRowsWithoutLCA(
+				ctx, ses, bh, tblStuff, dagInfo, tarDataHashmap, tarTombstoneHashmap,
+			); err != nil {
+				return
+			}
+		}
 		if err = hashDiffIfNoLCA(
 			ctx, ses, tblStuff, copt, emit,
 			tarDataHashmap, tarTombstoneHashmap,
@@ -1423,6 +1431,7 @@ func hashDiffIfHasLCA(
 	// A later-forked destination can collect parent inserts that were
 	// already visible at its fork. Window deletes reconcile those separately.
 	var inheritedAt types.TS
+	baseProbeStuff := sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, true)
 	if tblStuff.pickWindowStart != nil && tarLCAProbe.LT(&baseLCAProbe) {
 		if _, hasBaseFork := firstDataBranchForkTS(dagInfo.pathFromLCAToBaseTS, dagInfo.pathFromLCAToBaseLineageOnly); hasBaseFork {
 			inheritedAt = baseLCAProbe
@@ -1434,7 +1443,7 @@ func hashDiffIfHasLCA(
 		if tblStuff.pickWindowStart != nil && copt.conflictOpt != nil &&
 			wrapped.kind == diffDelete && !wrapped.fromUpdate &&
 			wrapped.batch.RowCount() > 0 && baseDataHashmap.ItemCount() > 0 {
-			stop, err := reconcilePickWindowDelete(ctx, ses, bh, tblStuff, copt, emit, wrapped, baseDataHashmap, inheritedAt)
+			stop, err := reconcilePickWindowDelete(ctx, ses, bh, baseProbeStuff, copt, emit, wrapped, baseDataHashmap, inheritedAt)
 			if stop || err != nil || wrapped.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return err
@@ -1462,14 +1471,9 @@ func hashDiffIfHasLCA(
 			}
 			if restoreBat.Vecs[0].Length() > 0 {
 				restoreBat.SetRowCount(restoreBat.Vecs[0].Length())
-				if stop, e := emitBatch(emit, batchWithKind{
-					batch:          restoreBat,
-					kind:           diffInsert,
-					name:           wrapped.name,
-					side:           wrapped.side,
-					fromUpdate:     true,
-					restoreMissing: true,
-				}, false, tblStuff.retPool); e != nil {
+				out := wrapped
+				out.batch, out.restoreMissing = restoreBat, true
+				if stop, e := emitBatch(emit, out, false, tblStuff.retPool); e != nil {
 					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 					return e
 				} else if stop {
@@ -1483,7 +1487,7 @@ func hashDiffIfHasLCA(
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return nil
 			}
-			if err := wrapped.batch.Shrink(keep, true, ses.proc.Mp()); err != nil {
+			if err := wrapped.batch.Shrink(keep, false, ses.proc.Mp()); err != nil {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return err
 			}
@@ -1737,11 +1741,12 @@ func hashDiffIfHasLCA(
 
 	// Select a relation, layout and snapshot together for either execution path.
 	stepHandler := func(forBase bool) (err2 error) {
-		sideStuff := sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, forBase)
+		sideStuff := baseProbeStuff
 		name, side, branchTS := tblStuff.baseRel.GetTableName(), diffSideBase, baseLCAProbe
 		hashmap1, hashmap2, handle := baseDataHashmap, baseTombstoneHashmap, handleBaseDeleteAndUpdates
 		var windowStart *tableStuff
 		if !forBase {
+			sideStuff = sideTableStuffForLCAProbe(tblStuff, copt, dagInfo, tarSP, baseSP, false)
 			name, side, branchTS = tblStuff.tarRel.GetTableName(), diffSideTarget, tarLCAProbe
 			hashmap1, hashmap2, handle = tarDataHashmap, tarTombstoneHashmap, handleTarDeleteAndUpdates
 			if tblStuff.pickWindowStart != nil {
@@ -2173,6 +2178,7 @@ func dataBranchUpdateRequiresNativeUpdateFromTuples(
 
 // Keep window deletes and fork-existing updates in before. Suppress live rows
 // equal to lo and leave changed, fork-absent live rows for INSERT matching.
+// Without a fork, callers use only the live-row pruning side effect.
 // A row gone since lo is a DELETE regardless of its presence at the fork.
 func classifyPickWindowChanges(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff, fork types.TS,
@@ -2202,7 +2208,9 @@ func classifyPickWindowChanges(
 			return err
 		}
 		if cmp != 0 {
-			changed = append(changed, int64(i))
+			if !fork.IsEmpty() {
+				changed = append(changed, int64(i))
+			}
 			continue
 		}
 		if _, err := data.PopByEncodedFullValueExact(row, false); err != nil {
@@ -2230,6 +2238,68 @@ func classifyPickWindowChanges(
 	}
 	slices.Sort(drop)
 	return before.Shrink(drop, true, mp)
+}
+
+// Unrelated operands retain their existing conflict semantics, but a source
+// replacement that equals its own window-start row is not a candidate change.
+func pruneUnchangedPickRowsWithoutLCA(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff, dagInfo branchMetaInfo,
+	data, tombstones databranchutils.BranchHashmap,
+) error {
+	mp := ses.proc.Mp()
+	keys := vector.NewVec(tables.def.colTypes[tables.def.pkColIdx], mp)
+	defer keys.Free(mp)
+	limit := tables.maxTombstoneBatchCnt
+	if limit <= 0 {
+		limit = maxSqlBatchCnt
+	}
+	var before tableStuff
+	flush := func() error {
+		if keys.Length() == 0 {
+			return nil
+		}
+		if before.lcaRel == nil {
+			tarSP, _ := tables.resolvedSnapshots(ses)
+			layout, err := dataBranchPickWindowProbe(ctx, ses, bh, tables, dagInfo, tarSP)
+			if err != nil {
+				return err
+			}
+			before = layout
+		}
+		rows, _, err := probeDataBranchRows(ctx, ses, bh, keys, before, before.pickWindowStart.snapshot.ToTimestamp())
+		if err != nil {
+			return err
+		}
+		defer before.retPool.releaseRetBatch(rows, false)
+		keys.CleanOnlyData()
+		return classifyPickWindowChanges(ctx, ses, bh, before, types.TS{}, rows, data)
+	}
+	err := tombstones.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		return cursor.ForEach(func(key []byte, _ []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			live, err := data.GetByEncodedKey(key)
+			if err != nil || !live.Exists {
+				return err
+			}
+			tuple, _, err := tombstones.DecodeRow(key)
+			if err != nil {
+				return err
+			}
+			if err := appendTupleValueToVector(keys, tuple[0], mp); err != nil {
+				return err
+			}
+			if keys.Length() >= limit {
+				return flush()
+			}
+			return nil
+		})
+	}, 1)
+	if err != nil {
+		return err
+	}
+	return flush()
 }
 
 func findDeleteAndUpdateBat(

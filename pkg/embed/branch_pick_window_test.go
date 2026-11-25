@@ -15,9 +15,14 @@
 package embed
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -260,8 +265,10 @@ func TestDataBranchPickWindowForkConflicts(t *testing.T) {
 			name      string
 			delete    bool
 			inherited bool
+			copy      bool
 		}{
 			{name: "inherited_delete", delete: true, inherited: true},
+			{name: "inherited_delete_after_copy", delete: true, inherited: true, copy: true},
 			{name: "post_fork_delete", delete: true},
 			{name: "source_update"},
 			{name: "inherited_insert", inherited: true},
@@ -290,6 +297,14 @@ func TestDataBranchPickWindowForkConflicts(t *testing.T) {
 				exec("create table " + root + " (k int primary key, v int)")
 				exec("data branch create table " + src + " from " + root)
 				exec("insert into " + src + " values (1,20)")
+				if tc.copy {
+					const query = "select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='root'"
+					var before, after uint64
+					require.NoError(t, db.QueryRowContext(t.Context(), query, ns).Scan(&before))
+					exec("alter table " + root + " algorithm=copy, modify column v int")
+					require.NoError(t, db.QueryRowContext(t.Context(), query, ns).Scan(&after))
+					require.NotEqual(t, before, after)
+				}
 				if tc.inherited {
 					exec("insert into " + root + " values (1,99)")
 				}
@@ -386,6 +401,98 @@ func TestDataBranchPickWindowForkConflicts(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestDataBranchPickWindowReviewCases(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db := recoverySQLClient(t, cn)
+		defer db.Close()
+
+		run := func(t *testing.T, ns string, setup, changes []string, want string) {
+			t.Helper()
+			exec := func(sql string) {
+				t.Helper()
+				_, err := db.ExecContext(t.Context(), sql)
+				require.NoError(t, err, sql)
+			}
+			exec("create database " + ns)
+			t.Cleanup(func() { _, _ = db.Exec("drop database " + ns) })
+			exec("use " + ns)
+			for _, sql := range setup {
+				exec(sql)
+			}
+			take := func(name string) {
+				exec("create snapshot " + name + " for table " + ns + " src")
+				t.Cleanup(func() { _, _ = db.Exec("drop snapshot " + name) })
+			}
+			lo, hi := ns+"_lo", ns+"_hi"
+			take(lo)
+			for _, sql := range changes {
+				exec(sql)
+			}
+			take(hi)
+			exec("data branch pick src into dst between snapshot " + lo + " and " + hi + " when conflict accept")
+			var got string
+			require.NoError(t, db.QueryRowContext(t.Context(),
+				"select group_concat(concat(k,':',v) order by k) from dst").Scan(&got))
+			require.Equal(t, want, got)
+		}
+
+		t.Run("independent_tables", func(t *testing.T) {
+			run(t, "pick_review_independent", []string{
+				"create table src(k int primary key,v int)", "insert into src values(1,20),(2,20)",
+				"create table dst(k int primary key,v int)", "insert into dst values(1,99),(2,99)",
+			}, []string{"update src set v=25", "update src set v=20 where k=1", "insert into src values(3,30)"}, "1:99,2:25,3:30")
+		})
+		t.Run("restore_and_update_in_same_batch", func(t *testing.T) {
+			a, b := pickWindowSameShardKeys(t)
+			run(t, "pick_review_mixed", []string{
+				"create table root(k int primary key,v int)",
+				fmt.Sprintf("insert into root values(%d,10),(%d,10)", a, b),
+				"data branch create table src from root", "data branch create table dst from root",
+				fmt.Sprintf("delete from dst where k=%d", a),
+			}, []string{"update src set v=20"}, fmt.Sprintf("%d:20,%d:20", a, b))
+		})
+	})
+}
+
+func pickWindowSameShardKeys(t *testing.T) (int32, int32) {
+	t.Helper()
+	// Use the same map and key encoding as the production tombstone batches.
+	hm, err := databranchutils.NewBranchHashmap()
+	require.NoError(t, err)
+	defer hm.Close()
+	mp := mpool.MustNewZero()
+	keys := vector.NewVec(types.T_int32.ToType(), mp)
+	defer keys.Free(mp)
+	for i := 1; i <= hm.ShardCount()+1; i++ {
+		require.NoError(t, vector.AppendFixed(keys, int32(i), false, mp))
+	}
+	require.NoError(t, hm.PutByVectors([]*vector.Vector{keys}, []int{0}))
+	var a, b int32
+	require.NoError(t, hm.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
+		if b != 0 {
+			return nil
+		}
+		var first int32
+		return cursor.ForEach(func(_, row []byte) error {
+			tuple, _, err := hm.DecodeRow(row)
+			if err != nil {
+				return err
+			}
+			k := tuple[0].(int32)
+			if first == 0 {
+				first = k
+			} else if b == 0 {
+				a, b = min(first, k), max(first, k)
+			}
+			return nil
+		})
+	}, 1))
+	require.NotZero(t, b)
+	return a, b
 }
 
 func TestDataBranchPickWindowCopyColumnSwap(t *testing.T) {

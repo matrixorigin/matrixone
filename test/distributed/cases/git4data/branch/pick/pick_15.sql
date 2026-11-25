@@ -170,3 +170,62 @@ select k,v from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: Destination fork resolves its COPY ALTER generation
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+data branch create table src from root;
+insert into src values (1,20);
+alter table root algorithm=copy, modify column v int;
+insert into root values (1,99);
+data branch create table dst_fail from root;
+data branch create table dst_skip from root;
+data branch create table dst_accept from root;
+create snapshot pick_window_lo for table pick_window src;
+delete from src where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst_fail between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst_fail;
+data branch pick src into dst_skip between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst_skip;
+data branch pick src into dst_accept between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst_accept;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Net-zero updates between snapshots remain no-ops with unrelated tables
+create database pick_window;
+use pick_window;
+create table src (k int primary key, v int);
+insert into src values (1,20),(2,20);
+create table dst (k int primary key, v int);
+insert into dst values (1,99),(2,99);
+create snapshot pick_window_lo for table pick_window src;
+update src set v=25;
+update src set v=20 where k=1;
+insert into src values (3,30);
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Restore one key and update the other in the same statement
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(5,10);
+data branch create table src from root;
+data branch create table dst from root;
+delete from dst where k=1;
+create snapshot pick_window_lo for table pick_window src;
+update src set v=20;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
