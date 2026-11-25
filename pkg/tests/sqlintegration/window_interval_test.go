@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -90,6 +92,15 @@ func TestWindowTemporalIntervals(t *testing.T) {
 					require.Equal(t, tc.want, query(t, q))
 				})
 			}
+			t.Run("invalid_end", func(t *testing.T) {
+				_, err := db.ExecContext(ctx, `select count(*) over (
+					order by cast(at as date)
+					range between interval 999999999 day preceding and interval 8796093022208 day following
+				) from dt where id = 1`)
+				var intervalErr *mysql.MySQLError
+				require.ErrorAs(t, err, &intervalErr)
+				require.Equal(t, moerr.ErrInvalidArg, intervalErr.Number)
+			})
 		})
 		t.Run("NULL interval consumers", func(t *testing.T) {
 			for _, typ := range []string{"date", "time(6)", "datetime(6)", "timestamp(6)"} {
