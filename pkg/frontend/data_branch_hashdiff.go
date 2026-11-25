@@ -1113,7 +1113,7 @@ func hashDiff(
 
 	diffStart := time.Now()
 	if !dagInfo.hasLCA() || tblStuff.lcaHasZeroHistory {
-		if !dagInfo.hasLCA() && tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
+		if tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind &&
 			tarDataHashmap.ItemCount() > 0 && tarTombstoneHashmap.ItemCount() > 0 {
 			if err = pruneUnchangedPickRowsWithoutLCA(
 				ctx, ses, bh, tblStuff, dagInfo, tarDataHashmap, tarTombstoneHashmap,
@@ -1188,6 +1188,7 @@ func dataBranchPickWindowProbe(
 	tarDef := tblStuff.tarRel.GetTableDef(ctx)
 	pathDefs := []*plan2.TableDef{tarDef}
 	lineageOnly := []bool{false}
+	var creationDefs []*plan2.TableDef
 	if start.tableID != tblStuff.tarRel.GetTableID(ctx) {
 		// A COPY ALTER can place the endpoint in a different generation.
 		// Resolve each edge before using the starting generation's own
@@ -1207,6 +1208,7 @@ func dataBranchPickWindowProbe(
 			return tableStuff{}, err
 		}
 		lineageOnly = dagInfo.pathFromLCAToTarLineageOnly[i:]
+		creationDefs = slices.Clone(pathDefs)
 		for j := len(pathDefs) - 1; j > 0; j-- {
 			if !lineageOnly[j] || pathDefs[j].Version == 0 {
 				continue
@@ -1219,7 +1221,8 @@ func dataBranchPickWindowProbe(
 					return tableStuff{}, err
 				}
 			}
-			if err := validateDataBranchPickWindowCopyLayout(ctx, ses, bh, copyRel, copyIdent, copySP, pathDefs[j]); err != nil {
+			creationDefs[j], err = dataBranchPickWindowCopyCreation(ctx, ses, bh, copyRel, copyIdent, copySP)
+			if err != nil {
 				return tableStuff{}, err
 			}
 		}
@@ -1230,6 +1233,7 @@ func dataBranchPickWindowProbe(
 	tblStuff.lcaRelSnapshot = start.snapshot
 	tblStuff.lcaProbeTableId = 0
 	tblStuff.def.lcaColNames = make([]string, len(tblStuff.def.colNames))
+	tblStuff.def.tarOnlyIdxes = slices.Clone(tblStuff.def.tarOnlyIdxes)
 	for i, name := range tblStuff.def.colNames {
 		if slices.Contains(tblStuff.def.tarOnlyIdxes, i) {
 			continue
@@ -1239,21 +1243,41 @@ func dataBranchPickWindowProbe(
 		for j := len(pathDefs) - 1; j > 0 && startCol != nil; j-- {
 			prev := pathDefs[j-1]
 			if lineageOnly[j] && isDataBranchUserVisibleColumn(startCol) {
-				startCol = dataBranchPickWindowCopyColumn(prev, pathDefs[j], startCol)
-				if startCol == nil {
+				created := creationDefs[j]
+				createdCol := dataBranchColumnDefByIdentity(created, startCol)
+				if createdCol == nil && dataBranchColumnDefByName(created, startCol.Name) == nil {
+					startCol = nil // Added within the copied generation.
+					break
+				}
+				if createdCol == nil || !strings.EqualFold(createdCol.Name, startCol.Name) ||
+					!isDataBranchLogicalTypeEquivalent(createdCol.Typ, startCol.Typ) {
 					return tableStuff{}, moerr.NewNotSupportedNoCtxf(
 						"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for %q at the window start",
 						name,
 					)
 				}
+				var proven bool
+				startCol, proven = dataBranchPickWindowCopyColumn(prev, created, createdCol)
+				if !proven {
+					return tableStuff{}, moerr.NewNotSupportedNoCtxf(
+						"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for %q at the window start", name)
+				}
 				continue
 			}
-			_, startCol, _ = dataBranchColumnReachesLCA(pathDefs[j-1:j+1], lineageOnly[j-1:j+1], startCol)
+			startCol = dataBranchColumnDefByLogicalName(prev, startCol)
 		}
 		// Both definitions are for the starting physical generation. Its
 		// current or edge name can belong to a different column at lo.
 		loCol := dataBranchColumnDefByIdentity(loDef, startCol)
 		if loCol == nil {
+			if isDataBranchUserVisibleColumn(tarCol) && !slices.Contains(tblStuff.def.pkColIdxes, i) &&
+				dataBranchColumnDefByName(loDef, name) == nil &&
+				(startCol == nil || dataBranchColumnDefByLogicalName(loDef, startCol) == nil) {
+				// A column introduced after lo has no before-image. Exclude
+				// it from both SQL and reader projections so they pad NULL.
+				tblStuff.def.tarOnlyIdxes = append(tblStuff.def.tarOnlyIdxes, i)
+				continue
+			}
 			return tableStuff{}, moerr.NewInternalErrorNoCtxf(
 				"DATA BRANCH PICK cannot resolve column %q at the window start (table %d, snapshot %s)",
 				name, start.tableID, start.snapshot.ToString(),
@@ -1264,80 +1288,85 @@ func dataBranchPickWindowProbe(
 	return tblStuff, nil
 }
 
-func validateDataBranchPickWindowCopyLayout(
+func dataBranchPickWindowCopyCreation(
 	ctx context.Context, ses *Session, bh BackgroundExec,
-	copyRel engine.Relation, ident branchIdentity, snapshot types.TS, copyDef *plan2.TableDef,
-) error {
+	copyRel engine.Relation, ident branchIdentity, snapshot types.TS,
+) (*plan2.TableDef, error) {
 	// COPY coordinates are table-local. A later rename can make a reassigned
 	// coordinate look like the old generation's column. Compare against the
 	// COPY's own initial layout before trusting its versioned definition.
 	tableID := copyRel.GetTableID(identityCtx(ctx, ident))
 	cts, err := getTablesCreationCommitTS(ctx, ses, ident, copyRel, ident, copyRel, []types.TS{snapshot, snapshot})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	createdRel, _, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{ident}, tableID, cts[0])
 	if err != nil {
-		return err
+		return nil, err
 	}
 	createdDef := createdRel.GetTableDef(identityCtx(ctx, ident))
 	if createdDef.Version != 0 {
-		return moerr.NewNotSupportedNoCtxf(
+		return nil, moerr.NewNotSupportedNoCtxf(
 			"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for table %d at the window start", tableID)
 	}
-	if name := dataBranchPickWindowCopyLayoutMismatch(createdDef, copyDef); name != "" {
-		return moerr.NewNotSupportedNoCtxf(
-			"DATA BRANCH PICK has ambiguous COPY ALTER column lineage for %q at the window start", name)
-	}
-	return nil
-}
-
-func dataBranchPickWindowCopyLayoutMismatch(createdDef, copyDef *plan2.TableDef) string {
-	remaining := createdDef.Cols
-	for _, col := range copyDef.Cols {
-		if !isDataBranchUserVisibleColumn(col) {
-			continue
-		}
-		i := slices.IndexFunc(remaining, isDataBranchUserVisibleColumn)
-		if i < 0 {
-			return col.Name
-		}
-		created := remaining[i]
-		if col.ColId == 0 || col.ColId != created.ColId || col.Seqnum != created.Seqnum ||
-			!strings.EqualFold(col.Name, created.Name) || !isDataBranchLogicalTypeEquivalent(col.Typ, created.Typ) {
-			return col.Name
-		}
-		remaining = remaining[i+1:]
-	}
-	if i := slices.IndexFunc(remaining, isDataBranchUserVisibleColumn); i >= 0 {
-		return remaining[i].Name
-	}
-	return ""
+	return createdDef, nil
 }
 
 func dataBranchPickWindowCopyColumn(
 	previousDef, copyDef *plan2.TableDef, col *plan2.ColDef,
-) *plan2.ColDef {
+) (*plan2.ColDef, bool) {
 	previous := dataBranchColumnDefByIdentity(previousDef, col)
 	if !isDataBranchUserVisibleColumn(previous) || !isDataBranchLogicalTypeEquivalent(previous.Typ, col.Typ) {
-		return nil
+		// ADD FIRST can shift every coordinate. Names can still prove
+		// identity when the old columns are all carried over in order.
+		if dataBranchCopyPreservesColumnOrder(previousDef, copyDef) {
+			if named := dataBranchColumnDefByName(previousDef, col.Name); named == nil ||
+				isDataBranchLogicalTypeEquivalent(named.Typ, col.Typ) {
+				return named, true
+			}
+		}
+		return nil, false
 	}
 	if strings.EqualFold(previous.Name, col.Name) {
-		return previous
+		return previous, true
+	}
+
+	if dataBranchCopyPreservesColumnOrder(previousDef, copyDef) {
+		if named := dataBranchColumnDefByName(previousDef, col.Name); named == nil ||
+			isDataBranchLogicalTypeEquivalent(named.Typ, col.Typ) {
+			return named, true
+		}
 	}
 
 	// An isolated rename is unambiguous when all visible coordinates are
 	// preserved and every other name still belongs to the same column.
 	if dataBranchColumnDefByRenameIdentity(previousDef, copyDef, col) == nil {
-		return nil
+		return nil, false
 	}
 	for _, candidate := range previousDef.Cols {
 		if candidate != previous && isDataBranchUserVisibleColumn(candidate) &&
 			dataBranchColumnDefByName(copyDef, candidate.Name) == nil {
-			return nil
+			return nil, false
 		}
 	}
-	return previous
+	return previous, true
+}
+
+func dataBranchCopyPreservesColumnOrder(previousDef, copyDef *plan2.TableDef) bool {
+	remaining := copyDef.Cols
+	for _, col := range previousDef.Cols {
+		if !isDataBranchUserVisibleColumn(col) {
+			continue
+		}
+		i := slices.IndexFunc(remaining, func(next *plan2.ColDef) bool {
+			return isDataBranchUserVisibleColumn(next) && strings.EqualFold(col.Name, next.Name)
+		})
+		if i < 0 {
+			return false
+		}
+		remaining = remaining[i+1:]
+	}
+	return true
 }
 
 func hashDiffIfHasLCA(
@@ -1441,9 +1470,10 @@ func hashDiffIfHasLCA(
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
 		if tblStuff.pickWindowStart != nil && copt.conflictOpt != nil &&
-			wrapped.kind == diffDelete && !wrapped.fromUpdate &&
+			((wrapped.kind == diffDelete && !wrapped.fromUpdate) ||
+				(wrapped.kind == diffInsert && wrapped.fromUpdate)) &&
 			wrapped.batch.RowCount() > 0 && baseDataHashmap.ItemCount() > 0 {
-			stop, err := reconcilePickWindowDelete(ctx, ses, bh, baseProbeStuff, copt, emit, wrapped, baseDataHashmap, inheritedAt)
+			stop, err := reconcilePickWindowDestinationInsert(ctx, ses, bh, baseProbeStuff, copt, emit, wrapped, baseDataHashmap, inheritedAt)
 			if stop || err != nil || wrapped.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return err
@@ -1883,10 +1913,10 @@ func hashDiffIfHasLCA(
 	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
-// A row present at the source window start may be absent at the fork.
-// A destination insert of that key therefore survives the fork probe in
-// baseDataHashmap, outside the destination delete/update batches.
-func reconcilePickWindowDelete(
+// A destination insert may survive the fork probe in baseDataHashmap,
+// outside the destination delete/update batches. Match it against both
+// deletes and window replacements before emitting their writes.
+func reconcilePickWindowDestinationInsert(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff, copt compositeOption,
 	emit emitFunc, src batchWithKind, baseDataHashmap databranchutils.BranchHashmap, inheritedAt types.TS,
 ) (bool, error) {
@@ -1916,7 +1946,18 @@ func reconcilePickWindowDelete(
 	}
 	matches.SetRowCount(len(srcRows))
 	conflicting := make([]int64, 0, len(srcRows))
-	if inheritedAt.IsEmpty() {
+	if src.fromUpdate {
+		for i, srcRow := range srcRows {
+			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(srcRow), i, true,
+				src, batchWithKind{batch: matches})
+			if err != nil {
+				return false, err
+			}
+			if cmp != 0 {
+				conflicting = append(conflicting, int64(i))
+			}
+		}
+	} else if inheritedAt.IsEmpty() {
 		for i := range srcRows {
 			conflicting = append(conflicting, int64(i))
 		}
@@ -1959,18 +2000,24 @@ func reconcilePickWindowDelete(
 		if err != nil {
 			return false, err
 		}
+		if src.fromUpdate {
+			return false, moerr.NewDataBranchConflictNoCtxf(
+				"%s INSERT and %s INSERT on pk(%v) with different values", src.name, baseName, key)
+		}
 		return false, moerr.NewDataBranchConflictNoCtxf(
 			"%s DELETE and %s INSERT on pk(%v)", src.name, baseName, key,
 		)
 	}
 	mp := ses.proc.Mp()
-	remove := make([]int64, 0, len(conflicting))
-	for _, i := range conflicting {
-		remove = append(remove, srcRows[i])
-	}
-	slices.Sort(remove) // Hashmap callbacks are grouped by shard.
-	if err := src.batch.Shrink(remove, true, mp); err != nil {
-		return false, err
+	if !src.fromUpdate || copt.conflictOpt.Opt == tree.CONFLICT_SKIP {
+		remove := make([]int64, 0, len(conflicting))
+		for _, i := range conflicting {
+			remove = append(remove, srcRows[i])
+		}
+		slices.Sort(remove) // Hashmap callbacks are grouped by shard.
+		if err := src.batch.Shrink(remove, true, mp); err != nil {
+			return false, err
+		}
 	}
 	if copt.conflictOpt.Opt == tree.CONFLICT_SKIP {
 		return false, nil
@@ -1980,7 +2027,9 @@ func reconcilePickWindowDelete(
 	}
 	wrapped := batchWithKind{
 		name: baseName, kind: diffDelete, side: diffSideBase, batch: matches,
-		pickDeleteInsertConflict: true,
+		hasReplacement:           src.fromUpdate,
+		fromUpdate:               src.fromUpdate,
+		pickDeleteInsertConflict: !src.fromUpdate,
 	}
 	matches = nil // emitBatch transfers or releases the batch.
 	return emitBatch(emit, wrapped, false, tables.retPool)
@@ -2177,11 +2226,10 @@ func dataBranchUpdateRequiresNativeUpdateFromTuples(
 }
 
 // Keep window deletes and fork-existing updates in before. Suppress live rows
-// equal to lo and leave changed, fork-absent live rows for INSERT matching.
-// Without a fork, callers use only the live-row pruning side effect.
-// A row gone since lo is a DELETE regardless of its presence at the fork.
-func classifyPickWindowChanges(
-	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff, fork types.TS,
+// equal to lo. A changed row present at lo is a window UPDATE even if it
+// did not exist at the source fork. Target existence is resolved at apply.
+func pruneUnchangedPickWindowRows(
+	ses *Session, tables tableStuff,
 	before *batch.Batch, data databranchutils.BranchHashmap,
 ) error {
 	if before.RowCount() == 0 || data.ItemCount() == 0 {
@@ -2193,7 +2241,7 @@ func classifyPickWindowChanges(
 		return err
 	}
 	mp := ses.proc.Mp()
-	var drop, changed []int64
+	var drop []int64
 	for i, result := range live {
 		if !result.Exists {
 			continue
@@ -2208,30 +2256,12 @@ func classifyPickWindowChanges(
 			return err
 		}
 		if cmp != 0 {
-			if !fork.IsEmpty() {
-				changed = append(changed, int64(i))
-			}
 			continue
 		}
 		if _, err := data.PopByEncodedFullValueExact(row, false); err != nil {
 			return err
 		}
 		drop = append(drop, int64(i))
-	}
-	if len(changed) > 0 {
-		keys := vector.NewVec(*pkVec.GetType(), mp)
-		defer keys.Free(mp)
-		if err := keys.Union(pkVec, changed, mp); err != nil {
-			return err
-		}
-		forkRows, missing, err := probeDataBranchRows(ctx, ses, bh, keys, tables, fork.ToTimestamp())
-		if err != nil {
-			return err
-		}
-		tables.retPool.releaseRetBatch(forkRows, false)
-		for _, i := range missing {
-			drop = append(drop, changed[i])
-		}
 	}
 	if len(drop) == 0 {
 		return nil
@@ -2272,7 +2302,7 @@ func pruneUnchangedPickRowsWithoutLCA(
 		}
 		defer before.retPool.releaseRetBatch(rows, false)
 		keys.CleanOnlyData()
-		return classifyPickWindowChanges(ctx, ses, bh, before, types.TS{}, rows, data)
+		return pruneUnchangedPickWindowRows(ses, before, rows, data)
 	}
 	err := tombstones.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		return cursor.ForEach(func(key []byte, _ []byte) error {
@@ -2388,7 +2418,7 @@ func findDeleteAndUpdateBat(
 			}
 
 			if windowStart != nil {
-				if err2 = classifyPickWindowChanges(ctx, ses, bh, tblStuff, branchTS, dBat, dataHashmap); err2 != nil {
+				if err2 = pruneUnchangedPickWindowRows(ses, tblStuff, dBat, dataHashmap); err2 != nil {
 					tblStuff.retPool.releaseRetBatch(dBat, false)
 					return err2
 				}
@@ -3585,7 +3615,13 @@ func buildHashmapForTable(
 			// 0 stale data (the original (0,0) is outside the change range).
 			// staleDataCount=0 < totalTombstones=1, so the tombstone stays
 			// and findDeleteAndUpdateBat correctly detects UPDATE on the LCA.
-			if staleDataCount >= totalTombstones {
+			// In bounded PICK the destination range may start before its
+			// own fork. An insert in that prefix was inherited by the
+			// destination, and must not cancel its post-fork delete. Keep
+			// the tombstone for the destination-fork probe; a true net-zero
+			// insert/delete will not find a before-image there.
+			if staleDataCount >= totalTombstones &&
+				!(side == "base" && tblStuff.pickWindowStart != nil && tblStuff.def.pkKind != fakeKind) {
 				if _, err3 = cursor.PopByEncodedKeyValue(
 					key, tombstoneRet.Rows[maxIdx], false,
 				); err3 != nil {

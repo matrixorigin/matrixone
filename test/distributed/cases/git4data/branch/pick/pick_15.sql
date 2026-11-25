@@ -229,3 +229,165 @@ select k,v from dst order by k;
 drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
+
+-- @testcase: A window update conflicts with a destination-only insert
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+data branch create table dst from root;
+insert into dst values (1,99);
+insert into root values (1,10);
+data branch create table src from root;
+update src set v=20;
+create snapshot pick_window_lo for table pick_window src;
+update src set v=10;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+-- @regex("conflict: src INSERT and dst INSERT", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Window start is in the parent before a later logical fork
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table par from root;
+data branch create table dst from root;
+update dst set v=99;
+update par set v=20;
+create snapshot pick_window_lo for table pick_window par;
+update par set v=25;
+update par set v=20 where k=1;
+data branch create table src from par;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Prune net-zero updates when the common ancestor has no committed history
+create database pick_window;
+use pick_window;
+begin;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table src from root;
+data branch create table dst from root;
+drop table root;
+commit;
+update dst set v=99;
+create snapshot pick_window_lo for table pick_window src;
+update src set v=20;
+update src set v=10 where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: A window update does not bypass an explicit destination delete
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+data branch create table src from root;
+insert into src values (1,20),(2,20);
+insert into root values (1,99);
+data branch create table dst from root;
+insert into dst values (2,99);
+delete from dst where k>0;
+create snapshot pick_window_lo for table pick_window src;
+update src set v=30;
+create snapshot pick_window_hi for table pick_window src;
+-- @regex("conflict: src INSERT and dst INSERT", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Restore a key missing at the destination fork
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table src from root;
+delete from root where k=1;
+data branch create table dst from root;
+create snapshot pick_window_lo for table pick_window src;
+update src set v=30 where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Window insert collides with an unchanged inherited destination key
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table src from root;
+data branch create table dst from root;
+delete from src where k=1;
+create snapshot pick_window_lo for table pick_window src;
+insert into src values (1,30);
+create snapshot pick_window_hi for table pick_window src;
+-- @regex("conflict: src INSERT and dst INSERT", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,v from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: COPY ADD FIRST preserves shared column identities
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table src from root;
+data branch create table dst from root;
+create snapshot pick_window_lo for table pick_window src;
+alter table src algorithm=copy, add column extra int first;
+update src set v=30 where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Source-only rename after COPY must not block writes to shared columns
+create database pick_window;
+use pick_window;
+create table root (k int primary key, v int);
+insert into root values (1,10),(2,10);
+data branch create table src from root;
+data branch create table dst from root;
+create snapshot pick_window_lo for table pick_window src;
+alter table src algorithm=copy, add column extra int;
+alter table src algorithm=inplace, rename column extra to extra2;
+update src set v=30 where k=1;
+create snapshot pick_window_hi for table pick_window src;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict accept;
+select k,v from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;

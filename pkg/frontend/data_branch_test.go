@@ -3191,6 +3191,14 @@ func TestDataBranchPickWindowForkBoundary(t *testing.T) {
 				require.NotNil(t, tables.pickWindowStart)
 				require.Equal(t, tarID, tables.pickWindowStart.tableID)
 				require.Equal(t, childCTS, tables.pickWindowStart.snapshot)
+			} else if tc.nested {
+				require.NotNil(t, tables.pickWindowStart)
+				require.Equal(t, parentID, tables.pickWindowStart.tableID)
+				want := lo
+				if nestedFork.LT(&want) {
+					want = nestedFork
+				}
+				require.Equal(t, want, tables.pickWindowStart.snapshot)
 			} else {
 				require.Nil(t, tables.pickWindowStart)
 			}

@@ -3361,12 +3361,12 @@ func testDataBranchPickWindowHashDiff(t *testing.T, reusedName, copyGap bool) {
 						beforeValue = "at_fork"
 					}
 					return nil
-				}).Times(3)
+				}).Times(2)
 				bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
 					defer sqlMu.Unlock()
 					return []interface{}{buildLCAProbeResultSetWithRows([]interface{}{int64(0), key, beforeValue, loOther})}
-				}).Times(3)
-				bh.EXPECT().ClearExecResultSet().Times(3)
+				}).Times(2)
+				bh.EXPECT().ClearExecResultSet().Times(2)
 			}
 
 			commit := commitTSBytes(types.BuildTS(15, 0))
@@ -5265,11 +5265,17 @@ func TestDataBranchPickWindowForkClassification(t *testing.T) {
 			want: []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), "before", "h"}}}}},
 		{name: "inherited_delete_skip", dstValue: "destination", inherited: true, policy: tree.CONFLICT_SKIP,
 			want: []capturedBatch{{kind: diffDelete, side: diffSideTarget, rows: [][]any{{int64(1), "before", "h"}}}}},
-		{name: "update_becomes_insert", update: true, policy: tree.CONFLICT_FAIL,
-			want: []capturedBatch{{kind: diffInsert, side: diffSideTarget, rows: [][]any{{int64(1), "after", "h"}}}}},
-		{name: "independent_insert_fail", update: true, dstValue: "destination", policy: tree.CONFLICT_FAIL},
-		{name: "independent_insert_skip", update: true, dstValue: "destination", policy: tree.CONFLICT_SKIP},
-		{name: "inherited_insert_fail", update: true, dstValue: "destination", inherited: true, policy: tree.CONFLICT_FAIL},
+		{name: "window_update_keeps_its_before_image", update: true, policy: tree.CONFLICT_FAIL,
+			want: []capturedBatch{
+				{kind: diffDelete, side: diffSideTarget, fromUpdate: true, rows: [][]any{{int64(1), "before", "h"}}},
+				{kind: diffInsert, side: diffSideTarget, fromUpdate: true, rows: [][]any{{int64(1), "after", "h"}}},
+			}},
+		{name: "independent_insert_fail", update: true, dstValue: "destination", policy: tree.CONFLICT_FAIL,
+			want: []capturedBatch{{kind: diffDelete, side: diffSideTarget, fromUpdate: true, rows: [][]any{{int64(1), "before", "h"}}}}},
+		{name: "independent_insert_skip", update: true, dstValue: "destination", policy: tree.CONFLICT_SKIP,
+			want: []capturedBatch{{kind: diffDelete, side: diffSideTarget, fromUpdate: true, rows: [][]any{{int64(1), "before", "h"}}}}},
+		{name: "inherited_insert_fail", update: true, dstValue: "destination", inherited: true, policy: tree.CONFLICT_FAIL,
+			want: []capturedBatch{{kind: diffDelete, side: diffSideTarget, fromUpdate: true, rows: [][]any{{int64(1), "before", "h"}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses := newValidateSession(t)
@@ -5377,9 +5383,6 @@ func TestDataBranchPickWindowRejectsAmbiguousCopyLineage(t *testing.T) {
 	}{
 		{name: "swapped_names", change: func(def *plan.TableDef) {
 			def.Cols[1].Name, def.Cols[2].Name = def.Cols[2].Name, def.Cols[1].Name
-		}},
-		{name: "missing_coordinates", change: func(def *plan.TableDef) {
-			def.Cols[1].ColId, def.Cols[1].Seqnum = 4, 3
 		}},
 		{name: "incompatible_type", change: func(def *plan.TableDef) {
 			def.Cols[1].Typ.Id = int32(types.T_int64)

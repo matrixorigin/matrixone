@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2298,23 +2297,12 @@ func constructChangeHandle(
 	if betweenFrom != nil && betweenTo != nil {
 		bFrom := betweenFrom.Next()
 		bTo := *betweenTo
-		// The lower bound can trim a parent range before the source fork.
-		// Only a lower bound after the fork can supply a source before image.
+		// The shared prefix before the first divergence is still handled
+		// against the fork. After it, lo can belong to any contributing
+		// source generation, including the parent of a later logical fork.
 		tarForkTS, _ := branchInfo.lcaProbeSnapshots(tarSnapshot, baseSnapshot, true)
 		hasLCA := branchInfo.hasLCA()
 		useWindowStart := !hasLCA || betweenFrom.GT(&tarForkTS)
-		sourceGenerations := branchInfo.pathFromLCAToTar
-		if useWindowStart && hasLCA {
-			// The last real fork starts the source branch. All following
-			// COPY ALTER generations still belong to that branch.
-			lineageOnly := branchInfo.pathFromLCAToTarLineageOnly
-			for i := len(sourceGenerations) - 1; i > 0; i-- {
-				if i >= len(lineageOnly) || !lineageOnly[i] {
-					sourceGenerations = sourceGenerations[i:]
-					break
-				}
-			}
-		}
 		j := 0
 		lastDropped := -1
 		boundaries := make([]engine.Relation, 0, len(tarRange.rel))
@@ -2340,8 +2328,8 @@ func constructChangeHandle(
 				if j == 0 && useWindowStart {
 					seg, snapshot := i, *betweenFrom
 					if bFrom.LT(&tarRange.from[i]) {
-						// The next generation is not visible yet. A predecessor
-						// after the fork supplies the image in the COPY gap.
+						// The next generation is not visible yet. Its
+						// captured parent image supplies the baseline.
 						seg = lastDropped
 						if seg >= 0 {
 							snapshot = tarRange.end[seg]
@@ -2349,13 +2337,10 @@ func constructChangeHandle(
 					}
 					if seg >= 0 && (!hasLCA || snapshot.GT(&tarForkTS)) {
 						ident := tarRange.segmentIdentity(seg, tarIdent)
-						id := tarRange.rel[seg].GetTableID(identityCtx(ctx, ident))
-						if slices.Contains(sourceGenerations, id) {
-							tables.pickWindowStart = &dataBranchPickWindowStart{
-								tableID:  id,
-								snapshot: snapshot,
-								identity: ident,
-							}
+						tables.pickWindowStart = &dataBranchPickWindowStart{
+							tableID:  tarRange.rel[seg].GetTableID(identityCtx(ctx, ident)),
+							snapshot: snapshot,
+							identity: ident,
 						}
 					}
 				}
