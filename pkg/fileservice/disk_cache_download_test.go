@@ -740,6 +740,7 @@ func newReadShareDownload(t *testing.T, data []byte, advertised int64) (*DiskCac
 	diskPath := cache.pathForFile("obj")
 	o := newPreloadGeneration(t, cache.preloads, diskPath, data)
 	cache.downloads.store(diskPath, o)
+	cache.newContentFill(diskPath, o)
 	o.advance(0, advertised)
 	o.end(true)
 	return cache, o, diskPath
@@ -780,7 +781,7 @@ func TestDiskCacheDownloadReadShareOnlyCountsSuccessfulReads(t *testing.T) {
 				if stage == "after_publish" {
 					cache.preloads.readDownload(diskPath, o, o.takeServed())
 				}
-				downloading, filled, err := cache.readFromDownload(ctx, diskPath, &entry, &IOVector{})
+				downloading, filled, err := cache.readFromDownload(ctx, diskPath, false, &entry, &IOVector{})
 				vector := IOVector{Entries: []IOEntry{entry}}
 				defer vector.Release()
 				require.True(t, downloading)
@@ -827,7 +828,7 @@ func TestDiskCacheDownloadFailedReadDoesNotCountWhenEvictedOnPublish(t *testing.
 	w := blockingWriter{entered: make(chan struct{}), release: make(chan struct{}), err: errors.New("injected writer error")}
 	read, release := startTestBlockedRead(t, pw, w, func() error {
 		entry := IOEntry{Offset: 0, Size: 4096, WriterForRead: w}
-		_, _, err := cache.readFromDownload(ctx, diskPath, &entry, &IOVector{})
+		_, _, err := cache.readFromDownload(ctx, diskPath, false, &entry, &IOVector{})
 		return err
 	})
 	select {

@@ -353,26 +353,36 @@ func (r *objectEndReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// fileDownload returns the download of the live FilePrefetchObject of the object at
-// objectPath holding the bytes [lo, hi) whose bytes arrive first, and where its bytes
-// start in the object.
-func (d *DiskCache) fileDownload(objectPath string, lo, hi int64) (*objectDownload, int64) {
+// fileFill returns the live file fill of the object at objectPath, of the index-file cache
+// when index is set, holding the bytes [lo, hi) whose bytes arrive first, and its
+// download.
+func (d *DiskCache) fileFill(objectPath string, index bool, lo, hi int64) (*filePrefetchObject, *objectDownload) {
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var best *objectDownload
-	var base int64
+	var best *filePrefetchObject
+	var bestDownload *objectDownload
 	var bestWait time.Duration
 	for _, o := range f.m[objectPath] {
 		p, ok := o.(*filePrefetchObject)
-		if !ok || p.start > lo || hi > p.end || p.ctx.Err() != nil {
+		if !ok || p.index != index || p.start > lo || hi > p.end || p.ctx.Err() != nil {
 			continue
 		}
 		if download := p.joinableDownload(); download != nil {
 			if _, wait := download.estimate(lo-p.start, hi-p.start); best == nil || wait < bestWait {
-				best, base, bestWait = download, p.start, wait
+				best, bestDownload, bestWait = p, download, wait
 			}
 		}
 	}
-	return best, base
+	return best, bestDownload
+}
+
+// fileDownload returns the download of the file fill of the disk cache fileFill returns,
+// and where its bytes start in the object.
+func (d *DiskCache) fileDownload(objectPath string, lo, hi int64) (*objectDownload, int64) {
+	p, o := d.fileFill(objectPath, false, lo, hi)
+	if p == nil {
+		return nil, 0
+	}
+	return o, p.start
 }

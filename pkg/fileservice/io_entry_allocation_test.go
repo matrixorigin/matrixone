@@ -309,6 +309,7 @@ func TestDiskCacheDownloadAllocationFailure(t *testing.T) {
 	diskPath := cache.pathForFile("obj")
 	download := newPreloadGeneration(t, cache.preloads, diskPath, []byte("xy"))
 	cache.downloads.store(diskPath, download)
+	cache.newContentFill(diskPath, download)
 	download.advance(0, 2)
 	allocator := new(limitedReadAllocator)
 	ctx = context.WithValue(ctx, ioEntryAllocatorKey{}, allocator)

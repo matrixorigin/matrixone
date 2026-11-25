@@ -971,28 +971,24 @@ func (d *DiskCache) download(diskPath string) *objectDownload {
 	return d.downloads.load(diskPath)
 }
 
-// readFromDownload fills entry from the download of the object at diskPath when its bytes
-// are written, or will be no more than the max extra wait later than a range read could
-// fetch them, or, for a whole-object download, are more than an eighth of what the
-// download writes before them. It
-// reports whether a download covers the object, and whether it filled entry.
-func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
-	end := entry.Offset + entry.Size
-	// The download of the object, or of a FilePrefetchObject holding the entry's bytes,
-	// whose bytes start at base in the object.
-	o, base, whole := d.download(diskPath), int64(0), true
-	if o == nil {
-		whole = false
-		if o, base = d.fileDownload(diskPath, entry.Offset, end); o == nil {
-			return false, false, nil
-		}
+// readFromDownload fills entry from the file fill of the object at diskPath, of the
+// index-file cache when index is set, holding its bytes that fileFill returns, when the
+// read joins it. It reports whether a fill holds the bytes, and whether it filled entry.
+func (d *DiskCache) readFromDownload(ctx context.Context, diskPath string, index bool, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
+	p, o := d.fileFill(diskPath, index, entry.Offset, entry.Offset+entry.Size)
+	if p == nil {
+		return false, false, nil
 	}
-	return d.readDownloadEntry(ctx, diskPath, o, base, whole, entry, vector)
+	return d.readDownloadEntry(ctx, diskPath, p, o, entry, vector)
 }
 
-// readDownloadEntry is readFromDownload of entry from o, whose bytes start at base in the
-// object, a whole-object download when whole is set.
-func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, o *objectDownload, base int64, whole bool, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
+// readDownloadEntry is readFromDownload of entry from the fill p, whose download is o. The
+// read joins p when its bytes are written, or arrive no later than a range read could
+// fetch them by the max extra wait, or, for a fill of a whole object, are more than an
+// eighth of what it writes before them; a prefetch range being read that delivers them
+// sooner is left to the range read. A read that joins waits as long as its context allows.
+func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, p *filePrefetchObject, o *objectDownload, entry *IOEntry, vector *IOVector) (downloading, filled bool, err error) {
+	base := p.start
 	end := entry.Offset + entry.Size
 	behind, wait := o.estimate(entry.Offset-base, end-base)
 	if wait == 0 {
@@ -1000,28 +996,15 @@ func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, o *o
 	} else {
 		if eta, ok := d.fastestPrefetch(diskPath, entry.Offset, end); ok && eta < wait {
 			if _, ok := d.prefetchUnit(vector); ok {
-				// A prefetch range being read delivers the bytes sooner.
 				return true, false, nil
 			}
 		}
-		budget := rangeReadCosts.cost(entry.Size) + d.downloadMaxExtraWait
-		if wait > budget {
-			// A range read fetches these bytes again; it pays only when they are a small
-			// part of what the download still writes before them.
-			if !whole || entry.Size*downloadDuplicateRatio <= behind {
-				metric.FSDiskCacheDownloadReadDeclinedCounter.Inc()
-				metric.FSDiskCacheDownloadDeclinedBytesCounter.Add(float64(entry.Size))
-				return true, false, nil
-			}
+		if !d.joinsFill(entry.Size, wait) && !(p.whole && entry.Size*downloadDuplicateRatio > behind) {
+			metric.FSDiskCacheDownloadReadDeclinedCounter.Inc()
+			metric.FSDiskCacheDownloadDeclinedBytesCounter.Add(float64(entry.Size))
+			return true, false, nil
 		}
-		// The read waits for the download it chose until its bytes are written or it ends:
-		// for a whole-object download at most the I/O wait bound, for the download of a
-		// FilePrefetchObject as long as its context allows.
-		timeout := time.Duration(0)
-		if whole {
-			timeout = maxIOWaitDuration
-		}
-		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, timeout); !ok {
+		if _, ok := o.waitFor(ctx, entry.Offset-base, end-base, 0); !ok {
 			if err := readFailure(ctx, vector.FilePath, fromSource, cmp.Or(ctx.Err(), o.failure())); err != nil {
 				return true, false, &failingReadError{err: err}
 			}
@@ -1043,6 +1026,12 @@ func (d *DiskCache) readDownloadEntry(ctx context.Context, diskPath string, o *o
 		return false, false, nil
 	}
 	return true, err == nil, err
+}
+
+// joinsFill reports whether a read of n bytes joins a file fill whose bytes arrive wait
+// from now: no later than the max extra wait after a range read could fetch them.
+func (d *DiskCache) joinsFill(n int64, wait time.Duration) bool {
+	return wait <= rangeReadCosts.cost(n)+d.downloadMaxExtraWait
 }
 
 const (

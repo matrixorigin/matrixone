@@ -834,6 +834,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 			vector.Entries[i].readDeletes = mark
 		}
 	}
+	vector.indexTier = s.indexObject(vector.Policy)
 	// The disk cache's eviction of whole objects says nothing of an object the index-file
 	// cache keeps.
 	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&

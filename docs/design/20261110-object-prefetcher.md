@@ -425,11 +425,10 @@ object.
   It stops silently: no read waits for it, so no read fails, and a read that comes later
   reads its own bytes. The stop frees the download's connection, its prefetch memory and
   its cache-write slot.
-- A read that joins a whole-object download gives up after the I/O wait bound and reads
-  its own bytes. The read that started a download, the reads of a prefetch range read, and
-  the reads that join a FilePrefetchObject of ranges, wait until their context ends: with a
-  source that stalls, as before the timeout existed, such a read waits as long as its
-  context allows.
+- Every read that waits for a download, the read that started it or one that joined it,
+  of a whole object or of ranges, waits until its context ends or the download ends: with
+  a source that stalls, as before the timeout existed, such a read waits as long as its
+  context allows (decision 2026-11-25).
 - A download that stops for the timeout fails no read: the read that started it reads its
   own ranges.
 
