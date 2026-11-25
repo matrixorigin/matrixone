@@ -175,8 +175,7 @@ func TestOuterCountIntegerSpanBounds(t *testing.T) {
 		{"infinity", types.T_int32, 100, 1, math.Inf(1), 100, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			typ := plan.Type{Id: int32(tc.oid), NotNullable: !tc.nullable}
-			require.Equal(t, tc.want, outerCountIntegerSpanCap(tc.groups, typ, tc.lo, tc.hi))
+			require.Equal(t, tc.want, boundNDVByIntegerSpan(tc.groups, tc.oid, tc.lo, tc.hi, tc.nullable))
 		})
 	}
 }

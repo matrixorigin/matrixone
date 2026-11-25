@@ -259,7 +259,7 @@ func containsNABlkFuncFactory[T any](comp func(T, T) int) func(args ...any) func
 				comp,
 				nil,
 			); existed {
-				rowIDs.Update(row, nil, true)
+				return containers.MarkNull(rowIDs.GetDownstreamVector(), uint32(row))
 			}
 			return
 		}
@@ -535,7 +535,9 @@ func containsABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args 
 					if commitTS.Equal(&txnif.UncommitTS) {
 						continue
 					}
-					rowIDs.Update(rowOffset, nil, true)
+					if err := containers.MarkNull(rowIDs.GetDownstreamVector(), uint32(rowOffset)); err != nil {
+						return err
+					}
 					startTS := txn.GetStartTS()
 					if commitTS.GT(&startTS) {
 						ts, err := delsFn(v1, commitTS)

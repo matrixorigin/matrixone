@@ -134,7 +134,6 @@ pkg/sql/colexec/runtimefilter/contract.go	CloseFloatSignedZero	float	1
 pkg/sql/colexec/table_function/filter_helper_gpu.go	filterColTypeFromOid	float	1
 pkg/sql/colexec/table_function/ivf_create.go	clustering	vector chain	1
 pkg/sql/colexec/table_function/ivf_create.go	start	vector	1
-pkg/sql/colexec/window/window.go	searchLeftWithLocation	float	1
 pkg/sql/colexec/window/window.go	searchRightWithLocation	float	1
 pkg/sql/colexec/window/window.go	validateRangeFrameBound	float	1
 pkg/sql/compile/compile.go	evalAggOptimize	float	2

@@ -158,19 +158,20 @@ func TestProbe(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "signal_test.go"), []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	mock := `#!/bin/bash
+	const nestedDriverTimeout = 60 * time.Second
+	mock := fmt.Sprintf(`#!/bin/bash
 case "${1:-}" in
  version) exit 0 ;;
  env) exit 1 ;;
  test)
   cd "$SIGNAL_PACKAGE" || exit 90
-  exec "$REAL_GO" test -mod=readonly -vet=off -short -v -json -tags matrixone_test -p 1 -timeout 60s $RACE_FLAG -count=1 . ;;
+  exec "$REAL_GO" test -mod=readonly -vet=off -short -v -json -tags matrixone_test -p 1 -timeout %s $RACE_FLAG -count=1 . ;;
 esac
 exit 81
-`
+`, nestedDriverTimeout)
 	transform := func(text string) string {
 		const foreground = "    if (( use_owned_group == 0 )); then\n"
-		const probe = "    (cd \"$SIGNAL_PACKAGE\" && MO_SIGNAL_OUTPUT=\"$CASE_DIR/foreground-signals\" \"$REAL_GO\" test -mod=readonly -vet=off -short -v -json -tags matrixone_test -p 1 -timeout 60s $RACE_FLAG -count=1 . > /dev/null) || return 125\n"
+		probe := fmt.Sprintf("    (cd \"$SIGNAL_PACKAGE\" && MO_SIGNAL_OUTPUT=\"$CASE_DIR/foreground-signals\" \"$REAL_GO\" test -mod=readonly -vet=off -short -v -json -tags matrixone_test -p 1 -timeout %s $RACE_FLAG -count=1 . > \"$CASE_DIR/foreground.json\") || return 125\n", nestedDriverTimeout)
 		text = injectBatchedHook(t, text, foreground, probe+foreground)
 		const anchor = "    ) 0<&0 &\n    pid=$!\n"
 		return injectBatchedHook(t, text, anchor, anchor+"    : > \"$CASE_DIR/async-fallback\"\n")
@@ -184,11 +185,15 @@ export GORACE=atexit_sleep_ms=0
 export MO_SIGNAL_OUTPUT="$CASE_DIR/fallback-signals"
 status=0
 run_ut_command embedded batched run_race_test_batches example/package "$PREBUILT_RACE_TEST_BINARY" 4 || status=$?
-[[ "$status" == 0 ]] || exit 91
+if [[ "$status" != 0 ]]; then
+  cat "$CASE_DIR/foreground.json" || true
+  exit 91
+fi
 if (( BASH_VERSINFO[0] >= 5 )); then [[ -e "$CASE_DIR/async-fallback" ]] || exit 93; fi
 cmp "$CASE_DIR/foreground-signals" "$CASE_DIR/fallback-signals" || exit 92
 `
-	out, err := scheduleHarnessWithMockTimeout(t, 40*time.Second, script, mock, transform, "SIGNAL_PACKAGE="+root, "REAL_GO="+goTool, "RACE_FLAG="+raceFlag)
+	harnessTimeout := 2*nestedDriverTimeout + 30*time.Second
+	out, err := scheduleHarnessWithMockTimeout(t, harnessTimeout, script, mock, transform, "SIGNAL_PACKAGE="+root, "REAL_GO="+goTool, "RACE_FLAG="+raceFlag)
 	if err != nil {
 		t.Fatalf("go test driver signal disposition: %v\n%s", err, out)
 	}

@@ -1023,7 +1023,8 @@ func (s *relationScanner) recordRelationExecutionStats(
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:
 // the coordinator owns in-memory rows independently of its object partition
-// ordinal. Remote partitions read only persisted objects assigned by object ID.
+// ordinal, including the flushed appendable representation of those rows.
+// Remote partitions read only immutable objects assigned by object ID.
 // Replicated metadata/centroid requests set partitionCount=1 and therefore
 // read all visible data on every executing CN.
 func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
