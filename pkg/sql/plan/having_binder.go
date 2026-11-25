@@ -259,6 +259,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 
 		return expr, nil
 	} else if b.builder.mysqlCompatible {
+		boundBefore := len(b.boundCols)
 		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {
 			return nil, err
@@ -278,6 +279,15 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})
 		colPos := len(b.ctx.aggregates)
 		b.ctx.aggregates = append(b.ctx.aggregates, newExpr)
+		// The aggregate slot survives alias expansion and BETWEEN's clones.
+		// The source binding is recorded before display or virtual reads wrap it.
+		if depth == 0 && len(b.boundCols) > boundBefore && b.ctx.bindingByTag[b.boundCols[boundBefore].relation] != nil &&
+			function.SerialTypeSupported(types.T(expr.Typ.Id)) && canShareGroupedBitCountRow(b.ctx) {
+			if b.ctx.implicitGroupHaving == nil {
+				b.ctx.implicitGroupHaving = make(map[int32]*Expr)
+			}
+			b.ctx.implicitGroupHaving[int32(colPos)] = expr
+		}
 		return &plan.Expr{
 			Typ: b.ctx.aggregates[colPos].Typ,
 			Expr: &plan.Expr_Col{

@@ -8742,7 +8742,16 @@ var supportedMathBuiltIns = []FuncNew{
 			case types.T_char, types.T_varchar, types.T_text:
 				return newCheckResultWithSuccess(13)
 			}
-			return fixedTypeMatch(overloads, inputs)
+			// Type-only lookup uses expression conversion. The binder
+			// explicitly selects rounding for native floating fields.
+			match := fixedTypeMatch(overloads[:bitCountTruncatedFloat32Overload], inputs)
+			switch match.idx {
+			case BitCountRoundedFloat32Overload:
+				match.idx = bitCountTruncatedFloat32Overload
+			case BitCountRoundedFloat64Overload:
+				match.idx = bitCountTruncatedFloat64Overload
+			}
+			return match
 		},
 
 		Overloads: []overload{
@@ -8827,23 +8836,23 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 8,
+				overloadId: BitCountRoundedFloat32Overload,
 				args:       []types.T{types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return BitCountFloat[float32]
+					return bitCountRoundedFloat[float32]
 				},
 			},
 			{
-				overloadId: 9,
+				overloadId: BitCountRoundedFloat64Overload,
 				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return BitCountFloat[float64]
+					return bitCountRoundedFloat[float64]
 				},
 			},
 			{
@@ -8897,6 +8906,59 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return BitCountBinaryString
+				},
+			},
+			{
+				overloadId: bitCountTruncatedFloat32Overload,
+				args:       []types.T{types.T_float32},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return bitCountTruncatedFloat[float32] },
+			},
+			{
+				overloadId: bitCountTruncatedFloat64Overload,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return bitCountTruncatedFloat[float64] },
+			},
+			{
+				// Match the reference x86 FLOAT field conversion on signed overflow.
+				overloadId: BitCountFloat32FieldOverload,
+				args:       []types.T{types.T_float32},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return bitCountFloatField[float32](0x1p63, math.MinInt64, false) },
+			},
+			{
+				// DOUBLE field conversion emits one truncation warning per selected row
+				// when MySQL's signed integer conversion clamps either boundary.
+				overloadId:           BitCountFloat64FieldOverload,
+				rowScopedDiagnostics: true,
+				args:                 []types.T{types.T_float64},
+				retType:              func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp: func() executeLogicOfOverload {
+					return bitCountFloatField[float64](0x1.fffffffffffffp62, math.MaxInt64, true)
+				},
+			},
+			{
+				overloadId:           BitCountFloat32ExpressionOverload,
+				args:                 []types.T{types.T_float32},
+				rowScopedDiagnostics: true,
+				retType:              func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:                func() executeLogicOfOverload { return bitCountFloatExpression[float32] },
+			},
+			{
+				overloadId:           BitCountFloat64ExpressionOverload,
+				args:                 []types.T{types.T_float64},
+				rowScopedDiagnostics: true,
+				retType:              func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:                func() executeLogicOfOverload { return bitCountFloatExpression[float64] },
+			},
+			{
+				// Real literals clamp at 2^63 without a field warning.
+				overloadId: BitCountFloat64LiteralOverload,
+				args:       []types.T{types.T_float64},
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp: func() executeLogicOfOverload {
+					return bitCountFloatField[float64](0x1p63, math.MaxInt64, false)
 				},
 			},
 		},

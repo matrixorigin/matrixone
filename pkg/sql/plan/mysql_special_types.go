@@ -219,41 +219,33 @@ func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
 		// keeps requiring the operator whitelist above.
 		return true
 	case *plan.Expr_F:
-		switch node.F.GetFunc().GetObjName() {
-		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
-			"unary_tilde", "cast", "serial", "serial_full":
-			for _, arg := range node.F.GetArgs() {
-				if !isGeometrySRIDConstFoldSafe(arg) {
-					return false
-				}
-			}
-			return true
-		default:
-			// A nested function is admissible only through the function
-			// registry's positively proven pure set - never through the
-			// absence of a flag: llm_chat is registered STRICT without the
-			// internal bit and without a volatile or real-time-related
-			// overload, so a negative-only test admits it and the guarded
-			// fold executes its HTTP request. The curated set keeps a pure
-			// deterministic builtin inside the arithmetic (ABS of a
-			// literal) folding exactly as ordinary binding folds it, while
-			// rand and sleep stay out through the volatile and real-time
-			// flags, the relation resolvers, the fault-injection machinery
-			// and the LLM, starlark and UDF executors stay out through the
-			// internal bit or pure-set membership, and nothing of any of
-			// them executes here.
-			if !function.GetFunctionIsProvenPureFoldableById(node.F.GetFunc().GetObj()) {
+		if !isProvenPureScalarFunction(node.F) {
+			return false
+		}
+		for _, arg := range node.F.GetArgs() {
+			if !isGeometrySRIDConstFoldSafe(arg) {
 				return false
 			}
-			for _, arg := range node.F.GetArgs() {
-				if !isGeometrySRIDConstFoldSafe(arg) {
-					return false
-				}
-			}
-			return true
 		}
+		return true
 	default:
 		return false
+	}
+}
+
+// isProvenPureScalarFunction admits the binder's native scalar operators and
+// the registry's positively verified pure builtins. Absence of a volatility
+// flag alone is insufficient: some builtins perform external side effects.
+func isProvenPureScalarFunction(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+		"unary_tilde", "cast", "serial", "serial_full":
+		return true
+	default:
+		return function.GetFunctionIsProvenPureFoldableById(fn.Func.Obj)
 	}
 }
 

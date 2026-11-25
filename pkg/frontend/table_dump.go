@@ -315,7 +315,7 @@ func tableSchemaHashWithResolver(
 	def *plan.TableDef,
 	resolve sqlplan.LegacyTinyTextTableResolver,
 ) (string, error) {
-	return tableSchemaHashWithOptions(ctx, def, resolve, false)
+	return tableSchemaHashWithOptions(ctx, def, resolve, tableDumpSchemaCurrent)
 }
 
 func tableLogicalSchemaHashWithResolver(
@@ -323,14 +323,22 @@ func tableLogicalSchemaHashWithResolver(
 	def *plan.TableDef,
 	resolve sqlplan.LegacyTinyTextTableResolver,
 ) (string, error) {
-	return tableSchemaHashWithOptions(ctx, def, resolve, true)
+	return tableSchemaHashWithOptions(ctx, def, resolve, tableDumpSchemaLogicalIndex)
 }
+
+type tableDumpSchemaFormat uint8
+
+const (
+	tableDumpSchemaCurrent tableDumpSchemaFormat = iota
+	tableDumpSchemaLogicalIndex
+	tableDumpSchemaV428
+)
 
 func tableSchemaHashWithOptions(
 	ctx context.Context,
 	def *plan.TableDef,
 	resolve sqlplan.LegacyTinyTextTableResolver,
-	logicalIndexSchema bool,
+	format tableDumpSchemaFormat,
 ) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
@@ -348,7 +356,7 @@ func tableSchemaHashWithOptions(
 	// different catalog-only defaults and CREATE SQL provenance. Normalize those
 	// identities for the new index hash without changing the engine-owned catalog
 	// definition. Keep the legacy hash above for old manifest compatibility.
-	if logicalIndexSchema {
+	if format == tableDumpSchemaLogicalIndex {
 		normalizeTableDumpIndexSchema(def)
 		// Programmatically created index relations can have no Createsql, while
 		// the same relations recreated from SHOW CREATE retain one. Use the
@@ -368,12 +376,19 @@ func tableSchemaHashWithOptions(
 		clone.Createsql = ""
 		// This is persisted fingerprint input, not the replayable manifest DDL.
 		// Keep the historical comment and default bytes so existing archives remain loadable.
-		canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(&clone)
+		render := sqlplan.ConstructCreateTableSQLForSchemaHash
+		if format == tableDumpSchemaV428 {
+			render = sqlplan.ConstructCreateTableSQLForV428DumpHash
+		}
+		canonical, err := render(&clone)
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}
 		sum := sha256.Sum256([]byte(canonical))
 		return hex.EncodeToString(sum[:]), nil
+	}
+	if format == tableDumpSchemaV428 {
+		return "", moerr.NewInvalidInputNoCtx("cannot verify v4.2.8 table dump schema")
 	}
 	// CREATE SQL is catalog-normalized and deliberately excludes physical table,
 	// database, column and constraint IDs, which differ between clusters.
@@ -849,7 +864,7 @@ func writeTableDumpJSON(ctx context.Context, fs fileservice.FileService, name st
 	})
 }
 
-func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*tableDumpManifest, error) {
+func readTableDumpManifest(ctx context.Context, fs fileservice.FileService, checksum string) (*tableDumpManifest, error) {
 	entry, err := fs.StatFile(ctx, tableDumpManifestName)
 	if err != nil {
 		return nil, err
@@ -863,7 +878,14 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if err = fs.Read(ctx, vec); err != nil {
 		return nil, err
 	}
-	manifest, err := decodeTableDumpManifest(vec.Entries[0].Data)
+	data := vec.Entries[0].Data
+	if checksum != "" {
+		sum := sha256.Sum256(data)
+		if !strings.EqualFold(hex.EncodeToString(sum[:]), checksum) {
+			return nil, moerr.NewInvalidInputNoCtx("table dump manifest checksum does not match")
+		}
+	}
+	manifest, err := decodeTableDumpManifest(data)
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid table dump manifest: %v", err)
 	}
@@ -1378,35 +1400,34 @@ func verifyTableDumpObject(ctx context.Context, fs fileservice.FileService, name
 		}
 		return nil
 	}
-	var reader io.ReadCloser
-	if err := fs.Read(ctx, &fileservice.IOVector{
-		FilePath: name, Entries: []fileservice.IOEntry{{Offset: 0, Size: -1, ReadCloserForRead: &reader}}, Policy: fileservice.SkipAllCache,
-	}); err != nil {
-		return err
-	}
-	defer reader.Close()
-	hasher := sha256.New()
-	n, err := io.Copy(hasher, reader)
+	n, checksum, err := hashTableDumpFile(ctx, fs, name)
 	if err != nil {
 		return err
 	}
-	if n != expectedSize || !strings.EqualFold(hex.EncodeToString(hasher.Sum(nil)), expectedHash) {
+	if n != expectedSize || !strings.EqualFold(checksum, expectedHash) {
 		return moerr.NewInvalidInputNoCtxf("object %s does not match manifest checksum", name)
 	}
 	return nil
 }
 
-func installTableDumpObject(ctx context.Context, dumpFS, targetFS fileservice.FileService, item tableDumpObject) (bool, error) {
+func installTableDumpObject(ctx context.Context, dumpFS, targetFS fileservice.FileService, item tableDumpObject, verifyArchiveObject bool) (bool, error) {
 	if _, err := targetFS.StatFile(ctx, item.Name); err == nil {
 		return false, verifyTableDumpObject(ctx, targetFS, item.Name, item.Size, item.SHA256)
 	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return false, err
 	}
+	if verifyArchiveObject {
+		// Reject a corrupt archive before reserving its immutable object name
+		// in shared storage. A corrected archive can then retry immediately.
+		if err := verifyTableDumpObject(ctx, dumpFS, item.FixturePath, item.Size, item.SHA256); err != nil {
+			return false, err
+		}
+	}
 	size, hash, providerCopied, err := copyTableDumpFile(ctx, dumpFS, targetFS, item.FixturePath, item.Name)
 	if err != nil {
 		return true, err
 	}
-	if providerCopied {
+	if providerCopied && !verifyArchiveObject {
 		if size != item.Size {
 			return true, moerr.NewInvalidInputNoCtxf("object %s does not match manifest size", item.Name)
 		}
@@ -1429,6 +1450,7 @@ func installTableDumpObjects(
 	dumpFS, targetFS fileservice.FileService,
 	items []tableDumpObject,
 	onCreated func(string),
+	verifyArchiveObjects bool,
 ) error {
 	if len(items) == 0 {
 		return nil
@@ -1446,7 +1468,7 @@ func installTableDumpObjects(
 				if i >= len(items) {
 					return nil
 				}
-				created, err := installTableDumpObject(copyCtx, dumpFS, targetFS, items[i])
+				created, err := installTableDumpObject(copyCtx, dumpFS, targetFS, items[i], verifyArchiveObjects)
 				if created && onCreated != nil {
 					onCreated(items[i].Name)
 				}
@@ -1700,7 +1722,73 @@ var lockTableDumpLoadTargets = func(
 	return nil
 }
 
+func validTableDumpSHA256(checksum string) bool {
+	if len(checksum) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(checksum)
+	return err == nil
+}
+
+func prepareV428TableDumpLoad(ctx context.Context, ses *Session, dbName string, refs []tableDumpRelationRef, manifest *tableDumpManifest) error {
+	if manifest.Version != tableDumpFormatVersion || manifest.MetadataOnly ||
+		len(manifest.BoundExpressions) != 0 || manifest.ExpressionHash != "" {
+		return moerr.NewInvalidInputNoCtx("v4.2.8 LOAD TABLE requires an original physical v1 table dump")
+	}
+	if len(refs) != 1 || len(manifest.Relations) != 1 {
+		return moerr.NewInvalidInputNoCtx("v4.2.8 LOAD TABLE requires a table without secondary index relations")
+	}
+	def := refs[0].relation.GetTableDef(ctx)
+	for _, col := range def.Cols {
+		// The release fingerprint predates column collations and cannot
+		// establish text semantics on a freshly created target.
+		if col == nil {
+			return moerr.NewInvalidInputNoCtx("v4.2.8 table dump has an invalid target column")
+		}
+		oid := types.T(col.Typ.Id)
+		typ := types.Type{Oid: oid}
+		// SET has an integer storage type but its labels are text metadata.
+		// typeswitch:partial v4.2.8 persisted only the native FLOAT and DOUBLE encodings.
+		if col.Typ.Enumvalues == "" && (typ.IsIntOrUint() || typ.IsDecimal() || oid == types.T_bit ||
+			oid == types.T_float32 || oid == types.T_float64 || (col.Hidden && oid == types.T_Rowid)) {
+			continue
+		}
+		// Composite keys pack the declared numeric components into a hidden
+		// VARCHAR in both versions. The release hash checks component order
+		// and types through the visible columns and PRIMARY KEY clause.
+		pk := def.Pkey
+		if col.Hidden && col.Primary && oid == types.T_varchar && col.Name == catalog.CPrimaryKeyColName &&
+			pk != nil && pk.PkeyColName == col.Name && pk.CompPkeyCol != nil && len(pk.Names) > 1 {
+			continue
+		}
+		return moerr.NewInvalidInputNoCtx("v4.2.8 LOAD TABLE requires numeric columns")
+	}
+	relation := manifest.Relations[0]
+	if relation.LogicalSchemaHash != "" || len(relation.AutoIncrement) != 0 {
+		return moerr.NewInvalidInputNoCtx("v4.2.8 table dump contains newer relation metadata")
+	}
+	for _, item := range relation.Objects {
+		if !validTableDumpSHA256(item.SHA256) {
+			return moerr.NewInvalidInputNoCtx("v4.2.8 table dump object requires a SHA-256 checksum")
+		}
+	}
+	resolve := tableDumpLegacyTinyTextResolver(ses, dbName, nil)
+	hash, err := tableSchemaHashWithOptions(ctx, def, resolve, tableDumpSchemaV428)
+	if err != nil {
+		return err
+	}
+	refs[0].SchemaHash = hash
+	return nil
+}
+
 func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (err error) {
+	var checksum string
+	if stmt.Source != nil {
+		checksum = stmt.Source.Checksum
+		if stmt.Source.Release != "v4.2.8" || !validTableDumpSHA256(checksum) {
+			return moerr.NewInvalidInputNoCtx("LOAD TABLE requires v4.2.8 and a SHA-256 manifest checksum")
+		}
+	}
 	dbName, _, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
 		return err
@@ -1714,7 +1802,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		return err
 	}
 	defer closeDumpFS()
-	manifest, err := readTableDumpManifest(ctx, dumpFS)
+	manifest, err := readTableDumpManifest(ctx, dumpFS, checksum)
 	if err != nil {
 		return err
 	}
@@ -1730,6 +1818,11 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	if err = validateTableDumpRelations(ctx, targetRefs); err != nil {
 		return err
 	}
+	if stmt.Source != nil {
+		if err = prepareV428TableDumpLoad(ctx, ses, dbName, targetRefs, manifest); err != nil {
+			return err
+		}
+	}
 	if targetRefs[0].SchemaHash != manifest.SchemaHash {
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
@@ -1742,6 +1835,11 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return err
 		}
 		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
+			return err
+		}
+	} else if stmt.Source != nil {
+		restoredDef, restoreExpressions, err = sqlplan.ReconstructV428TableDumpBindings(ses.GetTxnCompileCtx(), targetDef)
+		if err != nil {
 			return err
 		}
 	} else if tableDumpHasBoundExpressions(targetDef) {
@@ -1885,7 +1983,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		if !manifest.MetadataOnly {
 			if err = installTableDumpObjects(ctx, dumpFS, targetFS, relationDump.Objects, func(name string) {
 				tracker.TrackLoadFiles(name)
-			}); err != nil {
+			}, stmt.Source != nil); err != nil {
 				return err
 			}
 		}

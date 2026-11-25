@@ -89,7 +89,7 @@ func constructCreateTableSQL(
 ) (string, tree.Statement, error) {
 	return constructCreateTableSQLWithCommentFormat(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks,
-		sourceSubscription, legacyDumpDefaults, false, sqlMode,
+		sourceSubscription, legacyDumpDefaults, false, false, sqlMode,
 	)
 }
 
@@ -98,8 +98,21 @@ func constructCreateTableSQL(
 // fingerprints. Its output is hash input, not replayable SQL. Ordinary SQL
 // consumers must use ConstructCreateTableSQL, which renders both for replay.
 func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
+	return constructCreateTableSQLForDumpHash(tableDef, false)
+}
+
+// ConstructCreateTableSQLForV428DumpHash omits the table collation that the
+// v4.2.8 fingerprint renderer did not emit. Its caller verifies v1 provenance.
+func ConstructCreateTableSQLForV428DumpHash(tableDef *plan.TableDef) (string, error) {
+	if effectiveTableCharsetForShowCreate(tableDef) != uint32(types.CharsetUTF8) {
+		return "", moerr.NewInvalidInputNoCtx("v4.2.8 table dump requires the default table collation")
+	}
+	return constructCreateTableSQLForDumpHash(tableDef, true)
+}
+
+func constructCreateTableSQLForDumpHash(tableDef *plan.TableDef, omitTableCharset bool) (string, error) {
 	sql, _, err := constructCreateTableSQLWithCommentFormat(
-		nil, tableDef, nil, false, nil, true, nil, true, true, "",
+		nil, tableDef, nil, false, nil, true, nil, true, true, omitTableCharset, "",
 	)
 	return sql, err
 }
@@ -114,6 +127,7 @@ func constructCreateTableSQLWithCommentFormat(
 	sourceSubscription *SubscriptionMeta,
 	legacyDumpDefaults bool,
 	legacyStoredComments bool,
+	omitTableCharset bool,
 	sqlMode string,
 ) (string, tree.Statement, error) {
 	// Replaying native metadata through a legacy SQL alias would change its
@@ -688,7 +702,7 @@ func constructCreateTableSQLWithCommentFormat(
 		createStr += "\n"
 	}
 	createStr += ")"
-	if tableDef.TableType != catalog.SystemExternalRel {
+	if !omitTableCharset && tableDef.TableType != catalog.SystemExternalRel {
 		// Replayed definitions (LIKE, rebuilds and historical restore) must not
 		// inherit a different target database default. Ordinary SHOW can omit
 		// general_ci only when the current database would actually supply it.

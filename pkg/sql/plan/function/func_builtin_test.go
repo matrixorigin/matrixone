@@ -2044,6 +2044,31 @@ func TestSerialFullUnicodeKeepsOriginalValue(t *testing.T) {
 	require.Equal(t, []byte("b"), tuple[0])
 }
 
+func TestSerialFullInitializesEncoderAfterNullBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.T_varchar.ToType()
+	first := vector.NewConstNull(typ, 1, proc.Mp())
+	defer first.Free(proc.Mp())
+	second := newVectorByType(proc.Mp(), typ, []string{"next"}, nil)
+	defer second.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+	defer result.Free()
+	op := newOpSerial()
+	defer op.Close()
+	for _, input := range []struct {
+		vec  *vector.Vector
+		want any
+	}{{first, nil}, {second, []byte("next")}} {
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, op.BuiltInSerialFull([]*vector.Vector{input.vec}, result, proc, 1, nil))
+		tuple, err := types.Unpack(result.GetResultVector().GetBytesAt(0))
+		require.NoError(t, err)
+		require.Len(t, tuple, 1)
+		require.Equal(t, input.want, tuple[0])
+	}
+}
+
 func TestSerialUnicodeKeepsOriginalValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	unicodeType := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)

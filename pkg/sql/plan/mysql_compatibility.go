@@ -14,7 +14,11 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+)
 
 func (builder *QueryBuilder) wrapBareColRefsInAnyValue(expr *plan.Expr, ctx *BindContext) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
@@ -63,5 +67,193 @@ func (builder *QueryBuilder) wrapBareColRefsInAnyValue(expr *plan.Expr, ctx *Bin
 
 	default:
 		return expr
+	}
+}
+
+func canShareGroupedBitCountRow(ctx *BindContext) bool {
+	if ctx.groupingFuncAllowed || ctx.sampleFunc.hasSampleFunc {
+		return false
+	}
+	for _, group := range ctx.groups {
+		if releasedBitCountFloatOverload(types.T(group.Typ.Id)) >= 0 && bitCountSelector(group) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+type groupedSourceInputKey struct {
+	relation, column int32
+	rowIDNullTest    bool
+	textPredicate    string
+}
+
+// finalizeGroupedBitCountRow gives all eligible implicit group consumers one
+// non-NULL tuple per group. ANY_VALUE can pick that tuple even when one or
+// more of its fields are NULL. Explicit aggregate inputs retain their owners.
+func (builder *QueryBuilder) finalizeGroupedBitCountRow(
+	ctx *BindContext, having []*Expr, orderBy []*plan.OrderBySpec,
+	fillValues, fillColumns []*Expr, timeOrderBy *plan.OrderBySpec,
+) error {
+	if !ctx.needsGroupedBitCountRow {
+		return nil
+	}
+	walk := func(visit func(*Expr) bool) {
+		for _, list := range [][]*Expr{ctx.projects, ctx.windows, ctx.times, having, fillValues, fillColumns} {
+			for _, expr := range list {
+				visitGroupedSourceInputs(expr, visit)
+			}
+		}
+		for _, spec := range orderBy {
+			visitGroupedSourceInputs(spec.Expr, visit)
+		}
+		if timeOrderBy != nil {
+			visitGroupedSourceInputs(timeOrderBy.Expr, visit)
+		}
+	}
+	inputForReference := func(expr *Expr) (key groupedSourceInputKey, input, display *Expr) {
+		if isReplayableTextPredicate(builder.GetContext(), expr) {
+			// Capture a total predicate from the same row as the other inputs,
+			// rather than keeping its potentially large text operands per group.
+			found, local := false, true
+			_ = plan.VisitExprTree(expr, func(node *Expr) error {
+				if col := node.GetCol(); col != nil {
+					found = true
+					local = local && ctx.bindingByTag[col.RelPos] != nil
+				}
+				return nil
+			})
+			if found && local {
+				if predicate, err := projectExprKey(expr); err == nil {
+					return groupedSourceInputKey{textPredicate: predicate}, expr, nil
+				}
+			}
+		}
+		col := expr.GetCol()
+		if col == nil {
+			if rowID := groupedRowIDNullTest(expr); rowID != nil && ctx.bindingByTag[rowID.RelPos] != nil {
+				return groupedSourceInputKey{relation: rowID.RelPos, column: rowID.ColPos, rowIDNullTest: true}, expr, nil
+			}
+			return
+		}
+		if col.RelPos == ctx.aggregateTag {
+			expr = ctx.implicitGroupHaving[col.ColPos]
+			if expr == nil {
+				return
+			}
+			if source, ok := transparentOutputSourceExpr(expr); ok && expr.GetF().Args[0].GetLit() != nil {
+				display, expr = expr, source
+			}
+			if expr.GetCol() == nil {
+				// Compute a bound read that is more than a display adapter at
+				// its original input stage, before choosing the group row.
+				return groupedSourceInputKey{relation: col.RelPos, column: col.ColPos}, expr, nil
+			}
+			col = expr.GetCol()
+		}
+		if ctx.bindingByTag[col.RelPos] == nil || !function.SerialTypeSupported(types.T(expr.Typ.Id)) {
+			return groupedSourceInputKey{}, nil, nil
+		}
+		return groupedSourceInputKey{relation: col.RelPos, column: col.ColPos}, expr, display
+	}
+	var inputs []*Expr
+	positions := make(map[groupedSourceInputKey]int)
+	walk(func(expr *Expr) bool {
+		key, input, _ := inputForReference(expr)
+		if input == nil {
+			return false
+		}
+		if _, ok := positions[key]; !ok {
+			positions[key] = len(inputs)
+			inputs = append(inputs, DeepCopyExpr(input))
+		}
+		return true
+	})
+	if len(inputs) == 0 {
+		return nil
+	}
+	bindCtx := builder.GetContext()
+	tuple, err := BindFuncExprImplByPlanExpr(bindCtx, "serial_full", inputs)
+	if err != nil {
+		return err
+	}
+	representative, err := BindFuncExprImplByPlanExpr(bindCtx, "any_value", []*Expr{tuple})
+	if err != nil {
+		return err
+	}
+	slot := GetColExpr(representative.Typ, ctx.aggregateTag, int32(len(ctx.aggregates)))
+	values := make([]*Expr, len(inputs))
+	for pos, input := range inputs {
+		value, err := MakeSerialExtractExpr(bindCtx, DeepCopyExpr(slot), input.Typ, int64(pos))
+		if err != nil {
+			return err
+		}
+		// The extracted field carries the source domain, including collation.
+		value.Typ = input.Typ
+		values[pos] = value
+	}
+	ctx.aggregates = append(ctx.aggregates, representative)
+	walk(func(expr *Expr) bool {
+		key, input, display := inputForReference(expr)
+		if pos, ok := positions[key]; input != nil && ok {
+			value := DeepCopyExpr(values[pos])
+			if display != nil {
+				value.Typ = input.Typ
+				wrapped := DeepCopyExpr(display)
+				wrapped.GetF().Args[1] = value
+				value = wrapped
+			}
+			value.Typ = expr.Typ
+			*expr = *value
+			return true
+		}
+		return false
+	})
+	return nil
+}
+
+// A virtual column on an outer join uses the row ID's null bit to tell a
+// missing row from a present row with NULL data. Pack that boolean with the
+// other representative fields. Computing the null test for each input is
+// safe even when the surrounding virtual expression must stay lazy.
+func groupedRowIDNullTest(expr *Expr) *plan.ColRef {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 || fn.Args[0] == nil ||
+		types.T(fn.Args[0].Typ.Id) != types.T_Rowid || types.T(expr.Typ.Id) != types.T_bool {
+		return nil
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.ISNULL {
+		return nil
+	}
+	return fn.Args[0].GetCol()
+}
+
+// Visit executable operands in the caller. A literal's Src and a subquery's
+// plan are separate owners. A captured input owns its entire expression.
+func visitGroupedSourceInputs(expr *Expr, visit func(*Expr) bool) {
+	if expr == nil || visit(expr) {
+		return
+	}
+	switch {
+	case expr.GetF() != nil:
+		for _, arg := range expr.GetF().Args {
+			visitGroupedSourceInputs(arg, visit)
+		}
+	case expr.GetList() != nil:
+		for _, arg := range expr.GetList().List {
+			visitGroupedSourceInputs(arg, visit)
+		}
+	case expr.GetSub() != nil:
+		visitGroupedSourceInputs(expr.GetSub().Child, visit)
+	case expr.GetW() != nil:
+		window := expr.GetW()
+		visitGroupedSourceInputs(window.WindowFunc, visit)
+		for _, arg := range window.PartitionBy {
+			visitGroupedSourceInputs(arg, visit)
+		}
+		for _, spec := range window.OrderBy {
+			visitGroupedSourceInputs(spec.Expr, visit)
+		}
 	}
 }

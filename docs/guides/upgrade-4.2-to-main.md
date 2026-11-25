@@ -59,6 +59,66 @@ any commits with an unknown outcome have resolved; a network error can leave a
 remote commit pending after its local operation exits. Do not treat an empty
 metadata or job table as proof that remote writes have finished.
 
+## Floating-point `BIT_COUNT` after upgrade
+
+Existing generated columns keep their v4.2.8 `BIT_COUNT` bindings on later
+reads and writes. New expressions use the conversion of their operand: a
+FLOAT or DOUBLE field and a real literal round to even, while an explicit
+floating cast truncates. Other floating arithmetic uses signed integer
+conversion and reports an out-of-range error. Floating casts retain the
+existing MatrixOne saturation behavior outside their integer range; MySQL can
+report an error for those values. A direct `IF` or `CASE` uses the selected
+arm's conversion.
+When a grouped selector cannot be safely replayed, such as a volatile or
+warning-producing condition, `BIT_COUNT` instead uses the grouped value's
+conversion. The same applies in `ONLY_FULL_GROUP_BY` when the selector's
+source columns are not group-determined.
+
+New generated columns may persist floating `BIT_COUNT` overloads that v4.2.8
+cannot execute. Returning to v4.2.8 requires restoring the complete pre-upgrade
+backup; restoring it discards all changes made after that backup.
+
+A floating `IF` or `CASE` exposed as a derived-table column is read as a
+field, even if the optimizer removes that projection. For example, with two
+rows `(id, d) = (1, 3.9), (2, 3.9)`, the direct expression
+`BIT_COUNT(IF(id=1,d,CAST(d AS DOUBLE)))` returns `1, 2`; selecting the same
+`IF` as `x` in a derived table and evaluating `BIT_COUNT(x)` returns `1, 1`.
+MySQL can use different conversion semantics when it implicitly merges or
+materializes a derived table. Explicit materialization boundaries such as
+`LIMIT` also expose a field. The no-op `OFFSET 0` is normalized away and does
+not create a materialization boundary.
+
+## Restore a verified v4.2.8 physical table dump
+
+A physical v1 table dump records schema and object checksums. It omits the
+source build and the executable bindings of generated expressions. Establish
+from your source records that the archive and the relevant generated columns
+were authored by v4.2.8. Obtain the SHA-256 of the original `manifest.json`
+from your verified backup records. The checksum identifies the archived bytes.
+The source records establish their provenance.
+
+Create an empty target from the source DDL, then run as a restore administrator.
+Replace the path and manifest checksum with your verified values.
+
+```sql
+LOAD TABLE restored FROM '/archive/table'
+  WITH RELEASE 'v4.2.8' CHECKSUM '<manifest-sha256>';
+```
+
+This option checks the v4.2.8 schema fingerprint and each object checksum. It
+recovers generated `BIT_COUNT` on a FLOAT or DOUBLE column or a direct
+floating cast of that column when the binding is verifiable. The target must
+use the default table collation and have numeric columns with no secondary
+index relations. Numeric composite primary keys are supported when the
+target reproduces the v4.2.8 schema fingerprint, including the declared key
+order. Differences in historical schema rendering can still prevent a match,
+for example when a MEDIUMINT column rendered as INT in the release hash. The
+release fingerprint does not identify text collations or secondary index
+key metadata. Ambiguity in other expressions or the
+column binding scope causes the restore to fail. For an archive with uncertain
+provenance, recover an authoritative source copy. Upgrade that copy to a
+version that writes bound dumps, then export a new archive.
+
 ## Ambiguous snapshot ownership
 
 Some old system table snapshots can have names also used by branch protection.

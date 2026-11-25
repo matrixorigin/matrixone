@@ -3706,12 +3706,14 @@ func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector
 	}
 	if len(op.funcs) == 0 {
 		op.funcs = make([]func(v *vector.Vector, idx int, ps *types.Packer), len(parameters))
-		for i, p := range parameters {
-			if !p.IsConstNull() {
-				op.funcs[i], err = getPackFunWithPhysical(p, physicalKey)
-				if err != nil {
-					return err
-				}
+	}
+	for i, p := range parameters {
+		// A typed NULL batch only needs the NULL marker. The same
+		// expression executor can later receive a batch containing values.
+		if op.funcs[i] == nil && !p.IsConstNull() {
+			op.funcs[i], err = getPackFunWithPhysical(p, physicalKey)
+			if err != nil {
+				return err
 			}
 		}
 	}

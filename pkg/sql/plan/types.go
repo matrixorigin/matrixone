@@ -398,8 +398,7 @@ type QueryBuilder struct {
 	// mixedDomainCoalesce is set when the statement binds a binary-typed
 	// COALESCE that can return a text value; see coalesce_text_domain.go.
 	mixedDomainCoalesce bool
-
-	updateTargetScope *updateTargetScope
+	updateTargetScope   *updateTargetScope
 
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
@@ -409,9 +408,11 @@ type QueryBuilder struct {
 	borrowResolutionDisabled bool
 	originalIndexScan        originalIndexScan
 	integerPrecision         *integerPrecisionBuilder
-	correlationRouteNodes    map[int32]bool
-	dependentRelations       map[int32]bool
-	preparedBindingProof     *bool
+	// Tracks the direct scalar operand currently being bound by BIT_COUNT.
+	bitCountScalarTarget  *tree.Subquery
+	correlationRouteNodes map[int32]bool
+	dependentRelations    map[int32]bool
+	preparedBindingProof  *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64
@@ -945,8 +946,10 @@ type BindContext struct {
 	integerPrecisionGeneratedSource     *tree.Select
 	integerPrecisionTransparentBoundary bool
 	integerPrecision                    *integerPrecisionBuilder
-	existentialBlock                    uint64
-	subqueryNestingDepth                uint32
+	// The current subquery directly forwards BIT_COUNT's scalar source.
+	bitCountScalarForward bool
+	existentialBlock      uint64
+	subqueryNestingDepth  uint32
 
 	binder Binder
 
@@ -1172,6 +1175,12 @@ type BindContext struct {
 	// contexts created while binding one FROM clause inherit the owner, while a
 	// nested SELECT replaces it when bindSelect starts.
 	queryBlockOwner *BindContext
+	// groupedBitCounts is keyed by the original group slot. A selector's
+	// SELECT, HAVING and ORDER BY consumers share its representative.
+	groupedBitCounts        map[int32]*Expr
+	needsGroupedBitCountRow bool
+	implicitGroupHaving     map[int32]*Expr
+
 	// aggregateInputParent is set on a subquery context when that subquery is
 	// bound as an aggregate argument of its parent query. Correlations back to
 	// this parent are per-row aggregate inputs, not bare aggregate-query output

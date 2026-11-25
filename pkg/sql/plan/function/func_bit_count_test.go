@@ -83,7 +83,7 @@ func TestBitCountStringNumericPrefixCoercion(t *testing.T) {
 	}
 }
 
-func TestBitCountFloat(t *testing.T) {
+func TestBitCountTruncatedFloat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	values := []float64{
 		1.4, 1.5, 2.5, 3.5, 3.9, 64.9,
@@ -109,8 +109,8 @@ func TestBitCountFloat(t *testing.T) {
 		values any
 		fn     executeLogicOfOverload
 	}{
-		{types.T_float32, float32Values, BitCountFloat[float32]},
-		{types.T_float64, values, BitCountFloat[float64]},
+		{types.T_float32, float32Values, bitCountTruncatedFloat[float32]},
+		{types.T_float64, values, bitCountTruncatedFloat[float64]},
 	} {
 		t.Run(tc.typ.String(), func(t *testing.T) {
 			fc := NewFunctionTestCase(proc,
@@ -146,6 +146,36 @@ func TestBitCountFloat(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	_, err = bitCountFromFloat(float32(math.NaN()), proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
+func TestBitCountReleasedFloatOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []float64{3.5, -0.6, -0.5, -2.5, math.Inf(1), math.Inf(-1), 0}
+	want := []uint64{1, 64, 0, 63, 64, 1, 0}
+	nulls := []bool{false, false, false, false, false, false, true}
+	values32 := make([]float32, len(inputs))
+	for i, value := range inputs {
+		values32[i] = float32(value)
+	}
+	for _, tc := range []struct {
+		typ        types.T
+		values     any
+		overloadID int32
+	}{
+		{types.T_float32, values32, 8},
+		{types.T_float64, inputs, 9},
+	} {
+		t.Run(tc.typ.String(), func(t *testing.T) {
+			typ := tc.typ.ToType()
+			released, err := GetFunctionById(proc.Ctx, encodeOverloadID(BIT_COUNT, tc.overloadID))
+			require.NoError(t, err)
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(typ, tc.values, nulls)},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, want, nulls), released.newOp())
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestBitCountDecimal64(t *testing.T) {
@@ -337,6 +367,95 @@ func TestBitCountStringWarnings(t *testing.T) {
 			for _, warning := range session.warnings {
 				require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), warning.code)
 				require.Contains(t, warning.msg, "Truncated incorrect INTEGER value")
+			}
+		})
+	}
+}
+
+func TestBitCountFloatFieldDiagnostics(t *testing.T) {
+	fieldOverload, err := GetFunctionById(context.Background(), EncodeOverloadID(BIT_COUNT, BitCountFloat64FieldOverload))
+	require.NoError(t, err)
+	require.True(t, fieldOverload.HasRowScopedDiagnostics())
+
+	for _, tc := range []struct {
+		name         string
+		values       []float64
+		nulls        []bool
+		want         []uint64
+		wantNulls    []bool
+		mask         *FunctionSelectList
+		constant     bool
+		float32Field bool
+		wantTexts    []string
+	}{
+		{
+			name:      "one warning per overflow row",
+			values:    []float64{1e19, -1e19, 2.5},
+			want:      []uint64{63, 1, 1},
+			wantNulls: []bool{false, false, false},
+			wantTexts: []string{"Truncated incorrect INTEGER value: '1e19'", "Truncated incorrect INTEGER value: '-1e19'"},
+		},
+		{
+			name:      "constant partial selection",
+			values:    []float64{1e19},
+			want:      []uint64{63, 0, 63},
+			wantNulls: []bool{false, true, false},
+			mask:      &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}},
+			constant:  true,
+			wantTexts: []string{"Truncated incorrect INTEGER value: '1e19'", "Truncated incorrect INTEGER value: '1e19'"},
+		},
+		{
+			name:      "NULL does not warn",
+			values:    []float64{1e19},
+			nulls:     []bool{true},
+			want:      []uint64{0},
+			wantNulls: []bool{true},
+		},
+		{
+			name:         "float32 field remains warning free",
+			values:       []float64{1e19, -1e19},
+			want:         []uint64{1, 1},
+			wantNulls:    []bool{false, false},
+			float32Field: true,
+		},
+		{
+			name:      "constant all rows masked",
+			values:    []float64{1e19},
+			want:      []uint64{0, 0, 0},
+			wantNulls: []bool{true, true, true},
+			mask:      &FunctionSelectList{AnyNull: true, AllNull: true},
+			constant:  true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			if tc.float32Field {
+				values := []float32{float32(tc.values[0]), float32(tc.values[1])}
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{NewFunctionTestInput(types.T_float32.ToType(), values, nil)},
+					NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, tc.wantNulls),
+					bitCountFloatField[float32](0x1p63, math.MinInt64, false))
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, info)
+				require.Empty(t, warnings.warnings)
+				return
+			}
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), tc.values, tc.nulls)},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, tc.wantNulls),
+				bitCountFloatField[float64](0x1.fffffffffffffp62, math.MaxInt64, true)).WithSelectList(tc.mask)
+			if tc.constant {
+				fc.parameters[0].SetClass(vector.CONSTANT)
+				fc.fnLength = 3
+			}
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Len(t, warnings.warnings, len(tc.wantTexts))
+			for i, want := range tc.wantTexts {
+				require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), warnings.warnings[i].code)
+				require.Equal(t, want, warnings.warnings[i].msg)
 			}
 		})
 	}

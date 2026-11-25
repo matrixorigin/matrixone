@@ -6959,6 +6959,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		lockNode = nil
 	}
 
+	if err = builder.finalizeGroupedBitCountRow(ctx, boundHavingList, boundOrderBys, fillVals, fillCols, boundTimeWindowOrderBy); err != nil {
+		return
+	}
+
 	var preWindowHavingList []*plan.Expr
 	var postTimeWindowHavingList []*plan.Expr
 	if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
@@ -12301,7 +12305,13 @@ func (builder *QueryBuilder) appendProjectionNode(
 	notCacheable bool,
 ) (newNodeID int32, err error) {
 	for i, proj := range ctx.projects {
-		if nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx); err != nil {
+		if ctx.bitCountScalarForward && len(ctx.projects) == 1 {
+			nodeID, proj, _, err = builder.flattenSubqueriesWithConsumerAndChange(
+				nodeID, proj, ctx, false, existentialIneligible, ctx.outerPaginationPending, true)
+		} else {
+			nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx)
+		}
+		if err != nil {
 			return
 		}
 		ctx.projects[i] = proj

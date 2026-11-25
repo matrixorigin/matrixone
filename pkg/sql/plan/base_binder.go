@@ -333,7 +333,15 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 		}
-		if useExplicitCastOverload(exprImpl.Type) {
+		var dumpPolicy *bitCountDumpBinding
+		if releasedBitCountFloatOverload(types.T(typ.Id)) >= 0 {
+			dumpPolicy = bitCountDumpPolicy(b.GetContext())
+		}
+		if dumpPolicy != nil && dumpPolicy.releaseCasts {
+			// The released SQL binder used the ordinary CAST overload for
+			// FLOAT/DOUBLE. Rebuild that input tree during dump verification.
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		} else if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendTemporalIntegerCast(b.GetContext(), expr, typ, b)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
@@ -1216,6 +1224,13 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.builder.bitCountScalarTarget == astExpr {
+		next := bitCountForwardedScalar(astExpr)
+		subCtx.bitCountScalarForward = next != nil
+		previous := b.builder.bitCountScalarTarget
+		b.builder.bitCountScalarTarget = next
+		defer func() { b.builder.bitCountScalarTarget = previous }()
+	}
 	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
 	udfResolutionCount := b.builder.udfResolutionCount
 	udfExpansionDepth := b.builder.udfExpansionDepth
@@ -4653,6 +4668,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
+	if name == "bit_count" && len(astArgs) == 1 && b.builder != nil {
+		previous := b.builder.bitCountScalarTarget
+		b.builder.bitCountScalarTarget = bitCountScalarOperand(astArgs[0])
+		defer func() { b.builder.bitCountScalarTarget = previous }()
+	}
 	zeroScalarArgs := b.builder.beginZeroScalarArguments()
 	var requiredZeroScalarRoots map[int32]struct{}
 	builtinResult := false
@@ -5256,6 +5276,15 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 			return nil, err
 		}
 	}
+	if name == "bit_count" && len(args) == 1 && releasedBitCountFloatOverload(types.T(args[0].Typ.Id)) >= 0 {
+		policy := bitCountDumpPolicy(b.GetContext())
+		if policy == nil || !policy.legacy {
+			if policy != nil {
+				policy.sawFloat = true
+			}
+			return b.bindBitCountOperand(args[0])
+		}
+	}
 	var integerInputs []uint32
 	if b.builder != nil && b.builder.integerPrecision != nil {
 		integerInputs = b.builder.integerPrecision.functionInputs(b.ctx, name, args)
@@ -5273,6 +5302,7 @@ func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
+			markFoldedFloatArithmetic(name, args, e)
 			if b.builder != nil && b.builder.integerPrecision != nil {
 				b.builder.integerPrecision.captureFunction(name, integerInputs, e)
 			}
@@ -8500,6 +8530,15 @@ func bindFuncExprImplByPlanExpr(
 		return nil, moerr.NewInvalidInputf(
 			ctx, "function %s is plan-internal and cannot be called directly", name)
 	}
+	if name == "bit_count" && len(args) == 1 && args[0] != nil {
+		if fn := originalBoundExpr.GetF(); fn != nil && fn.Func != nil {
+			fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+			if fid == function.BIT_COUNT && len(fn.Args) == 1 && fn.Args[0].Typ.Id == args[0].Typ.Id &&
+				function.IsBitCountFloatOverload(overload) {
+				return bindBitCountFloatOverload(ctx, args, overload)
+			}
+		}
+	}
 	preparedCalendarResult := preparedRawCalendarResult(ctx, name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
@@ -9466,6 +9505,20 @@ func bindFuncExprImplByPlanExpr(
 			ctx, name, lookupTypes, stringDomainModes)
 	} else {
 		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
+	}
+	if err == nil && name == "bit_count" && len(lookupTypes) == 1 {
+		if policy := bitCountDumpPolicy(ctx); policy != nil {
+			oid := lookupTypes[0].Oid
+			if coerced, ok := fGet.ShouldDoImplicitTypeCast(); ok {
+				oid = coerced[0].Oid
+			}
+			if overload := releasedBitCountFloatOverload(oid); overload >= 0 {
+				policy.sawFloat = true
+				if policy.legacy {
+					fGet, err = function.GetFunctionByNameWithOverload(ctx, name, lookupTypes, overload)
+				}
+			}
+		}
 	}
 	if err != nil {
 		if name == "between" {
@@ -11037,11 +11090,18 @@ func refinePadLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 	if !sourceKnown || !padKnown {
 		return
 	}
-	maxRuneBytes := max(sourceRuneBytes, padRuneBytes)
-	if maxRuneBytes != 0 && uint64(target) > math.MaxUint64/maxRuneBytes {
-		return
+	if width, ok := padResultByteBound(target, max(sourceRuneBytes, padRuneBytes)); ok {
+		refineKnownStringResultType(returnType, width, true)
 	}
-	refineKnownStringResultType(returnType, uint64(target)*maxRuneBytes, true)
+}
+
+// PAD emits at most target units. A unit is one byte in binary evaluation
+// and at most one encoded rune in text evaluation.
+func padResultByteBound(target int64, maxBytesPerUnit uint64) (uint64, bool) {
+	if target < 0 || maxBytesPerUnit != 0 && uint64(target) > math.MaxUint64/maxBytesPerUnit {
+		return 0, false
+	}
+	return uint64(target) * maxBytesPerUnit, true
 }
 
 func binaryExprMaxRuntimeRuneBytes(expr *plan.Expr) (uint64, bool) {

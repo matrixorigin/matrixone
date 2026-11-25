@@ -946,28 +946,19 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	if val <= float64(math.MinInt64) {
 		return bitCountFromUint64(minInt64BitPattern), nil
 	}
-	//2^63 - 1 = 9223372036854775807
-	//2^64 - 1 = 18446744073709551615
-	// The largest longlong that will fix into a double (LLONG_MAX is not
-	// exactly convertible to double, so for large double x, the test
-	// x <= LLONG_MAX does not guarantee x will fit in a longlong,
-	// and may give a compiler warning). LLONG_MIN is exact.
-
-	// Similar, for ulonglong.
-	const ULLONG_MAX_DOUBLE = 18446744073709549568.0
-
-	if val >= ULLONG_MAX_DOUBLE {
-		return bitCountFromUint64(uint64(math.MaxUint64)), nil
+	// Largest representable double below 2^64. Saturate before converting
+	// to avoid an out-of-range float-to-integer conversion.
+	const maxUint64Double = 18446744073709549568.0
+	if val >= maxUint64Double {
+		return bitCountFromUint64(math.MaxUint64), nil
 	}
-	// MySQL truncates FLOAT/DOUBLE inputs toward zero before counting bits.
-	truncated := math.Trunc(val)
-	// Converting a negative float directly to uint64 is undefined in Go (the
-	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
-	// so route negatives through int64 first and reinterpret the bit pattern.
-	if truncated < 0 {
-		return bitCountFromSignedInt64Pattern(int64(truncated)), nil
+	// Float-to-integer conversion truncates toward zero. Convert negatives
+	// through int64 before reinterpreting their bits; a negative conversion
+	// directly to uint64 is implementation-specific.
+	if val < 0 {
+		return bitCountFromSignedInt64Pattern(int64(val)), nil
 	}
-	return bitCountFromUint64(uint64(truncated)), nil
+	return bitCountFromUint64(uint64(val)), nil
 }
 
 func bitCountFromDecimal64(v types.Decimal64, scale int32) (uint64, error) {
@@ -1009,7 +1000,101 @@ func BitCountInteger[T constraints.Unsigned | constraints.Signed](ivecs []*vecto
 	}, selectList)
 }
 
-func BitCountFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+const (
+	// 4.2.8 stored these overload IDs in generated expressions. Their rounding
+	// behavior is part of the persisted definition.
+	BitCountRoundedFloat32Overload = 8
+	BitCountRoundedFloat64Overload = 9
+
+	bitCountTruncatedFloat32Overload  = 15
+	bitCountTruncatedFloat64Overload  = 16
+	BitCountFloat32FieldOverload      = 17
+	BitCountFloat64FieldOverload      = 18
+	BitCountFloat32ExpressionOverload = 19
+	BitCountFloat64ExpressionOverload = 20
+	BitCountFloat64LiteralOverload    = 21
+)
+
+func IsBitCountFloatOverload(overload int32) bool {
+	return overload == BitCountRoundedFloat32Overload || overload == BitCountRoundedFloat64Overload ||
+		overload >= bitCountTruncatedFloat32Overload && overload <= BitCountFloat64LiteralOverload
+}
+
+func bitCountFloatField[T constraints.Float](upperBound float64, saturated int64, rowScopedWarning bool) executeLogicOfOverload {
+	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		constantInput := ivecs[0].IsConst()
+		err := opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+			rounded := math.RoundToEven(float64(v))
+			if rounded >= upperBound {
+				if rowScopedWarning && !constantInput {
+					appendBitCountFloatFieldWarning(proc, float64(v))
+				}
+				return bitCountFromSignedInt64Pattern(saturated), nil
+			}
+			if rowScopedWarning && rounded <= float64(math.MinInt64) && !constantInput {
+				appendBitCountFloatFieldWarning(proc, float64(v))
+			}
+			return bitCountFromFloat(rounded, proc)
+		}, selectList)
+		if err != nil || !rowScopedWarning || !constantInput {
+			return err
+		}
+		activeRows := bitCountSelectedRowCount(selectList, length)
+		if activeRows == 0 {
+			return nil
+		}
+		input := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
+		value, isNull := input.GetValue(0)
+		if isNull || !bitCountFloatFieldValueOverflows(float64(value), upperBound) {
+			return nil
+		}
+		for range activeRows {
+			appendBitCountFloatFieldWarning(proc, float64(value))
+		}
+		return nil
+	}
+}
+
+func bitCountFloatFieldValueOverflows(value, upperBound float64) bool {
+	rounded := math.RoundToEven(value)
+	return rounded >= upperBound || rounded <= float64(math.MinInt64)
+}
+
+func bitCountSelectedRowCount(selectList *FunctionSelectList, length int) int {
+	if length <= 0 || selectList != nil && selectList.IgnoreAllRow() {
+		return 0
+	}
+	if selectList == nil || selectList.ShouldEvalAllRow() {
+		return length
+	}
+	selected := 0
+	for row := uint64(0); row < uint64(length); row++ {
+		if !selectList.Contains(row) {
+			selected++
+		}
+	}
+	return selected
+}
+
+func appendBitCountFloatFieldWarning(proc *process.Process, value float64) {
+	text := string(util.AppendMySQLFloat(nil, value, 64))
+	appendIntegerNumericCoercionWarning(proc, text, "", false, true)
+}
+
+func bitCountFloatExpression[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+		value, err := explicitFloatToInt64(float64(v))
+		return bitCountFromSignedInt64Pattern(value), err
+	}, selectList)
+}
+
+func bitCountRoundedFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
+		return bitCountFromFloat(math.RoundToEven(float64(v)), proc)
+	}, selectList)
+}
+
+func bitCountTruncatedFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithErrorCheck[T, uint64](ivecs, result, proc, length, func(v T) (uint64, error) {
 		return bitCountFromFloat(v, proc)
 	}, selectList)

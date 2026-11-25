@@ -2154,6 +2154,10 @@ load_table_stmt:
     {
         $$ = &tree.LoadTable{Table: $3, Path: $5}
     }
+|   LOAD TABLE table_name FROM STRING WITH RELEASE STRING CHECKSUM STRING
+    {
+        $$ = &tree.LoadTable{Table: $3, Path: $5, Source: &tree.TableDumpSource{Release: $8, Checksum: $10}}
+    }
 
 load_extension_stmt:
     LOAD extension_name
