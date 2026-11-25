@@ -53,9 +53,14 @@ func (i *IOVector) ReleaseReadResultOnError() {
 			entry.CachedData.Release()
 			entry.CachedData = nil
 		}
-		if entry.done && entry.releaseData != nil {
-			entry.releaseData()
+		if release := entry.releaseData; entry.done && release != nil {
+			// A retry must not reuse aliases to the released buffer.
 			entry.releaseData = nil
+			entry.Data = nil
+			if entry.ReadCloserForRead != nil {
+				*entry.ReadCloserForRead = nil
+			}
+			release()
 		}
 		entry.decodeLease.release()
 		entry.decodeLease = nil

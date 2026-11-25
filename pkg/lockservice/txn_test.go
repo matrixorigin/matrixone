@@ -347,6 +347,37 @@ func TestCloseWithoutFreeWithContextRetriesOnlyFailedTables(t *testing.T) {
 	})
 }
 
+func TestRetryableCloseReleasesBlockedWaiterOnce(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		id := []byte("waiting-transaction")
+		txn := newActiveTxn(id, string(id), newFixedSlicePool(2), "")
+		defer reuse.Free(txn, nil)
+		w := acquireWaiter(pb.WaitTxn{TxnID: id}, "", nil)
+		defer func() {
+			w.disableNotify()
+			w.close("test cleanup", nil)
+		}()
+		txn.setBlocked(w, getLogger(""))
+
+		closeTxn := func() error {
+			return txn.closeWithoutFreeWithContext(context.Background(), id,
+				timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+					return nil, nil
+				}, getLogger(""))
+		}
+		require.NoError(t, closeTxn())
+		select {
+		case result := <-w.c:
+			require.ErrorIs(t, result.err, ErrTxnNotFound)
+		default:
+			t.Fatal("blocked waiter was not notified")
+		}
+		require.Empty(t, txn.blockedWaiters)
+		require.NoError(t, closeTxn())
+		require.Equal(t, int32(1), w.refCount.Load(), "retry must preserve the waiter's own reference")
+	})
+}
+
 func TestCloseWithoutFreeWithContextReturnsCanceledLookup(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		id := []byte("canceled-lookup")

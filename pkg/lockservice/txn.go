@@ -589,7 +589,10 @@ func (txn *activeTxn) fenceByBindChangedLocked(bind pb.LockTable, logger *log.MO
 func (txn *activeTxn) cancelBlocks(
 	logger *log.MOLogger,
 ) {
-	for _, w := range txn.blockedWaiters {
+	waiters := txn.blockedWaiters
+	txn.blockedWaiters = txn.blockedWaiters[:0]
+	for i, w := range waiters {
+		waiters[i] = nil
 		w.notify(notifyValue{err: ErrTxnNotFound}, logger)
 		w.close("cancelBlocks", logger)
 	}

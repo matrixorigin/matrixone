@@ -90,6 +90,8 @@ func (p CurrentCNPolicy) String() string {
 type QueryRequest struct {
 	ExecKind  QueryExecKind
 	CurrentCN Worker
+	// RequireWorkspaceOwner is an execution constraint, not a user preference.
+	RequireWorkspaceOwner bool
 	// Candidates contains workers after candidate discovery and pool/label
 	// resolution. Query placement only selects from this resolved set.
 	Candidates           Workers
@@ -261,6 +263,12 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 		return decideLocalQueryPlacement(req)
 	}
 
+	if req.RequireWorkspaceOwner {
+		if req.Intent.CurrentCNPolicy == CurrentCNExcluded || req.CurrentCNPolicy == CurrentCNExcluded {
+			return queryDecision(req, nil, nil, ReasonExcludedCurrentCN, false)
+		}
+		req.CurrentCNPolicy = CurrentCNRequired
+	}
 	resolved := resolvedWorkers(req)
 	workers, dropped := selectEligibleCandidateWorkers(resolved)
 	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
@@ -278,6 +286,27 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 	if req.CurrentCNPolicy == CurrentCNRequired && currentRejected {
 		return makeDecision(workers, currentRejectReason, false)
+	}
+	if req.RequireWorkspaceOwner {
+		// An empty pool fallback or a peer advertising the ingress address
+		// cannot stand in for the transaction's workspace. Prove membership
+		// before the worker cap and use the ingress's actual execution route.
+		found := false
+		for _, w := range resolved {
+			if !sameWorker(w, req.CurrentCN) ||
+				(w.ID != "" && req.CurrentCN.ID != "" && w.ID != req.CurrentCN.ID) {
+				continue
+			}
+			if reason, rejected := rejectedCurrentWorkerReason(w); rejected {
+				return makeDecision(nil, reason, false)
+			}
+			found = true
+		}
+		if !found {
+			return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
+		}
+		workers = append(removeCurrentWorker(workers, req.CurrentCN), req.CurrentCN)
+		eligibleCount = len(workers)
 	}
 	if req.CurrentCNPolicy == CurrentCNExcluded {
 		if !hasWorkerIdentity(req.CurrentCN) {
