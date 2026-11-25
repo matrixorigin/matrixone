@@ -471,8 +471,7 @@ func TestBatchSetEmptyAppendKeepsSortedTail(t *testing.T) {
 	require.True(t, bs.Get(0).Vecs[0].GetSorted())
 
 	var selection bitmap.Bitmap
-	selection.Init(bitmapTestMP)
-	mustBitmapOK(selection.InitWithSize(2, bitmapTestMP))
+	require.NoError(t, selection.InitWithSize(2, mp))
 	selection.Add(1)
 	selected := newInt64TestBatch(t, mp, 1, 2)
 	selected.SetSelection(&selection)
