@@ -842,8 +842,14 @@ func (l *store) getOrExtendTNLease(ctx context.Context,
 	shardID uint64, tnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetLeaseHolderCmd(tnID)
-	_, err := l.propose(ctx, session, cmd)
-	return err
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		return err
+	}
+	if len(result.Data) > 0 {
+		return moerr.NewNotLeaseHolder(ctx, binaryEnc.Uint64(result.Data))
+	}
+	return nil
 }
 
 func (l *store) truncateLog(ctx context.Context,
@@ -1181,11 +1187,12 @@ func isRaftInternalEntry(e raftpb.Entry) bool {
 }
 
 func (l *store) markEntries(ctx context.Context,
-	shardID uint64, entries []raftpb.Entry) ([]pb.LogRecord, error) {
+	view logReadView, entries []raftpb.Entry) ([]pb.LogRecord, error) {
 	if len(entries) == 0 {
 		return []pb.LogRecord{}, nil
 	}
-	result := make([]pb.LogRecord, 0)
+	result := make([]pb.LogRecord, 0, len(entries))
+	leaseHolder := view.initialLease
 	for _, e := range entries {
 		if isRaftInternalEntry(e) {
 			// raft internal stuff
@@ -1197,6 +1204,9 @@ func (l *store) markEntries(ctx context.Context,
 		}
 		cmd := l.decodeCmd(ctx, e)
 		if isSetLeaseHolderUpdate(cmd) {
+			if lease, ok := view.leaseChanges[e.Index]; ok {
+				leaseHolder = lease
+			}
 			result = append(result, LogRecord{
 				Type: pb.LeaseUpdate,
 				Lsn:  e.Index,
@@ -1204,6 +1214,12 @@ func (l *store) markEntries(ctx context.Context,
 			continue
 		}
 		if isUserUpdate(cmd) {
+			// Raft retains user proposals even when the state machine rejects
+			// them. Keep their physical position without exposing WAL payloads.
+			if leaseHolder != 0 && parseLeaseHolderID(cmd) != leaseHolder {
+				result = append(result, LogRecord{Type: pb.LeaseRejected, Lsn: e.Index})
+				continue
+			}
 			result = append(result, LogRecord{
 				Data: cmd,
 				Type: pb.UserRecord,
@@ -1225,19 +1241,15 @@ func getNextIndex(entries []raftpb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
 	return firstIndex
 }
 
-// high priority test
-// FIXME: add a test that queries the log with LeaseUpdate, LeaseRejected
-// entries, no matter what is the firstLsn specified in queryLog(), returned
-// results should make sense
 func (l *store) queryLog(ctx context.Context, shardID uint64,
 	firstIndex Lsn, maxSize uint64) ([]LogRecord, Lsn, error) {
-	v, err := l.read(ctx, shardID, indexQuery{})
+	v, err := l.read(ctx, shardID, logReadQuery{firstIndex: firstIndex})
 	if err != nil {
 		return nil, 0, err
 	}
-	lastIndex := v.(uint64)
+	view := v.(logReadView)
 	// FIXME: check whether lastIndex >= firstIndex
-	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex+1, maxSize)
+	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, view.index+1, maxSize)
 	if err != nil {
 		l.runtime.Logger().Error("QueryRaftLog failed", zap.Error(err))
 		return nil, 0, err
@@ -1247,7 +1259,7 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 		if v.Completed() {
 			entries, logRange := v.RaftLogs()
 			next := getNextIndex(entries, firstIndex, logRange.LastIndex)
-			results, err := l.markEntries(ctx, shardID, entries)
+			results, err := l.markEntries(ctx, view, entries)
 			if err != nil {
 				l.runtime.Logger().Error("markEntries failed", zap.Error(err))
 				return nil, 0, err

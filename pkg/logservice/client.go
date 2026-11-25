@@ -143,6 +143,36 @@ func NewClient(
 	return &managedClient{cfg: cfg, client: client, sid: sid}, nil
 }
 
+// NewTNWriterClientFactory claims the shard's write lease before its first
+// client is returned. Further clients and transport reconnects only attach
+// to the shard, so an existing writer cannot take back a successor's lease.
+func NewTNWriterClientFactory(sid string, cfg ClientConfig, timeout time.Duration) ClientFactory {
+	cfg.connectWithoutLease = true
+	var claimOnce sync.Once
+	var claimErr error
+	return func() (Client, error) {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseNewLogServiceClient)
+		defer cancel()
+		client, err := NewClient(ctx, sid, cfg)
+		if err != nil {
+			return nil, moerr.AttachCause(ctx, err)
+		}
+
+		// A timed-out grant may still commit. This factory must not submit
+		// another lease change and then become an active writer.
+		claimOnce.Do(func() {
+			claimErr = moerr.AttachCause(ctx, client.UpdateLeaseholderID(ctx, cfg.TNReplicaID))
+		})
+		if claimErr != nil {
+			if closeErr := client.Close(); closeErr != nil {
+				logutil.Error("failed to close the client", zap.Error(closeErr))
+			}
+			return nil, claimErr
+		}
+		return client, nil
+	}
+}
+
 // NewStandbyClient creates a Log Service client which is used by standby shard.
 func NewStandbyClient(ctx context.Context, sid string, cfg ClientConfig) (StandbyClient, error) {
 	if err := cfg.ValidateStandbyClient(); err != nil {
@@ -543,7 +573,7 @@ func connectToLogServiceAddress(
 	}
 	c.addr = addr
 	c.client = cc
-	if cfg.ReadOnly {
+	if cfg.ReadOnly || cfg.connectWithoutLease {
 		if err := c.connectReadOnly(ctx); err != nil {
 			if closeErr := c.close(); closeErr != nil {
 				logutil.Error("failed to close the client", zap.Error(closeErr))

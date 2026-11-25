@@ -205,7 +205,7 @@ func (c *wrappedClient) Append(
 		)
 		psn, err = c.wrapped.Append(ctx, c.buf)
 		cancel()
-		if err == nil {
+		if err == nil || moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) {
 			break
 		}
 		retryTimes++

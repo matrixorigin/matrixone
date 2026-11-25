@@ -27,6 +27,7 @@ import (
 	"github.com/lni/vfs"
 	"github.com/panjf2000/ants/v2"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -421,6 +422,101 @@ func TestAppendFailureCompletesWaiterBeforeFailStop(t *testing.T) {
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)
 	require.Zero(t, d.getCommittedDSNWatermark())
 	require.NoError(t, d.Close())
+}
+
+type takeoverAppendClient struct {
+	logservice.Client
+	reconnect logservice.ClientFactory
+	started   chan<- struct{}
+	release   <-chan struct{}
+	startOnce sync.Once
+}
+
+func (c *takeoverAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
+	if LogEntry(record.Payload()).GetStartDSN() != 2 {
+		return c.Client.Append(ctx, record)
+	}
+	c.startOnce.Do(func() { close(c.started) })
+	<-c.release
+	client, err := c.reconnect()
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close()
+	return client.Append(ctx, record)
+}
+
+func TestTimedOutWriterCannotOverwriteReplacementWAL(t *testing.T) {
+	service, clientCfg := initTest(t)
+	defer service.Close()
+	oldFactory := logservice.NewTNWriterClientFactory("", *clientCfg, 5*time.Second)
+	started, release := make(chan struct{}), make(chan struct{})
+	allowAppend := sync.OnceFunc(func() { close(release) })
+	defer allowAppend()
+	cfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(func() (logservice.Client, error) {
+			client, err := oldFactory()
+			if err != nil {
+				return nil, err
+			}
+			return &takeoverAppendClient{Client: client, reconnect: oldFactory, started: started, release: release}, nil
+		}))
+	cfg.CloseTimeout = 50 * time.Millisecond
+	old := NewLogServiceDriver(&cfg)
+	failed := make(chan error, 1)
+	old.onAppendFailure = func(err error) { failed <- err }
+	replay := func(d *LogServiceDriver) []string {
+		t.Helper()
+		var payloads []string
+		require.NoError(t, d.Replay(t.Context(), func(e *entry.Entry) driver.ReplayEntryState {
+			payloads = append(payloads, string(e.Entry.GetPayload()))
+			return driver.RE_Nomal
+		}, func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite }, nil))
+		return payloads
+	}
+	require.Empty(t, replay(old))
+	defer func() { allowAppend(); _ = old.Close() }()
+	first := entry.MockEntryWithPayload([]byte("old-first"))
+	require.NoError(t, old.Append(first))
+	require.NoError(t, first.WaitDone())
+	stale := entry.MockEntryWithPayload([]byte("old-second"))
+	require.NoError(t, old.Append(stale))
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old append did not reach the LogService client")
+	}
+	require.ErrorIs(t, old.Close(), context.DeadlineExceeded)
+
+	clientCfg.TNReplicaID++
+	newFactory := logservice.NewTNWriterClientFactory("", *clientCfg, 5*time.Second)
+	replacementCfg := NewConfig("", WithConfigOptMaxClient(1),
+		WithConfigOptClientFactory(LogServiceClientFactory(newFactory)))
+	replacement := NewLogServiceDriver(&replacementCfg)
+	require.Equal(t, []string{"old-first"}, replay(replacement))
+	newEntry := entry.MockEntryWithPayload([]byte("replacement"))
+	require.NoError(t, replacement.Append(newEntry))
+	require.NoError(t, newEntry.WaitDone())
+	require.Equal(t, uint64(2), newEntry.DSN)
+
+	allowAppend()
+	select {
+	case err := <-failed:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the old writer was not fenced")
+	}
+	require.True(t, moerr.IsMoErrCode(stale.WaitDone(), moerr.ErrNotLeaseHolder))
+	select {
+	case <-old.ShutdownDone():
+	case <-time.After(5 * time.Second):
+		t.Fatal("old WAL did not finish draining")
+	}
+	require.NoError(t, replacement.Close())
+
+	reopened := NewLogServiceDriver(&replacementCfg)
+	defer reopened.Close()
+	require.Equal(t, []string{"old-first", "replacement"}, replay(reopened))
 }
 
 func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *LogServiceDriver {

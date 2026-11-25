@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -500,6 +501,60 @@ func TestClientUpdateLeaseholderID(t *testing.T) {
 		assert.Equal(t, uint64(8), lsn)
 	}
 	RunClientTest(t, false, nil, fn)
+}
+
+func TestTNWriterReconnectDoesNotReclaimLease(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, _ *Service, cfg ClientConfig, _ Client) {
+		ctx, cancel := context.WithTimeout(t.Context(), testIOTimeout)
+		defer cancel()
+		oldFactory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+		old, err := oldFactory()
+		require.NoError(t, err)
+		defer old.Close()
+		oldRecord := old.GetLogRecord(8)
+		first, err := old.Append(ctx, oldRecord)
+		require.NoError(t, err)
+
+		cfg.TNReplicaID++
+		newFactory := NewTNWriterClientFactory("", cfg, testIOTimeout)
+		replacement, err := newFactory()
+		require.NoError(t, err)
+		defer replacement.Close()
+		newRecord := replacement.GetLogRecord(8)
+		newPSN, err := replacement.Append(ctx, newRecord)
+		require.NoError(t, err)
+
+		old.(*managedClient).resetClient()
+		_, err = old.Append(ctx, oldRecord)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+		stale, err := oldFactory()
+		require.NoError(t, err)
+		defer stale.Close()
+		_, err = stale.Append(ctx, oldRecord)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder), "%v", err)
+
+		// A read starting before the handoff retains both accepted writes.
+		records, _, err := replacement.Read(ctx, first, math.MaxUint64)
+		require.NoError(t, err)
+		var accepted []Lsn
+		for _, record := range records {
+			if record.Type == pb.UserRecord {
+				accepted = append(accepted, record.Lsn)
+			}
+		}
+		require.Equal(t, []Lsn{first, newPSN}, accepted)
+
+		// Reads starting after the handoff also know the active lease, even
+		// though the lease update is outside this page.
+		records, _, err = replacement.Read(ctx, newPSN+1, math.MaxUint64)
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		for i, record := range records {
+			require.Equal(t, newPSN+1+uint64(i), record.Lsn)
+			require.Equal(t, pb.LeaseRejected, record.Type)
+			require.Empty(t, record.Data)
+		}
+	})
 }
 
 func TestClientAppend(t *testing.T) {

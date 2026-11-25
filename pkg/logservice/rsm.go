@@ -43,6 +43,13 @@ const (
 // used to indicate query types
 type leaseHolderIDQuery struct{}
 type indexQuery struct{}
+type logReadQuery struct{ firstIndex uint64 }
+
+type logReadView struct {
+	index        uint64
+	initialLease uint64
+	leaseChanges map[uint64]uint64
+}
 type truncatedLsnQuery struct{}
 type leaseHistoryQuery struct{ lsn uint64 }
 type requiredLsnQuery struct{}
@@ -322,6 +329,18 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if _, ok := query.(indexQuery); ok {
 		return s.state.Index, nil
+	} else if q, ok := query.(logReadQuery); ok {
+		view := logReadView{index: s.state.Index, leaseChanges: make(map[uint64]uint64)}
+		var lastIndex uint64
+		for index, lease := range s.state.LeaseHistory {
+			if index >= q.firstIndex {
+				view.leaseChanges[index] = lease
+			} else if index > lastIndex {
+				lastIndex = index
+				view.initialLease = lease
+			}
+		}
+		return view, nil
 	} else if _, ok := query.(leaseHolderIDQuery); ok {
 		return s.state.LeaseHolderID, nil
 	} else if _, ok := query.(truncatedLsnQuery); ok {
