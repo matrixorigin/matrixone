@@ -2714,6 +2714,13 @@ func validateMultiPointGeometryTextContent(content string, depth int) error {
 		if item == "" {
 			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 		}
+		if strings.EqualFold(item, "EMPTY") {
+			// geo.WriteWKT renders an empty point member inside a
+			// MultiPoint as the bare token EMPTY, and a standard WKB
+			// NaN/NaN point member decodes into that form; the member
+			// carries no coordinates to parse.
+			continue
+		}
 		if itemType, err := geometryTypeNameFromText(item); err == nil {
 			if itemType != "POINT" {
 				return moerr.NewInvalidInputNoCtx("invalid geometry payload")

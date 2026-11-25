@@ -28,7 +28,6 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1551,6 +1550,15 @@ func (tbl *txnTable) DedupSnapByPK(
 	return
 }
 
+func markDeletedRow(rows containers.Vector, row int) error {
+	mask := rows.NullMask()
+	if err := nulls.TryExpand(mask, row+1); err != nil {
+		return err
+	}
+	mask.Add(uint64(row))
+	return nil
+}
+
 func (tbl *txnTable) findDeletesForCandidates(
 	ctx context.Context,
 	candidates *duplicatedRowIDs,
@@ -1622,7 +1630,9 @@ func (tbl *txnTable) findDeletes(
 	if err = index.BatchUpdateZM(keysZM, rowIDs.GetDownstreamVector()); err != nil {
 		return
 	}
-	tbl.contains(ctx, rowIDs, keysZM, rowIDs.GetAllocator())
+	if err = tbl.contains(ctx, rowIDs, keysZM); err != nil {
+		return
+	}
 
 	// Dedup uses a PrepareTS-based upper fence. A delete that is still
 	// committing conflicts with the writer regardless of whether it prepared
@@ -2251,7 +2261,6 @@ func (tbl *txnTable) contains(
 	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
-	mp *mpool.MPool,
 ) (err error) {
 	if tbl.tombstoneTable == nil || tbl.tombstoneTable.tableSpace == nil {
 		return
@@ -2297,7 +2306,9 @@ func (tbl *txnTable) contains(
 			} else if !slices.Contains(workspaceRowids, keyRowids[j]) {
 				continue
 			}
-			containers.UpdateValue(keys.GetDownstreamVector(), uint32(j), nil, true, mp)
+			if err := markDeletedRow(keys, j); err != nil {
+				return err
+			}
 		}
 	}
 	for _, stats := range tbl.tombstoneTable.tableSpace.stats {
@@ -2337,7 +2348,7 @@ func (tbl *txnTable) contains(
 			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
 
 			vectors, closeFunc, err := ioutil.LoadColumns2(
-				tbl.store.ctx,
+				ctx,
 				[]uint16{uint16(tbl.tombstoneTable.schema.GetSingleSortKeyIdx())},
 				nil,
 				tbl.store.rt.Fs,
@@ -2351,7 +2362,7 @@ func (tbl *txnTable) contains(
 				return err
 			}
 			data := vector.MustFixedColWithTypeCheck[types.Rowid](vectors[0].GetDownstreamVector())
-			containers.ForeachVector(keys,
+			err = containers.ForeachVector(keys,
 				func(id types.Rowid, isNull bool, row int) error {
 					if keys.IsNull(row) {
 						return nil
@@ -2362,12 +2373,15 @@ func (tbl *txnTable) contains(
 						types.CompareRowidRowidAligned,
 						nil,
 					); existed {
-						keys.Update(row, nil, true)
+						return markDeletedRow(keys, row)
 					}
 					return nil
 				}, sel)
 			closeFunc()
 			sel.Free()
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
