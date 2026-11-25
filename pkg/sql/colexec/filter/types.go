@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -75,13 +74,10 @@ type container struct {
 	outputAllocation          *mpool.MPool
 	buf                       *batch.Batch
 	executors                 []colexec.ExpressionExecutor
-	bs                        vector.FunctionParameterWrapper[bool]
 	runtimeExecutors          []colexec.ExpressionExecutor
 	allExecutors              []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 	subjectReuseAdmissionDone bool
 	selection                 selectionState
-	// flatSels is the compacting path's row-number scratch.
-	flatSels []int64
 }
 
 func (filter *Filter) SetRuntimeFilterExprs(proc *process.Process, exes []*plan.Expr) (err error) {
@@ -103,6 +99,7 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil
 	filter.ctr.selection.rows.Free()
+	filter.ctr.selection.pred.Free()
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(filter.ctr.mp(proc))
 		filter.ctr.buf = nil
