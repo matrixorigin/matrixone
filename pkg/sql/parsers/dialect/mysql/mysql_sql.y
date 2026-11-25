@@ -2309,7 +2309,7 @@ columns_or_variable_list:
     }
 
 columns_or_variable:
-    column_name_unresolved
+    column_decl_name
     {
         $$ = $1
     }

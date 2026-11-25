@@ -121,7 +121,18 @@ func restoredLegacyInnerWindow(ctx CompilerContext, database, name string, stmt 
 		return nil, false
 	}
 	inner := paren.Select
-	if inner.OrderBy != nil || inner.RankOption != nil || inner.Ep != nil || inner.IntoVars != nil || inner.DeprecatedInto || inner.SelectLockInfo != nil || inner.RewriteOption != nil || inner.IsPerform {
+	// An authored ORDER BY is accepted on exactly one side of the recorded
+	// window shape: the directly-authored outer ORDER BY (the already
+	// accepted projection ordering over the inner window) or, symmetric to
+	// it, an authored inner ORDER BY inside the parenthesized window body —
+	// but never both, which the release-era reads and the current binders
+	// treat as duplicate ORDER clauses. Only the inference boundary widens:
+	// the handoff still binds the inner Select alone and ordinary/marked
+	// current-generation paths keep full validation.
+	if inner.OrderBy != nil && stmt.OrderBy != nil {
+		return nil, false
+	}
+	if inner.RankOption != nil || inner.Ep != nil || inner.IntoVars != nil || inner.DeprecatedInto || inner.SelectLockInfo != nil || inner.RewriteOption != nil || inner.IsPerform {
 		return nil, false
 	}
 	return paren.Select, true
