@@ -1947,7 +1947,8 @@ func materializeVectorTopNRows(
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows
-// present in the deleteMask. Returns nil when there is nothing to filter.
+// present in the deleteMask. Returns nil when no rows are deleted and a nonnil
+// empty slice when every row is deleted; callers use nil to mean all rows.
 func buildTopInputRows(length int, deleteMask objectio.Bitmap) []int64 {
 	if length <= 0 || deleteMask.IsEmpty() {
 		return nil
