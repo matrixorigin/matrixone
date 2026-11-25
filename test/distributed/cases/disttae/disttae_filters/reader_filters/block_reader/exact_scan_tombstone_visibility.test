@@ -44,3 +44,4 @@ delete from full_delete;
 select count(*) from full_delete where bucket = 42;
 
 drop database issue_33159_exact_scan;
+select count(*) from information_schema.schemata where schema_name = 'issue_33159_exact_scan';
