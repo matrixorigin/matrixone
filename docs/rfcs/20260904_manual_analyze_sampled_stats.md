@@ -277,3 +277,57 @@ candidate. Any future durable or automatic phase requires a design revision.
 - MCV, histogram, correlation, and uncertainty-aware optimizer consumers;
 - replacing AUTO's exact incidence maps with a bounded estimator that retains
   acceptable accuracy under block clustering.
+
+## Proposed revision: bounded AUTO collection
+
+Review status: proposed, for the follow-up to #27728; the following changes
+apply to AUTO only. FULLSCAN, the snapshot, the selected blocks and rows, SQL
+equality and the publication fence are unchanged. No new session setting,
+catalog format, background job or planner rule is needed.
+
+**Cost and precision.** The exact incidence maps above scale with sample NDV.
+For the default AUTO budget keep the 32,768 smallest distinct uniform 64-bit
+typed hashes and, for each, its number of distinct admitted blocks. An
+occurrence in two different blocks counts twice; repeated rows in one block
+count once. Until truncation the sample cardinality is the retained count.
+After truncation estimate it as (K-1) divided by the largest retained hash
+normalized to [0,1). Use the retained block counts to estimate the singleton
+fraction in the existing block-incidence extrapolation. This is not full-table
+HLL and does not solve underestimation of long-tailed distributions. Preserve
+the smaller explicit exact-map budgets and their fail-on-overflow behavior.
+An integer-domain cap must be a proven superset, never sampled min/max alone;
+skip it if object coverage, type, numeric precision or metadata budget is
+insufficient. Missing optional metadata must not prevent publication.
+
+**Execution.** Keep one column per default pass. Within a fixed-width integer
+or DECIMAL64 pass, split disjoint persisted blocks between at most eight
+workers, subject to CPU, session DOP, block count and transient-memory
+admission. Scan the memory range once, serially. Each worker owns its reader,
+batch and partial state. Merge after all workers exit: every globally retained
+hash is retained in each shard that saw it. Sum its block counts, not its row
+counts. One coordinator publishes only after all passes succeed. Cancellation
+or a reader error must join workers and release reservations without publishing.
+Reducing workers must not change the sample or the sketch result; if even a
+serial reservation is rejected, return the admission error.
+
+Keep up to K distinct sampled row hashes as witnesses independently of the
+block-incidence estimate. The union of both frames supplies a lower bound,
+exact up to K even when frames or workers overlap. Grow incidence arrays with
+the retained set; their final size is 1.375 MiB. Reserve 4 MiB per active
+sketch for those arrays, the row witnesses and growth. Charge worker and
+coordinator sketches on the admitted path; this is not a bound on total RSS.
+Across column passes, memoize only row-inclusion decisions, keyed by the
+persisted block identity and physical row offset, at most 8 MiB per statement.
+Charge the bitmap to the statement and CN before allocation and until its last
+use. If it cannot be admitted, or it crowds out a scan, discard it and use the
+original row predicate. Unknown identities also use that predicate. Keep reader construction
+serialized where the relation setup is shared; do not share active readers.
+
+**Alternatives and acceptance.** Exact maps preserve sample frequencies but
+consume memory proportional to sampled cardinality. Full-column HLL gives
+better tail accuracy but reads every row; neither is a reason to change the
+default sample or remove FULLSCAN. Validate truncated and untruncated sketch
+merges against a serial oracle, reordered visible rows and admission denial.
+Compare whole-table AUTO time, sample receipts and NDV error against exact
+reference values; do not use a different engine's estimate as truth. A faster
+ANALYZE is the objective, not a claim of faster downstream SQL.

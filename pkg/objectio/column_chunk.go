@@ -49,7 +49,7 @@ type columnChunkMeta struct {
 func marshalColumnVectorWindow(
 	vec *vector.Vector, start, end int, mp *mpool.MPool,
 ) ([]byte, error) {
-	window, err := vec.CloneWindowWithAllocation(start, end, mp, nil)
+	window, err := vec.CloneWindow(start, end, mp)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +257,7 @@ func decodeChunkedColumn(
 			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload row count mismatch")
 		}
 		if dst == nil {
-			dst = vector.NewVec(*source.GetType())
+			dst = vector.NewVec(*source.GetType(), mp)
 		} else if *source.GetType() != *dst.GetType() {
 			return nil, moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
 		}

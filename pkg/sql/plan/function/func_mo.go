@@ -878,12 +878,18 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 			if err != nil {
 				return err
 			}
-			if err = process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), rel.GetTableDef(ctx)); err != nil {
+			planner := rel.GetTableDef(ctx)
+			if err = process.CheckIndexRelationDefinitionAccess(proc, rel.GetTableName(), planner); err != nil {
 				return err
 			}
-			tableColumns, err := rel.TableColumns(ctx)
-			if err != nil {
-				return err
+			var attrs []*engine.Attribute
+			source, ok := rel.(interface{ MaxAndMinValuesUsePlannerColumns() bool })
+			usePlanner := planner != nil && ok && source.MaxAndMinValuesUsePlannerColumns()
+			if !usePlanner {
+				attrs, err = rel.TableColumns(ctx)
+				if err != nil {
+					return err
+				}
 			}
 			ranges, err := rel.Ranges(ctx, engine.DefaultRangesParam)
 			if err != nil {
@@ -906,15 +912,24 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 				}
 
 				// BUG: if user drop the col and add it back with the same name within the same txn, the result will be wrong.
-				for j := range tableColumns {
-					if strings.EqualFold(tableColumns[j].Name, columnStr) {
-						strval := getValueInStr(tValues[j][minMaxIdx])
-						if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(strval)); err != nil {
-							return err
+				var columnIndex int
+				if usePlanner {
+					columnIndex = plannerExtremaColumnIndex(planner.Cols, columnStr, len(tValues))
+				} else {
+					columnIndex = -1
+					for j := range attrs[:min(len(attrs), len(tValues))] {
+						if strings.EqualFold(attrs[j].Name, columnStr) {
+							columnIndex = j
+							break
 						}
-						getValueFailed = false
-						break
 					}
+				}
+				if columnIndex >= 0 {
+					strval := getValueInStr(tValues[columnIndex][minMaxIdx])
+					if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(strval)); err != nil {
+						return err
+					}
+					getValueFailed = false
 				}
 			}
 			if getValueFailed {
@@ -925,6 +940,17 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 		}
 	}
 	return nil
+}
+
+// MaxAndMinValues omits the trailing physical row ID. Keep the planner's
+// positions because hidden data columns still occupy slots in the result.
+func plannerExtremaColumnIndex(cols []*plan.ColDef, name string, valueCount int) int {
+	for i, col := range cols[:min(len(cols), valueCount)] {
+		if strings.EqualFold(col.OriginName, name) {
+			return i
+		}
+	}
+	return -1
 }
 
 func getValueInStr(value any) string {
@@ -1173,6 +1199,8 @@ type enumValueIndex struct {
 	values        []string
 	exactIndexes  map[string]types.Enum
 	foldedIndexes map[string]types.Enum
+	// trimmedIndexes is non-nil only when a stored label has trailing spaces.
+	trimmedIndexes map[string]types.Enum
 }
 
 func buildEnumValueIndex(enumValues string) *enumValueIndex {
@@ -1197,24 +1225,48 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 			index.foldedIndexes[foldKey] = firstIndex
 		}
 		index.exactIndexes[value] = firstIndex
+		if strings.HasSuffix(value, " ") && index.trimmedIndexes == nil {
+			// Only definitions stored before CREATE-time trimming carry
+			// padded labels; ordinary domains skip the trimmed-label map.
+			index.trimmedIndexes = make(map[string]types.Enum, len(values))
+		}
+	}
+	if index.trimmedIndexes != nil {
+		for i, value := range values {
+			key := commonutil.EqualFoldKey(strings.TrimRight(value, " "))
+			if _, ok := index.trimmedIndexes[key]; !ok {
+				index.trimmedIndexes[key] = types.Enum(i + 1)
+			}
+		}
 	}
 	return index
 }
 
+// parse follows types.ParseEnum precedence: raw labels first, then the value
+// without trailing spaces, then padded stored labels compared trimmed.
 func (index *enumValueIndex) parse(value string) (types.Enum, bool, error) {
-	for {
-		if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
-			return enumIndex, false, nil
-		}
-		if enumIndex := index.foldedIndexes[commonutil.EqualFoldKey(value)]; enumIndex != 0 {
-			return enumIndex, false, nil
-		}
-		trimmed := strings.TrimRight(value, " ")
-		if trimmed == value {
-			return types.ParseEnumNumericText(value, len(index.values))
-		}
-		value = trimmed
+	if enumIndex := index.lookupRaw(value); enumIndex != 0 {
+		return enumIndex, false, nil
 	}
+	trimmed := strings.TrimRight(value, " ")
+	if trimmed != value {
+		if enumIndex := index.lookupRaw(trimmed); enumIndex != 0 {
+			return enumIndex, false, nil
+		}
+	}
+	if index.trimmedIndexes != nil {
+		if enumIndex := index.trimmedIndexes[commonutil.EqualFoldKey(trimmed)]; enumIndex != 0 {
+			return enumIndex, false, nil
+		}
+	}
+	return types.ParseEnumNumericText(trimmed, len(index.values))
+}
+
+func (index *enumValueIndex) lookupRaw(value string) types.Enum {
+	if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
+		return enumIndex
+	}
+	return index.foldedIndexes[commonutil.EqualFoldKey(value)]
 }
 
 // enum("a","b","c") -> CastIndexValueToIndex(1) -> 1

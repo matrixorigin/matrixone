@@ -44,9 +44,9 @@ func TestExternalNullAppendFailureIsReturned(t *testing.T) {
 			defer proc.Free()
 			defer mpool.DeleteMPool(mp)
 
-			bat := batch.NewOffHeap([]string{"a", "b"})
-			bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
-			bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+			bat := batch.New([]string{"a", "b"})
+			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
+			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			defer bat.Clean(mp)
 			param := &ExternalParam{ExParamConst: ExParamConst{
 				Ctx: context.Background(), ColumnListLen: 2,

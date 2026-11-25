@@ -1156,7 +1156,7 @@ func mergeBaseFilterInKind(
 		va.GetNulls().Any() || vb.GetNulls().Any() {
 		return BasePKFilter{}, nil
 	}
-	ret.Vec = vector.NewVec(left.Oid.ToType())
+	ret.Vec = vector.NewVec(left.Oid.ToType(), mp)
 	allocated = ret.Vec
 
 	switch va.GetType().Oid {

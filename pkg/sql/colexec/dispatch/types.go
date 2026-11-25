@@ -129,6 +129,25 @@ func (dispatch *Dispatch) ActivatesAllocationAccountLifecycle() bool {
 	return false
 }
 
+// dispatchAllocationSiteSpool is the account site of the spool's copied batches.
+const dispatchAllocationSiteSpool mpool.AllocationSite = 64
+
+// spoolMP returns the pool the pipeline spool copies batches through. The
+// spool copy used to be charged to each source batch's allocation account;
+// vectors no longer carry one, so the spool charges the statement account
+// compile bound to this operator, or proc's pool when none is bound.
+func (dispatch *Dispatch) spoolMP(proc *process.Process) (*mpool.MPool, error) {
+	if dispatch.allocationAccount == nil {
+		return proc.Mp(), nil
+	}
+	return proc.Mp().WithAccount(
+		dispatch.allocationAccount,
+		mpool.AllocationOwnerSelection,
+		dispatchAllocationSiteSpool,
+		mpool.AllocationCapacityClassDefault,
+	)
+}
+
 func (dispatch *Dispatch) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
@@ -276,19 +295,19 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 	dispatch.ctr = nil
 }
 
-// CleanupDeferredSpool reclaims spool cache memory after the paired Merge
-// cleanup has returned on a normal End path. The normal path drains queued
-// GetFromSpool signals; a cleanup-time timeout releases the current reference
-// and leaves no receiver goroutine that can read pending signals later.
+// CleanupDeferredSpool frees the spool's cached batches after the paired Merge
+// cleanup has returned on a normal End path. With an allocation account the
+// spool is kept until the account is drained, so FinalizeAfterConsumersQuiesced
+// can release slots whose GetFromSpool signals were bypassed by a typed
+// terminal signal.
 func (dispatch *Dispatch) CleanupDeferredSpool() {
 	if dispatch.cleanupSpool == nil {
 		return
 	}
+	dispatch.cleanupSpool.ReleaseCache()
 	if dispatch.allocationAccount != nil {
-		dispatch.cleanupSpool.ReleaseReusableCacheAfterProducerQuiesced()
 		return
 	}
-	dispatch.cleanupSpool.ForceCleanupAfterTerminalSignal()
 	dispatch.cleanupSpool = nil
 }
 

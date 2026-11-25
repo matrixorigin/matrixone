@@ -57,14 +57,14 @@ func ft2CreateCfg(t *testing.T, parser string, positionFree bool) string {
 // matching tf.Args (rowTerms reads tf.Args[i].Typ.Id for the datalink check).
 func ft2CreateArgVecs(t *testing.T, mp *mpool.MPool, cfg string, pk int64, texts ...string) (*TableFunction, []*vector.Vector) {
 	t.Helper()
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](pkVec, pk, false, mp))
 	vecs := make([]*vector.Vector, 0, 2+len(texts))
 	vecs = append(vecs, ft2ConstStr(t, mp, cfg), pkVec)
 	args := make([]*plan.Expr, 0, 2+len(texts))
 	args = append(args, makeStrConstExpr(cfg), makeStrConstExpr("pk"))
 	for _, s := range texts {
-		tv := vector.NewVec(types.T_varchar.ToType())
+		tv := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(tv, []byte(s), false, mp))
 		vecs = append(vecs, tv)
 		args = append(args, makeStrConstExpr("col"))
@@ -81,14 +81,14 @@ func ft2CreateArgVecs(t *testing.T, mp *mpool.MPool, cfg string, pk int64, texts
 // column and continue processing the other indexed columns.
 func ft2CreateNullableArgVecs(t *testing.T, mp *mpool.MPool, cfg string, pk int64, values ...any) (*TableFunction, []*vector.Vector) {
 	t.Helper()
-	pkVec := vector.NewVec(types.T_int64.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](pkVec, pk, false, mp))
 	vecs := make([]*vector.Vector, 0, 2+len(values))
 	vecs = append(vecs, ft2ConstStr(t, mp, cfg), pkVec)
 	args := make([]*plan.Expr, 0, 2+len(values))
 	args = append(args, makeStrConstExpr(cfg), makeStrConstExpr("pk"))
 	for _, value := range values {
-		tv := vector.NewVec(types.T_varchar.ToType())
+		tv := vector.NewVec(types.T_varchar.ToType(), mp)
 		s, ok := value.(string)
 		if value == nil {
 			require.NoError(t, vector.AppendBytes(tv, nil, true, mp))
@@ -127,7 +127,7 @@ func TestFulltext2CreateStartValidation(t *testing.T) {
 		tf := newFT2TF([]string{"status"}, ft2StatusRets())
 		nonStr, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, mp)
 		require.NoError(t, err)
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](pkVec, 1, false, mp))
 		tf.ctr.argVecs = []*vector.Vector{nonStr, pkVec}
 		require.ErrorContains(t, st.start(tf, proc, 0, nil), "must be a string")
@@ -136,7 +136,7 @@ func TestFulltext2CreateStartValidation(t *testing.T) {
 	{
 		st := &fulltext2CreateState{}
 		tf := newFT2TF([]string{"status"}, ft2StatusRets())
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](pkVec, 1, false, mp))
 		tf.ctr.argVecs = []*vector.Vector{ft2NonConstStr(t, mp, "{}"), pkVec}
 		require.ErrorContains(t, st.start(tf, proc, 0, nil), "must be a string constant")
@@ -145,7 +145,7 @@ func TestFulltext2CreateStartValidation(t *testing.T) {
 	{
 		st := &fulltext2CreateState{}
 		tf := newFT2TF([]string{"status"}, ft2StatusRets())
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](pkVec, 1, false, mp))
 		tf.ctr.argVecs = []*vector.Vector{ft2ConstStr(t, mp, ""), pkVec}
 		require.ErrorContains(t, st.start(tf, proc, 0, nil), "config is empty")
@@ -154,7 +154,7 @@ func TestFulltext2CreateStartValidation(t *testing.T) {
 	{
 		st := &fulltext2CreateState{}
 		tf := newFT2TF([]string{"status"}, ft2StatusRets())
-		pkVec := vector.NewVec(types.T_int64.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](pkVec, 1, false, mp))
 		tf.ctr.argVecs = []*vector.Vector{ft2ConstStr(t, mp, "{not json"), pkVec}
 		require.Error(t, st.start(tf, proc, 0, nil))
@@ -178,7 +178,7 @@ func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	require.Equal(t, 1, st.cur.NumDocs())
 
 	// a NULL pk row is skipped (no doc added).
-	pkNull := vector.NewVec(types.T_int64.ToType())
+	pkNull := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](pkNull, 0, true, mp))
 	tf.ctr.argVecs[1] = pkNull
 	require.NoError(t, st.start(tf, proc, 0, nil))
@@ -228,13 +228,13 @@ func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	pk := vector.NewVec(types.T_int64.ToType())
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](pk, 1, false, mp))
-	left := vector.NewVec(types.T_varchar.ToType())
+	left := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(left, nil, true, mp))
-	right := vector.NewVec(types.T_varchar.ToType())
+	right := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(right, []byte("right"), false, mp))
-	status := vector.NewVec(types.T_varchar.ToType())
+	status := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(status, []byte("active"), false, mp))
 
 	st := &fulltext2CreateState{}
@@ -440,13 +440,13 @@ func TestFulltext2CreateRowTermsBinaryJSONNullSibling(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
 
-	pk := vector.NewVec(types.T_int64.ToType())
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](pk, 1, false, mp))
-	left := vector.NewVec(types.T_json.ToType())
+	left := vector.NewVec(types.T_json.ToType(), mp)
 	bj, err := bytejson.ParseFromString(`{"k":"binary"}`)
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendByteJson(left, bj, false, mp))
-	right := vector.NewVec(types.T_json.ToType())
+	right := vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendByteJson(right, bytejson.ByteJson{}, true, mp))
 
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
@@ -465,13 +465,13 @@ func TestFulltext2CreateRowTermsNullBitmapAndConstNull(t *testing.T) {
 	// Two rows carry opposite NULL patterns. Each row must use its own bitmap;
 	// a NULL in row 0 must not suppress row 1's sibling (or vice versa).
 	cfg := ft2ConstStr(t, mp, "{}")
-	pk := vector.NewVec(types.T_int64.ToType())
+	pk := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](pk, 1, false, mp))
 	require.NoError(t, vector.AppendFixed[int64](pk, 2, false, mp))
-	left := vector.NewVec(types.T_varchar.ToType())
+	left := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(left, []byte("alpha"), false, mp))
 	require.NoError(t, vector.AppendBytes(left, nil, true, mp))
-	right := vector.NewVec(types.T_varchar.ToType())
+	right := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(right, nil, true, mp))
 	require.NoError(t, vector.AppendBytes(right, []byte("beta"), false, mp))
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
@@ -487,7 +487,7 @@ func TestFulltext2CreateRowTermsNullBitmapAndConstNull(t *testing.T) {
 	// A constant NULL vector represents a NULL expression for every row and
 	// must be skipped without affecting the other vector's row values.
 	constNull := vector.NewConstNull(types.T_varchar.ToType(), 2, mp)
-	other := vector.NewVec(types.T_varchar.ToType())
+	other := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(other, []byte("one"), false, mp))
 	require.NoError(t, vector.AppendBytes(other, []byte("two"), false, mp))
 	tf.Args = []*plan.Expr{makeStrConstExpr("{}"), makeStrConstExpr("pk"), makeStrConstExpr("null"), makeStrConstExpr("other")}

@@ -18,7 +18,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -63,34 +62,34 @@ func (window *Window) callRowNumber(proc *process.Process) (vm.CallResult, error
 			if uint64(count) > math.MaxUint64-ctr.rowNumberCounter {
 				return vm.NewCallResult(), moerr.NewInternalErrorNoCtx("ROW_NUMBER overflow")
 			}
-			vec, err := ctr.allocation.NewVector(types.T_uint64.ToType())
+			vec, err := ctr.allocation.NewVector(proc, types.T_uint64.ToType())
 			if err != nil {
 				return vm.NewCallResult(), err
 			}
-			if err = vec.PreExtend(count, proc.Mp()); err != nil {
-				vec.Free(proc.Mp())
+			vecMP, err := ctr.allocation.MP(proc)
+			if err != nil {
+				ctr.allocation.FreeVector(proc, vec)
+				return vm.NewCallResult(), err
+			}
+			if err = vec.PreExtend(count, vecMP); err != nil {
+				ctr.allocation.FreeVector(proc, vec)
 				return vm.NewCallResult(), err
 			}
 			vec.SetLength(count)
 			values := vector.MustFixedColNoTypeCheck[uint64](vec)
 			for i := range values {
 				if err = checkCanceled(proc, i); err != nil {
-					vec.Free(proc.Mp())
+					ctr.allocation.FreeVector(proc, vec)
 					return vm.CancelResult, err
 				}
 				values[i] = ctr.rowNumberCounter + uint64(i) + 1
 			}
-			var output *batch.Batch
-			if ctr.allocation.Vector != nil {
-				output, err = ctr.rowNumberInput.WindowWithAllocation(start, end, proc.Mp(), ctr.allocation.Vector)
-			} else {
-				output, err = ctr.rowNumberInput.Window(start, end)
-			}
+			output, err := ctr.rowNumberInput.Window(start, end)
 			if err != nil {
-				vec.Free(proc.Mp())
+				ctr.allocation.FreeVector(proc, vec)
 				return vm.NewCallResult(), err
 			}
-			vec.SetPrepareParamKind(ctr.prepareParamKind.Get(0))
+			ctr.rBatWindowCols = len(output.Vecs)
 			output.Vecs = append(output.Vecs, vec)
 			window.OpAnalyzer.Alloc(int64(vec.Size()))
 			ctr.rBat = output

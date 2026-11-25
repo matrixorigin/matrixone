@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -199,7 +200,7 @@ func TestInsert_initBufForS3(t *testing.T) {
 					Engine: nil,
 				},
 			}
-			insert.initBufForS3()
+			insert.initBufForS3(mpool.MustNewZero())
 			require.NotNil(t, insert.ctr.buf)
 			require.Equal(t, 2, len(insert.ctr.buf.Attrs))
 			require.Equal(t, catalog.BlockMeta_BlockInfo, insert.ctr.buf.Attrs[0])
@@ -423,7 +424,7 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 			s3MemThrottler: throttler,
 		},
 	}
-	insert.initBufForS3()
+	insert.initBufForS3(proc.Mp())
 	defer insert.ctr.s3Writer.Close()
 
 	bat := &batch.Batch{
@@ -509,7 +510,7 @@ func TestInsertS3FinalFlushRefreshesBeforeReleaseOnSuccess(t *testing.T) {
 			s3MemThrottler: throttler,
 		},
 	}
-	insert.initBufForS3()
+	insert.initBufForS3(proc.Mp())
 	defer insert.ctr.s3Writer.Close()
 
 	bat := &batch.Batch{

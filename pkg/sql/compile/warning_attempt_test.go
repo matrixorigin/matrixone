@@ -24,7 +24,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -67,9 +66,7 @@ func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
 			})
 			ctrl := gomock.NewController(t)
 			proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
-			buf := buffer.New()
-			t.Cleanup(buf.Free)
-			internal := &sqlExecutor{addr: proc.GetService(), eng: newStubEngine(), mp: proc.Mp(), txnClient: proc.Base.TxnClient, buf: buf}
+			internal := &sqlExecutor{addr: proc.GetService(), eng: newStubEngine(), mp: proc.Mp(), txnClient: proc.Base.TxnClient}
 			rt := moruntime.ServiceRuntime(proc.GetService())
 			previous, existed := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, internal)
@@ -284,11 +281,11 @@ func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
 	attempt := newWarningAttempt(proc, false)
 	require.NotNil(t, attempt)
 
-	source := vector.NewVec(types.T_varchar.ToType())
+	source := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer source.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
 	target := types.New(types.T_varchar, 3, 0)
-	destination := vector.NewVec(target)
+	destination := vector.NewVec(target, proc.Mp())
 	defer destination.Free(proc.Mp())
 	result := vector.NewFunctionResultWrapper(target, proc.Mp())
 	defer result.Free()

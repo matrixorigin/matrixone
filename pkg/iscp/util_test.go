@@ -41,7 +41,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// json
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_json, 65536, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_json, 65536, 0), proc.Mp())
 		bj, err := bytejson.ParseFromString("[1,2,3]")
 		require.Nil(t, err)
 		bytes, err := bj.Marshal()
@@ -54,7 +54,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// int64
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 		vector.AppendFixed[int64](bat.Vecs[i], int64(100), false, proc.Mp())
 		res[i] = "100"
 		i += 1
@@ -62,7 +62,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// []float32
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float32, 3, 0), proc.Mp()) // float32 array [3]float32
 		v32 := []float32{0, 1, 2}
 		vector.AppendArray[float32](bat.Vecs[i], v32, false, proc.Mp())
 		res[i] = "CAST('[0, 1, 2]' as VECF32(3))"
@@ -71,7 +71,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// []float64
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float64, 3, 0)) // float32 array [3]float64
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float64, 3, 0), proc.Mp()) // float32 array [3]float64
 		v64 := []float64{0, 1, 2}
 		vector.AppendArray[float64](bat.Vecs[i], v64, false, proc.Mp())
 		res[i] = "CAST('[0, 1, 2]' as VECF64(3))"
@@ -80,7 +80,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// []float16 (narrow base column)
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float16, 3, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_float16, 3, 0), proc.Mp())
 		vf16 := types.Float32ToFloat16Slice([]float32{0, 1, 2})
 		vector.AppendArray[types.Float16](bat.Vecs[i], vf16, false, proc.Mp())
 		res[i] = "CAST('[0, 1, 2]' as VECF16(3))"
@@ -89,7 +89,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// []bf16 (narrow base column)
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_bf16, 3, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_bf16, 3, 0), proc.Mp())
 		vbf16 := types.Float32ToBF16Slice([]float32{0, 1, 2})
 		vector.AppendArray[types.BF16](bat.Vecs[i], vbf16, false, proc.Mp())
 		res[i] = "CAST('[0, 1, 2]' as VECBF16(3))"
@@ -98,7 +98,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// []int8 (narrow base column)
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_int8, 3, 0), proc.Mp())
 		vector.AppendArray[int8](bat.Vecs[i], []int8{0, 1, 2}, false, proc.Mp())
 		res[i] = "CAST('[0, 1, 2]' as VECINT8(3))"
 		i += 1
@@ -106,7 +106,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// []uint8 (narrow base column)
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_array_uint8, 3, 0), proc.Mp())
 		vector.AppendArray[uint8](bat.Vecs[i], []uint8{0, 1, 2}, false, proc.Mp())
 		res[i] = "CAST('[0, 1, 2]' as VECUINT8(3))"
 		i += 1
@@ -114,7 +114,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// date
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_date, 4, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_date, 4, 0), proc.Mp())
 		v := 0
 		vector.AppendFixed[types.Date](bat.Vecs[i], types.Date(v), false, proc.Mp())
 		res[i] = "'0001-01-01'"
@@ -123,7 +123,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// datetime
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_datetime, 8, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_datetime, 8, 0), proc.Mp())
 		v := 0
 		vector.AppendFixed[types.Datetime](bat.Vecs[i], types.Datetime(v), false, proc.Mp())
 		res[i] = "'0001-01-01 00:00:00'"
@@ -132,7 +132,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// time
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_time, 8, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_time, 8, 0), proc.Mp())
 		v := 0
 		vector.AppendFixed[types.Time](bat.Vecs[i], types.Time(v), false, proc.Mp())
 		res[i] = "'00:00:00'"
@@ -141,7 +141,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// timestamp
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_timestamp, 8, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_timestamp, 8, 0), proc.Mp())
 		v := 0
 		vector.AppendFixed[types.Timestamp](bat.Vecs[i], types.Timestamp(v), false, proc.Mp())
 		res[i] = "bit_cast(unhex('0000000000000000') AS TIMESTAMP(0))"
@@ -150,7 +150,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// decimal64
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_decimal64, 8, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_decimal64, 8, 0), proc.Mp())
 		v := 1000
 		vector.AppendFixed[types.Decimal64](bat.Vecs[i], types.Decimal64(v), false, proc.Mp())
 		res[i] = "'1000'"
@@ -159,7 +159,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// decimal128
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_decimal128, 16, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_decimal128, 16, 0), proc.Mp())
 		v := types.Decimal128{B0_63: 1000, B64_127: 0}
 		vector.AppendFixed[types.Decimal128](bat.Vecs[i], v, false, proc.Mp())
 		res[i] = "'1000'"
@@ -168,7 +168,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// uuid
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_uuid, 16, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_uuid, 16, 0), proc.Mp())
 		v := types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8})
 		vector.AppendFixed[types.Uuid](bat.Vecs[i], v, false, proc.Mp())
 		res[i] = "'00010002-0003-0004-0005-000600070008'"
@@ -177,7 +177,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// enum
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_enum, 2, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_enum, 2, 0), proc.Mp())
 		v := types.Enum(uint16(1))
 		vector.AppendFixed[types.Enum](bat.Vecs[i], v, false, proc.Mp())
 		res[i] = "1"
@@ -186,7 +186,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// rowid
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_Rowid, types.RowidSize, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_Rowid, types.RowidSize, 0), proc.Mp())
 		v := types.Rowid([types.RowidSize]byte{})
 		vector.AppendFixed[types.Rowid](bat.Vecs[i], v, false, proc.Mp())
 		res[i] = "'00000000-0000-0000-0000-000000000000-0-0-0'"
@@ -195,7 +195,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// blockid
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_Blockid, types.BlockidSize, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_Blockid, types.BlockidSize, 0), proc.Mp())
 		v := types.Blockid([types.BlockidSize]byte{})
 		vector.AppendFixed[types.Blockid](bat.Vecs[i], v, false, proc.Mp())
 		res[i] = "'00000000-0000-0000-0000-000000000000-0-0'"
@@ -204,7 +204,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 
 	{
 		// TS
-		bat.Vecs[i] = vector.NewVec(types.New(types.T_TS, types.TxnTsSize, 0))
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_TS, types.TxnTsSize, 0), proc.Mp())
 		v := types.TS([types.TxnTsSize]byte{})
 		vector.AppendFixed[types.TS](bat.Vecs[i], v, false, proc.Mp())
 		res[i] = "'0-0'"
@@ -292,7 +292,7 @@ func TestExtractRowNativeRepr(t *testing.T) {
 	ctx := context.Background()
 
 	mk := func(typ types.Type, appendFn func(v *vector.Vector)) *vector.Vector {
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, m)
 		appendFn(v)
 		return v
 	}
@@ -347,7 +347,7 @@ func TestExtractRowNativeRepr(t *testing.T) {
 
 func TestExtractRowFromVectorCopiesBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendBytes(vec, []byte("value"), false, mp))
 	require.NoError(t, vector.AppendBytes(vec, []byte{}, false, mp))

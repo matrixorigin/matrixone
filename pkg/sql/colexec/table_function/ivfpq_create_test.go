@@ -112,7 +112,7 @@ func mock_ivfpq_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result
 		// fetchSrcTableRowCount expects exactly one row with a single
 		// int64 column carrying the count.
 		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())
 		vector.AppendFixed(bat.Vecs[0], mockIvfpqSrcRowCount, false, proc.Mp())
 		bat.SetRowCount(1)
 		return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{bat}}, nil
@@ -123,9 +123,9 @@ func mock_ivfpq_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result
 // makeBatchIvfpqCreate builds the 3-column input batch: (tblcfg varchar, pkid int64, vec float32[4]).
 func makeBatchIvfpqCreate(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // IndexTableConfig JSON
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 4, 0)) // float32 array [4]float32
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())     // IndexTableConfig JSON
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())         // pkid int64
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 4, 0), proc.Mp()) // float32 array [4]float32
 
 	tblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index","index_capacity":100}`
 	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
@@ -192,9 +192,9 @@ func TestIvfpqCreateMultiRow(t *testing.T) {
 
 	tblcfg := `{"db":"db","src":"src","metadata":"__meta","index":"__index","index_capacity":100}`
 	inbat := batch.NewWithSize(3)
-	inbat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))
-	inbat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))
-	inbat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 4, 0))
+	inbat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), ut.proc.Mp())
+	inbat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0), ut.proc.Mp())
+	inbat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 4, 0), ut.proc.Mp())
 	for i := 0; i < 10; i++ {
 		vector.AppendBytes(inbat.Vecs[0], []byte(tblcfg), false, ut.proc.Mp())
 		vector.AppendFixed(inbat.Vecs[1], int64(i+1), false, ut.proc.Mp())
@@ -280,9 +280,9 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 			plan2.MakePlan2Vecf32ConstExprWithType("[1,2,3,4]", vecDim),
 		}
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))
-		bat.Vecs[1] = vector.NewVec(types.New(idTyp, 8, 0))
-		bat.Vecs[2] = vector.NewVec(types.New(vecTyp, vecDim, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), mpool.MustNewZero())
+		bat.Vecs[1] = vector.NewVec(types.New(idTyp, 8, 0), mpool.MustNewZero())
+		bat.Vecs[2] = vector.NewVec(types.New(vecTyp, vecDim, 0), mpool.MustNewZero())
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, mpool.MustNewZero())
 		if idTyp == types.T_int64 {
 			vector.AppendFixed(bat.Vecs[1], int64(1), false, mpool.MustNewZero())
@@ -332,9 +332,9 @@ func TestIvfpqCreateIndexTableConfigFail(t *testing.T) {
 			},
 		}
 		bat := batch.NewWithSize(3)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), mpool.MustNewZero())
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0), mpool.MustNewZero())
+		bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0), mpool.MustNewZero())
 		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, mpool.MustNewZero())
 		vector.AppendFixed(bat.Vecs[1], int64(1), false, mpool.MustNewZero())
 		vector.AppendFixed(bat.Vecs[2], int64(1), false, mpool.MustNewZero())

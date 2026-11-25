@@ -27,6 +27,17 @@ INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());
 SELECT radians, DEGREES(radians) AS degrees FROM t1;
 DROP TABLE t1;
 
+# Finite DOUBLE input can overflow the degree result; the row is SQL NULL.
+SELECT DEGREES(1e308) IS NULL AS overflow_is_null, DEGREES(1e306) IS NOT NULL AS finite_control;
+
+# CTAS must permit the NULL produced from a stored NOT NULL DOUBLE input.
+CREATE TABLE degrees_source_nn(v DOUBLE NOT NULL);
+INSERT INTO degrees_source_nn VALUES (1e308), (1e306);
+CREATE TABLE degrees_ctas AS SELECT DEGREES(v) AS d FROM degrees_source_nn;
+SELECT COUNT(*) AS total_rows, COUNT(d) AS finite_rows FROM degrees_ctas;
+DROP TABLE degrees_ctas;
+DROP TABLE degrees_source_nn;
+
 # WHERE clause
 CREATE TABLE t1(radians FLOAT);
 INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());

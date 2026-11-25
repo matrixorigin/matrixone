@@ -52,12 +52,18 @@ type container struct {
 	limitExecutor colexec.ExpressionExecutor
 
 	bat *batch.Batch // bat stores the final result of merge-top
+	// bufMP is the operator's own pool: retained rows, stream output and the
+	// accounted views all come from it.
+	bufMP *mpool.MPool
 
 	executorsForOrderList []colexec.ExpressionExecutor
 
-	allocationAccount    *mpool.AllocationAccount
-	retainedAllocation   *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	// Accounted views of allocationViewPool, built on first use because the
+	// account is bound before the operator knows its process pool.
+	allocationViewPool   *mpool.MPool
+	retainedAllocation   *mpool.MPool
+	expressionAllocation *mpool.MPool
 	appendScratch        *mpool.AccountedBuffer
 
 	// stream is non-nil when MergeTop is the leaf of an ordered merge scope.
@@ -162,32 +168,113 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		len(ctr.executorsForOrderList) != 0 || cap(ctr.sels) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	retained, err := vector.NewAllocationAccountSelection(
-		account,
+	ctr.allocationAccount = account
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	return nil
+}
+
+// allocationViews builds the accounted views of mp the bound account charges
+// through. It is a no-op when no account is bound or the views already view mp.
+func (ctr *container) allocationViews(mp *mpool.MPool) error {
+	if ctr.allocationAccount == nil || mp == nil ||
+		(ctr.allocationViewPool == mp && ctr.retainedAllocation != nil) {
+		return nil
+	}
+	retained, err := mp.WithAccount(
+		ctr.allocationAccount,
 		mpool.AllocationOwnerTop,
 		topsites.MergeTopRetainedData,
-		topsites.MergeTopRetainedArea,
-		topsites.MergeTopRetainedNulls,
-		topsites.MergeTopRetainedGrouping,
+		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
 		return err
 	}
-	expression, err := vector.NewAllocationAccountSelection(
-		account,
+	expression, err := mp.WithAccount(
+		ctr.allocationAccount,
 		mpool.AllocationOwnerTop,
 		topsites.MergeTopExpressionData,
-		topsites.MergeTopExpressionArea,
-		topsites.MergeTopExpressionNulls,
-		topsites.MergeTopExpressionGrouping,
+		mpool.AllocationCapacityClassDefault,
 	)
 	if err != nil {
 		return err
 	}
-	ctr.allocationAccount = account
+	ctr.allocationViewPool = mp
 	ctr.retainedAllocation = retained
 	ctr.expressionAllocation = expression
 	return nil
+}
+
+// ownPool returns the merge-top pool vec belongs to: proc's pool or one of
+// the operator's accounted views. Any other pool is returned proc's pool so
+// freeing reports the mismatch.
+func (ctr *container) ownPool(proc *process.Process, vec *vector.Vector) *mpool.MPool {
+	switch mp := vec.MPool(); mp {
+	case nil:
+		return nil
+	case proc.Mp(), ctr.bufMP, ctr.retainedAllocation, ctr.expressionAllocation:
+		return mp
+	}
+	return proc.Mp()
+}
+
+// cleanOwned frees a batch the operator owns, each vector with its own pool.
+func (ctr *container) cleanOwned(proc *process.Process, bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	seen := make(map[*vector.Vector]struct{}, len(bat.Vecs))
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		if _, ok := seen[vec]; !ok {
+			seen[vec] = struct{}{}
+			vec.Free(ctr.ownPool(proc, vec))
+		}
+		bat.Vecs[i] = nil
+	}
+	bat.Clean(proc.Mp())
+}
+
+// ensureBufMP creates the operator's own pool.
+func (ctr *container) ensureBufMP(proc *process.Process) (err error) {
+	if ctr.bufMP == nil {
+		ctr.bufMP, err = colexec.NewOperatorMPool(proc, "mergetop")
+	}
+	return err
+}
+
+// retainedMP returns the pool retained merge-top state allocates from: the
+// retained view of the operator's own pool, or the own pool when no account
+// is bound.
+func (ctr *container) retainedMP(proc *process.Process) (*mpool.MPool, error) {
+	if err := ctr.ensureBufMP(proc); err != nil {
+		return nil, err
+	}
+	if ctr.allocationAccount == nil {
+		return ctr.bufMP, nil
+	}
+	if err := ctr.allocationViews(ctr.bufMP); err != nil {
+		return nil, err
+	}
+	return ctr.retainedAllocation, nil
+}
+
+// copyCompareRow replaces dst row dstRow of cmp's retained vector with src
+// row srcRow, allocating any growth through mp.
+func copyCompareRow(
+	cmp compare.Compare,
+	src *vector.Vector,
+	srcRow, dstRow int64,
+	mp *mpool.MPool,
+	proc *process.Process,
+) error {
+	if !mp.IsView() {
+		return cmp.Copy(1, 0, srcRow, dstRow, proc)
+	}
+	return cmp.Vector().Copy(src, dstRow, srcRow, mp)
 }
 
 func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -202,6 +289,7 @@ func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) e
 		return mpool.ErrAllocationAccountInvariant
 	}
 	ctr.allocationAccount = nil
+	ctr.allocationViewPool = nil
 	ctr.retainedAllocation = nil
 	ctr.expressionAllocation = nil
 	return nil
@@ -323,7 +411,7 @@ func (ctr *container) reset(proc *process.Process) {
 	}
 
 	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
+		ctr.cleanOwned(proc, ctr.bat)
 		ctr.bat = nil
 	}
 	if ctr.appendScratch != nil {
@@ -350,7 +438,7 @@ func (ctr *container) free(proc *process.Process) {
 	ctr.cmps = nil
 	ctr.limit = 0
 	if ctr.bat != nil {
-		ctr.bat.Clean(proc.Mp())
+		ctr.cleanOwned(proc, ctr.bat)
 		ctr.bat = nil
 	}
 	if ctr.appendScratch != nil {
@@ -370,6 +458,9 @@ func (ctr *container) free(proc *process.Process) {
 		ctr.limitExecutor.Free()
 	}
 	ctr.limitExecutor = nil
+	// Views of the deleted pool are rebuilt on the next pool.
+	ctr.allocationViewPool = nil
+	colexec.FreeOperatorMPool(&ctr.bufMP)
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {

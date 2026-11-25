@@ -17,7 +17,7 @@ package metric
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func Test_L2Distance_F32(t *testing.T) {
@@ -575,7 +575,7 @@ func Test_AngularDistance_F32(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got, err := SphericalDistance[float32](tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(float64(got), float64(tt.want)) {
+			if got, err := SphericalDistance[float32](tt.args.v1, tt.args.v2); err != nil || !util.InEpsilonF64(float64(got), float64(tt.want)) {
 				t.Errorf("SphericalDistance() = %v, want %v", got, tt.want)
 			}
 		})

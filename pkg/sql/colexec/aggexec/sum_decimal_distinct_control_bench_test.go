@@ -46,7 +46,7 @@ func BenchmarkDecimal64DistinctRepeatedBatchUpdates(b *testing.B) {
 			if tc.null {
 				input = vector.NewConstNull(typ, rows, mp)
 			} else {
-				input = vector.NewVec(typ)
+				input = vector.NewVec(typ, mp)
 			}
 			defer input.Free(mp)
 			groups := make([]uint64, rows)

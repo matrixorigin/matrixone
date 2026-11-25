@@ -331,7 +331,7 @@ func TestDecimal256DivisionShiftBoundaries(t *testing.T) {
 				}
 				got := make([]types.Decimal256, 1)
 				require.NoError(t, d256DivAtScale([]types.Decimal256{x}, []types.Decimal256{y},
-					got, 0, 0, 30, nulls.NewWithSize(1), true))
+					got, 0, 0, 30, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 				want := test.want
 				if !strings.Contains(want, ".") {
 					want += "."
@@ -347,7 +347,7 @@ func TestDecimal256DivisionShiftBoundaries(t *testing.T) {
 
 	// A NULL row with a zero divisor must never enter the arithmetic loop.
 	got := make([]types.Decimal256, 2)
-	resultNulls := nulls.NewWithSize(2)
+	resultNulls := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 	resultNulls.Add(1)
 	x, err := types.ParseDecimal256("28"+strings.Repeat("0", 45), 47, 0)
 	require.NoError(t, err)
@@ -402,7 +402,7 @@ func TestDecimalDivisionNegativeScaleRoundsOnce(t *testing.T) {
 		y := types.Decimal128{B0_63: 2}
 		got128 := make([]types.Decimal128, 1)
 		require.NoError(t, d128DivAtScale([]types.Decimal128{x}, []types.Decimal128{y},
-			got128, 1, 0, 0, nulls.NewWithSize(1), true))
+			got128, 1, 0, 0, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 		require.Equal(t, test.want, got128[0].Format(0))
 		x256 := types.Decimal256{B0_63: uint64(coefficient)}
 		if test.coefficient < 0 {
@@ -410,7 +410,7 @@ func TestDecimalDivisionNegativeScaleRoundsOnce(t *testing.T) {
 		}
 		got256 := make([]types.Decimal256, 1)
 		require.NoError(t, d256DivAtScale([]types.Decimal256{x256},
-			[]types.Decimal256{{B0_63: 2}}, got256, 1, 0, 0, nulls.NewWithSize(1), true))
+			[]types.Decimal256{{B0_63: 2}}, got256, 1, 0, 0, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 		require.Equal(t, test.want, got256[0].Format(0))
 	}
 }
@@ -424,7 +424,7 @@ func TestDecimalDivisionNegativeScaleWideFallback(t *testing.T) {
 	require.NoError(t, err)
 	got128 := make([]types.Decimal128, 1)
 	require.NoError(t, d128DivAtScale([]types.Decimal128{x}, []types.Decimal128{y},
-		got128, 1, 0, 0, nulls.NewWithSize(1), true))
+		got128, 1, 0, 0, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 	require.Equal(t, "1", got128[0].Format(0))
 
 	// A genuine D256 numerator takes the generic branch, and a divisor
@@ -435,7 +435,7 @@ func TestDecimalDivisionNegativeScaleWideFallback(t *testing.T) {
 	require.NoError(t, err)
 	got256 := make([]types.Decimal256, 1)
 	require.NoError(t, d256DivAtScale([]types.Decimal256{wideX}, []types.Decimal256{wideY},
-		got256, 37, 0, 30, nulls.NewWithSize(1), true))
+		got256, 37, 0, 30, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 	require.Equal(t, "0.00000000003"+strings.Repeat("0", 19), got256[0].Format(30))
 
 	maxCoefficient := "1" + strings.Repeat("0", 64)
@@ -444,7 +444,7 @@ func TestDecimalDivisionNegativeScaleWideFallback(t *testing.T) {
 	hugeY, err := types.ParseDecimal256(maxCoefficient, 65, 0)
 	require.NoError(t, err)
 	require.NoError(t, d256DivAtScale([]types.Decimal256{hugeX}, []types.Decimal256{hugeY},
-		got256, 50, 0, 30, nulls.NewWithSize(1), true))
+		got256, 50, 0, 30, mustNullsOK(nulls.NewWithSize(1, bitmapTestMP)), true))
 	require.Equal(t, "0."+strings.Repeat("0", 30), got256[0].Format(30))
 }
 
@@ -503,7 +503,7 @@ func BenchmarkDecimalDivisionScaleCap(b *testing.B) {
 	for i := range xs {
 		xs[i], ys[i] = x, types.Decimal128{B0_63: 2}
 	}
-	resultNulls := nulls.NewWithSize(rows)
+	resultNulls := mustNullsOK(nulls.NewWithSize(rows, bitmapTestMP))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -523,7 +523,7 @@ func BenchmarkDecimal256DivisionScaleCap(b *testing.B) {
 	for i := range xs {
 		xs[i], ys[i] = x, types.Decimal256{B0_63: 2}
 	}
-	resultNulls := nulls.NewWithSize(rows)
+	resultNulls := mustNullsOK(nulls.NewWithSize(rows, bitmapTestMP))
 	for _, test := range []struct {
 		name     string
 		divisors []types.Decimal256

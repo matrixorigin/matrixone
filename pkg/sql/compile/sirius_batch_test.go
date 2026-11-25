@@ -82,8 +82,8 @@ func TestSiriusBatchPublicationLayoutAndOwnership(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.NewWithSize(3)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	bat.Vecs[2] = vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp())
 	long := strings.Repeat("x", 25)
 	for i, value := range []string{"a", long, "ignored"} {
@@ -144,7 +144,7 @@ func TestSiriusDecimal256PublicationPreservesFixedWidthAndConstants(t *testing.T
 	value := types.Decimal256{B0_63: 9007199254740993, B192_255: 1}
 	bat := batch.NewWithSize(2)
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
-	bat.Vecs[0] = vector.NewVec(typ)
+	bat.Vecs[0] = vector.NewVec(typ, proc.Mp())
 	for row := 0; row < 3; row++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, row == 2, proc.Mp()))
 	}
@@ -177,7 +177,7 @@ func TestSiriusSplitAndConstantVarlenaPublication(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	columns := []SiriusReadColumn{{Type: planpb.Type{Id: int32(types.T_varchar)}}}
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	for _, value := range []string{strings.Repeat("a", 25), strings.Repeat("b", 26), "c"} {
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, proc.Mp()))

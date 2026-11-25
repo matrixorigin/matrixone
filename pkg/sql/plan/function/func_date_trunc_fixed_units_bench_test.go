@@ -70,7 +70,7 @@ func BenchmarkDateTruncFixedVector(b *testing.B) {
 			var units *vector.Vector
 			lastUnit := unit
 			if unit == "mixed_nulls" {
-				units = vector.NewVec(types.T_varchar.ToType())
+				units = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				b.Cleanup(func() { units.Free(proc.Mp()) })
 				for index := range values {
 					name := []string{"second", "minute", "hour", "day"}[index%4]

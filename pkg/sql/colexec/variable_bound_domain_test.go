@@ -50,41 +50,20 @@ func TestVarExpressionExecutorBoundDomainValidationAndLegacyReuse(t *testing.T) 
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	}
 
-	var domainErr error
-	domain := types.RuntimeStringBinary
-	calls := 0
 	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return "你", nil })
-	proc.SetResolveVariableStringDomainFunc(func(string, bool, bool) (types.RuntimeStringDomain, error) {
-		calls++
-		return domain, domainErr
-	})
 	// A freed frozen executor must not leak its binding into a subsequently
 	// allocated legacy executor. Each scope owns and releases its own vector.
+	// The bound domain is validated but no longer stamped on the result: the
+	// static type is the only source of string semantics.
 	for _, raw := range []uint32{2, 0, 3, 0, 1, 0} {
 		func() {
 			executor, err := NewExpressionExecutor(proc, makeExpr(raw))
 			require.NoError(t, err)
 			defer executor.Free()
-			for _, current := range []types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringText} {
-				domain = current
-				before := calls
+			for range 2 {
 				vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 				require.NoError(t, err)
-				wantBinary := raw == 3 || (raw == 0 && current == types.RuntimeStringBinary)
-				require.Equal(t, wantBinary, vec.GetIsBinaryStringAt(0))
-				if raw == 0 {
-					require.Equal(t, before+1, calls)
-				} else {
-					require.Equal(t, before, calls)
-				}
-			}
-			if raw == 0 {
-				domainErr = moerr.NewInternalErrorNoCtx("legacy resolver failed")
-				_, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-				require.ErrorIs(t, err, domainErr)
-				domainErr = nil
-				_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-				require.NoError(t, err)
+				require.Equal(t, "你", vec.GetStringAt(0))
 			}
 		}()
 		require.Zero(t, proc.Mp().CurrNB())

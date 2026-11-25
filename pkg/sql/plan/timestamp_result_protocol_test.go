@@ -49,7 +49,7 @@ func TestTimestampSerializedResultContracts(t *testing.T) {
 					}
 					input := batch.NewWithSize(1)
 					defer input.Clean(proc.Mp())
-					input.Vecs[0] = vector.NewVec(inputType.ToTypeWithScale(6))
+					input.Vecs[0] = vector.NewVec(inputType.ToTypeWithScale(6), proc.Mp())
 					for _, isNull := range []bool{false, true} {
 						switch inputType {
 						case types.T_date:

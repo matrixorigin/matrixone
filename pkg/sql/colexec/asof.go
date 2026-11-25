@@ -42,16 +42,6 @@ func HasMixedJSONNumericEquality(exprs ...*plan.Expr) bool {
 		if function.IsJSONNumericComparison(types.T(f.Args[0].Typ.Id), types.T(f.Args[1].Typ.Id)) {
 			return true
 		}
-		// A prepared adapter has JSON output but carries the SQL peer's runtime
-		// domain. Conservatively use eligibility scanning before it is rebound.
-		for _, arg := range f.Args {
-			if adapter := arg.GetF(); adapter != nil && adapter.Func != nil {
-				adapterID, _ := function.DecodeOverloadID(adapter.Func.Obj)
-				if adapterID == function.INTERNAL_JSON_COMPARISON_PARAM {
-					return true
-				}
-			}
-		}
 	}
 	return false
 }

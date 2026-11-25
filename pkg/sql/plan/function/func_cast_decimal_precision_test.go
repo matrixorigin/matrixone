@@ -770,7 +770,7 @@ func TestDecimalCastParameterRebinding(t *testing.T) {
 					replacement, err = vector.NewConstFixed(typ, types.Decimal128{B0_63: tc.coefficient}, length, proc.Mp())
 					require.NoError(t, err)
 				} else {
-					replacement = vector.NewVec(typ)
+					replacement = vector.NewVec(typ, proc.Mp())
 				}
 				previous := fc.parameters[0]
 				fc.parameters[0] = replacement

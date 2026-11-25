@@ -79,7 +79,7 @@ func TestSumAvgNumericCoercionExecAndMerge(t *testing.T) {
 					require.NoError(t, err)
 					targets, shouldCast := bound.ShouldDoImplicitTypeCast()
 					require.True(t, shouldCast)
-					nsp := nulls.NewWithSize(len(tc.input.nullList))
+					nsp := mustNullsOK(nulls.NewWithSize(len(tc.input.nullList), bitmapTestMP))
 					for i, isNull := range tc.input.nullList {
 						if isNull {
 							nsp.Set(uint64(i))
@@ -87,7 +87,7 @@ func TestSumAvgNumericCoercionExecAndMerge(t *testing.T) {
 					}
 					source := newVectorByType(mp, tc.input.typ, tc.input.values, nsp)
 					t.Cleanup(func() { source.Free(mp) })
-					target := vector.NewVec(targets[0])
+					target := vector.NewVec(targets[0], mp)
 					t.Cleanup(func() { target.Free(mp) })
 					cast, err := GetFunctionByName(proc.Ctx, "cast", []types.Type{tc.input.typ, targets[0]})
 					require.NoError(t, err)

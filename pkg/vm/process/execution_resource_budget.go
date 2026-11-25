@@ -159,17 +159,35 @@ const (
 	ExecutionResourceComponentSpillFD
 )
 
+// ExecutionPhysicalMemoryPressure describes the measured headroom decision
+// that rejected a request. SampledAvailable includes reclaimable cache.
+type ExecutionPhysicalMemoryPressure struct {
+	SampledAvailable      uint64
+	SafetyReserve         uint64
+	UnbackedGrowth        uint64
+	GrowthHeadroom        uint64
+	ConfirmationAttempted bool
+}
+
+func (p ExecutionPhysicalMemoryPressure) String() string {
+	return fmt.Sprintf(
+		"physical memory headroom: sampled_available=%d safety_reserve=%d unbacked_growth=%d growth_headroom=%d confirmation_attempted=%t",
+		p.SampledAvailable, p.SafetyReserve, p.UnbackedGrowth, p.GrowthHeadroom, p.ConfirmationAttempted,
+	)
+}
+
 // ExecutionResourceError carries bounded, observational details for an
 // admission failure. Requested, Used and Cap use the unit named by Resource
 // (bytes for memory/spill disk, descriptors for spill FD) and are always safe
 // to inspect; they are never produced by overflowing arithmetic.
 type ExecutionResourceError struct {
-	Kind      ExecutionResourceErrorKind
-	Component ExecutionResourceComponent
-	Requested uint64
-	Used      uint64
-	Cap       uint64
-	Message   string
+	Kind           ExecutionResourceErrorKind
+	Component      ExecutionResourceComponent
+	Requested      uint64
+	Used           uint64
+	Cap            uint64
+	Message        string
+	PhysicalMemory *ExecutionPhysicalMemoryPressure
 }
 
 func (e *ExecutionResourceError) Error() string {
@@ -181,7 +199,11 @@ func (e *ExecutionResourceError) Error() string {
 	}
 	switch e.Kind {
 	case ExecutionResourceErrorAdmission:
-		return fmt.Sprintf("%s: requested=%d used=%d cap=%d", ErrExecutionResourceAdmission, e.Requested, e.Used, e.Cap)
+		message := fmt.Sprintf("%s: requested=%d used=%d cap=%d", ErrExecutionResourceAdmission, e.Requested, e.Used, e.Cap)
+		if e.PhysicalMemory != nil {
+			message += "; " + e.PhysicalMemory.String()
+		}
+		return message
 	case ExecutionResourceErrorClosed:
 		return ErrExecutionResourceClosed.Error()
 	case ExecutionResourceErrorInvalid:
@@ -302,9 +324,10 @@ type ExecutionResourceBudget struct {
 	// baseline. Outstanding admissions, unused recovery floors and non-MPool
 	// scratch promises must still consume the observed free space. This is an
 	// observation of existing allocation ownership, not a second cap/ledger.
-	memoryHeadroomBacking  mpool.AllocationBackingSnapshot
-	memoryHeadroomMeasured bool
-	memoryHeadroomCached   bool
+	memoryHeadroomBacking   mpool.AllocationBackingSnapshot
+	memoryHeadroomMeasured  bool
+	memoryHeadroomCached    bool
+	memoryHeadroomConfirmed bool
 	// memoryHeadroomSafety is the free working-set margin retained while a
 	// query is already running. It is deliberately smaller than the startup
 	// reserve: current physical usage already includes the runtime, allocator,
@@ -1494,132 +1517,102 @@ func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 		lock()
 		return reject(err, stopped())
 	}
-	// A closed budget/generation has a deterministic lifecycle result and does
-	// not need to touch the live provider.
 	lock()
-	if b.closed || g.closed {
-		wasStopped := stopped()
-		g.rejectCount++
-		observeExecutionResourceBudget("memory", "reject", "query", size)
-		err := &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
-		return reject(err, wasStopped)
-	}
-	if b.memoryHeadroomRefreshNeededLocked() {
+	if !b.closed && !g.closed && b.memoryHeadroomRefreshNeededLocked() {
 		unlock()
-		// The sampler records aggregateUsed at the same boundary; every acquire
-		// below consumes from that cached physical headroom as well as the static
-		// query/CN ceilings. Recovery-class physical allocations borrow a floor
-		// which was admitted here earlier and therefore do not pay twice.
 		_, _ = b.sampleMemoryHeadroom()
 		lock()
-		if b.closed || g.closed {
-			wasStopped := stopped()
-			g.rejectCount++
-			observeExecutionResourceBudget("memory", "reject", "query", size)
-			err := &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
-			return reject(err, wasStopped)
-		}
 	}
 
-	// The common cached-cap path decides whether a refresh is needed and updates
-	// the ledger under one b.mu acquisition. Only an expired cache drops the
-	// lock and enters the refresh single-flight gate.
-	_, epoch, hasProvider, cached, err := b.aggregateCapRefreshDecisionLocked(false, 0)
-	if cached {
-		if err != nil {
+	// One reserve call can ask for one confirmation. If another caller
+	// replaces that sample before we reacquire the locks, use the newest
+	// observation rather than retrying across arbitrarily many windows.
+	confirmPhysical := true
+	aggregateRetried := false
+	for {
+		if b.closed || g.closed {
+			_, err := g.acquireMemoryLocked(size, false, recoveryReserve, false)
 			return reject(err, stopped())
 		}
+		// A shared confirmation drops both admission locks. Always recheck the
+		// configured ceiling here afterwards, including any new provider error.
+		_, epoch, hasProvider, cached, err := b.aggregateCapRefreshDecisionLocked(false, 0)
+		if cached {
+			if err != nil {
+				return reject(err, stopped())
+			}
+		} else {
+			unlock()
+			var refreshed bool
+			epoch, hasProvider, refreshed, err = b.refreshAggregateCap(false, 0)
+			if err != nil {
+				return resolveRefreshError(err)
+			}
+			hasProvider = hasProvider && !refreshed
+			lock()
+		}
+
 		wasStopped := stopped()
-		firstErr, aggregateRejected := g.acquireMemoryLocked(
-			size,
-			false,
-			recoveryReserve,
-		)
-		if firstErr != nil && !aggregateRejected {
-			return reject(firstErr, wasStopped)
+		action, err := g.acquireMemoryLocked(size, aggregateRetried, recoveryReserve, confirmPhysical && !wasStopped)
+		if action == memoryAdmissionRefreshAggregate && !aggregateRetried {
+			unlock()
+			// A cached aggregate cap may be stale. Refresh once before counting
+			// the terminal rejection, sharing the result with concurrent callers.
+			if hasProvider {
+				if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
+					return resolveRefreshError(err)
+				}
+			}
+			aggregateRetried = true
+			lock()
+			wasStopped = stopped()
+			action, err = g.acquireMemoryLocked(size, true, recoveryReserve, confirmPhysical && !wasStopped)
 		}
-		unlock()
-		if firstErr == nil && !aggregateRejected {
-			observeExecutionResourceBudget("memory", "reserve", "query", size)
-			observeExecutionResourceBudget("memory", "reserve", "cn", size)
+		if action == memoryAdmissionConfirmPhysical {
+			confirmPhysical = false
+			unlock()
+			b.refreshMemoryHeadroom(size)
+			lock()
+			continue
 		}
-		if !aggregateRejected {
-			return firstErr
-		}
-	} else {
-		unlock()
-		// The provider is sampled once on first use and then shared by all
-		// reservations until the TTL expires. refreshAggregateCap serializes
-		// only the sampling itself.
-		var refreshed bool
-		epoch, hasProvider, refreshed, err = b.refreshAggregateCap(false, 0)
 		if err != nil {
-			return resolveRefreshError(err)
-		}
-		lock()
-		wasStopped := stopped()
-		firstErr, aggregateRejected := g.acquireMemoryLocked(
-			size,
-			false,
-			recoveryReserve,
-		)
-		if firstErr != nil && !aggregateRejected {
-			return reject(firstErr, wasStopped)
+			return reject(err, wasStopped)
 		}
 		unlock()
-		if firstErr == nil && !aggregateRejected {
-			observeExecutionResourceBudget("memory", "reserve", "query", size)
-			observeExecutionResourceBudget("memory", "reserve", "cn", size)
-		}
-		if !aggregateRejected {
-			return firstErr
-		}
-		if refreshed {
-			hasProvider = false
-		}
+		observeExecutionResourceBudget("memory", "reserve", "query", size)
+		observeExecutionResourceBudget("memory", "reserve", "cn", size)
+		return nil
 	}
-
-	// A stale cached cap can reject a request even though the physical ceiling
-	// has grown. Before returning an aggregate rejection, force one refresh.
-	// The epoch check turns concurrent retries into a single-flight operation.
-	if hasProvider {
-		if _, _, _, err = b.refreshAggregateCap(true, epoch); err != nil {
-			return resolveRefreshError(err)
-		}
-	}
-
-	lock()
-	wasStopped := stopped()
-	err, _ = g.acquireMemoryLocked(
-		size,
-		true,
-		recoveryReserve,
-	)
-	if err != nil {
-		return reject(err, wasStopped)
-	}
-	unlock()
-	observeExecutionResourceBudget("memory", "reserve", "query", size)
-	observeExecutionResourceBudget("memory", "reserve", "cn", size)
-	return nil
 }
 
-// acquireMemoryLocked attempts one physical-memory admission. b.mu must be
-// held. The bool result identifies an aggregate-cap failure so the caller can
-// trigger a forced
-// live-ceiling refresh without counting a transient failure as a rejection.
+type memoryAdmissionAction uint8
+
+const (
+	memoryAdmissionComplete memoryAdmissionAction = iota
+	memoryAdmissionRefreshAggregate
+	memoryAdmissionConfirmPhysical
+)
+
+// acquireMemoryLocked attempts one admission under b.mu. A refresh request
+// leaves the ledger and rejection counters untouched.
 func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 	size uint64,
 	recordAggregateReject bool,
 	recoveryReserve bool,
-) (error, bool) {
+	confirmPhysical bool,
+) (memoryAdmissionAction, error) {
 	b := g.budget
 	if b.closed || g.closed {
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "query", size)
-		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}, false
+		return memoryAdmissionComplete, &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}
 	}
-	if physicalHeadroom, measured := b.physicalGrowthHeadroomLocked(); measured && size > physicalHeadroom {
+	if physicalHeadroom, measured, unbacked := b.physicalGrowthHeadroomLocked(); measured && size > physicalHeadroom {
+		if confirmPhysical && b.memoryHeadroomTTL > 0 && !b.memoryHeadroomConfirmed &&
+			b.aggregateUsed <= b.aggregateCap && size <= b.aggregateCap-b.aggregateUsed &&
+			g.used <= g.cap && size <= g.cap-g.used {
+			return memoryAdmissionConfirmPhysical, nil
+		}
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "cn", size)
 		physicalCap := b.aggregateUsed
@@ -1628,7 +1621,20 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 		} else {
 			physicalCap = ^uint64(0)
 		}
-		return newAdmissionError(size, b.aggregateUsed, physicalCap), false
+		return memoryAdmissionComplete, &ExecutionResourceError{
+			Kind:      ExecutionResourceErrorAdmission,
+			Component: ExecutionResourceComponentMemory,
+			Requested: size,
+			Used:      b.aggregateUsed,
+			Cap:       physicalCap,
+			PhysicalMemory: &ExecutionPhysicalMemoryPressure{
+				SampledAvailable:      b.memoryHeadroomBytes,
+				SafetyReserve:         b.memoryHeadroomSafety,
+				UnbackedGrowth:        unbacked,
+				GrowthHeadroom:        physicalHeadroom,
+				ConfirmationAttempted: b.memoryHeadroomConfirmed,
+			},
+		}
 	}
 	// Check by subtraction rather than used+size: this is safe for
 	// math.MaxUint64 and rejects every overflow-sized request.
@@ -1637,7 +1643,7 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 			g.rejectCount++
 			observeExecutionResourceBudget("memory", "reject", "cn", size)
 		}
-		return newAdmissionError(size, b.aggregateUsed, b.aggregateCap), true
+		return memoryAdmissionRefreshAggregate, newAdmissionError(size, b.aggregateUsed, b.aggregateCap)
 	}
 	b.aggregateUsed += size
 	if g.used > g.cap || size > g.cap-g.used {
@@ -1645,7 +1651,7 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 		b.aggregateUsed -= size
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "query", size)
-		return newAdmissionError(size, g.used, g.cap), false
+		return memoryAdmissionComplete, newAdmissionError(size, g.used, g.cap)
 	}
 	g.used += size
 	if recoveryReserve {
@@ -1656,7 +1662,7 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 	if g.used > g.peakUsed {
 		g.peakUsed = g.used
 	}
-	return nil, false
+	return memoryAdmissionComplete, nil
 }
 
 // borrowRecoveryCapacity converts a pre-admitted, non-physical recovery floor
@@ -2015,7 +2021,13 @@ type ExecutionMemoryCeiling struct {
 }
 
 func executionMemoryHeadroomSafety(ceiling ExecutionMemoryCeiling) uint64 {
-	safety := ceiling.EffectiveCN / 20
+	effective := ceiling.EffectiveCN
+	// A private limit stands in for a smaller container: the margin is sized
+	// from what this process may use, not from the whole host.
+	if limit := executionPrivateMemoryLimit.Load(); limit > 0 && limit < effective {
+		effective = limit
+	}
+	safety := effective / 20
 	if safety < executionResourceMinimumRuntimeHeadroom {
 		safety = executionResourceMinimumRuntimeHeadroom
 	}
@@ -2154,7 +2166,7 @@ func (proc *Process) getExecutionResourceBudget(withSpill bool) (*ExecutionResou
 			if createErr != nil {
 				return nil
 			}
-			b.memoryHeadroomProvider = system.MemoryAvailableIncludingCache
+			b.memoryHeadroomProvider = executionPhysicalMemoryHeadroom
 			b.memoryHeadroomTTL = executionResourceBudgetCapRefreshTTL
 			b.memoryHeadroomNow = time.Now
 			b.memoryHeadroomSafety = executionMemoryHeadroomSafety(ceiling)

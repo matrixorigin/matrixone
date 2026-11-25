@@ -30,6 +30,7 @@ import (
 	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -754,7 +755,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
-	return cwft.recordExecPlan(ctx, phyPlan, nil)
+	return cwft.recordExecPlan(ctx, phyPlan, nil, nil)
 }
 
 // statementWaitActiveCost copies the admission measurement before transaction
@@ -768,13 +769,17 @@ func (cwft *TxnComputationWrapper) statementWaitActiveCost() time.Duration {
 	return -1
 }
 
-func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error) error {
+func (cwft *TxnComputationWrapper) recordExecPlan(ctx context.Context, phyPlan *models.PhyPlan, runErr error, partial *plan.Query) error {
 	if stm := cwft.ses.GetStmtInfo(); stm != nil {
 		opts := []marshalPlanOptions{
 			WithWaitActiveCost(cwft.statementWaitActiveCost()),
 			withSchedulingTraceRecorder(&cwft.schedulingTrace),
 		}
-		handler := newJsonPlanHandler(ctx, stm, cwft.ses, cwft.plan, phyPlan, runErr, opts...)
+		executionPlan := cwft.plan
+		if partial != nil {
+			executionPlan = &plan.Plan{Plan: &plan.Plan_Query{Query: partial}}
+		}
+		handler := newJsonPlanHandler(ctx, stm, cwft.ses, executionPlan, phyPlan, runErr, opts...)
 		if handler.persistSchedulingTrace {
 			stm.DisableAgg()
 		}
@@ -1088,7 +1093,7 @@ func binaryProtocolPrepareParamKind(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
 	value []byte,
-) vector.PrepareParamKind {
+) types.StringConversionKind {
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY:
 		// The binary protocol has no usable Boolean parameter type. Go's
@@ -1096,19 +1101,19 @@ func binaryProtocolPrepareParamKind(
 		// other clients can use TINY for integers. Preserve unsigned and other
 		// TINY values as integers and restore the driver's bool values.
 		if !isUnsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
-			return vector.PrepareParamBoolean
+			return types.StringConversionBoolean
 		}
-		return vector.PrepareParamInteger
+		return types.StringConversionInteger
 	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
 		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
 		defines.MYSQL_TYPE_YEAR:
-		return vector.PrepareParamInteger
+		return types.StringConversionInteger
 	case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
-		return vector.PrepareParamFloat
+		return types.StringConversionFloat
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
-		return vector.PrepareParamDecimal
+		return types.StringConversionDecimal
 	default:
-		return vector.PrepareParamNone
+		return types.StringConversionString
 	}
 }
 
@@ -1249,7 +1254,7 @@ func binaryProtocolPrepareParamConcreteType(
 
 // binaryProtocolPrepareParamIsBinaryString identifies protocol domains whose
 // payload is an opaque byte string rather than a character string.  The
-// binary-string sidecar is intentionally independent from PrepareParamKind so
+// binary-string sidecar is intentionally independent from the conversion kind so
 // a BLOB value cannot be reparsed as a numeric or JSON text value.
 func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool {
 	switch mysqlType {
@@ -1259,37 +1264,6 @@ func binaryProtocolPrepareParamIsBinaryString(mysqlType defines.MysqlType) bool 
 	default:
 		return false
 	}
-}
-
-func binaryProtocolPrepareParamBinaryStringMetadata(
-	paramTypes []byte,
-	paramCount int,
-	reusable []bool,
-) []bool {
-	if paramCount <= 0 {
-		return nil
-	}
-	hasBinaryString := false
-	for i := 0; i < paramCount && i*2 < len(paramTypes); i++ {
-		if binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(paramTypes[i*2])) {
-			hasBinaryString = true
-			break
-		}
-	}
-	if !hasBinaryString {
-		return nil
-	}
-	if cap(reusable) < paramCount {
-		reusable = make([]bool, paramCount)
-	} else {
-		reusable = reusable[:paramCount]
-		clear(reusable)
-	}
-	for i := 0; i < paramCount && i*2 < len(paramTypes); i++ {
-		reusable[i] = binaryProtocolPrepareParamIsBinaryString(
-			defines.MysqlType(paramTypes[i*2]))
-	}
-	return reusable
 }
 
 // preparedFixedIntegerParamPositions returns static execute-time metadata for
@@ -1805,41 +1779,17 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
-		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
-			return nil, nil, nil, originSQL, false, err
-		}
 		if cap(prepareStmt.paramKinds) < paramCount {
-			prepareStmt.paramKinds = make([]vector.PrepareParamKind, paramCount)
+			prepareStmt.paramKinds = make([]types.StringConversionKind, paramCount)
 		} else {
 			prepareStmt.paramKinds = prepareStmt.paramKinds[:paramCount]
 			clear(prepareStmt.paramKinds)
-		}
-		hasParamKind := false
-		hasConcreteType := false
-		if cap(prepareStmt.paramConcreteTypes) < paramCount {
-			prepareStmt.paramConcreteTypes = make([]types.T, paramCount)
-		} else {
-			prepareStmt.paramConcreteTypes = prepareStmt.paramConcreteTypes[:paramCount]
-			clear(prepareStmt.paramConcreteTypes)
 		}
 		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
 			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
-			// Several non-string protocol domains have PrepareParamKind=None
-			// because their wire payload is length-encoded text. Keep their
-			// concrete SQL domain in metadata even when the parameter is consumed
-			// by JSON_STORAGE, whose position is not a JSON-comparison adapter
-			// position. Numeric and Boolean domains continue to use their existing
-			// kind metadata and therefore do not need a second type section.
-			if kind == vector.PrepareParamNone {
-				concreteType, supported := binaryProtocolPrepareParamConcreteType(mysqlType, isUnsigned)
-				if supported && concreteType != types.T_any && !concreteType.IsMySQLString() {
-					prepareStmt.paramConcreteTypes[i] = concreteType
-					hasConcreteType = true
-				}
-			}
 			if _, relevant := slices.BinarySearch(
 				prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
 				_, memberOfParam := slices.BinarySearch(
@@ -1852,36 +1802,19 @@ func initExecuteStmtParamWithResolverInSession(
 				// and text conversion paths. MEMBER OF has its own protocol-domain
 				// contract and must not inherit those fallbacks.
 				if preparedJSONConcreteTypeAllowed(concreteType, kind, memberOfParam) {
-					if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported {
+					if expectedKind, supported := types.StringConversionKindForType(concreteType); supported {
 						// For JSON comparison operands, the protocol type is the
 						// source of truth. In particular, TINYINT 0/1 must not inherit
 						// the generic driver Boolean compatibility heuristic.
 						kind = expectedKind
-						prepareStmt.paramConcreteTypes[i] = concreteType
-						hasConcreteType = true
 					}
 				}
 			}
 			prepareStmt.paramKinds[i] = kind
-			hasParamKind = hasParamKind || kind != vector.PrepareParamNone
 		}
-		binaryStringMetadata := binaryProtocolPrepareParamBinaryStringMetadata(
-			prepareStmt.ParamTypes, paramCount, prepareStmt.paramBinaryStrings)
-		if binaryStringMetadata != nil {
-			prepareStmt.paramBinaryStrings = binaryStringMetadata
-		}
-		if hasConcreteType {
-			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
-				prepareStmt.params, nil, prepareStmt.paramKinds,
-				prepareStmt.paramConcreteTypes, prepareStmt.paramMetadata, binaryStringMetadata)
-		} else if hasParamKind || binaryStringMetadata != nil {
-			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableMeta(
-				prepareStmt.params, nil, prepareStmt.paramKinds, prepareStmt.paramMetadata,
-				binaryStringMetadata)
-		} else {
-			cwft.proc.SetPrepareParams(prepareStmt.params)
-		}
-		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes,
+		cwft.proc.SetPrepareParams(prepareStmt.params)
+		cwft.proc.SetPrepareParamsStringSource(types.StringSourceCOMStmt)
+		cwft.paramVals, err = preparedParamValues(cwft.proc, &prepareStmt.paramValues, prepareStmt.ParamTypes, prepareStmt.paramKinds,
 			prepareStmt.inetNtoaParamPositions, prepareStmt.temporalRuntimeParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
@@ -1899,22 +1832,16 @@ func initExecuteStmtParamWithResolverInSession(
 				showPublicationPatternPositions = []int32{0}
 			}
 		}
-		params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
-			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
+		params, paramVals, paramIsBin, _, _, _, err := buildExecuteUserParamsInto(
+			&prepareStmt.userParams, cwft.proc, executionSes.GetTxnCompileCtx().ResolveVariablePrepareParamKind, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
 			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions, showPublicationPatternPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		if err = params.SetStringSource(types.StringSourceSQLPrepare); err != nil {
-			params.Free(cwft.proc.Mp())
-			return nil, nil, nil, originSQL, false, err
-		}
-		if paramTypes != nil {
-			cwft.proc.SetOwnedPrepareParamsWithTypedMeta(
-				params, paramIsBin, paramKinds, paramTypes, paramBinaryString)
-		} else {
-			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds, paramBinaryString)
-		}
+		// The statement owns the parameters; the process borrows them.
+		cwft.proc.SetPrepareParamsWithIsBin(params, paramIsBin)
+		prepareStmt.userParams.lend(cwft.proc)
+		cwft.proc.SetPrepareParamsStringSource(types.StringSourceSQLPrepare)
 		cwft.paramVals = paramVals
 		if !sourceBindingQuery {
 			applyPreparedConversionRuntimeTypes(cwft.paramVals, prepareStmt.conversionParamPositions)
@@ -1938,13 +1865,26 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 	}
+	if !sourceBindingQuery && len(cwft.paramVals) > 0 {
+		// Statements that are not re-bound per execution (DDL, SET, SHOW, ...)
+		// still read their parameters with source types. A parameter whose
+		// source type cannot be determined keeps the TEXT transport.
+		if bindings, bindErr := preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, nil); bindErr == nil {
+			if err = installTypedPrepareParams(cwft.proc, bindings, &prepareStmt.typedParams); err != nil {
+				return nil, nil, nil, originSQL, false, err
+			}
+		}
+	}
 	runtimePlanApplied := false
 	var cachedRuntimeCompile *compile.Compile
 	var runtimeColDefData [][]byte
 	if sourceBindingQuery {
 		prepareStmt.rememberBitCountSourceTypes(cwft.paramVals)
-		cwft.paramBindings, err = preparedExecutionBindings(reqCtx, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
+		cwft.paramBindings, err = preparedExecutionBindingsInto(reqCtx, &prepareStmt.bindings, cwft.paramVals, prepareStmt.ParamTypes, prepareStmt.bitCountNumericParamTypes)
 		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		if err = installTypedPrepareParams(cwft.proc, cwft.paramBindings, &prepareStmt.typedParams); err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
 		// Update only after the full protocol payload and typed bindings are
@@ -2177,9 +2117,10 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 }
 
 // preparedExecutionRetry is an immutable snapshot of the execution-time
-// binding needed when Compile rebuilds a plan after a definition change. The
-// slice must not alias TxnComputationWrapper.paramVals because that field is
-// replaced on the next execution of the cached prepared statement.
+// binding needed when Compile rebuilds a plan after a definition change. Its
+// values and bindings are copies: they do not alias the statement storage
+// the execution reads (TxnComputationWrapper.paramVals and paramBindings),
+// which the next execution of the prepared statement rewrites.
 type preparedExecutionRetry struct {
 	temporalTypes      *plan2.PreparedTemporalTypes
 	fieldTypes         *plan2.PreparedFieldTypes
@@ -2194,7 +2135,7 @@ func newPreparedExecutionRetry(paramVals []any) *preparedExecutionRetry {
 	if len(paramVals) == 0 {
 		return nil
 	}
-	return &preparedExecutionRetry{paramVals: append([]any(nil), paramVals...)}
+	return &preparedExecutionRetry{paramVals: plan2.CopyParamValues(paramVals)}
 }
 
 func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPositions []int32, paramVals []any) error {
@@ -2206,8 +2147,8 @@ func normalizePreparedOffsetBooleans(proc *process.Process, fixedIntegerPosition
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}
-		param, ok := paramVals[position].(plan2.ParamValue)
-		if !ok || param.PrepareParamKind != vector.PrepareParamBoolean {
+		param, ok := plan2.AsParamValue(paramVals[position])
+		if !ok || plan2.ParamValueKind(param) != types.StringConversionBoolean {
 			continue
 		}
 		value, ok := param.Value.(bool)
@@ -2367,7 +2308,11 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, paramTypes []byte, positionArgs ...[]int32) ([]any, error) {
+// preparedParamValues reads the binary-protocol parameters. kinds holds each
+// parameter's protocol conversion kind, as computed for the prepared statement.
+// store, when not nil, is the prepared statement's value storage: the result
+// points into it and is rewritten by the next execution.
+func preparedParamValues(proc *process.Process, store *plan2.ParamValueStore, paramTypes []byte, kinds []types.StringConversionKind, positionArgs ...[]int32) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -2380,14 +2325,21 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, positionArgs 
 	if len(positionArgs) > 1 {
 		temporalRuntimePositions = positionArgs[1]
 	}
-	values := make([]any, params.Length())
+	if store == nil {
+		store = &plan2.ParamValueStore{}
+	}
+	values := store.Reset(params.Length())
 	for i := range values {
 		paramValue := plan2.ParamValue{
-			IsBin:               proc.GetPrepareParamIsBin(i),
-			IsBinaryString:      proc.GetPrepareParamIsBinaryString(i),
+			IsBin: proc.GetPrepareParamIsBin(i),
+			IsBinaryString: i*2 < len(paramTypes) &&
+				binaryProtocolPrepareParamIsBinaryString(defines.MysqlType(paramTypes[i*2])),
 			IsBinaryProtocol:    true,
-			PrepareParamKind:    proc.GetPrepareParamKind(i),
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
+		}
+		kind := types.StringConversionString
+		if i < len(kinds) {
+			kind = kinds[i]
 		}
 		if params.IsNull(uint64(i)) && i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
@@ -2401,7 +2353,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, positionArgs 
 			// position, protocol source, and negotiated capabilities. A bare nil
 			// would make execute-time common-type rebinding forget that this is the
 			// same eligible marker used by a preceding non-NULL execution.
-			values[i] = paramValue
+			*store.Ref(i) = paramValue
 			continue
 		}
 		raw, err := proc.GetPrepareParamsAt(i)
@@ -2426,7 +2378,7 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, positionArgs 
 			// ordinary TINYINT callers, but restore the Boolean semantic kind
 			// before constructing the execute-time literal.  Otherwise JSON
 			// functions receive an integer 0/1 and change the stored JSON type.
-			if paramValue.PrepareParamKind == vector.PrepareParamBoolean {
+			if kind == types.StringConversionBoolean {
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
 			} else if runtimeType, directResultType, materializedValue, hasDirectResultType, ok :=
@@ -2443,11 +2395,12 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, positionArgs 
 				}
 				paramValue.DirectResultType = directResultType
 				paramValue.HasDirectResultType = hasDirectResultType
-				paramValue.MaterializedValue = materializedValue
 				if materializedValue != "" {
-					// The restored cached plan executes a typed ParamRef against this
-					// vector. Keep the raw packet spelling only in ParamValue provenance;
-					// otherwise the executor reparses input-sized leading zeroes.
+					// A DECIMAL is decoded once into its bounded canonical lexeme;
+					// the planner and the executor (which reads this vector) both use
+					// it, never the input-sized packet spelling. The visible scale of
+					// the spelling is already in DirectResultType.
+					paramValue.Value = materializedValue
 					if err = vector.SetStringAt(params, i, materializedValue, proc.Mp()); err != nil {
 						return nil, err
 					}
@@ -2456,13 +2409,52 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, positionArgs 
 				return nil, invalidBinaryDecimalParameter(proc.Ctx, paramValue.Value)
 			}
 		}
+		// A fixed-width numeric or Boolean parameter is planned from its value,
+		// not from a TEXT spelling that every consumer would parse again: give
+		// the planner the same native value the typed parameter batch holds.
+		if native, ok := binaryProtocolNativeParamValue(paramValue); ok {
+			paramValue.Value = native
+		}
 		// COM_STMT_EXECUTE values are binary-protocol values even when their
 		// declared MySQL type is VAR_STRING. Keep this provenance separate from
 		// RuntimeType so text values can safely participate in numeric overload
 		// inference without changing direct string result metadata.
-		values[i] = paramValue
+		*store.Ref(i) = paramValue
 	}
 	return values, nil
+}
+
+// binaryProtocolNativeParamValue parses the canonical text of a COM_STMT
+// parameter whose runtime type is a fixed-width integer, BIT, YEAR, float or
+// Boolean into the Go value SQL EXECUTE user variables use for that type
+// (int64, uint64, float64, bool). The runtime type keeps the SQL domain, so a
+// BIT stays BIT and a YEAR stays YEAR. ok is false for every other type, which
+// keeps its text.
+func binaryProtocolNativeParamValue(param plan2.ParamValue) (any, bool) {
+	text, isText := param.Value.(string)
+	if !isText || !param.HasRuntimeType {
+		return nil, false
+	}
+	// typeswitch:partial COM_STMT runtime types come from MySQL wire types, which map FLOAT/DOUBLE only to T_float32/T_float64; other types keep their text
+	switch oid := param.RuntimeType.Oid; {
+	case oid == types.T_bool:
+		v, err := strconv.ParseBool(text)
+		return v, err == nil
+	case oid.IsSignedInt():
+		v, err := strconv.ParseInt(text, 10, 64)
+		return v, err == nil
+	case oid.IsUnsignedInt() || oid == types.T_bit:
+		v, err := strconv.ParseUint(text, 10, 64)
+		return v, err == nil
+	case oid == types.T_year:
+		v, err := strconv.ParseInt(text, 10, 64)
+		return v, err == nil
+	// typeswitch:partial the MySQL wire has only FLOAT and DOUBLE; no COM_STMT parameter has a low-precision float type
+	case oid == types.T_float32 || oid == types.T_float64:
+		v, err := strconv.ParseFloat(text, 64)
+		return v, err == nil
+	}
+	return nil, false
 }
 
 func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
@@ -2470,7 +2462,7 @@ func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
 		if position < 0 || int(position) >= len(paramVals) {
 			continue
 		}
-		param, ok := paramVals[position].(plan2.ParamValue)
+		param, ok := plan2.AsParamValue(paramVals[position])
 		if !ok || param.Value == nil || param.HasRuntimeType {
 			continue
 		}
@@ -2483,7 +2475,7 @@ func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
 		}
 		param.RuntimeType = runtimeType
 		param.HasRuntimeType = true
-		paramVals[position] = param
+		plan2.SetParamValueAt(paramVals, int(position), param)
 	}
 }
 
@@ -2562,10 +2554,10 @@ func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) b
 			// parameter category. Rewrite it together with the latch so planning,
 			// cache identity, and later string executions cannot observe different
 			// sides of the same state transition.
-			if paramValue, ok := values[index].(plan2.ParamValue); ok {
+			if paramValue, ok := plan2.AsParamValue(values[index]); ok {
 				paramValue.RuntimeType = runtimeType
 				paramValue.HasRuntimeType = true
-				values[index] = paramValue
+				plan2.SetParamValueAt(values, index, paramValue)
 			}
 			numeric = true
 			continue
@@ -2574,7 +2566,7 @@ func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) b
 		// NULL has no runtime type and must not clear the marker's last numeric
 		// type. It does not need specialization for this execution, because both
 		// overloads return NULL. A later non-NULL value will reuse the latch.
-		paramValue, ok := values[index].(plan2.ParamValue)
+		paramValue, ok := plan2.AsParamValue(values[index])
 		if !ok || paramValue.Value == nil {
 			continue
 		}
@@ -2584,7 +2576,7 @@ func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) b
 		}
 		paramValue.RuntimeType = rememberedType
 		paramValue.HasRuntimeType = true
-		values[index] = paramValue
+		plan2.SetParamValueAt(values, index, paramValue)
 		numeric = true
 	}
 	return numeric
@@ -2600,13 +2592,13 @@ func executeUserParamConcreteType(
 	proc *process.Process,
 	arg *plan.Expr,
 	param any,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	position int,
 	memberOfParam bool,
 ) (types.T, error) {
 	if arg != nil {
 		concreteType := types.T(arg.Typ.Id)
-		if expectedKind, supported := vector.PrepareParamKindForType(concreteType); supported {
+		if expectedKind, supported := types.StringConversionKindForType(concreteType); supported {
 			if expectedKind != kind {
 				return types.T_any, moerr.NewInternalErrorf(
 					proc.Ctx,
@@ -2628,7 +2620,7 @@ func executeUserParamConcreteType(
 	// BIGINT/UBIGINT rather than treated as proof of an SQL assignment type.
 	concreteType := types.T(inferUserDefinedVarType(param).Id)
 	if memberOfParam && concreteType != types.T_any {
-		if _, supported := vector.PrepareParamKindForType(concreteType); supported {
+		if _, supported := types.StringConversionKindForType(concreteType); supported {
 			return concreteType, nil
 		}
 	}
@@ -2659,13 +2651,13 @@ func preparedJSONGenericConcreteTypeSupported(concreteType types.T) bool {
 
 func preparedJSONConcreteTypeAllowed(
 	concreteType types.T,
-	kind vector.PrepareParamKind,
+	kind types.StringConversionKind,
 	memberOfParam bool,
 ) bool {
 	if memberOfParam {
 		return true
 	}
-	if kind == vector.PrepareParamBoolean || kind == vector.PrepareParamDecimal {
+	if kind == types.StringConversionBoolean || kind == types.StringConversionDecimal {
 		return false
 	}
 	switch concreteType {
@@ -2676,20 +2668,96 @@ func preparedJSONConcreteTypeAllowed(
 	}
 }
 
-func untypedUserParamKindForType(typ types.T) (vector.PrepareParamKind, bool) {
+func untypedUserParamKindForType(typ types.T) (types.StringConversionKind, bool) {
 	switch typ {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return vector.PrepareParamInteger, true
+		return types.StringConversionInteger, true
 	case types.T_float32:
-		return vector.PrepareParamFloat, true
+		return types.StringConversionFloat, true
 	default:
-		return vector.PrepareParamNone, false
+		return types.StringConversionString, false
+	}
+}
+
+// executeUserParams is the storage SQL EXECUTE ... USING binds its
+// parameters into. A prepared statement owns one for its whole life and every
+// execution rewrites it in place: the TEXT vector restarts from an empty area
+// that keeps its capacity and the slices are reused, so after the first
+// execution binding allocates only when a value needs more room than before.
+// The process borrows the vector.
+type executeUserParams struct {
+	mp           *mpool.MPool
+	vec          *vector.Vector
+	values       plan2.ParamValueStore
+	isBin        []bool
+	binaryString []bool
+	domains      []types.RuntimeStringDomain
+	kinds        []types.StringConversionKind
+	types        []types.T
+	borrowers    []*process.Process
+}
+
+// release frees the storage, detaching the processes that borrowed it.
+func (u *executeUserParams) release() {
+	if u == nil || u.vec == nil {
+		return
+	}
+	for _, proc := range u.borrowers {
+		if proc != nil && proc.GetPrepareParams() == u.vec {
+			proc.SetPrepareParams(nil)
+		}
+	}
+	u.vec.Free(u.mp)
+	*u = executeUserParams{}
+}
+
+// lend records that proc borrows the storage. A process that no longer
+// borrows it (freed, or rebound to other parameters) is forgotten, so an
+// owner that runs many executions, each on a fresh process, such as a stored
+// procedure, retains only the processes that still borrow the storage.
+func (u *executeUserParams) lend(proc *process.Process) {
+	u.borrowers = slices.DeleteFunc(u.borrowers, func(borrower *process.Process) bool {
+		return borrower != proc && (borrower == nil || borrower.GetPrepareParams() != u.vec)
+	})
+	if !slices.Contains(u.borrowers, proc) {
+		u.borrowers = append(u.borrowers, proc)
+	}
+}
+
+func resetSlice[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n)
+	}
+	s = s[:n]
+	clear(s)
+	return s
+}
+
+// prepare readies the storage for an execution with n parameters.
+func (u *executeUserParams) prepare(proc *process.Process, n int) {
+	if u.vec != nil && u.mp != proc.Mp() {
+		// The vector is rewritten through this execution's pool.
+		u.release()
+	}
+	if u.vec == nil {
+		u.mp = proc.Mp()
+		u.vec = vector.NewVec(types.T_text.ToType(), u.mp)
+	} else {
+		u.vec.CleanOnlyData()
+	}
+	u.isBin = resetSlice(u.isBin, n)
+	u.binaryString = resetSlice(u.binaryString, n)
+	u.domains = resetSlice(u.domains, n)
+	u.kinds = resetSlice(u.kinds, n)
+	if u.types != nil {
+		u.types = resetSlice(u.types, n)
 	}
 }
 
 func buildExecuteUserParamsWithMemberOfPositions(
 	proc *process.Process,
+	resolveKind func(name string, system, global bool) (types.StringConversionKind, error),
 	args []*plan.Expr,
 	typedPositions []int32,
 	memberOfPositions []int32,
@@ -2699,22 +2767,51 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramVals []any,
 	paramIsBin []bool,
 	paramBinaryString []bool,
-	paramKinds []vector.PrepareParamKind,
+	paramKinds []types.StringConversionKind,
 	paramTypes []types.T,
 	err error,
 ) {
-	params = vector.NewVec(types.T_text.ToType())
+	var store executeUserParams
+	params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err = buildExecuteUserParamsInto(
+		&store, proc, resolveKind, args, typedPositions, memberOfPositions, inetNtoaPositionsArg...)
+	if err != nil {
+		store.release()
+	}
+	return
+}
+
+// buildExecuteUserParamsInto binds SQL EXECUTE ... USING arguments into store,
+// reusing its storage. The returned vector and slices belong to store.
+func buildExecuteUserParamsInto(
+	store *executeUserParams,
+	proc *process.Process,
+	resolveKind func(name string, system, global bool) (types.StringConversionKind, error),
+	args []*plan.Expr,
+	typedPositions []int32,
+	memberOfPositions []int32,
+	inetNtoaPositionsArg ...[]int32,
+) (
+	params *vector.Vector,
+	paramVals []any,
+	paramIsBin []bool,
+	paramBinaryString []bool,
+	paramKinds []types.StringConversionKind,
+	paramTypes []types.T,
+	err error,
+) {
+	store.prepare(proc, len(args))
+	params = store.vec
+	paramVals = store.values.Reset(len(args))
+	paramIsBin = store.isBin
+	paramBinaryString = store.binaryString
+	paramDomains := store.domains
+	paramKinds = store.kinds
+	usedTypes := false
 	defer func() {
-		if err != nil {
-			params.Free(proc.Mp())
+		if !usedTypes {
+			paramTypes = nil
 		}
 	}()
-	paramVals = make([]any, len(args))
-	paramIsBin = make([]bool, len(args))
-	paramBinaryString = make([]bool, len(args))
-	paramDomains := make([]types.RuntimeStringDomain, len(args))
-	effectiveParamDomains := make([]types.RuntimeStringDomain, len(args))
-	paramKinds = make([]vector.PrepareParamKind, len(args))
 	var inetNtoaPositions, showPublicationPatternPositions []int32
 	if len(inetNtoaPositionsArg) > 0 {
 		inetNtoaPositions = inetNtoaPositionsArg[0]
@@ -2759,15 +2856,6 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			}
 			paramBinaryString[i] = paramDomains[i] == types.RuntimeStringBinary
 		}
-		effectiveParamDomains[i] = paramDomains[i]
-		if effectiveParamDomains[i] == types.RuntimeStringInherit &&
-			types.StaticStringDomain(executeArgumentSourceType(sourceType)) == types.StringDomainBinary {
-			// SQL EXECUTE transports all values through a text-shaped vector. Carry
-			// the assignment-time binary domain on that vector so a remote CN or a
-			// scalar-subquery lineage source does not reinterpret the bytes as text.
-			effectiveParamDomains[i] = types.RuntimeStringBinary
-		}
-		resolveKind := proc.GetResolveVariablePrepareParamKindFunc()
 		if resolveKind != nil {
 			paramKinds[i], err = resolveKind(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
 			if err != nil {
@@ -2791,8 +2879,9 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			if concreteType == types.T_any {
 				concreteType = types.T(inferUserDefinedVarType(param).Id)
 			}
-			if paramTypes == nil {
-				paramTypes = make([]types.T, len(args))
+			if !usedTypes {
+				store.types = resetSlice(store.types, len(args))
+				paramTypes, usedTypes = store.types, true
 			}
 			paramTypes[i] = concreteType
 		}
@@ -2804,8 +2893,9 @@ func buildExecuteUserParamsWithMemberOfPositions(
 				return
 			}
 			if concreteType != types.T_any {
-				if paramTypes == nil {
-					paramTypes = make([]types.T, len(args))
+				if !usedTypes {
+					store.types = resetSlice(store.types, len(args))
+					paramTypes, usedTypes = store.types, true
 				}
 				paramTypes[i] = concreteType
 			}
@@ -2818,7 +2908,6 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			Value:               param,
 			IsBin:               paramIsBin[i],
 			IsBinaryString:      paramBinaryString[i],
-			PrepareParamKind:    paramKinds[i],
 			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
@@ -2827,7 +2916,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			paramValue.InetNtoaSourceType = resolvedSourceType
 			paramValue.HasInetNtoaSourceType = true
 		}
-		if paramKinds[i] == vector.PrepareParamBoolean {
+		if paramKinds[i] == types.StringConversionBoolean {
 			// SQL EXECUTE keeps its historical text transport for a bare result
 			// parameter.  Carry the logical source type so numeric consumers can
 			// rebind Boolean values as 0/1, but do not advertise a runtime result
@@ -2851,10 +2940,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		}
-		paramVals[i] = paramValue
-	}
-	if err = params.SetRuntimeStringDomainsWithMP(effectiveParamDomains, proc.Mp()); err != nil {
-		return
+		*store.values.Ref(i) = paramValue
 	}
 	return
 }

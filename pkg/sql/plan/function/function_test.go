@@ -1112,9 +1112,9 @@ func TestMinConditionalStringsUsesPropagatedBinaryCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	narrowType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
 	wideType := types.NewWithCharset(types.T_varchar, 80, 0, types.CharsetUTF8MB4Bin)
-	narrow := vector.NewVec(narrowType)
+	narrow := vector.NewVec(narrowType, proc.Mp())
 	defer narrow.Free(proc.Mp())
-	wide := vector.NewVec(wideType)
+	wide := vector.NewVec(wideType, proc.Mp())
 	defer wide.Free(proc.Mp())
 	for _, value := range []string{"a", "B"} {
 		require.NoError(t, vector.AppendBytes(narrow, []byte(value), false, proc.Mp()))
@@ -1200,7 +1200,7 @@ func TestDerivedStringFunctionsPreserveSourceCollation(t *testing.T) {
 func TestMinConvertUsingAndSubstringUseDerivedCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
-	input := vector.NewVec(inputType)
+	input := vector.NewVec(inputType, proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
@@ -1260,7 +1260,7 @@ func TestMinConvertUsingAndSubstringUseDerivedCollation(t *testing.T) {
 func TestMinConcatUsesPropagatedBinaryCollation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputType := types.NewWithCharset(types.T_varchar, 10, 0, types.CharsetUTF8MB4Bin)
-	input := vector.NewVec(inputType)
+	input := vector.NewVec(inputType, proc.Mp())
 	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(input, []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(input, []byte("B"), false, proc.Mp()))
@@ -2088,7 +2088,7 @@ func TestZoneMapMembershipDomain(t *testing.T) {
 	for _, oid := range []types.T{types.T_char, types.T_varchar} {
 		t.Run(oid.String(), func(t *testing.T) {
 			typ := plan.Type{Id: int32(oid), Width: 8}
-			v := vector.NewVec(types.New(oid, 8, 0))
+			v := vector.NewVec(types.New(oid, 8, 0), proc.Mp())
 			t.Cleanup(func() { v.Free(proc.Mp()) })
 			require.NoError(t, vector.AppendBytes(v, []byte("MO "), false, proc.Mp()))
 			data, err := v.MarshalBinary()

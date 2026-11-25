@@ -68,7 +68,7 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
-func TestCollectScalarSubqueriesCollate(t *testing.T) {
+func TestCollectOuterSubqueriesCollate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sql  string
@@ -87,7 +87,7 @@ func TestCollectScalarSubqueriesCollate(t *testing.T) {
 			defer stmts[0].Free()
 			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
 			var subqueries []*tree.Subquery
-			collectScalarSubqueries(expr, &subqueries)
+			tree.CollectOuterSubqueries(expr, &subqueries)
 			got := make([]string, len(subqueries))
 			for i, subquery := range subqueries {
 				got[i] = tree.StringWithOpts(subquery, dialect.MYSQL, tree.WithSingleQuoteString())
@@ -747,10 +747,10 @@ func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) 
 	selectStmt := stmt.(*tree.Select)
 	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
 
-	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
+	_, err = plan.BindSetVariableResultType(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), false)
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 
-	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
+	bound, err := plan.BindSetVariableResultType(expr, plan.NewEmptyCompilerContext(newPlanTestProcess(t)), true)
 	require.NoError(t, err)
 	require.NotNil(t, bound)
 }
@@ -937,6 +937,24 @@ func TestGetExprValue(t *testing.T) {
 			// execution context, because the next statement in the packet
 			// reuses it for planning.
 			cvey.So(ses.txnCompileCtx.execCtx, cvey.ShouldEqual, ec)
+		}
+
+		// A SET value read back from the synthetic SELECT's result is a
+		// column of that result and never a binary literal, even when the
+		// expression is a bare hex/bit literal or a binary user variable.
+		ec.proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+		cvey.So(setUserDefinedVarWithIsBin(ses, "bin_src", []byte("A"), "set @bin_src = 0x41", true), cvey.ShouldBeNil)
+		for _, sql := range []string{
+			"set @x=0x41", "set @x=X'41'", "set @x=b'01000001'", "set @x=(0x41)",
+			"set @x=concat(0x41)", "set @x=(select 0x41)", "set @x=@bin_src",
+		} {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			cvey.So(err, cvey.ShouldBeNil)
+			isBin := true
+			value, err := getExprValue(stmt.(*tree.SetVar).Assignments[0].Value, ses, ec, &isBin)
+			cvey.So(err, cvey.ShouldBeNil)
+			cvey.So(value, cvey.ShouldNotBeNil)
+			cvey.So(isBin, cvey.ShouldBeFalse)
 		}
 
 		// The next statement in the same packet must still be able to plan
@@ -1209,7 +1227,7 @@ func Test_makeExecuteSql(t *testing.T) {
 
 	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
-	params1 := vector.NewVec(types.T_text.ToType())
+	params1 := vector.NewVec(types.T_text.ToType(), mp)
 	defer params1.Free(testProc.GetMPool())
 	for i := 0; i < 3; i++ {
 		err = vector.AppendBytes(params1, []byte{}, false, testProc.GetMPool())
@@ -1221,9 +1239,10 @@ func Test_makeExecuteSql(t *testing.T) {
 	util.SetAnyToStringVector(testProc, "bVal", params1, 2)
 
 	ses1.SetPrepareStmt(ctx, "st4", &PrepareStmt{
-		Name:   "st4",
-		Sql:    "prepare st4 select * from t where a = ? and b = ?",
-		params: params1,
+		Name:     "st4",
+		Sql:      "prepare st4 select * from t where a = ? and b = ?",
+		params:   params1,
+		paramsMP: mp,
 	})
 
 	ses1.SetPrepareStmt(ctx, "st5", nil)
@@ -1387,8 +1406,8 @@ func Test_makeExecuteSql(t *testing.T) {
 		{"text NULL", "NULL", "NULL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			params := vector.NewVec(types.T_text.ToType())
-			prepared := &PrepareStmt{Name: "binary_diagnostic", Sql: "select ?, ?, ?", params: params}
+			params := vector.NewVec(types.T_text.ToType(), mp)
+			prepared := &PrepareStmt{Name: "binary_diagnostic", Sql: "select ?, ?, ?", params: params, paramsMP: mp}
 			t.Cleanup(func() { prepared.params = nil; params.Free(mp) })
 			for _, value := range []string{tc.value, "", "42"} {
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, mp))
@@ -1789,7 +1808,7 @@ func TestGetValueFromVectorPreservesTemporalScale(t *testing.T) {
 		{name: "datetime", typ: types.New(types.T_datetime, 0, 6), value: datetime, want: datetime.String2(6)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vec := vector.NewVec(tc.typ)
+			vec := vector.NewVec(tc.typ, mp)
 			t.Cleanup(func() { vec.Free(mp) })
 			switch value := tc.value.(type) {
 			case types.Time:
@@ -3821,7 +3840,7 @@ func TestLowPrecFloatFrontendPaths(t *testing.T) {
 			require.Equal(t, defines.MYSQL_TYPE_FLOAT, col.ColumnType())
 
 			// getValueFromVector widens a const scalar to float32.
-			cv := vector.NewVec(c.oid.ToType())
+			cv := vector.NewVec(c.oid.ToType(), mp)
 			defer cv.Free(mp)
 			c.app(cv, 1.5)
 			got, err := getValueFromVector(ctx, cv, nil, nil)
@@ -3829,7 +3848,7 @@ func TestLowPrecFloatFrontendPaths(t *testing.T) {
 			require.Equal(t, float32(1.5), got)
 
 			// extractRowFromVector (legacy any-row path) yields float32.
-			rv := vector.NewVec(c.oid.ToType())
+			rv := vector.NewVec(c.oid.ToType(), mp)
 			defer rv.Free(mp)
 			c.app(rv, -2.0)
 			row := make([]any, 1)
@@ -3853,4 +3872,33 @@ func BenchmarkMakeExecuteSqlDiscardedPreparedSQL(b *testing.B) {
 			}
 		})
 	}
+}
+
+// A column that fails to convert must not leak the vectors and null bitmaps
+// already built for earlier columns.
+func Test_convertRowsIntoBatchFreesPartialBatchOnError(t *testing.T) {
+	mrs := &MysqlResultSet{}
+	text := new(MysqlColumn)
+	text.SetName("s")
+	text.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	text.SetLength(64)
+	mrs.AddColumn(text)
+	dec := new(MysqlColumn)
+	dec.SetName("d")
+	dec.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	dec.SetSigned(true)
+	dec.SetLength(20)
+	dec.SetDecimal(2)
+	mrs.AddColumn(dec)
+	mrs.AddRow([]any{"a value long enough to live in the area", "1.00"})
+	mrs.AddRow([]any{nil, "not a decimal"})
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(pool)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	require.Error(t, err)
+	require.Nil(t, data)
+	require.Nil(t, pColDefs)
+	require.Zero(t, pool.CurrNB())
 }

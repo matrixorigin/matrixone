@@ -163,13 +163,9 @@ func TestLoopJoinCancellationReleasesConditionWindow(t *testing.T) {
 	build.Vecs[0].GetNulls().Add(1)
 	join.ctr.joinBat, join.ctr.cfs = colexec.NewJoinBatch(probe, proc.Mp())
 	before := account.Snapshot().Used
-	var during uint64
 	join.ctr.expr = &cancelingLoopJoinExpression{
 		ExpressionExecutor: join.ctr.expr,
-		afterFirstEval: func() {
-			during = account.Snapshot().Used
-			cancel()
-		},
+		afterFirstEval:     cancel,
 	}
 	// Starting at row one forces a real borrowed-data window with an owned
 	// null bitmap without allocating a million-row batch to cross the limit.
@@ -180,11 +176,11 @@ func TestLoopJoinCancellationReleasesConditionWindow(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, vec)
 	require.Nil(t, window)
-	require.Greater(t, during, before, "the fixture must own a condition-window bitmap")
 	require.Equal(t, before, account.Snapshot().Used, "cancellation must release the provisional window")
 	join.Reset(proc, true, err)
 	join.Reset(proc, true, err)
 	join.Free(proc, true, err)
+	freeTestChildren(join)
 	require.Zero(t, account.Snapshot().Used)
 }
 
@@ -249,6 +245,7 @@ func TestLoopJoinCancellationResetReuse(t *testing.T) {
 	require.Equal(t, 1, canceledExpression.evals, "the old executor must not run in the new generation")
 	join.Reset(proc, false, nil)
 	join.Free(proc, false, nil)
+	freeTestChildren(join)
 	require.Zero(t, account.Snapshot().Used)
 }
 

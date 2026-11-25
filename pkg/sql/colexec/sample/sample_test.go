@@ -16,11 +16,8 @@ package sample
 
 import (
 	"bytes"
-	"runtime"
-	"runtime/debug"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,7 +50,7 @@ func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpoo
 	bat := batch.NewWithSize(columnCount)
 	column := 0
 	if includeWide {
-		bat.Vecs[column] = vector.NewVec(types.T_text.ToType())
+		bat.Vecs[column] = vector.NewVec(types.T_text.ToType(), mp)
 		payload := bytes.Repeat([]byte{'x'}, wideSampleBytes)
 		for range wideSampleRows {
 			require.NoError(tb, vector.AppendBytes(bat.Vecs[column], payload, false, mp))
@@ -61,7 +58,7 @@ func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpoo
 		column++
 	}
 
-	bat.Vecs[column] = vector.NewVec(types.T_int8.ToType())
+	bat.Vecs[column] = vector.NewVec(types.T_int8.ToType(), mp)
 	for i := range wideSampleRows {
 		require.NoError(tb, vector.AppendFixed(bat.Vecs[column], int8(i), false, mp))
 	}
@@ -108,15 +105,9 @@ func measureSampleMemoryCase(tb testing.TB, includeWide bool) sampleMemoryStats 
 	proc := testutil.NewProcessWithMPool(tb, "", outputMP)
 	defer proc.Free()
 
-	runtime.GC()
-	previousGCPercent := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(previousGCPercent)
-	var before runtime.MemStats
-	runtime.ReadMemStats(&before)
+	// Vector memory is off-heap: measure the peak through the output pool.
 	stats := executeSampleMemoryCase(tb, proc, input)
-	var after runtime.MemStats
-	runtime.ReadMemStats(&after)
-	stats.peakBytes = int64(after.HeapAlloc - before.HeapAlloc)
+	stats.peakBytes = outputMP.Stats().HighWaterMark.Load()
 	return stats
 }
 
@@ -264,95 +255,27 @@ func TestSamplePool(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestSampleSeparatesGroupingKeyDomain(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		pool func(*process.Process) *sPool
-	}{
-		{
-			name: "row",
-			pool: func(proc *process.Process) *sPool {
-				return newSamplePoolByRows(proc, 1, 1, false)
-			},
-		},
-		{
-			name: "percent",
-			pool: func(proc *process.Process) *sPool {
-				return newSamplePoolByPercent(proc, 100, 1)
-			},
-		},
-		{
-			name: "merge",
-			pool: func(proc *process.Process) *sPool {
-				return newSamplePoolByRowsForMerge(proc, 1, 1, false)
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
-			ctr := &container{
-				isGroupBy:     true,
-				useIntHashMap: true,
-				samplePool:    test.pool(proc),
-			}
-			defer freeSampleHashContainer(ctr)
-
-			ordinary := makeSampleGroupingBatch(
-				t,
-				proc,
-				[]int64{1, 2},
-				[]int64{10, 20},
-				false,
-				test.name == "merge",
-			)
-			ctr.groupVectors = ordinary.Vecs[:1]
-			ctr.sampleVectors = ordinary.Vecs[1:2]
-			require.NoError(t, ctr.hashAndSample(ordinary, proc))
-			ordinary.Clean(proc.Mp())
-
-			rollup := makeSampleGroupingBatch(
-				t,
-				proc,
-				[]int64{0},
-				[]int64{30},
-				true,
-				test.name == "merge",
-			)
-			ctr.groupVectors = rollup.Vecs[:1]
-			ctr.sampleVectors = rollup.Vecs[1:2]
-			require.NoError(t, ctr.hashAndSample(rollup, proc))
-			rollup.Clean(proc.Mp())
-
-			result, err := ctr.samplePool.Result(true)
-			require.NoError(t, err)
-			require.Equal(t, 3, result.RowCount())
-			require.Equal(t, 1, result.Vecs[0].GetGrouping().Count())
-			result.Clean(proc.Mp())
-		})
-	}
-}
-
-func TestSampleSeparatesSQLNullFromGrouping(t *testing.T) {
+func TestSampleGroupsSQLNullAndConstNullKeysTogether(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	ctr := &container{
 		isGroupBy:            true,
 		useIntHashMap:        true,
 		groupVectorsNullable: true,
-		samplePool:           newSamplePoolByRows(proc, 1, 1, false),
+		// Capacity 2 keeps both rows, so the pool never replaces a sampled row.
+		samplePool: newSamplePoolByRows(proc, 2, 1, false),
 	}
 	defer freeSampleHashContainer(ctr)
 
 	nullBatch := batch.NewWithSize(2)
-	nullBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	nullBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		nullBatch.Vecs[0],
 		int64(0),
 		true,
 		proc.Mp(),
 	))
-	nullBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	nullBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendFixed(
 		nullBatch.Vecs[1],
 		int64(10),
@@ -365,149 +288,34 @@ func TestSampleSeparatesSQLNullFromGrouping(t *testing.T) {
 	require.NoError(t, ctr.hashAndSample(nullBatch, proc))
 	nullBatch.Clean(proc.Mp())
 
-	rollup := makeSampleGroupingBatch(
-		t,
-		proc,
-		[]int64{0},
-		[]int64{20},
-		true,
-		false,
-	)
-	ctr.groupVectors = rollup.Vecs[:1]
-	ctr.sampleVectors = rollup.Vecs[1:]
-	require.NoError(t, ctr.hashAndSample(rollup, proc))
-	rollup.Clean(proc.Mp())
+	// A rolled-up key is a plain NULL constant and shares the SQL NULL group.
+	constNull := batch.NewWithSize(2)
+	constNull.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+	constNull.Vecs[1] = testutil.MakeInt64Vector([]int64{20}, nil, proc.Mp())
+	constNull.SetRowCount(1)
+	ctr.groupVectors = constNull.Vecs[:1]
+	ctr.sampleVectors = constNull.Vecs[1:]
+	require.NoError(t, ctr.hashAndSample(constNull, proc))
+	constNull.Clean(proc.Mp())
 
+	require.Equal(t, uint64(1), ctr.intHashMap.GroupCount())
 	result, err := ctr.samplePool.Result(true)
 	require.NoError(t, err)
 	require.Equal(t, 2, result.RowCount())
 	require.Equal(t, 2, result.Vecs[0].GetNulls().Count())
-	require.Equal(t, 1, result.Vecs[0].GetGrouping().Count())
 	result.Clean(proc.Mp())
-}
-
-func TestSampleSeparatesPartialRollupKeys(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	ctr := &container{
-		isGroupBy:     true,
-		useIntHashMap: true,
-		samplePool:    newSamplePoolByRows(proc, 1, 1, false),
-	}
-	defer freeSampleHashContainer(ctr)
-
-	input := batch.NewWithSize(3)
-	for column := 0; column < 2; column++ {
-		input.Vecs[column] = vector.NewVec(types.T_int64.ToType())
-		require.NoError(t, vector.AppendFixedList(
-			input.Vecs[column],
-			[]int64{0, 0},
-			nil,
-			proc.Mp(),
-		))
-	}
-	input.Vecs[0].GetGrouping().Add(0)
-	input.Vecs[1].GetGrouping().Add(1)
-	input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixedList(
-		input.Vecs[2],
-		[]int64{10, 20},
-		nil,
-		proc.Mp(),
-	))
-	input.SetRowCount(2)
-	ctr.groupVectors = input.Vecs[:2]
-	ctr.sampleVectors = input.Vecs[2:]
-	require.NoError(t, ctr.hashAndSample(input, proc))
-	input.Clean(proc.Mp())
-
-	result, err := ctr.samplePool.Result(true)
-	require.NoError(t, err)
-	require.Equal(t, 2, result.RowCount())
-	require.Equal(t, 1, result.Vecs[0].GetGrouping().Count())
-	require.Equal(t, 1, result.Vecs[1].GetGrouping().Count())
-	result.Clean(proc.Mp())
-}
-
-func TestSampleAlternatingGroupingReusesIterators(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
-	input := makeSampleGroupingBatch(
-		t,
-		proc,
-		makeSequence(hashmap.UnitLimit),
-		makeSequence(hashmap.UnitLimit),
-		false,
-		false,
-	)
-	defer input.Clean(proc.Mp())
-	for row := 0; row < input.RowCount(); row += 2 {
-		input.Vecs[0].GetGrouping().Add(uint64(row))
-	}
-	ctr := &container{
-		isGroupBy:     true,
-		useIntHashMap: true,
-		samplePool:    newSamplePoolByRows(proc, 1, 1, false),
-		groupVectors:  input.Vecs[:1],
-		sampleVectors: input.Vecs[1:],
-	}
-	defer freeSampleHashContainer(ctr)
-	require.NoError(t, ctr.hashAndSample(input, proc))
-
-	var runErr error
-	allocations := testing.AllocsPerRun(20, func() {
-		runErr = ctr.hashAndSample(input, proc)
-	})
-	require.NoError(t, runErr)
-	require.Less(t, allocations, float64(32))
 }
 
 func BenchmarkSampleGroupedHashFastPath(b *testing.B) {
 	proc := testutil.NewProcess(b)
 	defer proc.Free()
-	input := makeSampleGroupingBatch(
+	input := makeSampleBatch(
 		b,
 		proc,
 		makeSequence(256),
 		makeSequence(256),
-		false,
-		false,
 	)
 	defer input.Clean(proc.Mp())
-	ctr := &container{
-		isGroupBy:     true,
-		useIntHashMap: true,
-		samplePool:    newSamplePoolByRows(proc, 1, 1, false),
-		groupVectors:  input.Vecs[:1],
-		sampleVectors: input.Vecs[1:],
-	}
-	defer freeSampleHashContainer(ctr)
-	require.NoError(b, ctr.hashAndSample(input, proc))
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := ctr.hashAndSample(input, proc); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkSampleAlternatingGrouping(b *testing.B) {
-	proc := testutil.NewProcess(b)
-	defer proc.Free()
-	input := makeSampleGroupingBatch(
-		b,
-		proc,
-		makeSequence(hashmap.UnitLimit),
-		makeSequence(hashmap.UnitLimit),
-		false,
-		false,
-	)
-	defer input.Clean(proc.Mp())
-	for row := 0; row < input.RowCount(); row += 2 {
-		input.Vecs[0].GetGrouping().Add(uint64(row))
-	}
 	ctr := &container{
 		isGroupBy:     true,
 		useIntHashMap: true,
@@ -535,52 +343,28 @@ func makeSequence(count int) []int64 {
 	return values
 }
 
-func makeSampleGroupingBatch(
+func makeSampleBatch(
 	tb testing.TB,
 	proc *process.Process,
 	groups []int64,
 	samples []int64,
-	rollup bool,
-	merge bool,
 ) *batch.Batch {
 	tb.Helper()
-	columns := 2
-	if merge {
-		columns++
-	}
-	bat := batch.NewWithSize(columns)
-	if rollup {
-		bat.Vecs[0] = vector.NewRollupConst(
-			types.T_int64.ToType(),
-			len(groups),
-			proc.Mp(),
-		)
-	} else {
-		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-		require.NoError(tb, vector.AppendFixedList(
-			bat.Vecs[0],
-			groups,
-			nil,
-			proc.Mp(),
-		))
-	}
-	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
+	require.NoError(tb, vector.AppendFixedList(
+		bat.Vecs[0],
+		groups,
+		nil,
+		proc.Mp(),
+	))
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 	require.NoError(tb, vector.AppendFixedList(
 		bat.Vecs[1],
 		samples,
 		nil,
 		proc.Mp(),
 	))
-	if merge {
-		var err error
-		bat.Vecs[2], err = vector.NewConstFixed(
-			types.T_int64.ToType(),
-			int64(len(groups)),
-			len(groups),
-			proc.Mp(),
-		)
-		require.NoError(tb, err)
-	}
 	bat.SetRowCount(len(groups))
 	return bat
 }
@@ -592,9 +376,6 @@ func freeSampleHashContainer(ctr *container) {
 	if ctr.strHashMap != nil {
 		ctr.strHashMap.Free()
 	}
-	if ctr.groupingHashMap != nil {
-		ctr.groupingHashMap.Free()
-	}
 	ctr.samplePool.Free()
 }
 
@@ -603,7 +384,7 @@ func genSampleBatch(proc *process.Process, rows [][]int64) (*batch.Batch, error)
 
 	var err error
 	for i := range b.Vecs {
-		b.Vecs[i] = vector.NewVec(types.T_int64.ToType())
+		b.Vecs[i] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 
 		for _, rowValue := range rows {
 			err = vector.AppendFixed[int64](b.Vecs[i], rowValue[i], rowValue[i] == nullFlag, proc.Mp())
@@ -646,7 +427,7 @@ func TestSamplePoolLowPrecisionFloats(t *testing.T) {
 	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 		t.Run(oid.String(), func(t *testing.T) {
 			b := batch.NewWithSize(1)
-			b.Vecs[0] = vector.NewVec(oid.ToType())
+			b.Vecs[0] = vector.NewVec(oid.ToType(), proc.Mp())
 			for i := 0; i < 20; i++ {
 				v := float32(i%6) - 2
 				var err error
@@ -679,4 +460,33 @@ func TestSamplePoolLowPrecisionFloats(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A sampled row can be replaced by a NULL row, including a const NULL key
+// (rolled-up ROLLUP keys are const NULLs), and later by a value again.
+func TestSamplePoolReplaceValidRowCopiesNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	mp := proc.Mp()
+	pd := &poolData{validBatch: batch.NewWithSize(1)}
+	pd.validBatch.Vecs[0] = testutil.MakeInt64Vector([]int64{5}, nil, mp)
+	pd.validBatch.SetRowCount(1)
+	defer pd.clean(mp)
+
+	constNull := batch.NewWithSize(1)
+	constNull.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 3, mp)
+	constNull.SetRowCount(3)
+	defer constNull.Clean(mp)
+	require.NoError(t, pd.replaceValidRow(mp, constNull, 0, 2))
+	require.True(t, pd.validBatch.Vecs[0].IsNull(0))
+
+	flat := batch.NewWithSize(1)
+	flat.Vecs[0] = testutil.MakeInt64Vector([]int64{7, 9}, []uint64{0}, mp)
+	flat.SetRowCount(2)
+	defer flat.Clean(mp)
+	require.NoError(t, pd.replaceValidRow(mp, flat, 0, 1))
+	require.False(t, pd.validBatch.Vecs[0].IsNull(0))
+	require.Equal(t, int64(9), vector.GetFixedAtNoTypeCheck[int64](pd.validBatch.Vecs[0], 0))
+	require.NoError(t, pd.replaceValidRow(mp, flat, 0, 0))
+	require.True(t, pd.validBatch.Vecs[0].IsNull(0))
 }

@@ -85,7 +85,7 @@ func TestAutoIDPrefetchBulkDemand(t *testing.T) {
 								for consumed := 0; consumed < actualRows; {
 									rows := min(8192, actualRows-consumed)
 									func() {
-										v := vector.NewVec(types.T_uint64.ToType())
+										v := vector.NewVec(types.T_uint64.ToType(), mp)
 										defer v.Free(mp)
 										vecErr := vector.AppendFixedList(v, make([]uint64, rows), nil, mp)
 										require.NoError(t, vecErr)
@@ -299,7 +299,7 @@ func TestAutoIDPrefetchFailureAndTerminal(t *testing.T) {
 				cc, err := newColumnCache(ctx, "", 42, col, cfg, false, a, nil)
 				require.NoError(t, err)
 				mp := internalPrefetchTestMP(t)
-				v := vector.NewVec(types.T_uint64.ToType())
+				v := vector.NewVec(types.T_uint64.ToType(), mp)
 				defer v.Free(mp)
 				require.NoError(t, vector.AppendFixedList(v, []uint64{0, 0, 0}, nil, mp))
 				v.GetNulls().AddRange(0, 3)
@@ -348,7 +348,7 @@ func TestAutoIDPrefetchMultipleCNAndColdReload(t *testing.T) {
 						defer mpool.DeleteMPool(mp)
 						r := result{}
 						for range 8 {
-							v := vector.NewVec(types.T_uint64.ToType())
+							v := vector.NewVec(types.T_uint64.ToType(), mp)
 							r.err = vector.AppendFixedList(v, make([]uint64, 8192), nil, mp)
 							v.GetNulls().AddRange(0, 8192)
 							if r.err == nil {

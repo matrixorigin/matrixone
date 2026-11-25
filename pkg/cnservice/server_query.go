@@ -15,6 +15,7 @@
 package cnservice
 
 import (
+	"bytes"
 	"context"
 	"runtime/debug"
 	"strings"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
-	commonUtil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -569,7 +569,7 @@ func copyWaitTxn(src pblock.WaitTxn) *pblock.WaitTxn {
 
 func copyTxnMeta(src txn.TxnMeta) *txn.TxnMeta {
 	dst := &txn.TxnMeta{
-		ID:         commonUtil.CloneBytes(src.GetID()),
+		ID:         bytes.Clone(src.GetID()),
 		Status:     src.GetStatus(),
 		SnapshotTS: src.GetSnapshotTS(),
 		PreparedTS: src.GetPreparedTS(),

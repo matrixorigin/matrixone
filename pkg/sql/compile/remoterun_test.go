@@ -3141,39 +3141,18 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_decodeBatch(t *testing.T) {
-	mp := &mpool.MPool{}
+	mp := mpool.MustNewZero()
 	bat := &batch.Batch{
 		Recursive:  0,
 		ShuffleIDX: 0,
 		Attrs:      []string{"1"},
-		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType())},
+		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType(), mp)},
 	}
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)
 	require.Nil(t, err)
 	_, err = decodeBatch(mp, data)
 	require.Nil(t, err)
-}
-
-func Test_decodeBatchPreservesPrepareParamKindTransportTrailer(t *testing.T) {
-	mp := mpool.MustNewZero()
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
-	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("5"), false, mp))
-	bat.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamFloat,
-		vector.PrepareParamNone,
-	})
-	bat.SetRowCount(2)
-	data, err := bat.MarshalBinaryWithPrepareParamKinds(&bytes.Buffer{}, true)
-	require.NoError(t, err)
-	decoded, err := decodeBatch(mp, data)
-	require.NoError(t, err)
-	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
-	bat.Clean(mp)
-	decoded.Clean(mp)
 }
 
 func TestGetRemoteDispatchReceiverConcurrentWake(t *testing.T) {
@@ -3422,7 +3401,8 @@ func TestCoordinatorDispatchRegisteredBeforePrepare(t *testing.T) {
 
 	runDone := make(chan error, 1)
 	go func() {
-		runDone <- runCompile.runOnce()
+		_, err := runCompile.runOnce()
+		runDone <- err
 	}()
 	select {
 	case <-child.entered:

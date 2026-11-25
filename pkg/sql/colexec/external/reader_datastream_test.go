@@ -102,9 +102,9 @@ func newDatastreamTestParam(t *testing.T, host string, port int32, filter string
 			Filter:    &FilterParam{},
 		},
 	}
-	bat := batch.NewOffHeap([]string{"a", "s"})
+	bat := batch.New([]string{"a", "s"})
 	for i := range cols {
-		bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&cols[i].Typ, false))
+		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
 	t.Cleanup(func() { bat.Clean(proc.Mp()) })
 	return param, proc, bat

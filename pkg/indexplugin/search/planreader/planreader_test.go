@@ -48,11 +48,11 @@ func (s *scriptedSearcher) Close() error {
 	return nil
 }
 
-func newOut(attrs []string, typs []types.Type) *batch.Batch {
+func newOut(attrs []string, typs []types.Type, mp *mpool.MPool) *batch.Batch {
 	out := batch.NewWithSize(len(attrs))
 	out.Attrs = attrs
 	for i, typ := range typs {
-		out.Vecs[i] = vector.NewVec(typ)
+		out.Vecs[i] = vector.NewVec(typ, mp)
 	}
 	return out
 }
@@ -60,7 +60,7 @@ func newOut(attrs []string, typs []types.Type) *batch.Batch {
 // readAll drains r and returns the key and score columns of every row.
 func readAll(t *testing.T, r *Reader, attrs []string, typs []types.Type, mp *mpool.MPool) ([]int64, []float64) {
 	t.Helper()
-	out := newOut(attrs, typs)
+	out := newOut(attrs, typs, mp)
 	defer out.Clean(mp)
 	var keys []int64
 	var scores []float64
@@ -101,7 +101,7 @@ func TestReaderEmitsChunksInRankOrder(t *testing.T) {
 	require.NoError(t, r.Close())
 	require.NoError(t, r.Close())
 	require.Equal(t, 1, s.closes)
-	done, err := r.Read(context.Background(), attrs, nil, mp, newOut(attrs, typs))
+	done, err := r.Read(context.Background(), attrs, nil, mp, newOut(attrs, typs, mp))
 	require.NoError(t, err)
 	require.True(t, done)
 }
@@ -117,7 +117,7 @@ func TestReaderEmitsAnyKeysAndIncludedColumns(t *testing.T) {
 	}}}
 	r := New(s)
 	attrs := []string{ScoreColumn, IncludePrefix + "tag", KeyColumn}
-	out := newOut(attrs, []types.Type{types.T_float64.ToType(), types.T_int64.ToType(), types.T_int32.ToType()})
+	out := newOut(attrs, []types.Type{types.T_float64.ToType(), types.T_int64.ToType(), types.T_int32.ToType()}, mp)
 	defer out.Clean(mp)
 	done, err := r.Read(context.Background(), attrs, nil, mp, out)
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestReaderRejectsMalformedResults(t *testing.T) {
 	attrs := []string{KeyColumn, ScoreColumn}
 	typs := []types.Type{types.T_int64.ToType(), types.T_float64.ToType()}
 	read := func(s Searcher, attrs []string, typs []types.Type) error {
-		out := newOut(attrs, typs)
+		out := newOut(attrs, typs, mp)
 		defer out.Clean(mp)
 		r := New(s)
 		defer r.Close()
@@ -161,7 +161,7 @@ func TestReaderStopsOnCancellationAndEmpty(t *testing.T) {
 	defer mpool.DeleteMPool(mp)
 	attrs := []string{KeyColumn, ScoreColumn}
 	typs := []types.Type{types.T_int64.ToType(), types.T_float64.ToType()}
-	out := newOut(attrs, typs)
+	out := newOut(attrs, typs, mp)
 	defer out.Clean(mp)
 
 	ctx, cancel := context.WithCancel(context.Background())

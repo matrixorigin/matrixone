@@ -2792,10 +2792,8 @@ func TestFillValuesOfParamsPreservesSQLExecuteRuntimeStringDomain(t *testing.T) 
 		wantForm   planpb.StringLiteralForm
 		wantLength int64
 	}{
-		{
-			name: "static varbinary runtime text", sourceType: types.T_varbinary.ToType(),
-			domain: types.RuntimeStringText, wantForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT, wantLength: 2,
-		},
+		// A static VARBINARY source can no longer carry a TEXT row: the static
+		// type is the only source of binary-vs-text semantics.
 		{
 			name: "static varchar runtime binary", sourceType: types.T_varchar.ToType(),
 			domain: types.RuntimeStringBinary, wantForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
@@ -3387,7 +3385,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		}
 		query := makeQuery(t, "=", []*planpb.Expr{intColumn, param(0)})
 		values := []any{ParamValue{
-			Value: "9.0", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+			Value: "9.0", SourceType: decimalParamType("9.0"), HasSourceType: true, EnableNumericPrefix: true,
 		}}
 		require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, values))
 
@@ -3410,7 +3408,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		}
 		query := makeQuery(t, "=", []*planpb.Expr{floatColumn, param(0)})
 		require.False(t, PreparedPlanNeedsNumericPrefixSpecialization(query, []any{ParamValue{
-			Value: "1.2345678", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+			Value: "1.2345678", SourceType: decimalParamType("1.2345678"), HasSourceType: true, EnableNumericPrefix: true,
 		}}), query.String())
 	})
 
@@ -3582,10 +3580,10 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), param(1)})
 		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 			ParamValue{
-				Value: "12.5", PrepareParamKind: vector.PrepareParamDecimal, EnableNumericPrefix: true,
+				Value: "12.5", SourceType: decimalParamType("12.5"), HasSourceType: true, EnableNumericPrefix: true,
 			},
 			ParamValue{
-				Value: int64(2), PrepareParamKind: vector.PrepareParamInteger, EnableNumericPrefix: true,
+				Value: int64(2), SourceType: types.T_int64.ToType(), HasSourceType: true, EnableNumericPrefix: true,
 			},
 		})
 		require.NoError(t, err)
@@ -3608,7 +3606,7 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 			ParamValue{Value: "9007199254740992.0001tail", EnableNumericPrefix: true},
 			ParamValue{
-				Value: "9007199254740992.0002", PrepareParamKind: vector.PrepareParamFloat,
+				Value: "9007199254740992.0002", SourceType: types.T_float64.ToType(), HasSourceType: true,
 				EnableNumericPrefix: true,
 			},
 		})
@@ -3624,21 +3622,19 @@ func TestFillValuesOfParamsUsesNumericPrefixForPreparedCommonType(t *testing.T) 
 		for _, test := range []struct {
 			name    string
 			value   any
-			kind    vector.PrepareParamKind
+			kind    types.StringConversionKind
 			wantOID types.T
 		}{
-			{name: "boolean", value: true, kind: vector.PrepareParamBoolean, wantOID: types.T_decimal128},
-			{name: "integer", value: int64(42), kind: vector.PrepareParamInteger, wantOID: types.T_decimal128},
-			{name: "decimal", value: "42.25", kind: vector.PrepareParamDecimal, wantOID: types.T_decimal128},
-			{name: "float", value: "42.25", kind: vector.PrepareParamFloat, wantOID: types.T_float64},
+			{name: "boolean", value: true, kind: types.StringConversionBoolean, wantOID: types.T_decimal128},
+			{name: "integer", value: int64(42), kind: types.StringConversionInteger, wantOID: types.T_decimal128},
+			{name: "decimal", value: "42.25", kind: types.StringConversionDecimal, wantOID: types.T_decimal128},
+			{name: "float", value: float64(42.25), kind: types.StringConversionFloat, wantOID: types.T_float64},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				query := makeQuery(t, "coalesce", []*planpb.Expr{param(0), decimalColumn()})
-				filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
-					ParamValue{
-						Value: test.value, PrepareParamKind: test.kind, EnableNumericPrefix: true,
-					},
-				})
+				value := sqlKindParam(test.value, test.kind)
+				value.EnableNumericPrefix = true
+				filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{value})
 				require.NoError(t, err)
 				require.True(t, specialized)
 				result := filled.GetQuery().Nodes[0].ProjectList[0]
@@ -3812,7 +3808,7 @@ func TestRestorePreparedExactIntegerTextExecutesNormalization(t *testing.T) {
 			} else {
 				require.NotNil(t, restored.GetF().Args[0].GetP())
 			}
-			params := vector.NewVec(types.T_text.ToType())
+			params := vector.NewVec(types.T_text.ToType(), proc.Mp())
 			proc.SetPrepareParams(params)
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			value := "9007199254740993"

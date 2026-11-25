@@ -31,7 +31,7 @@ import (
 // append can fail. Child scenarios share only immutable inputs.
 func varianceInput[T any](t *testing.T, mp *mpool.MPool, typ types.Type, values []T, nulls []bool) *vector.Vector {
 	t.Helper()
-	input := vector.NewVec(typ)
+	input := vector.NewVec(typ, mp)
 	t.Cleanup(func() { input.Free(mp) })
 	require.NoError(t, vector.AppendFixedList(input, values, nulls, mp))
 	return input
@@ -52,7 +52,7 @@ func varianceResult(t *testing.T, mp *mpool.MPool, exec AggFuncExec, typ types.T
 	results, err := exec.Flush()
 	for _, result := range results {
 		if result != nil {
-			t.Cleanup(func() { result.Free(mp) })
+			t.Cleanup(func() { result.Free(result.MPool()) })
 		}
 	}
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestVarianceDecimalResults(t *testing.T) {
 		t.Run(param.Oid.String(), func(t *testing.T) {
 			mp := newAggExecTestPool(t)
 			makeInput := func(values ...string) *vector.Vector {
-				input := vector.NewVec(param)
+				input := vector.NewVec(param, mp)
 				t.Cleanup(func() { input.Free(mp) })
 				for _, value := range values {
 					if param.Oid == types.T_decimal64 {
@@ -182,10 +182,10 @@ func TestVarianceDecimalResults(t *testing.T) {
 				}
 			}
 			if param.Oid == types.T_decimal128 {
-				leftInput := vector.NewVec(param)
+				leftInput := vector.NewVec(param, mp)
 				t.Cleanup(func() { leftInput.Free(mp) })
 				require.NoError(t, input.CloneWindowTo(leftInput, 0, 2, mp))
-				rightInput := vector.NewVec(param)
+				rightInput := vector.NewVec(param, mp)
 				t.Cleanup(func() { rightInput.Free(mp) })
 				require.NoError(t, input.CloneWindowTo(rightInput, 2, 3, mp))
 				t.Run("wire-merge", func(t *testing.T) {
@@ -265,7 +265,7 @@ func TestVarianceLargeOffset(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := newAggExecTestPool(t)
-			input := vector.NewVec(tc.typ)
+			input := vector.NewVec(tc.typ, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			for i := int64(0); i < 7; i++ {
 				literal := strconv.FormatInt(tc.origin+i, 10)
@@ -299,10 +299,10 @@ func TestVarianceLargeOffset(t *testing.T) {
 			var leftInput, rightInput *vector.Vector
 			if tc.typ.Oid != types.T_decimal64 {
 				cases = append(cases, offsetCase{"var-merge", AggIdOfVarPop, false, true, 4})
-				leftInput = vector.NewVec(tc.typ)
+				leftInput = vector.NewVec(tc.typ, mp)
 				t.Cleanup(func() { leftInput.Free(mp) })
 				require.NoError(t, input.CloneWindowTo(leftInput, 0, 3, mp))
-				rightInput = vector.NewVec(tc.typ)
+				rightInput = vector.NewVec(tc.typ, mp)
 				t.Cleanup(func() { rightInput.Free(mp) })
 				require.NoError(t, input.CloneWindowTo(rightInput, 3, 7, mp))
 			}
@@ -381,7 +381,7 @@ func TestVarianceFiniteRange(t *testing.T) {
 			case "merge":
 				var inputs [2]*vector.Vector
 				for i := range inputs {
-					clone := vector.NewVec(param)
+					clone := vector.NewVec(param, mp)
 					t.Cleanup(func() { clone.Free(mp) })
 					require.NoError(t, input.CloneWindowTo(clone, i, i+1, mp))
 					inputs[i] = clone
@@ -532,13 +532,13 @@ func TestVarianceExactOrigins(t *testing.T) {
 	for _, inputCase := range inputs {
 		t.Run(inputCase.name, func(t *testing.T) {
 			// Native values are built once per type. Executors never own these inputs.
-			input := vector.NewVec(inputCase.param)
+			input := vector.NewVec(inputCase.param, mp)
 			t.Cleanup(func() { input.Free(mp) })
 			inputCase.append(t, input, 0, 4)
-			leftInput := vector.NewVec(inputCase.param)
+			leftInput := vector.NewVec(inputCase.param, mp)
 			t.Cleanup(func() { leftInput.Free(mp) })
 			require.NoError(t, input.CloneWindowTo(leftInput, 0, 2, mp))
-			rightInput := vector.NewVec(inputCase.param)
+			rightInput := vector.NewVec(inputCase.param, mp)
 			t.Cleanup(func() { rightInput.Free(mp) })
 			require.NoError(t, input.CloneWindowTo(rightInput, 2, 4, mp))
 			check := func(t *testing.T, exec AggFuncExec, want float64) {
@@ -627,7 +627,7 @@ func TestExactIntegerStdDevAcrossFullRange(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			input := vector.NewVec(tc.param)
+			input := vector.NewVec(tc.param, mp)
 			defer input.Free(mp)
 			tc.append(t, input)
 			exec := makeStdDevPopExec(mp, AggIdOfStdDevPop, false, tc.param)
@@ -636,7 +636,7 @@ func TestExactIntegerStdDevAcrossFullRange(t *testing.T) {
 			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
 			results, err := exec.Flush()
 			require.NoError(t, err)
-			defer results[0].Free(mp)
+			defer results[0].Free(results[0].MPool())
 			require.InEpsilon(t, tc.want,
 				vector.MustFixedColNoTypeCheck[float64](results[0])[0], 1e-15)
 		})
@@ -829,7 +829,7 @@ func TestVarianceIntermediateStateWireLayouts(t *testing.T) {
 				layout = "legacy"
 			}
 			t.Run(tc.name+"/"+layout, func(t *testing.T) {
-				input := vector.NewVec(tc.param)
+				input := vector.NewVec(tc.param, mp)
 				defer input.Free(mp)
 				tc.append(t, input)
 
@@ -848,7 +848,7 @@ func TestVarianceIntermediateStateWireLayouts(t *testing.T) {
 					bytes.NewReader(wire.Bytes()), mp))
 				results, err := restored.Flush()
 				require.NoError(t, err)
-				defer results[0].Free(mp)
+				defer results[0].Free(results[0].MPool())
 				require.InEpsilon(t, 5.0, tc.read(results[0]), 1e-12)
 
 				mismatched := makeVarPopExec(mp, AggIdOfVarPop, false, tc.param, !legacy)
@@ -882,7 +882,7 @@ func TestLegacyVarianceExecFillMergeAndFlush(t *testing.T) {
 	param := types.T_float64.ToType()
 
 	makeInput := func(values ...float64) *vector.Vector {
-		input := vector.NewVec(param)
+		input := vector.NewVec(param, mp)
 		for _, value := range values {
 			require.NoError(t, vector.AppendFixed(input, value, false, mp))
 		}
@@ -913,7 +913,7 @@ func TestLegacyVarianceExecFillMergeAndFlush(t *testing.T) {
 		require.NoError(t, left.Merge(right, 0, 0))
 
 		result := flushFloat(t, left)
-		defer result.Free(mp)
+		defer result.Free(result.MPool())
 		require.InEpsilon(t, 5.0, vector.MustFixedColNoTypeCheck[float64](result)[0], 1e-15)
 	})
 
@@ -926,7 +926,7 @@ func TestLegacyVarianceExecFillMergeAndFlush(t *testing.T) {
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
 
 		result := flushFloat(t, exec)
-		defer result.Free(mp)
+		defer result.Free(result.MPool())
 		require.InEpsilon(t, 2.0, vector.MustFixedColNoTypeCheck[float64](result)[0], 1e-15)
 	})
 
@@ -939,7 +939,7 @@ func TestLegacyVarianceExecFillMergeAndFlush(t *testing.T) {
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
 
 		result := flushFloat(t, exec)
-		defer result.Free(mp)
+		defer result.Free(result.MPool())
 		require.InEpsilon(t, math.Sqrt(2), vector.MustFixedColNoTypeCheck[float64](result)[0], 1e-15)
 	})
 
@@ -952,7 +952,7 @@ func TestLegacyVarianceExecFillMergeAndFlush(t *testing.T) {
 		require.NoError(t, exec.Fill(1, 0, []*vector.Vector{input}))
 
 		result := flushFloat(t, exec)
-		defer result.Free(mp)
+		defer result.Free(result.MPool())
 		require.True(t, result.IsNull(0))
 		require.Equal(t, 0.0, vector.MustFixedColNoTypeCheck[float64](result)[1])
 	})
@@ -1186,9 +1186,9 @@ func TestVarianceDecimalFractionalResults(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := newAggExecTestPool(t)
-			input := vector.NewVec(tc.param)
+			input := vector.NewVec(tc.param, mp)
 			t.Cleanup(func() { input.Free(mp) })
-			duplicate := vector.NewVec(tc.param)
+			duplicate := vector.NewVec(tc.param, mp)
 			t.Cleanup(func() { duplicate.Free(mp) })
 			for _, fixture := range []struct {
 				v            *vector.Vector

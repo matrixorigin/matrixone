@@ -71,7 +71,7 @@ func TestParquetUUIDLogicalToUUIDColumn(t *testing.T) {
 				{parquet.FixedLenByteArrayValue(uuidLogicalFixtureBytes[1][:]).Level(0, 0, 0)},
 			})
 
-			vec := vector.NewVec(types.T_uuid.ToType())
+			vec := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uuid), NotNullable: true})
@@ -100,7 +100,7 @@ func TestParquetUUIDLogicalToUUIDColumnPreservesNull(t *testing.T) {
 				{parquet.NullValue().Level(0, 0, 0)},
 			})
 
-			vec := vector.NewVec(types.T_uuid.ToType())
+			vec := vector.NewVec(types.T_uuid.ToType(), proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_uuid), NotNullable: false})
@@ -131,7 +131,7 @@ func TestParquetUUIDLogicalToTextColumns(t *testing.T) {
 				{parquet.FixedLenByteArrayValue(uuidLogicalFixtureBytes[0][:]).Level(0, 0, 0)},
 			})
 
-			vec := vector.NewVec(target.typ)
+			vec := vector.NewVec(target.typ, proc.Mp())
 			t.Cleanup(func() { vec.Free(proc.Mp()) })
 			var h ParquetHandler
 			mp := h.getMapper(f.Root().Column("c"), target.plan)
@@ -152,7 +152,7 @@ func TestParquetUUIDLogicalToBinaryControl(t *testing.T) {
 		{parquet.FixedLenByteArrayValue(uuidLogicalFixtureBytes[0][:]).Level(0, 0, 0)},
 	})
 
-	vec := vector.NewVec(types.New(types.T_binary, 16, 0))
+	vec := vector.NewVec(types.New(types.T_binary, 16, 0), proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_binary), Width: 16, NotNullable: true})

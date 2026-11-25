@@ -91,6 +91,25 @@ func (connector *Connector) ActivatesAllocationAccountLifecycle() bool {
 	return false
 }
 
+// connectorAllocationSiteSpool is the account site of the spool's copied batches.
+const connectorAllocationSiteSpool mpool.AllocationSite = 64
+
+// spoolMP returns the pool the pipeline spool copies batches through. The
+// spool copy used to be charged to each source batch's allocation account;
+// vectors no longer carry one, so the spool charges the statement account
+// compile bound to this operator, or proc's pool when none is bound.
+func (connector *Connector) spoolMP(proc *process.Process) (*mpool.MPool, error) {
+	if connector.allocationAccount == nil {
+		return proc.Mp(), nil
+	}
+	return proc.Mp().WithAccount(
+		connector.allocationAccount,
+		mpool.AllocationOwnerSelection,
+		connectorAllocationSiteSpool,
+		mpool.AllocationCapacityClassDefault,
+	)
+}
+
 func (connector *Connector) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
@@ -181,19 +200,19 @@ func (connector *Connector) publishTerminalWithLog(proc *process.Process, signal
 	return process.PipelineSignal{}, false
 }
 
-// CleanupDeferredSpool reclaims spool cache memory after the paired Merge
-// cleanup has returned on a normal End path. The normal path drains queued
-// GetFromSpool signals; a cleanup-time timeout releases the current reference
-// and leaves no receiver goroutine that can read pending signals later.
+// CleanupDeferredSpool frees the spool's cached batches after the paired Merge
+// cleanup has returned on a normal End path. With an allocation account the
+// spool is kept until the account is drained, so FinalizeAfterConsumersQuiesced
+// can release slots whose GetFromSpool signals were bypassed by a typed
+// terminal signal.
 func (connector *Connector) CleanupDeferredSpool() {
 	if connector.cleanupSpool == nil {
 		return
 	}
+	connector.cleanupSpool.ReleaseCache()
 	if connector.allocationAccount != nil {
-		connector.cleanupSpool.ReleaseReusableCacheAfterProducerQuiesced()
 		return
 	}
-	connector.cleanupSpool.ForceCleanupAfterTerminalSignal()
 	connector.cleanupSpool = nil
 }
 

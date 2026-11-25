@@ -124,6 +124,7 @@ func TestFullText(t *testing.T) {
 		require.Equal(t, quoteExpectedFulltextColumns(s), rs)
 	}
 	arg.Free(proc, false, nil)
+	colexec.FreeMockChildren(&arg)
 
 	arg.Release()
 	proc.Free()
@@ -248,6 +249,7 @@ func TestAuditFullTextStringKeyPreservesQuotedLiteral(t *testing.T) {
 			require.Equal(t, tc.wantInsertLiterals, scanPostDmlStringLiterals(t, insertSQL, tc.sqlMode))
 
 			arg.Free(proc, false, nil)
+			colexec.FreeMockChildren(&arg)
 			arg.Release()
 			proc.Free()
 			require.Equal(t, int64(0), proc.GetMPool().CurrNB())
@@ -278,6 +280,7 @@ func scanPostDmlStringLiterals(t *testing.T, sql, sqlMode string) []string {
 }
 
 func resetChildren(arg *PostDml, m *mpool.MPool) {
+	colexec.FreeMockChildren(arg)
 	op := colexec.NewMockOperator()
 	bat := colexec.MakeMockBatchsWithRowID(m)
 	op.WithBatchs([]*batch.Batch{bat})
@@ -288,7 +291,7 @@ func resetChildren(arg *PostDml, m *mpool.MPool) {
 func TestGetAny(t *testing.T) {
 	{ // test const vector
 		mp := mpool.MustNewZero()
-		v := vector.NewVec(types.T_int8.ToType())
+		v := vector.NewVec(types.T_int8.ToType(), mp)
 		err := vector.AppendFixed(v, int8(0), false, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
@@ -298,7 +301,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // test const vector
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_varchar.ToType())
+		w := vector.NewVec(types.T_varchar.ToType(), mp)
 		err := vector.AppendBytes(w, []byte("x"), false, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(w, 0)
@@ -308,7 +311,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // bool
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_bool.ToType())
+		w := vector.NewVec(types.T_bool.ToType(), mp)
 		err := vector.AppendFixedList(w, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(w, 0)
@@ -320,7 +323,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // int8
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_int8.ToType())
+		w := vector.NewVec(types.T_int8.ToType(), mp)
 		err := vector.AppendFixedList(w, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -333,7 +336,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // int16
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_int16.ToType())
+		w := vector.NewVec(types.T_int16.ToType(), mp)
 		err := vector.AppendFixedList(w, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -346,7 +349,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // int32
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_int32.ToType())
+		w := vector.NewVec(types.T_int32.ToType(), mp)
 		err := vector.AppendFixedList(w, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -359,7 +362,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // int64
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_int64.ToType())
+		w := vector.NewVec(types.T_int64.ToType(), mp)
 		err := vector.AppendFixedList(w, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -372,7 +375,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // uint8
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_uint8.ToType())
+		w := vector.NewVec(types.T_uint8.ToType(), mp)
 		err := vector.AppendFixedList(w, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -385,7 +388,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // int16
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_uint16.ToType())
+		w := vector.NewVec(types.T_uint16.ToType(), mp)
 		err := vector.AppendFixedList(w, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -398,7 +401,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // int32
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_uint32.ToType())
+		w := vector.NewVec(types.T_uint32.ToType(), mp)
 		err := vector.AppendFixedList(w, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -411,7 +414,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // int64
 		mp := mpool.MustNewZero()
-		w := vector.NewVec(types.T_uint64.ToType())
+		w := vector.NewVec(types.T_uint64.ToType(), mp)
 		err := vector.AppendFixedList(w, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
@@ -424,7 +427,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // text
 		mp := mpool.MustNewZero()
-		v := vector.NewVec(types.T_text.ToType())
+		v := vector.NewVec(types.T_text.ToType(), mp)
 		err := vector.AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
 
@@ -437,7 +440,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // time
 		mp := mpool.MustNewZero()
-		v := vector.NewVec(types.T_time.ToType())
+		v := vector.NewVec(types.T_time.ToType(), mp)
 		err := vector.AppendFixedList(v, []types.Time{12 * 3600 * 1000 * 1000, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
@@ -448,7 +451,7 @@ func TestGetAny(t *testing.T) {
 	}
 	{ // timestamp
 		mp := mpool.MustNewZero()
-		v := vector.NewVec(types.T_timestamp.ToType())
+		v := vector.NewVec(types.T_timestamp.ToType(), mp)
 		err := vector.AppendFixedList(v, []types.Timestamp{10000000, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
@@ -461,7 +464,7 @@ func TestGetAny(t *testing.T) {
 		mp := mpool.MustNewZero()
 		typ := types.T_decimal64.ToType()
 		typ.Scale = 2
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, mp)
 		err := vector.AppendFixedList(v, []types.Decimal64{1234, 2000}, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
@@ -474,7 +477,7 @@ func TestGetAny(t *testing.T) {
 		mp := mpool.MustNewZero()
 		typ := types.T_decimal128.ToType()
 		typ.Scale = 2
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, mp)
 		err := vector.AppendFixedList(v, []types.Decimal128{{B0_63: 1234, B64_127: 0}, {B0_63: 2345, B64_127: 0}}, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
@@ -486,7 +489,7 @@ func TestGetAny(t *testing.T) {
 	{ // uuid
 		mp := mpool.MustNewZero()
 		vs := make([]types.Uuid, 4)
-		v := vector.NewVec(types.T_uuid.ToType())
+		v := vector.NewVec(types.T_uuid.ToType(), mp)
 		err := vector.AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
@@ -498,7 +501,7 @@ func TestGetAny(t *testing.T) {
 	{ // ts
 		mp := mpool.MustNewZero()
 		vs := make([]types.TS, 4)
-		v := vector.NewVec(types.T_TS.ToType())
+		v := vector.NewVec(types.T_TS.ToType(), mp)
 		err := vector.AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)
@@ -510,7 +513,7 @@ func TestGetAny(t *testing.T) {
 	{ // rowid
 		mp := mpool.MustNewZero()
 		vs := make([]types.Rowid, 4)
-		v := vector.NewVec(types.T_Rowid.ToType())
+		v := vector.NewVec(types.T_Rowid.ToType(), mp)
 		err := vector.AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
 		s, err := GetAnyAsString(v, 0)

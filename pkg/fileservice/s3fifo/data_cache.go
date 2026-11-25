@@ -100,6 +100,12 @@ func (d *DataCache) Get(_ context.Context, key fscache.CacheKey) (fscache.Data, 
 	return v.Data, ok
 }
 
+// TryGet retains a hit for the caller and treats a busy shard as a miss.
+func (d *DataCache) TryGet(key fscache.CacheKey) (fscache.Data, bool) {
+	v, _, ok, _ := d.c.TryGet(key, nil)
+	return v.Data, ok
+}
+
 func (d *DataCache) GetWithPinAdmission(_ context.Context, key fscache.CacheKey, admit fscache.DataCachePinAdmission) (fscache.Data, func(), bool, error) {
 	var a func(size int64) (func(), error)
 	if admit != nil {
@@ -145,4 +151,11 @@ func (d *DataCache) Evict(ctx context.Context, done chan int64) {
 
 func (d *DataCache) EvictToTargetWithWait(ctx context.Context, target int64) int64 {
 	return d.c.EvictTo(ctx, min(target, d.c.Capacity()))
+}
+
+// EvictForPressure admits new batches only while the pressure walk is live.
+// It returns the remaining usage and whether any callbacks for removed entries
+// completed, so the caller can reclaim the allocator even after cancellation.
+func (d *DataCache) EvictForPressure(ctx context.Context, target int64) (used int64, removed bool) {
+	return d.c.evictTo(ctx, target, true)
 }

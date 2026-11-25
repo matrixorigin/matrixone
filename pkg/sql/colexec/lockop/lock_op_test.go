@@ -394,7 +394,7 @@ func TestLockRowsForSnapshotRefresh(t *testing.T) {
 				defer testingContext.SetAdjustLockResultFunc(nil)
 
 				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+				bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
 				bat.SetRowCount(1)
 				defer bat.Clean(proc.Mp())
@@ -724,18 +724,18 @@ func TestHasNewVersionInRange(t *testing.T) {
 	analyzer := process.NewTempAnalyzer()
 	bat := batch.New(nil)
 
-	changed, err := hasNewVersionInRange(proc, rel, analyzer, 1, eng, nil, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	changed, err := hasNewVersionInRange(proc, rel, analyzer, 1, eng, nil, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{}, nil)
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(2)).Return("", "", nil, assert.AnError)
-	changed, err = hasNewVersionInRange(proc, nil, analyzer, 2, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	changed, err = hasNewVersionInRange(proc, nil, analyzer, 2, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{}, nil)
 	require.Error(t, err)
 	require.False(t, changed)
 
 	eng.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(3)).Return("", "", rel, nil)
 	rel.EXPECT().PrimaryKeysMayBeModified(gomock.Any(), gomock.Any(), gomock.Any(), bat, int32(0), int32(-1)).Return(true, nil)
-	changed, err = hasNewVersionInRange(proc, nil, analyzer, 3, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	changed, err = hasNewVersionInRange(proc, nil, analyzer, 3, eng, bat, 0, -1, timestamp.Timestamp{}, timestamp.Timestamp{}, nil)
 	require.NoError(t, err)
 	require.True(t, changed)
 }
@@ -1652,7 +1652,7 @@ func TestDoLockSharedOversizedBatchKeepsExactRows(t *testing.T) {
 			table:     26769,
 			typeValue: types.T_int64.ToType(),
 			makeVec: func(mp *mpool.MPool) *vector.Vector {
-				vec := vector.NewVec(types.T_int64.ToType())
+				vec := vector.NewVec(types.T_int64.ToType(), mp)
 				vector.AppendFixedList(vec, []int64{1, 2, 3, 4, 5}, nil, mp)
 				return vec
 			},
@@ -1666,7 +1666,7 @@ func TestDoLockSharedOversizedBatchKeepsExactRows(t *testing.T) {
 			table:     26770,
 			typeValue: types.T_varchar.ToType(),
 			makeVec: func(mp *mpool.MPool) *vector.Vector {
-				vec := vector.NewVec(types.T_varchar.ToType())
+				vec := vector.NewVec(types.T_varchar.ToType(), mp)
 				for _, value := range []string{"1", "2", "3", "4", "5"} {
 					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
 				}
@@ -2466,11 +2466,11 @@ func runLockNonBlockingOpTest(
 			for idx, table := range tables {
 				arg.AddLockTarget(table, nil, offset, pkType, -1, offset+1, nil, true)
 
-				vec := vector.NewVec(pkType)
+				vec := vector.NewVec(pkType, proc.Mp())
 				vector.AppendFixedList(vec, values[idx], nil, proc.Mp())
 				bat.Vecs[offset] = vec
 
-				vec = vector.NewVec(tsType)
+				vec = vector.NewVec(tsType, proc.Mp())
 				bat.Vecs[offset+1] = vec
 				offset += 2
 			}
@@ -2798,7 +2798,7 @@ func TestLockOpMergedTargetChecksEveryVersionRange(t *testing.T) {
 		return idx == 7, nil
 	}
 
-	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1}, nil)(
 		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -2813,7 +2813,7 @@ func TestLockOpMergedTargetsUseDefaultVersionRangeChecker(t *testing.T) {
 	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
 	arg.ctr.relations = make([]engine.Relation, len(arg.targets))
 
-	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1}, nil)(
 		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
 	require.NoError(t, err)
 	require.False(t, changed)

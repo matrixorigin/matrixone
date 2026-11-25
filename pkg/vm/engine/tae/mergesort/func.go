@@ -33,7 +33,9 @@ func SortBlockColumns(
 	sort.Sort(false, false, true, sortedIdx, pkCol.GetDownstreamVector())
 
 	for i := 0; i < len(cols); i++ {
-		err := cols[i].GetDownstreamVector().Shuffle(sortedIdx, pool.GetMPool())
+		// The columns are shuffled in place, through their own pool.
+		vec := cols[i].GetDownstreamVector()
+		err := vec.Shuffle(sortedIdx, vec.MPool())
 		if err != nil {
 			return nil, err
 		}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -285,7 +286,28 @@ func newOpOperatorIntegerIn[T constraints.Integer]() *opOperatorIntegerIn[T] {
 	return new(opOperatorIntegerIn[T])
 }
 
-func (op *opOperatorIntegerIn[T]) initBitmap(tuple *vector.Vector) bool {
+// free releases the bitmap; it is the overload's free hook.
+func (op *opOperatorIntegerIn[T]) free() error {
+	if op.bits != nil {
+		op.bits.Free()
+		op.bits = nil
+	}
+	return nil
+}
+
+// newIntegerInWithFree registers op's IN or NOT IN with its free hook.
+func newIntegerInWithFree[T constraints.Integer](negate bool) (
+	executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload, executeRetainedBytesOfOverload,
+) {
+	op := newOpOperatorIntegerIn[T]()
+	if negate {
+		return op.operatorNotIn, nil, op.free, nil
+	}
+	return op.operatorIn, nil, op.free, nil
+}
+
+// initBitmap builds the bitmap from mp, or reports false to use the map.
+func (op *opOperatorIntegerIn[T]) initBitmap(tuple *vector.Vector, mp *mpool.MPool) bool {
 	const maxBitmapBits = 64 * 1024 * 8
 	if tuple.IsConst() || tuple.Length() < 16 || !tuple.GetSorted() || tuple.GetNulls().Any() {
 		return false
@@ -299,9 +321,13 @@ func (op *opOperatorIntegerIn[T]) initBitmap(tuple *vector.Vector) bool {
 	if span >= maxBitmapBits || span/64 >= uint64(len(values)) {
 		return false
 	}
+	bits := new(bitmap.Bitmap)
+	if bits.InitWithSize(int64(span)+1, mp) != nil {
+		// Without the bitmap the operator falls back to the map.
+		return false
+	}
 	op.lower = lower
-	op.bits = new(bitmap.Bitmap)
-	op.bits.InitWithSize(int64(span) + 1)
+	op.bits = bits
 	for _, v := range values {
 		op.bits.Add(uint64(v) - lower)
 	}
@@ -310,15 +336,15 @@ func (op *opOperatorIntegerIn[T]) initBitmap(tuple *vector.Vector) bool {
 }
 
 func (op *opOperatorIntegerIn[T]) operatorIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.eval(parameters, result, length, false)
+	return op.eval(parameters, result, proc, length, false)
 }
 
 func (op *opOperatorIntegerIn[T]) operatorNotIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return op.eval(parameters, result, length, true)
+	return op.eval(parameters, result, proc, length, true)
 }
 
-func (op *opOperatorIntegerIn[T]) eval(parameters []*vector.Vector, result vector.FunctionResultWrapper, length int, negate bool) error {
-	if !op.ready && !op.initBitmap(parameters[1]) {
+func (op *opOperatorIntegerIn[T]) eval(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, negate bool) error {
+	if !op.ready && !op.initBitmap(parameters[1], proc.Mp()) {
 		op.init(parameters[1])
 	}
 	probe := parameters[0]
@@ -326,32 +352,6 @@ func (op *opOperatorIntegerIn[T]) eval(parameters []*vector.Vector, result vecto
 	resultNulls := rs.GetNulls()
 	if probe.IsConstNull() {
 		resultNulls.AddRange(0, uint64(length))
-		return nil
-	}
-	if probe.IsDictionary() {
-		view := vector.ResolveFixedReadView[T](probe)
-		output := vector.MustFixedColWithTypeCheck[bool](rs)[:length]
-		for i := range output {
-			if view.AllNull || view.Nulls.Contains(uint64(i)) {
-				resultNulls.Add(uint64(i))
-				continue
-			}
-			physical := int(view.Selection[i])
-			if view.Constant {
-				physical = 0
-			}
-			value := view.Values[physical]
-			var found bool
-			if op.bits != nil {
-				found = op.bits.Contains(uint64(value) - op.lower)
-			} else {
-				_, found = op.mp[value]
-			}
-			output[i] = found != negate
-			if !found && op.hasNull {
-				resultNulls.Add(uint64(i))
-			}
-		}
 		return nil
 	}
 	values := vector.MustFixedColWithTypeCheck[T](probe)

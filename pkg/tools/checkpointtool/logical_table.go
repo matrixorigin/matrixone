@@ -433,10 +433,11 @@ func (r *CheckpointReader) filterTombstonesForObject(
 	if r.filterTombstonesForTest != nil {
 		return r.filterTombstonesForTest(objectID, tombstoneStats)
 	}
-	selection, err := objectioutil.FindTombstonesOfObject(ctx, objectID, tombstoneStats, r.fs)
+	selection, err := objectioutil.FindTombstonesOfObject(ctx, objectID, tombstoneStats, r.fs, r.mp)
 	if err != nil {
 		return nil, err
 	}
+	defer selection.Free()
 	relevant := make([]objectio.ObjectStats, 0, selection.Count())
 	iter := selection.Iterator()
 	for iter.HasNext() {

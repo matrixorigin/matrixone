@@ -86,7 +86,7 @@ func TestCountDistinctArgumentDrainCommitAndRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{2, 6},
 		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	restored.Free()
 	require.Equal(t, baseline, mp.CurrNB())
 }
@@ -129,7 +129,7 @@ func TestCountDistinctArgumentDrainUsesCanonicalMembershipKey(t *testing.T) {
 	result, err := spill.Flush()
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -139,7 +139,7 @@ func TestCountDistinctArgumentDrainKeepsRepresentative(t *testing.T) {
 	require.NoError(t, err)
 	raw, err := types.EncodeJson(json)
 	require.NoError(t, err)
-	values := vector.NewVec(types.T_json.ToType())
+	values := vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, raw, false, mp))
 
 	exec := newCountColumnExec(
@@ -172,7 +172,7 @@ func TestCountDistinctLegacyKeepsNonFloatRepresentative(t *testing.T) {
 	require.NoError(t, err)
 	raw, err := types.EncodeJson(json)
 	require.NoError(t, err)
-	values := vector.NewVec(types.T_json.ToType())
+	values := vector.NewVec(types.T_json.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(values, raw, false, mp))
 
 	exec := newCountColumnExec(
@@ -264,7 +264,7 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{1},
 			vector.MustFixedColNoTypeCheck[int64](result[0]))
-		result[0].Free(mp)
+		result[0].Free(result[0].MPool())
 		freeOne()
 		target.Free()
 
@@ -275,7 +275,7 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{1},
 			vector.MustFixedColNoTypeCheck[int64](headerlessResult[0]))
-		headerlessResult[0].Free(mp)
+		headerlessResult[0].Free(headerlessResult[0].MPool())
 		headerlessTarget.Free()
 	})
 
@@ -414,7 +414,7 @@ func TestCountDistinctStateRestoresFloatEquivalencePeers(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []int64{2},
 				vector.MustFixedColNoTypeCheck[int64](result[0]))
-			result[0].Free(mp)
+			result[0].Free(result[0].MPool())
 			exec.Free()
 			require.Zero(t, mp.CurrNB())
 		})
@@ -450,7 +450,7 @@ func TestCountDistinctStateRestoresLegacyRawOpaqueKeys(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -488,7 +488,7 @@ func TestCountDistinctStateRestoresLegacyRawTupleKeys(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -512,7 +512,7 @@ func TestCountDistinctLegacyPayloadCannotMimicCanonicalWireFrame(t *testing.T) {
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, []int64{2}, vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	exec.Free()
 }
 
@@ -555,7 +555,7 @@ func TestCountDistinctArgumentDrainAbortKeepsResidentOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{2},
 		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	spill.Free()
 	require.Equal(t, baseline, mp.CurrNB())
 }
@@ -570,8 +570,7 @@ func TestCountDistinctDrainCommitFailureKeepsResidentOwner(t *testing.T) {
 		account,
 		mpool.AllocationOwnerGroup,
 		AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3,
-			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		},
 	)
 	require.NoError(t, err)
@@ -603,7 +602,7 @@ func TestCountDistinctDrainCommitFailureKeepsResidentOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{1},
 		vector.MustFixedColNoTypeCheck[int64](result[0]))
-	result[0].Free(mp)
+	result[0].Free(result[0].MPool())
 	input.Free(mp)
 	spill.Free()
 	require.NoError(t, spill.ClearAllocationAccount(allocation))

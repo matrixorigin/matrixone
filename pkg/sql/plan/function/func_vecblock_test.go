@@ -120,7 +120,7 @@ func vecBlockProc(t *testing.T) *process.Process {
 
 // vecBlockVector is an empty vector of typ, freed when the test ends.
 func vecBlockVector(t *testing.T, proc *process.Process, typ types.Type) *vector.Vector {
-	vec := vector.NewVec(typ)
+	vec := vector.NewVec(typ, proc.Mp())
 	t.Cleanup(func() { vec.Free(proc.Mp()) })
 	return vec
 }

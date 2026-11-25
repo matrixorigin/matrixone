@@ -50,7 +50,7 @@ func (s *currentAccountState) start(tf *TableFunction, proc *process.Process, nt
 	//-------------------------------------------------------
 
 	if s.batch == nil {
-		s.batch = tf.createResultBatch()
+		s.batch = tf.createResultBatch(proc.Mp())
 		for i, attr := range tf.Attrs {
 			switch attr {
 			case "account_name":

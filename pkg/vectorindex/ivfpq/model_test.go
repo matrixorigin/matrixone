@@ -82,10 +82,10 @@ func generateTestData(nVectors, dim int) []float32 {
 
 func makeMetaBatch(proc *process.Process, id, checksum string, timestamp, filesize int64) *batch.Batch {
 	bat := batch.NewWithSize(4)
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0)) // checksum
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
-	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))       // filesize
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0), proc.Mp())   // index_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0), proc.Mp()) // checksum
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())       // timestamp
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0), proc.Mp())       // filesize
 
 	vector.AppendBytes(bat.Vecs[0], []byte(id), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte(checksum), false, proc.Mp())

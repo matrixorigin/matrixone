@@ -318,7 +318,11 @@ func TestWithdrawViewMetadataAdmissionFailureIsNotCleanHandoff(t *testing.T) {
 			logger:                          zap.NewNop(),
 			viewMetadataAdmissionGeneration: 8,
 		}
-		require.ErrorIs(t, s.withdrawViewMetadataAdmission(), context.DeadlineExceeded)
+		err := s.withdrawViewMetadataAdmission()
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.True(t, IsOnlyViewMetadataWithdrawalTimeout(errors.Join(err)))
+		require.False(t, IsOnlyViewMetadataWithdrawalTimeout(errors.Join(err, errors.New("local teardown failed"))))
+		require.False(t, IsOnlyViewMetadataWithdrawalTimeout(context.DeadlineExceeded))
 	})
 }
 

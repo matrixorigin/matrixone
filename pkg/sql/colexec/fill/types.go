@@ -38,16 +38,16 @@ const (
 	// a disjoint range under the Fill owner.
 	fillAllocationSiteRetainedData mpool.AllocationSite = iota + 64
 	fillAllocationSiteRetainedArea
-	fillAllocationSiteRetainedNulls
-	fillAllocationSiteRetainedGrouping
+	_ // reserved: was fillAllocationSiteRetainedNulls
+	_ // reserved: was fillAllocationSiteRetainedGrouping
 	fillAllocationSiteExpressionData
 	fillAllocationSiteExpressionArea
-	fillAllocationSiteExpressionNulls
-	fillAllocationSiteExpressionGrouping
+	_ // reserved: was fillAllocationSiteExpressionNulls
+	_ // reserved: was fillAllocationSiteExpressionGrouping
 	fillAllocationSiteOutputData
 	fillAllocationSiteOutputArea
-	fillAllocationSiteOutputNulls
-	fillAllocationSiteOutputGrouping
+	_ // reserved: was fillAllocationSiteOutputNulls
+	_ // reserved: was fillAllocationSiteOutputGrouping
 	fillAllocationSiteCoordinates
 	fillAllocationSitePartitionSnapshot
 	fillAllocationSiteSpillWriteBuffer
@@ -97,10 +97,13 @@ type container struct {
 	spillThreshold int64
 	spill          *fillSpill
 
-	allocationAccount    *mpool.AllocationAccount
-	retainedAllocation   *vector.AllocationAccountSelection
-	expressionAllocation *vector.AllocationAccountSelection
-	outputAllocation     *vector.AllocationAccountSelection
+	allocationAccount *mpool.AllocationAccount
+	// Accounted views of allocationViewPool, built on first use because the
+	// account is bound before the operator knows its process pool.
+	allocationViewPool   *mpool.MPool
+	retainedAllocation   *mpool.MPool
+	expressionAllocation *mpool.MPool
+	outputAllocation     *mpool.MPool
 	spillAllocation      *spillutil.SpillAllocationAccount
 	budget               *process.ExecutionResourceGeneration
 	// next: per fill-column list of NULL rows still waiting for a following
@@ -233,39 +236,6 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		len(ctr.linSeed) != 0 || len(ctr.linEntry) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	retained, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerFill,
-		fillAllocationSiteRetainedData,
-		fillAllocationSiteRetainedArea,
-		fillAllocationSiteRetainedNulls,
-		fillAllocationSiteRetainedGrouping,
-	)
-	if err != nil {
-		return err
-	}
-	expression, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerFill,
-		fillAllocationSiteExpressionData,
-		fillAllocationSiteExpressionArea,
-		fillAllocationSiteExpressionNulls,
-		fillAllocationSiteExpressionGrouping,
-	)
-	if err != nil {
-		return err
-	}
-	output, err := vector.NewAllocationAccountSelection(
-		account,
-		mpool.AllocationOwnerFill,
-		fillAllocationSiteOutputData,
-		fillAllocationSiteOutputArea,
-		fillAllocationSiteOutputNulls,
-		fillAllocationSiteOutputGrouping,
-	)
-	if err != nil {
-		return err
-	}
 	spill, err := spillutil.NewSpillAllocationAccount(
 		account,
 		mpool.AllocationOwnerFill,
@@ -274,11 +244,81 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		return err
 	}
 	ctr.allocationAccount = account
-	ctr.retainedAllocation = retained
-	ctr.expressionAllocation = expression
-	ctr.outputAllocation = output
+	ctr.allocationViewPool = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.outputAllocation = nil
 	ctr.spillAllocation = spill
 	return nil
+}
+
+// allocationViews builds the accounted views of mp the bound account charges
+// through. It is a no-op when no account is bound or the views already view mp.
+func (ctr *container) allocationViews(mp *mpool.MPool) error {
+	if ctr.allocationAccount == nil || mp == nil ||
+		(ctr.allocationViewPool == mp && ctr.retainedAllocation != nil) {
+		return nil
+	}
+	var views [3]*mpool.MPool
+	for i, site := range []mpool.AllocationSite{
+		fillAllocationSiteRetainedData,
+		fillAllocationSiteExpressionData,
+		fillAllocationSiteOutputData,
+	} {
+		view, err := mp.WithAccount(
+			ctr.allocationAccount,
+			mpool.AllocationOwnerFill,
+			site,
+			mpool.AllocationCapacityClassDefault,
+		)
+		if err != nil {
+			return err
+		}
+		views[i] = view
+	}
+	ctr.allocationViewPool = mp
+	ctr.retainedAllocation = views[0]
+	ctr.expressionAllocation = views[1]
+	ctr.outputAllocation = views[2]
+	return nil
+}
+
+// retainedMP returns the pool retained fill state (pending batches, endpoint
+// and snapshot vectors) allocates from.
+func (ctr *container) retainedMP(proc *process.Process) (*mpool.MPool, error) {
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
+	return orMP(ctr.retainedAllocation, proc), nil
+}
+
+// outputMP returns the pool the output batch allocates from.
+func (ctr *container) outputMP(proc *process.Process) (*mpool.MPool, error) {
+	if err := ctr.allocationViews(proc.Mp()); err != nil {
+		return nil, err
+	}
+	return orMP(ctr.outputAllocation, proc), nil
+}
+
+// decodedMP returns the pool spill records decode into.
+func (ctr *container) decodedMP(proc *process.Process) (*mpool.MPool, error) {
+	if ctr.spillAllocation == nil {
+		return proc.Mp(), nil
+	}
+	return ctr.spillAllocation.DecodedMP(proc.Mp())
+}
+
+// retainedPool is the pool retained endpoint state (prevVecs, linSeed,
+// linEntry, linearLeft) is created with.
+func (ctr *container) retainedPool(proc *process.Process) *mpool.MPool {
+	return orMP(ctr.retainedAllocation, proc)
+}
+
+func orMP(view *mpool.MPool, proc *process.Process) *mpool.MPool {
+	if view != nil {
+		return view
+	}
+	return proc.Mp()
 }
 
 func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) error {
@@ -298,6 +338,7 @@ func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) e
 	ctr.prevPart.free()
 	ctr.linEntryPart.free()
 	ctr.allocationAccount = nil
+	ctr.allocationViewPool = nil
 	ctr.retainedAllocation = nil
 	ctr.expressionAllocation = nil
 	ctr.outputAllocation = nil
@@ -323,10 +364,10 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &fill.ctr
 	ctr.cleanupSpill(proc)
 	if ctr.allocationAccount != nil {
-		ctr.freeVectors(proc.Mp())
+		ctr.freeVectors(ctr.retainedPool(proc))
 	} else {
-		ctr.clearLinearSeeds(proc.Mp())
-		ctr.clearLinearEntries(proc.Mp())
+		ctr.clearLinearSeeds(ctr.retainedPool(proc))
+		ctr.clearLinearEntries(ctr.retainedPool(proc))
 	}
 	ctr.resetCtrParma(proc.Mp())
 	if ctr.allocationAccount != nil {
@@ -336,17 +377,15 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 		ctr.resetExes()
 	}
 	if ctr.buf != nil {
-		if ctr.buf.HasAllocationAccount() {
-			ctr.buf.Clean(proc.Mp())
+		if ctr.allocationAccount != nil {
+			cleanOwnedBatch(ctr.buf)
 			ctr.buf = nil
 		} else {
 			ctr.buf.CleanOnlyData()
 		}
 	}
 	for _, b := range ctr.bats {
-		if b != nil {
-			b.Clean(proc.GetMPool())
-		}
+		cleanOwnedBatch(b)
 	}
 	clear(ctr.bats)
 	if ctr.allocationAccount != nil {
@@ -356,7 +395,7 @@ func (fill *Fill) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	}
 	// toFree was popped out of bats, so the loop above does not cover it.
 	if ctr.toFree != nil {
-		ctr.toFree.Clean(proc.GetMPool())
+		cleanOwnedBatch(ctr.toFree)
 		ctr.toFree = nil
 	}
 
@@ -379,7 +418,7 @@ func (fill *Fill) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.valVecs = nil
-	ctr.freeVectors(proc.Mp())
+	ctr.freeVectors(ctr.retainedPool(proc))
 	ctr.freeCoordRuns(proc.Mp())
 	ctr.prevPart.free()
 	ctr.linEntryPart.free()
@@ -397,23 +436,37 @@ func (fill *Fill) ExecProjection(proc *process.Process, input *batch.Batch) (*ba
 	return batch, err
 }
 
-func (ctr *container) freeBatch(mp *mpool.MPool) {
+// freeBatch frees the retained, pending and output batches. Their vectors
+// come from different pools (proc's pool, the retained, expression and
+// output views, decoded spill views), so each is freed with its own pool.
+func (ctr *container) freeBatch(_ *mpool.MPool) {
 	for _, b := range ctr.bats {
-		if b != nil {
-			b.Clean(mp)
-		}
+		cleanOwnedBatch(b)
 	}
 	ctr.bats = nil
-	if ctr.toFree != nil {
-		ctr.toFree.Clean(mp)
-		ctr.toFree = nil
-	}
-	if ctr.buf != nil {
-		ctr.buf.Clean(mp)
-		ctr.buf = nil
-	}
+	cleanOwnedBatch(ctr.toFree)
+	ctr.toFree = nil
+	cleanOwnedBatch(ctr.buf)
+	ctr.buf = nil
 }
 
+// cleanOwnedBatch frees an operator-owned batch, each vector with the pool
+// it was created with.
+func cleanOwnedBatch(bat *batch.Batch) {
+	if bat == nil {
+		return
+	}
+	for i, vec := range bat.Vecs {
+		if vec != nil {
+			vec.Free(vec.MPool())
+			bat.Vecs[i] = nil
+		}
+	}
+	bat.Clean(nil)
+}
+
+// freeVectors frees the saved endpoint state. mp is the retained pool
+// (retainedPool), which makeEndpoint creates every endpoint with.
 func (ctr *container) freeVectors(mp *mpool.MPool) {
 	for _, vec := range ctr.prevVecs {
 		if vec != nil {

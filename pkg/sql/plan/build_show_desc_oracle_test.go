@@ -129,7 +129,7 @@ func descKeptByFilterPattern(t *testing.T, proc *process.Process, p *Plan, patte
 	require.Len(t, replacements, 1, "the DESCRIBE LIKE predicate filters a single authoritative name column")
 	bound = replaceColumnsForExpr(bound, replacements)
 	in := batch.NewWithSize(1)
-	in.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	in.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 	defer in.Vecs[0].Free(proc.Mp())
 	for _, f := range fields {
 		require.NoError(t, vector.AppendBytes(in.Vecs[0], []byte(f), false, proc.Mp()))
@@ -283,6 +283,7 @@ type descViewProviderRecorder struct {
 	events                []string
 	querying              *SubscriptionMeta
 	childBoundAccounts    []uint32
+	childPersistentScopes []bool
 	childBoundSubs        int
 }
 
@@ -316,6 +317,7 @@ type descViewProviderChild struct {
 func (c *descViewProviderChild) SetContext(ctx context.Context) {
 	if id, acctErr := defines.GetAccountId(ctx); acctErr == nil {
 		c.rec.childBoundAccounts = append(c.rec.childBoundAccounts, id)
+		c.rec.childPersistentScopes = append(c.rec.childPersistentScopes, defines.IsPersistentViewBinding(ctx))
 	}
 	c.rec.events = append(c.rec.events, "bind-account")
 	c.MockCompilerContext.SetContext(ctx)
@@ -365,7 +367,7 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		rec := &descViewProviderRecorder{MockCompilerContext: mock.ctxt}
 		return mock, rec
 	}
-	fullEventOrder := []string{"parent-bind", "bind-account", "bind-sub", "cleanup", "parent-restore"}
+	fullEventOrder := []string{"parent-bind", "bind-account", "bind-sub", "bind-account", "bind-account", "cleanup", "parent-restore"}
 
 	t.Run("success binds publisher then cleans up", func(t *testing.T) {
 		_, rec := newRecorder(t)
@@ -381,8 +383,9 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		require.False(t, queryContainsStringLiteral(got.GetQuery(), "LiveName"))
 		require.Equal(t, 1, rec.openCount, "one authoritative description per build")
 		require.Equal(t, 1, rec.closeCount, "the child description binding closes exactly once")
-		require.Equal(t, []uint32{17}, rec.childBoundAccounts,
-			"publisher account attaches before the live description")
+		require.Equal(t, []uint32{17, 17, 17}, rec.childBoundAccounts,
+			"publisher account is preserved while entering and leaving the stored body")
+		require.Equal(t, []bool{false, true, false}, rec.childPersistentScopes)
 		require.Equal(t, 1, rec.childBoundSubs,
 			"publisher subscription attaches before the live description")
 		require.Equal(t, fullEventOrder, rec.events)
@@ -403,7 +406,8 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		require.Equal(t, []uint32{17}, rec.childBoundAccounts,
 			"publisher binding precedes the failed description")
 		require.Equal(t, 1, rec.childBoundSubs)
-		require.Equal(t, fullEventOrder, rec.events,
+		require.Equal(t, []bool{false}, rec.childPersistentScopes, "parse failure never enters the stored body")
+		require.Equal(t, []string{"parent-bind", "bind-account", "bind-sub", "cleanup", "parent-restore"}, rec.events,
 			"caller subscription is restored on the description failure path")
 		require.Nil(t, rec.querying)
 		require.Nil(t, sc.Like, "the saved AST stays original after the failed description")
@@ -421,7 +425,8 @@ func TestDescColNameSubscriptionViewBindsPublisherAndRestoresContext(t *testing.
 		require.Equal(t, 1, rec.openCount)
 		require.Equal(t, 1, rec.closeCount,
 			"the successful child description closes exactly once before the binding failure")
-		require.Equal(t, []uint32{17}, rec.childBoundAccounts)
+		require.Equal(t, []uint32{17, 17, 17}, rec.childBoundAccounts)
+		require.Equal(t, []bool{false, true, false}, rec.childPersistentScopes)
 		require.Equal(t, 1, rec.childBoundSubs)
 		require.Equal(t, fullEventOrder, rec.events,
 			"caller subscription is restored after the rewritten-sql failure")

@@ -23,5 +23,11 @@ import "C"
 // The external test wrapper owns that link closure for its transitive caller.
 func BitmapCount(value uint64) uint64 {
 	word := C.uint64_t(value)
-	return uint64(C.Bitmap_Count(&word, 64))
+	count := uint64(0)
+	for pos := C.uint64_t(0); pos < 64; pos++ {
+		if C.Bitmap_Contains(&word, pos) {
+			count++
+		}
+	}
+	return count
 }

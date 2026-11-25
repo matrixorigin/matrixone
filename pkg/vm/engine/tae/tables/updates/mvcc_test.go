@@ -201,7 +201,7 @@ func TestGetVisibleRow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(3), selection.MaxRow)
 	assert.True(t, visible)
-	assert.Equal(t, 1, selection.Holes.GetCardinality())
+	assert.Equal(t, 1, selection.Holes.Count())
 	assert.True(t, selection.Holes.Contains(1))
 
 	// ts=5 maxrow=3, holes={}
@@ -312,7 +312,7 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.Equal(t, uint32(0), selection.MinRow)
 	assert.Equal(t, uint32(30), selection.MaxRow)
 	require.NotNil(t, selection.Holes)
-	assert.Equal(t, 10, selection.Holes.GetCardinality())
+	assert.Equal(t, 10, selection.Holes.Count())
 	assert.True(t, selection.Holes.Contains(10))
 	assert.True(t, selection.Holes.Contains(19))
 	assert.False(t, selection.Holes.Contains(9))

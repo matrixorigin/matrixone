@@ -435,7 +435,7 @@ func GetObjectListWithoutSession(
 	}
 
 	// Create object list batch
-	bat := logtailreplay.CreateObjectListBatch()
+	bat := logtailreplay.CreateObjectListBatch(mp)
 
 	// If dbname is specified, collect for that specific database
 	if len(dbname) > 0 {

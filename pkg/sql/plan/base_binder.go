@@ -572,11 +572,11 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			state := preparedBindingState(b.GetContext())
 			if state != nil && astExpr.Offset > 0 && astExpr.Offset <= len(state.values) {
 				value := state.values[astExpr.Offset-1]
-				if source, ok := value.(ParamValue); ok {
+				if source, ok := AsParamValue(value); ok {
 					value = source.Value
 				}
 				if value == nil {
-					source, _ := state.values[astExpr.Offset-1].(ParamValue)
+					source, _ := AsParamValue(state.values[astExpr.Offset-1])
 					if !source.IsBinaryProtocol {
 						// SQL user-variable NULL has a TEXT source for FIELD and
 						// for a bare visible projection.
@@ -1216,6 +1216,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	zeroScalarSourceSafe := !astExpr.Exists && zeroLimitScalarSourceSafe(astExpr.Select, subCtx)
+	udfResolutionCount := b.builder.udfResolutionCount
+	udfExpansionDepth := b.builder.udfExpansionDepth
 	b.builder.nextExistentialBlock++
 	subCtx.existentialBlock = b.builder.nextExistentialBlock
 	subCtx.subqueryNestingDepth = b.ctx.subqueryNestingDepth + 1
@@ -1238,6 +1241,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	var nodeID int32
 	var err error
+	zeroScalarGeneration := b.builder.zeroScalarRewriteGeneration
+	zeroScalarRetention := b.builder.zeroScalarRetentionGeneration
+	zeroScalarValidationSpecial := b.builder.zeroScalarValidationSpecialGeneration
 	switch subquery := astExpr.Select.(type) {
 	case *tree.ParenSelect:
 		nodeID, err = b.builder.bindSelect(subquery.Select, subCtx, false)
@@ -1252,6 +1258,49 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
+	}
+	if b.builder.zeroScalarRewriteGeneration != zeroScalarGeneration ||
+		b.builder.zeroScalarRetentionGeneration != zeroScalarRetention {
+		if b.builder.zeroScalarValidationSpecialGeneration != zeroScalarValidationSpecial {
+			return nil, moerr.NewNYI(b.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+		}
+		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, []int32{nodeID})
+		if err != nil {
+			return nil, err
+		}
+		// A control function folded while binding an affected wrapper might
+		// already be missing from the sources checked by the frontend.
+		if zeroLimitScalarHasControlFunction(astExpr.Select) {
+			controlRetained := false
+			for source := range sources {
+				if NodeHasMoCtrl(b.builder.qry.Nodes[source]) {
+					controlRetained = true
+					break
+				}
+			}
+			if !controlRetained {
+				return nil, moerr.NewNYI(b.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+			}
+		}
+		if b.builder.zeroScalarPolicy == zeroScalarValidateOnly {
+			if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+				return nil, err
+			}
+		}
+		if len(sources) != 0 {
+			b.builder.zeroScalarArgumentWrappers = append(b.builder.zeroScalarArgumentWrappers, nodeID)
+		}
+	}
+	subCtx.zeroScalarRootSourceSafe = zeroScalarSourceSafe && udfExpansionDepth == 0 &&
+		b.builder.udfExpansionDepth == 0 && b.builder.udfResolutionCount == udfResolutionCount
+	if subCtx.zeroScalarRootSourceSafe {
+		// Bound scalar references can later be copied into SQL UDF arguments.
+		// Keep this summary sticky for the lifetime of the statement.
+		b.builder.hasZeroScalarSourceCandidate = true
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -3832,6 +3881,7 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 // name on the stored-function/UDF path. With IGNORE_SPACE disabled, MySQL does
 // not recognize that spelling as a native built-in call.
 func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	zeroScalarArgs := b.builder.beginZeroScalarArguments()
 	args := make([]*Expr, len(astArgs))
 	for i, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
@@ -3852,7 +3902,7 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 	if err != nil {
 		return nil, err
 	}
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarArgs)
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -4595,6 +4645,52 @@ func (b *baseBinder) coerceJSONNumericAggregateArg(
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	expr, err := b.bindFuncExprImplByAstExprInner(name, astArgs, depth)
+	if err == nil && name == "coalesce" && b.builder != nil && isMixedDomainCoalesce(expr) {
+		b.builder.mixedDomainCoalesce = true
+	}
+	return expr, err
+}
+
+func (b *baseBinder) bindFuncExprImplByAstExprInner(name string, astArgs []tree.Expr, depth int32) (boundExpr *plan.Expr, bindErr error) {
+	zeroScalarArgs := b.builder.beginZeroScalarArguments()
+	var requiredZeroScalarRoots map[int32]struct{}
+	builtinResult := false
+	defer func() {
+		if bindErr != nil || len(requiredZeroScalarRoots) == 0 {
+			return
+		}
+		missing := missingZeroScalarRoots(boundExpr, requiredZeroScalarRoots)
+		if len(missing) == 0 {
+			return
+		}
+		if !builtinResult || b.builder == nil || b.builder.zeroScalarPolicy == zeroScalarDisabled {
+			boundExpr = nil
+			bindErr = moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+			return
+		}
+		sources, err := collectUDFArgumentAuthorizationSources(b.builder, nil, missing)
+		if err == nil && len(sources) == 0 {
+			err = moerr.NewInternalError(b.GetContext(), "missing folded zero-limit scalar source")
+		}
+		if err == nil && b.builder.zeroScalarPolicy == zeroScalarValidateOnly {
+			// The validation owner collects ordinary bound sources itself.
+			// Special frontend checks require the original executable node.
+			err = b.builder.validateZeroScalarSpecialSources(sources)
+			if err == nil {
+				b.builder.zeroScalarRetentionGeneration++
+				return
+			}
+		}
+		if err == nil {
+			err = b.builder.retainZeroScalarAuthorizationSources(sources)
+		}
+		if err != nil {
+			boundExpr, bindErr = nil, err
+			return
+		}
+		b.builder.zeroScalarRetentionGeneration++
+	}()
 	previousFieldContext := b.preparedFieldArgumentContext
 	b.preparedFieldArgumentContext = previousFieldContext || name == "field"
 	defer func() { b.preparedFieldArgumentContext = previousFieldContext }()
@@ -4778,6 +4874,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
+			if conditionalValueIndexes(name, len(astArgs)) != nil && isBinaryLiteralAst(arg) {
+				// A binary literal branch keeps its own COERCIBLE identity, so
+				// collation aggregation decides the conditional's string domain
+				// instead of the destination column type of a DEFAULT.
+				b.suppressDefaultValueBindType = true
+			}
 			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
 				// SECOND consumes the source decimal value before integer coercion.
 				b.suppressDefaultValueBindType = true
@@ -4789,7 +4891,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
-			} else if function.IntegerArgumentSourceDependent(name, idx) {
+			} else if function.IntegerArgumentSourceDependent(name, idx) &&
+				!function.IntegerArgumentKeepsOperandBinding(name, idx) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				if function.IntegerArgumentUsesBitSources(name, idx) {
@@ -4837,6 +4940,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	requiredZeroScalarRoots = zeroScalarSubqueryRoots(b.builder, args)
 	if name == "coalesce" && b.builder != nil && b.builder.isPrepareStatement &&
 		preparedSourceBindings(b.GetContext()) == nil {
 		var err error
@@ -5080,11 +5184,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			if peer.IsInteger() && pos >= 0 && int(pos) < len(state.values) {
 				state.valueDependent = true
 				value := state.values[pos]
-				if param, ok := value.(ParamValue); ok {
+				if param, ok := AsParamValue(value); ok {
 					value = param.Value
-					if param.MaterializedValue != "" {
-						value = param.MaterializedValue
-					}
 				}
 				if str, ok := value.(string); ok {
 					str = strings.TrimSpace(str)
@@ -5221,6 +5322,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					}
 				}
 			}
+			builtinResult = true
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5254,6 +5356,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					return nil, err
 				}
 			}
+			builtinResult = true
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5283,8 +5386,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if err != nil {
 		return nil, err
 	}
+	requiredZeroScalarRoots = nil // The UDF binder owns argument retention.
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth, zeroScalarArgs)
+}
 
-	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+func (builder *QueryBuilder) validateZeroScalarSpecialSources(sources map[int32]struct{}) error {
+	for id := range sources {
+		if zeroScalarNodeLiveRequirements(builder.qry.Nodes[id]) != 0 {
+			return moerr.NewNYI(builder.GetContext(), "special source in correlated scalar LIMIT 0 wrapper")
+		}
+	}
+	return nil
 }
 
 func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.Udf, error) {
@@ -5299,6 +5411,106 @@ func (b *baseBinder) resolveIndexViewUdf(name string, args []*Expr) (*function.U
 		}
 	}
 	return compiler.ResolveUdf(name, args)
+}
+
+func zeroScalarSubqueryRoots(builder *QueryBuilder, args []*plan.Expr) map[int32]struct{} {
+	if builder == nil || !builder.hasZeroScalarSourceCandidate || len(args) == 0 {
+		return nil
+	}
+	var roots map[int32]struct{}
+	for _, arg := range args {
+		_ = visitExecutablePlanExprTree(arg, func(expr *plan.Expr) error {
+			sub := expr.GetSub()
+			if sub == nil || sub.Typ != plan.SubqueryRef_SCALAR || sub.Child != nil ||
+				sub.NodeId < 0 || int(sub.NodeId) >= len(builder.ctxByNode) {
+				return nil
+			}
+			ctx := builder.ctxByNode[sub.NodeId]
+			if ctx != nil && ctx.zeroScalarRootSourceSafe && builder.scalarRootZeroNeedsDependent(sub) {
+				if roots == nil {
+					roots = make(map[int32]struct{})
+				}
+				roots[sub.NodeId] = struct{}{}
+			}
+			return nil
+		})
+	}
+	return roots
+}
+
+func exprRetainsZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) bool {
+	return len(missingZeroScalarRoots(expr, required)) == 0
+}
+
+func missingZeroScalarRoots(expr *plan.Expr, required map[int32]struct{}) []int32 {
+	if len(required) == 0 {
+		return nil
+	}
+	retained := make(map[int32]struct{}, len(required))
+	_ = visitExecutablePlanExprTree(expr, func(candidate *plan.Expr) error {
+		if sub := candidate.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+			if _, ok := required[sub.NodeId]; ok {
+				retained[sub.NodeId] = struct{}{}
+			}
+		}
+		return nil
+	})
+	var missing []int32
+	for root := range required {
+		if _, ok := retained[root]; !ok {
+			missing = append(missing, root)
+		}
+	}
+	return missing
+}
+
+func visitExecutablePlanExprTree(root *plan.Expr, visit func(*plan.Expr) error) error {
+	var local [16]*plan.Expr
+	pending := append(local[:0], root)
+	for len(pending) > 0 {
+		expr := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if expr == nil {
+			continue
+		}
+		if err := visit(expr); err != nil {
+			return err
+		}
+		if dependent := expr.GetDependent(); dependent != nil {
+			pending = append(pending, dependent.Comparison)
+			for i := len(dependent.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, dependent.Lhs[i])
+			}
+			for i := len(dependent.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, dependent.Inputs[i])
+			}
+		}
+		if window := expr.GetW(); window != nil {
+			for i := len(window.OrderBy) - 1; i >= 0; i-- {
+				if window.OrderBy[i] != nil {
+					pending = append(pending, window.OrderBy[i].Expr)
+				}
+			}
+			for i := len(window.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, window.PartitionBy[i])
+			}
+			pending = append(pending, window.WindowFunc)
+		}
+		if sub := expr.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := expr.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+	}
+	return nil
 }
 
 func applyIfNullCommonValueContract(expr *plan.Expr, args []*plan.Expr) {
@@ -5610,6 +5822,289 @@ func (e *UdfDisallowedInPublicationViewBinding) Error() string {
 		"user-defined function '%s' cannot bind in publication view binding", e.Name)
 }
 
+// isUDFArgumentAuthorizationSource mirrors the sources authenticated by the
+// frontend for SELECT statements. View references are tracked separately on
+// Query.ViewReferences and remain pinned when SQL UDF bodies are expanded.
+func isUDFArgumentAuthorizationSource(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	if node.NotCacheable || zeroScalarSavedResultRequirements(node) != 0 {
+		return true
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		return true
+	case plan.Node_EXTERNAL_SCAN:
+		return IsExternalScanRequiringSelectPrivilege(node)
+	case plan.Node_FUNCTION_SCAN:
+		tableDef := node.GetTableDef()
+		return tableDef != nil && tableDef.GetTblFunc() != nil &&
+			tableDef.GetTblFunc().GetName() == "table_changes"
+	default:
+		return false
+	}
+}
+
+// Saved results and control functions have frontend checks that require the
+// original node and its bound expressions, rather than a table carrier.
+func zeroScalarNodeLiveRequirements(node *plan.Node) zeroScalarLiveRequirement {
+	if node == nil {
+		return 0
+	}
+	required := zeroScalarSavedResultRequirements(node)
+	if NodeHasMoCtrl(node) {
+		required |= zeroScalarLiveControl
+	}
+	return required
+}
+
+func zeroScalarSavedResultRequirements(node *plan.Node) zeroScalarLiveRequirement {
+	if node == nil {
+		return 0
+	}
+	tableDef := node.GetTableDef()
+	if node.NodeType == plan.Node_EXTERNAL_SCAN && tableDef != nil && tableDef.GetTableType() == "query_result" ||
+		node.NodeType == plan.Node_FUNCTION_SCAN && tableDef != nil && tableDef.GetTblFunc() != nil && tableDef.GetTblFunc().GetName() == "meta_scan" {
+		return zeroScalarLiveSavedResult
+	}
+	return 0
+}
+
+func isMoCtrlFunctionExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc() == nil {
+		return false
+	}
+	return fn.GetFunc().GetObjName() == "mo_ctl" || fn.GetFunc().GetObjName() == "fault_inject"
+}
+
+// collectUDFArgumentAuthorizationSources follows bound subquery and dependent-
+// program roots to their privilege-bearing sources. It is used only when
+// binding an argument applied the correlated root LIMIT 0 rewrite.
+func collectUDFArgumentAuthorizationSources(
+	builder *QueryBuilder,
+	exprs []*plan.Expr,
+	roots []int32,
+	observers ...func(*plan.Expr),
+) (map[int32]struct{}, error) {
+	if builder == nil || builder.qry == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing query for SQL UDF source validation")
+	}
+
+	pending := append([]int32(nil), roots...)
+	var visitNodeExpressions bool
+	var nodeHasControlCall bool
+	visitExpr := func(expr *plan.Expr) error {
+		return plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			if visitNodeExpressions && isMoCtrlFunctionExpr(e) {
+				nodeHasControlCall = true
+			}
+			for _, observe := range observers {
+				observe(e)
+			}
+			if sub := e.GetSub(); sub != nil {
+				pending = append(pending, sub.NodeId)
+			}
+			if dependent := e.GetDependent(); dependent != nil {
+				spec := builder.qry.Correlation
+				if spec == nil || dependent.ProgramId == 0 || int(dependent.ProgramId) > len(spec.Programs) {
+					return moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF dependent source")
+				}
+				program := spec.Programs[dependent.ProgramId-1]
+				if program == nil {
+					return moerr.NewInternalError(builder.GetContext(), "missing SQL UDF dependent program")
+				}
+				pending = append(pending, program.RootNode)
+			}
+			return nil
+		})
+	}
+	for _, expr := range exprs {
+		if err := visitExpr(expr); err != nil {
+			return nil, err
+		}
+	}
+
+	sources := make(map[int32]struct{})
+	visited := make(map[int32]struct{})
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF source node")
+		}
+		if _, ok := visited[id]; ok {
+			continue
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if isUDFArgumentAuthorizationSource(node) {
+			sources[id] = struct{}{}
+		}
+		pending = append(pending, node.Children...)
+		for _, step := range node.SourceStep {
+			if step < 0 || int(step) >= len(builder.qry.Steps) {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid SQL UDF source step")
+			}
+			pending = append(pending, builder.qry.Steps[step])
+		}
+		nodeHasControlCall = false
+		visitNodeExpressions = true
+		err := plan.VisitExpressionsInOwner(node, visitExpr)
+		visitNodeExpressions = false
+		if err != nil {
+			return nil, err
+		}
+		if nodeHasControlCall {
+			sources[id] = struct{}{}
+		}
+	}
+	return sources, nil
+}
+
+// udfArgumentNeedsZeroScalarRemap checks only the repeated argument's graph.
+func udfArgumentNeedsZeroScalarRemap(builder *QueryBuilder, arg *plan.Expr) (bool, error) {
+	found := false
+	_, err := collectUDFArgumentAuthorizationSources(builder, []*plan.Expr{arg}, nil, func(e *plan.Expr) {
+		if sub := e.GetSub(); sub != nil && builder.scalarRootZeroNeedsDependent(sub) {
+			found = true
+		}
+		if dependent := e.GetDependent(); dependent != nil {
+			_, marked := builder.zeroScalarPrograms[dependent.ProgramId]
+			found = found || marked
+		}
+	})
+	return found, err
+}
+
+func udfArgsContainCorrelatedRootZero(builder *QueryBuilder, args []*plan.Expr) bool {
+	if builder == nil {
+		return false
+	}
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		found := false
+		_ = plan.VisitExprTree(arg, func(expr *plan.Expr) error {
+			if sub := expr.GetSub(); sub != nil && builder.scalarRootZeroNeedsDependent(sub) {
+				found = true
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func validateUDFArgumentAuthorizationSources(
+	builder *QueryBuilder,
+	required map[int32]struct{},
+	result *plan.Expr,
+) error {
+	if builder == nil || builder.qry == nil {
+		return moerr.NewInternalErrorNoCtx("missing query for SQL UDF source validation")
+	}
+	if len(required) == 0 {
+		return moerr.NewNYI(builder.GetContext(), "SQL UDF with an untracked correlated scalar LIMIT 0 source")
+	}
+
+	bodySources, err := collectUDFArgumentAuthorizationSources(builder, []*plan.Expr{result}, nil)
+	if err != nil {
+		return err
+	}
+	missing := make(map[int32]struct{})
+	retainedByValidation := false
+	for source := range required {
+		if _, inBody := bodySources[source]; inBody {
+			continue
+		}
+		// Validation owners collect ordinary sources from the original bound
+		// nodes even when the UDF result no longer reaches them.
+		if builder.zeroScalarPolicy == zeroScalarValidateOnly &&
+			zeroScalarNodeLiveRequirements(builder.qry.Nodes[source]) == 0 {
+			retainedByValidation = true
+			continue
+		}
+		missing[source] = struct{}{}
+	}
+	if retainedByValidation {
+		// Notify enclosing wrappers and the named-window special-source check.
+		builder.zeroScalarRetentionGeneration++
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	// Only walk the retained statement plan when the returned expression
+	// itself does not retain every required authorization source.
+	retainedRoots := append([]int32(nil), builder.qry.Steps...)
+	if spec := builder.qry.Correlation; spec != nil {
+		for _, program := range spec.Programs {
+			if program == nil {
+				return moerr.NewInternalError(builder.GetContext(), "missing SQL UDF retained program")
+			}
+			retainedRoots = append(retainedRoots, program.RootNode)
+		}
+	}
+	retainedSources, err := collectUDFArgumentAuthorizationSources(builder, nil, retainedRoots)
+	if err != nil {
+		return err
+	}
+	for source := range missing {
+		if _, inPlan := retainedSources[source]; !inPlan {
+			if udfAuthorizationSourceHasRetainedCarrier(builder, source) {
+				continue
+			}
+			return moerr.NewNYI(builder.GetContext(), "SQL UDF with an unretained correlated scalar LIMIT 0 source")
+		}
+	}
+	return nil
+}
+
+func udfAuthorizationSourceHasRetainedCarrier(builder *QueryBuilder, source int32) bool {
+	if builder == nil || builder.qry == nil || source < 0 || int(source) >= len(builder.qry.Nodes) {
+		return false
+	}
+	expected := validationPrivilegeCarrier(builder.qry.Nodes[source])
+	if expected == nil {
+		return false
+	}
+	key := validationPrivilegeCarrierKey(expected)
+	if _, ok := builder.validationPrivilegeCarrierKeys[key]; ok {
+		return true
+	}
+	for _, carrier := range builder.validationPrivilegeCarriers {
+		if carrier != nil && validationPrivilegeCarrierKey(carrier) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// A call can prove provenance only from the work performed while binding its
+// own arguments. A folded wrapper may no longer appear in their bound trees.
+type zeroScalarArgumentScope struct {
+	rewriteGeneration uint64
+	argumentWrappers  int
+}
+
+func (builder *QueryBuilder) beginZeroScalarArguments() zeroScalarArgumentScope {
+	if builder == nil {
+		return zeroScalarArgumentScope{}
+	}
+	return zeroScalarArgumentScope{
+		rewriteGeneration: builder.zeroScalarRewriteGeneration,
+		argumentWrappers:  len(builder.zeroScalarArgumentWrappers),
+	}
+}
+
 func bindFuncExprImplUdf(
 	b *baseBinder,
 	name string,
@@ -5617,33 +6112,106 @@ func bindFuncExprImplUdf(
 	astArgs []tree.Expr,
 	boundArgs []*plan.Expr,
 	depth int32,
+	zeroScalarArgs zeroScalarArgumentScope,
 ) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
 	}
 	if defines.IsPublicationViewBinding(b.GetContext()) {
-		// The binder reached user-defined function binding for this call -
-		// builtin resolution by name, arity and argument types did not claim
-		// it, and this account's catalog row did. A subscriber resolves the
-		// same call in its own catalog, where the function may be missing or
-		// carry another body, so the metadata binding refuses it outright and
-		// the caller reports the stable publication error.
+		// A selected UDF is forbidden during publication-view validation,
+		// regardless of its arguments or any planner rewrite they trigger.
 		return nil, &UdfDisallowedInPublicationViewBinding{Name: name}
 	}
-
+	requiresUDFSourceValidation := b.builder != nil &&
+		(b.builder.zeroScalarRewriteGeneration != zeroScalarArgs.rewriteGeneration ||
+			len(b.builder.zeroScalarArgumentWrappers) != zeroScalarArgs.argumentWrappers ||
+			udfArgsContainCorrelatedRootZero(b.builder, boundArgs))
+	var requiredSources map[int32]struct{}
+	if requiresUDFSourceValidation {
+		if udf.Language != string(tree.SQL) {
+			return nil, moerr.NewNYI(b.GetContext(), "non-SQL UDF with a correlated scalar LIMIT 0 argument")
+		}
+		// Capture the original authorization dependencies before binding the
+		// SQL UDF body can mutate or discard the bound argument graph.
+		var err error
+		argumentWrappers := b.builder.zeroScalarArgumentWrappers[zeroScalarArgs.argumentWrappers:]
+		requiredSources, err = collectUDFArgumentAuthorizationSources(b.builder, boundArgs, argumentWrappers)
+		if err != nil {
+			return nil, err
+		}
+	}
+	requiredRoots := zeroScalarSubqueryRoots(b.builder, boundArgs)
+	validateBoundResult := func(expr *plan.Expr) (*plan.Expr, error) {
+		if (b.builder == nil || b.builder.zeroScalarPolicy == zeroScalarDisabled) &&
+			!exprRetainsZeroScalarRoots(expr, requiredRoots) {
+			return nil, moerr.NewNYI(b.GetContext(), "function with a correlated scalar LIMIT 0 argument may discard its table dependency")
+		}
+		if requiresUDFSourceValidation {
+			if err := validateUDFArgumentAuthorizationSources(b.builder, requiredSources, expr); err != nil {
+				return nil, err
+			}
+		}
+		return expr, nil
+	}
+	if b.builder != nil {
+		b.builder.udfResolutionCount++
+		b.builder.udfExpansionDepth++
+		defer func() { b.builder.udfExpansionDepth-- }()
+	}
 	switch udf.Language {
 	case string(tree.SQL):
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
-		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
+		guardRemap := requiresUDFSourceValidation || b.builder != nil && len(b.builder.zeroScalarPrograms) > 0
+		sql, udfArgs, err := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode, guardRemap)
+		if err != nil {
+			return nil, err
+		}
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
 		expressionBody := !strings.Contains(sql, "select")
+		if requiresUDFSourceValidation {
+			used := make(map[*plan.Expr]struct{}, len(udfArgs))
+			for _, arg := range udfArgs {
+				used[arg] = struct{}{}
+				if expressionBody {
+					continue
+				}
+				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, arg)
+				if err != nil {
+					return nil, err
+				}
+				if needsRemap {
+					return nil, moerr.NewNYI(b.GetContext(), "SQL UDF query body with a correlated scalar LIMIT 0 argument")
+				}
+			}
+			var unused []*plan.Expr
+			for _, arg := range boundArgs {
+				if _, ok := used[arg]; !ok {
+					unused = append(unused, arg)
+				}
+			}
+			if len(unused) != 0 && b.builder.zeroScalarPolicy != zeroScalarDisabled {
+				sources, err := collectUDFArgumentAuthorizationSources(b.builder, unused, nil)
+				if err != nil {
+					return nil, err
+				}
+				if err := b.builder.validateZeroScalarSpecialSources(sources); err != nil {
+					return nil, err
+				}
+				if err := b.builder.retainZeroScalarAuthorizationSources(sources); err != nil {
+					return nil, err
+				}
+				if len(sources) != 0 {
+					b.builder.zeroScalarRetentionGeneration++
+				}
+			}
+		}
 		if expressionBody {
 			sql = "select " + sql
 		}
@@ -5672,9 +6240,17 @@ func bindFuncExprImplUdf(
 			}
 		}
 		if expressionBody {
-			return b.impl.BindExpr(bodyExpr, depth, false)
+			expr, err := b.impl.BindExpr(bodyExpr, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			return validateBoundResult(expr)
 		}
-		return b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
+		expr, err := b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
+		if err != nil {
+			return nil, err
+		}
+		return validateBoundResult(expr)
 	case string(tree.PYTHON):
 		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
@@ -5693,9 +6269,9 @@ func bindFuncExprImplUdf(
 // name. Checking the entire body (including quotes and comments) is deliberately
 // conservative: absence from the raw text guarantees that no user-authored
 // identifier in the parsed tree can be captured by the marker.
-func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string) (string, map[string]*plan.Expr) {
+func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMode string, guardRemap bool) (string, map[string]*plan.Expr, error) {
 	if len(args) == 0 {
-		return sql, nil
+		return sql, nil, nil
 	}
 
 	var callID uint64
@@ -5707,8 +6283,17 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 	markers := make(map[string]*plan.Expr, len(args))
 	markerByOrdinal := make(map[int]string, len(args))
 	foldedBody := strings.ToLower(sql)
+	var repeatedErr error
 	markerForOrdinal := func(ordinal int) string {
 		if name, ok := markerByOrdinal[ordinal]; ok {
+			if guardRemap && repeatedErr == nil {
+				needsRemap, err := udfArgumentNeedsZeroScalarRemap(b.builder, args[ordinal-1])
+				if err != nil {
+					repeatedErr = err
+				} else if needsRemap {
+					repeatedErr = moerr.NewNYI(b.GetContext(), "SQL UDF with a repeated correlated scalar LIMIT 0 argument")
+				}
+			}
 			return "`" + name + "`"
 		}
 
@@ -5722,7 +6307,7 @@ func (b *baseBinder) expandSQLUdfArguments(sql string, args []*plan.Expr, sqlMod
 		return "`" + name + "`"
 	}
 	rewritten := replaceSQLUdfArgMarkers(sql, len(args), sqlMode, markerForOrdinal)
-	return rewritten, markers
+	return rewritten, markers, repeatedErr
 }
 
 func replaceSQLUdfArgMarkers(sql string, argCount int, sqlMode string, markerForOrdinal func(int) string) string {
@@ -6133,7 +6718,7 @@ func bindFuncExprAndConstFoldInternal(
 
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
-			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
+			tmpexpr, _ := foldBoundConstant(ctx, DeepCopyExpr(retExpr), proc)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
@@ -6158,7 +6743,7 @@ func bindFuncExprAndConstFoldInternal(
 
 		fnArgs := retExpr.GetF().Args
 
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
+		arg1, err := foldBoundConstant(ctx, fnArgs[1], proc)
 		if err != nil {
 			goto between_fallback
 		}
@@ -6171,7 +6756,7 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
+		arg2, err := foldBoundConstant(ctx, fnArgs[2], proc)
 		if err != nil {
 			goto between_fallback
 		}
@@ -6189,7 +6774,7 @@ func bindFuncExprAndConstFoldInternal(
 		// value dependency to an otherwise reusable closed range.
 		if !containsDynamicParam(arg1) && !containsDynamicParam(arg2) {
 			rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{arg1, arg2})
-			rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+			rangeCheckRes, _ := foldBoundConstant(ctx, rangeCheckFn, proc)
 			rangeCheckVal := rangeCheckRes.GetLit()
 			if rangeCheckVal == nil || !rangeCheckVal.GetBval() {
 				goto between_fallback
@@ -6199,7 +6784,7 @@ func bindFuncExprAndConstFoldInternal(
 		// The final fold can fail (e.g. '1.5' BETWEEN 1 AND 20 casts the
 		// string operand to INT). Surface the error like the >=/<= form does;
 		// discarding it would bind a nil expression.
-		retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		retExpr, err = foldBoundConstant(ctx, retExpr, proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6211,7 +6796,7 @@ func bindFuncExprAndConstFoldInternal(
 
 		fnArgs := retExpr.GetF().Args
 
-		arg3, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[3], proc, false, true)
+		arg3, err := foldBoundConstant(ctx, fnArgs[3], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6223,7 +6808,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		flag := flagLit.GetU8Val()
 
-		arg1, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[1], proc, false, true)
+		arg1, err := foldBoundConstant(ctx, fnArgs[1], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6236,7 +6821,7 @@ func bindFuncExprAndConstFoldInternal(
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
-		arg2, err := ConstantFold(batch.EmptyForConstFoldBatch, fnArgs[2], proc, false, true)
+		arg2, err := foldBoundConstant(ctx, fnArgs[2], proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6251,7 +6836,7 @@ func bindFuncExprAndConstFoldInternal(
 			fnName = "<"
 		}
 		rangeCheckFn, _ := BindFuncExprImplByPlanExpr(ctx, fnName, []*plan.Expr{arg1, arg2})
-		rangeCheckRes, _ := ConstantFold(batch.EmptyForConstFoldBatch, rangeCheckFn, proc, false, true)
+		rangeCheckRes, _ := foldBoundConstant(ctx, rangeCheckFn, proc)
 		rangeCheckVal := rangeCheckRes.GetLit()
 		if rangeCheckVal == nil {
 			return nil, moerr.NewInvalidInput(ctx, "2nd and 3rd arguments not comparable")
@@ -6259,7 +6844,7 @@ func bindFuncExprAndConstFoldInternal(
 		if !rangeCheckVal.GetBval() {
 			retExpr = DeepCopyExpr(kAlwaysFalseExpr)
 		} else {
-			retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+			retExpr, _ = foldBoundConstant(ctx, retExpr, proc)
 		}
 	}
 
@@ -6280,7 +6865,7 @@ between_fallback:
 	if err != nil {
 		return nil, err
 	}
-	retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+	retExpr, err = foldBoundConstant(ctx, retExpr, proc)
 	if err != nil {
 		return nil, err
 	}
@@ -6306,7 +6891,7 @@ func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*pl
 		return moerr.NewWrongArguments(ctx, "nth_value")
 	}
 
-	offset, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	offset, err := foldBoundConstant(ctx, args[1], proc)
 	if err != nil {
 		return err
 	}
@@ -6618,9 +7203,6 @@ func bindMixedInListComparison(
 		left, right = operands[0], operands[1]
 	}
 	operands = []*Expr{left, right}
-	if err := adjustJsonDynamicParamType(ctx, operator, operands); err != nil {
-		return nil, err
-	}
 	return BindFuncExprImplByPlanExpr(ctx, operator, operands)
 }
 
@@ -7951,6 +8533,7 @@ func bindFuncExprImplByPlanExpr(
 	if err != nil {
 		return nil, err
 	}
+	args = relabelCoercibleBinaryBranches(name, args)
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
 	// type-only SUM/AVG fallback converts strings to DOUBLE. Ordinary binary
@@ -8148,7 +8731,7 @@ func bindFuncExprImplByPlanExpr(
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}
-		if err := adjustJsonDynamicParamType(ctx, name, args); err != nil {
+		if err := quoteJSONComparisonStringParam(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -8434,6 +9017,12 @@ func bindFuncExprImplByPlanExpr(
 		}
 		if isNullExpr(args[1]) {
 			return args[1], nil
+		}
+	case "unary_plus":
+		// MySQL's parser drops unary plus, so +<temporal> keeps the operand's
+		// native value and type instead of looking for a numeric overload.
+		if len(args) == 1 && isUnaryPlusTemporalOperand(args[0]) {
+			return args[0], nil
 		}
 	case "unary_minus":
 		if len(args) == 0 {
@@ -9681,7 +10270,7 @@ func bindFuncExprImplByPlanExpr(
 	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
 		return nil, err
 	}
-	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
+	if returnType.Oid == types.T_char || returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
 			if hasPadSpaceStringProvenance(args[idx]) {
 				Typ.PadSpace = true
@@ -12189,36 +12778,41 @@ func isCharacterStringType(typeID int32) bool {
 	}
 }
 
-func adjustJsonDynamicParamType(ctx context.Context, name string, args []*Expr) error {
-	paramFunction := ""
-	switch name {
-	case "<", "<=", ">", ">=":
-		paramFunction = function.JsonOrderingParamFunctionName
-	case "=", "<=>", "<>", "!=":
-		paramFunction = function.JsonComparisonParamFunctionName
-	default:
-		return nil
-	}
+// quoteJSONComparisonStringParam binds a string (or not yet typed) parameter
+// compared with a JSON value. Equality binds like the equivalent character
+// string literal, which compares the JSON operand as VARCHAR, in either
+// operand order. Other parameters and orderings bind as a JSON string.
+// Typed numeric and Boolean parameters need no rewrite: they bind like
+// literals of their type.
+func quoteJSONComparisonStringParam(ctx context.Context, name string, args []*Expr) error {
 	if len(args) != 2 {
 		return nil
 	}
-
-	// The private JSON adapter consumes the transport bytes and their Process
-	// type/kind metadata. A SQL cast back to TEXT would change direct Boolean
-	// parameters into numeric strings before the adapter can preserve them.
-	transport := func(expr *Expr) *Expr {
-		return &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &plan.Expr_P{
-			P: &plan.ParamRef{Pos: expr.GetP().Pos},
-		}}
-	}
-	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
-		var err error
-		args[1], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{transport(args[1])})
-		return err
-	}
-	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
-		var err error
-		args[0], err = BindFuncExprImplByPlanExpr(ctx, paramFunction, []*Expr{transport(args[0])})
+	for i := range args {
+		param, other := args[i], args[1-i]
+		if other.Typ.Id != int32(types.T_json) || !isDirectDynamicParam(param) {
+			continue
+		}
+		oid := types.T(param.Typ.Id)
+		if oid != types.T_any && !oid.IsMySQLString() {
+			continue
+		}
+		switch name {
+		case "=", "<=>", "<>", "!=":
+			switch oid {
+			case types.T_any, types.T_char, types.T_varchar, types.T_text, types.T_blob:
+				varcharType := types.T_varchar.ToType()
+				var err error
+				args[1-i], err = appendCastBeforeExpr(ctx, other, makePlan2Type(&varcharType))
+				return err
+			}
+		}
+		quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{param})
+		if err != nil {
+			return err
+		}
+		jsonType := types.T_json.ToType()
+		args[i], err = appendCastBeforeExpr(ctx, quoted, makePlan2Type(&jsonType))
 		return err
 	}
 	return nil
@@ -14080,4 +14674,12 @@ func (b *baseBinder) defaultNumericOuterType() *plan.Type {
 		return &typ
 	}
 	return nil
+}
+
+func isUnaryPlusTemporalOperand(expr *Expr) bool {
+	switch types.T(expr.Typ.Id) {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		return true
+	}
+	return false
 }

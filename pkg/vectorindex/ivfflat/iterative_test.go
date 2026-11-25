@@ -109,7 +109,7 @@ func TestExactMembershipCount(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 	payload := func(typ types.Type, appendKeys func(*vector.Vector)) []byte {
-		v := vector.NewVec(typ)
+		v := vector.NewVec(typ, mp)
 		defer v.Free(mp)
 		appendKeys(v)
 		b, err := v.MarshalBinary()

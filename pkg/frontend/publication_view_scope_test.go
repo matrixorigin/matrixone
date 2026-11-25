@@ -1052,6 +1052,7 @@ func TestCreatePublicationValidatesViewScope(t *testing.T) {
 			{int64(1), "acc1", "open", uint64(1), nil},
 		})
 	// resolve publication database
+	mockPublicationTargetRows(bh, 1)
 	sql, err := getSqlForGetDbIdAndType(context.Background(), testPublicationScopeDatabase, true, sysAccountID)
 	require.NoError(t, err)
 	bh.sql2result[sql] = newMrsForPublicationColumns(
@@ -1104,6 +1105,7 @@ func TestCreatePublicationAcceptsCompleteViewScope(t *testing.T) {
 			{int64(1), "acc1", "open", uint64(1), nil},
 		})
 	sql, err := getSqlForGetDbIdAndType(context.Background(), testPublicationScopeDatabase, true, sysAccountID)
+	mockPublicationTargetRows(bh, 1)
 	require.NoError(t, err)
 	bh.sql2result[sql] = newMrsForPublicationColumns(
 		[]string{"dat_id", "dat_type"}, [][]interface{}{{uint64(1), ""}})
@@ -1545,6 +1547,10 @@ func TestDoAlterPublicationAccountChangeValidatesInheritedScope(t *testing.T) {
 		ses.tenant = tenant
 		bh := &backgroundExecTest{}
 		bh.init()
+		mockPublicationTargetRows(bh, 1)
+		mockPublicationTargetRows(bh, 2)
+		mockPublicationTargetRows(bh, 1, 2)
+		mockPublicationTargetRows(bh, 1, 2, 3)
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		t.Cleanup(bhStub.Reset)
 		bh.sql2result[getAccountIdNamesSql] = newMrsForPublicationColumns(
@@ -2293,6 +2299,8 @@ func TestDoAlterPublicationForeignSourceAuthorization(t *testing.T) {
 		ses.tenant = tenant
 		bh := &backgroundExecTest{}
 		bh.init()
+		mockPublicationTargetRows(bh, 2)
+		mockPublicationTargetRows(bh, 3)
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		t.Cleanup(bhStub.Reset)
 		bh.sql2result[getAccountIdNamesSql] = newMrsForPublicationColumns(

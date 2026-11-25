@@ -15,10 +15,11 @@
 package vector
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -49,7 +50,7 @@ func TestFunctionParamFrameGrowsAndPreservesWrappers(t *testing.T) {
 
 func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	vec := NewVec(types.T_blob.ToType())
+	vec := NewVec(types.T_blob.ToType(), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 
 	require.NoError(t, AppendBytesWithWriter(vec, 64, mp, func(dst []byte) error {
@@ -68,10 +69,11 @@ func TestAppendBytesWithWriterOwnsFinalAreaAndRollsBack(t *testing.T) {
 func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1, 1)
 	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_blob.ToType(), state.selection)
+	dmp := state.view(t, mp)
+	vec := NewVec(types.T_blob.ToType(), dmp)
 	called := false
 
-	err := AppendBytesWithWriter(vec, 1, mp, func([]byte) error {
+	err := AppendBytesWithWriter(vec, 1, dmp, func([]byte) error {
 		called = true
 		return nil
 	})
@@ -79,7 +81,7 @@ func TestAppendBytesWithWriterAdmitsDescriptorBeforeWriter(t *testing.T) {
 	require.False(t, called)
 	require.Zero(t, vec.Length())
 
-	vec.Free(mp)
+	vec.Free(dmp)
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
@@ -89,24 +91,19 @@ func TestFunctionResultAllocationSurvivesVectorTransfer(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 	transferred := wrapper.GetResultVector()
-	require.Same(t, selection, transferred.AllocationAccountSelection())
 	firstUsed := account.Snapshot().Used
 	require.Positive(t, firstUsed)
 
 	wrapper.SetResultVector(nil)
 	require.NoError(t, wrapper.PreExtendAndReset(64))
-	require.Same(t, selection, wrapper.GetResultVector().AllocationAccountSelection())
 	require.Greater(t, account.Snapshot().Used, firstUsed)
 
-	transferred.Free(mp)
+	transferred.Free(view)
 	wrapper.Free()
 	require.Zero(t, account.Snapshot().Used)
 }
@@ -117,12 +114,9 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(
-		types.T_int64.ToType(), mp, selection,
-	)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_int64.ToType(), view)
 	require.NoError(t, wrapper.PreExtendAndReset(1))
 	result := MustFunctionResult[int64](wrapper)
 	require.NoError(t, result.Append(42, false))
@@ -131,26 +125,24 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 	require.True(t, result.vec.IsConst())
 
 	// A folded result resets before growing, while an ordinary reused result
-	// resets after capacity growth. Both generations must publish the same
-	// owner-provided NULL row bound.
+	// resets after capacity growth. The null bitmap is allocated lazily.
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 	require.False(t, result.vec.IsConst())
-	require.EqualValues(t, 64, result.vec.GetNulls().GetBitmap().Len())
 	result.AddNullAt(63)
+	require.True(t, result.GetNullAt(63))
 	require.NoError(t, wrapper.PreExtendAndReset(4))
 
 	result = MustFunctionResult[int64](wrapper)
-	capacityRows := result.GetResultVector().GetNulls().GetBitmap().ExternalStorageCapacity() * 64
-	require.GreaterOrEqual(t, capacityRows, 4)
-	source := nulls.NewWithSize(capacityRows + 1)
-	source.Add(1, uint64(capacityRows))
+	require.False(t, result.GetNullAt(63), "reset must drop the previous generation's NULLs")
+	source, err := nulls.NewWithSize(130, mp)
+	require.NoError(t, err)
+	source.Add(1, 129)
 
 	require.NotPanics(t, func() {
 		result.AddNulls(source)
 	})
 	require.True(t, result.GetNullAt(1))
-	require.False(t, result.GetNullAt(uint64(capacityRows)))
-	require.EqualValues(t, 4, result.GetResultVector().GetNulls().GetBitmap().Len())
+	require.False(t, result.GetNullAt(0))
 
 	wrapper.Free()
 	require.Zero(t, account.Snapshot().Used)
@@ -162,7 +154,6 @@ func TestFunctionResultUnaccountedKeepsLazyNullBitmap(t *testing.T) {
 	require.NoError(t, wrapper.PreExtendAndReset(64))
 
 	bitmap := wrapper.GetResultVector().GetNulls().GetBitmap()
-	require.False(t, bitmap.HasExternalStorage())
 	require.Zero(t, bitmap.Len())
 	require.Zero(t, bitmap.Size())
 
@@ -300,7 +291,7 @@ func BenchmarkGetStrValue1(b *testing.B) {
 	mp := mpool.MustNewZeroNoFixed()
 
 	vecSize := uint64(50000)
-	vec := NewVec(types.T_varchar.ToType())
+	vec := NewVec(types.T_varchar.ToType(), mp)
 	for i := uint64(0); i < vecSize; i++ {
 		err := appendOneBytes(vec, []byte("x"), false, mp)
 		require.NoError(b, err)
@@ -324,7 +315,7 @@ func BenchmarkGetStrValue2(b *testing.B) {
 	vecSize := uint64(50000)
 	t2 := types.T_varchar.ToType()
 	t2.Width = 10
-	vec2 := NewVec(t2)
+	vec2 := NewVec(t2, mp)
 	for i := uint64(0); i < vecSize; i++ {
 		err := appendOneBytes(vec2, []byte("x"), false, mp)
 		require.NoError(b, err)
@@ -418,7 +409,7 @@ func TestAppendByteJsonEncoded(t *testing.T) {
 
 	oldLength := result.vec.Length()
 	oldAreaLength := len(result.vec.area)
-	oldAreaData := uintptr(unsafe.Pointer(&result.vec.area[0]))
+	oldAreaData := &result.vec.area[0]
 	values := toSliceOfLengthNoTypeCheck[types.Varlena](result.vec, oldLength+1)
 	var sentinel types.Varlena
 	sentinel[0] = 1
@@ -434,7 +425,7 @@ func TestAppendByteJsonEncoded(t *testing.T) {
 	require.ErrorContains(t, err, "encode failed")
 	require.Equal(t, oldLength, result.vec.Length())
 	require.Equal(t, oldAreaLength, len(result.vec.area))
-	require.Equal(t, oldAreaData, uintptr(unsafe.Pointer(&result.vec.area[0])), "failed encoding must not commit replacement backing")
+	require.Same(t, oldAreaData, &result.vec.area[0], "failed encoding must not commit replacement backing")
 	require.Equal(t, sentinel, values[oldLength])
 	require.True(t, result.vec.nsp.Contains(uint64(oldLength)))
 
@@ -544,7 +535,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
 	func() {
-		v := NewVec(typ)
+		v := NewVec(typ, mp)
 		defer v.Free(mp)
 		require.NoError(t, appendValue(v, false, false, mp))
 		parameter := generate(v)
@@ -577,7 +568,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 		require.True(t, reuse(scalar, parameter))
 		check(parameter, scalar, 0, true, false)
 		// A NULL wrapper rejects both value shapes without changing its source.
-		constant := NewVec(typ)
+		constant := NewVec(typ, mp)
 		defer constant.Free(mp)
 		require.NoError(t, appendValue(constant, false, false, mp))
 		constant.SetClass(CONSTANT)
@@ -589,7 +580,7 @@ func exerciseParameterReuse[T types.FixedSizeT](t *testing.T, typ types.Type, sc
 		check(parameter, constant, 0, false, false)
 		changed := typ
 		changed.Width++
-		other := NewVec(changed)
+		other := NewVec(changed, mp)
 		defer other.Free(mp)
 		require.NoError(t, appendValue(other, false, true, mp))
 		require.NoError(t, appendValue(other, true, true, mp))
@@ -621,10 +612,9 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	result := MustFunctionResult[bool](wrapper)
 	require.NoError(t, result.PreExtendAndResetNonNull(0))
@@ -633,9 +623,8 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.Error(t, result.PreExtendAndResetNonNull(-1))
 	require.Zero(t, result.vec.Length())
 	require.NoError(t, result.PreExtendAndResetNonNull(128))
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
 	require.Positive(t, account.Snapshot().Used, "value storage is still charged")
-	require.Zero(t, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords(), "non-null preparation allocates no bitmap")
 	require.Len(t, result.cols, 128)
 	for i := 0; i < 128; i++ {
 		require.NoError(t, result.Append(i%2 == 0, false))
@@ -645,27 +634,27 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	require.NoError(t, result.PreExtendAndResetNonNull(256))
 	require.False(t, result.vec.IsConst())
 	require.Len(t, result.cols, 256)
-	require.Zero(t, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
 	require.NoError(t, result.PreExtendAndReset(64))
 	result.AddNullAt(63)
 	require.True(t, result.vec.IsNull(63))
-	bitmapCapacity := result.vec.GetNulls().GetBitmap().ExternalStorageCapacity()
-	require.Positive(t, bitmapCapacity)
-	// A larger all-valid generation must not grow a previously small bitmap.
+	require.Positive(t, result.vec.GetNulls().GetBitmap().CapWords())
+	// A larger all-valid generation keeps the bitmap it already owns for a
+	// later nullable generation, and allocates no more.
+	retained := result.vec.GetNulls().GetBitmap().CapWords()
 	require.NoError(t, result.PreExtendAndResetNonNull(512))
 	require.False(t, result.vec.HasNull())
-	require.Zero(t, result.vec.GetNulls().GetBitmap().Len())
-	require.Equal(t, bitmapCapacity, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
+	require.Zero(t, result.vec.GetNulls().Count())
+	require.Equal(t, retained, result.vec.GetNulls().GetBitmap().CapWords())
 	require.NoError(t, result.PreExtendAndReset(512))
 	result.AddNullAt(511)
 	require.True(t, result.vec.IsNull(511))
 	require.EqualValues(t, 512, result.vec.GetNulls().GetBitmap().Len())
 	transferred := wrapper.GetResultVector()
 	wrapper.SetResultVector(nil)
-	t.Cleanup(func() { transferred.Free(mp) })
+	t.Cleanup(func() { transferred.Free(view) })
 	require.NoError(t, result.PreExtendAndResetNonNull(8))
-	require.Zero(t, result.vec.GetNulls().GetBitmap().ExternalStorageCapacity())
-	require.Same(t, selection, result.vec.AllocationAccountSelection())
+	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
 }
 
 func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
@@ -680,12 +669,163 @@ func TestFunctionResultNonNullPreparationAdmitsValueAllocation(t *testing.T) {
 		_, _, err := registry.CompleteTerminal(account)
 		require.NoError(t, err)
 	})
-	selection, err := NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	view, err := mp.WithAccount(account, 1, 1, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
-	wrapper, err := NewFunctionResultWrapperWithAllocation(types.T_bool.ToType(), mp, selection)
-	require.NoError(t, err)
+	wrapper := NewFunctionResultWrapper(types.T_bool.ToType(), view)
 	t.Cleanup(wrapper.Free)
 	require.ErrorIs(t, MustFunctionResult[bool](wrapper).PreExtendAndResetNonNull(128), mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, wrapper.GetResultVector().Length())
 	require.Zero(t, account.Snapshot().Used)
+}
+
+// Function and cast results are where text values are produced, so every
+// byte writer of a native Unicode result rejects invalid text without adding
+// a row, and the same bytes are accepted for a legacy text result.
+func TestFunctionResultValidatesUnicodeText(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	mb4 := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	mb3 := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB3UnicodeCI)
+	writers := map[string]func(*FunctionResult[types.Varlena], []byte) error{
+		"AppendBytes": func(fr *FunctionResult[types.Varlena], v []byte) error { return fr.AppendBytes(v, false) },
+		"AppendMultiBytes": func(fr *FunctionResult[types.Varlena], v []byte) error {
+			return fr.AppendMultiBytes(v, false, 2)
+		},
+		"AppendMustBytesValue": func(fr *FunctionResult[types.Varlena], v []byte) error { return fr.AppendMustBytesValue(v) },
+		"AppendBytesWithWriter": func(fr *FunctionResult[types.Varlena], v []byte) error {
+			return fr.AppendBytesWithWriter(len(v), func(dst []byte) error { copy(dst, v); return nil })
+		},
+	}
+	for name, write := range writers {
+		for _, tc := range []struct {
+			name  string
+			typ   types.Type
+			value []byte
+			bad   bool
+		}{
+			{"mb4_valid", mb4, []byte("😀"), false},
+			{"mb4_invalid_inline", mb4, []byte{0xff}, true},
+			{"mb4_invalid_area", mb4, append(bytes.Repeat([]byte("x"), 40), 0xff), true},
+			{"mb3_non_bmp", mb3, []byte("😀"), true},
+			{"legacy_invalid", types.T_varchar.ToType(), []byte{0xff}, false},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				fr := MustFunctionResult[types.Varlena](NewFunctionResultWrapper(tc.typ, mp))
+				defer fr.Free()
+				require.NoError(t, fr.PreExtendAndReset(4))
+				err := write(fr, tc.value)
+				if tc.bad {
+					require.Error(t, err)
+					require.Zero(t, fr.GetResultVector().Length())
+					require.Empty(t, fr.GetResultVector().GetArea())
+					// A NULL row carries no text to validate.
+					require.NoError(t, fr.AppendBytes(tc.value, true))
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.value, fr.GetResultVector().GetBytesAt(0))
+			})
+		}
+	}
+}
+
+func TestConvertedParameterReuse(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		oid                  types.T
+		scale                int32
+		coefficient, changed uint64
+	}{
+		{"decimal64", types.T_decimal64, 2, 123, 250},
+		{"float32", types.T_float32, 7, 12500000, 25000000},
+		{"float64", types.T_float64, 16, 12500000000000000, 25000000000000000},
+		{"native_decimal128", types.T_decimal128, 2, 123, 250},
+	} {
+		for _, constant := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/constant=%v", tc.name, constant), func(t *testing.T) {
+				mp := mpool.MustNewZeroNoFixed()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				typ := tc.oid.ToType()
+				if tc.oid == types.T_decimal64 || tc.oid == types.T_decimal128 {
+					typ.Scale = 2
+				}
+				input := NewVec(typ, mp)
+				defer input.Free(mp)
+				for i := 0; i < 2; i++ {
+					switch tc.oid {
+					case types.T_decimal64:
+						require.NoError(t, AppendFixed(input, types.Decimal64(123), false, mp))
+					case types.T_float32:
+						require.NoError(t, AppendFixed(input, float32(1.25), false, mp))
+					case types.T_float64:
+						require.NoError(t, AppendFixed(input, float64(1.25), false, mp))
+					case types.T_decimal128:
+						require.NoError(t, AppendFixed(input, types.Decimal128{B0_63: 123}, false, mp))
+					}
+					if constant {
+						input.SetClass(CONSTANT)
+						input.SetLength(2)
+						break
+					}
+				}
+				nilInput := NewConstNull(typ, 2, mp)
+				defer nilInput.Free(mp)
+				result := NewFunctionResultWrapper(types.T_decimal128.ToType(), mp)
+				defer result.Free()
+				result.UseOptFunctionParamFrame(1)
+				wantType := types.T_decimal128.ToType()
+				wantType.Width, wantType.Scale = 38, tc.scale
+				check := func(want uint64, nullable bool) {
+					t.Helper()
+					parameter := OptGetParamFromWrapper[types.Decimal128](result, 0, input)
+					require.Equal(t, wantType, parameter.GetType())
+					require.Same(t, input, parameter.GetSourceVector())
+					require.Equal(t, typ, *input.GetType())
+					for row := uint64(0); row < 2; row++ {
+						value, isNull := parameter.GetValue(row)
+						require.Equal(t, nullable && row == 1, isNull)
+						if !isNull {
+							require.Equal(t, types.Decimal128{B0_63: want}, value)
+						}
+					}
+					// Native D128 controls must retain the successful, allocation-free reuse path.
+					require.Equal(t, tc.oid == types.T_decimal128, ReuseFunctionFixedTypeParameter(input, parameter))
+				}
+				nullToValue := func() {
+					t.Helper()
+					old := OptGetParamFromWrapper[types.Decimal128](result, 0, nilInput)
+					require.True(t, ReuseFunctionFixedTypeParameter(nilInput, old))
+					require.False(t, ReuseFunctionFixedTypeParameter(input, old))
+					_, isNull := old.GetValue(0)
+					require.True(t, isNull)
+					require.Equal(t, typ, old.GetType())
+					require.Same(t, nilInput, old.GetSourceVector())
+					fresh := OptGetParamFromWrapper[types.Decimal128](result, 0, input)
+					require.NotSame(t, old, fresh)
+					require.Same(t, nilInput, old.GetSourceVector())
+					_, isNull = old.GetValue(0)
+					require.True(t, isNull)
+				}
+				nullToValue()
+				check(tc.coefficient, false)
+				check(tc.coefficient, false)
+				switch tc.oid {
+				case types.T_decimal64:
+					MustFixedColWithTypeCheck[types.Decimal64](input)[0] = 250
+				case types.T_float32:
+					MustFixedColWithTypeCheck[float32](input)[0] = 2.5
+				case types.T_float64:
+					MustFixedColWithTypeCheck[float64](input)[0] = 2.5
+				case types.T_decimal128:
+					MustFixedColWithTypeCheck[types.Decimal128](input)[0] = types.Decimal128{B0_63: 250}
+				}
+				if !constant {
+					input.GetNulls().Add(1)
+				}
+				check(tc.changed, !constant)
+				nullToValue()
+				check(tc.changed, !constant)
+			})
+		}
+	}
 }

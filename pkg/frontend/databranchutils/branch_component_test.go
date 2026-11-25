@@ -35,7 +35,7 @@ func branchComponentResult(t *testing.T, mp *mpool.MPool, rows []DataBranchMetad
 	kinds := []types.T{types.T_uint64, types.T_uint64, types.T_int64, types.T_uint64, types.T_varchar, types.T_bool}
 	b := batch.NewWithSize(len(kinds))
 	for i, kind := range kinds {
-		b.Vecs[i] = vector.NewVec(kind.ToType())
+		b.Vecs[i] = vector.NewVec(kind.ToType(), mp)
 	}
 	for _, row := range rows {
 		require.NoError(t, vector.AppendFixed(b.Vecs[0], row.TableID, false, mp))

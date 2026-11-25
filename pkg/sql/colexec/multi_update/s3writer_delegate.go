@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -72,13 +73,29 @@ type deleteBlockInfo struct {
 	rawRowCount uint64
 }
 
-func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
-	data := &deleteBlockData{
-		bitmap: nulls.NewWithSize(int(options.DefaultBlockMaxRows)),
-		typ:    deletion.DeletionOnCommitted,
-		bat:    newDeleteBatch(inputBatch, pkIdx),
+func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int, mp *mpool.MPool) (*deleteBlockData, error) {
+	bm, err := nulls.NewWithSize(int(options.DefaultBlockMaxRows), mp)
+	if err != nil {
+		return nil, err
 	}
-	return data
+	data := &deleteBlockData{
+		bitmap: bm,
+		typ:    deletion.DeletionOnCommitted,
+		bat:    newDeleteBatch(inputBatch, pkIdx, mp),
+	}
+	return data, nil
+}
+
+// free releases the block's batch and bitmap.
+func (d *deleteBlockData) free(mp *mpool.MPool) {
+	if d == nil {
+		return
+	}
+	if d.bat != nil {
+		d.bat.Clean(mp)
+	}
+	d.bitmap.Free()
+	d.bitmap = nil
 }
 
 type s3WriterDelegate struct {
@@ -91,6 +108,9 @@ type s3WriterDelegate struct {
 	action             actionType
 	rejectZeroTemporal bool
 	fillInsertOwned    bool
+	// ignoreFills hold, per update context, the vectors and the view of the
+	// INSERT IGNORE NOT NULL fill of the main-table leg.
+	ignoreFills []colexec.IgnoreFill
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -108,6 +128,9 @@ type s3WriterDelegate struct {
 	// per-table batch free lists that persist across sortAndSync calls,
 	// so pre-allocated vector capacity is reused instead of re-allocated.
 	insertFreeLists []*containers.BatchFreeList
+	// sinkMP is the writer's own pool: the persistent insert sinkers and
+	// their free lists outlive a single execution and allocate from it.
+	sinkMP *mpool.MPool
 
 	// unrecordedSinkNames accumulates the persisted names of the
 	// temporary S3 writers (delete/tombstone and spill-over table
@@ -278,6 +301,11 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 	if err != nil {
 		return err
 	}
+	if writer.sinkMP == nil {
+		if writer.sinkMP, err = colexec.NewOperatorMPool(proc, "s3writer"); err != nil {
+			return err
+		}
+	}
 	for i, updateCtx := range writer.updateCtxs {
 		if len(updateCtx.InsertCols) == 0 || writer.insertSinkers[i] != nil {
 			continue
@@ -300,7 +328,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 			opts = append(opts, opt)
 		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriterForService(
-			proc.GetService(), proc.Mp(), fs, updateCtx.TableDef, -1, false,
+			proc.GetService(), writer.sinkMP, fs, updateCtx.TableDef, -1, false,
 			opts...)
 	}
 	return nil
@@ -400,8 +428,26 @@ func (writer *s3WriterDelegate) append(
 			// snapshots the vector pointers. Rows with a NULL primary key
 			// are dropped here, and the projection re-counts after the
 			// drop.
-			if _, _, fillErr := fillMainInsertNotNullForIgnore(proc, updateCtx, contextBatch, false, writer.fillInsertOwned); fillErr != nil {
+			for len(writer.ignoreFills) <= i {
+				writer.ignoreFills = append(writer.ignoreFills, colexec.IgnoreFill{})
+			}
+			// A target batch other than inBatch is this writer's own
+			// filtered copy and is adjusted in place; inBatch belongs to the
+			// child, so the fill works on its view, which then replaces the
+			// target for every later leg.
+			filledBatch, _, _, fillErr := fillMainInsertNotNullForIgnore(
+				proc, &writer.ignoreFills[i], updateCtx, contextBatch, false,
+				writer.fillInsertOwned, contextBatch != inBatch)
+			if fillErr != nil {
 				return fillErr
+			}
+			if filledBatch != contextBatch {
+				for k := i; k < len(contextBatches); k++ {
+					if contextBatches[k] == contextBatch {
+						contextBatches[k] = filledBatch
+					}
+				}
+				contextBatch = filledBatch
 			}
 		}
 
@@ -425,8 +471,14 @@ func (writer *s3WriterDelegate) append(
 				if checked, err = sqlutil.CopyBatch(projBat, proc); err != nil {
 					return
 				}
-				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
-				if err = checked.ShrinkByMask(nulls, true, 0, mp); err != nil {
+				var nulls *bitmap.Bitmap
+				if nulls, err = checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone(mp); err != nil {
+					checked.Clean(mp)
+					return
+				}
+				err = checked.ShrinkByMask(nulls, true, 0, mp)
+				nulls.Free()
+				if err != nil {
 					checked.Clean(mp)
 					return
 				}
@@ -474,8 +526,14 @@ func (writer *s3WriterDelegate) append(
 			if tableType == UpdateMainTable {
 				nullIdx = mainTablePkProjectIdx
 			}
-			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
-			if err = filtered.ShrinkByMask(nulls, true, 0, mp); err != nil {
+			var nulls *bitmap.Bitmap
+			if nulls, err = filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone(mp); err != nil {
+				filtered.Clean(mp)
+				return
+			}
+			err = filtered.ShrinkByMask(nulls, true, 0, mp)
+			nulls.Free()
+			if err != nil {
 				filtered.Clean(mp)
 				return
 			}
@@ -610,7 +668,11 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 			rowOffset := rowID.GetRowOffset()
 
 			if blockMap[blkid] == nil {
-				blockMap[blkid] = newDeleteBlockData(bat, 1)
+				block, err := newDeleteBlockData(bat, 1, proc.Mp())
+				if err != nil {
+					return nil, err
+				}
+				blockMap[blkid] = block
 
 				tableId := uint64(0)
 				txnID := []byte(nil)
@@ -667,7 +729,11 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 	deleteBats := batch.NewBatchSet(objectio.BlockMaxRows)
 	defer deleteBats.Clean(proc.GetMPool())
 	for _, blkid := range blkids {
-		bat := blockMap[blkid].bat
+		block := blockMap[blkid]
+		bat := block.bat
+		// The batch moves into deleteBats; the bitmap is done.
+		block.bitmap.Free()
+		block.bitmap = nil
 		delete(blockMap, blkid)
 		err := deleteBats.Push(proc.GetMPool(), bat)
 		if err != nil {
@@ -818,7 +884,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
-	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
+	if blockInfoBat, err = s3Writer.FillBlockInfoBat(proc.Mp()); err != nil {
 		return
 	}
 
@@ -831,11 +897,11 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 }
 
 // initBlockInfoBat creates a new off-heap batch matching the schema of src.
-func initBlockInfoBat(src *batch.Batch) *batch.Batch {
-	dst := batch.NewOffHeapWithSize(src.VectorCount())
+func initBlockInfoBat(src *batch.Batch, mp *mpool.MPool) *batch.Batch {
+	dst := batch.NewWithSize(src.VectorCount())
 	dst.Attrs = src.Attrs
 	for i := 0; i < src.VectorCount(); i++ {
-		dst.Vecs[i] = vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
+		dst.Vecs[i] = vector.NewVec(*src.Vecs[i].GetType(), mp)
 	}
 	return dst
 }
@@ -864,7 +930,7 @@ func (writer *s3WriterDelegate) fillDeleteBlockInfo(
 
 	if writer.deleteBlockInfo[idx] == nil {
 		writer.deleteBlockInfo[idx] = &deleteBlockInfo{
-			bat: initBlockInfoBat(bat),
+			bat: initBlockInfoBat(bat, proc.Mp()),
 		}
 	}
 
@@ -886,7 +952,7 @@ func (writer *s3WriterDelegate) fillInsertBlockInfo(
 ) (err error) {
 
 	if writer.insertBlockInfo[idx] == nil {
-		writer.insertBlockInfo[idx] = initBlockInfoBat(bat)
+		writer.insertBlockInfo[idx] = initBlockInfoBat(bat, proc.Mp())
 		writer.insertBlockRowCount[idx] = 0
 	}
 
@@ -913,7 +979,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		if len(stats) == 0 {
 			continue
 		}
-		blockInfoBat, fillErr := s3w.FillBlockInfoBat()
+		blockInfoBat, fillErr := s3w.FillBlockInfoBat(proc.Mp())
 		if fillErr != nil {
 			return fillErr
 		}
@@ -935,7 +1001,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 	}
 
 	if writer.outputBat == nil {
-		writer.outputBat = makeS3OutputBatch()
+		writer.outputBat = makeS3OutputBatch(proc.Mp())
 	}
 	mp := proc.GetMPool()
 
@@ -1103,9 +1169,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	}
 	for _, data := range writer.deleteBlockMap {
 		for k, block := range data {
-			if block != nil && block.bat != nil {
-				block.bat.Clean(proc.Mp())
-			}
+			block.free(proc.Mp())
 			delete(data, k)
 		}
 	}
@@ -1119,6 +1183,10 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 }
 
 func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
+	for i := range writer.ignoreFills {
+		writer.ignoreFills[i].Free()
+	}
+	writer.ignoreFills = nil
 
 	writer.cleanDeleteBatches(proc.Mp())
 	mp := proc.Mp()
@@ -1142,7 +1210,7 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 
 	for _, fl := range writer.insertFreeLists {
 		if fl != nil {
-			fl.Close(mp)
+			fl.Close(writer.sinkMP)
 		}
 	}
 	writer.insertFreeLists = nil
@@ -1164,9 +1232,7 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 
 	for _, data := range writer.deleteBlockMap {
 		for _, block := range data {
-			if block != nil && block.bat != nil {
-				block.bat.Clean(mp)
-			}
+			block.free(mp)
 		}
 	}
 	writer.deleteBlockMap = nil
@@ -1177,6 +1243,7 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 	}
 	writer.buf.Reset()
 
+	colexec.FreeOperatorMPool(&writer.sinkMP)
 	return
 }
 
@@ -1242,13 +1309,13 @@ func (writer *s3WriterDelegate) addAffectedRowsToOutput(
 	return
 }
 
-func makeS3OutputBatch() *batch.Batch {
-	bat := batch.NewOffHeapWithSize(5)
-	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_uint8.ToType())   // actionInsert/actionDelete/actionAffectedRows
-	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // tableID
-	bat.Vecs[2] = vector.NewOffHeapVecWithType(types.T_uint64.ToType())  // rowCount of s3 blocks
-	bat.Vecs[3] = vector.NewOffHeapVecWithType(types.T_varchar.ToType()) // name for delete. empty for insert
-	bat.Vecs[4] = vector.NewOffHeapVecWithType(types.T_text.ToType())    // originBatch.MarshalBinary()
+func makeS3OutputBatch(mp *mpool.MPool) *batch.Batch {
+	bat := batch.NewWithSize(5)
+	bat.Vecs[0] = vector.NewVec(types.T_uint8.ToType(), mp)   // actionInsert/actionDelete/actionAffectedRows
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), mp)  // tableID
+	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)  // rowCount of s3 blocks
+	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType(), mp) // name for delete. empty for insert
+	bat.Vecs[4] = vector.NewVec(types.T_text.ToType(), mp)    // originBatch.MarshalBinary()
 	return bat
 }
 
@@ -1281,7 +1348,7 @@ func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
 	if bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
 		// bat comes from old CN, no object stats vec in it
 		bat.Attrs = append(bat.Attrs, catalog.ObjectMeta_ObjectStats)
-		bat.Vecs = append(bat.Vecs, vector.NewOffHeapVecWithType(types.T_binary.ToType()))
+		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_binary.ToType(), proc.Mp()))
 
 		blkVec := bat.Vecs[0]
 		destVec := bat.Vecs[1]

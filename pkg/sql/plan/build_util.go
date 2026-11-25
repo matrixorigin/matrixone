@@ -176,6 +176,24 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 	return ret, nil
 }
 
+// rawEnumDomainKey marks a replayed ENUM declaration whose labels must be kept
+// exactly as stored rather than normalized as a new declaration.
+type rawEnumDomainKey struct{}
+
+// replayedEnumDomainUnchanged reports whether column re-declares, during
+// persisted DDL replay, the exact ENUM domain its source column already stores.
+func replayedEnumDomainUnchanged(column *tree.ColumnTableDef, astType *tree.T, replay *persistedDDLReplay) bool {
+	if replay == nil || astType == nil ||
+		defines.MysqlType(astType.InternalType.Oid) != defines.MYSQL_TYPE_ENUM {
+		return false
+	}
+	preserved := replay.columns[strings.ToLower(column.Name.ColName())]
+	if preserved == nil || preserved.columnType.Id != int32(types.T_enum) {
+		return false
+	}
+	return preserved.columnType.Enumvalues == strings.Join(astType.InternalType.EnumValues, ",")
+}
+
 // getColumnTypeFromAst resolves a DDL declaration before applying its charset's
 // byte budget. Expression and CAST types deliberately keep their wider domain.
 func getColumnTypeFromAst(
@@ -196,7 +214,15 @@ func getColumnTypeFromAst(
 		bounded.InternalType.DisplayWith = types.MaxVarcharLen
 		parseType = &bounded
 	}
-	typ, err := getTypeFromAst(ctx, parseType)
+	typCtx := ctx
+	if replayedEnumDomainUnchanged(column, astType, replay) {
+		// LIKE/CLONE/COPY replay of an existing column renders its stored labels
+		// verbatim. Keep that authoritative domain and its ordinals instead of
+		// applying the CREATE-time trimming, which can reject or renumber
+		// definitions stored before trimming existed (e.g. ENUM(' ','red','')).
+		typCtx = context.WithValue(ctx, rawEnumDomainKey{}, true)
+	}
+	typ, err := getTypeFromAst(typCtx, parseType)
 	if err != nil {
 		return plan.Type{}, err
 	}
@@ -478,7 +504,14 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				return plan.Type{}, moerr.NewNYI(ctx, "enum type length err")
 			}
 
-			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			if raw, _ := ctx.Value(rawEnumDomainKey{}).(bool); raw {
+				return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(n.InternalType.EnumValues, ",")}, nil
+			}
+			enumValues, err := types.NormalizeEnumValues(ctx, n.InternalType.EnumValues)
+			if err != nil {
+				return plan.Type{}, err
+			}
+			return plan.Type{Id: int32(types.T_enum), Enumvalues: strings.Join(enumValues, ",")}, nil
 		case defines.MYSQL_TYPE_SET:
 			setValues, err := types.EncodeSetValues(n.InternalType.EnumValues)
 			if err != nil {
@@ -1205,7 +1238,7 @@ func buildDefaultExprWithColumnsForceDomain(
 	}
 
 	// try to calculate default value, return err if fails
-	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
+	newExpr, err := foldBoundConstant(bindCtx, DeepCopyExpr(defaultExpr), proc)
 	// cast_assign remains an executable expression because its behavior depends
 	// on sql_mode, so function.IsConstant rejects the outer function. Validate when
 	// its source value is constant, without eagerly evaluating volatile defaults.
@@ -1217,6 +1250,7 @@ func buildDefaultExprWithColumnsForceDomain(
 	}
 	if constantMediumIntDefault {
 		cast := newExpr.GetF()
+		proc := processForBoundExpr(bindCtx, cast.Args[0], proc)
 		strictExpr, strictErr := forceAssignmentCastExprWithName(
 			bindCtx, cast.Args[0], typ, "cast_strict")
 		if strictErr != nil {
@@ -1705,6 +1739,7 @@ func validateUnsignedDecimalStrictConstantDefault(ctx context.Context, proc *pro
 	if err != nil {
 		return err
 	}
+	proc = processForBoundExpr(ctx, strictExpr, proc)
 	executor, err := colexec.NewExpressionExecutor(proc, strictExpr)
 	if err != nil {
 		return err

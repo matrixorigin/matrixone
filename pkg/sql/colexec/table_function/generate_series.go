@@ -178,7 +178,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 	var err error
 	if tf.CanOpt {
 		if g.batch == nil {
-			g.batch = tf.createResultBatch()
+			g.batch = tf.createResultBatch(proc.Mp())
 		} else {
 			g.batch.CleanOnlyData()
 		}
@@ -219,7 +219,7 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 	}
 
 	if g.batch == nil {
-		g.batch = tf.createResultBatch()
+		g.batch = tf.createResultBatch(proc.Mp())
 	} else {
 		g.batch.CleanOnlyData()
 	}

@@ -74,7 +74,8 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			prepared.proc, ctx.proc = cw.proc, cw.proc
 			prepared.defaultDatabase = "tpch"
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
-			prepared.params = vector.NewVec(types.T_text.ToType())
+			prepared.params = vector.NewVec(types.T_text.ToType(), cw.proc.Mp())
+			prepared.paramsMP = cw.proc.Mp()
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("1"), false, cw.proc.Mp()))
 			require.NoError(t, vector.AppendBytes(prepared.params, []byte("a"), false, cw.proc.Mp()))
 			prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(defines.MYSQL_TYPE_VAR_STRING), 0}
@@ -231,7 +232,7 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 			require.Equal(t, plan2.GetResultColumnsFromPlan(fresh.Plan), plan2.GetResultColumnsFromPlan(next))
 			input := batch.NewWithSize(1)
 			t.Cleanup(func() { input.Clean(cw.proc.Mp()) })
-			input.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+			input.Vecs[0] = vector.NewVec(types.T_varbinary.ToType(), cw.proc.Mp())
 			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a"), false, cw.proc.Mp()))
 			input.SetRowCount(1)
 			var expr *plan.Expr

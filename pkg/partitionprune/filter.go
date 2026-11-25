@@ -611,7 +611,7 @@ func constructVectorFromList(proc *process.Process, list []*plan.Expr) (*vector.
 		return nil, nil
 	}
 
-	vec := vector.NewVec(types.T(list[0].Typ.Id).ToType())
+	vec := vector.NewVec(types.T(list[0].Typ.Id).ToType(), proc.Mp())
 	if err := vec.PreExtend(len(list), proc.Mp()); err != nil {
 		return nil, err
 	}
@@ -836,7 +836,7 @@ func convertFoldExprWithPool(expr *plan.Expr, mp *mpool.MPool) (*plan.Expr, bool
 				},
 			}, true, nil
 		} else {
-			vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
+			vec := vector.NewVec(types.T_any.ToType(), mp)
 			defer vec.Free(mp)
 			err := vec.UnmarshalBinary(ef.Fold.Data)
 			if err != nil {

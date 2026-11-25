@@ -334,13 +334,13 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 
 	mp := mpool.MustNewZeroNoFixed()
 
-	inVec := vector.NewVec(types.T_int32.ToType())
+	inVec := vector.NewVec(types.T_int32.ToType(), mp)
 	vector.AppendFixed(inVec, int32(1), false, mp)
 	vector.AppendFixed(inVec, int32(10), false, mp)
 	vector.AppendFixed(inVec, int32(20), false, mp)
 	vector.AppendFixed(inVec, int32(21), false, mp)
 
-	prefixInVec := vector.NewVec(types.T_varchar.ToType())
+	prefixInVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	vector.AppendBytes(prefixInVec, []byte("aa"), false, mp)
 	vector.AppendBytes(prefixInVec, []byte("bb"), false, mp)
 	vector.AppendBytes(prefixInVec, []byte("cc"), false, mp)
@@ -380,7 +380,7 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 		if f.Op != function.PREFIX_IN && f.Op != function.PREFIX_EQ &&
 			f.Op != function.PREFIX_BETWEEN && f.Op != PrefixRangeLeftOpen &&
 			f.Op != PrefixRangeRightOpen && f.Op != PrefixRangeBothOpen {
-			vec := vector.NewVec(types.T_int32.ToType())
+			vec := vector.NewVec(types.T_int32.ToType(), mp)
 			vector.AppendFixed[int32](vec, int32(9), false, mp)
 			vector.AppendFixed[int32](vec, int32(10), false, mp)
 			vector.AppendFixed[int32](vec, int32(11), false, mp)
@@ -389,7 +389,7 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 			vector.AppendFixed[int32](vec, int32(21), false, mp)
 			vecs = append(vecs, vec)
 		} else {
-			vec := vector.NewVec(types.T_varchar.ToType())
+			vec := vector.NewVec(types.T_varchar.ToType(), mp)
 			vector.AppendBytes(vec, []byte("aaa"), false, mp)
 			vector.AppendBytes(vec, []byte("bbb"), false, mp)
 			vector.AppendBytes(vec, []byte("ccc"), false, mp)
@@ -455,7 +455,7 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 func TestMemPKFilterINWorkspaceRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { vec.Free(mp) })
 	for _, value := range []int64{9, -1, 3, 7, 3, 10} {
 		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
@@ -498,7 +498,7 @@ func TestMemPKFilterPrefixInScales(t *testing.T) {
 
 	for _, count := range []int{0, 1, 4, 5, 64, 1024} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
-			prefixes := vector.NewVec(types.T_varchar.ToType())
+			prefixes := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer prefixes.Free(mp)
 			for idx := 0; idx < count; idx++ {
 				require.NoError(t, vector.AppendBytes(prefixes, []byte(fmt.Sprintf("p%04d", idx)), false, mp))
@@ -514,7 +514,7 @@ func TestMemPKFilterPrefixInScales(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, filter.Valid())
 
-			input := vector.NewVec(types.T_varchar.ToType())
+			input := vector.NewVec(types.T_varchar.ToType(), mp)
 			defer input.Free(mp)
 			require.NoError(t, vector.AppendBytes(input, []byte("p0000-tail"), false, mp))
 			last := max(count-1, 0)
@@ -545,7 +545,7 @@ func TestMemPKFilterPrefixInScales(t *testing.T) {
 			{name: "empty prefix", prefixes: []string{"z", ""}, wantSkipped: 0},
 		} {
 			t.Run(test.name, func(t *testing.T) {
-				prefixes := vector.NewVec(types.T_varchar.ToType())
+				prefixes := vector.NewVec(types.T_varchar.ToType(), mp)
 				defer prefixes.Free(mp)
 				for _, prefix := range test.prefixes {
 					require.NoError(t, vector.AppendBytes(prefixes, []byte(prefix), false, mp))
@@ -559,7 +559,7 @@ func TestMemPKFilterPrefixInScales(t *testing.T) {
 				)
 				require.NoError(t, err)
 
-				input := vector.NewVec(types.T_varchar.ToType())
+				input := vector.NewVec(types.T_varchar.ToType(), mp)
 				defer input.Free(mp)
 				for _, value := range []string{"ax", "abx", "bx", "cx"} {
 					require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
@@ -609,7 +609,7 @@ func TestMemPKFilterDisjunctsAndConcurrentRead(t *testing.T) {
 	require.True(t, filter.Valid())
 	require.Len(t, filter.Specs(), 2)
 
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	defer input.Free(mp)
 	for value := int64(0); value < 10; value++ {
 		require.NoError(t, vector.AppendFixed(input, value, false, mp))
@@ -692,7 +692,7 @@ func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 	}
 
 	t.Run("IN type mismatch", func(t *testing.T) {
-		values := vector.NewVec(types.T_varchar.ToType())
+		values := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(values, []byte("1"), false, mp))
 		defer values.Free(mp)
 		assertFailOpen(t, types.T_int64, BasePKFilter{
@@ -704,7 +704,7 @@ func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 	})
 
 	t.Run("PREFIX_IN type mismatch", func(t *testing.T) {
-		values := vector.NewVec(types.T_varbinary.ToType())
+		values := vector.NewVec(types.T_varbinary.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(values, []byte("prefix"), false, mp))
 		defer values.Free(mp)
 		assertFailOpen(t, types.T_varchar, BasePKFilter{
@@ -716,7 +716,7 @@ func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 	})
 
 	t.Run("PREFIX_IN null fails open", func(t *testing.T) {
-		values := vector.NewVec(types.T_varchar.ToType())
+		values := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(values, nil, true, mp))
 		defer values.Free(mp)
 		assertFailOpen(t, types.T_varchar, BasePKFilter{
@@ -761,7 +761,7 @@ func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 				LB:    test.lb,
 			})
 
-			values := vector.NewVec(test.oid.ToType())
+			values := vector.NewVec(test.oid.ToType(), mp)
 			test.add(values)
 			defer values.Free(mp)
 			assertFailOpen(t, test.oid, BasePKFilter{
@@ -828,7 +828,7 @@ func BenchmarkMemPKFilterPrefixIn(b *testing.B) {
 func TestMemPKFilterINConcurrentFirstUseAndReplacement(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	input := vector.NewVec(types.T_int64.ToType())
+	input := vector.NewVec(types.T_int64.ToType(), mp)
 	t.Cleanup(func() { input.Free(mp) })
 	for _, value := range []int64{1, 2, 2, 3} {
 		require.NoError(t, vector.AppendFixed(input, value, false, mp))

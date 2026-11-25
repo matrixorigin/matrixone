@@ -17,6 +17,7 @@ package ops
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -97,6 +98,8 @@ type OpWorker struct {
 	Stats      Stats
 	ExecFunc   OpExecFunc
 	CancelFunc OpExecFunc
+	drainMu    sync.Mutex
+	drainCond  *sync.Cond
 }
 
 func NewOpWorker(ctx context.Context, name string, args ...int) *OpWorker {
@@ -128,10 +131,9 @@ func NewOpWorker(ctx context.Context, name string, args ...int) *OpWorker {
 
 func (w *OpWorker) Start() {
 	logutil.Debugf("%s Started", w.Name)
-	if w.State.Load() != CREATED {
+	if !w.State.CompareAndSwap(CREATED, RUNNING) {
 		panic(fmt.Sprintf("logic error: %v", w.State.Load()))
 	}
-	w.State.Store(RUNNING)
 	go func() {
 		for {
 			state := w.State.Load()
@@ -146,7 +148,7 @@ func (w *OpWorker) Start() {
 				// } else {
 				// 	w.CancelFunc(op)
 				// }
-				w.Pending.Add(-1)
+				w.doneOp()
 			case cmd := <-w.CmdC:
 				w.onCmd(cmd)
 			}
@@ -161,29 +163,47 @@ func (w *OpWorker) Stop() {
 }
 
 func (w *OpWorker) StopReceiver() {
-	state := w.State.Load()
-	if state >= StoppingReceiver {
-		return
+	for {
+		state := w.State.Load()
+		if state >= StoppingReceiver {
+			return
+		}
+		if state == CREATED {
+			if w.State.CompareAndSwap(CREATED, StoppingCMD) {
+				w.finishStop()
+				return
+			}
+			continue
+		}
+		if w.State.CompareAndSwap(state, StoppingReceiver) {
+			return
+		}
 	}
-	w.State.CompareAndSwap(state, StoppingReceiver)
+}
+
+func (w *OpWorker) doneOp() {
+	if w.Pending.Add(-1) == 0 && w.State.Load() == StoppingCMD {
+		w.drainMu.Lock()
+		if w.drainCond != nil {
+			w.drainCond.Signal()
+		}
+		w.drainMu.Unlock()
+	}
 }
 
 func (w *OpWorker) WaitStop() {
-	state := w.State.Load()
-	if state <= RUNNING {
+	if w.State.Load() <= RUNNING {
 		panic("logic error")
 	}
-	if state == STOPPED {
-		return
-	}
 	if w.State.CompareAndSwap(StoppingReceiver, StoppingCMD) {
-		pending := w.Pending.Load()
-		for {
-			if pending == 0 {
-				break
-			}
-			pending = w.Pending.Load()
+		w.drainMu.Lock()
+		if w.drainCond == nil {
+			w.drainCond = sync.NewCond(&w.drainMu)
 		}
+		for w.Pending.Load() != 0 {
+			w.drainCond.Wait()
+		}
+		w.drainMu.Unlock()
 		w.CmdC <- QUIT
 	}
 	<-w.ClosedCh
@@ -195,8 +215,13 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 		return false
 	}
 	w.Pending.Add(1)
+	return w.sendReservedOp(op)
+}
+
+// sendReservedOp either transfers the reservation to the worker or rolls it back.
+func (w *OpWorker) sendReservedOp(op iops.IOp) bool {
 	if w.State.Load() != RUNNING {
-		w.Pending.Add(-1)
+		w.doneOp()
 		return false
 	}
 	select {
@@ -204,7 +229,7 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 		return true
 	default:
 	}
-	w.Pending.Add(-1)
+	w.doneOp()
 	return false
 }
 
@@ -231,18 +256,22 @@ func (w *OpWorker) onCmd(cmd Cmd) {
 	switch cmd {
 	case QUIT:
 		// log.Infof("Quit OpWorker")
-		close(w.CmdC)
-		close(w.OpC)
-		if !w.State.CompareAndSwap(StoppingCMD, STOPPED) {
-			panic("logic error")
-		}
-		w.ClosedCh <- struct{}{}
+		w.finishStop()
 	case stuck: // For test only
 		<-w.Ctx.Done()
 		return
 	default:
 		panic(fmt.Sprintf("Unsupported cmd %d", cmd))
 	}
+}
+
+func (w *OpWorker) finishStop() {
+	close(w.CmdC)
+	close(w.OpC)
+	if !w.State.CompareAndSwap(StoppingCMD, STOPPED) {
+		panic("logic error")
+	}
+	close(w.ClosedCh)
 }
 
 func (w *OpWorker) StatsString() string {

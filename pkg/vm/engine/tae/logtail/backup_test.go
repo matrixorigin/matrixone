@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -78,7 +77,7 @@ func TestBackupDataSinkerCleanupAfterWriteError(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	data := ckputil.NewObjectListBatch()
+	data := ckputil.NewObjectListBatch(mp)
 	defer data.Clean(mp)
 	stats := objectio.NewObjectStats()
 	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
@@ -114,6 +113,44 @@ func (fs *failingReadFileService) Read(ctx context.Context, vector *fileservice.
 		return errors.New("checkpoint data read failure")
 	}
 	return fs.FileService.Read(ctx, vector)
+}
+
+func TestBackupShrinksReadOnlyTombstones(t *testing.T) {
+	source := newBackupTombstoneTestBatch(t, types.T_int64, nil)
+	defer source.Clean(common.DebugAllocator)
+	var target, other types.Blockid
+	other[0] = 1
+	remaining := types.NewRowid(&other, 2)
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(source.Vecs[0], 2, remaining))
+
+	loaded, err := source.Window(0, source.RowCount())
+	require.NoError(t, err)
+	defer loaded.Clean(common.DebugAllocator)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	tombstone := &objData{stats: stats, appendable: true, data: []*batch.Batch{loaded}}
+	scan := func(visit func(*objData) (bool, error)) error {
+		_, err := visit(tombstone)
+		return err
+	}
+
+	for _, shrink := range []bool{false, true} {
+		mask := objectio.GetNoReuseBitmap()
+		err := GetTombstonesByBlockId(&target, &mask, scan, shrink)
+		rows := mask.ToI64Array(nil)
+		mask.Release()
+		require.NoError(t, err)
+		require.Equal(t, []int64{0, 1}, rows)
+		if !shrink {
+			require.True(t, loaded.Vecs[0].IsReadOnly())
+			require.Equal(t, 3, loaded.RowCount())
+		}
+	}
+	require.Equal(t, 1, loaded.RowCount())
+	require.Equal(t, remaining, vector.GetFixedAtWithTypeCheck[types.Rowid](loaded.Vecs[0], 0))
+	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](loaded.Vecs[1], 0))
+	require.Equal(t, types.NewRowid(&target, 0), vector.GetFixedAtWithTypeCheck[types.Rowid](source.Vecs[0], 0))
+	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](source.Vecs[1], 0))
 }
 
 func TestCanonicalizeBackupTombstone(t *testing.T) {
@@ -266,14 +303,14 @@ func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 			name:   "null commit timestamp",
 			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
-				nulls.Add(bat.Vecs[2].GetNulls(), 1)
+				bat.Vecs[2].GetNulls().Add(1)
 			},
 		},
 		{
 			name:   "null abort flag",
 			layout: backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, 3),
 			mutate: func(bat *batch.Batch) {
-				nulls.Add(bat.Vecs[3].GetNulls(), 1)
+				bat.Vecs[3].GetNulls().Add(1)
 			},
 		},
 	}
@@ -577,10 +614,10 @@ func newBackupTombstoneTestBatch(t *testing.T, pkType types.T, trailingTypes []t
 	t.Helper()
 
 	bat := batch.NewWithSize(len(objectio.TombstoneSeqnums_CN_Created) + len(trailingTypes))
-	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-	bat.Vecs[1] = vector.NewVec(pkType.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), common.DebugAllocator)
+	bat.Vecs[1] = vector.NewVec(pkType.ToType(), common.DebugAllocator)
 	for pos, typ := range trailingTypes {
-		bat.Vecs[len(objectio.TombstoneSeqnums_CN_Created)+pos] = vector.NewVec(typ.ToType())
+		bat.Vecs[len(objectio.TombstoneSeqnums_CN_Created)+pos] = vector.NewVec(typ.ToType(), common.DebugAllocator)
 	}
 
 	var deletedBlock, physicalBlock types.Blockid

@@ -52,7 +52,7 @@ func TestGenScalarInt64(t *testing.T) {
 	require.Equal(t, int64(0), genScalarInt64(executor.Result{Batches: []*batch.Batch{nil}})) // nil batch skipped
 
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], int64(42), false, mp))
 	bat.SetRowCount(1)
 	require.Equal(t, int64(42), genScalarInt64(executor.Result{Batches: []*batch.Batch{bat}}))
@@ -80,7 +80,7 @@ func TestQueryCdcGenerationError(t *testing.T) {
 
 func int64Result(t *testing.T, mp *mpool.MPool, v int64) executor.Result {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], v, false, mp))
 	bat.SetRowCount(1)
 	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}

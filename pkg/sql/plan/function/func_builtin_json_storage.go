@@ -59,7 +59,6 @@ func jsonStorageCheckPreparedInput(
 	if input == nil || selectList != nil && selectList.IgnoreAllRow() {
 		return nil
 	}
-	preparedType := input.GetPrepareParamType()
 	for row := 0; row < length; row++ {
 		if selectList != nil && selectList.Contains(uint64(row)) {
 			continue
@@ -73,15 +72,6 @@ func jsonStorageCheckPreparedInput(
 		}
 		runtimeType := input.GetType().Oid
 		if runtimeType != types.T_any && runtimeType != types.T_json && !runtimeType.IsMySQLString() {
-			return jsonStorageInvalidArg(proc, functionName)
-		}
-		if preparedType != types.T_any {
-			if preparedType != types.T_json && !preparedType.IsMySQLString() {
-				return jsonStorageInvalidArg(proc, functionName)
-			}
-			continue
-		}
-		if input.GetPrepareParamKindAt(physicalRow) != vector.PrepareParamNone {
 			return jsonStorageInvalidArg(proc, functionName)
 		}
 	}

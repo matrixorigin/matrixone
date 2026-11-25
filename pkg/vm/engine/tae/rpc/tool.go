@@ -815,7 +815,14 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 				err = moerr.NewInfoNoCtx(fmt.Sprintf("invalid rows %v out of row count %v", c.rows, blk.GetRows()))
 				return
 			}
-			vec, _ = vec.Window(left, right)
+			window, winErr := vec.Window(left, right)
+			if winErr != nil {
+				err = winErr
+				return
+			}
+			// The window is a read-only reference: Free only drops it.
+			defer window.Free(nil)
+			vec = window
 		}
 
 		col := ColumnJson{

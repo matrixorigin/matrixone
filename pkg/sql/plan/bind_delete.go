@@ -241,6 +241,13 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			return 0, err
 		}
 	}
+	syncIrregular, unmaintainedIrregular, err := hasSyncIrregularIndex(dmlCtx.tableDefs[0])
+	if err != nil {
+		return 0, err
+	}
+	if unmaintainedIrregular {
+		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+	}
 
 	var selectList []tree.SelectExpr
 	physicalGeneratedRefs := make(map[*tree.UnresolvedName]struct{})
@@ -320,7 +327,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	var returningIrregularIndexes []*plan.IndexDef
-	if stmt.HasReturning() {
+	if stmt.HasReturning() || syncIrregular {
 		tableDef := dmlCtx.tableDefs[0]
 		returningIrregularIndexes = getIrregularIndexes(tableDef)
 		alias := dmlCtx.aliases[0]
@@ -370,10 +377,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
 
 	for i, tableDef := range dmlCtx.tableDefs {
-		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
-		if hasIrregularIndex && !stmt.HasReturning() {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
-		}
+		validIndexes, _ := getValidIndexes(tableDef)
 		tableDef.Indexes = validIndexes
 
 		idxDefs := tableDef.Indexes

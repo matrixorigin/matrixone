@@ -490,12 +490,12 @@ func cloneCatalogLockBatch(
 			}
 		}
 	}()
-	inputs[0] = vector.NewVec(types.T_uint32.ToType())
+	inputs[0] = vector.NewVec(types.T_uint32.ToType(), proc.Mp())
 	if err := vector.AppendFixed(inputs[0], accountID, false, proc.GetMPool()); err != nil {
 		return nil, err
 	}
 	for i, name := range names {
-		inputs[i+1] = vector.NewVec(types.T_varchar.ToType())
+		inputs[i+1] = vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 		if err := vector.AppendBytes(inputs[i+1], []byte(name), false, proc.GetMPool()); err != nil {
 			return nil, err
 		}

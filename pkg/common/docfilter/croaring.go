@@ -78,8 +78,10 @@ func vecFixedArgs(v *vector.Vector) (data unsafe.Pointer, dataLen C.size_t, elem
 	// underlying bitmap may be larger (vector.SetLength preserves bits beyond the
 	// logical length), but C callers iterate [0, nitem) and should never read past
 	// the logical range.
-	if nb := v.GetNulls().GetBitmap(); nb != nil && !isConst {
-		nullPtr = unsafe.Pointer(nb.Ptr())
+	// The bitmap ends at its highest null, so it can be shorter than nitem
+	// bits; C tests the bit of every row, so pass words covering every row.
+	if words := v.GetNulls().GetBitmap().WordsCovering(int(nitem)); words != nil && !isConst {
+		nullPtr = unsafe.Pointer(&words[0])
 		nullLen = C.size_t((uint64(nitem) + 7) / 8)
 	}
 	return

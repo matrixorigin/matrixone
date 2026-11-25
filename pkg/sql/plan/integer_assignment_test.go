@@ -38,22 +38,22 @@ func TestIntegerAssignmentSourceCastSelection(t *testing.T) {
 	for _, version := range []int64{defines.MORPCVersion4, defines.MORPCVersion5} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		for _, source := range []*Expr{makePlan2Float64ConstExprWithType(2.5), param} {
-			want := "cast"
-			if version == defines.MORPCVersion5 {
-				want = "cast_assign"
-			}
 			bound, err := forceAssignmentCastExprWithProcess(t.Context(), DeepCopyExpr(source), dst, false, proc)
 			require.NoError(t, err)
-			require.Equal(t, want, bound.GetF().Func.ObjName)
+			require.Equal(t, "cast_assign", bound.GetF().Func.ObjName)
 			targetExpr := &Expr{Typ: dst, Expr: &pb.Expr_T{T: &pb.TargetType{}}}
 			bound2, err := forceCastExpr2WithProcess(t.Context(), DeepCopyExpr(source), target, targetExpr, false, proc)
 			require.NoError(t, err)
-			require.Equal(t, want, bound2.GetF().Func.ObjName)
+			require.Equal(t, "cast_assign", bound2.GetF().Func.ObjName)
 		}
 		require.Equal(t, "cast", assignmentCastFunctionNameForSource(proc.Ctx, makePlan2Int64ConstExprWithType(7), dst, false, proc))
-		require.Equal(t, "cast", assignmentCastFunctionNameForSource(proc.Ctx, makePlan2StringConstExprWithType("2.5"), dst, false, proc))
+		require.Equal(t, "cast_assign", assignmentCastFunctionNameForSource(proc.Ctx, makePlan2StringConstExprWithType("2.5"), dst, false, proc))
+		for _, oid := range []types.T{types.T_int64, types.T_decimal64, types.T_date} {
+			typ := oid.ToType()
+			require.Equal(t, "cast_assign", assignmentCastFunctionName(makePlan2Type(&typ), false, proc))
+			require.Equal(t, "cast_ignore", assignmentCastFunctionName(makePlan2Type(&typ), true, proc))
+		}
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
 	assignment, err := forceAssignmentCastExprWithProcess(t.Context(), param, dst, false, proc)
 	require.NoError(t, err)
 	pos, ok := directIntegerAssignmentParam(assignment)
@@ -69,6 +69,25 @@ func TestIntegerAssignmentSourceCastSelection(t *testing.T) {
 	require.NoError(t, err)
 	_, ok = directIntegerAssignmentParam(wrapped)
 	require.False(t, ok)
+}
+
+func TestIntegerDateAssignmentKeepsStrictDiagnostic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.T_date.ToType()
+	dst := makePlan2Type(&target)
+	source := makePlan2Int64ConstExprWithType(20220102)
+	for _, build := range []func() (*Expr, error){
+		func() (*Expr, error) {
+			return forceAssignmentCastExprWithProcess(t.Context(), source, dst, false, proc)
+		},
+		func() (*Expr, error) {
+			return forceCastExpr2WithProcess(t.Context(), source, target,
+				&Expr{Typ: dst, Expr: &pb.Expr_T{T: &pb.TargetType{}}}, false, proc)
+		},
+	} {
+		_, err := build()
+		require.ErrorContains(t, err, "invalid argument operator cast_strict")
+	}
 }
 
 func TestMediumIntAssignmentRequiresClusterProtocolFence(t *testing.T) {

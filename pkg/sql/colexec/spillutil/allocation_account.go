@@ -19,8 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 // Spill allocation sites occupy a dedicated range within each operator owner
@@ -34,24 +32,27 @@ const (
 	SpillAllocationSiteRowIDs
 	SpillAllocationSiteMarshalBuffer
 	SpillAllocationSiteCoalesceBuffer
-	SpillAllocationSiteDecodedNulls
-	SpillAllocationSiteDecodedGrouping
-	SpillAllocationSiteSelectedNulls
-	SpillAllocationSiteSelectedGrouping
+	_ // reserved: was SpillAllocationSiteDecodedNulls
+	_ // reserved: was SpillAllocationSiteDecodedGrouping
+	_ // reserved: was SpillAllocationSiteSelectedNulls
+	_ // reserved: was SpillAllocationSiteSelectedGrouping
 )
 
 // Sites 44-59 belong to hashbuild runtime-filter and dedup allocations.
 const SpillAllocationSiteReadBuffer mpool.AllocationSite = 60
 
 // SpillAllocationAccount is the allocation provenance for one spill
-// engine.
+// engine. Decoded (spill-read) and selected (scatter) vectors allocate
+// through accounted views of the pool the engine runs on; the views are built
+// on first use for that pool.
 type SpillAllocationAccount struct {
 	account       *mpool.AllocationAccount
 	owner         mpool.AllocationOwner
 	capacityClass mpool.AllocationCapacityClass
 
-	decoded  *vector.AllocationAccountSelection
-	selected *vector.AllocationAccountSelection
+	viewPool *mpool.MPool
+	decoded  *mpool.MPool
+	selected *mpool.MPool
 }
 
 func NewSpillAllocationAccount(
@@ -70,84 +71,72 @@ func NewSpillAllocationAccountWithCapacityClass(
 	owner mpool.AllocationOwner,
 	capacityClass mpool.AllocationCapacityClass,
 ) (*SpillAllocationAccount, error) {
-	decoded, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		owner,
-		SpillAllocationSiteDecodedData,
-		SpillAllocationSiteDecodedArea,
-		SpillAllocationSiteDecodedNulls,
-		SpillAllocationSiteDecodedGrouping,
-		capacityClass,
-	)
-	if err != nil {
-		return nil, err
-	}
-	selected, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		account,
-		owner,
-		SpillAllocationSiteSelectedData,
-		SpillAllocationSiteSelectedArea,
-		SpillAllocationSiteSelectedNulls,
-		SpillAllocationSiteSelectedGrouping,
-		capacityClass,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &SpillAllocationAccount{
+	a := &SpillAllocationAccount{
 		account:       account,
 		owner:         owner,
 		capacityClass: capacityClass,
-		decoded:       decoded,
-		selected:      selected,
-	}, nil
+	}
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 func (a *SpillAllocationAccount) validate() error {
 	if a == nil || a.account == nil || a.account.Handle() == 0 ||
 		a.owner < mpool.AllocationOwnerMin ||
-		a.owner > mpool.AllocationOwnerCatalogMax ||
-		a.decoded == nil || a.selected == nil {
+		a.owner > mpool.AllocationOwnerCatalogMax {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	return nil
 }
 
-func newSpillBatch(
-	size int,
-	selection *vector.AllocationAccountSelection,
-) (*batch.Batch, error) {
-	if selection == nil {
-		return nil, mpool.ErrAllocationAccountInvalid
-	}
-	bat := batch.NewOffHeapWithSize(size)
-	if err := bat.SetAllocationAccount(selection); err != nil {
-		bat.Clean(nil)
-		return nil, err
-	}
-	return bat, nil
-}
-
-// ConfigureDecodedBatch assigns the spill engine's decoded-data provenance to
-// an empty off-heap destination before its first physical allocation.
-func (a *SpillAllocationAccount) ConfigureDecodedBatch(bat *batch.Batch) error {
+func (a *SpillAllocationAccount) views(mp *mpool.MPool) error {
 	if err := a.validate(); err != nil {
 		return err
 	}
-	if bat == nil {
+	if mp == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
-	return bat.SetAllocationAccount(a.decoded)
+	if a.viewPool == mp && a.decoded != nil && a.selected != nil {
+		return nil
+	}
+	decoded, err := mp.WithAccount(
+		a.account, a.owner, SpillAllocationSiteDecodedData, a.capacityClass)
+	if err != nil {
+		return err
+	}
+	selected, err := mp.WithAccount(
+		a.account, a.owner, SpillAllocationSiteSelectedData, a.capacityClass)
+	if err != nil {
+		return err
+	}
+	a.viewPool, a.decoded, a.selected = mp, decoded, selected
+	return nil
 }
 
-func newSpillVector(
-	typ types.Type,
-	selection *vector.AllocationAccountSelection,
-) (*vector.Vector, error) {
-	if selection == nil {
-		return nil, mpool.ErrAllocationAccountInvalid
+// DecodedMP returns the accounted view of mp that spill-read (decoded)
+// batches allocate through.
+func (a *SpillAllocationAccount) DecodedMP(mp *mpool.MPool) (*mpool.MPool, error) {
+	if err := a.views(mp); err != nil {
+		return nil, err
 	}
-	return vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+	return a.decoded, nil
+}
+
+// SelectedMP returns the accounted view of mp that scatter-selected batches
+// allocate through.
+func (a *SpillAllocationAccount) SelectedMP(mp *mpool.MPool) (*mpool.MPool, error) {
+	if err := a.views(mp); err != nil {
+		return nil, err
+	}
+	return a.selected, nil
+}
+
+// newSpillBatch returns an empty off-heap batch; callers allocate its data
+// through DecodedMP or SelectedMP.
+func newSpillBatch(size int) *batch.Batch {
+	return batch.NewWithSize(size)
 }
 
 // GrowAccountedSlice grows an off-heap typed slice under the spill engine's

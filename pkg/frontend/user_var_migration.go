@@ -23,7 +23,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -112,11 +111,13 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 		}
 		typ := *plan2.DeepCopyType(&variable.Type)
 		item := &query.MigrateUserDefinedVar{
-			Name:                name,
-			Value:               value,
-			Sql:                 variable.Sql,
-			IsBin:               variable.IsBin,
-			PrepareParamKind:    uint32(variable.PrepareParamKind),
+			Name:  name,
+			Value: value,
+			Sql:   variable.Sql,
+			IsBin: variable.IsBin,
+			// Kept on the wire for CNs that still read it; it is derived from
+			// the type and ignored on receipt.
+			PrepareParamKind:    uint32(variable.prepareParamKind()),
 			RuntimeStringDomain: uint32(variable.RuntimeStringDomain),
 			Type:                &typ,
 		}
@@ -231,7 +232,7 @@ func decodeUserDefinedVars(
 		if _, exists := result[name]; exists {
 			return nil, moerr.NewInternalErrorf(ctx, "duplicate user variable %q in connection migration", name)
 		}
-		if item.PrepareParamKind > uint32(vector.PrepareParamBoolean) {
+		if item.PrepareParamKind > uint32(types.StringConversionBoolean) {
 			return nil, moerr.NewInternalErrorf(ctx, "invalid prepare parameter kind for user variable %q", name)
 		}
 		runtimeDomain := types.RuntimeStringDomain(item.RuntimeStringDomain)
@@ -259,7 +260,6 @@ func decodeUserDefinedVars(
 			Sql:                 item.Sql,
 			IsBin:               item.IsBin,
 			Type:                typ,
-			PrepareParamKind:    vector.PrepareParamKind(item.PrepareParamKind),
 			RuntimeStringDomain: runtimeDomain,
 			Replayable:          replayable && (value != nil || types.T(typ.Id) != types.T_any || regexpStringResult),
 		}

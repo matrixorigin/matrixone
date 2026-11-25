@@ -29,6 +29,8 @@ import (
 // Collected components preserve their original slots, including nil slots.
 // Only the hash table decides uniqueness; these batches never deduplicate.
 type uniqueKeyBatch struct {
+	// mp is the pool vecs were created with; they are freed with it.
+	mp          *mpool.MPool
 	vecs        []*vector.Vector
 	checkpoints []vector.AppendCheckpoint
 	metadata    *mpool.CapacityLease
@@ -50,12 +52,18 @@ func (b *uniqueKeyBatch) length() int {
 	return 0
 }
 
+// free releases the batch; mp is used only when the batch never recorded
+// its pool.
 func (b *uniqueKeyBatch) free(mp *mpool.MPool) {
+	if b.mp != nil {
+		mp = b.mp
+	}
 	for _, v := range b.vecs {
 		if v != nil {
 			v.Free(mp)
 		}
 	}
+	b.mp = nil
 	b.vecs, b.checkpoints = nil, nil
 	b.metadata.Release()
 	b.metadata = nil
@@ -116,17 +124,14 @@ func (hb *HashmapBuilder) newUniqueKeyBatch(mp *mpool.MPool) (out uniqueKeyBatch
 	if err != nil {
 		return out, err
 	}
+	out.mp = mp
 	out.vecs = make([]*vector.Vector, width)
 	out.checkpoints = make([]vector.AppendCheckpoint, width)
 	for i, src := range hb.curVecs {
 		if !hb.collectUniqueKeySlot(i) {
 			continue
 		}
-		out.vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*src.GetType(), hb.uniqueKeyAllocation)
-		if err != nil {
-			out.free(mp)
-			return uniqueKeyBatch{}, err
-		}
+		out.vecs[i] = vector.NewVec(*src.GetType(), mp)
 		if capacityHint > 0 {
 			if err = out.vecs[i].PreExtend(capacityHint, mp); err != nil {
 				out.free(mp)
@@ -293,6 +298,10 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 	if len(hb.curVecs) == 0 {
 		return nil
 	}
+	keyMP, err := hb.uniqueKeyAllocation.MP(proc.Mp())
+	if err != nil {
+		return err
+	}
 	b := &hb.uniqueKeys
 	oldChunks, oldRows := len(b.rest), b.count()
 	if count > math.MaxInt32-oldRows {
@@ -353,7 +362,7 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		}
 		if len(tail.vecs) == 0 {
 			var next uniqueKeyBatch
-			next, err = hb.newUniqueKeyBatch(proc.Mp())
+			next, err = hb.newUniqueKeyBatch(keyMP)
 			if err != nil {
 				return err
 			}
@@ -370,7 +379,7 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		}
 		if n == 0 {
 			var next uniqueKeyBatch
-			next, err = hb.newUniqueKeyBatch(proc.Mp())
+			next, err = hb.newUniqueKeyBatch(keyMP)
 			if err != nil {
 				return err
 			}
@@ -388,9 +397,9 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 				continue
 			}
 			if sels == nil {
-				err = v.UnionBatch(hb.curVecs[i], int64(start), n, nil, proc.Mp())
+				err = v.UnionBatch(hb.curVecs[i], int64(start), n, nil, keyMP)
 			} else {
-				err = v.Union(hb.curVecs[i], sels[:n], proc.Mp())
+				err = v.Union(hb.curVecs[i], sels[:n], keyMP)
 			}
 			if err != nil {
 				return err
@@ -404,4 +413,13 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		}
 	}
 	return nil
+}
+
+// uniqueKeyMP is the pool the collected unique-key vectors were created with,
+// which every call on them must pass.
+func (hb *HashmapBuilder) uniqueKeyMP(proc *process.Process) (*mpool.MPool, error) {
+	if mp := hb.uniqueKeys.first.mp; mp != nil {
+		return mp, nil
+	}
+	return hb.uniqueKeyAllocation.MP(proc.Mp())
 }

@@ -95,7 +95,7 @@ func BenchmarkFusedTopN(b *testing.B) {
 			typs := []types.Type{types.T_int64.ToType(), types.T_array_float32.ToType(), types.T_int64.ToType()}
 			input := batch.NewWithSize(3)
 			for i := range typs {
-				input.Vecs[i] = vector.NewVec(typs[i])
+				input.Vecs[i] = vector.NewVec(typs[i], pool)
 			}
 			b.Cleanup(func() { input.Clean(pool) })
 			values := make([]float32, dimensions)
@@ -148,7 +148,7 @@ func BenchmarkFusedTopN(b *testing.B) {
 				defer signal() // read failures must not strand the cohort barrier
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
-				filter, output := vector.NewVec(typs[0]), vector.NewVec(typs[2])
+				filter, output := vector.NewVec(typs[0], mp), vector.NewVec(typs[2], mp)
 				defer filter.Free(mp)
 				defer output.Free(mp)
 				op := &objectio.IndexReaderTopOp{Typ: types.T_array_float32, MetricType: metric.Metric_L2Distance, NumVec: query, Limit: 10}

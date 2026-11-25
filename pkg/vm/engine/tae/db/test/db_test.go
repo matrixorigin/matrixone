@@ -69,6 +69,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -219,7 +220,7 @@ func TestPrintVector(t *testing.T) {
 
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	vec1 := vector.NewVec(types.T_uint32.ToType())
+	vec1 := vector.NewVec(types.T_uint32.ToType(), mp)
 	defer vec1.Free(mp)
 	for i := 0; i < 10; i++ {
 		err = vector.AppendFixed[uint32](vec1, math.MaxUint32, false, mp)
@@ -1473,7 +1474,7 @@ func TestFlushTabletail(t *testing.T) {
 				defer view.Close()
 				viewDel := 0
 				if view.Deletes != nil {
-					viewDel = view.Deletes.GetCardinality()
+					viewDel = view.Deletes.Count()
 				}
 				assert.Equal(t, dels[i], viewDel)
 				view.Compact()
@@ -1515,7 +1516,7 @@ func TestFlushTabletail(t *testing.T) {
 
 				viewDel := 0
 				if views.Deletes != nil {
-					viewDel = views.Deletes.GetCardinality()
+					viewDel = views.Deletes.Count()
 				}
 				assert.Equal(t, dels[i], viewDel)
 				views.Compact()
@@ -2356,7 +2357,7 @@ func TestADA(t *testing.T) {
 			err := blk.HybridScan(ctx, &view, uint16(j), []int{schema.GetSingleSortKeyIdx()}, common.DefaultAllocator)
 			assert.NoError(t, err)
 			assert.Equal(t, 4, view.Length())
-			assert.Equal(t, 3, view.Deletes.GetCardinality())
+			assert.Equal(t, 3, view.Deletes.Count())
 			view.Close()
 
 		}
@@ -2522,10 +2523,10 @@ func TestChaos1(t *testing.T) {
 	assert.NoError(t, err)
 	defer view.Close()
 	assert.Equal(t, int(appendCnt), view.Length())
-	mask := view.Deletes
+	// Compact releases the deletes bitmap, so count it first.
+	assert.Equal(t, int(deleteCnt), view.Deletes.Count())
 	view.Compact()
 	t.Log(view.String())
-	assert.Equal(t, int(deleteCnt), mask.GetCardinality())
 }
 
 // Testing Steps
@@ -2834,7 +2835,7 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, uint32(9), resp.Commands[0].Bat.Vecs[0].Len) /* 5 create + 4 delete */
 	// start ts should not be empty
 	startTSVec := resp.Commands[0].Bat.Vecs[9]
-	cnStartVec, err := vector.ProtoVectorToVector(startTSVec)
+	cnStartVec, err := vector.ProtoVectorToVector(startTSVec, mpool.MustNewZero())
 	assert.NoError(t, err)
 	startTSs := vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
@@ -2845,7 +2846,7 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, uint32(4), resp.Commands[1].Bat.Vecs[0].Len) /* 2 create + 2 delete */
 	// start ts should not be empty
 	startTSVec = resp.Commands[1].Bat.Vecs[9]
-	cnStartVec, err = vector.ProtoVectorToVector(startTSVec)
+	cnStartVec, err = vector.ProtoVectorToVector(startTSVec, mpool.MustNewZero())
 	assert.NoError(t, err)
 	startTSs = vector.MustFixedColWithTypeCheck[types.TS](cnStartVec)
 	for _, ts := range startTSs {
@@ -4267,6 +4268,17 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	require.NoError(t, abortTxn.PrePrepare(ctx))
 	require.NoError(t, abortTxn.PreApplyCommit())
 	require.NoError(t, abortTxn.Rollback(ctx))
+
+	// Insert a terminal reservation with no prepare timestamp. Unlike the
+	// rollback above, the range collector omits this slot entirely. The
+	// following ordinary append still uses the next physical offset.
+	gapTxn, gapRel := tae.GetRelation()
+	metas := testutil.GetAllAppendableMetas(gapRel, false)
+	require.Len(t, metas, 1)
+	gap := updates.NewAppendNode(nil, 2, 3, false, nil)
+	gap.Start, gap.End, gap.Aborted = abortTxn.GetStartTS(), abortTxn.GetCommitTS(), true
+	require.NoError(t, metas[0].GetObjectData().OnReplayAppend(gap))
+	require.NoError(t, gapTxn.Rollback(ctx))
 	tae.DoAppend(tail)
 
 	deleteTxn, deleteRel := tae.GetRelation()
@@ -4274,7 +4286,7 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 	key := tail.Vecs[sortKeyIdx].Get(0)
 	id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(key))
 	require.NoError(t, err)
-	require.Equal(t, uint32(2), offset, "rollback hole must retain its physical slot")
+	require.Equal(t, uint32(3), offset, "both holes must retain their physical slots")
 	oldBlockID := id.BlockID
 	require.NoError(t, deleteRel.RangeDelete(id, offset, offset, handle.DT_Normal))
 	require.NoError(t, deleteTxn.Commit(ctx))
@@ -4297,8 +4309,14 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 
 	// The historical snapshot is held open while the aobject location is
 	// replaced, so it cannot use tombstones transferred by the later flush.
-	// Its tombstone still targets original offset 2; it must hide that row while
-	// preserving the later live row at offset 3.
+	// Its tombstone targets physical offset 3 and the surviving value is still
+	// at offset 4 in both point-read paths.
+	for _, skipDeleteCheck := range []bool{false, true} {
+		value, isNull, err := snapshotRel.GetValue(id, 4, uint16(sortKeyIdx), skipDeleteCheck)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, rows.Vecs[sortKeyIdx].Get(3), value)
+	}
 	var view *containers.Batch
 	err = tables.HybridScanByBlock(
 		ctx,
@@ -5307,7 +5325,7 @@ func TestBlockRead(t *testing.T) {
 				//bat.Attrs = append(bat.Attrs, cols...)
 
 				for i := 0; i < len(typs); i++ {
-					bat.Vecs[i] = vector.NewVec(typs[i])
+					bat.Vecs[i] = vector.NewVec(typs[i], pool)
 				}
 				return bat
 			}
@@ -5452,7 +5470,7 @@ func TestBlockRead2(t *testing.T) {
 				//bat.Attrs = append(bat.Attrs, cols...)
 
 				for i := 0; i < len(typs); i++ {
-					bat.Vecs[i] = vector.NewVec(typs[i])
+					bat.Vecs[i] = vector.NewVec(typs[i], pool)
 				}
 				return bat
 			}
@@ -6915,6 +6933,8 @@ func TestAlterFakePk(t *testing.T) {
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema(false)
 		sels := &nulls.Nulls{}
+		sels.Init(common.DefaultAllocator)
+		defer sels.Free()
 		sels.Add(1)
 		sels.Add(3)
 		rows := make([]int, 0, 4)
@@ -6953,7 +6973,7 @@ func TestAlterFakePk(t *testing.T) {
 	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)          // data insert
 	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)          // data delete
 
-	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat)
+	dataObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[0].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, common.DefaultAllocator)
 	t.Log(tnDataObjectBat.Attrs)
@@ -6962,7 +6982,7 @@ func TestAlterFakePk(t *testing.T) {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	tombstoneObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat)
+	tombstoneObjectBat, err := batch.ProtoBatchToBatch(resp.Commands[1].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, common.DefaultAllocator)
 	t.Log(tnTombstoneObjectBat.Attrs)
@@ -6971,7 +6991,7 @@ func TestAlterFakePk(t *testing.T) {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	insBat, err := batch.ProtoBatchToBatch(resp.Commands[2].Bat)
+	insBat, err := batch.ProtoBatchToBatch(resp.Commands[2].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, common.DefaultAllocator)
 	t.Log(tnInsBat.Attrs)
@@ -6981,7 +7001,7 @@ func TestAlterFakePk(t *testing.T) {
 	}
 	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
-	delBat, err := batch.ProtoBatchToBatch(resp.Commands[3].Bat)
+	delBat, err := batch.ProtoBatchToBatch(resp.Commands[3].Bat, mpool.MustNewZero())
 	assert.NoError(t, err)
 	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, common.DefaultAllocator)
 	t.Log(tnDelBat.Attrs)
@@ -7568,7 +7588,7 @@ func TestAppendAndGC2(t *testing.T) {
 		if group != wal.GroupFiles {
 			return driver.RE_Nomal
 		}
-		vec := vector.NewVec(types.Type{})
+		vec := vector.NewVec(types.Type{}, mpool.MustNewZero())
 		if err = vec.UnmarshalBinary(payload); err != nil {
 			return driver.RE_Internal
 		}
@@ -9719,7 +9739,8 @@ func TestForceCheckpointWithFullyReservedWAL(t *testing.T) {
 			if group != wal.GroupFiles {
 				return driver.RE_Nomal
 			}
-			vec := vector.NewVec(types.Type{})
+			// A nil pool decodes payload as a read-only reference.
+			vec := vector.NewVec(types.Type{}, nil)
 			defer vec.Free(nil)
 			if err := vec.UnmarshalBinary(payload); err != nil {
 				return driver.RE_Internal
@@ -11054,6 +11075,8 @@ func TestCollectDeletesInRangeAfterEmptyTombstoneFlush(t *testing.T) {
 }
 
 func TestCollectDeletesInRange2(t *testing.T) {
+	// DebugAllocator is shared by the package; check only this test's bytes.
+	debugBaseline := common.DebugAllocator.CurrNB()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11091,7 +11114,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	pkVec.Close()
 	rowidVec.Close()
-	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 
 	txn, rel = tae.GetRelation()
 	blk = testutil.GetOneObject(rel)
@@ -12781,6 +12804,8 @@ func TestTryDeleteByDeltaloc1(t *testing.T) {
 }
 
 func TestTryDeleteByDeltaloc2(t *testing.T) {
+	// DebugAllocator is shared by the package; check only this test's bytes.
+	debugBaseline := common.DebugAllocator.CurrNB()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12812,7 +12837,7 @@ func TestTryDeleteByDeltaloc2(t *testing.T) {
 	require.False(t, stats.IsZero())
 	pkVec.Close()
 	rowIDVec.Close()
-	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 
 	tae.MergeBlocks(true)
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -13526,6 +13551,8 @@ func TestDeleteWithObjectStats(t *testing.T) {
 }
 
 func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
+	// DebugAllocator is shared by the package; check only this test's bytes.
+	debugBaseline := common.DebugAllocator.CurrNB()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -13548,6 +13575,7 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 
 	txn, _ = tae.GetRelation()
 	deletes := &nulls.Nulls{}
+	deletes.Init(common.DebugAllocator)
 	nbid := types.NewBlockidWithObjectID(dataObj.ID(), 0)
 	atombstone.GetObjectData().FillBlockTombstones(
 		ctx,
@@ -13558,7 +13586,8 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 		common.DebugAllocator)
 	assert.NoError(t, txn.Commit(ctx))
 	assert.Equal(t, 1, deletes.Count())
-	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+	deletes.Free()
+	assert.Equal(t, debugBaseline, common.DebugAllocator.CurrNB())
 }
 
 func TestTransferS3Deletes(t *testing.T) {
@@ -14645,15 +14674,8 @@ func TestCheckpointV2(t *testing.T) {
 	assert.NoError(t, err)
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx, readTxn, tables.ReadSysTableBatch, func(cols []containers.Vector, pkidx int) (err2 error) {
-			_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-			return
-		}, &objlistReplayer{},
-	)
-	for _, fn := range closeFn {
-		fn()
-	}
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)
 
@@ -14706,8 +14728,9 @@ func TestCheckpointV2(t *testing.T) {
 
 type objlistReplayer struct{}
 
-func (r *objlistReplayer) Submit(_ uint64, fn func()) {
+func (r *objlistReplayer) Submit(_ context.Context, _ uint64, fn func()) error {
 	fn()
+	return nil
 }
 
 func TestDedupx(t *testing.T) {
@@ -14796,24 +14819,11 @@ func TestCheckpointCompatibility(t *testing.T) {
 	assert.NoError(t, err)
 	err = logtail.ReplayCheckpoint(ctx, catalog2, true, reader)
 	assert.NoError(t, err)
-	sortFunc := func(cols []containers.Vector, pkidx int) (err2 error) {
-		_, err2 = mergesort.SortBlockColumns(cols, pkidx, tae.Runtime.VectorPool.Transient)
-		return
-	}
-
 	readTxn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
-	closeFn := catalog2.RelayFromSysTableObjects(
-		ctx,
-		readTxn,
-		tables.ReadSysTableBatch,
-		sortFunc,
-		&objlistReplayer{},
-	)
+	err = catalog2.ReplayFromSysTableObjects(ctx, readTxn, tables.ScanSysTable, &objlistReplayer{})
+	require.NoError(t, err)
 	assert.NoError(t, readTxn.Commit(ctx))
-	for _, fn := range closeFn {
-		fn()
-	}
 
 	err = logtail.ReplayCheckpoint(ctx, catalog2, false, reader)
 	assert.NoError(t, err)

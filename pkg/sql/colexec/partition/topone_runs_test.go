@@ -113,7 +113,7 @@ func topOneRunBatch(t testing.TB, proc *process.Process, rows []topOneRunRow) (r
 		}
 	}()
 	for i, typ := range []types.T{types.T_int32, types.T_int64, types.T_int64, types.T_int64} {
-		bat.Vecs[i] = vector.NewVec(typ.ToType())
+		bat.Vecs[i] = vector.NewVec(typ.ToType(), proc.Mp())
 	}
 	for _, row := range rows {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row.group, row.groupNull, proc.Mp()))
@@ -245,6 +245,7 @@ func TestPartitionTopOneRunsNullableCompositeReset(t *testing.T) {
 					require.Equal(t, topOneRunOracle(rows, desc, nullsLast), topOneRunCollect(t, arg, proc))
 					arg.Reset(proc, false, nil)
 					child.Free(proc, false, nil)
+					colexec.FreeMockChildren(child)
 				}
 			})
 		}
@@ -292,7 +293,7 @@ func TestPartitionTopOneRunsTwoStageOracle(t *testing.T) {
 
 func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 	// Row zero exercises all-literal ORDER BY (no runtime comparator). Other
-	// rows cover initial retention and replacement for all three metadata kinds.
+	// rows cover initial retention and replacement for the payload text and its runtime string domain.
 	for _, winner := range []int{0, 100, 333, 334, 335} {
 		t.Run(fmt.Sprintf("winner%d", winner), func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
@@ -308,9 +309,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			t.Cleanup(func() { arg.Free(proc, false, nil) })
 			arg.AppendChild(child)
 			var wantText string
-			var wantKind vector.PrepareParamKind
-			var wantDomain types.RuntimeStringDomain
-			var wantSource types.StringSource
 			for start := 0; start < 515; start += 257 {
 				end := min(start+257, 515)
 				rows := make([]topOneRunRow, end-start)
@@ -323,25 +321,16 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 				}
 				bat := topOneRunBatch(t, proc, rows)
 				child.WithBatchs([]*batch.Batch{bat})
-				payload := vector.NewVec(types.T_varchar.ToType())
+				payload := vector.NewVec(types.T_varchar.ToType(), proc.Mp())
 				bat.Vecs = append(bat.Vecs, payload)
-				kinds := make([]vector.PrepareParamKind, len(rows))
-				domains := make([]types.RuntimeStringDomain, len(rows))
-				sources := make([]types.StringSource, len(rows))
 				for i := range rows {
 					id := start + i
 					text := fmt.Sprintf("%d:%s", id, strings.Repeat("payload", 12))
 					require.NoError(t, vector.AppendBytes(payload, []byte(text), false, proc.Mp()))
-					kinds[i] = []vector.PrepareParamKind{vector.PrepareParamNone, vector.PrepareParamInteger, vector.PrepareParamFloat}[id%3]
-					domains[i] = []types.RuntimeStringDomain{types.RuntimeStringInherit, types.RuntimeStringText, types.RuntimeStringBinary}[id%3]
-					sources[i] = []types.StringSource{types.StringSourceExpression, types.StringSourceCOMStmt, types.StringSourceUserVariable}[id%3]
 					if id == winner {
-						wantText, wantKind, wantDomain, wantSource = text, kinds[i], domains[i], sources[i]
+						wantText = text
 					}
 				}
-				require.NoError(t, payload.SetPrepareParamKindsWithMP(kinds, proc.Mp()))
-				require.NoError(t, payload.SetRuntimeStringDomainsWithMP(domains, proc.Mp()))
-				require.NoError(t, payload.SetStringSourcesWithMP(sources, proc.Mp()))
 			}
 			require.NoError(t, arg.Prepare(proc))
 			result, err := arg.Call(proc)
@@ -351,9 +340,6 @@ func TestPartitionTopOneRunsWinnerMetadata(t *testing.T) {
 			require.Equal(t, int64(winner), vector.GetFixedAtWithTypeCheck[int64](result.Batch.Vecs[3], 0))
 			payload := result.Batch.Vecs[4]
 			require.Equal(t, wantText, string(payload.GetBytesAt(0)))
-			require.Equal(t, wantKind, payload.GetPrepareParamKindAt(0))
-			require.Equal(t, wantDomain, payload.GetRuntimeStringDomainAt(0))
-			require.Equal(t, wantSource, payload.GetStringSourceAt(0))
 			result, err = arg.Call(proc)
 			require.NoError(t, err)
 			require.True(t, result.Batch == nil || result.Status == vm.ExecStop)
@@ -384,9 +370,9 @@ func TestPartitionTopOneRunsFloatAndConstantPeers(t *testing.T) {
 					for group := 0; group < 4; group++ {
 						bat := batch.NewWithSize(3)
 						child.WithBatchs([]*batch.Batch{bat})
-						bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-						bat.Vecs[1] = vector.NewVec(typ.ToType())
-						bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+						bat.Vecs[0] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
+						bat.Vecs[1] = vector.NewVec(typ.ToType(), proc.Mp())
+						bat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), proc.Mp())
 						for i := 0; i < 257; i++ {
 							value := math.Float64frombits(0x7ff8000000000001 + uint64(i%2))
 							switch group {
@@ -548,7 +534,7 @@ func topOneStringRunBatch(t testing.TB, proc *process.Process, keys []string, fi
 		}
 	}()
 	for i, typ := range []types.T{types.T_int32, types.T_varchar, types.T_int64} {
-		bat.Vecs[i] = vector.NewVec(typ.ToType())
+		bat.Vecs[i] = vector.NewVec(typ.ToType(), proc.Mp())
 	}
 	for row, key := range keys {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))

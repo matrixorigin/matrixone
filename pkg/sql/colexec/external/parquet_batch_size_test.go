@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -95,7 +96,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		var got []string
 		var rowsPerBatch []int
 		for !reader.h.isFinished() {
-			bat := batchBudgetVectorBatch(types.T_text)
+			bat := batchBudgetVectorBatch(types.T_text, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -121,7 +122,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		var got []int32
 		var rowsPerBatch []int
 		for {
-			bat := batchBudgetVectorBatch(types.T_int32)
+			bat := batchBudgetVectorBatch(types.T_int32, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -148,7 +149,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var total int
 		for {
-			bat := batchBudgetVectorBatch(types.T_text)
+			bat := batchBudgetVectorBatch(types.T_text, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, bat.RowCount())
@@ -170,7 +171,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var rowsPerBatch []int
 		for {
-			bat := batchBudgetVectorBatch(types.T_text)
+			bat := batchBudgetVectorBatch(types.T_text, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -197,7 +198,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var got []string
 		for {
-			bat := batchBudgetVectorBatch(types.T_text)
+			bat := batchBudgetVectorBatch(types.T_text, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			for row := 0; row < bat.RowCount(); row++ {
@@ -226,7 +227,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var total int
 		for attempts := 0; attempts < len(values); attempts++ {
-			bat := batchBudgetVectorBatch(types.T_text)
+			bat := batchBudgetVectorBatch(types.T_text, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			require.Positive(t, bat.RowCount())
@@ -255,8 +256,8 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		var intsOut []int32
 		for {
 			bat := batch.NewWithSize(2)
-			bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-			bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+			bat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
+			bat.Vecs[1] = vector.NewVec(types.T_int32.ToType(), proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			for row := 0; row < bat.RowCount(); row++ {
@@ -284,7 +285,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var rowsPerBatch []int
 		for {
-			bat := batch.NewWithSchema(false, []string{"path"}, []types.Type{types.T_text.ToType()})
+			bat := batch.NewWithSchema([]string{"path"}, []types.Type{types.T_text.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -335,7 +336,7 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		var values []int32
 		var rowsPerBatch []int
 		for {
-			bat := batch.NewWithSchema(false, []string{"c", "path"}, []types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+			bat := batch.NewWithSchema([]string{"c", "path"}, []types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -358,8 +359,8 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		reader, _, proc := newBatchBudgetHiveDefaultPartitionReader(t, data, 1<<10)
 		defer reader.Close()
 
-		bat := batch.NewWithSchema(false, []string{"c", "p"},
-			[]types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+		bat := batch.NewWithSchema([]string{"c", "p"},
+			[]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
 		finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 		require.NoError(t, err)
 		require.False(t, finished)
@@ -396,9 +397,8 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 
 		var ordinals []int64
 		for {
-			bat := batch.NewWithSchema(false,
-				[]string{"c", IcebergDMLDataFilePathAttr, IcebergDMLRowOrdinalAttr},
-				[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()})
+			bat := batch.NewWithSchema([]string{"c", IcebergDMLDataFilePathAttr, IcebergDMLRowOrdinalAttr},
+				[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			require.Equal(t, 1, bat.RowCount())
@@ -421,8 +421,8 @@ func TestParquetReaderBatchByteBudget(t *testing.T) {
 		var values []int32
 		var rowsPerBatch []int
 		for {
-			bat := batch.NewWithSchema(false, []string{"c", "added"},
-				[]types.Type{types.T_int32.ToType(), types.T_text.ToType()})
+			bat := batch.NewWithSchema([]string{"c", "added"},
+				[]types.Type{types.T_int32.ToType(), types.T_text.ToType()}, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(t, err)
 			rowsPerBatch = append(rowsPerBatch, bat.RowCount())
@@ -454,7 +454,7 @@ func BenchmarkParquetReaderBatchByteBudget(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		reader, _, proc := newBatchBudgetParquetReader(b, data, types.T_text, budget)
 		for {
-			bat := batchBudgetVectorBatch(types.T_text)
+			bat := batchBudgetVectorBatch(types.T_text, proc.Mp())
 			finished, err := reader.ReadBatch(context.Background(), bat, proc, nil)
 			require.NoError(b, err)
 			maxBatchBytes = max(maxBatchBytes, bat.Size())
@@ -633,9 +633,9 @@ func newBatchBudgetIcebergSchemaEvolutionReader(
 	return reader, proc
 }
 
-func batchBudgetVectorBatch(targetType types.T) *batch.Batch {
+func batchBudgetVectorBatch(targetType types.T, mp *mpool.MPool) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.New(targetType, 0, 0))
+	bat.Vecs[0] = vector.NewVec(types.New(targetType, 0, 0), mp)
 	return bat
 }
 

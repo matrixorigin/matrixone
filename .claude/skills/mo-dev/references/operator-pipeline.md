@@ -26,10 +26,10 @@ This is the most common source of subtle operator bugs: premature pipeline termi
 |--------|----------|----------|
 | `Close()` | Wait for consumers to acknowledge end of stream by consuming nil batches | Graceful legacy nil-batch protocol |
 | `CloseWithTimeout()` | Same as `Close()` but bounded by a timeout | Legacy nil-batch cleanup only |
-| `ForceCleanupAfterTerminalSignal()` | Release deferred spool state after a successfully delivered typed `EventEnd` and paired receiver cleanup | Graceful typed-signal completion |
+| `ReleaseCache()` | Free the batches cached for reuse after a successfully delivered typed `EventEnd` and paired receiver cleanup | Graceful typed-signal completion |
 | `Abort(cause)` | Immediately release unconsumed slots and record failure/abort state | Error, cancel, abort, or terminal-delivery failure |
 
-Critical rule: typed termination has two outcomes. A successfully delivered `EventEnd` defers spool reclamation until paired receiver cleanup returns, then calls `ForceCleanupAfterTerminalSignal()`. Error/abort/cancel paths and terminal-delivery failures call `Abort(cause)` immediately. Do not use legacy `CloseWithTimeout()` for either typed path.
+Critical rule: typed termination has two outcomes. A successfully delivered `EventEnd` defers spool reclamation until paired receiver cleanup returns, then calls `ReleaseCache()`. Error/abort/cancel paths and terminal-delivery failures call `Abort(cause)` immediately. Do not use legacy `CloseWithTimeout()` for either typed path.
 
 ### Pipeline Signal Types
 
@@ -44,26 +44,10 @@ Dual-protocol compatibility: `GetNextBatch` handles both explicit typed signals 
 
 ## 2. Post-Modification Verification
 
-### Test Freshness
-
-Test output must be from the current turn:
-
-1. `go test` command appears in current turn's tool calls.
-2. Exit code is 0.
-3. Timestamp is after the last edit.
-
-### Completion Gate
-
-Before declaring a change done, all boxes must be checked:
-
-```
-□ explicitly name each changed owning package and prove `go list -mod=readonly` selects at least one package
-□ GOWORK=off go build -mod=readonly <each named owning package> -> exit 0
-□ GOWORK=off go vet -mod=readonly <each named owning package>   -> exit 0
-□ GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s <each named owning package> -> exit 0, no hangs
-□ git diff --stat                            -> inspected, no unintended files
-□ Regression: at least one test from dependent package passes
-```
+Apply the [shared validation and evidence rules](../../../../.agents/skills/mo-dev/references/validation-evidence.md)
+to the changed sender, receiver, and Call/Reset/cleanup paths. Run or reuse the
+regression evidence and validate a real dependent endpoint when the changed
+protocol crosses packages.
 
 Hang = failure. If `go test` produces more than 10s of no output, investigate.
 

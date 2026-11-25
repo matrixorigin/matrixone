@@ -238,9 +238,9 @@ func TestDMLMatchedBatchColumnHelpersCoverTypesAndErrors(t *testing.T) {
 
 	bat := batch.New([]string{"id", "name", "extra"})
 	bat.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int32.ToType()),
-		vector.NewVec(types.T_varchar.ToType()),
-		vector.NewVec(types.T_int64.ToType()),
+		vector.NewVec(types.T_int32.ToType(), mp),
+		vector.NewVec(types.T_varchar.ToType(), mp),
+		vector.NewVec(types.T_int64.ToType(), mp),
 	}
 	for _, row := range []struct {
 		id    int32
@@ -303,80 +303,80 @@ func TestDMLVectorValueCoversSupportedTypes(t *testing.T) {
 		}
 		vec.Free(mp)
 	}
-	boolVec := vector.NewVec(types.T_bool.ToType())
+	boolVec := vector.NewVec(types.T_bool.ToType(), mp)
 	if err := vector.AppendFixed[bool](boolVec, true, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(boolVec, true)
-	i8 := vector.NewVec(types.T_int8.ToType())
+	i8 := vector.NewVec(types.T_int8.ToType(), mp)
 	if err := vector.AppendFixed[int8](i8, 8, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(i8, int8(8))
-	i16 := vector.NewVec(types.T_int16.ToType())
+	i16 := vector.NewVec(types.T_int16.ToType(), mp)
 	if err := vector.AppendFixed[int16](i16, 16, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(i16, int16(16))
-	i64 := vector.NewVec(types.T_int64.ToType())
+	i64 := vector.NewVec(types.T_int64.ToType(), mp)
 	if err := vector.AppendFixed[int64](i64, 64, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(i64, int64(64))
-	u8 := vector.NewVec(types.T_uint8.ToType())
+	u8 := vector.NewVec(types.T_uint8.ToType(), mp)
 	if err := vector.AppendFixed[uint8](u8, 8, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(u8, uint8(8))
-	u16 := vector.NewVec(types.T_uint16.ToType())
+	u16 := vector.NewVec(types.T_uint16.ToType(), mp)
 	if err := vector.AppendFixed[uint16](u16, 16, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(u16, uint16(16))
-	u32 := vector.NewVec(types.T_uint32.ToType())
+	u32 := vector.NewVec(types.T_uint32.ToType(), mp)
 	if err := vector.AppendFixed[uint32](u32, 32, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(u32, uint32(32))
-	u64 := vector.NewVec(types.T_uint64.ToType())
+	u64 := vector.NewVec(types.T_uint64.ToType(), mp)
 	if err := vector.AppendFixed[uint64](u64, 64, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(u64, uint64(64))
-	f32 := vector.NewVec(types.T_float32.ToType())
+	f32 := vector.NewVec(types.T_float32.ToType(), mp)
 	if err := vector.AppendFixed[float32](f32, 1.5, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(f32, float32(1.5))
-	f64 := vector.NewVec(types.T_float64.ToType())
+	f64 := vector.NewVec(types.T_float64.ToType(), mp)
 	if err := vector.AppendFixed[float64](f64, 2.5, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(f64, float64(2.5))
-	dateVec := vector.NewVec(types.T_date.ToType())
+	dateVec := vector.NewVec(types.T_date.ToType(), mp)
 	if err := vector.AppendFixed[types.Date](dateVec, types.Date(20454), false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(dateVec, int32(20454))
-	dtVec := vector.NewVec(types.T_datetime.ToType())
+	dtVec := vector.NewVec(types.T_datetime.ToType(), mp)
 	dt := types.DatetimeFromUnix(time.UTC, 1767225600)
 	if err := vector.AppendFixed[types.Datetime](dtVec, dt, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(dtVec, int64(dt))
-	tsVec := vector.NewVec(types.T_timestamp.ToType())
+	tsVec := vector.NewVec(types.T_timestamp.ToType(), mp)
 	ts := types.UnixMicroToTimestamp(1767225600000000)
 	if err := vector.AppendFixed[types.Timestamp](tsVec, ts, false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(tsVec, int64(ts))
-	textVec := vector.NewVec(types.T_text.ToType())
+	textVec := vector.NewVec(types.T_text.ToType(), mp)
 	if err := vector.AppendBytes(textVec, []byte("ksa"), false, mp); err != nil {
 		t.Fatal(err)
 	}
 	mustValue(textVec, "ksa")
 
-	nullVec := vector.NewVec(types.T_int32.ToType())
+	nullVec := vector.NewVec(types.T_int32.ToType(), mp)
 	defer nullVec.Free(mp)
 	if err := vector.AppendFixed[int32](nullVec, 0, true, mp); err != nil {
 		t.Fatal(err)
@@ -385,10 +385,10 @@ func TestDMLVectorValueCoversSupportedTypes(t *testing.T) {
 	if err != nil || got != nil {
 		t.Fatalf("null value got=%#v err=%v", got, err)
 	}
-	if _, err := dmlVectorValue(ctx, vector.NewVec(types.T_binary.ToType()), 0); err == nil {
+	if _, err := dmlVectorValue(ctx, vector.NewVec(types.T_binary.ToType(), mp), 0); err == nil {
 		t.Fatalf("expected unsupported equality value type")
 	}
-	if _, err := dmlStringValue(ctx, vector.NewVec(types.T_bool.ToType()), 0); err == nil {
+	if _, err := dmlStringValue(ctx, vector.NewVec(types.T_bool.ToType(), mp), 0); err == nil {
 		t.Fatalf("expected unsupported path type")
 	}
 	if _, err := dmlInt64Value(ctx, nullVec, 0); err == nil {
@@ -400,8 +400,8 @@ func newMatchedDeleteBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "name"})
-	idVec := vector.NewVec(types.T_int32.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, row := range []struct {
 		id   int32
 		name string
@@ -426,10 +426,10 @@ func newMatchedScanBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
 	bat := batch.New([]string{"id", "name", "_iceberg_data_file", "_iceberg_row_ordinal"})
-	idVec := vector.NewVec(types.T_int32.ToType())
-	nameVec := vector.NewVec(types.T_varchar.ToType())
-	pathVec := vector.NewVec(types.T_varchar.ToType())
-	ordinalVec := vector.NewVec(types.T_int64.ToType())
+	idVec := vector.NewVec(types.T_int32.ToType(), mp)
+	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	pathVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	ordinalVec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, row := range []struct {
 		id      int32
 		name    string

@@ -891,7 +891,7 @@ func d128DivAtScale(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, sc
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		signyU := b.B64_127 >> 63
@@ -1265,7 +1265,9 @@ func decimal128IntDivLegacyDecimalOverflow(x, y types.Decimal128, scale1, scale2
 	scaleAdj := scale - scale1 + scale2
 
 	var divResult types.Decimal128
-	err := d128DivOne(x, y, &divResult, scaleAdj, nulls.NewWithSize(1), 0, true, scale1, scale2)
+	// With shouldError, d128DivOne reports division by zero as an error and
+	// never touches the null bitmap.
+	err := d128DivOne(x, y, &divResult, scaleAdj, nil, 0, true, scale1, scale2)
 	return err != nil
 }
 
@@ -1914,7 +1916,7 @@ func d128IntDiv(v1, v2 []types.Decimal128, rs []int64, scale1, scale2 int32, rsn
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		// vec/const: precompute divisor properties for inline path.
@@ -3379,7 +3381,7 @@ func d256DivAtScale(v1, v2, rs []types.Decimal256, scale1, scale2, resultScale i
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		for i := 0; i < len1; i++ {
@@ -3591,7 +3593,7 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		// vec/const: pre-compute divisor properties for inline path.
@@ -4069,7 +4071,7 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		for i := 0; i < len1; i++ {
@@ -4208,7 +4210,7 @@ func d256IntDivViaD128(v1, v2 []types.Decimal256, rs []int64, scaleAdj int32, rs
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		// vec/const: precompute divisor for inline path.
@@ -4887,7 +4889,7 @@ func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scal
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		// D64 values always fit in 64 bits of D128, so use fully-inlined path.
@@ -5349,7 +5351,7 @@ func d64IntDiv(v1, v2 []types.Decimal64, rs []int64, scale1, scale2 int32, rsnul
 			if shouldError {
 				return moerr.NewDivByZeroNoCtx()
 			}
-			nulls.AddRange(rsnull, 0, uint64(len1))
+			rsnull.AddRange(0, uint64(len1))
 			return nil
 		}
 		y := d64toD128(v2[0])

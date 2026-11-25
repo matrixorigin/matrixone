@@ -64,6 +64,10 @@ func (i *IOVector) ReleaseReadResultOnError() {
 		if entry.done && entry.releaseData != nil {
 			entry.releaseData()
 			entry.releaseData = nil
+			entry.Data = nil
+			if entry.ReadCloserForRead != nil {
+				*entry.ReadCloserForRead = nil
+			}
 		}
 		entry.decodeLease.release()
 		entry.decodeLease = nil
@@ -106,26 +110,27 @@ func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
 	return
 }
 
-func (i *IOVector) readMinimalRange() (min *int64, max *int64) {
-	min = ptrTo(int64(math.MaxInt))
-	max = ptrTo(int64(0))
-	for _, entry := range i.Entries {
+func (i *IOVector) readMinimalRange() (*int64, *int64) {
+	minOffset := int64(math.MaxInt)
+	maxOffset := int64(0)
+	readToEnd := false
+	for pos := range i.Entries {
+		entry := &i.Entries[pos]
 		if entry.done {
 			continue
 		}
-		if entry.Offset < *min {
-			min = &entry.Offset
-		}
+		minOffset = min(minOffset, entry.Offset)
 		if entry.Size < 0 {
-			max = nil
+			readToEnd = true
 		}
-		if max != nil {
-			if end := entry.Offset + entry.Size; end > *max {
-				max = &end
-			}
+		if !readToEnd {
+			maxOffset = max(maxOffset, entry.Offset+entry.Size)
 		}
 	}
-	return
+	if readToEnd {
+		return &minOffset, nil
+	}
+	return &minOffset, &maxOffset
 }
 
 // expensiveMinimalRangeRead reports whether collapsing the unfinished entries
@@ -160,6 +165,35 @@ func (i *IOVector) expensiveMinimalRangeRead() (logicalBytes, spanBytes int64, e
 	}
 	return logicalBytes, spanBytes,
 		spanBytes > logicalBytes*maxMinimalRangeReadAmplification
+}
+
+// shouldSplitSparseRead uses the computed envelope to reject ordinary dense
+// reads before inspecting the unfinished entries.
+func (i *IOVector) shouldSplitSparseRead(min, max *int64) bool {
+	if len(i.Entries) < 2 || max == nil || *min < 0 || *max <= *min ||
+		*max-*min <= minExpensiveRangeReadSpan {
+		return false
+	}
+
+	var previousOffset int64
+	misses := 0
+	for pos := range i.Entries {
+		entry := &i.Entries[pos]
+		if entry.done {
+			continue
+		}
+		if misses == 4 || entry.WriterForRead != nil || entry.ReadCloserForRead != nil ||
+			(misses > 0 && entry.Offset < previousOffset) {
+			return false
+		}
+		previousOffset = entry.Offset
+		misses++
+	}
+	if misses < 2 {
+		return false
+	}
+	_, _, expensive := i.expensiveMinimalRangeRead()
+	return expensive
 }
 
 func (i *IOVector) size() *int64 {

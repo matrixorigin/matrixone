@@ -61,7 +61,7 @@ func newMPool(t *testing.T) *mpool.MPool {
 
 func makeStringBatch(t *testing.T, mp *mpool.MPool, vals []string) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendBytes(vec, []byte(v), false, mp))
 	}
@@ -72,7 +72,7 @@ func makeStringBatch(t *testing.T, mp *mpool.MPool, vals []string) *batch.Batch 
 
 func makeBoolBatch(t *testing.T, mp *mpool.MPool, vals []bool) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_bool.ToType())
+	vec := vector.NewVec(types.T_bool.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -83,7 +83,7 @@ func makeBoolBatch(t *testing.T, mp *mpool.MPool, vals []bool) *batch.Batch {
 
 func makeInt8Batch(t *testing.T, mp *mpool.MPool, vals []int8) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_int8.ToType())
+	vec := vector.NewVec(types.T_int8.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -94,7 +94,7 @@ func makeInt8Batch(t *testing.T, mp *mpool.MPool, vals []int8) *batch.Batch {
 
 func makeInt64Batch(t *testing.T, mp *mpool.MPool, vals []int64) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_int64.ToType())
+	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -105,7 +105,7 @@ func makeInt64Batch(t *testing.T, mp *mpool.MPool, vals []int64) *batch.Batch {
 
 func makeUint32Batch(t *testing.T, mp *mpool.MPool, vals []uint32) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_uint32.ToType())
+	vec := vector.NewVec(types.T_uint32.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -116,7 +116,7 @@ func makeUint32Batch(t *testing.T, mp *mpool.MPool, vals []uint32) *batch.Batch 
 
 func makeUint64Batch(t *testing.T, mp *mpool.MPool, vals []uint64) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_uint64.ToType())
+	vec := vector.NewVec(types.T_uint64.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -127,7 +127,7 @@ func makeUint64Batch(t *testing.T, mp *mpool.MPool, vals []uint64) *batch.Batch 
 
 func makeTSBatch(t *testing.T, mp *mpool.MPool, vals []types.TS) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_TS.ToType())
+	vec := vector.NewVec(types.T_TS.ToType(), mp)
 	for _, v := range vals {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
@@ -138,7 +138,7 @@ func makeTSBatch(t *testing.T, mp *mpool.MPool, vals []types.TS) *batch.Batch {
 
 func makeJsonBatch(t *testing.T, mp *mpool.MPool, jsonStrs []string) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	for _, s := range jsonStrs {
 		bj, err := types.ParseStringToByteJson(s)
 		require.NoError(t, err)
@@ -507,7 +507,7 @@ func TestExtractVectorValue_UnsupportedType(t *testing.T) {
 	mp := newMPool(t)
 	// Use float32 which is not handled
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_float32.ToType())
+	vec := vector.NewVec(types.T_float32.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(vec, float32(1.0), false, mp))
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)
@@ -536,7 +536,7 @@ func TestInternalResult_Err(t *testing.T) {
 func TestInternalResult_Scan_NullBytes(t *testing.T) {
 	mp := newMPool(t)
 	bat := batch.NewWithSize(1)
-	vec := vector.NewVec(types.T_varchar.ToType())
+	vec := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(vec, nil, true, mp)) // null
 	bat.Vecs[0] = vec
 	bat.SetRowCount(1)

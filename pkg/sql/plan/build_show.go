@@ -149,7 +149,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +157,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
+		return nil, err
+	}
+	if err = checkShowRewriteMetadata(ctx, stmt.RewriteOption, dbName, tblName, tableDef,
+		snapshot == nil && sub == nil && obj.GetPubInfo() == nil); err != nil {
 		return nil, err
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
@@ -679,6 +683,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext, isPrepareStmt
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if err = checkShowRewriteMetadata(ctx, stmt.RewriteOption, dbName, tblName, tableDef, obj.GetPubInfo() == nil); err != nil {
+		return nil, err
 	}
 	catalogTblName := tblName
 	if tableDef.IsTemporary {

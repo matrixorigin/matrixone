@@ -49,23 +49,23 @@ func (fl *BatchFreeList) Len() int {
 	return len(fl.pool)
 }
 
-func (fl *BatchFreeList) FetchWithSchema(attrs []string, typs []types.Type) *batch.Batch {
+func (fl *BatchFreeList) FetchWithSchema(attrs []string, typs []types.Type, mp *mpool.MPool) *batch.Batch {
 	if fl.attrs == nil {
 		fl.attrs = attrs
 		fl.typs = typs
 	}
-	if len(fl.pool) > 0 {
+	if len(fl.pool) > 0 && batchOfPool(fl.pool[len(fl.pool)-1], mp) {
 		bat := fl.pool[len(fl.pool)-1]
 		fl.pool = fl.pool[:len(fl.pool)-1]
 		fl.reuseBytes += bat.Allocated()
 		fl.reuseCount++
 		return bat
 	}
-	return batch.NewWithSchema(fl.offHeap, fl.attrs, fl.typs)
+	return batch.NewWithSchema(fl.attrs, fl.typs, mp)
 }
 
-func (fl *BatchFreeList) Fetch() *batch.Batch {
-	return fl.FetchWithSchema(fl.attrs, fl.typs)
+func (fl *BatchFreeList) Fetch(mp *mpool.MPool) *batch.Batch {
+	return fl.FetchWithSchema(fl.attrs, fl.typs, mp)
 }
 
 func (fl *BatchFreeList) Putback(bat *batch.Batch, _ *mpool.MPool) {

@@ -59,8 +59,8 @@ func vmExec(t *testing.T, mp *mpool.MPool, idType types.Type, groups int, cfg []
 // vmVectors builds int64 ids and vecf8 cells; a nil row is NULL.
 func vmVectors(t *testing.T, mp *mpool.MPool, ids []int64, rows [][]float32) []*vector.Vector {
 	t.Helper()
-	idv := vector.NewVec(types.T_int64.ToType())
-	vv := vector.NewVec(vmVecType())
+	idv := vector.NewVec(types.T_int64.ToType(), mp)
+	vv := vector.NewVec(vmVecType(), mp)
 	for i, r := range rows {
 		require.NoError(t, vector.AppendFixed(idv, ids[i], false, mp))
 		if r == nil {
@@ -76,7 +76,7 @@ func vmVectors(t *testing.T, mp *mpool.MPool, ids []int64, rows [][]float32) []*
 
 func vmFree(mp *mpool.MPool, vecs []*vector.Vector) {
 	for _, v := range vecs {
-		v.Free(mp)
+		v.Free(v.MPool())
 	}
 }
 
@@ -91,7 +91,7 @@ func vmFlush(t *testing.T, mp *mpool.MPool, exec AggFuncExec) []string {
 			require.NoError(t, json.Compact(&c, []byte(types.DecodeJson(v.GetBytesAt(i)).String())))
 			out = append(out, c.String())
 		}
-		v.Free(mp)
+		v.Free(v.MPool())
 	}
 	return out
 }
@@ -250,7 +250,7 @@ func TestVectorMatmulAccountedFill(t *testing.T) {
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 
@@ -263,8 +263,8 @@ func TestVectorMatmulAccountedFill(t *testing.T) {
 	// long, churning string ids: the arena compacts in place instead of growing
 	r := rand.New(rand.NewSource(5))
 	for batch := 0; batch < 50; batch++ {
-		idv := vector.NewVec(types.T_varchar.ToType())
-		vv := vector.NewVec(vmVecType())
+		idv := vector.NewVec(types.T_varchar.ToType(), mp)
+		vv := vector.NewVec(vmVecType(), mp)
 		groups := make([]uint64, 64)
 		for i := range groups {
 			groups[i] = 1
@@ -316,7 +316,7 @@ func TestVectorMatmulIDText(t *testing.T) {
 	}
 	for _, c := range cases {
 		require.True(t, VectorMatmulIDSupported(c.typ.Oid))
-		v := vector.NewVec(c.typ)
+		v := vector.NewVec(c.typ, mp)
 		require.NoError(t, c.add(v))
 		require.Equal(t, c.want, string(appendVectorMatmulID(nil, v, 0)), c.typ.String())
 		require.GreaterOrEqual(t, vectorMatmulIDLenBound(v, 0), len(c.want), c.typ.String())
@@ -327,9 +327,9 @@ func TestVectorMatmulIDText(t *testing.T) {
 	// a quote in a string id is JSON-escaped
 	exec := vmExec(t, mp, types.T_varchar.ToType(), 1, vmConfig(1, [][]float32{{1, 0, 0, 0}}))
 	defer exec.Free()
-	idv := vector.NewVec(types.T_varchar.ToType())
+	idv := vector.NewVec(types.T_varchar.ToType(), mp)
 	require.NoError(t, vector.AppendBytes(idv, []byte(`a"b`), false, mp))
-	vv := vector.NewVec(vmVecType())
+	vv := vector.NewVec(vmVecType(), mp)
 	cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, []float32{1, 0, 0, 0})
 	require.NoError(t, err)
 	require.NoError(t, vector.AppendBytes(vv, cell, false, mp))
@@ -435,7 +435,7 @@ func vmAllocation(t *testing.T) *AllocationAccount {
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	return allocation
@@ -477,8 +477,8 @@ func TestVectorMatmulAccountedMerge(t *testing.T) {
 // vmTextVectors builds varchar ids and vecf8 cells.
 func vmTextVectors(t *testing.T, mp *mpool.MPool, ids []string, rows [][]float32) []*vector.Vector {
 	t.Helper()
-	idv := vector.NewVec(types.T_varchar.ToType())
-	vv := vector.NewVec(vmVecType())
+	idv := vector.NewVec(types.T_varchar.ToType(), mp)
+	vv := vector.NewVec(vmVecType(), mp)
 	for i, r := range rows {
 		require.NoError(t, vector.AppendBytes(idv, []byte(ids[i]), false, mp))
 		cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, r)
@@ -604,7 +604,7 @@ func TestVectorMatmulNullAndConstInputs(t *testing.T) {
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	exec := vmExec(t, mp, types.T_int64.ToType(), 1, vmConfig(3, [][]float32{{1, 0, 0, 0}}))
 	defer exec.Free()
-	idv := vector.NewVec(types.T_int64.ToType())
+	idv := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(idv, int64(1), true, mp))
 	require.NoError(t, vector.AppendFixed(idv, int64(2), false, mp))
 	cell, err := types.AppendBlockScaled(nil, types.BlockScaledMXFP8, []float32{2, 0, 0, 0})
@@ -616,10 +616,10 @@ func TestVectorMatmulNullAndConstInputs(t *testing.T) {
 	require.Equal(t, []string{`[[["2",-2]]]`}, vmFlush(t, mp, exec))
 
 	// a malformed cell is an error
-	bad := vector.NewVec(vmVecType())
+	bad := vector.NewVec(vmVecType(), mp)
 	require.NoError(t, vector.AppendBytes(bad, []byte{0x7f, 1, 0, 0, 4, 0, 0, 0}, false, mp))
 	defer bad.Free(mp)
-	one := vector.NewVec(types.T_int64.ToType())
+	one := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(one, int64(9), false, mp))
 	defer one.Free(mp)
 	require.Error(t, exec.Fill(0, 0, []*vector.Vector{one, bad}))
@@ -649,8 +649,8 @@ func TestVectorMatmulLaneOverflowScoresExactDistance(t *testing.T) {
 		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(int64(topk), string(q), "", false), 0))
 		return exec.(*vectorMatmulExec)
 	}
-	idv := vector.NewVec(types.T_int64.ToType())
-	vv := vector.NewVec(vt)
+	idv := vector.NewVec(types.T_int64.ToType(), mp)
+	vv := vector.NewVec(vt, mp)
 	small := make([]float32, 32)
 	small[0] = 1
 	for i, row := range [][]float32{big, small, small} {
@@ -745,7 +745,7 @@ func vmAccountWithLimit(t *testing.T, limit uint64) *AllocationAccount {
 	account, err := registry.Open(limit)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	return allocation
@@ -985,8 +985,8 @@ func TestVectorMatmulPlainTypes(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, exec.GroupGrow(1))
 		require.NoError(t, exec.SetExtraInformation(EncodeVectorMatmulConfig(k, string(q), "", false), 0))
-		idv := vector.NewVec(types.T_int64.ToType())
-		vv := vector.NewVec(vt)
+		idv := vector.NewVec(types.T_int64.ToType(), mp)
+		vv := vector.NewVec(vt, mp)
 		for i, row := range rows {
 			require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
 			require.NoError(t, vector.AppendBytes(vv, c.toCell(row), false, mp))
@@ -1151,7 +1151,7 @@ func TestVectorMatmulGPUMemoryAdmission(t *testing.T) {
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 		require.NoError(t, err)
 		agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
@@ -1316,7 +1316,7 @@ func TestVectorMatmulMetrics(t *testing.T) {
 			exec := agg.(*vectorMatmulExec)
 			require.NoError(t, exec.GroupGrow(1))
 			require.NoError(t, exec.SetExtraInformation(cfg, 0))
-			idv, vv := vector.NewVec(types.T_int64.ToType()), vector.NewVec(vt)
+			idv, vv := vector.NewVec(types.T_int64.ToType(), mp), vector.NewVec(vt, mp)
 			for i, r := range rows {
 				require.NoError(t, vector.AppendFixed(idv, int64(i), false, mp))
 				switch vt.Oid {
@@ -1606,7 +1606,7 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 		account, err := registry.Open(limit)
 		require.NoError(t, err)
 		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 		})
 		require.NoError(t, err)
 		return account, allocation
@@ -1669,7 +1669,7 @@ func TestVectorMatmulConfigAdmission(t *testing.T) {
 					cell, err = types.AppendBlockScaled(nil, types.BlockScaledMXFP8, ones(tc.dim))
 					require.NoError(t, err)
 				}
-				ids, v := vector.NewVec(types.T_int64.ToType()), vector.NewVec(typ)
+				ids, v := vector.NewVec(types.T_int64.ToType(), mp), vector.NewVec(typ, mp)
 				vecs := []*vector.Vector{ids, v}
 				freeVecs := releaser(t, func() { vmFree(mp, vecs) })
 				require.NoError(t, vector.AppendFixed(ids, int64(7), false, mp))
@@ -1791,7 +1791,7 @@ func (s *vectorMatmulState) sorted(j int) []vectorMatmulEntry {
 // vmStateJSON encodes s as Flush does and returns a copy of the value.
 func vmStateJSON(t *testing.T, mp *mpool.MPool, s *vectorMatmulState) bytejson.ByteJson {
 	t.Helper()
-	vec := vector.NewVec(types.T_json.ToType())
+	vec := vector.NewVec(types.T_json.ToType(), mp)
 	defer vec.Free(mp)
 	enc := &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, s.k)}
 	require.NoError(t, vector.AppendByteJsonEncoded(vec, enc, mp))
@@ -1880,7 +1880,7 @@ func TestVectorMatmulJSONMatchesText(t *testing.T) {
 		s, err := newVectorMatmulState(mp, nil, 1, 2)
 		require.NoError(t, err)
 		require.NoError(t, s.offer([]float64{bad}, []byte("x")))
-		vec := vector.NewVec(types.T_json.ToType())
+		vec := vector.NewVec(types.T_json.ToType(), mp)
 		err = vector.AppendByteJsonEncoded(vec, &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, 2)}, mp)
 		require.ErrorContains(t, err, "overflows the float32 domain")
 		require.Zero(t, vec.Length())
@@ -1934,7 +1934,7 @@ func TestVectorMatmulFillIDNotCopied(t *testing.T) {
 	require.NoError(t, ex.SetExtraInformation(vmConfig(2, [][]float32{{1, 0, 0, 0}}), 0))
 	require.NoError(t, ex.GroupGrow(1))
 	u := types.Uuid{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}
-	idv := vector.NewVec(types.T_uuid.ToType())
+	idv := vector.NewVec(types.T_uuid.ToType(), mp)
 	require.NoError(t, vector.AppendFixed(idv, u, false, mp))
 	vv := vmVectors(t, mp, []int64{0}, [][]float32{{1, 0, 0, 0}})
 	vecs := []*vector.Vector{idv, vv[1]}
@@ -2017,7 +2017,7 @@ func vmFlushGoAllocation(t *testing.T, scale float32) {
 		require.Equal(t, 2, results[0].Length())
 		require.Greater(t, len(results[0].GetBytesAt(0)), 8*topk*64)
 		for _, r := range results {
-			r.Free(mp)
+			r.Free(r.MPool())
 		}
 		ex.Free()
 	}
@@ -2072,7 +2072,7 @@ func TestVectorMatmulConfigAdmittedBeforeParse(t *testing.T) {
 				account, err := registry.Open(limit)
 				require.NoError(t, err)
 				allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-					VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+					VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 				})
 				require.NoError(t, err)
 				var aggErr error
@@ -2154,7 +2154,7 @@ func TestVectorMatmulLargeOptionsRefused(t *testing.T) {
 	account, err := registry.Open(64 << 10)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	raw := EncodeVectorMatmulConfig(1, "[[1,0,0,0]]", opts.String(), false)
@@ -2260,7 +2260,8 @@ func TestVectorMatmulParseBoundVecblockText(t *testing.T) {
 	b2, err := vectorMatmulParseBound(large, typ)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, b2, 64*uint64(len(long)))
-	require.Less(t, b1, uint64(64<<10))
+	// beyond the fixed decoder parser, a small text's bound stays small
+	require.Less(t, b1-vectorMatmulJSONDecoderScratch, uint64(64<<10))
 	_, err = parseVectorMatmulConfig(large, typ)
 	require.Error(t, err)
 }
@@ -2350,7 +2351,7 @@ func TestVectorMatmulVecblockJSONRejectedBeforeCollecting(t *testing.T) {
 	account, err := registry.Open(64 << 10)
 	require.NoError(t, err)
 	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
-		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		VectorData: 1, VectorArea: 2, ArgumentCount: 5, ArgumentArena: 6,
 	})
 	require.NoError(t, err)
 	raw := EncodeVectorMatmulConfig(1, malformed(10000), `{"query_format":"vecblock"}`, false)
