@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -110,18 +111,38 @@ func (d *DiskCache) newWholeObject(ctx context.Context, diskPath string, index b
 	return p
 }
 
-// newContentFill registers and returns the fill of the whole object at diskPath from the
-// bytes the write path holds, whose download is o.
-func (d *DiskCache) newContentFill(diskPath string, o *objectDownload) *filePrefetchObject {
+// newContentFill returns the unregistered fill of the whole object at diskPath from the
+// bytes the write path holds, which registers with its download.
+func (d *DiskCache) newContentFill(diskPath string) *filePrefetchObject {
 	p := newFilePrefetchObject(context.Background(), 0, math.MaxInt64)
 	p.prefetchTarget = prefetchTarget{d: d, diskPath: diskPath}
 	p.whole, p.content = true, true
-	f := &d.prefetchObjects
-	f.mu.Lock()
-	f.registerLocked(diskPath, p)
-	f.mu.Unlock()
-	p.started(o)
 	return p
+}
+
+// measured reports whether the rate of p's download counts toward the recent downloads'
+// rate: a fill of bytes the write path holds reads no object storage.
+func (p *filePrefetchObject) measured() bool { return !p.content }
+
+// splitParts sets the end of p, the fill of a whole object, at the object's size layout
+// gives, and returns the bounds of the parts it reads at once and the part a read needs
+// first, or nil to read it as one range. It splits only when fewer than the limit of
+// downloads are in flight once it is counted; taken reports that it is counted.
+func (p *filePrefetchObject) splitParts(layout objectLayout) (bounds []int64, lead int, taken bool) {
+	if layout == nil {
+		return nil, 0, false
+	}
+	size, splitAt, err := layout(p.ctx)
+	if err != nil {
+		return nil, 0, false
+	}
+	p.endAt(size)
+	d := p.d
+	b := d.objectSplit.bounds(size, splitAt)
+	if b == nil || !d.downloads.take(int64(cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))) {
+		return nil, 0, false
+	}
+	return b, leadPart(b, splitAt), true
 }
 
 // wholeFill returns the registered fill of the whole object at diskPath whose download
@@ -190,17 +211,6 @@ func (p *filePrefetchObject) joinableDownload() *objectDownload {
 func (p *filePrefetchObject) markReady() { p.readyOnce.Do(func() { close(p.ready) }) }
 
 type fileDownloadKey struct{}
-
-// fileDownloadStarted gives the download of ctx's FilePrefetchObject to it, and returns
-// that FilePrefetchObject, or nil.
-func fileDownloadStarted(ctx context.Context, o *objectDownload) *filePrefetchObject {
-	p, ok := ctx.Value(fileDownloadKey{}).(*filePrefetchObject)
-	if !ok {
-		return nil
-	}
-	p.started(o)
-	return p
-}
 
 // started gives p its download o, which reads can join from then.
 func (p *filePrefetchObject) started(o *objectDownload) {

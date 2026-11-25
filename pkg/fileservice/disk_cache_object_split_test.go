@@ -523,10 +523,9 @@ func TestJoinableSkipsPartNotBegun(t *testing.T) {
 	f.registerLocked(diskPath, p)
 	f.mu.Unlock()
 	defer d.endFilePrefetch(diskPath, p)(nil)
-	ctx := p.ctx
 	o := newObjectDownload("", false, []int64{0, 4, 8})
 	o.begin(0)
-	fileDownloadStarted(ctx, o)
+	p.started(o)
 	covering := func(lo, hi int64) prefetchObject {
 		f.mu.Lock()
 		defer f.mu.Unlock()

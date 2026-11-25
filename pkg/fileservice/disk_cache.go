@@ -1109,21 +1109,12 @@ func (d *DiskCache) writeFileTo(
 		}
 		ctx, releaseConns = whole.ctx, whole.releaseConn
 		w.releaseConns = releaseConns
-		if objectSize != nil {
-			if size, splitAt, err := objectSize(ctx); err == nil {
-				whole.endAt(size)
-				// A download splits only when fewer than the limit are in flight once it is
-				// counted.
-				if b := d.objectSplit.bounds(size, splitAt); b != nil &&
-					d.downloads.take(int64(cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads))) {
-					bounds, lead, taken = b, leadPart(b, splitAt), true
-					defer func() {
-						if taken {
-							d.downloads.n.Add(-1)
-						}
-					}()
+		if bounds, lead, taken = whole.splitParts(objectSize); taken {
+			defer func() {
+				if taken {
+					d.downloads.n.Add(-1)
 				}
-			}
+			}()
 		}
 	}
 
@@ -1165,23 +1156,22 @@ func (d *DiskCache) writeFileTo(
 	var download *objectDownload
 	var dst io.Writer = f
 	if fill != notWholeFill {
-		_, indexFile := target.(indexFillTarget)
+		// The fill of ctx, or one of the bytes the write path holds.
+		own := p
+		if own == nil {
+			own = d.newContentFill(diskPath)
+		}
+		download = newObjectDownload(f.Name(), own.measured() && !unpublished, bounds)
 		if unpublished {
-			download = newObjectDownload(f.Name(), false, bounds)
 			defer download.retire()
 		} else {
-			download = d.startDownload(diskPath, f.Name(), fill != contentFill, indexFile, bounds, taken)
+			d.startDownload(diskPath, own, download, taken)
 			taken = false
+			w.owner.first(func() { d.finishDownload(diskPath, download, own) })
 		}
 		// Its lead part holds the connection the download took.
 		download.begin(lead)
-		own := fileDownloadStarted(ctx, download)
-		if own == nil && !unpublished {
-			own = d.newContentFill(diskPath, download)
-		}
-		if !unpublished {
-			w.owner.first(func() { d.finishDownload(diskPath, download, own) })
-		}
+		own.started(download)
 		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
 	}

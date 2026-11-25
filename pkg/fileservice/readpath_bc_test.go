@@ -425,7 +425,7 @@ func TestIndexObjectReadSkippingDiskReadsJoinsIndexDownload(t *testing.T) {
 		download = d.download(d.pathForFile("object"))
 		return download != nil
 	}, 5*time.Second, time.Millisecond)
-	require.True(t, download.indexFile)
+	require.NotNil(t, d.wholeFill(d.pathForFile("object"), true), "the download is of the index-file cache")
 	vec := &IOVector{FilePath: "object", Policy: IndexFileObject | SkipDiskCacheReads | SkipMemoryCache,
 		Entries: []IOEntry{{Offset: 100, Size: 4096}}}
 	defer vec.Release()

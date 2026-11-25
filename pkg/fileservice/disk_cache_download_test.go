@@ -715,6 +715,14 @@ func acquireCapture(t *testing.T, read *fullObjectDiskCacheReader, download *obj
 	}
 }
 
+// registerWholeFill registers o as the download of a fill of the whole object at diskPath.
+func registerWholeFill(d *DiskCache, diskPath string, o *objectDownload) *filePrefetchObject {
+	p := d.newContentFill(diskPath)
+	d.startDownload(diskPath, p, o, false)
+	p.started(o)
+	return p
+}
+
 func newPreloadGeneration(t *testing.T, p *preloadUsage, diskPath string, data []byte) *objectDownload {
 	t.Helper()
 	tempPath := filepath.Join(t.TempDir(), "download")
@@ -739,8 +747,7 @@ func newReadShareDownload(t *testing.T, data []byte, advertised int64) (*DiskCac
 
 	diskPath := cache.pathForFile("obj")
 	o := newPreloadGeneration(t, cache.preloads, diskPath, data)
-	cache.downloads.store(diskPath, o)
-	cache.newContentFill(diskPath, o)
+	registerWholeFill(cache, diskPath, o)
 	o.advance(0, advertised)
 	o.end(true)
 	return cache, o, diskPath

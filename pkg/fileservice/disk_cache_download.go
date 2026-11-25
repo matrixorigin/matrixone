@@ -51,7 +51,6 @@ type objectDownload struct {
 	served      int64         // bytes readers took from the download before credited
 	credited    bool          // the cached file counts the bytes readers take
 	credit      func(n int64) // counts n bytes read toward the published file
-	indexFile   bool          // publishes into the index-file cache
 }
 
 // downloadPart is a range of the object a download writes from its start.
@@ -837,18 +836,22 @@ func (s *diskCacheDownloads) load(diskPath string) *objectDownload {
 	return nil
 }
 
-// startDownload registers the download of a cache file; taken is set when
+// startDownload registers o, the download of the cache file at diskPath of the fill p,
+// which a fill of bytes the write path holds registers with; taken is set when
 // diskCacheDownloads.take counted it already.
-func (d *DiskCache) startDownload(diskPath, tempPath string, measured, indexFile bool, bounds []int64, taken bool) *objectDownload {
-	o := newObjectDownload(tempPath, measured, bounds)
-	o.indexFile = indexFile
+func (d *DiskCache) startDownload(diskPath string, p *filePrefetchObject, o *objectDownload, taken bool) {
 	o.credit = func(n int64) { d.preloads.readDownload(diskPath, o, n) }
 	if taken {
 		d.downloads.storeTaken(diskPath, o)
 	} else {
 		d.downloads.store(diskPath, o)
 	}
-	return o
+	if p.content {
+		f := &d.prefetchObjects
+		f.mu.Lock()
+		f.registerLocked(p.diskPath, p)
+		f.mu.Unlock()
+	}
 }
 
 // finishDownload ends the download o of the fill p of the object at diskPath, once its
