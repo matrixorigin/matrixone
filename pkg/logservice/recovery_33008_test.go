@@ -453,11 +453,34 @@ func TestInitialLogBootstrapReopensBeforeMetadataWasSaved(t *testing.T) {
 	require.True(t, service.store.nh.HasNodeInfo(shard, replica))
 	require.Equal(t, int64(-1), service.store.getReplicaID(shard))
 
+	refuses := func(command pb.ScheduleCommand) {
+		t.Helper()
+		service.handleCommands([]pb.ScheduleCommand{command})
+		_, err := service.store.nh.GetNodeUser(shard)
+		require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+		require.Equal(t, int64(-1), service.store.getReplicaID(shard))
+	}
 	ordinary := start
 	ordinary.Bootstrapping = false
-	service.handleCommands([]pb.ScheduleCommand{ordinary})
-	_, err = service.store.nh.GetNodeUser(shard)
-	require.ErrorIs(t, err, dragonboat.ErrShardNotFound)
+	refuses(ordinary)
+
+	wrong := start
+	change := *start.ConfigChange
+	wrong.ConfigChange = &change
+	change.InitialMembers = map[uint64]string{replica: "different-store"}
+	refuses(wrong)
+	// Dragonboat validates the complete set even when the recipient matches.
+	change.InitialMembers = map[uint64]string{replica: cfg.UUID, 3: cfg.UUID}
+	refuses(wrong)
+
+	key := zombieKey{shardID: shard, replicaID: replica}
+	service.store.mu.Lock()
+	service.store.mu.skippedZombies[key] = 8
+	service.store.mu.Unlock()
+	refuses(start)
+	service.store.mu.Lock()
+	delete(service.store.mu.skippedZombies, key)
+	service.store.mu.Unlock()
 
 	client, err := NewLogHAKeeperClient(ctx, cfg.UUID, HAKeeperClientConfig{
 		ServiceAddresses: []string{cfg.LogServiceServiceAddr()},
