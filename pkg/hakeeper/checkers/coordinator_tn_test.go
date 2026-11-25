@@ -418,6 +418,15 @@ func TestCoordinatorRepairsAfterMissingReplicaReport(t *testing.T) {
 	require.False(t, hasChange(resumed, pb.StartReplica, 1, "log-b"), "do not start the replica selected for removal")
 	require.True(t, hasChange(resumed, pb.AddNonVotingReplica, 1, "log-d"))
 
+	// A prior Remove can still be in a heartbeat worker even when only one
+	// data voter now reports. Its exact target must not receive a new Start.
+	state.LogState.Stores["log-b"] = pb.LogStoreInfo{Tick: state.Tick}
+	store.Replicas = store.Replicas[:1]
+	state.LogState.Stores["log-c"] = store
+	changed := recoveryCommands()
+	require.False(t, hasChange(changed, pb.StartReplica, 1, "log-b"))
+	require.True(t, hasChange(changed, pb.StartReplica, 1, "log-c"))
+
 	control.Replicas = map[uint64]string{1: "log-a", 3: "log-c"}
 	control.Epoch++
 	state.LogState.Shards[0] = control

@@ -238,7 +238,7 @@ func TestRecoverExistingReplicaWithoutRetiredStore(t *testing.T) {
 	open(2)
 	c = services[2]
 	require.True(t, c.store.nh.HasNodeInfo(0, 3))
-	c.store.addMetadata(0, 3, false)
+	require.Equal(t, int64(-1), c.store.getReplicaID(0))
 	c.haClient = client
 	controlStart := pb.ScheduleCommand{UUID: c.ID(), ServiceType: pb.LogService,
 		ConfigChange: &pb.ConfigChange{ChangeType: pb.StartReplica, Replica: pb.Replica{ShardID: 0, ReplicaID: 3, UUID: c.ID()}}}

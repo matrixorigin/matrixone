@@ -342,9 +342,13 @@ func TestZombieRepro_WithFix(t *testing.T) {
 	// bootstrap whose metadata was retired from disk.
 	require.NoError(t, svc3b.Close())
 	svc3b = restartService3(t, cfg3, obsLogger)
-	_, skipped = svc3b.store.skippedZombieEpoch(hakeeper.DefaultHAKeeperShardID, 3)
-	require.False(t, skipped)
+	restoredEpoch, skipped := svc3b.store.skippedZombieEpoch(hakeeper.DefaultHAKeeperShardID, 3)
+	require.True(t, skipped)
+	require.GreaterOrEqual(t, restoredEpoch, epoch)
 	require.True(t, svc3b.store.nh.HasNodeInfo(hakeeper.DefaultHAKeeperShardID, 3))
+	svc3b.handleCommands([]pb.ScheduleCommand{stale})
+	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
+	stale.ConfigChange.Replica.Epoch = restoredEpoch - 1
 	svc3b.handleCommands([]pb.ScheduleCommand{stale})
 	require.Zero(t, atomic.LoadUint64(&svc3b.store.haKeeperReplicaID))
 

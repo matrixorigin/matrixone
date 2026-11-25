@@ -400,33 +400,33 @@ func (l *store) skippedZombieEpoch(shardID, replicaID uint64) (uint64, bool) {
 func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persisted bool) bool {
 	shardID, replicaID := replica.ShardID, replica.ReplicaID
 	epoch, skipped := l.skippedZombieEpoch(shardID, replicaID)
-	if !skipped {
+	if !skipped && replica.Epoch == 0 {
 		if !persisted {
 			return true
 		}
-		if replica.Epoch == 0 {
-			// Released Starts carry no membership epoch. Dragonboat may
-			// retain bootstrap data after MO removes its replica record.
-			l.mu.Lock()
-			defer l.mu.Unlock()
-			for _, record := range l.mu.metadata.Shards {
-				if record.ShardID == shardID && record.ReplicaID == replicaID && record.NonVoting == nonVoting {
-					return true
-				}
+		// Released Starts carry no membership epoch. Dragonboat may
+		// retain bootstrap data after MO removes its replica record.
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		for _, record := range l.mu.metadata.Shards {
+			if record.ShardID == shardID && record.ReplicaID == replicaID && record.NonVoting == nonVoting {
+				return true
 			}
-			return false
 		}
+		return false
 	}
 
 	// A committed heartbeat can confirm an orphan even after quorum is lost.
 	// If local gossip already knows a later configuration, honor that view.
-	confirmed := replica.Epoch > epoch
+	// A non-voter can be present at an index where it was absent as a voter.
+	confirmed := replica.Epoch > epoch || nonVoting && replica.Epoch != 0 && replica.Epoch == epoch
 	registry, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
 		return confirmed
 	}
 	shard, ok := registry.GetShardInfo(shardID)
-	if !ok || shard.ConfigChangeIndex <= epoch || shard.ConfigChangeIndex < replica.Epoch {
+	if !ok || shard.ConfigChangeIndex < replica.Epoch ||
+		shard.ConfigChangeIndex < epoch || shard.ConfigChangeIndex == epoch && !nonVoting {
 		return confirmed
 	}
 	members := shard.Nodes
@@ -437,12 +437,25 @@ func (l *store) canStartScheduledReplica(replica pb.Replica, nonVoting, persiste
 }
 
 func (l *store) startReplicas(ctx context.Context) error {
-	l.mu.Lock()
-	shards := make([]metadata.LogShard, 0)
-	shards = append(shards, l.mu.metadata.Shards...)
-	l.mu.Unlock()
-
-	zombies := l.checkZombieReplicas(ctx, shards)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	shards := l.getShards()
+	probes := append([]metadata.LogShard(nil), shards...)
+	local := make(map[zombieKey]struct{}, len(shards))
+	for _, rec := range shards {
+		local[zombieKey{shardID: rec.ShardID, replicaID: rec.ReplicaID}] = struct{}{}
+	}
+	// Kill and stale cleanup can leave bootstrap records behind. Include
+	// their voting membership in the existing bounded startup check.
+	for _, node := range l.nh.GetNodeHostInfo(dragonboat.DefaultNodeHostInfoOption).LogInfo {
+		if _, ok := local[zombieKey{shardID: node.ShardID, replicaID: node.ReplicaID}]; !ok {
+			probes = append(probes, metadata.LogShard{
+				LogShardRecord: metadata.LogShardRecord{ShardID: node.ShardID}, ReplicaID: node.ReplicaID,
+			})
+		}
+	}
+	zombies := l.checkZombieReplicas(ctx, probes)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
