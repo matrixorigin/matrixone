@@ -118,9 +118,6 @@ func TestStaticRollbackSetIsInfrastructureOnly(t *testing.T) {
 	// a genuine infrastructure failure still ends the transaction, with or
 	// without the session variable
 	require.True(t, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
-	indexCorrupt := moerr.NewIndexCorrupt(context.Background(), "idx")
-	require.True(t, isErrorRollbackWholeTxn(indexCorrupt))
-	require.True(t, isErrorRollbackWholeTxn(errors.Join(indexCorrupt, errors.New("result sink abort failed"))))
 }
 
 // unknownVarSession is a FeSession whose system-variable lookup fails, which

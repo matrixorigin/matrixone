@@ -114,6 +114,40 @@ where t.reldatabase=database() and t.relname='dup' and i.name='ux'`))
 		exec("alter table dup_null add unique key ux(e,v)")
 		checkPublicSerial()
 
+		// UNIQUE keys omit NULL entries. Composite nonunique keys encode NULL
+		// and must still remove the entry when their base row is deleted.
+		exec("create table delete_keys(id int primary key, e enum('new','paid'), n int, unique key ux(e,n), key ix(e,n))")
+		exec("insert into delete_keys values (1,'paid',1),(2,'paid',null),(3,null,1),(4,'new',1)")
+		owners := func(index string) string {
+			t.Helper()
+			var name, ids string
+			require.NoError(t, conn.QueryRowContext(ctx, `select distinct i.index_table_name
+from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id
+where t.reldatabase=database() and t.relname='delete_keys' and i.name=?`, index).Scan(&name))
+			name = "`" + strings.ReplaceAll(name, "`", "``") + "`"
+			require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(__mo_index_pri_col order by __mo_index_pri_col) from "+name).Scan(&ids))
+			return ids
+		}
+		require.Equal(t, "1,4", owners("ux"))
+		require.Equal(t, "1,2,3,4", owners("ix"))
+		result = exec("delete from delete_keys where id in (1,2)")
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 2, affected)
+		require.Equal(t, "4", owners("ux"))
+		require.Equal(t, "3,4", owners("ix"))
+
+		exec("create table delete_peer(id int primary key)")
+		exec("insert into delete_peer values (3)")
+		result = exec("delete k,p from delete_keys k join delete_peer p on k.id=p.id where p.id=3")
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.EqualValues(t, 2, affected)
+		require.Zero(t, count("select count(*) from delete_peer"))
+		require.Equal(t, 1, count("select count(*) from delete_keys use index() where id=4"))
+		require.Equal(t, "4", owners("ux"))
+		require.Equal(t, "4", owners("ix"))
+
 		// Legacy writers and index backfill disagree on prefixes of the
 		// special column itself. Reject those definitions before any DDL write.
 		exec("create table prefix_guard(id int primary key, e enum('blue','black'), s set('a','b'), v varchar(8))")
@@ -212,250 +246,5 @@ where t.reldatabase=? and t.relname=? and i.name='mi'`, database, tc.name).Scan(
 			require.Equal(t, 1, count(ownerJoin), tc.name)
 		}
 		checkPublicSerial()
-	})
-}
-
-func TestDeleteRejectsLegacyEnumIndexKeyMismatch(t *testing.T) {
-	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		cn, err := c.GetCNService(0)
-		require.NoError(t, err)
-		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
-		require.NoError(t, err)
-		defer db.Close()
-		conn, err := db.Conn(ctx)
-		require.NoError(t, err)
-		defer conn.Close()
-
-		database := strings.ToLower(testutils.GetDatabaseName(t))
-		quoted := "`" + strings.ReplaceAll(database, "`", "``") + "`"
-		exec := func(query string) sql.Result {
-			t.Helper()
-			result, err := conn.ExecContext(ctx, query)
-			require.NoError(t, err, query)
-			return result
-		}
-		count := func(query string) int {
-			t.Helper()
-			var n int
-			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&n), query)
-			return n
-		}
-		exec("create database " + quoted)
-		defer func() {
-			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
-			defer stop()
-			_, err := conn.ExecContext(cleanup, "drop database "+quoted)
-			require.NoError(t, err)
-		}()
-		exec("use " + quoted)
-		exec("create table indexed_rows(id int primary key,e enum('a','b'),n int,key ix(e,n))")
-		exec("insert into indexed_rows values(1,'a',null),(2,'b',null),(3,'a',1)")
-		exec("create table delete_side(id int primary key)")
-		exec("insert into delete_side values(1),(2),(4)")
-
-		var indexTable string
-		require.NoError(t, conn.QueryRowContext(ctx, `select distinct i.index_table_name
-from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id
-where t.reldatabase=? and t.relname='indexed_rows' and i.name='ix'`, database).Scan(&indexTable))
-		quotedIndex := "`" + strings.ReplaceAll(indexTable, "`", "``") + "`"
-
-		// Recreate the historical display-string encoding in the physical index
-		// while leaving the base ENUM row unchanged.
-		exec("update " + quotedIndex + " set __mo_index_idx_col=serial_full('a',null,serial(1)) where __mo_index_pri_col=1")
-
-		baseIDs := func() []int {
-			t.Helper()
-			rows, err := conn.QueryContext(ctx, "select id from indexed_rows order by id")
-			require.NoError(t, err)
-			defer rows.Close()
-			var ids []int
-			for rows.Next() {
-				var id int
-				require.NoError(t, rows.Scan(&id))
-				ids = append(ids, id)
-			}
-			require.NoError(t, rows.Err())
-			return ids
-		}
-		indexEntries := func() []string {
-			t.Helper()
-			rows, err := conn.QueryContext(ctx, "select hex(__mo_index_idx_col),__mo_index_pri_col from "+quotedIndex+" order by __mo_index_pri_col")
-			require.NoError(t, err)
-			defer rows.Close()
-			var entries []string
-			for rows.Next() {
-				var key string
-				var owner int
-				require.NoError(t, rows.Scan(&key, &owner))
-				entries = append(entries, fmt.Sprintf("%s:%d", key, owner))
-			}
-			require.NoError(t, rows.Err())
-			return entries
-		}
-
-		beforeBase := baseIDs()
-		beforeEntries := indexEntries()
-
-		// An unmatched row from the preserved side of an outer join is not a
-		// target row and must not be treated as a missing index entry.
-		result := exec("delete r from delete_side s left join indexed_rows r on s.id=r.id where s.id=4")
-		affected, err := result.RowsAffected()
-		require.NoError(t, err)
-		require.Zero(t, affected)
-		require.Equal(t, beforeBase, baseIDs())
-		require.Equal(t, beforeEntries, indexEntries())
-
-		// DELETE RETURNING wraps execution errors while aborting its result sink.
-		// The corruption error must still force rollback of prior transaction work.
-		exec("create table returning_rows(id int primary key,e enum('a','b'),n int,unique key ix(e,n))")
-		exec("insert into returning_rows values(1,'a',1)")
-		var returningIndexTable string
-		require.NoError(t, conn.QueryRowContext(ctx, "select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname='returning_rows' and i.name='ix'", database).Scan(&returningIndexTable))
-		quotedReturningIndex := string(rune(96)) + strings.ReplaceAll(returningIndexTable, string(rune(96)), string(rune(96))+string(rune(96))) + string(rune(96))
-		exec("update " + quotedReturningIndex + " set __mo_index_idx_col=serial('a',cast(1 as int)) where __mo_index_pri_col=1")
-		exec("set mo_rollback_txn_on_error=0")
-		exec("begin")
-		exec("insert into delete_side values(3)")
-		returningErr := func() error {
-			returningRows, err := conn.QueryContext(ctx, "delete from returning_rows where id=1 returning id")
-			if err != nil {
-				return err
-			}
-			defer returningRows.Close()
-			for returningRows.Next() {
-			}
-			return returningRows.Err()
-		}()
-		var mysqlErr *mysql.MySQLError
-		require.ErrorAs(t, returningErr, &mysqlErr)
-		require.EqualValues(t, 1712, mysqlErr.Number)
-		require.Equal(t, 3, count("select count(*) from delete_side"))
-		require.Equal(t, 1, count("select count(*) from returning_rows"))
-		var returningEntryCount int
-		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+quotedReturningIndex).Scan(&returningEntryCount))
-		require.Equal(t, 1, returningEntryCount)
-
-		_, err = conn.ExecContext(ctx, "delete from indexed_rows where id=1")
-		require.ErrorAs(t, err, &mysqlErr)
-		require.EqualValues(t, 1712, mysqlErr.Number)
-		require.Equal(t, beforeBase, baseIDs())
-		require.Equal(t, beforeEntries, indexEntries())
-
-		// A failed multi-target DELETE must leave both targets and the stale
-		// physical entry unchanged.
-		_, err = conn.ExecContext(ctx, "delete a,b from indexed_rows a join delete_side b on a.id=b.id where a.id=1")
-		require.ErrorAs(t, err, &mysqlErr)
-		require.EqualValues(t, 1712, mysqlErr.Number)
-		require.Equal(t, beforeBase, baseIDs())
-		require.Equal(t, 3, count("select count(*) from delete_side"))
-		require.Equal(t, beforeEntries, indexEntries())
-
-		// A MASTER sibling selects the legacy maintenance path for a filtered
-		// single-target DELETE. The regular ENUM index must still be checked.
-		exec("create table master_rows(id int primary key,e enum('a','b'),n int,v varchar(16),key ix(e,n))")
-		exec("create index mx using master on master_rows(v)")
-		exec("insert into master_rows values(1,'a',null,'one')")
-		var masterIndexTable string
-		require.NoError(t, conn.QueryRowContext(ctx, "select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname='master_rows' and i.name='ix'", database).Scan(&masterIndexTable))
-		quotedMasterIndex := string(rune(96)) + strings.ReplaceAll(masterIndexTable, string(rune(96)), string(rune(96))+string(rune(96))) + string(rune(96))
-		exec("update " + quotedMasterIndex + " set __mo_index_idx_col=serial_full('a',null,serial(1)) where __mo_index_pri_col=1")
-		_, err = conn.ExecContext(ctx, "delete from master_rows where id=1")
-		require.ErrorAs(t, err, &mysqlErr)
-		require.EqualValues(t, 1712, mysqlErr.Number)
-		require.Equal(t, 1, count("select count(*) from master_rows"))
-		var masterIndexEntries int
-		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+quotedMasterIndex).Scan(&masterIndexEntries))
-		require.Equal(t, 1, masterIndexEntries)
-
-		// Composite serial_full keys are present even when a key part is NULL.
-		result = exec("delete from indexed_rows where id=2")
-		affected, err = result.RowsAffected()
-		require.NoError(t, err)
-		require.EqualValues(t, 1, affected)
-		require.Equal(t, []int{1, 3}, baseIDs())
-		var expectedEntries []string
-		for _, entry := range beforeEntries {
-			if !strings.HasSuffix(entry, ":2") {
-				expectedEntries = append(expectedEntries, entry)
-			}
-		}
-		require.Equal(t, expectedEntries, indexEntries())
-
-		// A unique index match must have both the canonical key and the selected owner.
-		{
-			exec("create table unique_rows(id int primary key,e enum('a','b'),n int,unique key ux(e,n))")
-			exec("insert into unique_rows values(1,'a',1),(2,null,2),(3,'a',null),(4,'b',4)")
-			var hidden string
-			require.NoError(t, conn.QueryRowContext(ctx, "select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname='unique_rows' and i.name='ux'", database).Scan(&hidden))
-			hidden = "`" + strings.ReplaceAll(hidden, "`", "``") + "`"
-			readState := func() (base, entries string) {
-				t.Helper()
-				require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(id order by id) from unique_rows use index()").Scan(&base))
-				require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(concat(hex(__mo_index_idx_col),':',__mo_index_pri_col) order by __mo_index_pri_col) from "+hidden).Scan(&entries))
-				return
-			}
-			expectCorrupt := func(query string) {
-				t.Helper()
-				base, entries := readState()
-				_, err := conn.ExecContext(ctx, query)
-				var sqlErr *mysql.MySQLError
-				require.ErrorAs(t, err, &sqlErr)
-				require.EqualValues(t, 1712, sqlErr.Number)
-				afterBase, afterEntries := readState()
-				require.Equal(t, base, afterBase)
-				require.Equal(t, entries, afterEntries)
-			}
-			// The canonical key exists but belongs to a different base row.
-			exec("update " + hidden + " set __mo_index_pri_col=99 where __mo_index_pri_col=1")
-			expectCorrupt("delete from unique_rows where id=1")
-			expectCorrupt("delete u,s from unique_rows u join delete_side s on u.id=s.id where u.id=1")
-			exec("update " + hidden + " set __mo_index_pri_col=1 where __mo_index_pri_col=99")
-			// Install the display encoding used by v4.2.9 backfill for the old key.
-			exec("update " + hidden + " set __mo_index_idx_col=serial('a',cast(1 as int)) where __mo_index_pri_col=1")
-			expectCorrupt("delete from unique_rows where id=1")
-			expectCorrupt("delete u,s from unique_rows u join delete_side s on u.id=s.id where u.id=1")
-			require.Equal(t, 3, count("select count(*) from delete_side"))
-
-			_, entriesBeforeDelete := readState()
-			ownerFourPresent := false
-			for _, entry := range strings.Split(entriesBeforeDelete, ",") {
-				ownerFourPresent = ownerFourPresent || strings.HasSuffix(entry, ":4")
-			}
-			require.True(t, ownerFourPresent)
-			var expectedEntries []string
-			for _, entry := range strings.Split(entriesBeforeDelete, ",") {
-				if !strings.HasSuffix(entry, ":2") && !strings.HasSuffix(entry, ":4") {
-					expectedEntries = append(expectedEntries, entry)
-				}
-			}
-			result := exec("delete from unique_rows where id in (2,4)")
-			deleted, err := result.RowsAffected()
-			require.NoError(t, err)
-			require.EqualValues(t, 2, deleted)
-			base, entries := readState()
-			require.Equal(t, "1,3", base)
-			require.Equal(t, expectedEntries, strings.Split(entries, ","))
-			result = exec("delete u from unique_rows u join delete_side s on s.id=4 where u.id=3")
-			deleted, err = result.RowsAffected()
-			require.NoError(t, err)
-			require.EqualValues(t, 1, deleted)
-			base, entries = readState()
-			require.Equal(t, "1", base)
-			require.Equal(t, expectedEntries, strings.Split(entries, ","))
-		}
-
-		// R-tree indexes omit NULL geometries. An ENUM primary-key owner alias
-		// must not make that intentionally absent entry look corrupt.
-		exec("create table spatial_rows(id int primary key,e enum('a','b'),g point null,key ei(e))")
-		exec("create spatial index sx on spatial_rows(g)")
-		exec("insert into spatial_rows values(1,'a',null),(2,'b',st_geomfromtext('POINT(2 2)'))")
-		exec("alter table spatial_rows rename column g to __mo_alias_geom")
-		spatialDelete := exec("delete from spatial_rows where id=1")
-		spatialAffected, err := spatialDelete.RowsAffected()
-		require.NoError(t, err)
-		require.EqualValues(t, 1, spatialAffected)
-		require.Equal(t, 1, count("select count(*) from spatial_rows"))
 	})
 }

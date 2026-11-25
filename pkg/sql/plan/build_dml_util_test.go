@@ -556,7 +556,6 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			posMap,
 			lastNodeID,
 			nil,
-			nil,
 			true,
 		)
 
@@ -580,7 +579,6 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			nil,
 			nil,
 			false,
 		)
@@ -612,7 +610,6 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			posMap,
 			lastNodeID,
 			nil,
-			nil,
 			true,
 		)
 
@@ -626,26 +623,6 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
-}
-
-func TestShouldCheckDeleteIndexEntry(t *testing.T) {
-	enumType := plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
-	partTypes := map[string]plan.Type{"id": enumType}
-
-	spatial := &plan.IndexDef{
-		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
-		Parts:     []string{"g", catalog.CreateAlias("id")},
-	}
-	require.True(t, isSpatialIndexDef(spatial))
-	require.False(t, shouldCheckDeleteIndexEntry(spatial, partTypes))
-
-	regular := &plan.IndexDef{
-		IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
-		Parts:     []string{"e"},
-	}
-	require.True(t, shouldCheckDeleteIndexEntry(regular, map[string]plan.Type{"e": enumType}))
-	intType := plan.Type{Id: int32(types.T_int32)}
-	require.False(t, shouldCheckDeleteIndexEntry(regular, map[string]plan.Type{"e": intType}))
 }
 
 func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
@@ -707,16 +684,6 @@ func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	assertPlanHasPrefixCount(t, "insert into constraint_test.single_idx_t values (1, 'abcdef-long') on duplicate key update val = values(val)", "val", 2)
 	assertPlanHasPrefixCount(t, "update constraint_test.single_idx_t set val = 'abcdef-long' where id = 1", "val", 2)
 	assertPlanHasPrefixCount(t, "delete from constraint_test.single_idx_t where id = 1", "val", 1)
-
-	// ENUM secondary-index deletes preserve unmatched base rows long enough for
-	// the integrity assertion to report a missing index entry.
-	singleIdx.Cols[1].Typ = plan.Type{Id: int32(types.T_enum), Enumvalues: "x,y"}
-	singleIdx.Indexes[0].Parts = []string{"val", "id"}
-	singleIdx.Indexes[0].IndexAlgoParams = ""
-	singleIdxIndexTable.Cols[0].Typ = plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
-	logicPlan, err := runOneStmt(mock, t, "delete from constraint_test.single_idx_t where id = 1")
-	require.NoError(t, err)
-	require.True(t, updateFkPlanContainsFunc(logicPlan.GetQuery(), "assert"), "composite ENUM DELETE must include the index-entry assertion")
 }
 
 func queryHasPrefixSubstring(query *plan.Query, colName string, length int64) bool {

@@ -128,11 +128,6 @@ type deleteNodeInfo struct {
 	pkTyp              plan.Type
 	lockTable          bool
 	preserveProjection bool
-	assertIndexEntry   bool
-	indexEntryRequired *Expr
-	indexEntryRowIDPos int
-	indexEntryName     string
-	indexEntryTable    string
 }
 
 type ivfIncludeSourceCol struct {
@@ -2277,19 +2272,6 @@ func makeOneDeletePlan(
 	isSK bool,
 	canTruncate bool,
 ) (int32, error) {
-	if delNodeInfo.assertIndexEntry {
-		rowIDTyp := types.T_Rowid.ToType()
-		rowID := &plan.Expr{Typ: makePlan2Type(&rowIDTyp), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(delNodeInfo.indexEntryRowIDPos)}}}
-		entryExists, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*plan.Expr{rowID})
-		if err != nil {
-			return -1, err
-		}
-		assertExpr, err := makeDeleteIndexEntryAssert(builder, entryExists, delNodeInfo.indexEntryRequired, delNodeInfo.indexEntryName, delNodeInfo.indexEntryTable)
-		if err != nil {
-			return -1, err
-		}
-		lastNodeId = builder.appendNode(&Node{NodeType: plan.Node_FILTER, Children: []int32{lastNodeId}, FilterList: []*plan.Expr{assertExpr}, ProjectList: getProjectionByLastNode(builder, lastNodeId)}, bindCtx)
-	}
 	if isUK || isSK {
 
 		// For the hidden table of the secondary index, there will be no null situation, only unique key hidden table need this filter
@@ -3556,7 +3538,6 @@ func appendDeleteIndexTablePlan(
 	posMap map[string]int,
 	baseNodeId int32,
 	baseTableDef *TableDef,
-	entryRowIDPosOut *int,
 	isUK bool,
 ) (int32, error) {
 	/********
@@ -3566,7 +3547,6 @@ func appendDeleteIndexTablePlan(
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
-	baseProjectionLength := len(projectList)
 	rfTag := builder.genNewMsgTag()
 
 	var rightRowIdPos int32 = -1
@@ -3612,9 +3592,6 @@ func appendDeleteIndexTablePlan(
 	leftId := builder.appendNode(leftscan, bindCtx)
 
 	// append projection
-	if entryRowIDPosOut != nil {
-		*entryRowIDPosOut = baseProjectionLength
-	}
 	projectList = append(projectList, &plan.Expr{
 		Typ: uniqueTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
@@ -3702,8 +3679,7 @@ func appendDeleteIndexTablePlan(
 		return -1, err
 	}
 	joinConds = []*Expr{condExpr}
-	if (baseTableDef != nil && isUK && shouldCheckDeleteIndexEntry(indexdef, typMap)) ||
-		indexNeedsOwnerMatch(baseTableDef, indexdef, prefixLengths) {
+	if indexNeedsOwnerMatch(baseTableDef, indexdef, prefixLengths) {
 		if rightOwnerPos < 0 {
 			return -1, moerr.NewInternalError(builder.GetContext(), "DELETE index table has no owner column")
 		}
@@ -5464,7 +5440,6 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	}
 	var lastNodeId int32
 	var uniqueDeleteIdx int
-	var indexEntryRowIDPos int
 	var uniqueTblPkPos int
 	var uniqueTblPkTyp Type
 
@@ -5478,7 +5453,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		if !isUpdate {
 			ownerTable = delCtx.tableDef
 		}
-		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, ownerTable, &indexEntryRowIDPos, isUk)
+		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, ownerTable, isUk)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
 		uniqueTblPkTyp = uniqueTableDef.Cols[0].Typ
@@ -5558,31 +5533,6 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 		delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
-		if !delCtx.isDeleteWithoutFilters && shouldCheckDeleteIndexEntry(indexdef, typMap) {
-			projection := builder.qry.Nodes[lastNodeId].ProjectList
-			baseColumn := func(name string) (*Expr, error) {
-				pos, ok := posMap[name]
-				if !ok || pos < 0 || pos >= len(projection) {
-					return nil, moerr.NewInternalErrorf(builder.GetContext(), "DELETE cannot locate target column %s", name)
-				}
-				return &plan.Expr{Typ: projection[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(pos)}}}, nil
-			}
-			rowID, err := baseColumn(catalog.Row_ID)
-			if err != nil {
-				putDeleteNodeInfo(delNodeInfo)
-				return err
-			}
-			required, err := builder.deleteIndexEntryRequired(indexdef, rowID, baseColumn)
-			if err != nil {
-				putDeleteNodeInfo(delNodeInfo)
-				return err
-			}
-			delNodeInfo.assertIndexEntry = true
-			delNodeInfo.indexEntryRequired = required
-			delNodeInfo.indexEntryRowIDPos = indexEntryRowIDPos
-			delNodeInfo.indexEntryName = indexdef.IndexName
-			delNodeInfo.indexEntryTable = delCtx.tableDef.Name
-		}
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
 		putDeleteNodeInfo(delNodeInfo)
 		if err != nil {
