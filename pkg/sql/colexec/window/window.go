@@ -2673,11 +2673,6 @@ func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx 
 			if err != nil {
 				return start, end, false, err
 			}
-			if arithmeticNull {
-				// Use the start of the non-NULL segment so subsequent valid
-				// frames can slide forward from this empty interval.
-				return start, start, true, nil
-			}
 		}
 	case plan.FrameBound_FOLLOWING:
 		start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
@@ -2708,6 +2703,11 @@ func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx 
 				return start, end, false, err
 			}
 		}
+	}
+	if arithmeticNull {
+		// Once the end bound has been validated, anchor the empty frame at
+		// the start of the non-NULL segment so subsequent frames slide forward.
+		return start, start, true, nil
 	}
 	return start, end, false, nil
 }
