@@ -83,10 +83,7 @@ func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, col
 		if err != nil {
 			return err
 		}
-		count := rows
-		if !selected.All {
-			count = len(selected.Sels)
-		}
+		count := selected.Count(rows)
 		if err = validateReaderFilterResult(selected, rows, count); err != nil {
 			return err
 		}
@@ -101,16 +98,24 @@ func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, col
 					destination.CleanOnlyData()
 					continue
 				}
-				if selected.All {
+				switch {
+				case selected.All:
 					err = destination.UnionBatch(inputs[i], 0, rows, nil, mp)
-				} else {
+				case selected.Mask != nil:
+					err = destination.UnionByMask(inputs[i], selected.Mask, mp)
+				default:
 					err = destination.Union(inputs[i], selected.Sels, mp)
 				}
 				if err != nil {
 					return err
 				}
 			} else if !selected.All {
-				if err = destination.Shrink(selected.Sels, false, mp); err != nil {
+				if selected.Mask != nil {
+					err = destination.ShrinkByMask(selected.Mask, false, 0, mp)
+				} else {
+					err = destination.Shrink(selected.Sels, false, mp)
+				}
+				if err != nil {
 					return err
 				}
 			}
@@ -126,7 +131,8 @@ func blockDataReadScopedOwned(ctx context.Context, info *objectio.BlockInfo, col
 	}
 	var physicalRows []int64
 	if !selected.All {
-		physicalRows = selected.Sels
+		// The late columns load by row list.
+		physicalRows = request.RowList(selected)
 	}
 	// The pinned early read has ended; reuse its non-owning operands for the
 	// same late materialization helper, retaining only schema-sized storage.

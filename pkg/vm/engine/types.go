@@ -1280,9 +1280,34 @@ type ExplainVectorTopStatsReader interface {
 // length must equal the filtered batch row count. Sels is borrowed from the
 // callback and is only valid until the next callback. When All is true, every
 // row survived, the callback must not change the row count, and Sels is ignored.
+// ReaderFilterResult is the rows a reader filter keeps. All means every row.
+// Otherwise the kept rows, ascending, are Mask, a bitmap over the input rows
+// (issue #33181: a selection is a bitmap), or Sels, a row list, for
+// producers that build a list. Both are borrowed until the next callback.
 type ReaderFilterResult struct {
 	Sels []int64
+	Mask *bitmap.Bitmap
 	All  bool
+}
+
+// Count returns the number of kept rows of an input of rows rows.
+func (r ReaderFilterResult) Count(rows int) int {
+	switch {
+	case r.All:
+		return rows
+	case r.Mask != nil:
+		return r.Mask.Count()
+	}
+	return len(r.Sels)
+}
+
+// RowList returns the kept rows as a list: Sels itself, or Mask's rows
+// appended to dst[:0]. It is for consumers that load rows by list.
+func (r ReaderFilterResult) RowList(dst []int64) []int64 {
+	if r.Mask != nil {
+		return bitmap.AppendRows(r.Mask, dst[:0])
+	}
+	return r.Sels
 }
 
 // ReaderFilter evaluates a residual predicate over the columns listed in
@@ -1350,6 +1375,7 @@ type ReaderFilterRequest struct {
 	// Missing/unknown policies retain all columns. It never changes filter inputs.
 	ColumnUses       []ReaderColumnUse
 	selectionScratch *ReaderSelectionScratch
+	rowList          []int64
 	borrowColumns    []bool
 	scopedColumns    *objectio.CachedColumnScope
 	// Select evaluates the same ordered predicate chain without shrinking its
@@ -1473,6 +1499,18 @@ func (r *ReaderFilterRequest) BorrowColumns(positions []int, width int) []bool {
 }
 
 // SelectionScratch is execution-lane local and bounded by the scan schema.
+// RowList returns res's kept rows as a list, for loaders that read rows by
+// list (storage search results stay lists; see the row-selection design).
+// A Mask's rows go into a buffer the request reuses across blocks, valid
+// until the next call.
+func (r *ReaderFilterRequest) RowList(res ReaderFilterResult) []int64 {
+	if res.Mask == nil {
+		return res.Sels
+	}
+	r.rowList = res.RowList(r.rowList)
+	return r.rowList
+}
+
 func (r *ReaderFilterRequest) SelectionScratch(width int) *ReaderSelectionScratch {
 	if r.selectionScratch == nil {
 		r.selectionScratch = &ReaderSelectionScratch{}
