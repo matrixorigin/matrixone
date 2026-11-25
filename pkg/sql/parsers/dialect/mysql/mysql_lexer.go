@@ -562,26 +562,32 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		typ = ADMIN
 	}
 
-	if l.whereSources != nil && l.lastToken == UNDERSCORE_BINARY {
-		switch {
-		case typ == STRING && str != "":
-			typ, str = HEXNUM, "0x"+hex.EncodeToString([]byte(str))
-		case typ == HEXNUM && len(str)%2 != 0:
-			// The binder pads an odd number of hex digits by one nibble.
-			str = "0x0" + str[2:]
-		}
-	}
 	icebergRefName := l.previousToken == FOR_ICEBERG && l.lastToken == REF
-	l.previousToken = l.lastToken
-	l.lastToken = typ
 	if l.whereSources != nil && !icebergRefName {
+		// Both binary introducer forms bind as the same category, even when
+		// the byte string is empty. This token never goes back into the SQL.
+		if typ == STRING && l.lastToken == UNDERSCORE_BINARY {
+			typ, str = HEXNUM, "0x"+hex.EncodeToString([]byte(str))
+		}
 		switch {
+		case typ == HEXNUM:
+			// Binding pads a partial byte without removing leading zero bytes.
+			if len(str)%2 != 0 {
+				str = "0x0" + str[2:]
+			}
+			str = strings.ToLower(str)
+		case typ == BIT_LITERAL:
+			digits := str[2:]
+			padding := (8 - len(digits)%8) % 8
+			str = "0b" + strings.Repeat("0", padding) + digits
 		case l.lower == 1 && (typ == ID || typ == QUOTE_ID):
 			str = tree.NewCStr(str, 1).Compare()
-		case typ == HEXNUM || l.lower == 1 && typ != 0 && keywords[strings.ToLower(str)] == typ:
+		case l.lower == 1 && typ != 0 && keywords[strings.ToLower(str)] == typ:
 			str = strings.ToLower(str)
 		}
 	}
+	l.previousToken = l.lastToken
+	l.lastToken = typ
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ

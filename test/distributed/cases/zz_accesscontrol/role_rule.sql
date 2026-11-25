@@ -393,6 +393,23 @@ alter role test_rule_role_inherit_b add rule "select id, _binary 0x00A as x from
 select id, hex(x) from db1.t_rule_text order by id;
 -- @session
 
+-- Equal byte values within one literal category retain both roles' rows.
+alter role test_rule_role_inherit_a add rule "select id, 0xA as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0x0A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_a add rule "select id, b'1010' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0b00001010 as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+-- @session
+alter role test_rule_role_inherit_a add rule "select id, _binary '' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, _binary X'' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+-- @session:id=4&user=sys:test_rule_user_inherit:test_rule_role_inherit_a&password=123456
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+-- @session
+
 -- The table alias must bind in the reader's table-name mode.
 alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
 alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;

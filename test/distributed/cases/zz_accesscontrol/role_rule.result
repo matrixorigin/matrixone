@@ -419,6 +419,24 @@ alter role test_rule_role_inherit_b add rule "select id, _binary 0x00A as x from
 select id, hex(x) from db1.t_rule_text order by id;
 ➤ id[4,32,0]  ¦  hex(x)[12,4,0]  𝄀
 3  ¦  000A
+alter role test_rule_role_inherit_a add rule "select id, 0xA as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0x0A as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,8,0]  ¦  length(x)[-5,64,0]  ¦  x is null[-6,8,0]  𝄀
+1  ¦  0A  ¦  1  ¦  0  𝄀
+3  ¦  0A  ¦  1  ¦  0
+alter role test_rule_role_inherit_a add rule "select id, b'1010' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, 0b00001010 as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,8,0]  ¦  length(x)[-5,64,0]  ¦  x is null[-6,8,0]  𝄀
+1  ¦  0A  ¦  1  ¦  0  𝄀
+3  ¦  0A  ¦  1  ¦  0
+alter role test_rule_role_inherit_a add rule "select id, _binary '' as x from db1.t_rule_text where id = 1" on table db1.t_rule_text;
+alter role test_rule_role_inherit_b add rule "select id, _binary X'' as x from db1.t_rule_text where id = 3" on table db1.t_rule_text;
+select id, hex(x), length(x), x is null from db1.t_rule_text order by id;
+➤ id[4,32,0]  ¦  hex(x)[12,536870911,0]  ¦  length(x)[-5,64,0]  ¦  x is null[-6,8,0]  𝄀
+1  ¦    ¦  0  ¦  0  𝄀
+3  ¦    ¦  0  ¦  0
 alter role test_rule_role_inherit_a add rule "select id from db1.t_rule_text as `X` where id = 1" on table db1.t_rule_text;
 alter role test_rule_role_inherit_b add rule "select id from db1.t_rule_text as x where x.id = 3" on table db1.t_rule_text;
 select id from db1.t_rule_text order by id;
