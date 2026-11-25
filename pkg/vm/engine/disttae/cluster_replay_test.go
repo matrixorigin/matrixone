@@ -333,14 +333,14 @@ func readClusterReplay(
 	require.NoError(t, err)
 
 	out := batch.NewWithSize(1)
-	out.Attrs = []string{"value"}
+	outAttrs := []string{"value"}
 	out.Vecs[0] = vector.NewVec(types.T_float64.ToType(), mp)
 	defer out.Clean(mp)
 
 	readBatches := 0
 	for {
 		out.CleanOnlyData()
-		isEnd, err := reader.Read(qryCtx, out.Attrs, nil, mp, out)
+		isEnd, err := reader.Read(qryCtx, outAttrs, nil, mp, out)
 		require.NoError(t, err)
 		if isEnd {
 			break
@@ -976,7 +976,6 @@ func TestClusterOneReplayMatchNeverArmsExactHit(t *testing.T) {
 		memPKFilter:     filter,
 	}
 	out := batch.NewWithSize(1)
-	out.Attrs = []string{"value"}
 	out.Vecs[0] = vector.NewVec(types.T_float64.ToType(), mp)
 	require.NoError(t, ls.filterInMemCommittedInserts(
 		ctx, []types.Type{types.T_float64.ToType()}, []uint16{4}, mp, out))

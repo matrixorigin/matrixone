@@ -119,7 +119,7 @@ func issue26796InsertBatchInto(
 ) {
 	t.Helper()
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{issue26796PKName, "value"}
+	batAttrs := []string{issue26796PKName, "value"}
 	bat.SetVector(0, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	bat.SetVector(1, vector.NewVec(types.T_int64.ToType(), txn.proc.Mp()))
 	for _, pk := range pks {
@@ -129,7 +129,7 @@ func issue26796InsertBatchInto(
 	bat.SetRowCount(len(pks))
 	_, err := txn.WriteBatch(
 		INSERT, "", 1, issue26796DBID, tableID,
-		issue26796DB, tableName, bat, DNStore{},
+		issue26796DB, tableName, bat, batAttrs, DNStore{},
 	)
 	require.NoError(t, err)
 }

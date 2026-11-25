@@ -1144,7 +1144,7 @@ func TestShuffleRetiresCertifiedStopWithoutDataLoss(t *testing.T) {
 		remoteToIdx:     map[uuid.UUID]int{uid: 0},
 	}}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	done, err := sendBatToIndexOutcome(d, proc, bat, 0)
@@ -1293,7 +1293,7 @@ func Test_sendBatToMultiMatchedReg_ReceiverRemoved(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	// shuffleIndex=0, localRegsCnt=2, remoteToIdx[uid]=0
@@ -1505,7 +1505,7 @@ func TestSendToAllRemoteFunc_ReceiverFailure(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	// SendToAll should fail when any receiver is done
@@ -1538,7 +1538,7 @@ func TestSendToAnyRemoteFunc_ReceiverFailure(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	end, err := sendToAnyRemoteFunc(bat, d, proc)
@@ -1565,7 +1565,7 @@ func Test_sendToAnyRemoteFunc_RemoteRegsCntZero(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	// Should hit the error path: if ap.ctr.remoteRegsCnt == 0
@@ -1598,7 +1598,7 @@ func Test_sendToAnyRemoteFunc_NetworkError(t *testing.T) {
 
 func TestSendToAnyFunc_PropagatesLocalError(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	want := moerr.NewInternalErrorNoCtx("local send failed")
 
@@ -1621,7 +1621,7 @@ func TestSendToAnyFunc_PropagatesLocalError(t *testing.T) {
 
 func TestSendToAnyFunc_PropagatesRemoteError(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	want := moerr.NewInternalErrorNoCtx("remote send failed")
 
@@ -1644,7 +1644,7 @@ func TestSendToAnyFunc_PropagatesRemoteError(t *testing.T) {
 
 func TestSendToAnyFunc_FallbackFromLocalToRemote(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 
 	localStub := gostub.Stub(&sendToAnyLocal, func(*batch.Batch, *Dispatch, *process.Process) (bool, error) {
@@ -1674,7 +1674,7 @@ func TestSendToAnyFunc_FallbackFromLocalToRemote(t *testing.T) {
 
 func TestSendToAnyFunc_FallbackRemoteErrorIsPropagated(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	want := moerr.NewInternalErrorNoCtx("fallback remote failed")
 	localCalled := false
@@ -1725,7 +1725,7 @@ func TestShuffleScenario_TargetReceiverFailed(t *testing.T) {
 		},
 	}
 
-	bat := batch.New(nil)
+	bat := batch.NewWithSize(0)
 	bat.SetRowCount(1)
 	bat.ShuffleIDX = 0 // This batch should go to receiver 0
 

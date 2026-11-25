@@ -134,7 +134,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 					return result, err
 				}
 				bat.SetRowCount(bat.GetVector(0).Length())
-				byts, err1 := bat.MarshalBinary()
+				byts, err1 := bat.MarshalBinaryWithNames(DelBatchAttrs)
 				if err1 != nil {
 					result.Status = vm.ExecStop
 					return result, err1
@@ -163,7 +163,7 @@ func (deletion *Deletion) remoteDelete(proc *process.Process) (vm.CallResult, er
 					return result, err
 				}
 
-				batBytes, err := bat.MarshalBinary()
+				batBytes, err := bat.MarshalBinaryWithNames(TombstoneObjectStatsAttrs)
 				if err != nil {
 					result.Status = vm.ExecStop
 					return result, err
@@ -245,7 +245,7 @@ func (deletion *Deletion) normalDelete(proc *process.Process) (vm.CallResult, er
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, catalog.Row_ID)
+			return deletion.ctr.source.Delete(newCtx, deletion.ctr.resBat, DelBatchAttrs, catalog.Row_ID)
 		})
 		if err != nil {
 			return result, err

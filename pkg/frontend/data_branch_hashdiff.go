@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2309,7 +2308,6 @@ func validateLeadingRowID(side, tableName string, isTombstone bool, bat *batch.B
 			zap.Bool("tombstone", isTombstone),
 			zap.Int("row-cnt", bat.RowCount()),
 			zap.Int("vec-cnt", bat.VectorCount()),
-			zap.Strings("attrs", append([]string(nil), bat.Attrs...)),
 			zap.Strings("samples", batchSampleRowsForLog(bat, 4)),
 		}
 	}
@@ -2968,8 +2966,6 @@ func buildHashmapForTable(
 				return
 			}
 
-			dataBat = projectBaseBatchToTargetIfNeeded(side, dataBat, tblStuff, mp)
-
 			if dataBat != nil && dataBat.RowCount() > 0 {
 				totalRows += int64(dataBat.RowCount())
 				totalBytes += int64(dataBat.Size())
@@ -3204,8 +3200,7 @@ func projectBaseBatchToTargetIfNeeded(
 	tblStuff *tableStuff,
 	mp *mpool.MPool,
 ) *batch.Batch {
-	if side != "base" || dataBat == nil || dataBat.RowCount() == 0 ||
-		dataBranchBatchHasTargetLayout(dataBat, tblStuff) {
+	if side != "base" || dataBat == nil || dataBat.RowCount() == 0 {
 		return dataBat
 	}
 	// Legacy table metadata without a source-to-target mapping has no evidence
@@ -3364,33 +3359,6 @@ func dataBranchNeedsHistoricalProjection(sourceToTarget []int, targetColCount in
 		}
 	}
 	return false
-}
-
-func dataBranchTargetLayoutAttrs(tblStuff *tableStuff, hasCommitTS bool) []string {
-	attrs := make([]string, 0, len(tblStuff.def.colNames)+2)
-	attrs = append(attrs, catalog.Row_ID)
-	attrs = append(attrs, tblStuff.def.colNames...)
-	if hasCommitTS {
-		attrs = append(attrs, objectio.DefaultCommitTS_Attr)
-	}
-	return attrs
-}
-
-func dataBranchBatchHasTargetLayout(bat *batch.Batch, tblStuff *tableStuff) bool {
-	if bat == nil || len(bat.Attrs) != bat.VectorCount() {
-		return false
-	}
-	hasCommitTS := bat.VectorCount() == len(tblStuff.def.colNames)+2
-	if !hasCommitTS && bat.VectorCount() != len(tblStuff.def.colNames)+1 {
-		return false
-	}
-	want := dataBranchTargetLayoutAttrs(tblStuff, hasCommitTS)
-	for i := range want {
-		if !strings.EqualFold(bat.Attrs[i], want[i]) {
-			return false
-		}
-	}
-	return true
 }
 
 func overlayDataBranchProbeResult(
@@ -3610,6 +3578,32 @@ func (h *historicalDataBranchChangesHandle) Close() error {
 	return h.inner.Close()
 }
 
+// currentBaseChangesHandle projects batches of the current base relation,
+// read in the base table's layout, into the target layout. Only that
+// relation's handle is wrapped: a historical relation's handle already
+// yields the target layout (projected by historicalDataBranchChangesHandle,
+// or identical to it), and a batch carries no names to tell them apart.
+type currentBaseChangesHandle struct {
+	inner    engine.ChangesHandle
+	tblStuff tableStuff
+}
+
+func (h *currentBaseChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	data, tombstone, hint, err := h.inner.Next(ctx, mp)
+	if err != nil {
+		return data, tombstone, hint, err
+	}
+	data = projectBaseBatchToTargetIfNeeded("base", data, &h.tblStuff, mp)
+	return data, tombstone, hint, nil
+}
+
+func (h *currentBaseChangesHandle) Close() error {
+	return h.inner.Close()
+}
+
 func projectDataBranchBatchToTarget(
 	sourceBat *batch.Batch,
 	tblStuff *tableStuff,
@@ -3650,7 +3644,6 @@ func projectDataBranchBatchToTarget(
 		}
 	}
 	out.SetRowCount(sourceBat.RowCount())
-	out.SetAttributes(dataBranchTargetLayoutAttrs(tblStuff, hasCommitTS))
 	sourceBat.Clean(mp)
 	return out
 }

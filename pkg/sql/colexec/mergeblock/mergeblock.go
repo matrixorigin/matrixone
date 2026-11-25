@@ -84,7 +84,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 
 		//batches in mp will be deeply copied into txn's workspace.
 		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0])
+			return mergeBlock.container.source.Write(newCtx, mergeBlock.container.mp[0], colexec.CNS3ResultAttrs)
 		}); err != nil {
 			return input, err
 		}
@@ -96,7 +96,7 @@ func (mergeBlock *MergeBlock) Call(proc *process.Process) (vm.CallResult, error)
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		//batches in mp2 will be deeply copied into txn's workspace.
 		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-			return mergeBlock.container.source.Write(newCtx, bat)
+			return mergeBlock.container.source.Write(newCtx, bat, mergeBlock.Attrs)
 		}); err != nil {
 			return input, err
 		}

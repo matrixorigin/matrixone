@@ -849,14 +849,14 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		reader := NewMergeReader([]engine.Reader{child})
 
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.NewWithSize(0),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
 		require.True(t, topKApplied)
 
 		isEnd, topKApplied, err = reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.NewWithSize(0),
 		)
 		require.NoError(t, err)
 		require.True(t, isEnd)
@@ -871,7 +871,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		}
 		reader := NewMergeReader([]engine.Reader{child})
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.NewWithSize(0),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
@@ -884,7 +884,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		child := &countingReader{rows: 1, closeCount: &closeCount}
 		reader := NewMergeReader([]engine.Reader{child})
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.NewWithSize(0),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
@@ -899,7 +899,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		}
 		reader := NewMergeReader([]engine.Reader{child})
 		_, _, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.NewWithSize(0),
 		)
 		require.ErrorIs(t, err, readErr)
 		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))

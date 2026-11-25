@@ -397,6 +397,7 @@ func TestDMLActionExecutorCommitUpdateMaterializesReplacementBatch(t *testing.T)
 			}},
 		},
 		ReplacementBatch: DMLReplacementDataBatch{
+			Attrs:               []string{"id", "name"},
 			Batch:               bat,
 			TargetFileSizeBytes: 1,
 		},
@@ -481,6 +482,7 @@ func TestDMLActionExecutorRecordsMaterializedObjectsWhenActionBuildFails(t *test
 			}},
 		},
 		ReplacementBatch: DMLReplacementDataBatch{
+			Attrs:               []string{"id", "name"},
 			Batch:               bat,
 			TargetFileSizeBytes: 1,
 		},
@@ -680,7 +682,7 @@ func TestDMLActionExecutorCommitMergeCombinesMatchedAndUnmatchedActions(t *testi
 func newReplacementExecutorBatch(t *testing.T) (*batch.Batch, func()) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "name"})
+	bat := batch.NewWithSize(2)
 	idVec := vector.NewVec(types.T_int32.ToType(), mp)
 	nameVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	if err := vector.AppendFixed[int32](idVec, 42, false, mp); err != nil {

@@ -412,7 +412,7 @@ func TestExecuteIteration1(t *testing.T) {
 	// Create a batch with 10 rows
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -938,7 +938,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	// Create a batch with 10 rows
 	bat1 := catalog2.MockBatch(schema1, 10)
 	defer bat1.Close()
-	err = rel1.Write(srcCtxWithTimeout, containers.ToCNBatch(bat1))
+	err = rel1.Write(srcCtxWithTimeout, containers.ToCNBatch(bat1), bat1.Attrs)
 	require.NoError(t, err)
 
 	// Create second table
@@ -955,7 +955,7 @@ func TestExecuteIterationDatabaseLevel(t *testing.T) {
 	// Create a batch with 15 rows
 	bat2 := catalog2.MockBatch(schema2, 15)
 	defer bat2.Close()
-	err = rel2.Write(srcCtxWithTimeout, containers.ToCNBatch(bat2))
+	err = rel2.Write(srcCtxWithTimeout, containers.ToCNBatch(bat2), bat2.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -1854,7 +1854,7 @@ func TestExecuteIterationWithSnapshotFinishedInjection(t *testing.T) {
 	// Insert data into source table
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -2182,7 +2182,7 @@ func TestExecuteIterationWithCommitFailedInjection(t *testing.T) {
 	// Insert data into source table
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -2724,7 +2724,7 @@ func TestCCPRCreateDelete(t *testing.T) {
 	// Create a batch with 10 rows
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -3121,7 +3121,7 @@ func TestCCPRAlterTable(t *testing.T) {
 	// Create a batch with 10 rows
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -3321,7 +3321,7 @@ func TestCCPRAlterTable(t *testing.T) {
 	// Create a batch with 15 rows (different from first iteration)
 	bat2 := catalog2.MockBatch(schema, 15)
 	defer bat2.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat2))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat2), bat2.Attrs)
 	require.NoError(t, err)
 
 	err = txnRecreate.Commit(srcCtxWithTimeout)
@@ -3565,7 +3565,7 @@ func TestCCPRErrorHandling1(t *testing.T) {
 	// Insert data into source table
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -4484,7 +4484,7 @@ func TestCCPRExecutorWithGC(t *testing.T) {
 	// Insert data into source table
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -4867,7 +4867,7 @@ func TestCCPRErrorHandling2(t *testing.T) {
 	// Insert data into source table
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -5231,7 +5231,7 @@ func TestExecuteIterationWithStaleRead(t *testing.T) {
 	// Insert data into source table
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)
@@ -5667,7 +5667,7 @@ func TestCCPRSyncProtectionRetry(t *testing.T) {
 	// Insert data into source table
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
-	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat))
+	err = rel.Write(srcCtxWithTimeout, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(srcCtxWithTimeout)

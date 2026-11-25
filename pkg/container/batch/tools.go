@@ -20,9 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
+// BatchToProtoBatch converts bat to its protobuf form. attrs names bat's
+// columns on the wire: a batch carries no names of its own.
+func BatchToProtoBatch(bat *Batch, attrs []string) (*api.Batch, error) {
 	rbat := new(api.Batch)
-	rbat.Attrs = bat.Attrs
+	rbat.Attrs = attrs
 	if len(bat.Vecs) > 0 {
 		rbat.Vecs = make([]api.Vector, len(bat.Vecs))
 	}
@@ -41,7 +43,6 @@ func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
 // are read-only references to bat's buffers.
 func ProtoBatchToBatch(bat *api.Batch, mp *mpool.MPool) (*Batch, error) {
 	rbat := NewWithSize(len(bat.Vecs))
-	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, v := range bat.Vecs {
 		vec, err := vector.ProtoVectorToVector(v, mp)
 		if err != nil {

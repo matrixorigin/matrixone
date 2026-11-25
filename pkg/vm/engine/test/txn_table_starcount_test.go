@@ -110,7 +110,7 @@ func TestStarCountBasic(t *testing.T) {
 
 	// Insert 100 rows
 	bat := catalog2.MockBatch(schema, 100)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(ctx)
@@ -154,7 +154,7 @@ func TestStarCountBasic(t *testing.T) {
 	rel, err = db.Relation(ctx, emptyTable, nil)
 	require.NoError(t, err)
 	bat = catalog2.MockBatch(emptySchema, 50)
-	require.NoError(t, rel.Write(ctx, containers.ToCNBatch(bat)))
+	require.NoError(t, rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs))
 	count, err = rel.StarCount(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(50), count, "empty table should count uncommitted inserts")
@@ -210,7 +210,7 @@ func TestStarCountWithPersistedInserts(t *testing.T) {
 	require.NoError(t, err)
 
 	bat := catalog2.MockBatch(schema, 100)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(ctx)
@@ -230,7 +230,7 @@ func TestStarCountWithPersistedInserts(t *testing.T) {
 	// Each row is ~100 bytes, so 20 rows should be enough
 	for i := 0; i < 5; i++ {
 		bat = catalog2.MockBatch(schema, 20)
-		err = rel.Write(ctx, containers.ToCNBatch(bat))
+		err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 		require.NoError(t, err)
 	}
 
@@ -293,7 +293,7 @@ func TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	bat := catalog2.MockBatch(schema, 100)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(ctx)
@@ -333,7 +333,7 @@ func TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch(t *testing.T) {
 		"testdb",
 		"test_table",
 		"fake_multi_obj",
-		insertBat,
+		insertBat, catalog.ObjectInsertAttrs,
 		disttaeEngine.Engine.GetTNServices()[0],
 	))
 
@@ -398,7 +398,7 @@ func TestStarCountInMemoryLarge(t *testing.T) {
 	batchSize := 1000
 	for i := 0; i < totalRows/batchSize; i++ {
 		bat := catalog2.MockBatch(schema, batchSize)
-		err = rel.Write(ctx, containers.ToCNBatch(bat))
+		err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 		require.NoError(t, err)
 	}
 
@@ -420,7 +420,7 @@ func TestStarCountInMemoryLarge(t *testing.T) {
 
 	uncommittedRows := 1000
 	bat := catalog2.MockBatch(schema, uncommittedRows)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	count, err = rel.StarCount(ctx)
@@ -471,7 +471,7 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	require.NoError(t, err)
 
 	bat := catalog2.MockBatch(schema, 100)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(ctx)
@@ -495,7 +495,7 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	// Write batches with fault injection enabled - these will be persisted
 	for i := 0; i < 3; i++ {
 		bat = catalog2.MockBatch(schema, 20)
-		err = rel.Write(ctx, containers.ToCNBatch(bat))
+		err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 		require.NoError(t, err)
 	}
 
@@ -506,7 +506,7 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	// Write more batches without fault injection - these will stay in-memory
 	for i := 0; i < 2; i++ {
 		bat = catalog2.MockBatch(schema, 25)
-		err = rel.Write(ctx, containers.ToCNBatch(bat))
+		err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 		require.NoError(t, err)
 	}
 
@@ -548,7 +548,7 @@ func assertWorkspaceHasPersistedInsertWithMultipleObjectStats(
 			return
 		}
 		bat := entry.Bat()
-		if len(bat.Attrs) < 2 || bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+		if attrs := entry.Attrs(); len(attrs) < 2 || attrs[1] != catalog.ObjectMeta_ObjectStats {
 			return
 		}
 		if bat.Vecs[1].Length() == wantObjectStatsRows {
@@ -585,7 +585,7 @@ func assertWorkspaceHasPersistedTombstones(
 		if bat.IsEmpty() || bat.Vecs[0].Length() == 0 {
 			return
 		}
-		if len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
+		if attrs := entry.Attrs(); len(attrs) > 0 && attrs[0] == catalog.ObjectMeta_ObjectStats {
 			found = true
 		}
 	})
@@ -740,12 +740,12 @@ func TestStarCountWithInMemoryTombstones(t *testing.T) {
 
 	delBatch := batch.NewWithSize(2)
 	delBatch.SetRowCount(len(deleteRowIDs))
-	delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	delBatch.Vecs[0] = vec1
 	delBatch.Vecs[1] = vec2
 
 	// Delete rows
-	require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+	require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 
 	// Step 4: Verify StarCount after deletion
 	count, err = rel.StarCount(p.Ctx)
@@ -838,7 +838,7 @@ func TestStarCountWithMixedInsertsAndTombstones(t *testing.T) {
 
 	// Insert 50 new rows
 	bat := catalog2.MockBatch(schema, 50)
-	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
+	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat), bat.Attrs))
 
 	// Delete 20 rows
 	vec1 := vector.NewVec(types.T_Rowid.ToType(), p.Mp)
@@ -855,11 +855,11 @@ func TestStarCountWithMixedInsertsAndTombstones(t *testing.T) {
 
 	delBatch := batch.NewWithSize(2)
 	delBatch.SetRowCount(len(deleteRowIDs))
-	delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	delBatch.Vecs[0] = vec1
 	delBatch.Vecs[1] = vec2
 
-	require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+	require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 
 	// Step 4: Verify StarCount
 	count, err := rel.StarCount(p.Ctx)
@@ -952,7 +952,6 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), p.Mp)
 	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType(), p.Mp)
-	tombstoneBat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	for _, rowid := range deleteRowIDs {
 		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[0], rowid, false, p.Mp))
 	}
@@ -973,11 +972,11 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 
 	// Add persisted DELETE entry via object-level delete (ObjectMeta_ObjectStats)
 	tbat := batch.NewWithSize(1)
-	tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	tbatAttrs := []string{catalog.ObjectMeta_ObjectStats}
 	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp))
 	tbat.SetRowCount(1)
-	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
+	require.NoError(t, rel.Delete(p.Ctx, tbat, tbatAttrs, catalog.Row_ID))
 
 	// Step 4: Assert workspace has uncommitted persisted tombstones (guarantees the path is exercisable)
 	assertWorkspaceHasPersistedTombstones(t, txnop, dbID, tableID)
@@ -1043,7 +1042,7 @@ func TestStarCountDeleteUncommittedInserts(t *testing.T) {
 
 	// Insert 50 rows
 	bat := catalog2.MockBatch(schema, 50)
-	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
+	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat), bat.Attrs))
 
 	// Note: We cannot easily get rowids of uncommitted inserts to delete them
 	// because they don't have stable rowids yet. This scenario is actually
@@ -1093,11 +1092,11 @@ func TestStarCountDeleteUncommittedInserts(t *testing.T) {
 
 	delBatch := batch.NewWithSize(2)
 	delBatch.SetRowCount(len(deleteRowIDs))
-	delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	delBatch.Vecs[0] = vec1
 	delBatch.Vecs[1] = vec2
 
-	require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+	require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 
 	// Step 3: Verify StarCount
 	count, err := rel.StarCount(p.Ctx)
@@ -1221,16 +1220,15 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	}
 	delBatch1 := batch.NewWithSize(2)
 	delBatch1.SetRowCount(len(firstBatchRowIDs))
-	delBatch1.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatch1Attrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	delBatch1.Vecs[0] = vec1
 	delBatch1.Vecs[1] = vec2
-	require.NoError(t, rel.Delete(p.Ctx, delBatch1, catalog.Row_ID))
+	require.NoError(t, rel.Delete(p.Ctx, delBatch1, delBatch1Attrs, catalog.Row_ID))
 
 	// Create tombstone object for second batch and add as persisted DELETE (object-level delete)
 	tombstoneBat := batch.NewWithSize(2)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), p.Mp)
 	tombstoneBat.Vecs[1] = vector.NewVec(types.T_int8.ToType(), p.Mp)
-	tombstoneBat.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	for _, rowid := range secondBatchRowIDs {
 		require.NoError(t, vector.AppendFixed(tombstoneBat.Vecs[0], rowid, false, p.Mp))
 	}
@@ -1250,11 +1248,11 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	tombstoneBat.Vecs[1].Free(p.Mp)
 
 	tbat := batch.NewWithSize(1)
-	tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+	tbatAttrs := []string{catalog.ObjectMeta_ObjectStats}
 	tbat.Vecs[0] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
 	require.NoError(t, vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp))
 	tbat.SetRowCount(1)
-	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
+	require.NoError(t, rel.Delete(p.Ctx, tbat, tbatAttrs, catalog.Row_ID))
 
 	assertWorkspaceHasPersistedTombstones(t, txnop, dbID, tableID)
 
@@ -1356,11 +1354,11 @@ func TestStarCountEmptyTableWithTombstones(t *testing.T) {
 
 	delBatch := batch.NewWithSize(2)
 	delBatch.SetRowCount(len(deleteRowIDs))
-	delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+	delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 	delBatch.Vecs[0] = vec1
 	delBatch.Vecs[1] = vec2
 
-	require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+	require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 
 	// Step 5: Verify StarCount
 	count, err := rel.StarCount(p.Ctx)
@@ -1481,11 +1479,11 @@ func TestStarCountMultipleDeletes(t *testing.T) {
 
 		delBatch := batch.NewWithSize(2)
 		delBatch.SetRowCount(len(batch1RowIDs))
-		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 		delBatch.Vecs[0] = vec1
 		delBatch.Vecs[1] = vec2
 
-		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 		vec1.Free(p.Mp)
 		vec2.Free(p.Mp)
 	}
@@ -1506,11 +1504,11 @@ func TestStarCountMultipleDeletes(t *testing.T) {
 
 		delBatch := batch.NewWithSize(2)
 		delBatch.SetRowCount(len(batch2RowIDs))
-		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 		delBatch.Vecs[0] = vec1
 		delBatch.Vecs[1] = vec2
 
-		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 		vec1.Free(p.Mp)
 		vec2.Free(p.Mp)
 	}
@@ -1531,11 +1529,11 @@ func TestStarCountMultipleDeletes(t *testing.T) {
 
 		delBatch := batch.NewWithSize(2)
 		delBatch.SetRowCount(len(batch3RowIDs))
-		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 		delBatch.Vecs[0] = vec1
 		delBatch.Vecs[1] = vec2
 
-		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 		vec1.Free(p.Mp)
 		vec2.Free(p.Mp)
 	}
@@ -1685,7 +1683,7 @@ func TestStarCountWithTransferredTombstones(t *testing.T) {
 		require.Equal(t, 1, len(ss))
 
 		tbat := batch.NewWithSize(1)
-		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
+		tbatAttrs := []string{catalog.ObjectMeta_ObjectStats}
 		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 		vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp)
 		tbat.SetRowCount(1)
@@ -1693,7 +1691,7 @@ func TestStarCountWithTransferredTombstones(t *testing.T) {
 		transaction := cnTxnOp.GetWorkspace().(*disttae.Transaction)
 		require.NoError(t, transaction.WriteFile(
 			disttae.DELETE, 0, dbID, tableID, "db", schema.Name,
-			ss[0].ObjectLocation().String(), tbat, p.D.Engine.GetTNServices()[0]))
+			ss[0].ObjectLocation().String(), tbat, tbatAttrs, p.D.Engine.GetTNServices()[0]))
 
 		require.NoError(t, cnTxnOp.UpdateSnapshot(p.Ctx, p.D.Now()))
 	}
@@ -1775,13 +1773,13 @@ func TestStarCountWithTransferredInMemoryTombstones(t *testing.T) {
 
 		delBatch := batch.NewWithSize(2)
 		delBatch.SetRowCount(5)
-		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 		delBatch.Vecs[0] = vec1
 		delBatch.Vecs[1] = vec2
 
 		db, _ := p.D.Engine.Database(p.Ctx, "db", cnTxnOp)
 		rel, _ := db.Relation(p.Ctx, schema.Name, nil)
-		require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+		require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 
 		// Verify StarCount before merge: 10 - 5 = 5
 		count, err := rel.StarCount(p.Ctx)

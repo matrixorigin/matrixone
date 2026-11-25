@@ -245,9 +245,6 @@ func TestCreateObjectListBatch(t *testing.T) {
 	assert.Equal(t, len(ObjectListTypes), len(bat.Vecs))
 
 	// Verify attributes
-	for i, attr := range ObjectListAttrs {
-		assert.Equal(t, attr, bat.Attrs[i])
-	}
 
 	// Verify vector types
 	assert.Equal(t, types.T_varchar.ToType().Oid, bat.Vecs[ObjectListAttr_DbName_Idx].GetType().Oid)
@@ -367,9 +364,6 @@ func TestGetObjectListFromCKPBatchCreation(t *testing.T) {
 
 	// Verify batch structure
 	assert.Equal(t, len(ObjectListAttrs), len(bat.Vecs))
-	for i, attr := range ObjectListAttrs {
-		assert.Equal(t, attr, bat.Attrs[i])
-	}
 }
 
 // TestCollectObjectListEmptyState tests CollectObjectList with empty partition state

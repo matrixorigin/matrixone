@@ -52,7 +52,7 @@ func newStatsLookupEngine(t *testing.T) *Engine {
 	} {
 		bat, err := catalog.GenCreateTableTuple(tbl, mp, packer)
 		require.NoError(t, err)
-		_, err = fillRandomRowidAndZeroTs(bat, mp)
+		_, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, mp)
 		require.NoError(t, err)
 		vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(cache.MO_TIMESTAMP_IDX))[0] = types.BuildTS(1, 0)
 		eng.GetLatestCatalogCache().InsertTable(bat)

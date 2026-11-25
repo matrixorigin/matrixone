@@ -335,7 +335,6 @@ func newMaterializedInMemBatch(
 	mp *mpool.MPool,
 ) *batch.Batch {
 	bat := batch.NewWithSize(len(attrs))
-	bat.SetAttributes(attrs)
 	for i := range attrs {
 		bat.Vecs[i] = vector.NewVec(colTypes[i], mp)
 	}
@@ -348,7 +347,7 @@ func appendCommittedInMemEntry(
 	seqNums []uint16,
 	mp *mpool.MPool,
 ) error {
-	for i := range out.Attrs {
+	for i := range out.Vecs {
 		switch seqNums[i] {
 		case objectio.SEQNUM_ROWID:
 			if err := vector.AppendFixed(out.Vecs[i], entry.RowID, false, mp); err != nil {

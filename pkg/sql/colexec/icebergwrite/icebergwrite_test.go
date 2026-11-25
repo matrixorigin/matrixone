@@ -504,7 +504,7 @@ func (c *testProcessAwareCoordinator) AppendWithProcess(proc *process.Process, b
 }
 
 func testBatchWithRows(proc *process.Process, rows int) *batch.Batch {
-	bat := batch.NewWithSchema([]string{"id"}, []types.Type{types.T_int64.ToType()}, proc.Mp())
+	bat := batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, proc.Mp())
 	for i := 0; i < rows; i++ {
 		if err := vector.AppendFixed[int64](bat.Vecs[0], int64(i+1), false, proc.Mp()); err != nil {
 			panic(err)
@@ -515,7 +515,7 @@ func testBatchWithRows(proc *process.Process, rows int) *batch.Batch {
 }
 
 func lastBatch() *batch.Batch {
-	bat := batch.NewWithSchema([]string{"id"}, []types.Type{types.T_int64.ToType()}, mpool.MustNewZero())
+	bat := batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, mpool.MustNewZero())
 	bat.SetLast()
 	return bat
 }

@@ -286,7 +286,7 @@ func (flow *TransferFlow) Process(ctx context.Context) error {
 	for {
 		buffer := flow.getBuffer()
 		defer flow.putBuffer(buffer)
-		done, err := flow.sourcer.Read(ctx, buffer.Attrs, nil, flow.mp, buffer)
+		done, err := flow.sourcer.Read(ctx, flow.buffer.Attrs(), nil, flow.mp, buffer)
 		if err != nil {
 			return err
 		}

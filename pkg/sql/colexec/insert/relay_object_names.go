@@ -29,8 +29,8 @@
 // transferred, released its local owner, and a cancellation before the
 // coordinator's record left the persisted files enumerated nowhere.
 //
-// The recognizer is deliberately attribute-anchored: both column names
-// are the writer's internal metadata attributes. Rows never adopt
+// The recognizer is layout-anchored: a batch carries no column names, so
+// it checks the writer's vector count and types. Rows never adopt
 // outside a scope whose fragment runs the covered producer (the
 // compile-side scope gate owns that check), and a stats value that
 // cannot carry an ObjectStats rejects the ack instead of adopting a
@@ -38,12 +38,12 @@
 package insert
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 )
 
 // ProducesRemotePersistedObjectMetadata is the mode-authenticated
@@ -68,6 +68,25 @@ func (op *PartitionInsert) ProducesRemotePersistedObjectMetadata() bool {
 	return op.raw != nil && op.raw.ToWriteS3 && !op.raw.ToExternal
 }
 
+// isS3InsertResultLayout reports whether bat has the insert writer's
+// result layout (colexec.AllocCNS3ResultBat, not a tombstone).
+func isS3InsertResultLayout(bat *batch.Batch) bool {
+	return bat != nil && len(bat.Vecs) == 2 &&
+		bat.Vecs[0] != nil && bat.Vecs[1] != nil &&
+		bat.Vecs[0].GetType().Oid == types.T_text &&
+		bat.Vecs[1].GetType().Oid == types.T_binary
+}
+
+// RelayWireNames returns the column names an older coordinator expects on
+// the wire for bat when bat has the insert writer's result layout, and nil
+// otherwise. Older coordinators recognize the result batch by these names.
+func RelayWireNames(bat *batch.Batch) []string {
+	if isS3InsertResultLayout(bat) {
+		return colexec.CNS3ResultAttrs
+	}
+	return nil
+}
+
 // TryExtractS3InsertObjectNames returns ok=true only for a batch
 // carrying the standalone insert writer's result layout, with one
 // canonical name per persisted object, or an error when a row cannot
@@ -75,16 +94,7 @@ func (op *PartitionInsert) ProducesRemotePersistedObjectMetadata() bool {
 func TryExtractS3InsertObjectNames(
 	bat *batch.Batch,
 ) (names []string, ok bool, err error) {
-	if bat == nil || len(bat.Vecs) != 2 || bat.Vecs[0].Length() == 0 {
-		return nil, false, nil
-	}
-	if len(bat.Attrs) < 2 ||
-		bat.Attrs[0] != catalog.BlockMeta_BlockInfo ||
-		bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-		return nil, false, nil
-	}
-	if bat.Vecs[0].GetType().Oid != types.T_text ||
-		bat.Vecs[1].GetType().Oid != types.T_binary {
+	if !isS3InsertResultLayout(bat) || bat.Vecs[0].Length() == 0 {
 		return nil, false, nil
 	}
 	col, area := vector.MustVarlenaRawData(bat.Vecs[1])
