@@ -398,12 +398,12 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 	}
 }
 
-// Null bitmaps are Go-owned, so copying a NULL into an accounted vector
-// succeeds without charging the allocation account.
-func TestCopyAccountedNullUsesGoBitmap(t *testing.T) {
+// A vector's null bitmap comes from the vector's pool, so copying a NULL into
+// an accounted vector charges its allocation account, and Free returns it.
+func TestCopyAccountedNullChargesAccount(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 2)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
@@ -423,7 +423,7 @@ func TestCopyAccountedNullUsesGoBitmap(t *testing.T) {
 	require.NoError(t, cmp.Copy(0, 1, 0, 0, proc))
 	require.True(t, destination.GetNulls().Contains(0))
 	require.Equal(t, 1, destination.Length())
-	require.Equal(t, used, account.Snapshot().Used)
+	require.Greater(t, account.Snapshot().Used, used, "the null bitmap is charged")
 
 	source.Free(mp)
 	destination.Free(view)

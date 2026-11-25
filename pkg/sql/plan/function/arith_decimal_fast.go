@@ -1265,7 +1265,9 @@ func decimal128IntDivLegacyDecimalOverflow(x, y types.Decimal128, scale1, scale2
 	scaleAdj := scale - scale1 + scale2
 
 	var divResult types.Decimal128
-	err := d128DivOne(x, y, &divResult, scaleAdj, nulls.NewWithSize(1), 0, true, scale1, scale2)
+	// With shouldError, d128DivOne reports division by zero as an error and
+	// never touches the null bitmap.
+	err := d128DivOne(x, y, &divResult, scaleAdj, nil, 0, true, scale1, scale2)
 	return err != nil
 }
 

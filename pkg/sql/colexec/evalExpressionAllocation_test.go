@@ -255,8 +255,8 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	_, err = equalExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	equalRoot := equalExecutor.(*FunctionExpressionExecutor)
-	require.Zero(t, equalRoot.resultVector.GetResultVector().GetNulls().GetBitmap().CapWords(),
-		"the first non-NULL generation needs no validity reservation")
+	require.Positive(t, equalRoot.resultVector.GetResultVector().GetNulls().GetBitmap().CapWords(),
+		"a nullable result reserves its validity bitmap at preparation")
 	// Establish real nullable storage before probing a stale NULL beyond its
 	// bound. The non-NULL fast path intentionally has no bitmap to exceed.
 	equalResult, err := equalExecutor.Eval(proc, []*batch.Batch{second}, nil)

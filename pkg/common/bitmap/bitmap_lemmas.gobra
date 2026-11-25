@@ -755,6 +755,20 @@ func tailBits(s seq[uint64], nb int64) {
 		r/64 == len(s)-1 && nb%64 != 0 && int(nb%64) <= r%64 && s[r/64] == s[len(s)-1] && !bits.Bit(s[len(s)-1], r%64)
 }
 
+// carryRemove restates removeOrdered's loop invariant on the output
+// stream at the end of a step.
+ghost
+requires 0 <= o && o <= len(d)
+requires forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
+	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < pos &&
+	OutB(d, p, o, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+ensures forall s int :: {HasS(orig, oldLength, s)} 0 <= s && s < e && Rank(ss, int64(s+1)) == Rank(ss, int64(s)) ==>
+	0 <= s-Rank(ss, int64(s)) && s-Rank(ss, int64(s)) < pos &&
+	OutB(d, p, o, s-Rank(ss, int64(s))) == HasS(orig, oldLength, s)
+decreases
+func carryRemove(ss seq[int64], orig seq[uint64], oldLength int64, e int, d seq[uint64], p uint64, o int, pos int) {
+}
+
 // carrySelectMask restates selectMask's loop invariants at ws+1.
 ghost
 requires 0 <= o && o <= len(d) && 0 <= ws && 0 <= oldLength
