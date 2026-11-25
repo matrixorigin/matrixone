@@ -182,6 +182,26 @@ func TestWriteExclusiveFilesystemAliases(t *testing.T) {
 	require.Equal(t, "winner", string(data))
 }
 
+func TestSyncLocalFileForPublicationResolvesWithinRoot(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	fs, err := NewLocalETLFS("etl", root)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(context.Background()) })
+	target := filepath.Join(root, "storage")
+	require.NoError(t, os.Mkdir(target, 0700))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "alias")))
+	sub := SubPath(fs, "alias")
+	require.NoError(t, WriteExclusive(ctx, sub, publicationVector("manifest", "content")))
+	require.NoError(t, SyncLocalFileForPublication(ctx, sub, "manifest"))
+
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "manifest"), []byte("outside"), 0600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "outside")))
+	err = SyncLocalFileForPublication(ctx, fs, "outside/manifest")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath), "%v", err)
+}
+
 func TestWriteExclusiveObjectStorage(t *testing.T) {
 	for _, provider := range []string{"aws", "minio", "disk"} {
 		t.Run(provider, func(t *testing.T) {

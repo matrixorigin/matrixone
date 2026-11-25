@@ -29,6 +29,63 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFileArtifactStorePublishesBelowSearchOnlyAncestor(t *testing.T) {
+	ctx := t.Context()
+	shared := defines.SharedFileServiceName
+	for _, backend := range []struct {
+		name string
+		open func(string) (fileservice.FileService, error)
+	}{
+		{"disk-v2", func(root string) (fileservice.FileService, error) {
+			return fileservice.NewLocalFS2(ctx, shared, root, fileservice.DisabledCacheConfig, nil)
+		}},
+		{"local-etl", func(root string) (fileservice.FileService, error) {
+			return fileservice.NewLocalETLFS(shared, root)
+		}},
+		{"disk-object-storage", func(root string) (fileservice.FileService, error) {
+			args := fileservice.ObjectStorageArguments{
+				Name: shared, Endpoint: "disk", Bucket: root, KeyPrefix: "prefix",
+			}
+			return fileservice.NewS3FS(ctx, args, fileservice.DisabledCacheConfig, nil, false, true)
+		}},
+	} {
+		t.Run(backend.name, func(t *testing.T) {
+			base := t.TempDir()
+			parent := filepath.Join(base, "traverse")
+			root := filepath.Join(parent, "storage")
+			require.NoError(t, os.MkdirAll(root, 0700))
+			alias := filepath.Join(base, "configured-root")
+			require.NoError(t, os.Symlink(root, alias))
+			t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0700)) })
+			require.NoError(t, os.Chmod(parent, 0100))
+			f, err := os.Open(parent)
+			if err == nil {
+				require.NoError(t, f.Close())
+				t.Skip("test user can open a directory without read permission")
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+
+			fs, err := backend.open(alias)
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			store, err := NewFileArtifactStore(fs, DefaultMaxArtifactBytes)
+			require.NoError(t, err)
+			store.maxPublications = 2
+			for _, source := range []string{"def f(ctx): return 7", "def f(ctx): return 8"} {
+				want := udf.PythonInlineArtifactDigest("f", source)
+				for range 2 {
+					digest, err := store.Publish(ctx, 7, "f", source)
+					require.NoError(t, err)
+					require.Equal(t, want, digest)
+				}
+				resolved, err := store.Resolve(ctx, 7, "f", want)
+				require.NoError(t, err)
+				require.Equal(t, source, resolved)
+			}
+		})
+	}
+}
+
 func TestFileArtifactStoreLocalPublishRetryRequiresSync(t *testing.T) {
 	const source = "def f(ctx): return 7"
 	digest := udf.PythonInlineArtifactDigest("f", source)

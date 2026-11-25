@@ -73,6 +73,8 @@ func linkLocalFile(tempPath, nativePath, logicalPath string) error {
 // SyncLocalFileForPublication makes an immutable local object durable before a
 // caller publishes a reference to it. A visible link can survive a failed
 // directory sync, so this also applies to retries that find the object.
+// The configured storage root is the durability boundary. The root's entry
+// in its parent directory belongs to storage provisioning.
 // Non-local services retain their own persistence semantics.
 func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath string) error {
 	if sub, ok := fs.(*subPathFS); ok {
@@ -83,14 +85,18 @@ func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath s
 		return SyncLocalFileForPublication(ctx, sub.upstream, upstreamPath)
 	}
 
+	var rootPath string
 	var nativePath func(string) string
 	switch f := fs.(type) {
 	case *LocalFS:
+		rootPath = f.rootPath
 		nativePath = f.toNativeFilePath
 	case *LocalETLFS:
+		rootPath = f.rootPath
 		nativePath = f.toNativeFilePath
 	case *S3FS:
 		if storage, ok := f.rawStorage.(*diskObjectStorage); ok {
+			rootPath = storage.path
 			nativePath = func(file string) string {
 				return filepath.Join(storage.path, f.pathToKey(file))
 			}
@@ -106,29 +112,41 @@ func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath s
 	if err != nil {
 		return err
 	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return err
+	}
 	name, err := filepath.EvalSymlinks(nativePath(path.File))
 	if err != nil {
 		return err
 	}
-	// Sync the inode first, then its name and each parent directory entry.
-	// This also repairs a retry after an interrupted parent mkdir or sync.
+	relative, err := filepath.Rel(resolvedRoot, name)
+	if err != nil || relative == "." || !filepath.IsLocal(relative) {
+		return moerr.NewInvalidPathNoCtx(path.File)
+	}
+	root, err := os.OpenRoot(resolvedRoot)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	// Sync the inode first, then each directory up to and including the
+	// storage root. This also repairs a retry after an interrupted mkdir.
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := syncPublicationPath(name); err != nil {
+		if err := syncPublicationPath(root, relative); err != nil {
 			return err
 		}
-		parent := filepath.Dir(name)
-		if parent == name {
+		if relative == "." {
 			return nil
 		}
-		name = parent
+		relative = filepath.Dir(relative)
 	}
 }
 
-func syncPublicationPath(name string) error {
-	file, err := os.Open(name)
+func syncPublicationPath(root *os.Root, name string) error {
+	file, err := root.Open(name)
 	if err != nil {
 		return err
 	}
