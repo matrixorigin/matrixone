@@ -685,7 +685,7 @@ func (h *UpstreamSQLHelper) handleGetObjectDirectly(
 
 	// Create a batch with 5 columns: data, total_size, chunk_index, total_chunks, is_complete
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"data", "total_size", "chunk_index", "total_chunks", "is_complete"})
+	bat := batch.NewWithSize(5)
 
 	// Column 0: data (BLOB)
 	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType(), mp)
@@ -762,7 +762,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 	if err != nil {
 		// If snapshot not found, return false
 		mp := mpool.MustNewZero()
-		bat := batch.New([]string{"result"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 		err = vector.AppendFixed(bat.Vecs[0], false, false, mp)
 		if err != nil {
@@ -807,7 +807,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedDirectly(
 
 	// Create a batch with one column containing the result
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"result"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[0], result, false, mp)
 	if err != nil {
@@ -1276,7 +1276,7 @@ func (h *UpstreamSQLHelper) handleGetObjectCmd(
 
 	// Create a batch with 5 columns: data, total_size, chunk_index, total_chunks, is_complete
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"data", "total_size", "chunk_index", "total_chunks", "is_complete"})
+	bat := batch.NewWithSize(5)
 
 	// Column 0: data (BLOB)
 	bat.Vecs[0] = vector.NewVec(types.T_blob.ToType(), mp)
@@ -1367,7 +1367,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedCmd(
 	if err != nil {
 		// If snapshot not found, return false
 		mp := mpool.MustNewZero()
-		bat := batch.New([]string{"result"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 		err = vector.AppendFixed(bat.Vecs[0], false, false, mp)
 		if err != nil {
@@ -1412,7 +1412,7 @@ func (h *UpstreamSQLHelper) handleCheckSnapshotFlushedCmd(
 
 	// Create a batch with one column containing the result
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"result"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_bool.ToType(), mp)
 	err = vector.AppendFixed(bat.Vecs[0], result, false, mp)
 	if err != nil {
@@ -1443,7 +1443,7 @@ func (h *UpstreamSQLHelper) handleGCStatusCmd(
 		responseJSON := fmt.Sprintf(`{"running": true, "protections": 0, "ts": %d}`, time.Now().UnixNano())
 
 		mp := mpool.MustNewZero()
-		bat := batch.New([]string{"result"})
+		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 		err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 		if err != nil {
@@ -1464,7 +1464,7 @@ func (h *UpstreamSQLHelper) handleGCStatusCmd(
 	responseJSON := fmt.Sprintf(`{"running": false, "protections": 0, "ts": %d}`, time.Now().UnixNano())
 
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"result"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
@@ -1491,7 +1491,7 @@ func (h *UpstreamSQLHelper) handleRegisterSyncProtectionCmd(
 	responseJSON := `{"method":"diskcleaner", "result":[{"ReturnStr":"{\"status\": \"ok\"}"}]}`
 
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"result"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
@@ -1518,7 +1518,7 @@ func (h *UpstreamSQLHelper) handleRenewSyncProtectionCmd(
 	responseJSON := `{"method":"diskcleaner", "result":[{"ReturnStr":"{\"status\": \"ok\"}"}]}`
 
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"result"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {
@@ -1545,7 +1545,7 @@ func (h *UpstreamSQLHelper) handleUnregisterSyncProtectionCmd(
 	responseJSON := `{"method":"diskcleaner", "result":[{"ReturnStr":"{\"status\": \"ok\"}"}]}`
 
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"result"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	err := vector.AppendBytes(bat.Vecs[0], []byte(responseJSON), false, mp)
 	if err != nil {

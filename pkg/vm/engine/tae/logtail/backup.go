@@ -533,7 +533,6 @@ func canonicalizeBackupTombstone(
 		vec.Free(common.DebugAllocator)
 	}
 	data.Vecs = nil
-	data.Attrs = nil
 	data.SetRowCount(0)
 	return formatData(result), nil
 }
@@ -594,15 +593,20 @@ func appendValToBatch(
 	return
 }
 
+// positionalAttrs names n columns by position, for a TN batch built only to
+// rewrite the columns.
+func positionalAttrs(n int) []string {
+	attrs := make([]string, n)
+	for i := range attrs {
+		attrs[i] = fmt.Sprintf("col_%d", i)
+	}
+	return attrs
+}
+
 // Need to format the loaded batch, otherwise panic may occur when WriteBatch.
 func formatData(data *batch.Batch) *batch.Batch {
-	data.Attrs = make([]string, 0)
-	for i := range data.Vecs {
-		att := fmt.Sprintf("col_%d", i)
-		data.Attrs = append(data.Attrs, att)
-	}
 	if data.Vecs[0].Length() > 0 {
-		tmp := containers.ToTNBatch(data, common.CheckpointAllocator)
+		tmp := containers.ToTNBatch(data, positionalAttrs(len(data.Vecs)), common.CheckpointAllocator)
 		data = containers.ToCNBatch(tmp)
 	}
 	return data
@@ -902,7 +906,8 @@ func ReWriteCheckpointAndBlockFromKey(
 			if err = objectData.data[0].OwnReadOnlyVectors(common.DebugAllocator); err != nil {
 				return err
 			}
-			sortData := containers.ToTNBatch(objectData.data[0], common.DebugAllocator)
+			sortData := containers.ToTNBatch(
+				objectData.data[0], positionalAttrs(len(objectData.data[0].Vecs)), common.DebugAllocator)
 
 			if objectData.sortKey != math.MaxUint16 {
 				_, err = mergesort.SortBlockColumns(sortData.Vecs, int(objectData.sortKey), backupPool)

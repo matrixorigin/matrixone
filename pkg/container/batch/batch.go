@@ -76,14 +76,6 @@ func discardBatchMetadataRows(r io.Reader, n int) error {
 	return nil
 }
 
-func New(attrs []string) *Batch {
-	return &Batch{
-		Attrs:    attrs,
-		Vecs:     make([]*vector.Vector, len(attrs)),
-		rowCount: 0,
-	}
-}
-
 func NewWithSize(n int) *Batch {
 	return &Batch{
 		Vecs:     make([]*vector.Vector, n),
@@ -91,10 +83,9 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
-// NewWithSchema returns a batch of empty vectors of attTypes, all from mp.
-func NewWithSchema(attrs []string, attTypes []types.Type, mp *mpool.MPool) *Batch {
+// NewWithTypes returns a batch of empty vectors of attTypes, all from mp.
+func NewWithTypes(attTypes []types.Type, mp *mpool.MPool) *Batch {
 	bat := NewWithSize(len(attTypes))
-	bat.Attrs = attrs
 	for i, t := range attTypes {
 		bat.Vecs[i] = vector.NewVec(t, mp)
 	}
@@ -117,27 +108,47 @@ func (bat *Batch) CheckLength() error {
 	return nil
 }
 
+// MarshalBinary encodes bat in the stable Batch wire format. The format has
+// a column-name section; it is written empty. Use MarshalBinaryWithNames for a
+// message whose receiver identifies its columns by name.
 func (bat *Batch) MarshalBinary() ([]byte, error) {
 	var w bytes.Buffer
-	return bat.MarshalBinaryWithBuffer(&w, false)
+	return bat.MarshalBinaryWithBufferAndNames(&w, false, nil)
+}
+
+// MarshalBinaryWithNames is MarshalBinary with names written into the
+// format's column-name section. names belong to the message, not to bat:
+// WireNames reads them back from the encoded bytes.
+func (bat *Batch) MarshalBinaryWithNames(names []string) ([]byte, error) {
+	var w bytes.Buffer
+	return bat.MarshalBinaryWithBufferAndNames(&w, false, names)
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
+	return bat.MarshalBinaryWithBufferAndNames(w, reset, nil)
+}
+
+// MarshalBinaryWithBufferAndNames is MarshalBinaryWithBuffer with names
+// written into the column-name section (see MarshalBinaryWithNames).
+func (bat *Batch) MarshalBinaryWithBufferAndNames(
+	w *bytes.Buffer, reset bool, names []string,
+) ([]byte, error) {
 	if reset {
 		w.Reset()
 	}
-	if err := bat.MarshalBinaryTo(w); err != nil {
+	if err := bat.marshalBinaryTo(w, names); err != nil {
 		return nil, err
 	}
 	return w.Bytes(), nil
 }
 
 func (bat *Batch) MarshalBinarySize() (int, error) {
-	return bat.prepareMarshalBinary(nil)
+	return bat.prepareMarshalBinary(nil, nil)
 }
 
 func (bat *Batch) prepareMarshalBinary(
 	plans []vector.MarshalBinaryPlan,
+	names []string,
 ) (int, error) {
 	if bat == nil {
 		return 0, moerr.NewInvalidInputNoCtx("invalid batch for marshal")
@@ -155,7 +166,7 @@ func (bat *Batch) prepareMarshalBinary(
 		return true
 	}
 	if uint64(len(bat.Vecs)) > uint64(^uint32(0)>>1) ||
-		uint64(len(bat.Attrs)) > uint64(^uint32(0)>>1) ||
+		uint64(len(names)) > uint64(^uint32(0)>>1) ||
 		uint64(len(bat.ExtraBuf)) > uint64(^uint32(0)>>1) {
 		return 0, moerr.NewInvalidInputNoCtx(
 			"batch field exceeds marshal format",
@@ -185,7 +196,7 @@ func (bat *Batch) prepareMarshalBinary(
 			plans[i] = plan
 		}
 	}
-	for _, attr := range bat.Attrs {
+	for _, attr := range names {
 		if uint64(len(attr)) > uint64(^uint32(0)>>1) ||
 			!add(4+uint64(len(attr))) {
 			return 0, moerr.NewInvalidInputNoCtx(
@@ -202,6 +213,10 @@ func (bat *Batch) prepareMarshalBinary(
 }
 
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
+	return bat.marshalBinaryTo(w, nil)
+}
+
+func (bat *Batch) marshalBinaryTo(w io.Writer, names []string) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
 	}
@@ -215,7 +230,7 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	} else {
 		plans = make([]vector.MarshalBinaryPlan, len(bat.Vecs))
 	}
-	size, err := bat.prepareMarshalBinary(plans)
+	size, err := bat.prepareMarshalBinary(plans, names)
 	if err != nil {
 		return err
 	}
@@ -247,16 +262,16 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 		}
 	}
 
-	l = int32(len(bat.Attrs))
+	l = int32(len(names))
 	if err := writeBatchMarshalInt32(w, l); err != nil {
 		return err
 	}
 	for i := 0; i < int(l); i++ {
-		size := int32(len(bat.Attrs[i]))
+		size := int32(len(names[i]))
 		if err := writeBatchMarshalInt32(w, size); err != nil {
 			return err
 		}
-		n, err := io.WriteString(w, bat.Attrs[i])
+		n, err := io.WriteString(w, names[i])
 		if err != nil {
 			return err
 		}
@@ -386,7 +401,7 @@ func (bat *Batch) UnmarshalFromReaderWithMetadata(
 }
 
 // UnmarshalFromReaderWithMetadataForSpill is the metadata-free local
-// spill variant. It rejects Attrs and ExtraBuf before allocating their
+// spill variant. It rejects column names and ExtraBuf before allocating their
 // payloads, while retaining the prepared-parameter trailer used by expression
 // results.
 func (bat *Batch) UnmarshalFromReaderWithMetadataForSpill(
@@ -799,6 +814,62 @@ func (c *batchUnmarshalCursor) readUint32() (uint32, error) {
 	return types.DecodeUint32(data), nil
 }
 
+// WireNames returns the column-name section of a batch encoded in the stable
+// Batch wire format, without decoding the vectors. It is empty unless the
+// writer used MarshalBinaryWithNames (or is an older version, which always
+// wrote names).
+func WireNames(data []byte) ([]string, error) {
+	cursor := batchUnmarshalCursor{data: data}
+	if _, err := cursor.readInt64(); err != nil {
+		return nil, err
+	}
+	l, err := cursor.readInt32()
+	if err != nil {
+		return nil, err
+	}
+	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
+		return nil, moerr.NewInvalidInputNoCtx("invalid batch vector count")
+	}
+	for i := 0; i < int(l); i++ {
+		size, err := cursor.readUint32()
+		if err != nil {
+			return nil, err
+		}
+		if uint64(size) > uint64(len(cursor.data)) {
+			return nil, io.ErrUnexpectedEOF
+		}
+		if _, err := cursor.read(int(size)); err != nil {
+			return nil, err
+		}
+	}
+	l, err = cursor.readInt32()
+	if err != nil {
+		return nil, err
+	}
+	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
+		return nil, moerr.NewInvalidInputNoCtx("invalid batch attribute count")
+	}
+	if l == 0 {
+		return nil, nil
+	}
+	names := make([]string, l)
+	for i := range names {
+		size, err := cursor.readInt32()
+		if err != nil {
+			return nil, err
+		}
+		if size < 0 {
+			return nil, moerr.NewInvalidInputNoCtx("invalid batch attribute size")
+		}
+		name, err := cursor.read(int(size))
+		if err != nil {
+			return nil, err
+		}
+		names[i] = string(name)
+	}
+	return names, nil
+}
+
 func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
 	// Decoding replaces every column; no previous lent backing stays aliased.
 	bat.leases.Release()
@@ -901,64 +972,9 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	if l < 0 || int64(l) > int64(len(cursor.data)/4) {
 		return moerr.NewInvalidInputNoCtx("invalid batch attribute count")
 	}
-	// Fix for bug #23156: Attrs length MUST always match Vecs length
-	// Vecs length (vecsLen) is authoritative - it's already allocated and deserialized
-	// If serialized Attrs length differs from Vecs length, we use Vecs length as the source of truth
-	// This handles cases where serialized data has inconsistent lengths (which can occur in practice)
-	serializedAttrsLen := int(l)
-	// CRITICAL FIX: Always reallocate Attrs to ensure clean state for batch reuse
-	// This prevents stale Attrs values from previous unmarshal operations
-	// Special case: if vecsLen == 0 but serializedAttrsLen > 0, use serializedAttrsLen
-	// This handles cases where Vecs are empty but Attrs are preserved (e.g., in tests)
-	attrsLen := vecsLen
-	if vecsLen == 0 && serializedAttrsLen > 0 {
-		attrsLen = serializedAttrsLen
-	}
-	if attrsLen != len(bat.Attrs) {
-		if attrsLen == 0 {
-			// If attrsLen is 0, keep Attrs as nil (not empty array) for consistency
-			bat.Attrs = nil
-		} else {
-			bat.Attrs = make([]string, attrsLen)
-		}
-	} else if !firstTime {
-		// When batch is reused and lengths match, still clear Attrs to prevent stale values
-		// This is critical for UPDATE operations where batch is reused multiple times
-		// Performance note: This is O(n) where n is typically small (dozens of columns)
-		// The cost is acceptable compared to data corruption issues
-		for i := range bat.Attrs {
-			bat.Attrs[i] = ""
-		}
-	}
-
-	// Read serialized Attrs, but only up to min(serializedAttrsLen, attrsLen)
-	// If serialized length > attrsLen: ignore excess (data inconsistency, attrsLen is authoritative)
-	// If serialized length < attrsLen: read what's available (remaining will be empty strings, should not happen normally)
-	attrsToRead := serializedAttrsLen
-	if attrsToRead > attrsLen {
-		attrsToRead = attrsLen
-	}
-	for i := 0; i < attrsToRead; i++ {
-		size, err := cursor.readInt32()
-		if err != nil {
-			return err
-		}
-		if size < 0 {
-			return moerr.NewInvalidInputNoCtx("invalid batch attribute size")
-		}
-		attrData, err := cursor.read(int(size))
-		if err != nil {
-			return err
-		}
-		bat.Attrs[i] = string(attrData)
-	}
-	// CRITICAL FIX: Clear remaining Attrs to prevent stale values when serializedAttrsLen < attrsLen
-	// This is essential for batch reuse scenarios (e.g., UPDATE operations with IVF index)
-	for i := attrsToRead; i < attrsLen; i++ {
-		bat.Attrs[i] = ""
-	}
-	// If serialized Attrs length > vecsLen, skip the excess data
-	for i := attrsToRead; i < serializedAttrsLen; i++ {
+	// The column-name section belongs to the message, not to the batch:
+	// WireNames reads it for a receiver that needs it. Skip it here.
+	for i := 0; i < int(l); i++ {
 		size, err := cursor.readInt32()
 		if err != nil {
 			return err
@@ -1060,16 +1076,10 @@ func (bat *Batch) unmarshalFromReader(
 	if !allowMetadata && l != 0 {
 		return moerr.NewInvalidInputNoCtx("spill batch attributes are not allowed")
 	}
-	if l != len(bat.Attrs) {
-		bat.Attrs = make([]string, l)
-	}
-
 	for i := 0; i < int(l); i++ {
-		bs, err := readBatchSizedBytes(r)
-		if err != nil {
+		if _, err := readBatchSizedBytes(r); err != nil {
 			return err
 		}
-		bat.Attrs[i] = string(bs)
 	}
 
 	// ExtraBuf is a data-scaled Go-heap field in the stable Batch codec. Spill
@@ -1280,10 +1290,6 @@ func (bat *Batch) VectorCount() int {
 	return len(bat.Vecs)
 }
 
-func (bat *Batch) SetAttributes(attrs []string) {
-	bat.Attrs = attrs
-}
-
 // SetAccountedExtraBuffer transfers one accounted byte buffer into the Batch.
 // Clean releases it exactly once; MoveExtraBufferFrom preserves ownership when
 // a pipeline spool moves the payload to another Batch object.
@@ -1408,7 +1414,6 @@ func (bat *Batch) FreeWindow() {
 		}
 	}
 	bat.Vecs = nil
-	bat.Attrs = nil
 	bat.rowCount = 0
 }
 
@@ -1425,21 +1430,13 @@ func (bat *Batch) CleanOwned() {
 		}
 	}
 	bat.Vecs = nil
-	bat.Attrs = nil
 	bat.rowCount = 0
 }
 
-func (bat *Batch) InsertVector(
-	pos int32,
-	attr string,
-	vec *vector.Vector,
-) {
+func (bat *Batch) InsertVector(pos int32, vec *vector.Vector) {
 	bat.Vecs = append(bat.Vecs, nil)
 	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
 	bat.Vecs[pos] = vec
-	bat.Attrs = append(bat.Attrs, "")
-	copy(bat.Attrs[pos+1:], bat.Attrs[pos:])
-	bat.Attrs[pos] = attr
 }
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
@@ -1452,11 +1449,9 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 
 func (bat *Batch) CloneSelectedColumns(
 	selectCols []int,
-	selectAttrs []string,
 	mp *mpool.MPool,
 ) (cloned *Batch, err error) {
 	cloned = NewWithSize(len(selectCols))
-	cloned.Attrs = selectAttrs
 	var typ types.Type
 	for idx := range selectCols {
 		cloned.Vecs[idx] = vector.NewVec(typ, mp)
@@ -1502,7 +1497,6 @@ func (bat *Batch) CloneSelectedColumnsTo(
 func (bat *Batch) ViewInto(dst *Batch) {
 	dst.Recursive = bat.Recursive
 	dst.ShuffleIDX = bat.ShuffleIDX
-	dst.Attrs = bat.Attrs
 	dst.Vecs = append(dst.Vecs[:0], bat.Vecs...)
 	dst.ExtraBuf = bat.ExtraBuf
 	dst.rowCount = bat.rowCount
@@ -1510,9 +1504,8 @@ func (bat *Batch) ViewInto(dst *Batch) {
 	dst.physicalRows = bat.physicalRows
 }
 
-func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
+func (bat *Batch) SelectColumns(cols []int) *Batch {
 	rbat := NewWithSize(len(cols))
-	rbat.Attrs = attrs
 	for i, col := range cols {
 		rbat.Vecs[i] = bat.Vecs[col]
 	}
@@ -1535,7 +1528,6 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	bat.leases.Release()
 
 	bat.Vecs = nil
-	bat.Attrs = nil
 	bat.releaseExtraBuf()
 	bat.SetRowCount(0)
 	bat.selection, bat.physicalRows = nil, 0
@@ -1625,23 +1617,18 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) GetSchema() (attrs []string, attrTypes []types.Type) {
-	attrs = make([]string, len(bat.Attrs))
-	attrTypes = make([]types.Type, len(bat.Vecs))
-	copy(attrs, bat.Attrs)
+// Types returns a copy of the types of bat's vectors.
+func (bat *Batch) Types() []types.Type {
+	attrTypes := make([]types.Type, len(bat.Vecs))
 	for i, vec := range bat.Vecs {
 		attrTypes[i] = *vec.GetType()
 	}
-	return
+	return attrTypes
 }
 
 // Clone copies bat into a new batch whose vectors all come from mp.
 func (bat *Batch) Clone(mp *mpool.MPool) (*Batch, error) {
-	var (
-		cloned           *Batch
-		attrs, attrTypes = bat.GetSchema()
-	)
-	cloned = NewWithSchema(attrs, attrTypes, mp)
+	cloned := NewWithTypes(bat.Types(), mp)
 	cloned.Recursive = bat.Recursive
 	err := bat.CloneTo(cloned, mp)
 	if err != nil {
@@ -1805,7 +1792,6 @@ func (bat *Batch) Window(start, end int) (*Batch, error) {
 	}
 	b := NewWithSize(len(bat.Vecs))
 	var err error
-	b.Attrs = bat.Attrs
 	for i, vec := range bat.Vecs {
 		if vec == nil {
 			b.FreeWindow()

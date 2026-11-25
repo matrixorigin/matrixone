@@ -1262,7 +1262,6 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 	}
 	first := res.Batches[0]
 	out := batch.NewWithSize(len(first.Vecs))
-	out.Attrs = append(out.Attrs, first.Attrs...)
 	for i, src := range first.Vecs {
 		out.Vecs[i] = vector.NewVec(*src.GetType(), res.Mp)
 	}
@@ -1290,7 +1289,6 @@ func compactRelationTop(res *executor.Result, limit int, desc bool) error {
 
 func makeRelationScanBatch(tableDef *plan.TableDef, columns []string, mp *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(columns))
-	bat.Attrs = append(bat.Attrs, columns...)
 	for i, name := range columns {
 		pos, ok := tableDef.Name2ColIndex[name]
 		if !ok {

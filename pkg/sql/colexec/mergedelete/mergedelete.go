@@ -90,10 +90,17 @@ func (mergeDelete *MergeDelete) Call(proc *process.Process) (vm.CallResult, erro
 	// If the target table is a general table
 	for i := 0; i < resBat.RowCount(); i++ {
 		name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
-		if err := bat.UnmarshalBinaryWithAnyMp(deltaLocs[i].GetByteSlice(area1), proc.Mp()); err != nil {
+		blob := deltaLocs[i].GetByteSlice(area1)
+		if err := bat.UnmarshalBinaryWithAnyMp(blob, proc.Mp()); err != nil {
 			return input, err
 		}
-		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, name)
+		// The deletion producer writes the blob's column names into it
+		// (row delete or tombstone object stats); they tell Delete which.
+		attrs, err := batch.WireNames(blob)
+		if err != nil {
+			return input, err
+		}
+		err = mergeDelete.ctr.delSource.Delete(proc.Ctx, bat, attrs, name)
 		if err != nil {
 			return input, err
 		}

@@ -40,10 +40,12 @@ import (
 type mockRelation struct {
 	engine.Relation
 	result *batch.Batch
+	attrs  []string
 }
 
-func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
+func (e *mockRelation) Write(_ context.Context, b *batch.Batch, attrs []string) error {
 	e.result = b
+	e.attrs = attrs
 	return nil
 }
 
@@ -86,7 +88,6 @@ func TestMergeBlock(t *testing.T) {
 	blkInfo3.SetMetaLocation(loc3)
 
 	batch1 := &batch.Batch{
-		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats},
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil, proc.Mp()),
 			testutil.MakeTextVector([]string{
@@ -112,11 +113,12 @@ func TestMergeBlock(t *testing.T) {
 	require.Equal(t, uint64(15*3), argument1.container.affectedRows)
 	// Check Tbl
 	{
-		result := argument1.container.source.(*mockRelation).result
+		rel := argument1.container.source.(*mockRelation)
+		result := rel.result
 		// check attr names
 		require.True(t, reflect.DeepEqual(
 			[]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats},
-			result.Attrs,
+			rel.attrs,
 		))
 		// check vector
 		require.Equal(t, 2, len(result.Vecs))
@@ -144,7 +146,6 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 	}
 
 	blockInfoBat := batch.NewWithSize(len(attrs))
-	blockInfoBat.Attrs = attrs
 	blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType(), proc.Mp())
 	blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 
@@ -178,11 +179,6 @@ func makeLegacyBlockInfoBat(
 	blockInfo.SetMetaLocation(loc)
 
 	bat := batch.NewWithSize(3)
-	bat.Attrs = []string{
-		catalog.BlockMeta_TableIdx_Insert,
-		catalog.BlockMeta_BlockInfo,
-		catalog.ObjectMeta_ObjectStats,
-	}
 	bat.Vecs[0] = vector.NewVec(types.T_int16.ToType(), proc.Mp())
 	bat.Vecs[1] = vector.NewVec(types.T_text.ToType(), proc.Mp())
 	bat.Vecs[2] = vector.NewVec(types.T_binary.ToType(), proc.Mp())
@@ -200,9 +196,10 @@ func makeLegacyBlockInfoBat(
 func newTestArgument() *MergeBlock {
 	return &MergeBlock{
 		container: Container{
-			source: &mockRelation{},
-			mp:     make(map[int]*batch.Batch),
-			mp2:    make(map[int][]*batch.Batch),
+			source:   &mockRelation{},
+			mp:       make(map[int]*batch.Batch),
+			mp2:      make(map[int][]*batch.Batch),
+			mp2Attrs: make(map[int][][]string),
 		},
 		AddAffectedRows: true,
 	}

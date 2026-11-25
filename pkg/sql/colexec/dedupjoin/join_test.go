@@ -521,7 +521,7 @@ func makeInt32Batch(mp *mpool.MPool, cols [][]int32, nsp [][]uint64) *batch.Batc
 	for i := range names {
 		names[i] = "c" + string(rune('0'+i))
 	}
-	bat := batch.New(names)
+	bat := batch.NewWithSize(len(names))
 	for i, data := range cols {
 		var ns []uint64
 		if nsp != nil && i < len(nsp) {

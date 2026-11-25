@@ -69,7 +69,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -201,7 +200,7 @@ func r29StatsTailBytes(t *testing.T, mp *mpool.MPool, stats []objectio.ObjectSta
 	}
 	inner.SetRowCount(inner.Vecs[1].Length())
 	var buf bytes.Buffer
-	data, err := inner.MarshalBinaryWithBuffer(&buf, true)
+	data, err := inner.MarshalBinaryWithBufferAndNames(&buf, true, colexec.CNS3ResultAttrs)
 	require.NoError(t, err)
 	return data
 }
@@ -213,7 +212,6 @@ func r29RelayBatch(
 ) (*batch.Batch, []string) {
 	t.Helper()
 	out := batch.NewWithSize(5)
-	out.SetAttributes([]string{"action", "table_id", "row_count", "name", "data"})
 	out.Vecs[0] = vector.NewVec(types.T_uint8.ToType(), mp)
 	out.Vecs[1] = vector.NewVec(types.T_uint64.ToType(), mp)
 	out.Vecs[2] = vector.NewVec(types.T_uint64.ToType(), mp)
@@ -278,13 +276,6 @@ func r29DeleteBatch(
 ) (*batch.Batch, []string) {
 	t.Helper()
 	out := batch.NewWithSize(5)
-	out.SetAttributes([]string{
-		catalog.BlockMeta_Delete_ID,
-		catalog.BlockMeta_DeltaLoc,
-		catalog.BlockMeta_Type,
-		catalog.BlockMeta_Partition,
-		catalog.BlockMeta_Deletes_Length,
-	})
 	out.Vecs[0] = vector.NewVec(types.T_text.ToType(), mp)
 	out.Vecs[1] = vector.NewVec(types.T_text.ToType(), mp)
 	out.Vecs[2] = vector.NewVec(types.T_int8.ToType(), mp)

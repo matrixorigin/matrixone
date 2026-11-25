@@ -913,7 +913,7 @@ func TestExternalArrowFailurePathsReleaseAllocationAccount(t *testing.T) {
 
 func TestFitArrowBatchUsesActualCanonicalWireSize(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"v"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 	for _, value := range []string{
 		"first payload longer than twenty three bytes",
@@ -955,7 +955,7 @@ func TestFitArrowBatchRetainsEligibleBorrowedPrefix(t *testing.T) {
 	require.NoError(t, err)
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 3, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	bat := batch.New([]string{"v"})
+	bat := batch.NewWithSize(1)
 	// The converted batch is the lender of the Arrow buffer.
 	require.NoError(t, bat.HoldLease(lease))
 	lease.Release()
@@ -996,7 +996,7 @@ func TestFitArrowBatchRejectsOversizedFirstRow(t *testing.T) {
 	for _, rows := range []int{1, 2} {
 		t.Run(fmt.Sprintf("rows-%d", rows), func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			bat := batch.New([]string{"v"})
+			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			for row := 0; row < rows; row++ {
 				value := bytes.Repeat([]byte{'x'}, 256)

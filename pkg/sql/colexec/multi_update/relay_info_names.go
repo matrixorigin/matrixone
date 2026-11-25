@@ -154,9 +154,15 @@ func relayTailObjectNames(
 	if err := inner.UnmarshalBinaryWithAnyMp(blob, mp); err != nil {
 		return nil, err
 	}
+	// The metadata batch is self-describing: its producer writes the
+	// column names into the blob (MarshalBinaryWithBufferAndNames).
+	innerNames, err := batch.WireNames(blob)
+	if err != nil {
+		return nil, err
+	}
 	statsVec := -1
-	for j, attr := range inner.Attrs {
-		if attr == catalog.ObjectMeta_ObjectStats {
+	for j, attr := range innerNames {
+		if attr == catalog.ObjectMeta_ObjectStats && j < len(inner.Vecs) {
 			statsVec = j
 			break
 		}

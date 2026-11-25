@@ -32,31 +32,6 @@ func dmlReplacementColumnIndexes(
 	if bat == nil {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg DML replacement batch is nil")
 	}
-	if len(bat.Attrs) == len(bat.Vecs) {
-		positions := make(map[string]int, len(bat.Attrs))
-		for idx, attr := range bat.Attrs {
-			key := strings.ToLower(strings.TrimSpace(attr))
-			if key == "" {
-				continue
-			}
-			if _, exists := positions[key]; !exists {
-				positions[key] = idx
-			}
-		}
-		out := make([]int, len(attrs))
-		matched := true
-		for idx, attr := range attrs {
-			pos, ok := positions[strings.ToLower(strings.TrimSpace(attr))]
-			if !ok {
-				matched = false
-				break
-			}
-			out[idx] = pos
-		}
-		if matched {
-			return out, nil
-		}
-	}
 	if len(fallback) != len(attrs) {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"Iceberg DML replacement fallback column count mismatch: attrs=%d columns=%d",
@@ -80,7 +55,7 @@ func dmlBatchColumnIndexByNameOrError(
 	fallback int32,
 	purpose string,
 ) (int, error) {
-	idx := int(dmlBatchColumnIndexByName(bat, name, fallback))
+	idx := int(fallback)
 	if bat == nil || idx < 0 || idx >= len(bat.Vecs) {
 		return 0, moerr.NewInvalidInputf(ctx,
 			"Iceberg DML %s column index is out of range: column=%s index=%s columns=%d",

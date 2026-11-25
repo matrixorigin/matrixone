@@ -3145,7 +3145,6 @@ func Test_decodeBatch(t *testing.T) {
 	bat := &batch.Batch{
 		Recursive:  0,
 		ShuffleIDX: 0,
-		Attrs:      []string{"1"},
 		Vecs:       []*vector.Vector{vector.NewVec(types.T_int64.ToType(), mp)},
 	}
 	bat.SetRowCount(1)

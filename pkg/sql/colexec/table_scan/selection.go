@@ -129,7 +129,6 @@ func (s *selectionState) compactInto(out *batch.Batch, mp *mpool.MPool) (*batch.
 		}
 		dst.SetSorted(vec.GetSorted())
 	}
-	compact.Attrs = append(compact.Attrs[:0], out.Attrs...)
 	compact.Recursive, compact.ShuffleIDX = out.Recursive, out.ShuffleIDX
 	compact.SetRowCount(out.RowCount())
 	return compact, nil

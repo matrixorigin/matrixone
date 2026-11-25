@@ -37,7 +37,6 @@ func TestSortKey(t *testing.T) {
 	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
 	batch1 := &batch.Batch{
-		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
 			testutil.MakeUint16Vector([]uint16{1, 2, 0}, nil, proc.Mp()),
 		},
@@ -51,7 +50,6 @@ func TestSortKey(t *testing.T) {
 	}
 
 	batch2 := &batch.Batch{
-		Attrs: []string{"a"},
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"b", "a", "c"}, nil, proc.Mp()),
 		},

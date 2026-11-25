@@ -16,7 +16,6 @@ package mergeblock
 import (
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -41,7 +41,10 @@ type Container struct {
 	// Notice that batches in mp should be free, since the memory of these batches be allocated from mpool.
 	mp map[int]*batch.Batch
 	// mp2 is used to store the normal data batches
-	mp2          map[int][]*batch.Batch
+	mp2 map[int][]*batch.Batch
+	// mp2Attrs names the columns of each batch in mp2, read from its
+	// encoding (a batch carries no names).
+	mp2Attrs     map[int][][]string
 	source       engine.Relation
 	affectedRows uint64
 }
@@ -110,12 +113,30 @@ func (mergeBlock *MergeBlock) Free(proc *process.Process, pipelineFailed bool, e
 	mergeBlock.cleanMp(proc)
 }
 
+// hasTableIdxColumn reports whether src has the legacy leading
+// BlockMeta_TableIdx_Insert (int16) column. The current layout starts with
+// the BlockMeta_BlockInfo (text) column.
+func hasTableIdxColumn(src *batch.Batch) bool {
+	return len(src.Vecs) > 0 && src.Vecs[0].GetType().Oid == types.T_int16
+}
+
+// hasObjectStatsColumn reports whether src carries the trailing
+// ObjectMeta_ObjectStats column after BlockMeta_BlockInfo (and the optional
+// table-index column). Batches from old CNs carry no stats column.
+func hasObjectStatsColumn(src *batch.Batch) bool {
+	n := 2
+	if hasTableIdxColumn(src) {
+		n = 3
+	}
+	return len(src.Vecs) >= n
+}
+
 func (mergeBlock *MergeBlock) GetMetaLocBat(
 	src *batch.Batch,
 	proc *process.Process,
 ) bool {
 
-	hasTblIdxCol := src.Attrs[0] == catalog.BlockMeta_TableIdx_Insert
+	hasTblIdxCol := hasTableIdxColumn(src)
 
 	if len(mergeBlock.container.mp) > 0 {
 		for _, bat := range mergeBlock.container.mp {
@@ -124,33 +145,14 @@ func (mergeBlock *MergeBlock) GetMetaLocBat(
 		return hasTblIdxCol
 	}
 
-	var (
-		vecStart int
-
-		attrs []string
-		typs  []types.Type
-	)
-
-	attrs = src.Attrs
-	if hasTblIdxCol {
-		// exclude the table id column
-		attrs = attrs[1:]
-		vecStart = 1
-	}
-
-	for idx := vecStart; idx < len(src.Vecs); idx++ {
-		typs = append(typs, *src.Vecs[idx].GetType())
-	}
-
-	// src comes from old CN which haven't object stats column
-	if src.Attrs[len(src.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
-		attrs = append(attrs, catalog.ObjectMeta_ObjectStats)
-		typs = append(typs, types.T_binary.ToType())
-	}
+	// mp[0] always has the current layout [BlockMeta_BlockInfo,
+	// ObjectMeta_ObjectStats]; splitObjectStats builds the stats column for a
+	// batch from an old CN that has none.
+	attrs := colexec.CNS3ResultAttrs
+	typs := []types.Type{types.T_text.ToType(), types.T_binary.ToType()}
 
 	bat := batch.NewWithSize(len(attrs))
-	bat.Attrs = attrs
-	for idx := 0; idx < len(attrs); idx++ {
+	for idx := range attrs {
 		bat.Vecs[idx] = vector.NewVec(typs[idx], proc.Mp())
 	}
 	mergeBlock.container.mp[0] = bat
@@ -185,7 +187,7 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 	// bat comes from old CN, no object stats vec in it.
 	// to ensure all bats the TN received contain the object stats column, we should
 	// construct the object stats from block info here.
-	needLoad := bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats
+	needLoad := !hasObjectStatsColumn(bat)
 
 	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	if err != nil {
@@ -304,13 +306,22 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, ana
 		} else { // append data
 			idx := int(-(tblIdx[i] + 1))
 			newBat := &batch.Batch{}
-			if err := newBat.UnmarshalBinary(blkInfosVec.GetBytesAt(i)); err != nil {
+			blob := blkInfosVec.GetBytesAt(i)
+			if err := newBat.UnmarshalBinary(blob); err != nil {
+				return err
+			}
+			attrs, err := batch.WireNames(blob)
+			if err != nil {
 				return err
 			}
 			if mergeBlock.AddAffectedRows {
 				affectedRowsInc += uint64(newBat.RowCount())
 			}
 			mergeBlock.container.mp2[idx] = append(mergeBlock.container.mp2[idx], newBat)
+			if mergeBlock.container.mp2Attrs == nil {
+				mergeBlock.container.mp2Attrs = make(map[int][][]string)
+			}
+			mergeBlock.container.mp2Attrs[idx] = append(mergeBlock.container.mp2Attrs[idx], attrs)
 		}
 	}
 
@@ -341,6 +352,7 @@ func (mergeBlock *MergeBlock) resetMp(proc *process.Process) {
 			bat.Clean(proc.GetMPool())
 		}
 		mergeBlock.container.mp2[i] = mergeBlock.container.mp2[i][:0]
+		mergeBlock.container.mp2Attrs[i] = mergeBlock.container.mp2Attrs[i][:0]
 	}
 }
 
@@ -356,6 +368,7 @@ func (mergeBlock *MergeBlock) cleanMp(proc *process.Process) {
 		}
 	}
 	mergeBlock.container.mp2 = nil
+	mergeBlock.container.mp2Attrs = nil
 }
 
 func (mergeBlock *MergeBlock) GetAffectedRows() uint64 {

@@ -204,7 +204,6 @@ func consumeReplayColumnsWithFaults(ctx context.Context, bs []*batch.Batch, mp *
 		}
 		if tail < rows {
 			carry = batch.NewWithSize(len(b.Vecs))
-			carry.Attrs = b.Attrs
 			for j, v := range b.Vecs {
 				carry.Vecs[j] = vector.NewVec(*v.GetType(), mp)
 			}

@@ -173,7 +173,7 @@ func newS3Writer(
 		admitSeenGrowth:     update.admitSeenTargetRowsGrowth,
 	}
 	for i := range writer.insertFreeLists {
-		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
+		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, true)
 	}
 
 	if throttler, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.CNMemoryThrottler); !ok {
@@ -396,8 +396,6 @@ func (writer *s3WriterDelegate) append(
 		if contextBatch.RowCount() == 0 {
 			continue
 		}
-		insertAttrs := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).insertAttrs
-
 		tableType := lookupUpdateCtxInfo(writer.updateCtxInfos, updateCtx).tableType
 
 		// Check NOT NULL constraints for main table columns (mirrors insert_main_table).
@@ -434,7 +432,7 @@ func (writer *s3WriterDelegate) append(
 			}
 		}
 
-		projBat := contextBatch.SelectColumns(updateCtx.InsertCols, insertAttrs)
+		projBat := contextBatch.SelectColumns(updateCtx.InsertCols)
 
 		mainTablePkProjectIdx := -1
 		mainTableNullPkFilter := false
@@ -547,7 +545,7 @@ func (writer *s3WriterDelegate) append(
 		if writer.deleteBatches[i] == nil {
 			writer.deleteBatches[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 		}
-		projBat := contextBatch.SelectColumns(updateCtx.DeleteCols[:2], DeleteBatchAttrs)
+		projBat := contextBatch.SelectColumns(updateCtx.DeleteCols[:2])
 		if _, err = writer.deleteBatches[i].Extend(mp, projBat, nil); err != nil {
 			return
 		}
@@ -862,7 +860,6 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 // initBlockInfoBat creates a new off-heap batch matching the schema of src.
 func initBlockInfoBat(src *batch.Batch, mp *mpool.MPool) *batch.Batch {
 	dst := batch.NewWithSize(src.VectorCount())
-	dst.Attrs = src.Attrs
 	for i := 0; i < src.VectorCount(); i++ {
 		dst.Vecs[i] = vector.NewVec(*src.Vecs[i].GetType(), mp)
 	}
@@ -972,7 +969,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 	for i, block := range writer.deleteBlockInfo {
 		// normal table
 		if block != nil && block.bat.RowCount() > 0 {
-			err = writer.addBatchToOutput(mp, actionDelete, i, block.rawRowCount, block.name, block.bat)
+			err = writer.addBatchToOutput(mp, actionDelete, i, block.rawRowCount, block.name, block.bat, colexec.CNS3TombstoneResultAttrs)
 			if err != nil {
 				return
 			}
@@ -984,7 +981,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		// normal table
 		for _, blockData := range block {
 			name := objectio.PhysicalAddr_Attr
-			err = writer.addBatchToOutput(mp, actionDelete, i, uint64(blockData.bat.RowCount()), name, blockData.bat)
+			err = writer.addBatchToOutput(mp, actionDelete, i, uint64(blockData.bat.RowCount()), name, blockData.bat, DeleteBatchAttrs)
 			if err != nil {
 				return
 			}
@@ -996,7 +993,7 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		// normal table
 		if bat != nil && bat.RowCount() > 0 {
 			resetMergeBlockForOldCN(proc, bat)
-			err = writer.addBatchToOutput(mp, actionInsert, i, writer.insertBlockRowCount[i], "", bat)
+			err = writer.addBatchToOutput(mp, actionInsert, i, writer.insertBlockRowCount[i], "", bat, colexec.CNS3ResultAttrs)
 			if err != nil {
 				return
 			}
@@ -1221,6 +1218,7 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	rowCount uint64,
 	name string,
 	bat *batch.Batch,
+	attrs []string,
 ) (err error) {
 	output := writer.outputBat
 	if action == actionInsert {
@@ -1241,7 +1239,10 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 	}
 
 	var val []byte
-	if val, err = bat.MarshalBinaryWithBuffer(&writer.buf, true); err != nil {
+	// The relayed batch is self-describing: the consumer (this CN's or an
+	// older CN's multi_update, and the relay recognizer) reads the names
+	// from the blob, as older CNs did from the batch.
+	if val, err = bat.MarshalBinaryWithBufferAndNames(&writer.buf, true, attrs); err != nil {
 		return
 	}
 	if err = vector.AppendBytes(output.Vecs[4], val, false, mp); err != nil {
@@ -1312,9 +1313,8 @@ func appendCfgToWriter(
 }
 
 func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
-	if bat.Attrs[len(bat.Attrs)-1] != catalog.ObjectMeta_ObjectStats {
-		// bat comes from old CN, no object stats vec in it
-		bat.Attrs = append(bat.Attrs, catalog.ObjectMeta_ObjectStats)
+	if len(bat.Vecs) < len(colexec.CNS3ResultAttrs) {
+		// bat has only the block-info column, no object stats vec in it
 		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_binary.ToType(), proc.Mp()))
 
 		blkVec := bat.Vecs[0]

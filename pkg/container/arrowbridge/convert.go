@@ -138,7 +138,7 @@ func (p *Plan) convert(
 	}
 
 	rows := int(record.NumRows())
-	bat := batch.New(p.attrs)
+	bat := batch.NewWithSize(len(p.attrs))
 	defer func() {
 		if err != nil {
 			bat.Clean(mp)

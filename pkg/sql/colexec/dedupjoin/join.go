@@ -931,7 +931,6 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			for i := range ap.ctr.buf {
 				ap.ctr.buf[i] = batch.NewWithSize(len(ap.Result))
 				bat := ctr.batches[i]
-				ap.ctr.buf[i].Attrs = bat.Attrs
 				batSize := bat.RowCount()
 				// Flat-index offset of this build batch in capturedVecs space.
 				// hashOnUnique guarantees a 1:1 bucket↔flat-row mapping.

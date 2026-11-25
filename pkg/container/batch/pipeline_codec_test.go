@@ -47,7 +47,6 @@ func TestPipelineIgnoresLegacyGroupingTrailer(t *testing.T) {
 	t.Cleanup(func() { input.Clean(mp) })
 	input.Vecs[0] = vector.NewVec(types.T_int32.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(input.Vecs[0], []int32{7, 0, 0}, []bool{false, true, true}, mp))
-	input.Attrs = []string{"key"}
 	input.ExtraBuf = []byte{2, 0, 3, 1}
 	input.SetRowCount(3)
 	plain, err := input.MarshalBinaryWithBuffer(&bytes.Buffer{}, true)
@@ -57,7 +56,6 @@ func TestPipelineIgnoresLegacyGroupingTrailer(t *testing.T) {
 	t.Cleanup(func() { output.Clean(mp) })
 	check := func() {
 		require.Equal(t, 3, output.RowCount())
-		require.Equal(t, input.Attrs, output.Attrs)
 		require.Equal(t, input.ExtraBuf, output.ExtraBuf)
 		require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](output.Vecs[0], 0))
 		require.False(t, output.Vecs[0].IsNull(0))

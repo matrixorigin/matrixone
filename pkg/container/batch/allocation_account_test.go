@@ -71,10 +71,7 @@ func newBatchAllocationTestSource(
 	mp *mpool.MPool,
 ) *Batch {
 	t.Helper()
-	bat := NewWithSchema(
-		[]string{"id", "value"},
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp,
-	)
+	bat := NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp)
 	for i := 0; i < 32; i++ {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
 		require.NoError(
@@ -150,11 +147,7 @@ func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	dup.Clean(view)
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
-	selectedColumns, err := source.CloneSelectedColumns(
-		[]int{1},
-		[]string{"value"},
-		view,
-	)
+	selectedColumns, err := source.CloneSelectedColumns([]int{1}, view)
 	require.NoError(t, err)
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
 	selectedColumns.Clean(view)
@@ -177,17 +170,11 @@ func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	require.Equal(t, sourceUsed, state.account.Snapshot().Used)
 
 	// A receiver owned by another pool is not the decoder's to free.
-	foreign := NewWithSchema(
-		source.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp,
-	)
+	foreign := NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, mp)
 	require.Error(t, foreign.UnmarshalBinaryWithAnyMp(data, view))
 	foreign.Clean(mp)
 
-	aliasDecoded := NewWithSchema(
-		source.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view,
-	)
+	aliasDecoded := NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view)
 	require.NoError(t, aliasDecoded.UnmarshalBinaryWithAnyMp(data, view))
 	// Decoding with a pool copies into it.
 	require.Greater(t, state.account.Snapshot().Used, sourceUsed)
@@ -328,7 +315,6 @@ func TestBatchSpillCodecRoundTrip(t *testing.T) {
 	require.NoError(t, source.MarshalBinaryForSpillTo(&encoded))
 	decoded := NewWithSize(0)
 	require.NoError(t, decoded.UnmarshalFromReaderForSpill(&encoded, view))
-	require.Empty(t, decoded.Attrs)
 	require.Empty(t, decoded.ExtraBuf)
 	require.Equal(t, source.RowCount(), decoded.RowCount())
 	require.Len(t, decoded.Vecs, len(source.Vecs))
@@ -374,10 +360,10 @@ func TestBatchSpillCodecRejectsStableMetadataBeforePayloadAllocation(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := NewWithSize(0)
-			source.Attrs = test.attrs
 			source.ExtraBuf = test.extra
 			var payload bytes.Buffer
-			require.NoError(t, source.MarshalBinaryTo(&payload))
+			_, err := source.MarshalBinaryWithBufferAndNames(&payload, false, test.attrs)
+			require.NoError(t, err)
 			var encoded bytes.Buffer
 			payloadSize := int64(payload.Len())
 			encoded.Write(types.EncodeInt64(&payloadSize))
@@ -496,10 +482,7 @@ func TestBatchSetChargesCopiesToView(t *testing.T) {
 
 	// A reuse buffer is consumed only when it belongs to the pool the set
 	// copies through.
-	reuse := NewWithSchema(
-		first.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view,
-	)
+	reuse := NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view)
 	third := newBatchAllocationTestSource(t, mp)
 	require.NoError(t, third.Shrink([]int64{0, 1, 2, 3, 4, 5, 6, 7}, false, mp))
 	consumed, err := set.Extend(view, third, reuse)
@@ -521,10 +504,7 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 	view := state.view(t, mp)
 	source := newBatchAllocationTestSource(t, mp)
 
-	destination := NewWithSchema(
-		source.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view,
-	)
+	destination := NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}, view)
 	require.NoError(t, source.CloneTo(destination, view))
 	require.NotZero(t, state.account.Snapshot().Used)
 	require.Equal(t, source.RowCount(), destination.RowCount())
@@ -551,20 +531,14 @@ func TestBatchAllocationAccountDestinationCloneUnionAndReuse(t *testing.T) {
 func TestBatchAllocationAccountCloneRollback(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 1)
 	mp := mpool.MustNewZero()
-	source := NewWithSchema(
-		[]string{"left", "right"},
-		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp,
-	)
+	source := NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, mp)
 	for i := range source.Vecs {
 		require.NoError(t, vector.AppendFixed(source.Vecs[i], int64(i), false, mp))
 	}
 	source.SetRowCount(1)
 
 	view := state.view(t, mp)
-	destination := NewWithSchema(
-		source.Attrs,
-		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, view,
-	)
+	destination := NewWithTypes([]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, view)
 	err := source.CloneTo(destination, view)
 	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
 	require.Zero(t, state.account.Snapshot().Used)

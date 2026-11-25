@@ -60,6 +60,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -123,12 +125,9 @@ func TestIssue25590RCTombstoneTransferBoundToTheAdmissionLedger(t *testing.T) {
 
 	// One tombstone row in the sinker's own schema: (rowid, pk).
 	tombstoneBatch := func() *batch.Batch {
-		attrs, _ := objectio.GetTombstoneSchema(
-			types.T_int64.ToType(), objectio.HiddenColumnSelection_None)
 		objID := objectio.NewObjectid()
 		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(objID, 0, 0)
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes(attrs)
 		rowids := vector.NewVec(types.T_Rowid.ToType(), txn.proc.Mp())
 		pks := vector.NewVec(types.T_int64.ToType(), txn.proc.Mp())
 		require.NoError(t, vector.AppendFixed(rowids, rowID, false, txn.proc.Mp()))
@@ -178,7 +177,7 @@ func TestIssue25590RCTombstoneTransferBoundToTheAdmissionLedger(t *testing.T) {
 		// extraInfo.AutoIncrEpoch would be.
 		return txn.writeFileLockedWithAutoIncrEpoch(
 			DELETE, 1, issue25590DBID, issue25590TableID,
-			"db", "tbl", stats.ObjectName().String(), recBat,
+			"db", "tbl", stats.ObjectName().String(), recBat, catalog.ObjectDeleteAttrs,
 			txn.tnStores[0], 0)
 	}
 

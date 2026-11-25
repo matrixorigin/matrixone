@@ -126,14 +126,14 @@ func TestCheckExternalNotNull(t *testing.T) {
 	// non-null value through a NOT NULL column: ok
 	ins := newInsert([]*plan.ColDef{notNullCol("a")}, []string{"a"})
 	defer ins.Release()
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = intVec(7, false)
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 	require.NoError(t, notNullErr(ins.checkExternalNotNull(proc, bat)))
 
 	// NULL in the nulls bitmap: rejected
-	bat2 := batch.New([]string{"a"})
+	bat2 := batch.NewWithSize(1)
 	bat2.Vecs[0] = intVec(0, true)
 	bat2.SetRowCount(1)
 	defer bat2.Clean(mp)
@@ -143,7 +143,7 @@ func TestCheckExternalNotNull(t *testing.T) {
 
 	// const-null vector: rejected (no bitmap entry to find)
 	cn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
-	bat3 := batch.New([]string{"a"})
+	bat3 := batch.NewWithSize(1)
 	bat3.Vecs[0] = cn
 	bat3.SetRowCount(3)
 	defer bat3.Clean(mp)
@@ -153,7 +153,7 @@ func TestCheckExternalNotNull(t *testing.T) {
 	flagOnly := &plan.ColDef{Name: "a", NotNull: true}
 	ins2 := newInsert([]*plan.ColDef{flagOnly}, []string{"a"})
 	defer ins2.Release()
-	bat4 := batch.New([]string{"a"})
+	bat4 := batch.NewWithSize(1)
 	bat4.Vecs[0] = intVec(0, true)
 	bat4.SetRowCount(1)
 	defer bat4.Clean(mp)
@@ -162,7 +162,7 @@ func TestCheckExternalNotNull(t *testing.T) {
 	// nullable column and nil extCols entries pass NULLs through
 	ins3 := newInsert([]*plan.ColDef{nullableCol("a"), nil}, []string{"a", "b"})
 	defer ins3.Release()
-	bat5 := batch.New([]string{"a", "b"})
+	bat5 := batch.NewWithSize(2)
 	bat5.Vecs[0] = intVec(0, true)
 	bat5.Vecs[1] = intVec(0, true)
 	bat5.SetRowCount(1)
@@ -215,7 +215,7 @@ func TestCheckExternalNotNullIgnoreAdjustsInsteadOfRejecting(t *testing.T) {
 	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](vec, 7, false, mp))
 	require.NoError(t, vector.AppendFixed[int64](vec, 0, true, mp))
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
 	bat.SetRowCount(2)
 	defer bat.Clean(mp)
@@ -259,7 +259,7 @@ func TestCheckExternalNotNullIgnoreFillsConstNullVector(t *testing.T) {
 	defer ins.Release()
 
 	cn := vector.NewConstNull(types.T_int64.ToType(), 3, mp)
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = cn
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
@@ -473,7 +473,7 @@ func TestExternalInsertOwnsConstFillReplacements(t *testing.T) {
 	const rowsPerBatch = 3
 	inputs := make([]*batch.Batch, 0, batches)
 	for range batches {
-		src := batch.New([]string{"b"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = int64SupplyVec(t, q, rowsPerBatch)
 		src.SetRowCount(rowsPerBatch)
 		inputs = append(inputs, src)
@@ -551,7 +551,7 @@ func TestExternalInsertReleasesFillOnWriteFailure(t *testing.T) {
 	proc := newExternalIgnoreLoadProc(t, q)
 
 	newPipeline := func() (*projection.Projection, *Insert, *mockExtWriter, *batch.Batch) {
-		src := batch.New([]string{"b"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = int64SupplyVec(t, q, 3)
 		src.SetRowCount(3)
 		proj := projection.NewArgument()
@@ -638,7 +638,7 @@ func TestExternalInsertReleasesPartialFillOnViolation(t *testing.T) {
 	proc := newExternalIgnoreLoadProc(t, q)
 
 	const rowsPerBatch = 3
-	src := batch.New([]string{"b"})
+	src := batch.NewWithSize(1)
 	src.Vecs[0] = int64SupplyVec(t, q, rowsPerBatch)
 	src.SetRowCount(rowsPerBatch)
 
@@ -717,7 +717,7 @@ func TestCheckExternalNotNullIgnoreCopiesAliasedFlatDestination(t *testing.T) {
 	require.NoError(t, vector.AppendFixed[int64](shared, 1, false, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 0, true, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 2, false, q))
-	bat := batch.New([]string{"a", "b"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = shared
 	bat.Vecs[1] = shared
 	bat.SetRowCount(3)
@@ -762,7 +762,7 @@ func TestCheckExternalNotNullIgnoreCopiesEachAliasedDestination(t *testing.T) {
 	require.NoError(t, vector.AppendFixed[int64](shared, 1, false, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 0, true, q))
 	require.NoError(t, vector.AppendFixed[int64](shared, 2, false, q))
-	bat := batch.New([]string{"a", "b1", "b2"})
+	bat := batch.NewWithSize(3)
 	for j := range bat.Vecs {
 		bat.Vecs[j] = shared
 	}
@@ -812,7 +812,7 @@ func TestExternalInsertIgnoreFillKeepsAliasedNullableSibling(t *testing.T) {
 		require.NoError(t, vector.AppendFixed[int64](vec, 1, false, q))
 		require.NoError(t, vector.AppendFixed[int64](vec, 0, true, q))
 		require.NoError(t, vector.AppendFixed[int64](vec, 2, false, q))
-		src := batch.New([]string{"s"})
+		src := batch.NewWithSize(1)
 		src.Vecs[0] = vec
 		src.SetRowCount(rowsPerBatch)
 		return src

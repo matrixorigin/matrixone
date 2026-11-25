@@ -5362,7 +5362,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = rel.Write(c.proc.Ctx, bat)
+		err = rel.Write(c.proc.Ctx, bat, plan2.Sequence_cols_name)
 		if err != nil {
 			return err
 		}
@@ -5484,7 +5484,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		if rel == nil {
 			return moerr.NewLockTableNotFound(c.proc.Ctx)
 		}
-		err = rel.Write(c.proc.Ctx, bat)
+		err = rel.Write(c.proc.Ctx, bat, plan2.Sequence_cols_name)
 		if err != nil {
 			return err
 		}
@@ -5699,11 +5699,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 	var def plan2.AlterSequenceEffectiveDefinition
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
-	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
-	}
-	bat.Attrs = attrs
 
 	// typ is sequenece's type now
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
@@ -5736,11 +5731,6 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
 	var bat batch.Batch
 	bat.SetRowCount(1)
-	attrs := make([]string, len(plan2.Sequence_cols_name))
-	for i := range attrs {
-		attrs[i] = plan2.Sequence_cols_name[i]
-	}
-	bat.Attrs = attrs
 
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	sequence_cols_num := 7

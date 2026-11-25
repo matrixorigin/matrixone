@@ -1145,8 +1145,6 @@ func (r *reader) read(
 		gatherStats(numRead, numHit)
 	}
 
-	outBatch.SetAttributes(cols)
-
 	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
 		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}

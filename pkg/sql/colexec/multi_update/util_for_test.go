@@ -273,14 +273,14 @@ func prepareTestEng(ctrl *gomock.Controller, relationResetReturnError bool) engi
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(database, nil).AnyTimes()
 
 	relation := mock_frontend.NewMockRelation(ctrl)
-	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Write(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	if relationResetReturnError {
 		relation.EXPECT().Reset(gomock.Any()).Return(moerr.NewInternalErrorNoCtx("")).AnyTimes()
 	} else {
 		relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
 	}
 
-	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 

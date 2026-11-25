@@ -3518,7 +3518,6 @@ func TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified(t *testing.T) {
 
 	mp := ses.proc.Mp()
 	tarData := batch.NewWithSize(5)
-	tarData.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
 	tarData.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	tarData.Vecs[1] = vector.NewVec(pkType, mp)
 	tarData.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -3532,7 +3531,6 @@ func TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified(t *testing.T) {
 	tarData.SetRowCount(1)
 
 	tarTombstone := batch.NewWithSize(3)
-	tarTombstone.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
 	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	tarTombstone.Vecs[1] = vector.NewVec(pkType, mp)
 	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -3631,7 +3629,6 @@ func TestHashDiff_HasLCADecimal256PKDeleteIsReported(t *testing.T) {
 
 	oldRowID := buildHashDiffRowID(t, 0)
 	tarTombstone := batch.NewWithSize(3)
-	tarTombstone.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
 	tarTombstone.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), ses.proc.Mp())
 	tarTombstone.Vecs[1] = vector.NewVec(pkType, ses.proc.Mp())
 	tarTombstone.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), ses.proc.Mp())
@@ -3735,7 +3732,6 @@ func buildVisibleComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *b
 	t.Helper()
 
 	bat := batch.NewWithSize(2)
-	bat.SetAttributes([]string{"id", "name"})
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 
@@ -3753,7 +3749,6 @@ func buildIntDataBatch(t *testing.T, mp *mpool.MPool, attrs []string, colTypes [
 
 	require.Len(t, attrs, len(colTypes))
 	bat := batch.NewWithSize(len(colTypes))
-	bat.SetAttributes(attrs)
 	for i, typ := range colTypes {
 		bat.Vecs[i] = vector.NewVec(typ, mp)
 	}
@@ -3865,7 +3860,6 @@ func buildHashDiffDataBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs []ty
 	require.Len(t, rowIDs, len(rows))
 
 	bat := batch.NewWithSize(5)
-	bat.SetAttributes([]string{catalog.Row_ID, "id", "name", "hidden", "__commit_ts"})
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -3896,7 +3890,6 @@ func buildHashDiffTombstoneBatchWithRowIDs(t *testing.T, mp *mpool.MPool, rowIDs
 	require.Len(t, rowIDs, len(rows))
 
 	bat := batch.NewWithSize(3)
-	bat.SetAttributes([]string{catalog.Row_ID, "id", "__commit_ts"})
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -4026,7 +4019,6 @@ func TestValidateLeadingRowID(t *testing.T) {
 	makeBatchWithLeadingType := func(t *testing.T, oid types.T) *batch.Batch {
 		t.Helper()
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{catalog.Row_ID, "id"})
 		bat.Vecs[0] = vector.NewVec(oid.ToType(), mp)
 		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
@@ -4059,7 +4051,6 @@ func TestValidateLeadingRowID(t *testing.T) {
 
 	t.Run("length mismatch", func(t *testing.T) {
 		bat := batch.NewWithSize(2)
-		bat.SetAttributes([]string{catalog.Row_ID, "id"})
 		bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, mp))
@@ -4125,7 +4116,6 @@ func TestProjectBaseBatchToTarget(t *testing.T) {
 
 	// Build a base-side data batch with 1 RowID + 2 columns [a, b]
 	baseBat := batch.NewWithSize(3)
-	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b"})
 	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -4189,7 +4179,6 @@ func TestProjectBaseBatchToTargetPreservesTrailingCommitTS(t *testing.T) {
 	mp := ses.proc.Mp()
 	baseline := mp.CurrNB()
 	baseBat := batch.NewWithSize(4)
-	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
 	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	baseBat.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -4214,7 +4203,6 @@ func TestProjectBaseBatchToTargetPreservesTrailingCommitTS(t *testing.T) {
 	// CollectChanges data batches are [RowID, data..., commit_ts]. Projection
 	// changes only the data-column layout and retains both boundary vectors.
 	require.Equal(t, 5, projected.VectorCount())
-	require.True(t, dataBranchBatchHasTargetLayout(projected, &tblStuff))
 	require.Same(t, rowIDVec, projected.Vecs[0])
 	require.Same(t, aVec, projected.Vecs[1])
 	require.True(t, projected.Vecs[2].IsConstNull())
@@ -4243,7 +4231,6 @@ func TestProjectBaseBatchToTargetIfNeededForPureColumnReorder(t *testing.T) {
 	mp := ses.proc.Mp()
 	baseline := mp.CurrNB()
 	baseBat := batch.NewWithSize(3)
-	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b"})
 	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -4256,8 +4243,7 @@ func TestProjectBaseBatchToTargetIfNeededForPureColumnReorder(t *testing.T) {
 	baseBat.SetRowCount(1)
 
 	projected := projectBaseBatchToTargetIfNeeded("base", baseBat, &tblStuff, mp)
-	require.True(t, dataBranchBatchHasTargetLayout(projected, &tblStuff))
-	require.Equal(t, []string{catalog.Row_ID, "b", "a"}, projected.Attrs)
+	require.Equal(t, 3, projected.VectorCount())
 	require.Equal(t, int64(22), vector.GetFixedAtNoTypeCheck[int64](projected.Vecs[1], 0))
 	require.Equal(t, int64(11), vector.GetFixedAtNoTypeCheck[int64](projected.Vecs[2], 0))
 
@@ -4318,7 +4304,6 @@ func TestDataBranchSourceColToTargetIdxSkipsTargetOnlyHistoricalTypeDrift(t *tes
 		types.T_int64.ToType(), types.New(types.T_varchar, 20, 0),
 	}
 	source := batch.NewWithSize(3)
-	source.SetAttributes([]string{catalog.Row_ID, "a", "c"})
 	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	source.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	source.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
@@ -4365,7 +4350,6 @@ func TestDataBranchSourceColToTargetIdxExcludesBaseHistoricalTargetOnlyColumns(t
 	defer mpool.DeleteMPool(mp)
 	source := batch.NewWithSize(6)
 	defer source.Clean(mp)
-	source.SetAttributes([]string{catalog.Row_ID, "id", "x", "y", "amount", objectio.DefaultCommitTS_Attr})
 	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	source.Vecs[1] = vector.NewVec(intType, mp)
 	source.Vecs[2] = vector.NewVec(intType, mp)
@@ -4384,7 +4368,7 @@ func TestDataBranchSourceColToTargetIdxExcludesBaseHistoricalTargetOnlyColumns(t
 
 	projected := projectDataBranchBatchToTarget(source, &tblStuff, baseMapping, mp)
 	defer projected.Clean(mp)
-	require.Equal(t, []string{catalog.Row_ID, "id", "x", "y", "amount", objectio.DefaultCommitTS_Attr}, projected.Attrs)
+	require.Equal(t, 6, projected.VectorCount())
 	require.Equal(t, 1, projected.RowCount())
 	require.Equal(t, rowID, vector.GetFixedAtNoTypeCheck[types.Rowid](projected.Vecs[0], 0))
 	require.Equal(t, int32(2), vector.GetFixedAtNoTypeCheck[int32](projected.Vecs[1], 0))
@@ -4606,7 +4590,6 @@ func TestHistoricalDataBranchChangesHandleSkipsHydrationAtBoundedGeneration(t *t
 	mp := ses.proc.Mp()
 
 	source := batch.NewWithSize(4)
-	source.SetAttributes([]string{catalog.Row_ID, "a", "b", objectio.DefaultCommitTS_Attr})
 	source.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	source.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	source.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -4696,7 +4679,6 @@ func TestProjectBaseBatchToTargetMovesHiddenKeyColumns(t *testing.T) {
 
 	mp := ses.proc.Mp()
 	baseBat := batch.NewWithSize(4)
-	baseBat.SetAttributes([]string{catalog.Row_ID, "a", "b", catalog.CPrimaryKeyColName})
 	baseBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	baseBat.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	baseBat.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -4747,7 +4729,6 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 
 	// Batch1: [id=1, extra=999, name="same"]
 	bat1 := batch.NewWithSize(3)
-	bat1.SetAttributes([]string{"id", "extra", "name"})
 	bat1.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat1.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat1.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -4758,7 +4739,6 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 
 	// Batch2: [id=1, extra=0, name="same"] (extra differs but is target-only)
 	bat2 := batch.NewWithSize(3)
-	bat2.SetAttributes([]string{"id", "extra", "name"})
 	bat2.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat2.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat2.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)
@@ -4785,7 +4765,6 @@ func TestCompareRowInWrappedBatches_WithCommonIdxes(t *testing.T) {
 
 	// Now test with a difference in a common column (name)
 	bat3 := batch.NewWithSize(3)
-	bat3.SetAttributes([]string{"id", "extra", "name"})
 	bat3.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat3.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat3.Vecs[2] = vector.NewVec(types.T_varchar.ToType(), mp)

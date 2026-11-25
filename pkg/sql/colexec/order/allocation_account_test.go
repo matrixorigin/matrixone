@@ -315,7 +315,7 @@ func TestAccountedOrderVariableProjectionAcrossBatches(t *testing.T) {
 	require.NoError(t, err)
 
 	newInput := func(ids []int64) *batch.Batch {
-		logical := batch.New(nil)
+		logical := batch.NewWithSize(0)
 		logical.SetRowCount(len(ids))
 		zone, evalErr := variable.Eval(proc, []*batch.Batch{logical}, nil)
 		require.NoError(t, evalErr)

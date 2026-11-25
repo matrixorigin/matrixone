@@ -169,6 +169,8 @@ type WriteReq struct {
 	AutoIncrEpochKnown bool
 	Schema             *catalog2.Schema
 	Batch              *batch.Batch
+	// Attrs names Batch's columns, as the CN sent them.
+	Attrs []string
 	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
 	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
 	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.

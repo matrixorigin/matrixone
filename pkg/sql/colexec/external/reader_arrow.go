@@ -539,7 +539,6 @@ func (r *ArrowReader) PublishBatch(
 			return nil, false, moerr.NewInternalErrorNoCtxf("Arrow conversion produced a nil vector at column %d", i)
 		}
 	}
-	converted.Attrs = attrs
 	r.published = converted
 	metric.ArrowLoadBatchCounter.Inc()
 	metric.ArrowLoadRowCounter.Add(float64(converted.RowCount()))
@@ -696,7 +695,7 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 	if source == nil || mp == nil || rows <= 0 || rows > source.RowCount() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid Arrow batch prefix")
 	}
-	stable := batch.New(append([]string(nil), source.Attrs...))
+	stable := batch.NewWithSize(len(source.Vecs))
 	stable.Recursive = source.Recursive
 	stable.ShuffleIDX = source.ShuffleIDX
 	defer func() {

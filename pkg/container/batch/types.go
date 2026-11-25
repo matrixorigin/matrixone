@@ -40,15 +40,16 @@ var (
 // it's the basic unit for data transmission in the computing layer of MatrixOne.
 //
 // this includes information such as
-// column names (Attrs), column data (Vecs), the number of rows (rowCount),
-// aggregation intermediate data (Aggs),
+// column data (Vecs), the number of rows (rowCount),
 // and some specific flags like Recursive, ShuffleIDX.
+//
+// A batch carries no column names: names belong to whoever defines the
+// columns (the plan, a table definition, a workspace entry), and travel beside
+// the batch when an API needs them.
 type Batch struct {
 	// For recursive CTE, 1 is last batch, 2 is end of batch
 	Recursive  int32
 	ShuffleIDX int32 //used only in shuffle
-	// Attrs column name list, letter case: origin
-	Attrs []string
 	// Vecs col data
 	Vecs []*vector.Vector
 

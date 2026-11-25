@@ -169,7 +169,6 @@ func (c *batchCache) copyInto(dst, src *batch.Batch) (_ *batch.Batch, aliased bo
 	}
 	dst.Recursive = src.Recursive
 	dst.ShuffleIDX = src.ShuffleIDX
-	dst.Attrs = append(dst.Attrs[:0], src.Attrs...)
 
 copyVectors:
 	for i, vec := range src.Vecs {

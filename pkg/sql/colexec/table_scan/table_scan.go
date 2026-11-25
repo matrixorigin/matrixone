@@ -100,7 +100,6 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 			return err
 		}
 		tableScan.ctr.buf = batch.NewWithSize(len(tableScan.Types))
-		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
 		for i := range tableScan.Types {
 			tableScan.ctr.buf.Vecs[i] = vector.NewVec(plan.MakeTypeByPlan2Type(tableScan.Types[i]), tableScan.mp(proc))
 		}

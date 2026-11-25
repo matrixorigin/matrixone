@@ -54,7 +54,7 @@ func TestSinkerWriteOwnedRejectsBorrowedBackingBeforeStaging(t *testing.T) {
 	require.NoError(t, err)
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 1, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	bat := batch.New([]string{"v"})
+	bat := batch.NewWithSize(1)
 	require.NoError(t, bat.HoldLease(lease))
 	lease.Release()
 	bat.Vecs[0] = vec

@@ -34,7 +34,7 @@ func newAccountantTestProcess(t *testing.T, limit int64) *process.Process {
 }
 
 func makeAccountantBatch(proc *process.Process, value string) *batch.Batch {
-	bat := batch.New([]string{"value"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeVarcharVector([]string{value}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	return bat

@@ -36,11 +36,12 @@ func TestOptimisticRCWriteDependencies(t *testing.T) {
 		t.Run(map[bool]string{false: "data", true: "tombstone"}[tombstone], func(t *testing.T) {
 			tbl, eng, fs, keys := newPersistedPKCheckTable(t, types.T_int64, tombstone)
 			mp := tbl.proc.Load().Mp()
-			keys.Attrs = []string{"pk"}
+			keysAttrs := []string{"pk"}
 			for _, typ := range []int{INSERT, DELETE} {
-				e := Entry{typ: typ, tableId: tbl.tableId, bat: keys}
+				e := Entry{typ: typ, tableId: tbl.tableId, bat: keys, attrs: keysAttrs}
 				if typ == DELETE {
-					e.bat = &batch.Batch{Attrs: []string{"rowid", "pk"}, Vecs: []*vector.Vector{nil, keys.Vecs[0]}}
+					e.bat = &batch.Batch{Vecs: []*vector.Vector{nil, keys.Vecs[0]}}
+					e.attrs = []string{"rowid", "pk"}
 				}
 				require.Error(t, validateOptimisticWriteEntry(t.Context(), tbl, e, types.BuildTS(10, 0), types.BuildTS(50, 0)))
 				require.NoError(t, validateOptimisticWriteEntry(t.Context(), tbl, e, types.BuildTS(50, 0), types.BuildTS(60, 0)))

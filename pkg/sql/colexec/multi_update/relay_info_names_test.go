@@ -109,7 +109,7 @@ func issue25590MakeRelayBatch(
 		if r.origin != nil {
 			var buf bytes.Buffer
 			var err error
-			val, err = r.origin.MarshalBinaryWithBuffer(&buf, true)
+			val, err = r.origin.MarshalBinaryWithBufferAndNames(&buf, true, issue25590TailNames(r.origin))
 			require.NoError(t, err)
 		}
 		require.NoError(t, vector.AppendBytes(
@@ -117,6 +117,19 @@ func issue25590MakeRelayBatch(
 	}
 	out.SetRowCount(out.Vecs[0].Length())
 	return out
+}
+
+// issue25590TailNames returns the names the writer writes into a tail of
+// origin's layout (addBatchToOutput): the S3 result batches are named, any
+// other layout carries no names.
+func issue25590TailNames(origin *batch.Batch) []string {
+	switch {
+	case len(origin.Vecs) == 2 && origin.Vecs[1].GetType().Oid == types.T_binary:
+		return colexec.CNS3ResultAttrs
+	case len(origin.Vecs) == 1 && origin.Vecs[0].GetType().Oid == types.T_binary:
+		return colexec.CNS3TombstoneResultAttrs
+	}
+	return nil
 }
 
 // TestIssue25590RelayS3InfoNameExtraction pins the r23 intake
@@ -175,7 +188,6 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 	// tail lost the object-stats column cannot prove its objects, so
 	// the whole ack rejects fail-closed instead of adopting a subset.
 	typeless := batch.NewWithSize(1)
-	typeless.SetAttributes([]string{"not-a-stats-column"})
 	typeless.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer typeless.Clean(mp)
 	require.NoError(t, vector.AppendFixed(typeless.Vecs[0], int64(1), false, mp))
@@ -235,7 +247,6 @@ func TestIssue25590RelayS3InfoNameExtraction(t *testing.T) {
 
 	// An ordinary two-column data batch never matches the layout.
 	dataBatch := batch.NewWithSize(2)
-	dataBatch.SetAttributes([]string{"pk", "v"})
 	dataBatch.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	dataBatch.Vecs[1] = vector.NewVec(types.T_int64.ToType(), mp)
 	defer dataBatch.Clean(mp)

@@ -53,7 +53,7 @@ func TestSpoolCopiesBorrowedFixedPayload(t *testing.T) {
 	lease := poisonedLease(t, data)
 	vec, err := vector.NewVecWithData(types.T_int64.ToType(), 2, data, nil, nil), error(nil)
 	require.NoError(t, err)
-	source := batch.New([]string{"v"})
+	source := batch.NewWithSize(1)
 	require.NoError(t, source.HoldLease(lease))
 	lease.Release()
 	source.Vecs[0] = vec
@@ -95,7 +95,7 @@ func TestSpoolCopiesBorrowedVarlenPayload(t *testing.T) {
 	owner := vec
 	vec = vector.NewVecWithData(types.T_varchar.ToType(), 2, owner.GetData(), area, nil)
 
-	source := batch.New([]string{"v"})
+	source := batch.NewWithSize(1)
 	require.NoError(t, source.HoldLease(lease))
 	lease.Release()
 	source.Vecs[0] = vec

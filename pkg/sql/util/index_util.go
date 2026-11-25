@@ -118,18 +118,11 @@ func BuildUniqueKeyBatch(
 	)
 
 	if originTablePrimaryKey == "" {
-		b = &batch.Batch{
-			Attrs: make([]string, 1),
-			Vecs:  make([]*vector.Vector, 1),
-		}
-		b.Attrs[0] = catalog.IndexTableIndexColName
+		// [IndexTableIndexColName]
+		b = batch.NewWithSize(1)
 	} else {
-		b = &batch.Batch{
-			Attrs: make([]string, 2),
-			Vecs:  make([]*vector.Vector, 2),
-		}
-		b.Attrs[0] = catalog.IndexTableIndexColName
-		b.Attrs[1] = catalog.IndexTablePrimaryColName
+		// [IndexTableIndexColName, IndexTablePrimaryColName]
+		b = batch.NewWithSize(2)
 	}
 	if len(parts) > 1 {
 		isCompoundIndex = true
@@ -162,7 +155,7 @@ func BuildUniqueKeyBatch(
 		bitMap, err = compactSingleIndexCol(vec, b.Vecs[0], proc)
 	}
 
-	if len(b.Attrs) > 1 {
+	if originTablePrimaryKey != "" {
 		var vec *vector.Vector
 		for i, name := range attrs {
 			if originTablePrimaryKey == name {

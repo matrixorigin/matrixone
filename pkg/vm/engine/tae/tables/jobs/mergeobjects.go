@@ -314,7 +314,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	task.nMergedBlk[objIdx]++
 
 	if retBatch == nil {
-		retBatch = batch.New(task.attrs)
+		retBatch = batch.NewWithSize(len(task.attrs))
 	}
 	// Re-wire CN batch vectors to the new TN batch's downstream vectors.
 	for i, idx := range task.idxs {

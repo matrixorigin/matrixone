@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"slices"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -232,9 +230,6 @@ func (bs *Batches) copyIntoBatches(
 			}
 			return err
 		}
-		if allocationLimit != 0 {
-			tmp.SetAttributes(slices.Clone(tmp.Attrs))
-		}
 		bs.MemSize += int64(tmp.Size())
 		bs.Buf = append(bs.Buf, tmp)
 		lenBuf := len(bs.Buf)
@@ -277,9 +272,6 @@ func (bs *Batches) copyIntoBatches(
 			tmp, err = proc.NewBatchFromSrcWithAllocation(src, rows, selection)
 			if err != nil {
 				return err
-			}
-			if allocationLimit != 0 {
-				tmp.SetAttributes(slices.Clone(tmp.Attrs))
 			}
 			bs.Buf = append(bs.Buf, tmp)
 		}

@@ -64,7 +64,6 @@ func decodeEmbeddedSiriusResult(result siriusbridge.Result, request compile.Siri
 			bat = nil
 		}
 	}()
-	bat.Attrs = request.Headings
 	bat.SetRowCount(int(result.Rows))
 	// The batch is the lender of the native window its vectors alias; the
 	// window stays valid for the callback that consumes and cleans the batch.

@@ -3851,7 +3851,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
-			for i := 0; i < len(bat.Attrs); i++ {
+			for i := 0; i < len(bat.Vecs); i++ {
 				for j := 0; j < bat.Vecs[0].Length(); j++ {
 					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
@@ -3925,7 +3925,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		batchCase2 := func() *batch.Batch {
 			bat := genBatch()
 
-			for i := 0; i < len(bat.Attrs); i++ {
+			for i := 0; i < len(bat.Vecs); i++ {
 				for j := 0; j < 1; j++ {
 					bat.Vecs[i].GetNulls().Add(uint64(j))
 				}
@@ -4013,7 +4013,7 @@ func Test_typeconvert(t *testing.T) {
 }
 
 func allocTestBatch(mp *mpool.MPool, attrName []string, tt []types.Type, batchSize int) *batch.Batch {
-	batchData := batch.New(attrName)
+	batchData := batch.NewWithSize(len(attrName))
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
