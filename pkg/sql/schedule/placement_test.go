@@ -57,6 +57,52 @@ func TestDecideQueryPlacementRejectsInvalidCurrentCNPolicy(t *testing.T) {
 	}
 }
 
+func TestWritableWorkspacePlacement(t *testing.T) {
+	owner := Worker{ID: "owner", Addr: "local", Route: WorkerRouteLocal}
+	peer := Worker{ID: "peer", Addr: "remote", Route: WorkerRouteRemote}
+	alias := Worker{ID: "other", Addr: owner.Addr}
+	draining := owner
+	draining.State = WorkerStateDraining
+	for _, tc := range []struct {
+		name    string
+		pool    Workers
+		exclude bool
+		capOne  bool
+		reject  string
+	}{
+		{name: "keep-eligible-peers", pool: Workers{peer, owner}},
+		{name: "budget-keeps-real-local-route", pool: Workers{peer, alias, {ID: owner.ID, Addr: "advertised"}}, capOne: true},
+		{name: "empty-is-not-membership", reject: ReasonRequiredCurrentOutsidePool},
+		{name: "same-address-is-not-ownership", pool: Workers{alias, peer}, reject: ReasonRequiredCurrentOutsidePool},
+		{name: "owner-being-drained", pool: Workers{draining, peer}, reject: ReasonCurrentCNDraining},
+		{name: "cannot-override-exclusion", pool: Workers{owner, peer}, exclude: true, reject: ReasonExcludedCurrentCN},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := QueryRequest{ExecKind: QueryExecAPMultiCN, CurrentCN: owner,
+				ResolvedPool: ResolvedPool{Workers: tc.pool}, RequireWorkspaceOwner: true}
+			if tc.capOne {
+				req.Intent.WorkerSet = WorkerSetPolicy{Mode: WorkerSetMax, MaxWorkers: 1, SelectionKey: "statement"}
+			}
+			if tc.exclude {
+				req.Intent.CurrentCNPolicy = CurrentCNExcluded
+			}
+			got := DecideQueryPlacement(req)
+			if tc.reject != "" {
+				require.False(t, got.Satisfied)
+				require.Equal(t, tc.reject, got.Reason)
+				return
+			}
+			require.True(t, got.Satisfied)
+			require.Equal(t, ReasonRequiredCurrentCN, got.Reason)
+			if tc.capOne {
+				require.Equal(t, Workers{owner}, got.Workers)
+			} else {
+				require.ElementsMatch(t, Workers{owner, peer}, got.Workers)
+			}
+		})
+	}
+}
+
 func TestDecideQueryPlacementRejectsExcludedCurrentCNForLocalExecTypes(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 
