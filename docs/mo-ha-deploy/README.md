@@ -1,7 +1,7 @@
 # MatrixOne 双机主备部署（DRBD + Pacemaker/STONITH）
 
 两台机器，用 DRBD 块级复制整个数据目录，Pacemaker 保证严格单活。
-MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `docker-compose` 资源代理启停
+MatrixOne 以 all-in-one 容器运行，由 Pacemaker 的 `ocf:matrixone:docker-compose` 资源代理启停
 （**不进 systemd**）。同步复制的 RPO=0 以 DRBD 正常连接、双端同步及隔离机制通过验收为前提；切换时间受故障检测、隔离和 MO 恢复耗时影响。
 
 支持 RHEL / CentOS / Rocky / AlmaLinux 与 Debian / Ubuntu。
@@ -45,6 +45,20 @@ sudo ./mo-ha-deploy.sh --config node1.env --bootstrap --format-drbd --yes
 ```bash
 sudo ./mo-ha-deploy.sh --config node1.env --stages check --yes
 ```
+
+`pkg` 阶段在两台节点安装随包提供的 MatrixOne 资源代理和 Python 3。已有集群如果已具备 Python 3 和支持 `config --format json` 的 Docker Compose 插件，可以在两台节点的部署目录单独安装代理。
+
+```bash
+sudo install -D -m 0755 agents/heartbeat/docker-compose /usr/lib/ocf/resource.d/matrixone/docker-compose
+```
+
+如果 `p_mo` 仍使用 `ocf:heartbeat:docker-compose`，在维护窗口停用该资源并确认容器已停止。通过离线 CIB 将 `p_mo` 的 provider 改为 `matrixone`，保留现有资源参数和约束，校验后发布并重新启用 `p_mo`。
+
+停机或迁移时，资源代理也会停止能确认属于该配置的活动 `docker compose run` 任务，以便释放共享数据。请在维护前完成需要保留运行的任务。已经退出的临时容器会保留；使用 `--rm` 启动的任务由 Docker 自动清理。
+
+如果 Compose 配置丢失，且仍有属于该配置的活动容器，监控会报错。恢复原配置后，代理才能核对 MatrixOne 等预期服务是否运行。如果配置可读、部分服务缺失，且容器归属清楚，`start` 会尝试一次 `compose up -d` 并重新检查。
+
+服务改名或缩容到零后，如果旧容器仍在运行，代理会报错并阻止启动替代容器。请先确认旧容器已释放数据目录。如果常驻服务已经停止，但同项目的临时任务仍在运行，代理也会阻止启动，直到任务退出或由停机操作结束。
 
 ## 三、验证
 
@@ -112,7 +126,7 @@ fencing 不能省，也不能用假实现。上线前务必对非活动节点实
 | `mo-ha-deploy.sh` | 一键部署脚本，RPM / DEB 通用 |
 | `deploy.env.example` | 参数模板，复制后修改 |
 | `mo-config/` | MatrixOne all-in-one compose 与 launch/log/tn/cn 配置模板 |
-| `agents/heartbeat/docker-compose` | OCF 资源代理（EL9 的 resource-agents 不含，随包下发） |
+| `agents/heartbeat/docker-compose` | 随包提供的 OCF 代理源码，安装为 `ocf:matrixone:docker-compose` |
 | `backups/20261105-before-fixes/` | 本次修改前的原脚本、env 模板及 SHA-256 校验值 |
 | `backups/20261105-before-proxmox-fix/` | 集成 Proxmox 自动发现修复前的脚本 |
 

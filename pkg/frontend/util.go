@@ -1369,7 +1369,7 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 // convertRowsIntoBatchInLocation converts frontend result rows into a batch.
 // Some producers, such as DATA BRANCH DIFF, render temporal values as text in
 // the session time zone; loc is the zone used to read TIMESTAMP text back.
-func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]any, loc *time.Location) (*batch.Batch, *plan.ResultColDef, error) {
+func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]any, loc *time.Location) (_ *batch.Batch, _ *plan.ResultColDef, err error) {
 	if loc == nil {
 		loc = time.Local
 	}
@@ -1379,12 +1379,26 @@ func convertRowsIntoBatchInLocation(pool *mpool.MPool, cols []Column, rows [][]a
 	}
 	//1. make vector type
 	bat := batch.New(colNames)
+	// On error, free the vectors already built in pool.
+	defer func() {
+		if err != nil {
+			bat.Clean(pool)
+		}
+	}()
 	//2. make batch
 	cnt := len(rows)
 	bat.SetRowCount(cnt)
+	// nsp collects one column's NULL rows before they are copied into the
+	// vector; the last one is freed on return, the others as they are
+	// replaced.
+	var nsp *nulls.Nulls
+	defer func() { nsp.Free() }()
 	for colIndex, typ := range colTyps {
 		bat.Vecs[colIndex] = vector.NewVec(typ, pool)
-		nsp := nulls.NewWithSize(cnt)
+		nsp.Free()
+		if nsp, err = nulls.NewWithSize(cnt, pool); err != nil {
+			return nil, nil, err
+		}
 
 		// typeswitch:partial colTyps come from mysqlColDef2PlanResultColDef, which maps MySQL FLOAT/DOUBLE only to T_float32/T_float64
 		switch typ.Oid {

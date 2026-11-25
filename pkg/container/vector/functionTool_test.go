@@ -134,7 +134,8 @@ func TestFunctionResultAllocationBoundsNullUnion(t *testing.T) {
 
 	result = MustFunctionResult[int64](wrapper)
 	require.False(t, result.GetNullAt(63), "reset must drop the previous generation's NULLs")
-	source := nulls.NewWithSize(130)
+	source, err := nulls.NewWithSize(130, mp)
+	require.NoError(t, err)
 	source.Add(1, 129)
 
 	require.NotPanics(t, func() {
@@ -638,11 +639,13 @@ func TestFunctionResultNonNullPreparationAndNullableReuse(t *testing.T) {
 	result.AddNullAt(63)
 	require.True(t, result.vec.IsNull(63))
 	require.Positive(t, result.vec.GetNulls().GetBitmap().CapWords())
-	// A larger all-valid generation must not allocate a bitmap.
+	// A larger all-valid generation keeps the bitmap it already owns for a
+	// later nullable generation, and allocates no more.
+	retained := result.vec.GetNulls().GetBitmap().CapWords()
 	require.NoError(t, result.PreExtendAndResetNonNull(512))
 	require.False(t, result.vec.HasNull())
-	require.Zero(t, result.vec.GetNulls().GetBitmap().Len())
-	require.Zero(t, result.vec.GetNulls().GetBitmap().CapWords())
+	require.Zero(t, result.vec.GetNulls().Count())
+	require.Equal(t, retained, result.vec.GetNulls().GetBitmap().CapWords())
 	require.NoError(t, result.PreExtendAndReset(512))
 	result.AddNullAt(511)
 	require.True(t, result.vec.IsNull(511))

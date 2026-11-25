@@ -26,7 +26,7 @@ import (
 
 func newMailboxBitmap(t *testing.T) *bitmap.Bitmap {
 	t.Helper()
-	value, err := colexec.NewRowBitmap(1024)
+	value, err := colexec.NewRowBitmap(1024, bitmapTestMP)
 	require.NoError(t, err)
 	return value
 }

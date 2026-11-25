@@ -103,7 +103,8 @@ func TestFilterSelectedInput(t *testing.T) {
 		source := MakeFilterMockBatchs(proc.Mp())
 		physicalRows := source.RowCount()
 		var selection bitmap.Bitmap
-		selection.InitWithSize(int64(physicalRows))
+		selection.Init(bitmapTestMP)
+		mustBitmapOK(selection.InitWithSize(int64(physicalRows), bitmapTestMP))
 		var selectedRows []int
 		for row := 0; row < physicalRows; row += 3 {
 			selection.Add(uint64(row))

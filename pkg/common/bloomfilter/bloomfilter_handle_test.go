@@ -25,7 +25,7 @@ import (
 )
 
 func TestBloomFilter_HandleAndRefCount(t *testing.T) {
-	bf := New(1000, 0.0001)
+	bf := mustNewBF(New(1000, 0.0001, bitmapTestMP))
 	require.NotNil(t, bf.shared)
 	require.Equal(t, int32(1), bf.shared.refCount)
 
@@ -56,7 +56,7 @@ func TestBloomFilter_HandleAndRefCount(t *testing.T) {
 
 func TestBloomFilter_ConcurrentHandles(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bf := New(1000, 0.0001)
+	bf := mustNewBF(New(1000, 0.0001, bitmapTestMP))
 	defer bf.Free()
 
 	vec := vector.NewVec(types.T_int64.ToType(), mp)
@@ -93,7 +93,7 @@ func TestBloomFilter_ConcurrentHandles(t *testing.T) {
 
 func TestBloomFilter_TestRow(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bf := New(1000, 0.0001)
+	bf := mustNewBF(New(1000, 0.0001, bitmapTestMP))
 	defer bf.Free()
 
 	vec := vector.NewVec(types.T_int32.ToType(), mp)
@@ -121,7 +121,7 @@ func TestBloomFilter_TestRow(t *testing.T) {
 }
 
 func TestBloomFilter_FreeCleanup(t *testing.T) {
-	bf := New(100, 0.01)
+	bf := mustNewBF(New(100, 0.01, bitmapTestMP))
 	shared := bf.shared
 	require.NotNil(t, shared.bitmap.Ptr())
 
@@ -132,7 +132,7 @@ func TestBloomFilter_FreeCleanup(t *testing.T) {
 
 func TestBloomFilter_MarshalUnmarshalHandle(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bf := New(1000, 0.0001)
+	bf := mustNewBF(New(1000, 0.0001, bitmapTestMP))
 
 	vec := vector.NewVec(types.T_int64.ToType(), mp)
 	vector.AppendFixed(vec, int64(12345), false, mp)
@@ -156,7 +156,7 @@ func TestBloomFilter_MarshalUnmarshalHandle(t *testing.T) {
 
 func TestBloomFilter_LargeVector(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bf := New(10000, 0.001)
+	bf := mustNewBF(New(10000, 0.001, bitmapTestMP))
 	defer bf.Free()
 
 	// 1000 rows, more than hashmap.UnitLimit (usually 64 or 256)

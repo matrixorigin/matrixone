@@ -38,7 +38,7 @@ func TestLoadFKIgnoreCheck(t *testing.T) {
 			overload, ok := GetFunctionByIdWithoutError(fn.GetEncodedOverloadID())
 			require.True(t, ok)
 			require.True(t, overload.CannotFold())
-			ns := nulls.NewWithSize(3)
+			ns := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 			ns.Add(2)
 			flags := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false, false}, ns)
 			defer flags.Free(proc.Mp())

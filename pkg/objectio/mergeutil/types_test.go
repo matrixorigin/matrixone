@@ -198,8 +198,8 @@ func TestMergeSortBatchesDisjointRanges(t *testing.T) {
 func TestDisjointBatchOrderFallsBackForOverlappingRanges(t *testing.T) {
 	ds := &fixedDataSlice[int64]{cols: [][]int64{{1, 4}, {2, 3}}}
 	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{
-		nulls.NewWithSize(2),
-		nulls.NewWithSize(2),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
 	})
 	require.Nil(t, merge.disjointBatchOrder())
 }
@@ -207,25 +207,25 @@ func TestDisjointBatchOrderFallsBackForOverlappingRanges(t *testing.T) {
 func TestDisjointBatchOrderFallsBackForEqualBoundaries(t *testing.T) {
 	ds := &fixedDataSlice[int64]{cols: [][]int64{{1, 2}, {2, 3}}}
 	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{
-		nulls.NewWithSize(2),
-		nulls.NewWithSize(2),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
+		mustNullsOK(nulls.NewWithSize(2, bitmapTestMP)),
 	})
 	require.Nil(t, merge.disjointBatchOrder())
 }
 
 func TestDisjointBatchOrderHandlesNullBoundariesConservatively(t *testing.T) {
-	leftNulls := nulls.NewWithSize(3)
+	leftNulls := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 	leftNulls.Add(0)
-	rightNulls := nulls.NewWithSize(3)
+	rightNulls := mustNullsOK(nulls.NewWithSize(3, bitmapTestMP))
 	rightNulls.Add(0)
 	ds := &fixedDataSlice[int64]{cols: [][]int64{{0, 1, 2}, {0, 3, 4}}}
 	merge := newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{leftNulls, rightNulls})
 	require.Nil(t, merge.disjointBatchOrder(), "mixed null/non-null ranges overlap")
 
-	allNulls := nulls.NewWithSize(2)
+	allNulls := mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))
 	allNulls.Add(0, 1)
 	ds = &fixedDataSlice[int64]{cols: [][]int64{{0, 0}, {1, 2}}}
-	merge = newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{allNulls, nulls.NewWithSize(2)})
+	merge = newMerge(sort.GenericLess[int64], ds, []*nulls.Nulls{allNulls, mustNullsOK(nulls.NewWithSize(2, bitmapTestMP))})
 	require.Equal(t, []int{0, 1}, merge.disjointBatchOrder())
 }
 

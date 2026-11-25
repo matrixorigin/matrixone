@@ -103,16 +103,57 @@ func (bat *Batch) GetVectorByName(name string) Vector {
 	return bat.Vecs[pos]
 }
 
+// deletesMP is the pool a delete bitmap of bat allocates from: its vectors'
+// allocator, or TAE's default allocator for a batch without vectors.
+func (bat *Batch) deletesMP() *mpool.MPool {
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			if mp := vec.GetAllocator(); mp != nil {
+				return mp
+			}
+		}
+	}
+	return common.DefaultAllocator
+}
+
+// newDeletes returns an empty owned delete bitmap of size rows.
+func (bat *Batch) newDeletes(size int) *nulls.Nulls {
+	deletes, err := nulls.NewWithSize(size, bat.deletesMP())
+	if err != nil {
+		panic(err)
+	}
+	return deletes
+}
+
+// ReleaseDeletes frees bat's delete bitmap (a view only drops its reference)
+// and clears it. A batch owns its Deletes: every replacement of Deletes must
+// release the old one first.
+func (bat *Batch) ReleaseDeletes() {
+	if bat.Deletes != nil {
+		bat.Deletes.Free()
+		bat.Deletes = nil
+	}
+}
+
+// SetDeletes makes deletes bat's delete bitmap, releasing the old one. bat
+// takes ownership of deletes.
+func (bat *Batch) SetDeletes(deletes *nulls.Nulls) {
+	if bat.Deletes != deletes {
+		bat.ReleaseDeletes()
+	}
+	bat.Deletes = deletes
+}
+
 func (bat *Batch) RangeDelete(start, end int) {
 	if bat.Deletes == nil {
-		bat.Deletes = nulls.NewWithSize(end)
+		bat.Deletes = bat.newDeletes(end)
 	}
 	bat.Deletes.AddRange(uint64(start), uint64(end))
 }
 
 func (bat *Batch) Delete(i int) {
 	if bat.Deletes == nil {
-		bat.Deletes = nulls.NewWithSize(i)
+		bat.Deletes = bat.newDeletes(i)
 	}
 	bat.Deletes.Add(uint64(i))
 }
@@ -139,7 +180,7 @@ func (bat *Batch) Compact() {
 	for _, vec := range bat.Vecs {
 		vec.CompactByBitmap(bat.Deletes)
 	}
-	bat.Deletes = nil
+	bat.ReleaseDeletes()
 }
 
 func (bat *Batch) Length() int {
@@ -162,6 +203,9 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
+// WindowDeletes returns the deletes of rows [offset, offset+length): a
+// read-only view of bat.Deletes, or with deep an owned copy. Either way the
+// result is a separate Nulls the caller releases with Free.
 func (bat *Batch) WindowDeletes(offset, length int, deep bool) *nulls.Nulls {
 	if bat.Deletes.IsEmpty() || length <= 0 {
 		return nil
@@ -171,11 +215,14 @@ func (bat *Batch) WindowDeletes(offset, length int, deep bool) *nulls.Nulls {
 	if end > bat.Length() {
 		panic(fmt.Sprintf("out of range: %d, %d", offset, length))
 	}
-	if start == 0 && end == bat.Length() && !deep {
-		return bat.Deletes
+	ret := new(nulls.Nulls)
+	if !deep {
+		ret.InitView(bat.Deletes, start, end)
+		return ret
 	}
-	ret := nulls.NewWithSize(length)
-	nulls.Range(bat.Deletes, uint64(start), uint64(end), uint64(start), ret)
+	if err := nulls.Range(bat.Deletes, uint64(start), uint64(end), uint64(start), ret, bat.deletesMP()); err != nil {
+		panic(err)
+	}
 	return ret
 }
 
@@ -238,6 +285,7 @@ func (bat *Batch) PPString(num int) string {
 }
 
 func (bat *Batch) Close() {
+	bat.ReleaseDeletes()
 	if bat.DataRelease != nil {
 		bat.DataRelease()
 		bat.DataRelease = nil
@@ -264,11 +312,11 @@ func (bat *Batch) Reset() {
 		vec.Close()
 		bat.Vecs[i] = newVec
 	}
-	bat.Deletes = nil
+	bat.ReleaseDeletes()
 }
 
 func (bat *Batch) CleanOnlyData() {
-	bat.Deletes = nil
+	bat.ReleaseDeletes()
 	for i := range bat.Vecs {
 		bat.Vecs[i].GetDownstreamVector().CleanOnlyData()
 	}
@@ -472,12 +520,13 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	bat.Deletes = &nulls.Nulls{}
 	buf = make([]byte, size)
 	if _, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
-	if err = bat.Deletes.ReadNoCopy(buf); err != nil {
+	bat.SetDeletes(&nulls.Nulls{})
+	bat.Deletes.Init(bat.deletesMP())
+	if err = bat.Deletes.Read(buf); err != nil {
 		return
 	}
 	n += int64(size)
@@ -566,7 +615,11 @@ func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += tmpn
-	bat.Deletes = common.RoaringToMOBitmap(deletes)
+	var nbm *nulls.Nulls
+	if nbm, err = common.RoaringToMOBitmap(deletes, bat.deletesMP()); err != nil {
+		return
+	}
+	bat.SetDeletes(nbm)
 
 	return
 }
@@ -618,12 +671,13 @@ func (bat *Batch) ReadFromV2(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	bat.Deletes = &nulls.Nulls{}
 	buf = make([]byte, size)
 	if _, err = r.Read(buf); err != nil {
 		return
 	}
-	if err = bat.Deletes.ReadNoCopyV1(buf); err != nil {
+	bat.SetDeletes(&nulls.Nulls{})
+	bat.Deletes.Init(bat.deletesMP())
+	if err = bat.Deletes.GetBitmap().UnmarshalV1(buf); err != nil {
 		return
 	}
 	n += int64(size)

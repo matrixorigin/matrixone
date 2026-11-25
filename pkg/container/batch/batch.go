@@ -1337,6 +1337,13 @@ func (bat *Batch) releaseExtraBuf() {
 // several columns is copied once.
 func (bat *Batch) OwnReadOnlyVectors(mp *mpool.MPool) error {
 	var copied map[*vector.Vector]*vector.Vector
+	// The replaced originals are no longer referenced by bat, also when a
+	// later Dup fails. A read-only vector can still own its nulls bitmap.
+	defer func() {
+		for vec := range copied {
+			vec.Free(nil)
+		}
+	}()
 	for i, vec := range bat.Vecs {
 		if vec == nil || !vec.IsReadOnly() {
 			continue
@@ -1354,9 +1361,6 @@ func (bat *Batch) OwnReadOnlyVectors(mp *mpool.MPool) error {
 		}
 		copied[vec] = owned
 		bat.Vecs[i] = owned
-	}
-	for vec := range copied {
-		vec.Free(nil)
 	}
 	return nil
 }
