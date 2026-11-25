@@ -26,22 +26,6 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	newMongoDBCatalogTable(mongodb.TableMappings, mongodb.MappingsDDL),
 	ensureInformationSchemaCharacterSetsTable(),
 	populateInformationSchemaCharacterSets(),
-	upgradeColumnCharsetView(),
-}
-
-func upgradeColumnCharsetView() versions.UpgradeEntry {
-	ddl := sysview.InformationSchemaColumnsUTF8MB4DDL()
-	return versions.UpgradeEntry{
-		Schema:    sysview.InformationDBConst,
-		TableName: "COLUMNS",
-		UpgType:   versions.MODIFY_VIEW,
-		PreSql:    "DROP VIEW IF EXISTS information_schema.COLUMNS;",
-		UpgSql:    ddl,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
-			return exists && definition == ddl, err
-		},
-	}
 }
 
 func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
