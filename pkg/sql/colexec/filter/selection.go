@@ -32,7 +32,6 @@ type selectionState struct {
 	rows   bitmap.Bitmap
 	// pred holds one predicate's TRUE rows while they are ANDed into rows.
 	pred     bitmap.Bitmap
-	mask     []bool
 	physical batch.Batch
 	view     batch.Batch
 }
@@ -77,10 +76,11 @@ func (filter *Filter) selectionCall(proc *process.Process, input *batch.Batch) (
 			filter.ctr.executors[staticIndex] = executor
 			filter.ctr.allExecutors[i] = executor
 		}
-		var mask []bool
+		// The executors read the selection through the bitmap; rows outside
+		// it are not evaluated.
+		var mask *bitmap.Bitmap
 		if selected {
-			s.mask = batch.SelectionMaskOf(&s.rows, physicalRows, s.mask)
-			mask = s.mask
+			mask = &s.rows
 		}
 		vec, err := filter.ctr.allExecutors[i].Eval(proc, []*batch.Batch{physical}, mask)
 		if err != nil {

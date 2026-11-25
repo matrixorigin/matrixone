@@ -17,6 +17,7 @@ package colexec
 import (
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -219,7 +220,7 @@ func decimalMulSubSource(v *vector.Vector, column *ColumnExpressionExecutor, n i
 	return t.Oid == types.T_decimal64 && t.Scale == column.typ.Scale && t.Width <= column.typ.Width && v.Length() == n
 }
 
-func (e *decimalMulSubExecutor) Eval(proc *process.Process, batches []*batch.Batch, selected []bool) (*vector.Vector, error) {
+func (e *decimalMulSubExecutor) Eval(proc *process.Process, batches []*batch.Batch, selected *bitmap.Bitmap) (*vector.Vector, error) {
 	n := expressionRowCount(batches)
 	if len(batches) == 0 || selected != nil {
 		return e.root.Eval(proc, batches, selected)
@@ -248,7 +249,7 @@ func (e *decimalMulSubExecutor) Eval(proc *process.Process, batches []*batch.Bat
 	return out, nil
 }
 
-func (e *decimalMulSubExecutor) EvalWithoutResultReusing(p *process.Process, b []*batch.Batch, s []bool) (*vector.Vector, error) {
+func (e *decimalMulSubExecutor) EvalWithoutResultReusing(p *process.Process, b []*batch.Batch, s *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.root.EvalWithoutResultReusing(p, b, s)
 }
 func (e *decimalMulSubExecutor) ResetForNextQuery() { e.root.ResetForNextQuery() }

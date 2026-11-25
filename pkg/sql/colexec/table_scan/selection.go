@@ -38,7 +38,6 @@ type selectionState struct {
 	// block: keep is the result over the block's rows, pred one predicate's
 	// TRUE rows over the rows still kept, and dep the composition of the two.
 	keep, pred, dep bitmap.Bitmap
-	mask            []bool
 	physical        batch.Batch
 	compact         *batch.Batch
 	// uses is the reader column policy for selected reads: the columns the
@@ -87,9 +86,8 @@ func (tableScan *TableScan) execSelectedProjection(proc *process.Process, input 
 	out := input
 	if tableScan.ProjectList != nil {
 		input.PhysicalView(&s.physical)
-		s.mask = input.SelectionMask(s.mask)
 		var err error
-		if out, err = tableScan.EvalProjectionSelected(input, &s.physical, s.mask, proc); err != nil {
+		if out, err = tableScan.EvalProjectionSelected(input, &s.physical, input.Selection(), proc); err != nil {
 			return nil, err
 		}
 	}

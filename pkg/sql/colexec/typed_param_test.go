@@ -265,7 +265,7 @@ func TestParamExpressionExecutorTypedIntegerConversion(t *testing.T) {
 			require.NotNil(t, executor.adapter)
 			// Rows that are not selected never see the error.
 			executor.ResetForNextQuery()
-			got, err := executor.Eval(proc, rows(2), []bool{false, false})
+			got, err := executor.Eval(proc, rows(2), boolSelection([]bool{false, false}))
 			require.NoError(t, err)
 			require.True(t, got.IsNull(0))
 			executor.Free()

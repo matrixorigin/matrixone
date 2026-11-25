@@ -104,7 +104,7 @@ func TestDecimal128ValidityRuntimeTransitions(t *testing.T) {
 			out, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			check(out, -1)
-			out, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, true})
+			out, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, false, true, true}))
 			require.NoError(t, err)
 			check(out, 1)
 			input.Vecs[0].SetNull(1)

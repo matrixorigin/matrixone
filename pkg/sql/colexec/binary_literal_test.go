@@ -58,7 +58,7 @@ func binaryLiteralTestRows(t *testing.T, proc *process.Process, expr *plan.Expr)
 	input.SetRowCount(3)
 	var got []string
 	for _, selectList := range [][]bool{nil, {true, false, true}} {
-		result, err := executor.Eval(proc, []*batch.Batch{input}, selectList)
+		result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(selectList))
 		require.NoError(t, err)
 		require.Equal(t, 3, result.Length())
 		require.False(t, result.IsNull(0))

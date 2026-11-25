@@ -21,6 +21,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -73,12 +74,12 @@ var (
 type ExpressionExecutor interface {
 	// Eval evaluates the expression and returns the result vector.
 	// The result is a read-only vector that is only valid until the next call to Eval.
-	Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error)
+	Eval(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error)
 
 	// EvalWithoutResultReusing will be removed in the future.
 	// It's used to evaluate the expression,
 	// and the result's ownership is transferred to the caller except for the column expression.
-	EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error)
+	EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error)
 
 	// ResetForNextQuery resets the expression to its initial state for a same expression.
 	// this is useful to a prepare statement.
@@ -104,7 +105,7 @@ type memoExpressionExecutor struct {
 }
 
 func (expr *memoExpressionExecutor) Eval(
-	proc *process.Process, batches []*batch.Batch, selectList []bool,
+	proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	if expr.state.cached != nil {
 		return expr.state.cached, nil
@@ -117,7 +118,7 @@ func (expr *memoExpressionExecutor) Eval(
 }
 
 func (expr *memoExpressionExecutor) EvalWithoutResultReusing(
-	proc *process.Process, batches []*batch.Batch, selectList []bool,
+	proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	return expr.Eval(proc, batches, selectList)
 }
@@ -148,14 +149,14 @@ func (expr *memoRootExpressionExecutor) resetCachedValues() {
 }
 
 func (expr *memoRootExpressionExecutor) Eval(
-	proc *process.Process, batches []*batch.Batch, selectList []bool,
+	proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	expr.resetCachedValues()
 	return expr.executor.Eval(proc, batches, selectList)
 }
 
 func (expr *memoRootExpressionExecutor) EvalWithoutResultReusing(
-	proc *process.Process, batches []*batch.Batch, selectList []bool,
+	proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	expr.resetCachedValues()
 	return expr.executor.EvalWithoutResultReusing(proc, batches, selectList)
@@ -695,9 +696,16 @@ type FunctionExpressionExecutor struct {
 	// boundary.
 	parameterTypes []types.Type
 	functionInformationForEval
-	selectList1 []bool
-	selectList2 []bool
-	selectList  function.FunctionSelectList
+	// branchRows and branchScratch hold the rows each branch of IFF, CASE,
+	// COALESCE and JSON ELT is evaluated on. They are allocated from m on
+	// first use, re-initialized per batch, and freed in Free.
+	branchRows    bitmap.Bitmap
+	branchScratch bitmap.Bitmap
+	// allRows is the select list kernels receive: the executor calls a kernel
+	// only when every row is selected (partial selections are compacted
+	// first). It stays the zero value, which selects every row; some kernels
+	// choose their path by whether the list is nil, so it is never nil.
+	allRows function.FunctionSelectList
 
 	// A function implementation cannot be required to interpret selectList
 	// correctly: many built-ins predate it, and evaluating them on masked rows
@@ -705,7 +713,6 @@ type FunctionExpressionExecutor struct {
 	// therefore compact row-aligned parameters, evaluate only selected rows, and
 	// scatter the result back to the original row positions. These buffers are
 	// allocated lazily and reused across batches.
-	selectedRows             []int64
 	selectedParameterResults []*vector.Vector
 	selectedParameterVectors []*vector.Vector
 	selectedResult           vector.FunctionResultWrapper
@@ -876,7 +883,7 @@ func (expr *ParamExpressionExecutor) evalTyped(proc *process.Process, src *vecto
 	return expr.typedVec, nil
 }
 
-func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	var typed *vector.Vector
 	var err error
 	// Once this execution's typed value is folded, its route is settled,
@@ -969,7 +976,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	return expr.vec, nil
 }
 
-func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	_, adapter, err := expr.route(proc)
 	if err != nil {
 		return nil, err
@@ -1059,7 +1066,7 @@ type VarExpressionExecutor struct {
 	isBin bool
 }
 
-func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	// Scalar values stay physically constant, but their logical cardinality
 	// must follow the input batch for downstream materialization and shuffle.
 	rowCount := expressionRowCount(batches)
@@ -1128,7 +1135,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	return expr.vec, err
 }
 
-func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	vec, err := expr.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
@@ -1173,7 +1180,7 @@ type ListExpressionExecutor struct {
 	parameterExecutor []ExpressionExecutor
 }
 
-func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 
 	if expr.resultVector == nil {
 		var err error
@@ -1201,7 +1208,7 @@ func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch
 	return expr.resultVector, nil
 }
 
-func (expr *ListExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ListExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	vec, err := expr.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
@@ -1304,31 +1311,24 @@ func expressionRowCount(batches []*batch.Batch) int {
 	return 1
 }
 
-func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (err error) {
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
 	}
 	rowCount := expressionRowCount(batches)
-	if len(expr.selectList1) < rowCount {
-		expr.selectList1 = make([]bool, rowCount)
-		expr.selectList2 = make([]bool, rowCount)
+	trueBranch, falseBranch := &expr.branchRows, &expr.branchScratch
+	if err = trueBranch.InitWithSize(int64(rowCount), expr.m); err != nil {
+		return err
 	}
-
-	trueBranch := expr.selectList1[:rowCount]
-	falseBranch := expr.selectList2[:rowCount]
+	if err = falseBranch.InitWithSize(int64(rowCount), expr.m); err != nil {
+		return err
+	}
 	mode := function.CompatibilityModeFromProcess(proc)
 	conditionIsBin := isBinaryLiteralResult(expr.parameterExecutor[0], expr.parameterResults[0])
 
 	for i := 0; i < rowCount; i++ {
-		if selectList != nil {
-			trueBranch[i] = selectList[i]
-			falseBranch[i] = selectList[i]
-		} else {
-			trueBranch[i] = true
-			falseBranch[i] = true
-		}
-		if !trueBranch[i] {
+		if selectList != nil && !selectList.Contains(uint64(i)) {
 			continue
 		}
 		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), conditionIsBin, mode)
@@ -1336,13 +1336,13 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 			return err
 		}
 		if truth {
-			falseBranch[i] = false
+			trueBranch.Add(uint64(i))
 		} else {
-			trueBranch[i] = false
+			falseBranch.Add(uint64(i))
 		}
 	}
 
-	if hasSelectedRows(trueBranch) {
+	if !trueBranch.IsEmpty() {
 		expr.parameterResults[1], err = expr.parameterExecutor[1].Eval(proc, batches, trueBranch)
 		if err != nil {
 			return err
@@ -1353,7 +1353,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 			return err
 		}
 	}
-	if hasSelectedRows(falseBranch) {
+	if !falseBranch.IsEmpty() {
 		expr.parameterResults[2], err = expr.parameterExecutor[2].Eval(proc, batches, falseBranch)
 		if err != nil {
 			return err
@@ -1366,17 +1366,14 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 
 // EvalJSONStringElt evaluates the selector first and masks each value subtree.
 // Only overload 1 has this JSON-aware, selected-consumer execution contract.
-func (expr *FunctionExpressionExecutor) EvalJSONStringElt(proc *process.Process, batches []*batch.Batch, selectList []bool) error {
+func (expr *FunctionExpressionExecutor) EvalJSONStringElt(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) error {
 	index, err := expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
 	}
 	expr.parameterResults[0] = index
 	rowCount := expressionRowCount(batches)
-	if len(expr.selectList1) < rowCount {
-		expr.selectList1 = make([]bool, rowCount)
-	}
-	selected := expr.selectList1[:rowCount]
+	selected := &expr.branchRows
 	var signedIndex vector.FunctionParameterWrapper[int64]
 	var unsignedIndex vector.FunctionParameterWrapper[uint64]
 	switch index.GetType().Oid {
@@ -1386,18 +1383,24 @@ func (expr *FunctionExpressionExecutor) EvalJSONStringElt(proc *process.Process,
 		unsignedIndex = vector.GenerateFunctionFixedTypeParameter[uint64](index)
 	}
 	for branch := 1; branch < len(expr.parameterExecutor); branch++ {
-		for row := range selected {
-			selected[row] = false
-			if selectList != nil && !selectList[row] {
+		if err = selected.InitWithSize(int64(rowCount), expr.m); err != nil {
+			return err
+		}
+		for row := 0; row < rowCount; row++ {
+			if selectList != nil && !selectList.Contains(uint64(row)) {
 				continue
 			}
+			match := false
 			switch {
 			case signedIndex != nil:
 				value, isNull := signedIndex.GetValue(uint64(row))
-				selected[row] = !isNull && value == int64(branch)
+				match = !isNull && value == int64(branch)
 			case unsignedIndex != nil:
 				value, isNull := unsignedIndex.GetValue(uint64(row))
-				selected[row] = !isNull && value == uint64(branch)
+				match = !isNull && value == uint64(branch)
+			}
+			if match {
+				selected.Add(uint64(row))
 			}
 		}
 		expr.parameterResults[branch], err = expr.parameterExecutor[branch].Eval(proc, batches, selected)
@@ -1408,13 +1411,19 @@ func (expr *FunctionExpressionExecutor) EvalJSONStringElt(proc *process.Process,
 	return nil
 }
 
-func hasSelectedRows(selectList []bool) bool {
-	for _, selected := range selectList {
-		if selected {
-			return true
+// initSelected sets b to the rows sel selects among the first rowCount rows;
+// a nil sel selects all of them. b is owned by the executor and reused.
+func (expr *FunctionExpressionExecutor) initSelected(b, sel *bitmap.Bitmap, rowCount int) error {
+	if sel == nil {
+		if err := b.InitWithSize(int64(rowCount), expr.m); err != nil {
+			return err
 		}
+		if rowCount > 0 {
+			b.AddRange(0, uint64(rowCount))
+		}
+		return nil
 	}
-	return false
+	return b.InitWith(sel, expr.m)
 }
 
 // A prepared numeric parameter can pass through a runtime CAST before the
@@ -1514,21 +1523,12 @@ func (expr *FunctionExpressionExecutor) iffNullResult(index, length int) (*vecto
 	return result, nil
 }
 
-func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (err error) {
 	rowCount := expressionRowCount(batches)
 	mode := function.CompatibilityModeFromProcess(proc)
-	if len(expr.selectList1) < rowCount {
-		expr.selectList1 = make([]bool, rowCount)
-		expr.selectList2 = make([]bool, rowCount)
-	}
-	remaining := expr.selectList1[:rowCount]
-	selectedBranch := expr.selectList2[:rowCount]
-	if selectList != nil {
-		copy(remaining, selectList)
-	} else {
-		for i := range remaining {
-			remaining[i] = true
-		}
+	remaining, selectedBranch := &expr.branchRows, &expr.branchScratch
+	if err = expr.initSelected(remaining, selectList, rowCount); err != nil {
+		return err
 	}
 	for i := 0; i < len(expr.parameterExecutor); i += 2 {
 		expr.parameterResults[i], err = expr.parameterExecutor[i].Eval(proc, batches, remaining)
@@ -1536,6 +1536,9 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			return err
 		}
 		if i != len(expr.parameterExecutor)-1 {
+			if err = selectedBranch.InitWithSize(int64(rowCount), expr.m); err != nil {
+				return err
+			}
 			if expr.parameterResults[i].GetType().Oid == types.T_json {
 				if mode != function.SQLCompatibilityMySQL {
 					// A native-mode statement never binds a JSON condition, so
@@ -1559,23 +1562,21 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 					if evalErr != nil {
 						return evalErr
 					}
-					if remaining[j] && truth {
-						remaining[j] = false
-						selectedBranch[j] = true
-					} else {
-						selectedBranch[j] = false
+					if truth && remaining.Contains(uint64(j)) {
+						remaining.Remove(uint64(j))
+						selectedBranch.Add(uint64(j))
 					}
 				}
 			} else {
 				bs := vector.GenerateFunctionFixedTypeParameter[bool](expr.parameterResults[i])
 
 				for j := 0; j < rowCount; j++ {
-					b, null := bs.GetValue(uint64(j))
-					if remaining[j] && !null && b {
-						remaining[j] = false
-						selectedBranch[j] = true
-					} else {
-						selectedBranch[j] = false
+					if !remaining.Contains(uint64(j)) {
+						continue
+					}
+					if b, null := bs.GetValue(uint64(j)); !null && b {
+						remaining.Remove(uint64(j))
+						selectedBranch.Add(uint64(j))
 					}
 				}
 			}
@@ -1588,20 +1589,11 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 	return err
 }
 
-func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
+func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (err error) {
 	rowCount := expressionRowCount(batches)
-	if len(expr.selectList1) < rowCount {
-		expr.selectList1 = make([]bool, rowCount)
-	}
-	remaining := expr.selectList1[:rowCount]
-	if selectList != nil {
-		for i := range remaining {
-			remaining[i] = i < len(selectList) && selectList[i]
-		}
-	} else {
-		for i := range remaining {
-			remaining[i] = true
-		}
+	remaining := &expr.branchRows
+	if err = expr.initSelected(remaining, selectList, rowCount); err != nil {
+		return err
 	}
 
 	for i := range expr.parameterExecutor {
@@ -1609,28 +1601,32 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		if err != nil {
 			return err
 		}
-		for row := range remaining {
-			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
-				remaining[row] = false
-			}
+		// A row stays for the next argument only while this one is NULL.
+		switch result := expr.parameterResults[i]; {
+		case result.IsConstNull():
+		case result.IsConst() || result.GetNulls().IsEmpty():
+			remaining.Clear()
+		default:
+			remaining.And(result.GetNulls().GetBitmap())
 		}
 	}
 	return nil
 }
 
-func noRowsSelected(selectList []bool, rowCount int) bool {
-	if selectList == nil {
-		return false
+// selectedRowCount returns how many of the first rowCount rows sel selects;
+// a nil sel selects every row.
+func selectedRowCount(sel *bitmap.Bitmap, rowCount int) int {
+	if sel == nil {
+		return rowCount
 	}
-	if len(selectList) < rowCount {
-		return false
+	if sel.Len() <= int64(rowCount) {
+		return sel.Count()
 	}
-	for i := 0; i < rowCount; i++ {
-		if selectList[i] {
-			return false
-		}
-	}
-	return true
+	return sel.CountRange(0, uint64(rowCount))
+}
+
+func noRowsSelected(sel *bitmap.Bitmap, rowCount int) bool {
+	return sel != nil && selectedRowCount(sel, rowCount) == 0
 }
 
 func (expr *FunctionExpressionExecutor) makeNullResult(rowCount int) (*vector.Vector, error) {
@@ -1673,21 +1669,17 @@ func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
 func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	proc *process.Process,
 	rowCount int,
-	selectList []bool,
+	selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
-	expr.selectedRows = expr.selectedRows[:0]
-	for row := 0; row < rowCount; row++ {
-		if expr.fid == function.JSON_EXTRACT {
+	if expr.fid == function.JSON_EXTRACT {
+		for row := 0; row < rowCount; row++ {
 			if err := function.CheckJSONExtractRow(proc.Ctx, row); err != nil {
 				return nil, err
 			}
 		}
-		if selectList[row] {
-			expr.selectedRows = append(expr.selectedRows, int64(row))
-		}
 	}
 
-	selectedCount := len(expr.selectedRows)
+	selectedCount := selectedRowCount(selectList, rowCount)
 	if len(expr.selectedParameterResults) == 0 && len(expr.parameterResults) > 0 {
 		expr.selectedParameterResults = make([]*vector.Vector, len(expr.parameterResults))
 		expr.selectedParameterVectors = make([]*vector.Vector, len(expr.parameterResults))
@@ -1711,7 +1703,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			} else {
 				selected.Reset(*parameter.GetType())
 			}
-			if err := selected.Union(parameter, expr.selectedRows, expr.m); err != nil {
+			if err := selected.UnionByMask(parameter, selectList, expr.m); err != nil {
 				return nil, err
 			}
 			expr.selectedParameterResults[i] = selected
@@ -1757,31 +1749,10 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		result.SetLength(rowCount)
 		return result, nil
 	}
-	sourceData, destinationData := selectedResult.GetData(), result.GetData()
-	// Copy performs mutation admission. Amortize it only when each value
-	// avoids at least three NULL-placeholder appends; keep dense masks on
-	// the existing append loop.
-	scatterFixed := selectedCount <= rowCount/4 && runtimeType.IsFixedLen() &&
-		!selectedResult.IsConst() &&
-		!selectedResult.IsReadOnly() && !result.IsReadOnly() &&
-		cap(sourceData) > 0 && cap(destinationData) > 0 &&
-		&sourceData[:1][0] != &destinationData[:1][0]
-	if scatterFixed {
-		// Reserve for the runtime type before publishing its full logical domain.
-		// The wrapper normally already admitted this storage; refinements may
-		// change the physical result width.
-		if err := result.PreExtend(rowCount, expr.m); err != nil {
+	if !result.IsReadOnly() {
+		// Selected rows take the compact results in order; the rest are NULL.
+		if err := result.ScatterByMask(selectedResult, selectList, rowCount, expr.m); err != nil {
 			return nil, err
-		}
-		if err := result.PreExtendNulls(rowCount, expr.m); err != nil {
-			return nil, err
-		}
-		result.SetLength(rowCount)
-		result.GetNulls().AddRange(0, uint64(rowCount))
-		for compactRow, row := range expr.selectedRows {
-			if err := result.Copy(selectedResult, row, int64(compactRow), expr.m); err != nil {
-				return nil, err
-			}
 		}
 	} else {
 		if expr.selectedNullResult == nil {
@@ -1798,7 +1769,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		}
 		selectedRow := int64(0)
 		for row := 0; row < rowCount; row++ {
-			if selectList[row] {
+			if selectList.Contains(uint64(row)) {
 				if err := result.UnionOne(selectedResult, selectedRow, expr.m); err != nil {
 					return nil, err
 				}
@@ -1812,22 +1783,19 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	return result, nil
 }
 
-func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	if len(batches) == 0 {
 		batches = []*batch.Batch{batch.EmptyForConstFoldBatch}
 	}
 	rowCount := expressionRowCount(batches)
 	selectedCount := -1
 	if expr.fid == function.JSON_EXTRACT && selectList != nil && !expr.folded.canFold {
-		selectedCount = 0
 		for row := 0; row < rowCount; row++ {
 			if err := function.CheckJSONExtractRow(proc.Ctx, row); err != nil {
 				return nil, err
 			}
-			if selectList[row] {
-				selectedCount++
-			}
 		}
+		selectedCount = selectedRowCount(selectList, rowCount)
 		if selectedCount == 0 {
 			return expr.makeNullResult(rowCount)
 		}
@@ -1891,12 +1859,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 
 	if selectList != nil {
 		if selectedCount < 0 {
-			selectedCount = 0
-			for row := 0; row < rowCount; row++ {
-				if selectList[row] {
-					selectedCount++
-				}
-			}
+			selectedCount = selectedRowCount(selectList, rowCount)
 		}
 		if selectedCount < rowCount {
 			return expr.evalSelectedRows(proc, rowCount, selectList)
@@ -1914,32 +1877,12 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	if err != nil {
 		return nil, err
 	}
-	if selectList != nil && len(expr.selectList.SelectList) < rowCount {
-		expr.selectList.SelectList = make([]bool, rowCount)
-	}
-	if selectList == nil {
-		expr.selectList.AnyNull = false
-		expr.selectList.AllNull = false
-		for i := range expr.selectList.SelectList {
-			expr.selectList.SelectList[i] = true
-		}
-	} else {
-		expr.selectList.AllNull = true
-		expr.selectList.AnyNull = false
-		for i := range selectList {
-			expr.selectList.SelectList[i] = selectList[i]
-			if selectList[i] {
-				expr.selectList.AllNull = false
-			} else {
-				expr.selectList.AnyNull = true
-			}
-		}
-	}
-
+	// Every row is selected here: partial selections returned through
+	// evalSelectedRows above.
 	parameters := expr.parameterResults
 	expr.publishArgumentIsBin(expr.resultVector)
 	if err = expr.evalFn(
-		expr.semanticParameterVectors(parameters), expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
+		expr.semanticParameterVectors(parameters), expr.resultVector, proc, rowCount, &expr.allRows); err != nil {
 		return nil, err
 	}
 	// Partial selections returned through evalSelectedRows above.
@@ -1990,7 +1933,7 @@ func (expr *FunctionExpressionExecutor) semanticParameterVectors(parameters []*v
 	return views
 }
 
-func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	vec, err := expr.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err
@@ -2011,6 +1954,8 @@ func (expr *FunctionExpressionExecutor) Free() {
 		expr.resultVector = nil
 	}
 	expr.freeIffNullResults()
+	expr.branchRows.Free()
+	expr.branchScratch.Free()
 	if expr.selectedResult != nil {
 		expr.selectedResult.Free()
 		expr.selectedResult = nil
@@ -2045,7 +1990,7 @@ func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 
 	relIndex := expr.relIndex
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
@@ -2087,7 +2032,7 @@ func (expr *ColumnExpressionExecutor) getConstNullVec(
 	return expr.nullVecCache, nil
 }
 
-func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	vec, err := expr.Eval(proc, batches, nil)
 	if vec == expr.nullVecCache {
 		expr.nullVecCache = nil
@@ -2110,14 +2055,14 @@ func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
 	return true
 }
 
-func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	if !expr.noNeedToSetLength {
 		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
 }
 
-func (expr *FixedVectorExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (expr *FixedVectorExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	vec, err := expr.Eval(proc, batches, nil)
 	if err != nil {
 		return nil, err

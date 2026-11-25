@@ -83,7 +83,7 @@ func TestDateNumericSerializedExecution(t *testing.T) {
 				require.NoError(t, err)
 				defer executor.Free()
 				for _, mask := range [][]bool{nil, {false, true, true}, nil} {
-					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(mask))
 					require.NoError(t, err)
 					require.Equal(t, resultType, result.GetType().Oid)
 					var got int64

@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -107,7 +108,7 @@ func prepareDecimalTyped(e *plan.Expr, executor ExpressionExecutor) ExpressionEx
 	return &decimalTypedExecutor{root: root, left: a, right: b, op: op}
 }
 
-func (e *decimalTypedExecutor) Eval(p *process.Process, b []*batch.Batch, s []bool) (*vector.Vector, error) {
+func (e *decimalTypedExecutor) Eval(p *process.Process, b []*batch.Batch, s *bitmap.Bitmap) (*vector.Vector, error) {
 	if len(b) == 0 || s != nil {
 		return e.root.Eval(p, b, s)
 	}
@@ -135,7 +136,7 @@ func (e *decimalTypedExecutor) Eval(p *process.Process, b []*batch.Batch, s []bo
 	}
 	return out, nil
 }
-func (e *decimalTypedExecutor) EvalWithoutResultReusing(p *process.Process, b []*batch.Batch, s []bool) (*vector.Vector, error) {
+func (e *decimalTypedExecutor) EvalWithoutResultReusing(p *process.Process, b []*batch.Batch, s *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.root.EvalWithoutResultReusing(p, b, s)
 }
 func (e *decimalTypedExecutor) ResetForNextQuery() { e.root.ResetForNextQuery() }

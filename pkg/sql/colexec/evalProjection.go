@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -99,7 +100,7 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 // physical rows (physical, a PhysicalView of bat), masked to the selection,
 // so filtered-out rows are not evaluated. The result carries bat's selection
 // and borrows it: it is valid until bat changes.
-func (projection *Projection) EvalProjectionSelected(bat, physical *batch.Batch, mask []bool, proc *process.Process) (*batch.Batch, error) {
+func (projection *Projection) EvalProjectionSelected(bat, physical *batch.Batch, mask *bitmap.Bitmap, proc *process.Process) (*batch.Batch, error) {
 	if !bat.HasSelection() {
 		return projection.EvalProjection(bat, proc)
 	}

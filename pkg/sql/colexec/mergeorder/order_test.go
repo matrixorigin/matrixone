@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -71,11 +72,11 @@ type countingColumnExecutor struct {
 	calls    int
 }
 
-func (e *countingColumnExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *countingColumnExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.EvalWithoutResultReusing(nil, batches, nil)
 }
 
-func (e *countingColumnExecutor) EvalWithoutResultReusing(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *countingColumnExecutor) EvalWithoutResultReusing(_ *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	e.calls++
 	if e.calls > e.maxCalls {
 		return nil, moerr.NewInternalErrorNoCtx("order executor reevaluated spilled keys")
@@ -93,11 +94,11 @@ type negatingInt8Executor struct {
 	calls int
 }
 
-func (e *negatingInt8Executor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *negatingInt8Executor) Eval(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.EvalWithoutResultReusing(proc, batches, nil)
 }
 
-func (e *negatingInt8Executor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *negatingInt8Executor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	e.calls++
 	src := vector.MustFixedColWithTypeCheck[int8](batches[0].Vecs[e.col])
 	values := make([]int8, len(src))
@@ -116,11 +117,11 @@ type resetTrackingExecutor struct {
 	resetCalls int
 }
 
-func (e *resetTrackingExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *resetTrackingExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, nil
 }
 
-func (e *resetTrackingExecutor) EvalWithoutResultReusing(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *resetTrackingExecutor) EvalWithoutResultReusing(_ *process.Process, _ []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, nil
 }
 
@@ -131,11 +132,11 @@ func (e *resetTrackingExecutor) TypeName() string   { return "resetTrackingExecu
 
 type failingExecutor struct{}
 
-func (e *failingExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *failingExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, moerr.NewInternalErrorNoCtx("test executor failure")
 }
 
-func (e *failingExecutor) EvalWithoutResultReusing(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *failingExecutor) EvalWithoutResultReusing(_ *process.Process, _ []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, moerr.NewInternalErrorNoCtx("test executor failure")
 }
 

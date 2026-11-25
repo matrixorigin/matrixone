@@ -132,20 +132,6 @@ func (bat *Batch) CompactInto(dst *Batch, mp *mpool.MPool) error {
 	return nil
 }
 
-// SelectionMask sets mask[physical] to true for every selected row and
-// returns it sized to the physical row count; nil means every row.
-func (bat *Batch) SelectionMask(mask []bool) []bool {
-	if bat.selection == nil {
-		return nil
-	}
-	return SelectionMaskOf(bat.selection, bat.physicalRows, mask)
-}
-
-// SelectionMaskOf expands sel into a per-row mask of length physicalRows.
-func SelectionMaskOf(sel *bitmap.Bitmap, physicalRows int, mask []bool) []bool {
-	return sel.ExpandBools(mask, physicalRows)
-}
-
 func errSelectedBatch() error {
 	return moerr.NewInternalErrorNoCtx("selected batch reached a boundary that requires compacted rows")
 }

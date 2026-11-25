@@ -83,10 +83,10 @@ func TestDecimalMulSubExpression(t *testing.T) {
 		}
 		input.SetRowCount(3)
 		for _, mask := range [][]bool{nil, {false, true, true}} {
-			got, err := ex.Eval(p, []*batch.Batch{input}, mask)
+			got, err := ex.Eval(p, []*batch.Batch{input}, boolSelection(mask))
 			require.NoError(t, err)
 			snapshot := append([]types.Decimal128(nil), vector.MustFixedColNoTypeCheck[types.Decimal128](got)...)
-			want, err := fused.root.Eval(p, []*batch.Batch{input}, mask)
+			want, err := fused.root.Eval(p, []*batch.Batch{input}, boolSelection(mask))
 			require.NoError(t, err)
 			require.Equal(t, *want.GetType(), *got.GetType())
 			require.Equal(t, vector.MustFixedColNoTypeCheck[types.Decimal128](want), snapshot)
@@ -129,7 +129,7 @@ func TestDecimalMulSubGenericParentsAndWritableOwnership(t *testing.T) {
 		require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, p.Mp()))
 	}
 	input.SetRowCount(3)
-	got, err := ex.Eval(p, []*batch.Batch{input}, []bool{false, true, true})
+	got, err := ex.Eval(p, []*batch.Batch{input}, boolSelection([]bool{false, true, true}))
 	require.NoError(t, err)
 	require.Equal(t, "360.0000", vector.GetFixedAtNoTypeCheck[types.Decimal128](got, 1).Format(4))
 	require.Equal(t, "480.0000", vector.GetFixedAtNoTypeCheck[types.Decimal128](got, 2).Format(4))
@@ -269,12 +269,12 @@ func BenchmarkDecimalMulSubExpression(b *testing.B) {
 				if strings.HasPrefix(mode, "generic") {
 					executor = root
 				}
-				_, err = executor.Eval(p, []*batch.Batch{input}, mask)
+				_, err = executor.Eval(p, []*batch.Batch{input}, boolSelection(mask))
 				require.NoError(b, err)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					_, err = executor.Eval(p, []*batch.Batch{input}, mask)
+					_, err = executor.Eval(p, []*batch.Batch{input}, boolSelection(mask))
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -334,14 +334,14 @@ func TestDecimalMulSubRepresentations(t *testing.T) {
 				input.Vecs[1].GetNulls().Add(1)
 			}
 			for _, mask := range [][]bool{nil, {false, true, true}, {false, false, false}} {
-				got, err := ex.Eval(p, []*batch.Batch{input}, mask)
+				got, err := ex.Eval(p, []*batch.Batch{input}, boolSelection(mask))
 				require.NoError(t, err)
 				values := append([]types.Decimal128(nil), vector.MustFixedColNoTypeCheck[types.Decimal128](got)...)
 				isNull := make([]bool, 3)
 				for i := range isNull {
 					isNull[i] = got.IsNull(uint64(i))
 				}
-				want, err := root.Eval(p, []*batch.Batch{input}, mask)
+				want, err := root.Eval(p, []*batch.Batch{input}, boolSelection(mask))
 				require.NoError(t, err)
 				for i := range isNull {
 					require.Equal(t, want.IsNull(uint64(i)), isNull[i])

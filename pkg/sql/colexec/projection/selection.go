@@ -26,7 +26,6 @@ import (
 // (borrowed, valid until the next Call) or is compacted into compact.
 type selectionState struct {
 	output   bool
-	mask     []bool
 	physical batch.Batch
 	compact  *batch.Batch
 }

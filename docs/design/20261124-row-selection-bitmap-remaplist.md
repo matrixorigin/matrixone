@@ -95,6 +95,24 @@ This relies on `InitWithSize` reusing capacity, which #33144 provides, and on th
 
 **Expression evaluation.** `ExpressionExecutor.Eval` takes the bitmap instead of `[]bool`. `evalSelectedRows` gathers its inputs by mask and scatters the result by mask. The per-call copy into `FunctionSelectList` goes away, and the list becomes nil or a single "all rows" flag.
 
+PR 4 does this:
+
+- `Eval(proc, batches, sel *bitmap.Bitmap)`. nil selects every row. Filter, projection and table_scan pass their selection bitmap directly, so `Batch.SelectionMask` (the `ExpandBools` conversion) is gone.
+- IF, CASE, COALESCE and JSON ELT build each branch's rows in two executor-owned bitmaps (`branchRows`, `branchScratch`), allocated from the executor's pool on first use and freed in `Free`. COALESCE narrows the remaining rows with each argument's NULL bitmap a word at a time.
+- `evalSelectedRows` gathers with `UnionByMask` and scatters with the new `Vector.ScatterByMask`, its inverse: fixed-width values a word at a time, unselected rows marked NULL a run at a time.
+- A kernel is called only when every row is selected, so it receives one constant all-rows `FunctionSelectList` instead of a per-call copy. It stays non-nil: some kernels choose their path by whether the list is nil.
+
+`BenchmarkEvalSelection` (one 8192-row batch, µs, PR 3 → PR 4):
+
+| expression | all rows | half | tenth |
+| --- | --- | --- | --- |
+| `a + b` | 52.9 → 52.8 | 218 → 84 | 29.7 → 19.7 |
+| `IF(a > 0, a + b, b)` | 317 → 207 | 573 → 257 | 94 → 63 |
+| `CASE` with two conditions | 294 → 202 | 750 → 282 | 144 → 73 |
+| `COALESCE(a, b)` | 84 → 40 | 250 → 55 | 38 → 14 |
+
+The kernels' own masking paths (`FunctionSelectList` with `AnyNull`) are no longer reached from the executor. Removing them is part of PR 6.
+
 ## Design: RemapList
 
 Every list that reorders or repeats rows does one of five things, and the first four fit one type.

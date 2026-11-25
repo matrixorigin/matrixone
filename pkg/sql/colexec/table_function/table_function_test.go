@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -528,11 +529,11 @@ func (s *stubTableFunctionState) free(*TableFunction, *process.Process, bool, er
 	s.freeCount++
 }
 
-func (s *stubExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+func (s *stubExpressionExecutor) Eval(*process.Process, []*batch.Batch, *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, nil
 }
 
-func (s *stubExpressionExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+func (s *stubExpressionExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, nil
 }
 

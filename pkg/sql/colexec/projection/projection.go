@@ -17,6 +17,7 @@ package projection
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -104,12 +105,11 @@ func (projection *Projection) Call(proc *process.Process) (vm.CallResult, error)
 	// keep shuffleIDX unchanged
 	projection.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 	batches := []*batch.Batch{bat}
-	var mask []bool
+	var mask *bitmap.Bitmap
 	if bat.HasSelection() {
 		bat.PhysicalView(&projection.ctr.selection.physical)
 		batches[0] = &projection.ctr.selection.physical
-		projection.ctr.selection.mask = bat.SelectionMask(projection.ctr.selection.mask)
-		mask = projection.ctr.selection.mask
+		mask = bat.Selection()
 	}
 
 	if projection.ValuesWarningRow != 0 {

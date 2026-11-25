@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -244,7 +245,7 @@ type jsonNumericAsofObservedExecutor struct {
 	before func() error
 }
 
-func (e *jsonNumericAsofObservedExecutor) Eval(proc *process.Process, bats []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (e *jsonNumericAsofObservedExecutor) Eval(proc *process.Process, bats []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	if err := e.before(); err != nil {
 		return nil, err
 	}

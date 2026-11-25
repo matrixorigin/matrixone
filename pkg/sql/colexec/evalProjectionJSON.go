@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -341,14 +342,14 @@ func (b *jsonProjectionBinding) extract(ctx context.Context, row int, raw []byte
 	return out, exists, nil
 }
 
-func (b *jsonProjectionBinding) eval(proc *process.Process, arguments []*vector.Vector, result vector.FunctionResultWrapper, rows int, mask []bool) error {
+func (b *jsonProjectionBinding) eval(proc *process.Process, arguments []*vector.Vector, result vector.FunctionResultWrapper, rows int, mask *bitmap.Bitmap) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	input := vector.GenerateFunctionStrParameter(arguments[0])
 	for row := 0; row < rows; row++ {
 		if err := function.CheckJSONExtractRow(proc.Ctx, row); err != nil {
 			return err
 		}
-		if mask != nil && !mask[row] {
+		if mask != nil && !mask.Contains(uint64(row)) {
 			if err := rs.AppendByteJson(bytejson.ByteJson{}, true); err != nil {
 				return err
 			}

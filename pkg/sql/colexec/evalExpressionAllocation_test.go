@@ -101,7 +101,7 @@ func TestAccountedFixedMaskedResultNullsAndReuse(t *testing.T) {
 				{true, true, true, true, true, true, true, true, true, true, true, true},
 				{false, false, true, false, false, false, false, false, false, false, false, true},
 			} {
-				result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(mask))
 				require.NoError(t, err)
 				if index == 0 {
 					require.Nil(t, executor.(*FunctionExpressionExecutor).selectedNullResult,
@@ -180,7 +180,7 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 	input.SetRowCount(4)
 	defer input.Clean(proc.Mp())
 	result, err := executor.Eval(
-		proc, []*batch.Batch{input}, []bool{true, false, true, false},
+		proc, []*batch.Batch{input}, boolSelection([]bool{true, false, true, false}),
 	)
 	require.NoError(t, err)
 	require.Equal(t, []string{"aaAA-", "", "ccCC-", ""}, vector.InefficientMustStrCol(result))
@@ -204,10 +204,10 @@ func TestAccountedExpressionTreeCoversNestedAndSelectedResults(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(large.Vecs[0], []byte(strings.Repeat("A", 2048)), false, proc.Mp()))
 	}
 	large.SetRowCount(4)
-	_, err = executor.Eval(proc, []*batch.Batch{large}, []bool{true, false, true, false})
+	_, err = executor.Eval(proc, []*batch.Batch{large}, boolSelection([]bool{true, false, true, false}))
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.LessOrEqual(t, account.Snapshot().Used, account.Snapshot().Limit)
-	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false})
+	result, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, false, true, false}))
 	require.NoError(t, err)
 	require.Equal(t, []string{"aaAA-", "", "ccCC-", ""}, vector.InefficientMustStrCol(result))
 

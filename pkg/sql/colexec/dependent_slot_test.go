@@ -51,7 +51,7 @@ func TestDependentSlotPreservesNativeValueAndLifetime(t *testing.T) {
 	require.Equal(t, []byte{0, 255, 1}, result.GetBytesAt(0))
 	// An empty selection neither reads a retired slot nor preserves stale bytes.
 	child.CloseDependentProcess()
-	result, err = executor.Eval(child, []*batch.Batch{input}, []bool{false, false, false})
+	result, err = executor.Eval(child, []*batch.Batch{input}, boolSelection([]bool{false, false, false}))
 	require.NoError(t, err)
 	require.True(t, result.IsConstNull())
 	_, err = executor.Eval(child, []*batch.Batch{input}, nil)

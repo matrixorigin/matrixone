@@ -137,7 +137,7 @@ func TestCRC32JSONTextSelectionAndExecutorReuse(t *testing.T) {
 	exec, err := colexec.NewExpressionExecutor(proc, bound)
 	require.NoError(t, err)
 	defer exec.Free()
-	result, err := exec.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+	result, err := exec.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, true}))
 	require.NoError(t, err)
 	require.True(t, result.IsNull(0))
 	require.Equal(t, uint64(4128176518), vector.GetFixedAtNoTypeCheck[uint64](result, 1))

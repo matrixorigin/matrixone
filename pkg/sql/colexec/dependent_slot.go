@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,7 +47,7 @@ func newDependentSlotExecutor(proc *process.Process, slot *plan.CorrelationSlot,
 	return &dependentSlotExecutor{slot: *slot, value: value, mp: mp}, nil
 }
 
-func (e *dependentSlotExecutor) Eval(proc *process.Process, batches []*batch.Batch, selection []bool) (*vector.Vector, error) {
+func (e *dependentSlotExecutor) Eval(proc *process.Process, batches []*batch.Batch, selection *bitmap.Bitmap) (*vector.Vector, error) {
 	if e.value == nil {
 		return nil, moerr.NewInternalErrorNoCtx("dependent slot executor is closed")
 	}
@@ -73,7 +74,7 @@ func (e *dependentSlotExecutor) Eval(proc *process.Process, batches []*batch.Bat
 	}
 	return e.value, nil
 }
-func (e *dependentSlotExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selection []bool) (*vector.Vector, error) {
+func (e *dependentSlotExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selection *bitmap.Bitmap) (*vector.Vector, error) {
 	value, err := e.Eval(proc, batches, selection)
 	if err != nil {
 		return nil, err

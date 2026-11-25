@@ -36,7 +36,7 @@ func TestBatchSelection(t *testing.T) {
 	}
 	bat.SetRowCount(6)
 	require.False(t, bat.HasSelection())
-	require.Nil(t, bat.SelectionMask(nil))
+	require.Nil(t, bat.Selection())
 
 	var selection bitmap.Bitmap
 
@@ -48,7 +48,7 @@ func TestBatchSelection(t *testing.T) {
 	require.True(t, bat.HasSelection())
 	require.Equal(t, 3, bat.RowCount())
 	require.Equal(t, 6, bat.PhysicalRowCount())
-	require.Equal(t, []bool{false, true, false, false, true, true}, bat.SelectionMask(nil))
+	require.Equal(t, []bool{false, true, false, false, true, true}, bat.Selection().ExpandBools(nil, 6))
 
 	var view Batch
 	bat.PhysicalView(&view)

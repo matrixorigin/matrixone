@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,7 +47,7 @@ type rowWindowExpressionExecutor struct {
 	mp       *mpool.MPool
 }
 
-func (e *rowWindowExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *rowWindowExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	if len(batches) != 1 || batches[0] == nil {
 		return nil, moerr.NewInternalErrorNoCtx("row-window probe received an invalid input")
 	}
@@ -61,7 +62,7 @@ func (e *rowWindowExpressionExecutor) Eval(proc *process.Process, batches []*bat
 	return e.result, err
 }
 
-func (e *rowWindowExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (e *rowWindowExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.Eval(proc, batches, selectList)
 }
 

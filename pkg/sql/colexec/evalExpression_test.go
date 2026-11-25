@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -106,7 +107,7 @@ func evalTestTypedParameter(t *testing.T, proc *process.Process, executor Expres
 		typedBatch.SetRowCount(1)
 		proc.SetTypedPrepareParams(typedBatch)
 	}
-	result, err := executor.Eval(proc, batches, mask)
+	result, err := executor.Eval(proc, batches, boolSelection(mask))
 	require.NoError(t, err)
 	return result
 }
@@ -134,12 +135,12 @@ type failingExpressionExecutor struct {
 	calls int
 }
 
-func (e *failingExpressionExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *failingExpressionExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	e.calls++
 	return nil, moerr.NewInvalidInputNoCtx("unexpected branch evaluation")
 }
 
-func (e *failingExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (e *failingExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.Eval(proc, batches, selectList)
 }
 
@@ -153,7 +154,7 @@ type failAfterFirstExpressionExecutor struct {
 	delegate ExpressionExecutor
 }
 
-func (e *failAfterFirstExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (e *failAfterFirstExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	e.calls++
 	if e.calls > 1 {
 		return nil, moerr.NewInvalidInputNoCtx("inactive branch evaluated after batch shrink")
@@ -161,7 +162,7 @@ func (e *failAfterFirstExpressionExecutor) Eval(proc *process.Process, batches [
 	return e.delegate.Eval(proc, batches, selectList)
 }
 
-func (e *failAfterFirstExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (e *failAfterFirstExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.Eval(proc, batches, selectList)
 }
 
@@ -246,7 +247,7 @@ func TestMemoExpressionLifecycle(t *testing.T) {
 				t.Cleanup(executor.Free)
 			}
 			require.NoError(t, err)
-			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, true, true})
+			result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, true, true}))
 			require.NoError(t, err)
 			require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *result.GetType())
 			require.Equal(t, 3, result.Length())
@@ -736,7 +737,7 @@ func TestStringSourceConsumerTotality(t *testing.T) {
 			if name == "numeric" {
 				// A column reference is never a binary literal: its bytes
 				// convert as numeric text on the selected-row path too.
-				result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false, true})
+				result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, false, true, false, true}))
 				require.NoError(t, err)
 				for row := range sources {
 					require.Equal(t, row%2 != 0, result.IsNull(uint64(row)))
@@ -824,8 +825,8 @@ func TestFlowControlBranchPreparation(t *testing.T) {
 		expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
 
 		require.NoError(t, expr.EvalIff(proc, []*batch.Batch{bat}, nil))
-		require.Equal(t, []bool{true, false}, expr.selectList1)
-		require.Equal(t, []bool{false, true}, expr.selectList2)
+		require.Equal(t, []bool{true, false}, expr.branchRows.ExpandBools(nil, 2))
+		require.Equal(t, []bool{false, true}, expr.branchScratch.ExpandBools(nil, 2))
 
 		proc.GetSessionInfo().MatrixOneNativeMode = true
 		err = expr.EvalIff(proc, []*batch.Batch{bat}, nil)
@@ -1103,7 +1104,7 @@ func TestParamExpressionExecutorLifecycle(t *testing.T) {
 				if tc.masked {
 					selected = []bool{false}
 				}
-				result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, selected)
+				result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, boolSelection(selected))
 				if tc.fail {
 					require.Error(t, err)
 					return
@@ -1217,13 +1218,13 @@ func TestPrivateIntegerArgumentScalarLifecycle(t *testing.T) {
 		t.Cleanup(func() { bat.Clean(proc.Mp()) })
 		bat.SetRowCount(3)
 		for row, mask := range [][]bool{{true, false, false}, {false, true, false}} {
-			got, err := executor.Eval(proc, []*batch.Batch{bat}, mask)
+			got, err := executor.Eval(proc, []*batch.Batch{bat}, boolSelection(mask))
 			require.NoError(t, err)
 			checkScalar(t, got, row, 2)
 		}
 		value = math.Inf(1)
 		before := calls
-		got, err := executor.Eval(proc, []*batch.Batch{bat}, []bool{false, false, false})
+		got, err := executor.Eval(proc, []*batch.Batch{bat}, boolSelection([]bool{false, false, false}))
 		require.NoError(t, err)
 		require.Equal(t, before, calls)
 		require.Equal(t, types.Type{Oid: types.T_int64, Size: 8}, *got.GetType())
@@ -1233,10 +1234,10 @@ func TestPrivateIntegerArgumentScalarLifecycle(t *testing.T) {
 		}
 		for _, mask := range [][]bool{{false, true, false}, {true, true, true}} {
 			value = math.Inf(1)
-			_, err = executor.Eval(proc, []*batch.Batch{bat}, mask)
+			_, err = executor.Eval(proc, []*batch.Batch{bat}, boolSelection(mask))
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
 			value = float64(2.5)
-			got, err = executor.Eval(proc, []*batch.Batch{bat}, mask)
+			got, err = executor.Eval(proc, []*batch.Batch{bat}, boolSelection(mask))
 			require.NoError(t, err)
 			checkScalar(t, got, 1, 2)
 		}
@@ -1410,7 +1411,7 @@ func TestFlowControlPreparedParamOnPartialSelection(t *testing.T) {
 			require.NoError(t, err)
 			defer executor.Free()
 
-			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false})
+			result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, false}))
 			require.NoError(t, err)
 			require.Equal(t, "5.5", result.GetStringAt(0))
 			require.True(t, result.IsNull(1))
@@ -1420,7 +1421,7 @@ func TestFlowControlPreparedParamOnPartialSelection(t *testing.T) {
 			require.Equal(t, "5.5", result.GetStringAt(0))
 			require.Equal(t, "5.5", result.GetStringAt(1))
 
-			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+			result, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, true}))
 			require.NoError(t, err)
 			require.Equal(t, "5.5", result.GetStringAt(1))
 			require.True(t, result.IsNull(0))
@@ -1466,7 +1467,7 @@ func TestFlowControlPreparedParamOnPartialSelection(t *testing.T) {
 	require.True(t, maskedResult.IsNull(0))
 	require.Equal(t, "5.5", maskedResult.GetStringAt(1))
 	maskedResult, err = maskedBranchExecutor.Eval(
-		proc, []*batch.Batch{maskedBranchInput}, []bool{true, false})
+		proc, []*batch.Batch{maskedBranchInput}, boolSelection([]bool{true, false}))
 	require.NoError(t, err)
 	require.Equal(t, 2, maskedResult.Length())
 
@@ -1653,7 +1654,7 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 
 			executor.ResetForNextQuery()
 			resolveErr = moerr.NewInternalErrorNoCtx("variable resolver failed")
-			masked, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false})
+			masked, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, false}))
 			require.NoError(t, err)
 			require.True(t, masked.IsConstNull())
 			_, err = executor.Eval(proc, []*batch.Batch{input}, nil)
@@ -1978,7 +1979,7 @@ func TestVariableExpressionLifecycle(t *testing.T) {
 		failStage, calls = -2, [2]int{}
 		input := batch.New(nil)
 		input.SetRowCount(3)
-		masked, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false})
+		masked, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, false, false}))
 		require.NoError(t, err)
 		require.Equal(t, [2]int{}, calls)
 		require.Equal(t, expectedText, *masked.GetType())
@@ -2296,7 +2297,7 @@ func TestFunctionExpressionLifecycle(t *testing.T) {
 				t.Cleanup(executor.Free)
 			}
 			require.NoError(t, err)
-			result, err := executor.Eval(proc, []*batch.Batch{large}, []bool{true, true, false})
+			result, err := executor.Eval(proc, []*batch.Batch{large}, boolSelection([]bool{true, true, false}))
 			require.NoError(t, err)
 			require.Equal(t, types.Type{Oid: types.T_float64, Size: 8}, *result.GetType())
 			require.Equal(t, 3, result.Length())
@@ -2304,7 +2305,7 @@ func TestFunctionExpressionLifecycle(t *testing.T) {
 			require.False(t, result.IsNull(0))
 			require.False(t, result.IsNull(1))
 			require.True(t, result.IsNull(2))
-			result, err = executor.Eval(proc, []*batch.Batch{small}, []bool{true, false})
+			result, err = executor.Eval(proc, []*batch.Batch{small}, boolSelection([]bool{true, false}))
 			require.NoError(t, err)
 			require.Equal(t, types.Type{Oid: types.T_float64, Size: 8}, *result.GetType())
 			require.Equal(t, 2, result.Length())
@@ -2419,7 +2420,7 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		require.NoError(t, err)
 		defer executor.Free()
 
-		result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false})
+		result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, false}))
 		require.NoError(t, err)
 		require.Equal(t, 2, result.Length())
 		require.True(t, result.GetNulls().Contains(0))
@@ -2461,22 +2462,22 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		require.NoError(t, err)
 		defer executor.Free()
 
-		result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, true, false, false})
+		result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, true, false, false}))
 		require.NoError(t, err)
 		require.False(t, result.IsNull(0))
 		require.Equal(t, int64(42), vector.MustFixedColWithTypeCheck[int64](result)[0])
 		require.True(t, result.IsNull(1))
 
-		result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true, false, true})
+		result, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, true, false, true}))
 		require.NoError(t, err)
 		require.True(t, result.IsNull(1))
 		require.True(t, result.IsNull(3))
-		result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false, false})
+		result, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, false, false, false}))
 		require.NoError(t, err)
 		for row := 0; row < 4; row++ {
 			require.True(t, result.IsNull(uint64(row)))
 		}
-		_, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, true, false})
+		_, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, false, true, false}))
 		require.Error(t, err)
 	})
 
@@ -2758,7 +2759,7 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 			require.NoError(t, err)
 			defer executor.Free()
 
-			result, err := executor.Eval(proc, []*batch.Batch{input}, selectList)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(selectList))
 			require.NoError(t, err)
 			return *result.GetType()
 		}
@@ -2783,7 +2784,7 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 			}, nil)
 			defer input.Clean(proc.Mp())
 
-			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+			result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, true}))
 			require.NoError(t, err)
 			require.Equal(t, int32(scale), result.GetType().Scale)
 		}
@@ -2962,7 +2963,7 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 				require.NoError(t, err)
 				defer executor.Free()
 				for _, mask := range [][]bool{nil, {true, false, true, true, true, true}, {false, false, false, false, false, false}, nil} {
-					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(mask))
 					require.NoError(t, err)
 					for i, v := range values {
 						wantNull := i == 5 || mask != nil && !mask[i]
@@ -3067,7 +3068,7 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 				}, nil)
 				defer input.Clean(proc.Mp())
 
-				result, err := executor.Eval(proc, []*batch.Batch{input}, test.parentSelect)
+				result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(test.parentSelect))
 				require.NoError(t, err)
 				values := vector.MustFixedColWithTypeCheck[int64](result)
 				require.Len(t, values, len(test.want))
@@ -3410,7 +3411,7 @@ func TestPreparedCastLifecycle(t *testing.T) {
 				}
 			}
 
-			result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false, false})
+			result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, false, false, false}))
 			require.NoError(t, err)
 			require.Equal(t, types.T_float64.ToType(), *result.GetType())
 			require.Equal(t, 4, result.Length())
@@ -3419,7 +3420,7 @@ func TestPreparedCastLifecycle(t *testing.T) {
 				require.True(t, result.IsNull(uint64(row)))
 			}
 
-			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true, false})
+			result, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, false, true, false}))
 			require.NoError(t, err)
 			require.True(t, result.IsConst())
 			require.Equal(t, 1, warnings.warningCount)
@@ -3487,7 +3488,7 @@ func TestExplicitDecimalCastRowDiagnostics(t *testing.T) {
 						require.NoError(t, err)
 						return evalTestTypedParameter(t, proc, executor, "1000", false, typed, []*batch.Batch{input}, mask)
 					}
-					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(mask))
 					require.NoError(t, err)
 					return result
 				}
@@ -3882,7 +3883,7 @@ func TestDecimalCastLifecycle(t *testing.T) {
 			t.Cleanup(executor.Free)
 		}
 		require.NoError(t, err)
-		result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, false, true})
+		result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, false, true}))
 		require.NoError(t, err)
 		require.Equal(t, targetType, *result.GetType())
 		require.Equal(t, 3, result.Length())
@@ -3985,7 +3986,7 @@ func TestRegisteredXorSelectionAndFolding(t *testing.T) {
 			{[]bool{false, false, false}, []bool{true, true, true}},
 			{nil, []bool{false, false, true}},
 		} {
-			result, err := executor.Eval(proc, []*batch.Batch{input}, tc.selection)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(tc.selection))
 			require.NoError(t, err)
 			require.Equal(t, types.T_bool.ToType(), *result.GetType())
 			require.Equal(t, 3, result.Length())
@@ -4007,7 +4008,7 @@ func TestRegisteredXorSelectionAndFolding(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(executor.Free)
 		for _, selection := range [][]bool{nil, {false, true, false}} {
-			result, err := executor.Eval(proc, []*batch.Batch{input}, selection)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(selection))
 			require.NoError(t, err)
 			require.Equal(t, types.T_bool.ToType(), *result.GetType())
 			require.Equal(t, 3, result.Length())
@@ -4061,7 +4062,7 @@ func TestJSONStringEltEvaluatesOnlySelectedSubtree(t *testing.T) {
 	require.Error(t, err)
 	executor.ResetForNextQuery()
 	// The masked bad row cannot poison a valid selected row.
-	result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
+	result, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, true}))
 	require.NoError(t, err)
 	require.True(t, result.IsNull(0))
 	require.Equal(t, `{"q": 3}`, string(result.GetBytesAt(1)))
@@ -4137,7 +4138,7 @@ func TestBitCountDiagnosticFolding(t *testing.T) {
 			for _, mask := range [][]bool{nil, {false, true, true}, {false, false, false}} {
 				executor.ResetForNextQuery()
 				session.warningCount = 0
-				result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(mask))
 				require.NoError(t, err)
 				require.Equal(t, 3, result.Length())
 				selected := 0
@@ -4197,7 +4198,7 @@ func TestDiagnosticScalarValues(t *testing.T) {
 			// Reuse without reset: a scalar output must never cache away effects.
 			for _, mask := range [][]bool{nil, {false, true, true}, nil, {false, false, false}} {
 				sink.warningCount = 0
-				got, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				got, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(mask))
 				require.NoError(t, err)
 				selected := 0
 				for row := 0; row < 3; row++ {

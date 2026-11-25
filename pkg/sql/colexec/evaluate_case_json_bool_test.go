@@ -17,6 +17,7 @@ package colexec
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,13 +35,13 @@ type captureSelectExecutor struct {
 	seen   [][]bool
 }
 
-func (c *captureSelectExecutor) Eval(_ *process.Process, _ []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	c.seen = append(c.seen, append([]bool(nil), selectList...))
+func (c *captureSelectExecutor) Eval(_ *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
+	c.seen = append(c.seen, selectionBools(selectList, batches))
 	return c.result, nil
 }
 
-func (c *captureSelectExecutor) EvalWithoutResultReusing(_ *process.Process, _ []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	c.seen = append(c.seen, append([]bool(nil), selectList...))
+func (c *captureSelectExecutor) EvalWithoutResultReusing(_ *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
+	c.seen = append(c.seen, selectionBools(selectList, batches))
 	return c.result, nil
 }
 
@@ -96,11 +97,13 @@ func TestEvalCaseJsonConditionInDomain(t *testing.T) {
 	thenExec := &captureSelectExecutor{result: thenVec}
 	elseExec := &captureSelectExecutor{result: elseVec}
 	expr := &FunctionExpressionExecutor{
+		m:                 proc.Mp(),
 		parameterResults:  make([]*vector.Vector, 3),
 		parameterExecutor: []ExpressionExecutor{condExec, thenExec, elseExec},
 	}
 	expr.fid = function.CASE
 	expr.resultType = types.T_int64.ToType()
+	t.Cleanup(func() { expr.branchRows.Free(); expr.branchScratch.Free() })
 
 	input := batch.NewWithSize(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
@@ -155,11 +158,13 @@ func TestEvalCaseJsonConditionNeverDecodesJsonAsBoolInNativeMode(t *testing.T) {
 	thenExec := &captureSelectExecutor{result: thenVec}
 	elseExec := &captureSelectExecutor{result: elseVec}
 	expr := &FunctionExpressionExecutor{
+		m:                 proc.Mp(),
 		parameterResults:  make([]*vector.Vector, 3),
 		parameterExecutor: []ExpressionExecutor{condExec, thenExec, elseExec},
 	}
 	expr.fid = function.CASE
 	expr.resultType = types.T_int64.ToType()
+	t.Cleanup(func() { expr.branchRows.Free(); expr.branchScratch.Free() })
 
 	input := batch.NewWithSize(1)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })

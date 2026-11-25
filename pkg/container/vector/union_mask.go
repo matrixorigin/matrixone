@@ -18,6 +18,7 @@ import (
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -254,5 +255,162 @@ func (v *Vector) unionVarlenByMask(w *Vector, mask *bitmap.Bitmap, rows, cnt int
 		}
 	}
 	v.setLengthAfterExtend(out)
+	return nil
+}
+
+// ScatterByMask appends rows rows to v, the inverse of UnionByMask: the rows
+// set in mask take the values of w in order, one row of w per set bit (or
+// copies of w's one value when w is constant), and every other row is NULL.
+// mask must cover rows [0, rows); bits at or above rows are ignored.
+func (v *Vector) ScatterByMask(w *Vector, mask *bitmap.Bitmap, rows int, mp *mpool.MPool) error {
+	if rows == 0 {
+		return nil
+	}
+	cnt := mask.CountRange(0, uint64(rows))
+	if !v.typ.IsFixedLen() {
+		return v.scatterRowsByMask(w, mask, rows, cnt, mp)
+	}
+	if v.typ.TypeSize() != w.typ.TypeSize() {
+		return moerr.NewInternalErrorNoCtxf("scatter by mask: %s values into %s", w.typ.String(), v.typ.String())
+	}
+	if !w.IsConst() && w.Length() < cnt {
+		return moerr.NewInternalErrorNoCtxf("scatter by mask: %d rows for %d selected", w.Length(), cnt)
+	}
+	if v.dataAliases(w) {
+		return v.withClonedSource(w, 0, w.Length(), mp, func(source *Vector) error {
+			return v.ScatterByMask(source, mask, rows, mp)
+		})
+	}
+	if err := extendWithBitmaps(v, rows, mp, true); err != nil {
+		return err
+	}
+	oldLen := v.length
+	if w.IsConstNull() {
+		// Every row is NULL, selected or not.
+		v.nsp.AddRange(uint64(oldLen), uint64(oldLen+rows))
+		v.setLengthAfterExtend(oldLen + rows)
+		return nil
+	}
+	switch v.typ.TypeSize() {
+	case 1:
+		scatterFixedByMask[uint8](v, w, mask, rows, oldLen)
+	case 2:
+		scatterFixedByMask[uint16](v, w, mask, rows, oldLen)
+	case 4:
+		scatterFixedByMask[uint32](v, w, mask, rows, oldLen)
+	case 8:
+		scatterFixedByMask[uint64](v, w, mask, rows, oldLen)
+	case 16:
+		scatterFixedByMask[types.Decimal128](v, w, mask, rows, oldLen)
+	default:
+		tlen := v.typ.TypeSize()
+		in := 0
+		forSelectedRows(mask, rows, func(r int) {
+			src := in
+			if w.IsConst() {
+				src = 0
+			}
+			copy(v.data[(oldLen+r)*tlen:(oldLen+r+1)*tlen], w.data[src*tlen:(src+1)*tlen])
+			in++
+		})
+	}
+	scatterNullsByMask(v, w, mask, rows, oldLen)
+	v.setLengthAfterExtend(oldLen + rows)
+	return nil
+}
+
+// scatterFixedByMask writes the i-th value of w to the row of v at out plus the
+// position of the i-th set bit of mask. Unselected slots keep stale bytes; the
+// NULL bitmap hides them.
+func scatterFixedByMask[T any](v, w *Vector, mask *bitmap.Bitmap, rows, out int) {
+	dst := toSliceOfLengthNoTypeCheck[T](v, out+rows)[out:]
+	if w.IsConst() {
+		value := toSliceOfLengthNoTypeCheck[T](w, 1)[0]
+		forSelectedRows(mask, rows, func(r int) { dst[r] = value })
+		return
+	}
+	src := toSliceOfLengthNoTypeCheck[T](w, w.Length())
+	words := maskWords(mask, rows)
+	mr := newMaskReader(mask)
+	in := 0
+	for i := 0; i < words; i++ {
+		word := selectedWord(&mr, i, words, rows)
+		base := 64 * i
+		if word == ^uint64(0) {
+			in += copy(dst[base:base+64], src[in:in+64])
+			continue
+		}
+		for word != 0 {
+			dst[base+bits.TrailingZeros64(word)] = src[in]
+			in++
+			word &= word - 1
+		}
+	}
+}
+
+// scatterNullsByMask marks the rows of v from out on that mask leaves
+// unselected, a run at a time, and the selected rows whose value in w is NULL.
+func scatterNullsByMask(v, w *Vector, mask *bitmap.Bitmap, rows, out int) {
+	words := (rows + 63) / 64
+	mr := newMaskReader(mask)
+	have := mask.NumWords()
+	for i := 0; i < words; i++ {
+		var word uint64
+		if i < have {
+			word = mr.word(i)
+		}
+		valid := ^uint64(0)
+		if i == words-1 && rows%64 != 0 {
+			valid >>= uint(64 - rows%64)
+		}
+		// Runs of unselected rows.
+		for u := ^word & valid; u != 0; {
+			start := bits.TrailingZeros64(u)
+			n := bits.TrailingZeros64(^(u >> uint(start)))
+			v.nsp.AddRange(uint64(out+64*i+start), uint64(out+64*i+start+n))
+			if start+n == 64 {
+				break
+			}
+			u &= ^uint64(0) << uint(start+n)
+		}
+	}
+	if w.IsConst() || w.nsp.IsEmpty() {
+		return
+	}
+	in := 0
+	forSelectedRows(mask, rows, func(r int) {
+		if w.nsp.Contains(uint64(in)) {
+			v.nsp.Add(uint64(out + r))
+		}
+		in++
+	})
+}
+
+// scatterRowsByMask is ScatterByMask a row at a time, for variable-length
+// types.
+func (v *Vector) scatterRowsByMask(w *Vector, mask *bitmap.Bitmap, rows, cnt int, mp *mpool.MPool) error {
+	if !w.IsConst() && w.Length() < cnt {
+		return moerr.NewInternalErrorNoCtxf("scatter by mask: %d rows for %d selected", w.Length(), cnt)
+	}
+	if err := v.PreExtend(rows, mp); err != nil {
+		return err
+	}
+	in := int64(0)
+	for r := 0; r < rows; r++ {
+		var err error
+		if mask.Contains(uint64(r)) {
+			src := in
+			if w.IsConst() {
+				src = 0
+			}
+			err = v.UnionOne(w, src, mp)
+			in++
+		} else {
+			err = AppendBytes(v, nil, true, mp)
+		}
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }

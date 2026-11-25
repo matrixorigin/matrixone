@@ -17,6 +17,7 @@ package colexec_test
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,7 +53,11 @@ func TestIntegerWideningBoundExpressionSelection(t *testing.T) {
 	bat.SetRowCount(3)
 	before, err := bat.Vecs[0].MarshalBinary()
 	require.NoError(t, err)
-	for _, selection := range [][]bool{nil, {true, true, true}, nil} {
+	var all bitmap.Bitmap
+	require.NoError(t, all.InitWithSize(3, proc.Mp()))
+	all.AddRange(0, 3)
+	t.Cleanup(all.Free)
+	for _, selection := range []*bitmap.Bitmap{nil, &all, nil} {
 		result, err := executor.Eval(proc, []*batch.Batch{bat}, selection)
 		require.NoError(t, err)
 		require.Equal(t, []int64{16384, 0, 16129}, vector.MustFixedColWithTypeCheck[int64](result))

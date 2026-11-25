@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -66,7 +67,7 @@ type countingLoopJoinExpression struct {
 func (e *countingLoopJoinExpression) Eval(
 	proc *process.Process,
 	batches []*batch.Batch,
-	selectList []bool,
+	selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	e.evals++
 	return e.delegate.Eval(proc, batches, selectList)
@@ -75,7 +76,7 @@ func (e *countingLoopJoinExpression) Eval(
 func (e *countingLoopJoinExpression) EvalWithoutResultReusing(
 	proc *process.Process,
 	batches []*batch.Batch,
-	selectList []bool,
+	selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	e.evals++
 	return e.delegate.EvalWithoutResultReusing(proc, batches, selectList)
@@ -98,7 +99,7 @@ type failingLoopJoinExpression struct {
 func (e *failingLoopJoinExpression) Eval(
 	proc *process.Process,
 	batches []*batch.Batch,
-	selectList []bool,
+	selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	e.evals++
 	if e.evals == e.failAt {
@@ -110,7 +111,7 @@ func (e *failingLoopJoinExpression) Eval(
 func (e *failingLoopJoinExpression) EvalWithoutResultReusing(
 	proc *process.Process,
 	batches []*batch.Batch,
-	selectList []bool,
+	selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	return e.delegate.EvalWithoutResultReusing(proc, batches, selectList)
 }

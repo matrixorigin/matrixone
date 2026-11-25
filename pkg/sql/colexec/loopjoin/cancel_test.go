@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,7 +39,7 @@ type cancelingLoopJoinExpression struct {
 }
 
 func (e *cancelingLoopJoinExpression) Eval(
-	proc *process.Process, batches []*batch.Batch, selectList []bool,
+	proc *process.Process, batches []*batch.Batch, selectList *bitmap.Bitmap,
 ) (*vector.Vector, error) {
 	e.evals++
 	vec, err := e.ExpressionExecutor.Eval(proc, batches, selectList)

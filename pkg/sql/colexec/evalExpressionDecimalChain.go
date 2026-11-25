@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -264,7 +265,7 @@ func (e *decimalChainExecutor) operand(ref, start int) (*vector.Vector, int) {
 	}
 	return v.value, start
 }
-func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, selected []bool) (out *vector.Vector, err error) {
+func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, selected *bitmap.Bitmap) (out *vector.Vector, err error) {
 	if len(b) == 0 || selected != nil {
 		return e.root.Eval(p, b, selected)
 	}
@@ -326,7 +327,7 @@ func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, select
 	}
 	return out, nil
 }
-func (e *decimalChainExecutor) EvalWithoutResultReusing(p *process.Process, b []*batch.Batch, s []bool) (*vector.Vector, error) {
+func (e *decimalChainExecutor) EvalWithoutResultReusing(p *process.Process, b []*batch.Batch, s *bitmap.Bitmap) (*vector.Vector, error) {
 	return e.root.EvalWithoutResultReusing(p, b, s)
 }
 func (e *decimalChainExecutor) ResetForNextQuery() { e.releaseScratch(); e.root.ResetForNextQuery() }

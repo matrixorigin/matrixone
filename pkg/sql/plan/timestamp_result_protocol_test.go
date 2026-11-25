@@ -84,7 +84,7 @@ func TestTimestampSerializedResultContracts(t *testing.T) {
 					require.NoError(t, err)
 					defer exec.Free()
 					for _, mask := range [][]bool{nil, {false, true}, nil} {
-						result, err := exec.Eval(proc, []*batch.Batch{input}, mask)
+						result, err := exec.Eval(proc, []*batch.Batch{input}, boolSelection(mask))
 						require.NoError(t, err)
 						require.True(t, result.IsNull(1))
 						if mask != nil {

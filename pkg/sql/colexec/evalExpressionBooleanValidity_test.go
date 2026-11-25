@@ -74,7 +74,7 @@ func TestBooleanNonNullPreparationTransitions(t *testing.T) {
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			checkValues(result)
-			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true, true, true})
+			result, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, true, true, true}))
 			require.NoError(t, err)
 			require.True(t, result.IsNull(0), "masked rows must keep normal NULL admission")
 			for row := 1; row < 4; row++ {

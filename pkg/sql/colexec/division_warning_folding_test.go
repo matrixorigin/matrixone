@@ -79,7 +79,7 @@ func TestDivisionWarningRuntimeFolding(t *testing.T) {
 						{3, []bool{false, false, false}, 0},
 					} {
 						input.SetRowCount(evaluation.rows)
-						result, err := executor.Eval(proc, []*batch.Batch{input}, evaluation.mask)
+						result, err := executor.Eval(proc, []*batch.Batch{input}, boolSelection(evaluation.mask))
 						require.NoError(t, err)
 						require.Equal(t, evaluation.rows, result.Length())
 						if mode != "" {

@@ -174,18 +174,18 @@ func TestORLikeSubjectReuseInvocation(t *testing.T) {
 			}
 			second := orLikeTestBatch(t, proc, []string{"ordinary", "RETRY"}, nil)
 			mask := []bool{true, false}
-			result, err = executor.Eval(proc, []*batch.Batch{second}, mask)
+			result, err = executor.Eval(proc, []*batch.Batch{second}, boolSelection(mask))
 			require.NoError(t, err)
 			require.Equal(t, 2, calls)
 			require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 			require.True(t, result.IsNull(1))
 			mask[0], mask[1] = false, true
-			result, err = executor.Eval(proc, []*batch.Batch{second}, mask)
+			result, err = executor.Eval(proc, []*batch.Batch{second}, boolSelection(mask))
 			require.NoError(t, err)
 			require.Equal(t, 3, calls)
 			require.True(t, result.IsNull(0))
 			require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
-			_, err = executor.Eval(proc, []*batch.Batch{second}, []bool{false, false})
+			_, err = executor.Eval(proc, []*batch.Batch{second}, boolSelection([]bool{false, false}))
 			require.NoError(t, err)
 			require.Equal(t, 3, calls, "inactive invocation must not demand the subject")
 			_, err = DebugShowExecutor(executor)
@@ -683,7 +683,7 @@ func TestORLikeSubjectReuseAccountFailureAndBuildRollback(t *testing.T) {
 	canonical := root.states[0].executor.(*FunctionExpressionExecutor)
 	small := orLikeTestBatch(t, proc, []string{"ERROR", "ordinary"}, nil)
 	large := orLikeTestBatch(t, proc, []string{strings.Repeat("A", 2048), strings.Repeat("A", 2048), strings.Repeat("A", 2048), strings.Repeat("A", 2048)}, nil)
-	_, err = executor.Eval(proc, []*batch.Batch{large}, []bool{true, false, true, false})
+	_, err = executor.Eval(proc, []*batch.Batch{large}, boolSelection([]bool{true, false, true, false}))
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Nil(t, root.states[0].cached)
 	result, err := executor.Eval(proc, []*batch.Batch{small}, nil)
@@ -878,13 +878,13 @@ func BenchmarkORLikeSubjectReuseBatch(b *testing.B) {
 							mask[i] = i%2 == 0
 						}
 					}
-					_, err = executor.Eval(proc, batches, mask)
+					_, err = executor.Eval(proc, batches, boolSelection(mask))
 					require.NoError(b, err)
 					b.ReportAllocs()
 					b.SetBytes(int64(len(values[0]) * rows))
 					b.ResetTimer()
 					for range b.N {
-						if _, err := executor.Eval(proc, batches, mask); err != nil {
+						if _, err := executor.Eval(proc, batches, boolSelection(mask)); err != nil {
 							b.Fatal(err)
 						}
 					}

@@ -64,7 +64,7 @@ func TestDeferredJoinConstantDiagnosticActivationAndReuse(t *testing.T) {
 	// build key is reused for several batches.
 	executor.ResetForNextQuery()
 	owner.Prepare(proc)
-	_, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false})
+	_, err = executor.Eval(proc, []*batch.Batch{input}, boolSelection([]bool{false, false, false}))
 	require.NoError(t, err)
 	require.Zero(t, session.warningCount)
 	_, err = executor.Eval(proc, []*batch.Batch{input}, nil)

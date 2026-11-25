@@ -142,15 +142,9 @@ func printFunctionExpressionExecutor(buffer *bytes.Buffer, expr *FunctionExpress
 	buffer.WriteString(fmt.Sprintf("%s    needFoldingCheck: %v\n", prefix, expr.folded.needFoldingCheck))
 	buffer.WriteString(fmt.Sprintf("%s    canFold: %v\n", prefix, expr.folded.canFold))
 
-	// selectList1, selectList2
-	buffer.WriteString(fmt.Sprintf("%s  selectList1: %v\n", prefix, expr.selectList1))
-	buffer.WriteString(fmt.Sprintf("%s  selectList2: %v\n", prefix, expr.selectList2))
-
-	// selectList
-	buffer.WriteString(fmt.Sprintf("%s  selectList\n", prefix))
-	buffer.WriteString(fmt.Sprintf("%s    anynull: %v\n", prefix, expr.selectList.AnyNull))
-	buffer.WriteString(fmt.Sprintf("%s    allnull: %v\n", prefix, expr.selectList.AllNull))
-	buffer.WriteString(fmt.Sprintf("%s    selectList: %v\n", prefix, expr.selectList.SelectList))
+	// branch selections of IFF, CASE, COALESCE and JSON ELT
+	buffer.WriteString(fmt.Sprintf("%s  branchRows: %s\n", prefix, expr.branchRows.String()))
+	buffer.WriteString(fmt.Sprintf("%s  branchScratch: %s\n", prefix, expr.branchScratch.String()))
 
 	// resultVector
 	if expr.resultVector != nil {

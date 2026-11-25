@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1565,10 +1566,10 @@ func TestFreeThenBuildRepopulatesCache(t *testing.T) {
 // failingExecutor always returns an error; used to simulate BuildHashmap failure paths.
 type failingExecutor struct{}
 
-func (f failingExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+func (f failingExecutor) Eval(*process.Process, []*batch.Batch, *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, moerr.NewInternalErrorNoCtx("exec failed")
 }
-func (f failingExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+func (f failingExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, moerr.NewInternalErrorNoCtx("exec failed")
 }
 func (f failingExecutor) IsColumnExpr() bool { return false }

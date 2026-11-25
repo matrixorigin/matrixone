@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -467,11 +468,11 @@ func TestTopFreesExecutorsAfterPartialOrderEvalError(t *testing.T) {
 
 type topErrorExpressionExecutor struct{ err error }
 
-func (e topErrorExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+func (e topErrorExpressionExecutor) Eval(*process.Process, []*batch.Batch, *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, e.err
 }
 
-func (e topErrorExpressionExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+func (e topErrorExpressionExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, *bitmap.Bitmap) (*vector.Vector, error) {
 	return nil, e.err
 }
 

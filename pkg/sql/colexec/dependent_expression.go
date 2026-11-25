@@ -18,6 +18,7 @@ import (
 	"context"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -502,7 +503,7 @@ type dependentValueReference struct {
 	null  *vector.Vector
 }
 
-func (r *dependentValueReference) Eval(_ *process.Process, _ []*batch.Batch, mask []bool) (*vector.Vector, error) {
+func (r *dependentValueReference) Eval(_ *process.Process, _ []*batch.Batch, mask *bitmap.Bitmap) (*vector.Vector, error) {
 	if noRowsSelected(mask, 1) {
 		return r.null, nil
 	}
@@ -512,7 +513,7 @@ func (r *dependentValueReference) Eval(_ *process.Process, _ []*batch.Batch, mas
 	}
 	return cell.value, nil
 }
-func (r *dependentValueReference) EvalWithoutResultReusing(proc *process.Process, b []*batch.Batch, mask []bool) (*vector.Vector, error) {
+func (r *dependentValueReference) EvalWithoutResultReusing(proc *process.Process, b []*batch.Batch, mask *bitmap.Bitmap) (*vector.Vector, error) {
 	return r.Eval(proc, b, mask)
 }
 func (r *dependentValueReference) Free() {

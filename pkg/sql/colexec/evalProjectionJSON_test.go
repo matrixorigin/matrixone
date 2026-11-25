@@ -147,7 +147,7 @@ func TestProjectionJSONSharesSelectedPhysicalRows(t *testing.T) {
 	require.NoError(t, projection.PrepareProjection(proc))
 	defer projection.FreeProjection(proc)
 	count := CountProjectionJSONParses(t, projection.jsonFrame)
-	mask := input.SelectionMask(nil)
+	mask := input.Selection()
 	var physical batch.Batch
 	eval := func(docs []string) (*batch.Batch, error) {
 		input.Vecs[0].ResetWithSameType()
@@ -260,7 +260,7 @@ func TestProjectionJSONSharedGuardHonorsPhysicalMask(t *testing.T) {
 	frame.Begin(input)
 	defer frame.End()
 	for i, want := range []string{"10", "20"} {
-		vec, err := executors[i].Eval(proc, []*batch.Batch{input}, []bool{true, true, false, true})
+		vec, err := executors[i].Eval(proc, []*batch.Batch{input}, boolSelection([]bool{true, true, false, true}))
 		require.NoError(t, err)
 		require.Equal(t, want, types.DecodeJson(vec.GetBytesAt(0)).String())
 		require.True(t, vec.IsNull(1))

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,7 +43,7 @@ type retryStringExpression struct {
 	calls, rows int
 }
 
-func (e *retryStringExpression) Eval(proc *process.Process, inputs []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (e *retryStringExpression) Eval(proc *process.Process, inputs []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	if e.borrowed {
 		e.calls++
 		result, err := e.ExpressionExecutor.Eval(proc, inputs, selectList)
@@ -92,7 +93,7 @@ type retryIntExpression struct {
 	calls, rows int
 }
 
-func (e *retryIntExpression) Eval(proc *process.Process, inputs []*batch.Batch, _ []bool) (*vector.Vector, error) {
+func (e *retryIntExpression) Eval(proc *process.Process, inputs []*batch.Batch, _ *bitmap.Bitmap) (*vector.Vector, error) {
 	if e.vec != nil {
 		e.vec.Free(e.mp)
 	}
@@ -376,7 +377,7 @@ type armAfterSecondEvaluation struct {
 	calls      int
 }
 
-func (e *armAfterSecondEvaluation) Eval(proc *process.Process, inputs []*batch.Batch, selected []bool) (*vector.Vector, error) {
+func (e *armAfterSecondEvaluation) Eval(proc *process.Process, inputs []*batch.Batch, selected *bitmap.Bitmap) (*vector.Vector, error) {
 	result, err := e.ExpressionExecutor.Eval(proc, inputs, selected)
 	e.calls++
 	if err == nil && e.calls == 2 {
@@ -450,7 +451,7 @@ type failOnceRetryExpression struct {
 	failAt int
 }
 
-func (e *failOnceRetryExpression) Eval(proc *process.Process, inputs []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+func (e *failOnceRetryExpression) Eval(proc *process.Process, inputs []*batch.Batch, selectList *bitmap.Bitmap) (*vector.Vector, error) {
 	e.calls++
 	if e.calls == e.failAt {
 		return nil, mpool.ErrAllocationAccountCapacity
