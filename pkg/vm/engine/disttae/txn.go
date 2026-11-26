@@ -2887,7 +2887,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	// The workers only read their sources and persist objects. Their capacity
 	// reservations use the existing per-object ledger. Workspace recording and
 	// source retirement are serial and remain under the transaction lock.
-	prepare := func(candidate *spill) {
+	prepare := func(ctx context.Context, candidate *spill) {
 		defer func() {
 			if failure := recover(); failure != nil {
 				candidate.err = moerr.ConvertPanicError(ctx, failure)
@@ -2956,14 +2956,30 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	var publishErr error
 	writeGroup := func(group []spill) {
 		prepareRegion := gotrace.StartRegion(ctx, "txn spill prepare files")
+		var prepareErr error
 		if len(group) == 1 {
-			prepare(&group[0])
+			prepare(ctx, &group[0])
+			prepareErr = group[0].err
 		} else {
+			prepareCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			var firstFailure sync.Once
 			var workers sync.WaitGroup
 			for i := range group {
-				workers.Go(func() { prepare(&group[i]) })
+				workers.Go(func() {
+					prepare(prepareCtx, &group[i])
+					if err := group[i].err; err != nil {
+						firstFailure.Do(func() {
+							// Record before cancellation can wake an earlier peer.
+							prepareErr = err
+							cancel()
+						})
+					}
+				})
 			}
 			workers.Wait()
+			// Successful writers retain a live context through publication;
+			// failed writers have all joined before their resources are reclaimed.
 		}
 		prepareRegion.End()
 		defer gotrace.StartRegion(ctx, "txn spill record files").End()
@@ -2975,12 +2991,12 @@ func (txn *Transaction) dumpInsertBatchLocked(
 				abandon(&group[i])
 			}
 		}()
+		if prepareErr != nil {
+			publishErr = prepareErr
+			return
+		}
 		for i := range group {
 			candidate := &group[i]
-			if candidate.err != nil {
-				publishErr = candidate.err
-				return
-			}
 			table, key := candidate.table, candidate.key
 			publishErr = txn.writeFileLockedWithAutoIncrEpochKnown(
 				INSERT, table.accountId, table.db.databaseId, table.tableId,

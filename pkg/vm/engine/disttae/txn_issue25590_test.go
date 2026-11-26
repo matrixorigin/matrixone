@@ -1201,78 +1201,130 @@ func TestIssue25590InsertDumpSyncFailurePartialPublication(t *testing.T) {
 }
 
 func TestCommitWorkspaceSpillKeepsOwnershipOnPartialFailure(t *testing.T) {
-	colexec.NewServer("")
-	txn := newTransactionWithActivePKTableForTest(t, "pk")
-	issue25590InitDumpableFixture(t, txn)
-	addSecondIssue25590DumpTable(t, txn)
-	txn.engine.fillDefaults()
-	txn.commitWorkspaceThreshold = 0
-	failFS := issue25590SwapProcSharedFS(t, txn)
-	txn.engine.fs = failFS
-	pool, err := ants.NewPool(GCPoolSize)
-	require.NoError(t, err)
-	t.Cleanup(pool.Release)
-	require.NoError(t, txn.engine.ResetGCWorkerPool(pool))
+	for _, mode := range []string{"successful writers", "peer finishes", "peer needs cancellation", "caller cancellation"} {
+		t.Run(mode, func(t *testing.T) {
+			colexec.NewServer("")
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			issue25590InitDumpableFixture(t, txn)
+			addSecondIssue25590DumpTable(t, txn)
+			txn.engine.fillDefaults()
+			txn.commitWorkspaceThreshold = 0
+			failFS := issue25590SwapProcSharedFS(t, txn)
+			txn.engine.fs = failFS
+			pool, err := ants.NewPool(GCPoolSize)
+			require.NoError(t, err)
+			t.Cleanup(pool.Release)
+			require.NoError(t, txn.engine.ResetGCWorkerPool(pool))
+			rollback := sync.OnceFunc(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cancel()
+				require.NoError(t, txn.Rollback(cleanupCtx))
+			})
+			t.Cleanup(rollback)
 
-	first := issue25590AppendInsertEntry(t, txn, 1, 2)
-	second := newIssue25590InsertBatchWithPKsForTest(t, txn, []int64{7})
-	appendWorkspaceEntryForTest(t, txn, Entry{
-		typ: INSERT, accountId: 1, databaseId: issue25590DBID, tableId: secondIssue25590TableID,
-		databaseName: "db", tableName: "tbl2", bat: second,
-	})
+			first := issue25590AppendInsertEntry(t, txn, 1, 2)
+			second := newIssue25590InsertBatchWithPKsForTest(t, txn, []int64{7})
+			appendWorkspaceEntryForTest(t, txn, Entry{
+				typ: INSERT, accountId: 1, databaseId: issue25590DBID, tableId: secondIssue25590TableID,
+				databaseName: "db", tableName: "tbl2", bat: second,
+			})
 
-	// Both table writers must reach the store before either can return.
-	// Fail one write after it lands so its physical object must be collected.
-	var began atomic.Int32
-	together := make(chan struct{})
-	failFS.writeHook = func(ctx context.Context) error {
-		if began.Add(1) == 2 {
-			close(together)
-		}
-		select {
-		case <-together:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	failFS.armPostPersistFailure(func() bool { return true })
-	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
-	defer cancel()
-	txn.Lock()
-	err = txn.dumpBatchLocked(ctx, -1)
-	txn.Unlock()
-	require.ErrorContains(t, err, "post-persist fs write failure")
-
-	files := failFS.persistedSnapshot()
-	orphans := make(map[string]bool)
-	for _, pending := range txn.pendingObjectCleanup {
-		orphans[pending.name] = true
-	}
-	require.True(t, orphans[failFS.failedAtName()])
-	for _, name := range files {
-		require.True(t, orphans[name] || txn.hasRecordedUnpublishedObjectName(name), name)
-	}
-	for _, write := range txn.writes {
-		if write.fileName == "" {
-			if write.tableId == issue25590TableID {
-				require.Same(t, first, write.bat)
+			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+			defer cancel()
+			ctx, cancelCaller := context.WithCancelCause(ctx)
+			defer cancelCaller(nil)
+			// Both table writers must reach the store before either can return.
+			// A failing write lands first so its physical object must be collected.
+			var began atomic.Int32
+			together := make(chan struct{})
+			failFS.writeHook = func(ctx context.Context) error {
+				arrival := began.Add(1)
+				if arrival == 2 {
+					close(together)
+					if mode == "caller cancellation" {
+						cancelCaller(errors.New("caller requested stop"))
+					}
+				}
+				select {
+				case <-together:
+					if mode == "caller cancellation" || mode == "peer needs cancellation" && arrival == 2 {
+						<-ctx.Done()
+						return ctx.Err()
+					}
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			failedWrite := mode == "peer finishes" || mode == "peer needs cancellation"
+			if failedWrite {
+				failFS.armPostPersistFailure(func() bool { return true })
+			}
+			done := make(chan error, 1)
+			go func() {
+				txn.Lock()
+				err := txn.dumpBatchLocked(ctx, -1)
+				txn.Unlock()
+				done <- err
+			}()
+			guard := time.NewTimer(4 * time.Second)
+			defer guard.Stop()
+			select {
+			case err = <-done:
+			case <-guard.C:
+				// Release and join even on the old implementation so the failure
+				// cannot strand a worker or its transaction lock in the test suite.
+				cancel()
+				<-done
+				t.Fatal("a failed writer did not cancel and join the blocked peer")
+			}
+			if mode == "caller cancellation" {
+				require.ErrorIs(t, err, context.Canceled)
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
 			} else {
-				require.Same(t, second, write.bat)
+				require.NoError(t, ctx.Err(), "spilling must not cancel the caller")
 			}
-		}
-	}
-	require.NoError(t, txn.checkWorkspaceAccountingLocked())
+			if failedWrite {
+				require.ErrorContains(t, err, "post-persist fs write failure")
+			} else if mode == "successful writers" {
+				require.NoError(t, err)
+			}
 
-	require.NoError(t, txn.Rollback(ctx))
-	require.Eventually(t, func() bool {
-		for _, name := range files {
-			if _, err := failFS.StatFile(t.Context(), name); !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				return false
+			files := failFS.persistedSnapshot()
+			orphans := make(map[string]bool)
+			for _, pending := range txn.pendingObjectCleanup {
+				orphans[pending.name] = true
 			}
-		}
-		return true
-	}, 8*time.Second, 10*time.Millisecond)
+			if failedWrite {
+				require.True(t, orphans[failFS.failedAtName()])
+			} else if mode == "successful writers" {
+				require.Empty(t, orphans)
+			}
+			for _, name := range files {
+				require.True(t, orphans[name] || txn.hasRecordedUnpublishedObjectName(name), name)
+			}
+			for _, write := range txn.writes {
+				if write.fileName == "" {
+					if write.tableId == issue25590TableID {
+						require.Same(t, first, write.bat)
+					} else {
+						require.Same(t, second, write.bat)
+					}
+				}
+			}
+			require.NoError(t, txn.checkWorkspaceAccountingLocked())
+
+			rollback()
+			require.Eventually(t, func() bool {
+				for _, name := range files {
+					if _, err := failFS.StatFile(t.Context(), name); !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+						return false
+					}
+				}
+				return true
+			}, 8*time.Second, 10*time.Millisecond)
+		})
+	}
 }
 
 // TestIssue25590DeleteDumpFailureRetainsEveryStagedSource pins the same
