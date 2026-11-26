@@ -1351,13 +1351,15 @@ func (f *memoryPrefetchObject) waitFor(ctx context.Context, end int64) ([]byte, 
 type prefetchObjects struct {
 	mu sync.Mutex
 	m  map[string][]prefetchObject
-	// bytes is the size of the buffers of the runs under way or still held by reads;
+	// bytes is the size of the buffers of the flights under way or still held by reads;
 	// freed, when set, is closed once it shrinks.
 	bytes int64
 	// background is the part of bytes charged by background flights.
 	background int64
 	freed      freedSignal
-	closed     bool
+	// streamBytes is the size of the buffers of the memory-backed streams open.
+	streamBytes int64
+	closed      bool
 	// downloads counts the downloads of file fills in flight.
 	downloads downloadCount
 	// waiting are the prefetch objects of runs waiting for their resources.

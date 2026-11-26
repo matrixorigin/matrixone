@@ -169,7 +169,7 @@ Where caller code meets object storage:
 
 | Caller code | How it runs with no room held |
 |---|---|
-| reads a stream (`ReadCloserForRead`) | The stream is a fill read in one request into memory or the file service's own temporary file, by the fill's backing rule; the caller reads it as bytes arrive. |
+| reads a stream (`ReadCloserForRead`) | The stream is read in one request into memory, when its bytes fit the stream memory bound, or into the file service's own temporary file; the caller reads it as bytes arrive. |
 | receives bytes (`WriterForRead`, `ToCacheData`) | The range is read first; the caller's writer or decoder runs after the request ends. |
 | supplies a write (`ReaderForWrite`) | Each part is read from the caller into a buffer first; then one request writes it. |
 | handles listed entries (`List`) | One request per page; entries are handed to the caller between pages. |
@@ -244,17 +244,20 @@ startup removes them as stale cache. The cache refills them on use.
 
 ## Bounds and ownership of resources
 
-Memory-backed fills count against the flight memory budget, file-backed fills against the
-disk cache, waiting background fills against the queue's byte bound, and every
-object-storage request against the governor's room. Each bound is charged in one place,
-because there is one kind of fill and one way to open a connection.
+Memory-backed fills count against the flight memory budget, memory-backed streams against
+the stream memory bound, file-backed fills against the disk cache, waiting background
+fills against the queue's byte bound, and every object-storage request against the
+governor's room. Each bound is charged in one place, because there is one kind of fill and
+one way to open a connection.
 
 The flight memory budget (decision 2026-11-26):
 
-- The buffers of memory-backed fills and streams under way never exceed the budget.
-- A fill, or a stream, is memory-backed only when it is at most the memory limit and its
-  buffer fits its class's share of the budget: all of it for foreground, half of it for
-  background. Otherwise it is file-backed.
+- Only fills charge the budget, and a fill frees its buffer when its download ends and
+  the reads copying from it have copied; no caller code runs while a buffer is held.
+- The buffers of memory-backed fills under way never exceed the budget.
+- A fill is memory-backed only when it is at most the memory limit and its buffer fits its
+  class's share of the budget: all of it for foreground, half of it for background.
+  Otherwise it is file-backed.
 - A buffer is taken only when it fits: with the buffers under way within the budget and,
   for a background buffer, with the background buffers within half of it while no
   foreground flight waits for a buffer.
@@ -264,10 +267,20 @@ The flight memory budget (decision 2026-11-26):
 - Making a fill foreground moves its buffer from the background charge to the foreground
   charge.
 
+The stream memory bound (decision 2026-11-26):
+
+- A stream frees its buffer only when its caller closes it, so streams never charge the
+  flight budget. Their buffers are charged to a bound of their own, the same size as the
+  flight budget.
+- A stream is memory-backed only when it is at most the memory limit, its size is known,
+  and its buffer fits the bound when it opens; otherwise it reads into its temporary file.
+  Nothing waits for stream memory.
+- Peak memory of fills and streams is the flight budget plus the stream memory bound.
+
 No wait holds a resource another wait needs: a waiting fill holds nothing, a started fill
 takes its buffer, file and registration before it asks for room, a request that holds room
-waits only for object storage, and a read waits only for a fill, a buffer or room, none of
-which waits for a read.
+waits only for object storage, and a read waits only for a fill, a fill's buffer or room,
+none of which waits for a read or for caller code.
 
 ## Alternatives
 

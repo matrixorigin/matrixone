@@ -24,7 +24,7 @@ import (
 )
 
 // streamDownload reads a range of an object in one request on its own goroutine: into a
-// buffer when its size is known and fits the flight memory of the disk cache, otherwise
+// buffer when its size is known and fits the stream memory of the disk cache, otherwise
 // into an unlinked temporary file. Its reader reads the bytes as they arrive.
 type streamDownload struct {
 	cancel context.CancelFunc
@@ -85,9 +85,9 @@ func (s *S3FS) openStream(ctx context.Context, rr rangeRead) (*streamReader, err
 	return r, nil
 }
 
-// streamBuffer returns a buffer of size bytes charged to the flight memory of the disk
+// streamBuffer returns a buffer of size bytes charged to the stream memory of the disk
 // cache, and the function freeing it, or nil when there is no disk cache or it does not
-// fit.
+// fit. The stream memory is at most the flight budget and is apart from it.
 func (s *S3FS) streamBuffer(size int64) ([]byte, func()) {
 	d := s.diskCache
 	if d == nil || size > d.memoryPrefetchMax {
@@ -96,17 +96,17 @@ func (s *S3FS) streamBuffer(size int64) ([]byte, func()) {
 	f := &d.prefetchObjects
 	charge := flightBufSize(size)
 	f.mu.Lock()
-	if !d.fitsLocked(charge, false) {
+	if f.streamBytes+charge > d.flightBytes() {
 		f.mu.Unlock()
 		return nil, nil
 	}
-	f.bytes += charge
+	f.streamBytes += charge
 	f.mu.Unlock()
 	buf := getFlightBuf(size)
 	return buf, func() {
 		putFlightBuf(buf)
 		f.mu.Lock()
-		d.unchargeLocked(charge)
+		f.streamBytes -= charge
 		f.mu.Unlock()
 	}
 }
