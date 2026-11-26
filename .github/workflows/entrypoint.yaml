@@ -140,7 +140,7 @@ jobs:
     permissions:
       contents: read
       actions: write
-    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@cdb7337514853bc6bfdec460e7f0981eeaafd96d
+    uses: matrixorigin/CI/.github/workflows/coverage-ut-standby.yaml@354cd934e96f03c138338f580c4fde0d64ad22e8
     with:
       bvt_generation: ${{ needs.preflight.outputs.generation }}
     secrets: inherit

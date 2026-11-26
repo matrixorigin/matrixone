@@ -94,7 +94,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: matrixorigin/CI
-          ref: cdb7337514853bc6bfdec460e7f0981eeaafd96d
+          ref: 354cd934e96f03c138338f580c4fde0d64ad22e8
           path: .coverage-companion
           persist-credentials: false
           sparse-checkout: |
@@ -107,5 +107,5 @@ jobs:
         run: |
           set -euo pipefail
           git -C "$COVERAGE_COMPANION_DIR" log -1 --format='Companion checked out at %H'
-          (cd "$COVERAGE_COMPANION_DIR" && python3 -m unittest scripts.test_coverage_pr_entry scripts.test_coverage_standby)
+          (cd "$COVERAGE_COMPANION_DIR" && python3 -m unittest scripts.test_coverage_pr_entry scripts.test_coverage_standby scripts.test_coverage_cs_build_tools)
           node --test .github/ci/coverage-standby-pinned.contract.cjs
