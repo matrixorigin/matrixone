@@ -1924,7 +1924,27 @@ func TestQueryLogLsn(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+// stubCommittedMembershipFromGossip keeps routing-only fixtures focused on
+// which endpoints are queried. Real committed membership is covered by the
+// service restart and RPC tests.
+func stubCommittedMembershipFromGossip(t *testing.T) {
+	t.Helper()
+	original := getCommittedShardMembershipFn
+	t.Cleanup(func() { getCommittedShardMembershipFn = original })
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		members, ok, err := getShardMembershipFn(ctx, sid, address, shardID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, dragonboat.ErrShardNotFound
+		}
+		return members, nil
+	}
+}
+
 func TestCheckZombieReplicas_ReplicaPresent(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	// Stub getShardMembership to report that replicaID 7 is a live member of shard 3.
 	orig := getShardMembershipFn
@@ -1951,6 +1971,7 @@ func TestCheckZombieReplicas_ReplicaPresent(t *testing.T) {
 }
 
 func TestCheckZombieReplicas_ReplicaAbsent(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
@@ -1978,6 +1999,7 @@ func TestCheckZombieReplicas_ReplicaAbsent(t *testing.T) {
 }
 
 func TestCheckZombieReplicas_RPCFails(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
@@ -2002,6 +2024,7 @@ func TestCheckZombieReplicas_RPCFails(t *testing.T) {
 }
 
 func TestCheckZombieReplicas_ShardUnknown(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
@@ -2026,6 +2049,7 @@ func TestCheckZombieReplicas_ShardUnknown(t *testing.T) {
 }
 
 func TestCheckZombieReplicas_NoAddresses(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	called := false
 	orig := getShardMembershipFn
@@ -2050,214 +2074,105 @@ func TestCheckZombieReplicas_NoAddresses(t *testing.T) {
 	assert.False(t, called, "should not call getShardMembership when no address is configured")
 }
 
-func TestCheckZombieReplicas_DiscoveryOnlyUsesHAKeeperState(t *testing.T) {
+func TestCheckZombieReplicas_DiscoveryOnlyUsesCommittedMembership(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	gossipCalled := false
-	origMembership := getShardMembershipFn
-	defer func() { getShardMembershipFn = origMembership }()
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		gossipCalled = true
-		return nil, false, nil
+	originalGossip := getShardMembershipFn
+	t.Cleanup(func() { getShardMembershipFn = originalGossip })
+	getShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, bool, error) {
+		return map[uint64]string{8: "10.0.0.2:32001"}, true, nil
 	}
-	origState := getHAKeeperStateForZombieCheckFn
-	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
-	getHAKeeperStateForZombieCheckFn = func(
-		ctx context.Context,
-		sid string,
-		cfg HAKeeperClientConfig,
-	) (pb.CheckerState, error) {
-		assert.Equal(t, "uuid-1", sid)
-		assert.Equal(t, "10.0.0.100:32001", cfg.DiscoveryAddress)
-		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
-			hakeeper.DefaultHAKeeperShardID: {
-				ShardID:  hakeeper.DefaultHAKeeperShardID,
-				Epoch:    12,
-				Replicas: map[uint64]string{8: "store-2"},
-			},
-			3: {
-				ShardID:  3,
-				Epoch:    21,
-				Replicas: map[uint64]string{18: "store-2"},
-			},
-			4: {
-				ShardID:  4,
-				Epoch:    9,
-				Replicas: map[uint64]string{27: "uuid-1"},
-			},
-		}}}, nil
-	}
-
-	l := &store{cfg: Config{
-		UUID: "uuid-1",
-		HAKeeperClientConfig: HAKeeperClientConfig{
-			DiscoveryAddress: "10.0.0.100:32001",
-		},
-	}}
-	l.runtime = runtime.DefaultRuntime()
-
-	shards := []metadata.LogShard{
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: hakeeper.DefaultHAKeeperShardID},
-			ReplicaID:      7,
-		},
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
-			ReplicaID:      17,
-		},
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: 4},
-			ReplicaID:      27,
-		},
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
-			ReplicaID:      19,
-			NonVoting:      true,
-		},
-	}
-	zombies := l.checkZombieReplicas(context.Background(), shards)
-	assert.Equal(t, map[zombieKey]struct{}{
-		{shardID: hakeeper.DefaultHAKeeperShardID, replicaID: 7}: {},
-		{shardID: 3, replicaID: 17}:                              {},
-	}, zombies)
-	assert.False(t, gossipCalled,
-		"discovery-only mode must use HAKeeper state, not one proxy-selected gossip view")
-}
-
-func TestCheckZombieReplicas_PartialGossipDefersStaleHAKeeperState(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	originalMembership := getShardMembershipFn
-	defer func() { getShardMembershipFn = originalMembership }()
-	var queried []string
-	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
-		queried = append(queried, address)
-		if address == "10.0.0.1:32001" {
-			return map[uint64]string{8: "10.0.0.2:32001"}, true, nil
-		}
-		return nil, false, moerr.NewInternalErrorNoCtx("peer unavailable")
-	}
-	originalState := getHAKeeperStateForZombieCheckFn
-	defer func() { getHAKeeperStateForZombieCheckFn = originalState }()
-	stateReads := 0
-	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
-		stateReads++
-		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
-			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{8: "other"}},
-		}}}, nil
+	originalCommitted := getCommittedShardMembershipFn
+	t.Cleanup(func() { getCommittedShardMembershipFn = originalCommitted })
+	committedReads := 0
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		committedReads++
+		require.Equal(t, "10.0.0.100:32001", address)
+		return map[uint64]string{8: "store-2"}, nil
 	}
 	l := &store{cfg: Config{
-		UUID: "uuid-1",
-		HAKeeperClientConfig: HAKeeperClientConfig{
-			DiscoveryAddress: "10.0.0.100:32001",
-			ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"},
-		},
+		UUID:                 "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{DiscoveryAddress: "10.0.0.100:32001"},
 	}}
 	l.runtime = runtime.DefaultRuntime()
 	shards := []metadata.LogShard{{LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7}}
-	require.Empty(t, l.checkZombieReplicas(context.Background(), shards),
-		"an older HAKeeper report cannot prove removal after partial gossip")
-	require.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001"}, queried)
-	require.Zero(t, stateReads, "the heartbeat-fed HAKeeper view is not a freshness fence")
+	require.Contains(t, l.checkZombieReplicas(context.Background(), shards), zombieKey{shardID: 3, replicaID: 7})
+	require.Equal(t, 1, committedReads)
+}
+
+func TestCheckZombieReplicas_PartialGossipWithoutQuorumKeepsReplica(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	originalGossip := getShardMembershipFn
+	t.Cleanup(func() { getShardMembershipFn = originalGossip })
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		return map[uint64]string{8: "10.0.0.2:32001"}, true, nil
+	}
+	originalCommitted := getCommittedShardMembershipFn
+	t.Cleanup(func() { getCommittedShardMembershipFn = originalCommitted })
+	getCommittedShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, error) {
+		return nil, context.DeadlineExceeded
+	}
+	l := &store{cfg: Config{
+		UUID:                 "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"}},
+	}}
+	l.runtime = runtime.DefaultRuntime()
+	shards := []metadata.LogShard{{LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7}}
+	require.Empty(t, l.checkZombieReplicas(context.Background(), shards))
 }
 
 func TestCheckZombieReplicas_BlackholedPeerDefersWithinBudget(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	originalTimeout := zombieSelfCheckTimeout
-	defer func() { zombieSelfCheckTimeout = originalTimeout }()
+	t.Cleanup(func() { zombieSelfCheckTimeout = originalTimeout })
 	zombieSelfCheckTimeout = 200 * time.Millisecond
-	originalMembership := getShardMembershipFn
-	defer func() { getShardMembershipFn = originalMembership }()
+	originalGossip := getShardMembershipFn
+	t.Cleanup(func() { getShardMembershipFn = originalGossip })
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		if address == "10.0.0.1:32001" {
-			return map[uint64]string{8: "other"}, true, nil
+			return map[uint64]string{8: "10.0.0.2:32001"}, true, nil
 		}
-		_, ok := ctx.Deadline()
-		require.True(t, ok)
 		<-ctx.Done()
 		return nil, false, ctx.Err()
 	}
-	originalState := getHAKeeperStateForZombieCheckFn
-	defer func() { getHAKeeperStateForZombieCheckFn = originalState }()
-	stateReads := 0
-	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
-		stateReads++
-		return pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
-			3: {ShardID: 3, Epoch: 2, Replicas: map[uint64]string{8: "other"}},
-		}}}, nil
+	originalCommitted := getCommittedShardMembershipFn
+	t.Cleanup(func() { getCommittedShardMembershipFn = originalCommitted })
+	getCommittedShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, error) {
+		return nil, context.DeadlineExceeded
 	}
 	l := &store{cfg: Config{
-		UUID: "uuid-1",
-		HAKeeperClientConfig: HAKeeperClientConfig{
-			ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"},
-		},
+		UUID:                 "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{ServiceAddresses: []string{"10.0.0.1:32001", "10.0.0.2:32001"}},
 	}}
 	l.runtime = runtime.DefaultRuntime()
 	shards := []metadata.LogShard{{LogShardRecord: metadata.LogShardRecord{ShardID: 3}, ReplicaID: 7}}
 	started := time.Now()
 	require.Empty(t, l.checkZombieReplicas(context.Background(), shards))
-	require.Zero(t, stateReads)
-	require.Less(t, time.Since(started), time.Second,
-		"an isolated peer must not hold startup beyond the bounded check")
+	require.Less(t, time.Since(started), time.Second)
 }
 
 func TestCheckZombieReplicas_DiscoveryFailurePreservesColdStart(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	origTimeout := zombieSelfCheckTimeout
-	defer func() { zombieSelfCheckTimeout = origTimeout }()
-	zombieSelfCheckTimeout = 10 * time.Millisecond
-	origState := getHAKeeperStateForZombieCheckFn
-	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
-	getHAKeeperStateForZombieCheckFn = func(
-		ctx context.Context,
-		_ string,
-		_ HAKeeperClientConfig,
-	) (pb.CheckerState, error) {
-		<-ctx.Done()
-		return pb.CheckerState{}, ctx.Err()
+	originalGossip := getShardMembershipFn
+	t.Cleanup(func() { getShardMembershipFn = originalGossip })
+	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
+		return nil, false, context.DeadlineExceeded
 	}
-
+	originalCommitted := getCommittedShardMembershipFn
+	t.Cleanup(func() { getCommittedShardMembershipFn = originalCommitted })
+	getCommittedShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, error) {
+		return nil, context.DeadlineExceeded
+	}
 	l := &store{cfg: Config{
-		UUID: "uuid-1",
-		HAKeeperClientConfig: HAKeeperClientConfig{
-			DiscoveryAddress: "10.0.0.100:32001",
-		},
+		UUID:                 "uuid-1",
+		HAKeeperClientConfig: HAKeeperClientConfig{DiscoveryAddress: "10.0.0.100:32001"},
 	}}
 	l.runtime = runtime.DefaultRuntime()
-
-	shards := []metadata.LogShard{{
-		LogShardRecord: metadata.LogShardRecord{ShardID: hakeeper.DefaultHAKeeperShardID},
-		ReplicaID:      7,
-	}}
-	started := time.Now()
-	assert.Empty(t, l.checkZombieReplicas(context.Background(), shards),
-		"no HAKeeper leader is expected during a whole-cluster cold start")
-	assert.Less(t, time.Since(started), time.Second,
-		"an unavailable discovery/HAKeeper path must not block local recovery")
+	shards := []metadata.LogShard{{LogShardRecord: metadata.LogShardRecord{ShardID: hakeeper.DefaultHAKeeperShardID}, ReplicaID: 7}}
+	require.Empty(t, l.checkZombieReplicas(context.Background(), shards))
 }
 
-func TestClassifyZombiesFromHAKeeperStateRequiresInitializedShard(t *testing.T) {
-	shards := []metadata.LogShard{
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: 3},
-			ReplicaID:      7,
-		},
-		{
-			LogShardRecord: metadata.LogShardRecord{ShardID: 4},
-			ReplicaID:      8,
-		},
-	}
-	state := pb.CheckerState{LogState: pb.LogState{Shards: map[uint64]pb.LogShardInfo{
-		3: {ShardID: 3, Epoch: 0},
-	}}}
-	assert.Empty(t, classifyZombiesFromHAKeeperState(shards, state),
-		"missing and epoch-zero shards are cold-start state, not authoritative absence")
-}
-
-// TestCheckZombieReplicas_SkipsSelfAddress guards against the first pitfall
-// flagged in #24300 review: the pre-revision code probed the first configured
-// address, which may be the local logservice listener. startReplicas runs
-// before the RPC server is up, so probing self always fails. We must drop
-// self addresses before dialing.
 func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	var probed []string
 	orig := getShardMembershipFn
@@ -2265,6 +2180,9 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
 		return map[uint64]string{8: "10.0.0.2:32001", 9: "10.0.0.3:32001"}, true, nil
+	}
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		return map[uint64]string{8: "store-2", 9: "store-3"}, nil
 	}
 
 	l := &store{cfg: Config{
@@ -2284,14 +2202,15 @@ func TestCheckZombieReplicas_SkipsSelfAddress(t *testing.T) {
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
-	assert.True(t, isZombie, "two peers that agree on the absent membership classify the replica as zombie")
-	assert.Equal(t, []string{"10.0.0.2:32001", "10.0.0.3:32001"}, probed,
+	assert.True(t, isZombie, "the committed membership excludes the old replica")
+	assert.Equal(t, []string{"10.0.0.2:32001"}, probed,
 		"self address must be filtered out before dialing")
 }
 
-// An unanswered peer may be the one with a newer membership view. Continue
-// probing every address, then defer when any view is missing.
+// An unanswered seed must not prevent a later peer from supplying a committed
+// membership read.
 func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	var probed []string
 	orig := getShardMembershipFn
@@ -2309,12 +2228,11 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 		t.Fatalf("unexpected address %q", address)
 		return nil, false, nil
 	}
-	origState := getHAKeeperStateForZombieCheckFn
-	defer func() { getHAKeeperStateForZombieCheckFn = origState }()
-	stateReads := 0
-	getHAKeeperStateForZombieCheckFn = func(ctx context.Context, sid string, cfg HAKeeperClientConfig) (pb.CheckerState, error) {
-		stateReads++
-		return pb.CheckerState{}, nil
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		if address == "10.0.0.3:32001" {
+			return map[uint64]string{8: "store-3"}, nil
+		}
+		return nil, context.DeadlineExceeded
 	}
 
 	l := &store{cfg: Config{
@@ -2331,19 +2249,15 @@ func TestCheckZombieReplicas_FallsThroughAddresses(t *testing.T) {
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
-	assert.False(t, isZombie,
-		"missing peer views cannot prove removal")
+	assert.True(t, isZombie,
+		"the later peer supplies a quorum-backed absence")
 	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001", "10.0.0.3:32001"}, probed,
-		"every address must be probed; the check does not short-circuit on a single answer")
-	assert.Zero(t, stateReads, "partial gossip must not read stale HAKeeper membership")
+		"probe every seed until one committed answer succeeds")
 }
 
-// TestCheckZombieReplicas_ProbesAllAddresses protects the new unanimous-absence
-// rule: a single authoritative reply cannot be the deciding vote, so the
-// probe loop must query every reachable peer even after one of them has
-// already answered. This guards against gossip skew where an early peer has
-// not yet learned of a recent ADD/REMOVE.
-func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
+// A quorum-backed answer is sufficient; later gossip views cannot improve it.
+func TestCheckZombieReplicas_StopsAfterCommittedAnswer(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	var probed []string
 	orig := getShardMembershipFn
@@ -2351,6 +2265,9 @@ func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		probed = append(probed, address)
 		return map[uint64]string{8: "10.0.0.1:32001", 9: "10.0.0.2:32001"}, true, nil
+	}
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		return map[uint64]string{8: "store-1", 9: "store-2"}, nil
 	}
 
 	l := &store{cfg: Config{
@@ -2367,17 +2284,13 @@ func TestCheckZombieReplicas_ProbesAllAddresses(t *testing.T) {
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	assert.Contains(t, zombies, zombieKey{shardID: 3, replicaID: 7})
-	assert.Equal(t, []string{"10.0.0.1:32001", "10.0.0.2:32001", "10.0.0.3:32001"}, probed,
-		"every address must be probed even after an authoritative answer, so the "+
-			"unanimous-absence rule is provable")
+	assert.Equal(t, []string{"10.0.0.1:32001"}, probed)
 }
 
-// TestCheckZombieReplicas_DisagreeingPeersKeepReplica is the core safety
-// property against gossip skew: if even one reachable peer still lists the
-// replica as a member, we defer to that peer and treat the replica as
-// legitimate. This prevents classifying a freshly-added replica as a zombie
-// just because another peer's gossip registry has not yet observed the ADD.
-func TestCheckZombieReplicas_DisagreeingPeersKeepReplica(t *testing.T) {
+// A stale gossip view that omits a recently added voter cannot override the
+// membership committed by Raft.
+func TestCheckZombieReplicas_StaleGossipCannotOverrideCommittedMember(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
@@ -2393,6 +2306,9 @@ func TestCheckZombieReplicas_DisagreeingPeersKeepReplica(t *testing.T) {
 		t.Fatalf("unexpected address %q", address)
 		return nil, false, nil
 	}
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		return map[uint64]string{7: "store-1", 8: "store-2"}, nil
+	}
 
 	l := &store{cfg: Config{
 		UUID: "uuid-1",
@@ -2407,15 +2323,12 @@ func TestCheckZombieReplicas_DisagreeingPeersKeepReplica(t *testing.T) {
 		ReplicaID:      7,
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
-	assert.Empty(t, zombies,
-		"at least one peer still lists the replica, so it must not be classified as a zombie")
+	assert.Empty(t, zombies, "committed membership retains the voter")
 }
 
-// TestCheckZombieReplicas_UnanimousAbsenceClassifies covers the complementary
-// side of the unanimity rule: when every reachable authoritative peer agrees
-// the replica is not a member, we classify as zombie — which is the behavior
-// the fix exists to produce for the #24203 scenario.
-func TestCheckZombieReplicas_UnanimousAbsenceClassifies(t *testing.T) {
+// The committed membership excludes an old voter after a successful REMOVE.
+func TestCheckZombieReplicas_CommittedAbsenceClassifies(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	orig := getShardMembershipFn
 	defer func() { getShardMembershipFn = orig }()
@@ -2437,8 +2350,7 @@ func TestCheckZombieReplicas_UnanimousAbsenceClassifies(t *testing.T) {
 	}}
 	zombies := l.checkZombieReplicas(context.Background(), shards)
 	_, isZombie := zombies[zombieKey{shardID: 3, replicaID: 7}]
-	assert.True(t, isZombie,
-		"all reachable peers agree the replica is absent -> must be classified as zombie")
+	assert.True(t, isZombie, "the quorum-backed membership excludes the replica")
 }
 
 // TestCheckZombieReplicas_NonVotingIsNotChecked protects against a gossip
@@ -2451,6 +2363,7 @@ func TestCheckZombieReplicas_UnanimousAbsenceClassifies(t *testing.T) {
 // failure this self-check exists to prevent, and HAKeeper's checkZombie path
 // still cleans up non-voting zombies if they do occur.
 func TestCheckZombieReplicas_NonVotingIsNotChecked(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	called := false
 	orig := getShardMembershipFn
@@ -2480,6 +2393,7 @@ func TestCheckZombieReplicas_NonVotingIsNotChecked(t *testing.T) {
 }
 
 func TestCheckZombieReplicas_ProbesLaterPeerAfterTimeoutError(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	var probed []string
 	var firstDeadline time.Time
@@ -2496,6 +2410,12 @@ func TestCheckZombieReplicas_ProbesLaterPeerAfterTimeoutError(t *testing.T) {
 		require.True(t, deadline.After(firstDeadline),
 			"the next peer receives the remaining gossip budget")
 		return map[uint64]string{7: "uuid-1"}, true, nil
+	}
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		if address == "10.0.0.1:32001" {
+			return nil, context.DeadlineExceeded
+		}
+		return map[uint64]string{7: "uuid-1"}, nil
 	}
 
 	l := &store{cfg: Config{
@@ -2521,6 +2441,7 @@ func TestCheckZombieReplicas_ProbesLaterPeerAfterTimeoutError(t *testing.T) {
 }
 
 func TestCheckZombieReplicas_StopsWhenParentContextCanceled(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2532,6 +2453,9 @@ func TestCheckZombieReplicas_StopsWhenParentContextCanceled(t *testing.T) {
 		probed = append(probed, address)
 		cancel()
 		return nil, false, ctx.Err()
+	}
+	getCommittedShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, error) {
+		return nil, ctx.Err()
 	}
 
 	l := &store{cfg: Config{
@@ -2553,6 +2477,7 @@ func TestCheckZombieReplicas_StopsWhenParentContextCanceled(t *testing.T) {
 }
 
 func TestStartReplicas_SkipsZombie(t *testing.T) {
+	stubCommittedMembershipFromGossip(t)
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)

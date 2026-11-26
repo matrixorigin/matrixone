@@ -346,6 +346,7 @@ enum MethodType {
   TRUNCATE_WAL = 31;
   CLAIM_REQUIRED_LSN = 32;
   APPEND_WAL = 33;
+  GET_COMMITTED_SHARD_MEMBERSHIP = 34;
 };
 
 enum RecordType {

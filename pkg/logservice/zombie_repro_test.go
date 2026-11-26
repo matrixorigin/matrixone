@@ -503,6 +503,11 @@ func TestZombieRepro_WithoutFix(t *testing.T) {
 	getShardMembershipFn = func(ctx context.Context, sid, address string, shardID uint64) (map[uint64]string, bool, error) {
 		return nil, false, nil // shard unknown -> fallback = not a zombie
 	}
+	originalCommitted := getCommittedShardMembershipFn
+	defer func() { getCommittedShardMembershipFn = originalCommitted }()
+	getCommittedShardMembershipFn = func(context.Context, string, string, uint64) (map[uint64]string, error) {
+		return nil, dragonboat.ErrShardNotFound
+	}
 
 	svc3b := restartService3(t, cfg3, obsLogger)
 	defer func() {
