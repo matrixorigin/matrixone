@@ -107,11 +107,13 @@ func (rw *reactWriter) AddAfter(hook table.AckHook) {
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, enableSqlWriter bool) table.WriterFactory {
 	cfg := table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: table.CsvExtension}
 	factory := func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-		filePath := cfg.LogsFilePathFactory(account, tbl, ts)
+		var filePath string
 		var batchID uuid.UUID
 		if tbl.UsesMetricBatchReceipt() {
 			batchID = uuid.New()
-			filePath = table.MetricBatchPath(filePath, batchID)
+			filePath = cfg.MetricBatchLogPath(account, tbl, ts, batchID)
+		} else {
+			filePath = cfg.LogsFilePathFactory(account, tbl, ts)
 		}
 		options := []etl.FSWriterOption{etl.WithFilePath(filePath)}
 		cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))

@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"path"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -152,6 +154,78 @@ func TestMetricFallbackDelivery(t *testing.T) {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 			})
 		}
+	}
+}
+
+type metricReceiptArgument struct {
+	id uuid.UUID
+}
+
+func (arg *metricReceiptArgument) Match(value driver.Value) bool {
+	raw, ok := value.(string)
+	if !ok {
+		return false
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil || id == uuid.Nil {
+		return false
+	}
+	arg.id = id
+	return true
+}
+
+func TestMetricFallbackWithLongNodeID(t *testing.T) {
+	node := strings.Repeat("c", 200)
+	for _, fixture := range []struct {
+		tbl     *table.Table
+		payload string
+	}{
+		{mometric.SingleMetricTable, "m," + sampleTime + ",1," + node + ",CN,sys,0,\n"},
+		{mometric.SqlStatementCUTable, "sys," + sampleTime + ",1," + node + ",CN,internal_sql\n"},
+	} {
+		t.Run(fixture.tbl.Table, func(t *testing.T) {
+			ctx := t.Context()
+			fs, err := fileservice.NewLocalETLFS("etl", t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { fs.Close(context.Background()) })
+			mock := metricDeliveryDB(t)
+			receipt := &metricReceiptArgument{}
+			mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(receipt).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("^LOAD DATA INLINE").WillReturnError(&mysql.MySQLError{Number: 1213})
+			expectMetricRollback(mock)
+
+			now := time.Unix(1795599361, 0)
+			writer := GetWriterFactory(fs, node, "CN", true).GetRowWriter(ctx, "sys", fixture.tbl, now)
+			writer.(table.BufferSettable).SetBuffer(bytes.NewBufferString(fixture.payload), nil)
+			_, err = writer.FlushAndClose()
+			require.NoError(t, err)
+
+			dir := fixture.tbl.PathBuilder.Build("sys", table.MergeLogTypeLogs, now, fixture.tbl.Database, fixture.tbl.Table)
+			files := make([]*FileMeta, 0, 1)
+			for file, err := range fs.List(ctx, dir) {
+				require.NoError(t, err)
+				require.False(t, file.IsDir)
+				require.LessOrEqual(t, len(file.Name), 255)
+				filePath := path.Join(dir, file.Name)
+				id, ok := table.MetricBatchID(filePath)
+				require.True(t, ok)
+				require.Equal(t, receipt.id, id)
+				parsed, err := fixture.tbl.PathBuilder.ParsePath(ctx, filePath)
+				require.NoError(t, err)
+				require.Equal(t, fixture.tbl.Table, parsed.Table())
+				files = append(files, &FileMeta{FilePath: filePath, FileSize: file.Size})
+			}
+			require.Len(t, files, 1)
+			expectMetricLoad(mock, fixture.tbl, receipt.id, fixture.payload, true)
+			expectMetricCommit(mock)
+			merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(fixture.tbl))
+			require.NoError(t, err)
+			t.Cleanup(merge.Stop)
+			require.NoError(t, merge.doMergeFiles(ctx, files))
+			_, err = fs.StatFile(ctx, files[0].FilePath)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		})
 	}
 }
 

@@ -15,13 +15,28 @@
 package table
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 const metricBatchSuffix = "-batch-"
+const maxMetricFilenameBytes = 255
+
+func (c FilePathCfg) MetricBatchLogPath(account string, tbl *Table, ts time.Time, id uuid.UUID) string {
+	filePath := MetricBatchPath(c.LogsFilePathFactory(account, tbl, ts), id)
+	if len(path.Base(filePath)) <= maxMetricFilenameBytes {
+		return filePath
+	}
+	// Local ETL files must fit in one filesystem component. Hash only the
+	// node portion so the log format and the entire batch UUID survive.
+	c.NodeUUID = fmt.Sprintf("%x", sha256.Sum256([]byte(c.NodeUUID)))
+	return MetricBatchPath(c.LogsFilePathFactory(account, tbl, ts), id)
+}
 
 func (tbl *Table) UsesMetricBatchReceipt() bool {
 	return tbl.Database == "system_metrics" && (tbl.Table == "metric" || tbl.Table == "sql_statement_cu")
