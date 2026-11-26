@@ -7,6 +7,10 @@ on:
       - '.github/workflows/coverage-standby-worker.yaml'
       - '.github/ci/cancel-superseded.cjs'
       - '.github/ci/cancel-superseded.test.cjs'
+      - '.github/ci/coverage-identity-contract.test.cjs'
+      - '.github/ci/coverage-standby-pinned.contract.cjs'
+      - '.github/ci/coverage-standby-pinned-fixture.py'
+      - '.github/workflows/entrypoint.yaml'
 permissions: {}
 jobs:
   fixture:
@@ -15,10 +19,15 @@ jobs:
         include:
           - {group: 0, pool: cs}
           - {group: 1, pool: idc}
+          # Additional GROUP0 identities, with the same head and pool but
+          # a different parent or parent attempt. These are names only.
+          - {group: 0, pool: cs, parent: '1'}
+          - {group: 0, pool: cs, attempt: '999999'}
     name: >-
-      ${{ format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{3}000000000000000000000000', github.run_id, github.run_attempt, matrix.group, github.sha, matrix.pool) }}
+      ${{ format('Coverage standby / {0}/{1}/{2}/{3}/{4}/{3}000000000000000000000000', matrix.parent || github.run_id, matrix.attempt || github.run_attempt, matrix.group, github.sha, matrix.pool) }}
     uses: ./.github/workflows/coverage-standby-identity.yaml
   verify:
+    name: Read identity markers while active
     needs: fixture
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
@@ -47,12 +56,20 @@ jobs:
             if jq -e --arg prefix "$prefix" --arg sha "$GITHUB_SHA" --arg key "$key" \
                 --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
               [.jobs[] | select(.name | endswith(" / Run identity"))] as $m
-              | ($m | length) == 2
+              | ($m | length) == 4
                 and all($m[]; .run_id == $run and .run_attempt == $attempt
                   and .status == "completed" and .conclusion == "skipped")
-                and ([$m[].name] | sort) == [
+                and any(.jobs[]; .name == "Read identity markers while active"
+                  and .run_id == $run and .run_attempt == $attempt
+                  and .status == "in_progress" and .conclusion == null)
+                and ([$m[].name] | sort) == ([
                   ($prefix+"/0/"+$sha+"/cs/"+$key+" / Run identity"),
-                  ($prefix+"/1/"+$sha+"/idc/"+$key+" / Run identity")]' "$jobs"; then
+                  ($prefix+"/1/"+$sha+"/idc/"+$key+" / Run identity"),
+                  ("Coverage standby / 1/"+($attempt|tostring)+"/0/"+$sha+"/cs/"+$key+" / Run identity"),
+                  ("Coverage standby / "+($run|tostring)+"/999999/0/"+$sha+"/cs/"+$key+" / Run identity")] | sort)' "$jobs"; then
+              jq -c '.jobs[] | select((.name | endswith(" / Run identity")) or
+                .name == "Read identity markers while active") |
+                {name, id, run_id, run_attempt, status, conclusion}' "$jobs"
               exit 0
             fi
           done
@@ -61,3 +78,34 @@ jobs:
             jq -c '.jobs[] | {name, run_id, run_attempt, status, conclusion}' "$jobs"
           fi
           exit 1
+  pinned-contract:
+    name: Pinned dispatch, retry and cleanup contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/ci
+            .github/workflows
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: matrixorigin/CI
+          ref: cdb7337514853bc6bfdec460e7f0981eeaafd96d
+          path: .coverage-companion
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            .github/workflows
+      - name: Run the pinned companion suites and cross-repository contract
+        env:
+          COVERAGE_COMPANION_DIR: ${{ github.workspace }}/.coverage-companion
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          git -C "$COVERAGE_COMPANION_DIR" log -1 --format='Companion checked out at %H'
+          (cd "$COVERAGE_COMPANION_DIR" && python3 -m unittest scripts.test_coverage_pr_entry scripts.test_coverage_standby)
+          node --test .github/ci/coverage-standby-pinned.contract.cjs
