@@ -22,6 +22,7 @@
 //	go run . -root ../..                  # summary
 //	go run . -root ../.. -loops           # switches inside a loop, TSV
 //	go run . -root ../.. -loops -invariant # only those whose type is loop-invariant
+//	go run . -root ../.. -list -dir pkg/container/vector   # every switch in one package, TSV
 package main
 
 import (
@@ -38,6 +39,8 @@ func main() {
 	root := flag.String("root", ".", "repository root (the directory that holds pkg/)")
 	loops := flag.Bool("loops", false, "list switches inside a loop instead of the summary")
 	invariant := flag.Bool("invariant", false, "with -loops, list only switches whose subject does not change in the innermost loop")
+	list := flag.Bool("list", false, "list every switch instead of the summary")
+	dir := flag.String("dir", "", "only report switches in files directly in this slash-separated directory, relative to -root (e.g. pkg/container/vector)")
 	flag.Parse()
 
 	switches, err := Scan(*root)
@@ -45,11 +48,46 @@ func main() {
 		fmt.Fprintln(os.Stderr, "oidscan:", err)
 		os.Exit(1)
 	}
+	switches = underDir(switches, *dir)
+	if *list {
+		writeList(os.Stdout, switches)
+		return
+	}
 	if *loops {
 		writeLoops(os.Stdout, switches, *invariant)
 		return
 	}
 	writeSummary(os.Stdout, switches)
+}
+
+// underDir keeps the switches in files directly in dir; "" keeps all.
+func underDir(switches []Switch, dir string) []Switch {
+	if dir == "" {
+		return switches
+	}
+	dir = strings.TrimSuffix(dir, "/")
+	var out []Switch
+	for _, s := range switches {
+		if path.Dir(s.File) == dir {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// writeList writes one TSV line per switch: file:line, function, oid count,
+// "default" if it has a default branch, and "loop" if it is inside a loop.
+func writeList(w io.Writer, switches []Switch) {
+	for _, s := range switches {
+		def, loop := "-", "-"
+		if s.HasDefault {
+			def = "default"
+		}
+		if len(s.Loops) > 0 {
+			loop = "loop"
+		}
+		fmt.Fprintf(w, "%s:%d\t%s\t%d\t%s\t%s\n", s.File, s.Line, s.Func, s.Oids, def, loop)
+	}
 }
 
 // writeLoops writes one TSV line per switch inside a loop:
