@@ -49,6 +49,12 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 			_, err := db.ExecContext(ctx, q)
 			require.NoError(t, err, q)
 		}
+		syncCommit := func() {
+			t.Helper()
+			var result string
+			require.NoError(t, left.QueryRowContext(ctx, "select mo_ctl('cn','syncCommit','')").Scan(&result))
+			require.Contains(t, result, "sync 3 cn services")
+		}
 		number := func(db *sql.DB, q string) int {
 			t.Helper()
 			var n int
@@ -72,6 +78,7 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 		exec(left, "create table race32900src.t (id int primary key)")
 		exec(left, "insert into race32900src.t values (7)")
 		exec(left, "create publication race32900p database race32900src account race32900a,race32900keep")
+		syncCommit()
 		keep := open(1, "race32900keep#admin#accountadmin")
 		exec(keep, "create database race32900sub from sys publication race32900p")
 		exec(open(0, "race32900a#admin#accountadmin"), "create database race32900sub from sys publication race32900p")
@@ -118,9 +125,13 @@ func TestDropAccountConcurrentPublicationGrant(t *testing.T) {
 			var sqlErr *mysql.MySQLError
 			require.ErrorAs(t, err, &sqlErr)
 			require.EqualValues(t, moerr.ErrTxnNeedRetry, sqlErr.Number)
+			// The retry must see the completed DROP, and the rollback check must see CN1's outcome.
+			syncCommit()
 			require.Zero(t, number(left, "select count(*) from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_name='race32900b'"))
 			exec(right, addB)
 		}
+		// ALTER commits on CN1 while the final catalog checks run on CN0.
+		syncCommit()
 		where := fmt.Sprintf(" from mo_catalog.mo_subs where pub_name='race32900p' and sub_account_id=%d", id)
 		require.Zero(t, number(left, "select count(*)"+where))
 		require.Zero(t, number(left, "select count(*) from mo_catalog.mo_account where account_name='race32900a'"))
