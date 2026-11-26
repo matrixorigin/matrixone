@@ -53,19 +53,24 @@ type collectChangesVisibleDiffKey struct{}
 // VisibleStateKeySelector returns the increasing row indexes of keys to compare.
 type VisibleStateKeySelector func(*vector.Vector) ([]int64, error)
 
-// WithCollectChangesVisibleDiff asks CollectChanges to compare the protected
-// start relation and the end snapshot, without replaying materialization.
-// An optional selector restricts both images before interpreting keys.
-func WithCollectChangesVisibleDiff(ctx context.Context, selectKeys VisibleStateKeySelector) context.Context {
-	return context.WithValue(ctx, collectChangesVisibleDiffKey{}, selectKeys)
+// VisibleStateDiff compares protected snapshots instead of replaying
+// materialization. CompareColumns maps start names to end names when the
+// caller has already established column lineage across a logical fork.
+type VisibleStateDiff struct {
+	SelectKeys     VisibleStateKeySelector
+	CompareColumns map[string]string
 }
 
-func CollectChangesVisibleDiffFromContext(ctx context.Context) (VisibleStateKeySelector, bool) {
+func WithCollectChangesVisibleDiff(ctx context.Context, diff VisibleStateDiff) context.Context {
+	return context.WithValue(ctx, collectChangesVisibleDiffKey{}, &diff)
+}
+
+func CollectChangesVisibleDiffFromContext(ctx context.Context) *VisibleStateDiff {
 	if ctx == nil {
-		return nil, false
+		return nil
 	}
-	selectKeys, ok := ctx.Value(collectChangesVisibleDiffKey{}).(VisibleStateKeySelector)
-	return selectKeys, ok
+	diff, _ := ctx.Value(collectChangesVisibleDiffKey{}).(*VisibleStateDiff)
+	return diff
 }
 
 // WithVisibleStateStartRelation supplies the protected lineage boundary that

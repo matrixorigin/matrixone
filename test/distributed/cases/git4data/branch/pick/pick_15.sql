@@ -783,7 +783,7 @@ drop snapshot pick_window_hi;
 drop snapshot pick_window_lo;
 drop database pick_window;
 
--- @testcase: Collect the writes inherited through an intermediate fork dropped in the same commit
+-- @testcase: Preserve column identity through a renamed intermediate fork dropped in the same commit
 create database pick_window;
 use pick_window;
 begin;
@@ -798,10 +798,63 @@ begin;
 data branch create table mid from parent_src;
 insert into mid values (3,70,80);
 delete from mid where k=2;
+alter table mid algorithm=inplace, rename column a to tmp;
+alter table mid algorithm=inplace, rename column b to a;
+alter table mid algorithm=inplace, rename column tmp to b;
 data branch create table src from mid;
-insert into src values (5,90,99);
+insert into src (k,b,a) values (5,90,99);
 drop table mid;
 commit;
+create snapshot pick_window_hi for account sys;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,a,b from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: Collect same-commit fork writes with a committed common ancestor and detect a destination update
+create database pick_window;
+use pick_window;
+create table root (k int primary key, a int, b int);
+insert into root values (1,10,20),(2,30,40),(4,50,60);
+data branch create table parent_src from root;
+data branch create table dst from root;
+update dst set b=121 where k=2;
+create snapshot pick_window_lo for account sys;
+begin;
+data branch create table mid from parent_src;
+delete from mid where k=2;
+insert into mid values (3,70,80);
+data branch create table src from mid;
+insert into src values (5,90,99);
+commit;
+create snapshot pick_window_hi for account sys;
+-- @regex("conflict: src INSERT and dst INSERT", true)
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
+select k,a,b from dst order by k;
+data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict skip;
+select k,a,b from dst order by k;
+drop snapshot pick_window_hi;
+drop snapshot pick_window_lo;
+drop database pick_window;
+
+-- @testcase: A rename on the intermediate table after cloning cannot change the window before-image
+create database pick_window;
+use pick_window;
+begin;
+create table root (k int primary key, a int, b int);
+insert into root values (1,10,20),(2,30,40),(4,50,60);
+data branch create table parent_src from root;
+data branch create table dst from root;
+drop table root;
+commit;
+create snapshot pick_window_lo for account sys;
+begin;
+data branch create table mid from parent_src;
+data branch create table src from mid;
+alter table mid algorithm=inplace, rename column b to bb;
+commit;
+update src set b=62 where k=4;
 create snapshot pick_window_hi for account sys;
 data branch pick src into dst between snapshot pick_window_lo and pick_window_hi when conflict fail;
 select k,a,b from dst order by k;

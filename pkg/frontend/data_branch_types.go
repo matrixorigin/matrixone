@@ -290,6 +290,7 @@ type tableStuff struct {
 	pickSourceEdges []bool
 	pickBaseDefs    []*plan.TableDef
 	pickBaseEdges   []bool
+	pickForkColumns dataBranchForkColumns
 
 	def struct {
 		colNames      []string     // all columns
@@ -356,9 +357,10 @@ func (t tableStuff) lcaFallbackRangeRel(snapshotTS types.TS) engine.Relation {
 }
 
 type dataBranchPickWindowStart struct {
-	tableID  uint64
-	snapshot types.TS
-	identity branchIdentity
+	tableID       uint64
+	snapshot      types.TS
+	identity      branchIdentity
+	collapsedFork bool
 }
 
 // resolvedSnapshots returns the effective per-side snapshot timestamps:

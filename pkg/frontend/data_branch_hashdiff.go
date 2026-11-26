@@ -1193,7 +1193,18 @@ func dataBranchPickWindowProbe(
 	pathDefs := []*plan2.TableDef{tarDef}
 	lineageOnly := []bool{false}
 	var creationDefs []*plan2.TableDef
-	if start.tableID != tblStuff.tarRel.GetTableID(ctx) {
+	crossesCollapsedFork := false
+	if len(tblStuff.pickForkColumns) > 0 {
+		defs, edges := dataBranchSchemaPathFrom(loDef, tblStuff.pickSourceDefs, tblStuff.pickSourceEdges)
+		for i := 1; i < len(defs); i++ {
+			if tblStuff.pickForkColumns[[2]*plan2.TableDef{defs[i-1], defs[i]}] != nil {
+				pathDefs, lineageOnly = defs, edges
+				crossesCollapsedFork = true
+				break
+			}
+		}
+	}
+	if !crossesCollapsedFork && start.tableID != tblStuff.tarRel.GetTableID(ctx) {
 		// A COPY ALTER can place the endpoint in a different generation.
 		// Resolve each edge before using the starting generation's own
 		// physical column identity to walk from that edge back to lo.
@@ -1205,7 +1216,7 @@ func dataBranchPickWindowProbe(
 		candidates := dedupeBranchIdentities(tarIdent, baseIdent)
 		path := dagInfo.pathFromLCAToTar[i:]
 		pathTS := dagInfo.pathFromLCAToTarTS[i:]
-		pathDefs, err = dataBranchPathTableDefs(
+		pathDefs, _, err = dataBranchPathTableDefs(
 			ctx, ses, bh, candidates, tblStuff.tarRel, tarSP, path, pathTS,
 		)
 		if err != nil {
@@ -1242,14 +1253,17 @@ func dataBranchPickWindowProbe(
 	tblStuff.lcaProbeTableId = 0
 	tblStuff.def.lcaColNames = make([]string, len(tblStuff.def.colNames))
 	tblStuff.def.tarOnlyIdxes = slices.Clone(tblStuff.def.tarOnlyIdxes)
-	renameProof := make(dataBranchRenameProof)
+	renameProof := newDataBranchRenameProof(tblStuff.pickForkColumns)
 	for i, name := range tblStuff.def.colNames {
 		if slices.Contains(tblStuff.def.tarOnlyIdxes, i) {
 			continue
 		}
 		tarCol := dataBranchColumnDefByName(tarDef, name)
 		startCol := tarCol
-		for j := len(pathDefs) - 1; j > 0 && startCol != nil; j-- {
+		if crossesCollapsedFork {
+			_, startCol, _ = dataBranchColumnReachesLCA(pathDefs, lineageOnly, startCol, renameProof)
+		}
+		for j := len(pathDefs) - 1; !crossesCollapsedFork && j > 0 && startCol != nil; j-- {
 			prev := pathDefs[j-1]
 			if isDataBranchUserVisibleColumn(startCol) {
 				created := creationDefs[j]
@@ -2200,7 +2214,7 @@ func emitPreviouslyPresentPickKeys(
 	starts := append([]dataBranchPickWindowStart{
 		{tableID: tables.baseRel.GetTableID(ctx), snapshot: creation, identity: tables.resolvedLCAIdentity(ctx, ses)},
 	}, tables.zeroHistoryBaseStarts...)
-	proof := make(dataBranchRenameProof)
+	proof := newDataBranchRenameProof(tables.pickForkColumns)
 	for _, start := range starts {
 		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{start.identity}, start.tableID, start.snapshot)
 		if err != nil {

@@ -252,7 +252,7 @@ func TestNewVisibleStateChangesHandleRejectsInvalidInputs(t *testing.T) {
 		beforeScan: visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		afterScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 	}
-	err = h.initSchema(nil, makeVisibleStateTableDef(false, true))
+	err = h.initSchema(nil, makeVisibleStateTableDef(false, true), nil)
 	require.ErrorContains(t, err, "primary key column not found")
 
 	h = &VisibleStateChangesHandle{
@@ -260,7 +260,7 @@ func TestNewVisibleStateChangesHandleRejectsInvalidInputs(t *testing.T) {
 		beforeScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		afterScan:   visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 	}
-	err = h.initSchema(nil, makeVisibleStateTableDef(true, false))
+	err = h.initSchema(nil, makeVisibleStateTableDef(true, false), nil)
 	require.ErrorContains(t, err, "rowid column not found")
 }
 
@@ -529,7 +529,7 @@ func TestVisibleStateChangesHandleProjectsHistoricalSchema(t *testing.T) {
 		afterScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		beforeRows: newTestVisibleStateStore(),
 	}
-	require.NoError(t, h.initSchema(beforeDef, afterDef))
+	require.NoError(t, h.initSchema(beforeDef, afterDef, nil))
 	require.Equal(t, []string{catalog.Row_ID, "id", "v"}, h.beforeScan.attrs)
 	require.Equal(t, []int{1, 2}, h.beforeScan.compareIdxes)
 	require.Equal(t, []int{1, 3}, h.afterScan.compareIdxes)

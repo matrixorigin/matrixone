@@ -110,12 +110,10 @@ func NewVisibleStateChangesHandle(
 		return nil, moerr.NewInternalErrorNoCtx("visible-state changes handle requires a non-nil mpool")
 	}
 
-	selectKeys, _ := engine.CollectChangesVisibleDiffFromContext(ctx)
 	h := &VisibleStateChangesHandle{
 		tbl: tbl, start: start, end: end, skipDeletes: skipDeletes,
 		coarseMaxRow: coarseMaxRow, mp: effectiveMP,
 		retainRowID: engine.RetainRowIDFromContext(ctx),
-		selectKeys:  selectKeys,
 		beforeScan:  visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 		afterScan:   visibleStateSnapshotScan{pkIdx: -1, rowIDIdx: -1},
 	}
@@ -151,7 +149,12 @@ func NewVisibleStateChangesHandle(
 	if beforeRel != nil {
 		beforeDef = beforeRel.GetTableDef(ctx)
 	}
-	if err = h.initSchema(beforeDef, afterRel.GetTableDef(ctx)); err != nil {
+	var compareColumns map[string]string
+	if diff := engine.CollectChangesVisibleDiffFromContext(ctx); diff != nil {
+		h.selectKeys = diff.SelectKeys
+		compareColumns = diff.CompareColumns
+	}
+	if err = h.initSchema(beforeDef, afterRel.GetTableDef(ctx), compareColumns); err != nil {
 		return nil, err
 	}
 	if h.beforeRows, err = resources.NewVisibleStateStore(); err != nil {
@@ -325,17 +328,26 @@ func isNilEngineReader(reader engine.Reader) bool {
 	}
 }
 
-func (h *VisibleStateChangesHandle) initSchema(beforeDef, afterDef *plan2.TableDef) error {
+func (h *VisibleStateChangesHandle) initSchema(
+	beforeDef, afterDef *plan2.TableDef, compareColumns map[string]string,
+) error {
 	if afterDef == nil || afterDef.Pkey == nil {
 		return moerr.NewInternalErrorNoCtx("visible-state end snapshot has no primary key definition")
 	}
 	afterBySeqnum := make(map[uint32]int, len(afterDef.Cols))
+	var afterByName map[string]int
+	if compareColumns != nil {
+		afterByName = make(map[string]int, len(afterDef.Cols))
+	}
 	for _, col := range afterDef.Cols {
 		colType := plan2.ExprType2Type(&col.Typ)
 		idx := len(h.afterScan.attrs)
 		h.afterScan.attrs = append(h.afterScan.attrs, col.Name)
 		h.afterScan.types = append(h.afterScan.types, colType)
 		afterBySeqnum[col.Seqnum] = idx
+		if afterByName != nil {
+			afterByName[col.Name] = idx
+		}
 		if colType.Oid == types.T_Rowid {
 			h.afterScan.rowIDIdx = idx
 			h.rowIDType = colType
@@ -362,8 +374,7 @@ func (h *VisibleStateChangesHandle) initSchema(beforeDef, afterDef *plan2.TableD
 	if beforeDef.Pkey == nil {
 		return moerr.NewInternalErrorNoCtx("visible-state start snapshot has no primary key definition")
 	}
-	beforePKSeqnum := uint32(0)
-	afterPKSeqnum := afterDef.Cols[h.afterScan.pkIdx].Seqnum
+	matchesPrimaryKey := false
 	for _, col := range beforeDef.Cols {
 		colType := plan2.ExprType2Type(&col.Typ)
 		idx := len(h.beforeScan.attrs)
@@ -373,11 +384,18 @@ func (h *VisibleStateChangesHandle) initSchema(beforeDef, afterDef *plan2.TableD
 			h.beforeScan.rowIDIdx = idx
 			continue
 		}
+		afterIdx, ok := afterBySeqnum[col.Seqnum]
+		if afterByName != nil {
+			afterName, mapped := compareColumns[col.Name]
+			if !mapped && col.Hidden {
+				afterName = col.Name
+			}
+			afterIdx, ok = afterByName[afterName]
+		}
 		if col.Name == beforeDef.Pkey.PkeyColName {
 			h.beforeScan.pkIdx = idx
-			beforePKSeqnum = col.Seqnum
+			matchesPrimaryKey = ok && afterIdx == h.afterScan.pkIdx
 		}
-		afterIdx, ok := afterBySeqnum[col.Seqnum]
 		if !ok || h.afterScan.types[afterIdx].Oid == types.T_Rowid || h.afterScan.types[afterIdx] != colType {
 			continue
 		}
@@ -387,7 +405,7 @@ func (h *VisibleStateChangesHandle) initSchema(beforeDef, afterDef *plan2.TableD
 	if h.beforeScan.pkIdx < 0 {
 		return moerr.NewInternalErrorNoCtx("primary key column not found in start snapshot")
 	}
-	if beforePKSeqnum != afterPKSeqnum || h.beforeScan.types[h.beforeScan.pkIdx] != h.pkType {
+	if !matchesPrimaryKey || h.beforeScan.types[h.beforeScan.pkIdx] != h.pkType {
 		return moerr.NewInternalErrorNoCtx("primary key lineage changed across visible-state snapshots")
 	}
 	if h.retainRowID && h.beforeScan.rowIDIdx < 0 {
