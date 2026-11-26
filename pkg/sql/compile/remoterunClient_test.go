@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -535,6 +536,7 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 	tests := []struct {
 		name        string
 		cancelQuery bool
+		remoteError bool
 		cancelCause error
 		wantErr     error
 		wantEvent   process.PipelineEventType
@@ -550,6 +552,10 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 			wantErr:     context.Canceled,
 			wantEvent:   process.EventError,
 			poison:      true,
+		},
+		{
+			name: "explicit remote failure stays terminal through AP aggregation", remoteError: true,
+			wantEvent: process.EventError, poison: true,
 		},
 		{
 			name:        "substantive error is terminal and poisons backend",
@@ -580,7 +586,11 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 					message := request.(*pipeline.Message)
 					switch message.GetCmd() {
 					case pipeline.Method_PipelineMessage:
-						if tt.cancelQuery {
+						if tt.remoteError {
+							response := &pipeline.Message{Id: 27757, Cmd: pipeline.Method_PipelineMessage, Sid: pipeline.Status_MessageEnd}
+							response.SetMoError(queryCtx, context.Canceled)
+							responses <- response
+						} else if tt.cancelQuery {
 							cancelQuery()
 						} else {
 							proc.Cancel(tt.cancelCause)
@@ -635,8 +645,19 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 				NodeInfo:      engine.Node{Addr: "remote-cn:6002", Mcpu: 1},
 			}
 
-			runErr := s.RemoteRun(c)
-			if tt.wantErr == nil {
+			var runErr error
+			if tt.remoteError {
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.scopes = []*Scope{s}
+				runErr = c.runOnce()
+				require.ErrorContains(t, runErr, "query interrupted")
+				require.NoError(t, queryCtx.Err())
+			} else {
+				runErr = s.RemoteRun(c)
+			}
+			if tt.remoteError {
+				require.True(t, moerr.IsMoErrCode(runErr, moerr.ErrInternal))
+			} else if tt.wantErr == nil {
 				require.NoError(t, runErr)
 			} else {
 				require.ErrorIs(t, runErr, tt.wantErr)
@@ -645,7 +666,9 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 			case signal := <-reg.Ch2:
 				_, terminalErr := signal.Action()
 				require.Equal(t, tt.wantEvent, signal.EventType)
-				if tt.wantErr == nil {
+				if tt.remoteError {
+					require.ErrorContains(t, terminalErr, "query interrupted")
+				} else if tt.wantErr == nil {
 					require.NoError(t, terminalErr)
 				} else {
 					require.ErrorIs(t, terminalErr, tt.wantErr)

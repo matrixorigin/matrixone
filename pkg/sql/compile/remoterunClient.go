@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -101,6 +102,8 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 		return nil, err
 	}
+
+	sender.queryCtx = scopeRunQueryContext(s.Proc)
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -419,6 +422,7 @@ type messageSenderOnClient struct {
 	// sender's context
 	// and cancel function (it exists if this context was recreated by us).
 	ctx                context.Context
+	queryCtx           context.Context // Only set for RemoteRun; separate from the stream/pipeline lifetime.
 	ctxCancel          context.CancelFunc
 	useInternalTimeout bool
 
@@ -687,6 +691,10 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 		if info, get := m.TryToGetMoErr(); get {
 			sender.markTerminal(m, false)
+			// A peer-reported error is not the local stream observing ctx.Done.
+			if sender.queryCtx != nil && sender.queryCtx.Err() == nil {
+				info = message.PreserveExplicitPipelineFailure(sender.queryCtx, info)
+			}
 			return nil, false, info
 		}
 		if m.IsEndMessage() {

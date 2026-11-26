@@ -121,7 +121,7 @@ func (connector *Connector) Release() {
 }
 
 func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
+	terminalSignal := process.BuildPublishedCleanupSignal(proc, pipelineFailed, err)
 	terminalErr := terminalSignal.TerminalErr()
 	signalCtx, signalCancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
 	defer signalCancel()

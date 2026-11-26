@@ -211,6 +211,21 @@ func (signal PipelineSignal) IsTerminal() bool {
 	return signal.EventType.IsTerminal()
 }
 
+// BuildPublishedCleanupSignal fixes the outcome before publishing it via
+// the terminal queue, spool abort, or materialized source. Only a genuinely
+// canceled query should propagate a cancellation-shaped failure unchanged.
+func BuildPublishedCleanupSignal(proc *Process, pipelineFailed bool, err error) PipelineSignal {
+	signal := BuildCleanupSignal(pipelineFailed, err)
+	if signal.EventType != EventError || proc == nil || proc.Base == nil {
+		return signal
+	}
+	queryCtx, _ := GetQueryCtxFromProc(proc)
+	if queryCtx != nil && queryCtx.Err() == nil {
+		signal.terminalErr = message.PreserveExplicitPipelineFailure(queryCtx, signal.terminalErr)
+	}
+	return signal
+}
+
 // TerminalErr returns the error carried by EventError or EventAbort.
 func (signal PipelineSignal) TerminalErr() error {
 	return signal.terminalErr

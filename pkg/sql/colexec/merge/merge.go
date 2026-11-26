@@ -72,12 +72,13 @@ func (merge *Merge) ActivateReceiverRange(proc *process.Process, start, end int3
 
 func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := merge.OpAnalyzer
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
 	if merge.MaterializedSource != nil {
 		// Scalar TVFs borrow their only batch even after EOF, until teardown.
 		if !merge.MaterializedSingleBatch {
 			merge.cleanMaterializedBatch(proc)
 		}
-		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
+		bat, end, err := merge.MaterializedSource.NextMerge(proc.Ctx, queryCtx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -98,7 +99,6 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 
 	var info error
 	result := vm.NewCallResult()
-	queryCtx, _ := process.GetQueryCtxFromProc(proc)
 	for {
 		result.Batch, info = merge.ctr.receiver.GetNextMergeBatch(analyzer, queryCtx)
 		if info != nil {

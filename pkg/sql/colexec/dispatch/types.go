@@ -264,7 +264,7 @@ func sendAbortSignalsToFailedLocalRegs(ctx context.Context, proc *process.Proces
 }
 
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
+	terminalSignal := process.BuildPublishedCleanupSignal(proc, pipelineFailed, err)
 	terminalErr := terminalSignal.TerminalErr()
 	if dispatch.MaterializedSource != nil {
 		dispatch.MaterializedSource.Finish(terminalErr)

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
 // Source stores one producer's immutable batches so multiple dependent
@@ -221,7 +222,17 @@ func (s *Source) Append(bat *batch.Batch) error {
 
 // Next returns a batch owned by the caller, or end=true after the producer
 // finishes. Every successful caller must clean the returned batch exactly once.
-func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.Batch, end bool, err error) {
+func (s *Source) Next(ctx context.Context, readerID, position int) (*batch.Batch, bool, error) {
+	return s.next(ctx, nil, readerID, position)
+}
+
+// NextMerge distinguishes the producer's stored failure from cancellation
+// of this reader's wait.
+func (s *Source) NextMerge(ctx, queryCtx context.Context, readerID, position int) (*batch.Batch, bool, error) {
+	return s.next(ctx, queryCtx, readerID, position)
+}
+
+func (s *Source) next(ctx, queryCtx context.Context, readerID, position int) (bat *batch.Batch, end bool, err error) {
 	if s == nil {
 		return nil, true, moerr.NewInternalErrorNoCtx("nil materialized sink source")
 	}
@@ -273,6 +284,9 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 		if s.done {
 			err = s.err
 			s.mu.Unlock()
+			if err != nil && queryCtx != nil && queryCtx.Err() == nil {
+				err = message.PreserveExplicitPipelineFailure(queryCtx, err)
+			}
 			return nil, true, err
 		}
 		notify := s.notify

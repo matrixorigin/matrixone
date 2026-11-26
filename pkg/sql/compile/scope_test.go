@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -2502,8 +2503,11 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 		err                error
 		code               uint16
 		cancelAfterReceive bool
+		transport          string
 	}{
 		{name: "end", cancelAfterReceive: true},
+		{name: "aborted connector spool", err: context.Canceled, code: moerr.ErrInternal, transport: "spool"},
+		{name: "stored materialized failure", err: context.Canceled, code: moerr.ErrInternal, transport: "materialized"},
 		{name: "canceled input", err: context.Canceled, code: moerr.ErrInternal},
 		{name: "canceled input before local stop", err: context.Canceled, code: moerr.ErrInternal, cancelAfterReceive: true},
 		{name: "foreign key", err: moerr.NewErrFKNoReferencedRow2(context.Background()), code: moerr.ErrFKNoReferencedRow2, cancelAfterReceive: true},
@@ -2552,7 +2556,30 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 			require.NoError(t, query.Err())
 			require.NoError(t, producer.Proc.Ctx.Err())
 			require.NoError(t, consumer.Proc.Ctx.Err())
-			require.True(t, process.TrySendPipelineSignal(producer.Proc.Reg.MergeReceivers[0], signal))
+			reg := producer.Proc.Reg.MergeReceivers[0]
+			switch tc.transport {
+			case "materialized":
+				source := materialized.NewSource(1)
+				t.Cleanup(source.Close)
+				require.NoError(t, source.Begin(c.proc.Mp()))
+				input.MaterializedSource = source
+				source.Finish(tc.err)
+			case "spool":
+				conn := connector.NewArgument().WithReg(reg)
+				defer conn.Release()
+				bat := batch.NewWithSize(0)
+				bat.SetRowCount(1)
+				defer bat.Clean(c.proc.Mp())
+				conn.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+				writer := c.proc.NewContextChildProc(0)
+				defer writer.Cancel(nil)
+				require.NoError(t, conn.Prepare(writer))
+				_, err := conn.Call(writer)
+				require.NoError(t, err)
+				conn.Reset(writer, true, tc.err)
+			default:
+				require.True(t, process.TrySendPipelineSignal(reg, signal))
+			}
 
 			err = consumer.MergeRun(c)
 			require.NoError(t, query.Err())
