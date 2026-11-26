@@ -26,15 +26,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A range read whose prefetch run is a FilePrefetchObject must not join a whole-object
-// Download whose bytes the cost model says arrive far later than its own range read would.
+// A range read whose prefetch run would be a FilePrefetchObject joins a whole-object
+// download stalled on its first byte: it waits for the download, reads no range of its
+// own, and gets its bytes once the download goes on.
 func TestDiskCacheTransitionFileRunJoinsSlowWholeDownload(t *testing.T) {
 	const size = 8 << 20
 	fs, _, data := newPrefetchRangeFS(t, 1<<20, size)
 	fs.diskCache.memoryPrefetchMax = 256 << 10
-	rate0 := downloadRates.rate()
-	downloadRates.set(1 << 20)
-	t.Cleanup(func() { downloadRates.set(rate0) })
 
 	key := fs.pathToKey("object")
 	// The whole-object download stalls on its first byte.
@@ -51,22 +49,35 @@ func TestDiskCacheTransitionFileRunJoinsSlowWholeDownload(t *testing.T) {
 		return cur == 1 && fs.diskCache.download(diskPath) != nil
 	}, 5*time.Second, time.Millisecond)
 
-	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	off := int64(6 << 20)
-	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
-		Entries: []IOEntry{{Offset: off, Size: 64 << 10}}}
-	start := time.Now()
-	err := fs.Read(readCtx, vec)
-	elapsed := time.Since(start)
-	var got []byte
-	if err == nil {
-		got = slices.Clone(vec.Entries[0].Data)
+	type result struct {
+		data []byte
+		err  error
 	}
-	vec.Release()
-	require.NoError(t, err, "elapsed %v", elapsed)
-	require.Equal(t, data[off:off+64<<10], got)
-	require.Less(t, elapsed, time.Second, "the read reads its own range rather than wait for the stalled download")
+	done := make(chan result, 1)
+	go func() {
+		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
+			Entries: []IOEntry{{Offset: off, Size: 64 << 10}}}
+		err := fs.Read(readCtx, vec)
+		var got []byte
+		if err == nil {
+			got = slices.Clone(vec.Entries[0].Data)
+		}
+		vec.Release()
+		done <- result{got, err}
+	}()
+	require.Never(t, func() bool { return len(done) > 0 }, 200*time.Millisecond, time.Millisecond,
+		"the read waits for the stalled download it joined")
+	_, _, total := g.counts(key)
+	require.Equal(t, 1, total, "the read reads no range of its own")
+	release()
+	r := <-done
+	require.NoError(t, r.err)
+	require.Equal(t, data[off:off+64<<10], r.data)
+	_, _, total = g.counts(key)
+	require.Equal(t, 1, total)
 }
 
 // ProbeStallStorage returns readers of whole reads that send their first n bytes, then wait

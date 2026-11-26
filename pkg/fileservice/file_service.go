@@ -113,9 +113,9 @@ type IOVector struct {
 	// Caches indicates extra caches to operate on
 	Caches []IOVectorCache
 
-	// downloadDeclined is set by the disk cache when some of the entries are in an object
-	// being downloaded, but a range read gets them sooner.
-	downloadDeclined bool
+	// fillStopped is set by the disk cache when a fill the read joined stopped without
+	// bytes of its entries.
+	fillStopped bool
 	// indexTier is set by the file service on a read whose cache on disk is the index-file
 	// cache: the disk cache joins only fills of that cache for it.
 	indexTier bool

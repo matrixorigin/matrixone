@@ -145,7 +145,7 @@ func TestPrefetchRangeDoesNotJoinUncachedObject(t *testing.T) {
 // A delete of an object stops the download a whole-object read started; the read then
 // reads its range and returns its bytes.
 func TestDeleteDuringWholeObjectReadReadsRange(t *testing.T) {
-	fs, storage, data := newDownloadContractFS(t, time.Hour)
+	fs, storage, data := newDownloadContractFS(t)
 	done := storage.readAsync(fs, 6<<20, 17)
 	require.Eventually(t, func() bool { return fs.diskCache.download(fs.diskCache.objectKey("object")) != nil },
 		10*time.Second, time.Millisecond)

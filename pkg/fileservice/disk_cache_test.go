@@ -1181,3 +1181,13 @@ func (d *DiskCache) objectFiles(filePath string) []string {
 	files, _ := filepath.Glob(filepath.Join(d.path, diskCacheShard(filePath), "[0-9]*-[0-9]*"+toOSPath(filePath)+cacheFileSuffix))
 	return files
 }
+
+// fileDownload returns the download of the file fill of the disk cache holding the bytes
+// [lo, hi) of the object at objectPath, and where its bytes start in the object.
+func (d *DiskCache) fileDownload(objectPath string, lo, hi int64) (*objectDownload, int64) {
+	p, o := d.fileFill(objectPath, false, lo, hi)
+	if p == nil {
+		return nil, 0
+	}
+	return o, p.start
+}

@@ -1122,7 +1122,7 @@ read_disk_cache:
 		}
 	}
 
-	if vector.downloadDeclined && !forcePerEntryRangeRead && !forceMinimalRangeRead {
+	if vector.fillStopped && !forcePerEntryRangeRead && !forceMinimalRangeRead {
 		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
 			forcePerEntryRangeRead = true
 		} else {
@@ -1986,7 +1986,7 @@ func (r *fullObjectDiskCacheReader) capture(
 		}
 		// The read that started the download waits for its own bytes as long as its context
 		// allows.
-		written, ok := download.waitFor(ctx, c.offset, end, 0)
+		written, ok := download.waitFor(ctx, c.offset, end)
 		if ok || download.isComplete() {
 			want := written - c.offset
 			if c.size >= 0 {

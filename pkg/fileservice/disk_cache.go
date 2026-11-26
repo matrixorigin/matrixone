@@ -62,10 +62,9 @@ type DiskCache struct {
 	directoryMu sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
-	diskFullEviction     atomic.Bool
-	downloadMaxExtraWait time.Duration
-	prefetchRange        prefetchRangeConfig
-	objectSplit          objectSplitConfig
+	diskFullEviction atomic.Bool
+	prefetchRange    prefetchRangeConfig
+	objectSplit      objectSplitConfig
 	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject.
 	memoryPrefetchMax int64
 	prefetched        prefetchedObjects
@@ -150,7 +149,7 @@ func newDiskCacheWithMetricScope(
 	metricScope string,
 ) (ret *DiskCache, err error) {
 	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope,
-		diskCacheOptions{downloadMaxExtraWait: DefaultDiskDownloadMaxExtraWait})
+		diskCacheOptions{})
 }
 
 type diskCacheOptions struct {
@@ -158,9 +157,6 @@ type diskCacheOptions struct {
 	// (IndexFileCache), never evicted while held, and whose
 	// capacity does not follow GlobalDiskCacheSizeHint.
 	dirEntries bool
-	// downloadMaxExtraWait is how much later than a range read a read may get its bytes
-	// by waiting for the download of their object.
-	downloadMaxExtraWait time.Duration
 	// prefetchRange sets the prefetch ranges of range reads.
 	prefetchRange prefetchRangeConfig
 	// objectSplit sets the parts a whole-object download reads at once.
@@ -216,13 +212,12 @@ func newDiskCache(
 		perfCounterSets:    perfCounterSets,
 		fileSync:           func(file *os.File) error { return file.Sync() },
 
-		capacityFunc:         capacityFunc,
-		dirEntries:           opts.dirEntries,
-		downloadMaxExtraWait: opts.downloadMaxExtraWait,
-		prefetchRange:        opts.prefetchRange,
-		objectSplit:          opts.objectSplit,
-		memoryPrefetchMax:    cmp.Or(opts.memoryPrefetchMax, DefaultDiskPrefetchMemoryMax),
-		preloads:             newPreloadUsage(),
+		capacityFunc:      capacityFunc,
+		dirEntries:        opts.dirEntries,
+		prefetchRange:     opts.prefetchRange,
+		objectSplit:       opts.objectSplit,
+		memoryPrefetchMax: cmp.Or(opts.memoryPrefetchMax, DefaultDiskPrefetchMemoryMax),
+		preloads:          newPreloadUsage(),
 	}
 	ret.trash.limit.Store(-1)
 
@@ -774,8 +769,8 @@ func (d *DiskCache) Read(
 		}
 
 		if !openedOK && downloading {
-			// A range read gets these bytes sooner than the download.
-			vector.downloadDeclined = true
+			// The fill the read joined stopped without these bytes.
+			vector.fillStopped = true
 			return nil
 		}
 
@@ -1129,10 +1124,7 @@ func (d *DiskCache) writeFileTo(
 	}
 
 	cleanup := func() error { return d.removeUnindexedFile(diskPath) }
-	// The download of a FilePrefetchObject a read started does not wait for the download
-	// of its path the read declined: it then publishes nothing.
-	p, readStarted := ctx.Value(fileDownloadKey{}).(*filePrefetchObject)
-	unpublished := false
+	p, _ := ctx.Value(fileDownloadKey{}).(*filePrefetchObject)
 	// A prefetch's fill waits for the path a fill of the object into either cache holds,
 	// and fills its own cache after it; a read's async fill does not wait for it.
 	if asyncFinalize && !prefetchFill(ctx) {
@@ -1140,10 +1132,6 @@ func (d *DiskCache) writeFileTo(
 		if w.owner, ok = d.paths.tryAcquire(diskPath, cleanup); !ok {
 			return false, nil
 		}
-	} else if readStarted && p.declined {
-		var ok bool
-		w.owner, ok = d.paths.tryAcquire(diskPath, cleanup)
-		unpublished = !ok
 	} else if w.owner, err = d.paths.acquire(ctx, diskPath, cleanup); err != nil {
 		return false, err
 	}
@@ -1171,17 +1159,13 @@ func (d *DiskCache) writeFileTo(
 		if own == nil {
 			own = d.newContentFill(diskPath)
 		}
-		download = newObjectDownload(f.Name(), own.measured() && !unpublished, bounds)
+		download = newObjectDownload(f.Name(), bounds)
 		if t, ok := target.(*wholeFillTarget); ok {
 			t.download = download
 		}
-		if unpublished {
-			defer download.retire()
-		} else {
-			d.startDownload(own, download, taken)
-			taken = false
-			w.owner.first(func() { d.finishDownload(download, own) })
-		}
+		d.startDownload(own, download, taken)
+		taken = false
+		w.owner.first(func() { d.finishDownload(download, own) })
 		own.started(download)
 		downloadStarted(ctx)
 		dst = downloadProgressWriter{w: f, download: download}
@@ -1236,9 +1220,6 @@ func (d *DiskCache) writeFileTo(
 		return false, err
 	}
 
-	if unpublished {
-		return false, nil
-	}
 	if t, ok := target.(*wholeFillTarget); ok {
 		if placed, err := t.place(ctx, n, &w, asyncFinalize && !prefetchFill(ctx)); !placed {
 			return false, err

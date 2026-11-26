@@ -90,7 +90,6 @@ func joinedColumnRead(t *testing.T, fileBacked bool, r PrefetchRange, answer fun
 	<-fs.diskCache.load.done
 	if fileBacked {
 		fs.diskCache.memoryPrefetchMax = r.Size - 1
-		fs.diskCache.downloadMaxExtraWait = time.Hour
 	}
 	s := &probeStorage{ObjectStorage: storage, at: r.Offset, gate: make(chan struct{}), answer: answer}
 	fs.server.raw = s
@@ -236,7 +235,6 @@ func stalledWholeDownload(t *testing.T, fs *S3FS) (*objectDownload, func()) {
 // its context's error.
 func TestDownloadWaitEndsWithReadContext(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.diskCache.downloadMaxExtraWait = time.Hour
 	download, _ := stalledWholeDownload(t, fs)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -412,7 +410,6 @@ func TestIndexObjectFillSkippingCacheWrites(t *testing.T) {
 func TestIndexObjectReadSkippingDiskReadsJoinsIndexDownload(t *testing.T) {
 	fs, _, data := newIndexObjectFS(t, true)
 	d := fs.diskCache
-	d.downloadMaxExtraWait = time.Hour
 	storage := newBlackBoxStorage(fs.server.raw, func(_ string, offset int64) bool { return offset == 0 })
 	fs.server.raw = storage
 	release := sync.OnceFunc(func() { close(storage.gate) })
@@ -479,9 +476,9 @@ func TestUncachingReadJoinsUncachingFlight(t *testing.T) {
 	require.Zero(t, s.others.Load())
 }
 
-// BC11: a read of the disk cache takes its bytes from the fastest live FilePrefetchObject
-// holding them, not from the first one registered.
-func TestFileDownloadPicksFastestLiveObject(t *testing.T) {
+// BC11: a read of the disk cache joins the first live FilePrefetchObject registered
+// holding its bytes, never a stopped one.
+func TestFileDownloadPicksLiveObject(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 64<<10)
 	d := fs.diskCache
 	<-d.load.done
@@ -490,7 +487,7 @@ func TestFileDownloadPicksFastestLiveObject(t *testing.T) {
 	require.NoError(t, os.WriteFile(tempPath, make([]byte, 64<<10), 0600))
 	object := func(written int64, stopped bool) *filePrefetchObject {
 		p := newFilePrefetchObject(context.Background(), 0, 64<<10)
-		o := newObjectDownload(tempPath, false, nil)
+		o := newObjectDownload(tempPath, nil)
 		t.Cleanup(o.retire)
 		o.begin(0)
 		if written > 0 {
@@ -510,7 +507,17 @@ func TestFileDownloadPicksFastestLiveObject(t *testing.T) {
 	f.registerLocked(diskPath, fast)
 	f.mu.Unlock()
 	got, _ := d.fileDownload(diskPath, 100, 200)
+	require.Same(t, slow.download, got)
+	f.mu.Lock()
+	f.forgetLocked(diskPath, slow)
+	f.mu.Unlock()
+	got, _ = d.fileDownload(diskPath, 100, 200)
 	require.Same(t, fast.download, got)
+	f.mu.Lock()
+	f.forgetLocked(diskPath, fast)
+	f.mu.Unlock()
+	got, _ = d.fileDownload(diskPath, 100, 200)
+	require.Nil(t, got)
 }
 
 // tailHeldStorage returns the first 64 KiB of every read at once and holds the rest until
@@ -593,7 +600,6 @@ func TestStreamedEntryPastPrefetchBufferReadsItself(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 0, max+2<<20)
 			d := fs.diskCache
 			d.memoryPrefetchMax = max
-			d.downloadMaxExtraWait = time.Hour
 			d.objectSplit.parts = 1
 			<-d.load.done
 			storage := &tailHeldStorage{ObjectStorage: fs.server.raw, gate: make(chan struct{})}

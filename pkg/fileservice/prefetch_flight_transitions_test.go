@@ -347,8 +347,10 @@ func TestFlightTransitionColumnReadJoinedFailedFlightFails(t *testing.T) {
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 1 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
 	diskPath := fs.diskCache.objectKey("object")
 	require.Eventually(t, func() bool {
-		_, ok := fs.diskCache.fastestPrefetch(diskPath, ranges[0].Offset, ranges[0].Offset+ranges[0].Size)
-		return ok
+		f := &fs.diskCache.prefetchObjects
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.joinableLocked(diskPath, false, ranges[0].Offset, ranges[0].Offset+ranges[0].Size, true) != nil
 	}, 5*time.Second, time.Millisecond)
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

@@ -22,7 +22,6 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // filePrefetchObject is a FilePrefetchObject of the bytes [start, end) of an object: they
@@ -43,8 +42,6 @@ type filePrefetchObject struct {
 	// before its download is registered.
 	holds       int
 	readStarted bool
-	// declined is set on one a read started past the download of its range it declined.
-	declined bool
 	// holdStarter is set when the download holds a reader for the read that started p,
 	// which reads it through readOwnAt, so that its file is not closed before that read
 	// copies its bytes: starterHeld while it holds one, starterDone once the read no longer
@@ -117,10 +114,6 @@ func (d *DiskCache) newContentFill(diskPath string) *filePrefetchObject {
 	p.whole, p.content = true, true
 	return p
 }
-
-// measured reports whether the rate of p's download counts toward the recent downloads'
-// rate: a fill of bytes the write path holds reads no object storage.
-func (p *filePrefetchObject) measured() bool { return !p.content }
 
 // splitParts sets the end of p, the fill of a whole object, at the object's size layout
 // gives, and returns the bounds of the parts it reads at once and the part a read needs
@@ -221,15 +214,15 @@ func (p *filePrefetchObject) started(o *objectDownload) {
 
 // joinLocked returns the prefetch object holding the bytes of p that p joins instead,
 // none for a whole object.
-func (p *filePrefetchObject) joinLocked(now time.Time) prefetchObject {
+func (p *filePrefetchObject) joinLocked() prefetchObject {
 	if p.whole {
 		return nil
 	}
-	return p.d.prefetchObjects.holdingLocked(p.diskPath, p.index, p.start, p.end, now, p.d.downloadMaxExtraWait)
+	return p.d.prefetchObjects.holdingLocked(p.diskPath, p.index, p.start, p.end)
 }
 
 // registerLocked registers p, joinable once its download is registered.
-func (p *filePrefetchObject) registerLocked(_, closing context.Context, _ time.Time) {
+func (p *filePrefetchObject) registerLocked(_, closing context.Context) {
 	f := &p.d.prefetchObjects
 	p.closing = closing
 	f.registerLocked(p.diskPath, p)
@@ -284,10 +277,10 @@ func (d *DiskCache) forgetFill(objectPath string, p *filePrefetchObject) {
 
 // holdingLocked returns the prefetch object of the object at objectPath, of the cache
 // index names, holding the bytes [start, end) that a FilePrefetchObject joins instead of
-// downloading them: the fastest one reads can join that caches them, or a registered
+// downloading them: one reads can join that caches them, or a registered
 // FilePrefetchObject a read started.
-func (f *prefetchObjects) holdingLocked(objectPath string, index bool, start, end int64, now time.Time, extraWait time.Duration) prefetchObject {
-	if o := f.fastestLocked(objectPath, index, start, end, now, extraWait, true); o != nil {
+func (f *prefetchObjects) holdingLocked(objectPath string, index bool, start, end int64) prefetchObject {
+	if o := f.joinableLocked(objectPath, index, start, end, true); o != nil {
 		return o
 	}
 	for _, o := range f.m[objectPath] {
@@ -331,34 +324,15 @@ func (d *DiskCache) downloadFile(ctx, closing context.Context, filePath string, 
 }
 
 // fileFill returns the live file fill of the object at objectPath, of the index-file cache
-// when index is set, holding the bytes [lo, hi) whose bytes arrive first, and its
-// download.
+// when index is set, holding the bytes [lo, hi), and its download.
 func (d *DiskCache) fileFill(objectPath string, index bool, lo, hi int64) (*filePrefetchObject, *objectDownload) {
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var best *filePrefetchObject
-	var bestDownload *objectDownload
-	var bestWait time.Duration
 	for _, o := range f.m[objectPath] {
-		p, ok := o.(*filePrefetchObject)
-		if !ok || !joinsLocked(p, index, lo, hi, false) {
-			continue
-		}
-		download := p.joinableDownload()
-		if _, wait := download.estimate(lo-p.start, hi-p.start); best == nil || wait < bestWait {
-			best, bestDownload, bestWait = p, download, wait
+		if p, ok := o.(*filePrefetchObject); ok && joinsLocked(p, index, lo, hi, false) {
+			return p, p.joinableDownload()
 		}
 	}
-	return best, bestDownload
-}
-
-// fileDownload returns the download of the file fill of the disk cache fileFill returns,
-// and where its bytes start in the object.
-func (d *DiskCache) fileDownload(objectPath string, lo, hi int64) (*objectDownload, int64) {
-	p, o := d.fileFill(objectPath, false, lo, hi)
-	if p == nil {
-		return nil, 0
-	}
-	return o, p.start
+	return nil, nil
 }

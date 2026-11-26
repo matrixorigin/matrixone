@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
+	btoml "github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,13 +71,6 @@ func readRange(t *testing.T, ctx context.Context, cache *DiskCache, offset, size
 	return result
 }
 
-// downloadsRate sets the recent download rate for the test.
-func downloadsRate(t *testing.T, bytesPerS float64) {
-	rate0 := downloadRates.rate()
-	t.Cleanup(func() { downloadRates.set(rate0) })
-	downloadRates.set(bytesPerS)
-}
-
 // rangeCosts sets the cost of range reads for the test.
 func rangeCosts(t *testing.T, latency, bytesPerS float64) {
 	c0 := rangeReadCosts.get()
@@ -95,15 +88,9 @@ func waitVector(t *testing.T, done chan *IOVector) *IOVector {
 	}
 }
 
-// rangeReadsCost makes every range read take latency for the test.
-func rangeReadsCost(t *testing.T, latency time.Duration) {
-	rangeCosts(t, latency.Seconds(), 1<<40)
-}
-
 // A read of an object being downloaded returns its bytes once they are written, without
 // waiting for the rest of the object.
 func TestDiskCacheReadWaitsForDownloadedBytes(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	cache, pw, filled := downloading(t)
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
@@ -133,7 +120,6 @@ func TestDiskCacheReadWaitsForDownloadedBytes(t *testing.T) {
 
 // A read whose bytes the download never writes is not served from it.
 func TestDiskCacheReadFallsBackWhenDownloadFails(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	cache, pw, filled := downloading(t)
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
@@ -147,7 +133,6 @@ func TestDiskCacheReadFallsBackWhenDownloadFails(t *testing.T) {
 
 // A read waiting for a download stops when its context is done.
 func TestDiskCacheReadOfDownloadStopsOnCancel(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	cache, _, _ := downloading(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	pending := readRange(t, ctx, cache, 6, 5)
@@ -157,7 +142,6 @@ func TestDiskCacheReadOfDownloadStopsOnCancel(t *testing.T) {
 
 func TestDiskCacheReadCleanupCancelsPendingRead(t *testing.T) {
 	t.Run("unconsumed result", func(t *testing.T) {
-		rangeReadsCost(t, time.Hour)
 		cache, pw, _ := downloading(t)
 		_, err := pw.Write([]byte("hello"))
 		require.NoError(t, err)
@@ -199,7 +183,6 @@ func TestDiskCacheDownloadCleanupJoinsAbandonedFill(t *testing.T) {
 
 // A download that ends with the object shorter than a read leaves the read unserved.
 func TestDiskCacheReadBeyondDownloadedObject(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	cache, pw, filled := downloading(t)
 	pending := readRange(t, context.Background(), cache, 2, 10)
 	_, err := pw.Write([]byte("hello"))
@@ -217,7 +200,7 @@ func TestObjectDownloadReadableAfterPublishOrRemoval(t *testing.T) {
 		download := cache.download(cache.objectKey("obj"))
 		_, err := pw.Write([]byte("hello"))
 		require.NoError(t, err)
-		require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
+		require.Eventually(t, func() bool { return download.writtenTo(0, 5) },
 			diskCacheLifecycleTestTimeout, time.Millisecond)
 		f, ok := download.acquire()
 		require.True(t, ok)
@@ -238,10 +221,9 @@ func TestObjectDownloadReadableAfterPublishOrRemoval(t *testing.T) {
 	}
 }
 
-// A read that chose to wait for the download keeps waiting while its bytes keep coming,
-// however late, instead of switching to a range read.
-func TestDiskCacheReadKeepsWaitingForChosenDownload(t *testing.T) {
-	rangeReadsCost(t, 20*time.Millisecond)
+// A read that joined the download keeps waiting while its bytes keep coming, however late,
+// instead of switching to a range read.
+func TestDiskCacheReadKeepsWaitingForJoinedDownload(t *testing.T) {
 	cache, pw, filled := downloading(t)
 	pending := readRange(t, context.Background(), cache, 12, 3)
 	t0 := time.Now()
@@ -251,7 +233,7 @@ func TestDiskCacheReadKeepsWaitingForChosenDownload(t *testing.T) {
 		require.NoError(t, err)
 	}
 	vec := waitVector(t, pending)
-	require.Greater(t, time.Since(t0), 20*time.Millisecond+cache.downloadMaxExtraWait, "past the budget")
+	require.Greater(t, time.Since(t0), 300*time.Millisecond, "until its bytes came")
 	require.True(t, vec.Entries[0].done)
 	require.Equal(t, []byte("cde"), vec.Entries[0].Data)
 	require.NoError(t, pw.Close())
@@ -261,7 +243,6 @@ func TestDiskCacheReadKeepsWaitingForChosenDownload(t *testing.T) {
 // A read waits for a download whose source stops sending until its context ends; the
 // download then fails after the idle timeout.
 func TestDiskCacheReadLeavesStalledDownload(t *testing.T) {
-	rangeReadsCost(t, 20*time.Millisecond)
 	idle0 := sourceIdleTimeout
 	sourceIdleTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { sourceIdleTimeout = idle0 })
@@ -373,7 +354,9 @@ func TestDiskCacheWaitedDownloadIsNotTimed(t *testing.T) {
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 	waited := make(chan bool, 1)
 	go func() {
-		_, ok := o.waitFor(ctx, 0, 3, diskCacheLifecycleTestTimeout)
+		ctx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+		defer cancel()
+		_, ok := o.waitFor(ctx, 0, 3)
 		waited <- ok
 	}()
 	require.Eventually(t, func() bool {
@@ -392,75 +375,45 @@ func TestDiskCacheWaitedDownloadIsNotTimed(t *testing.T) {
 	require.True(t, cache.cache.Contains(cache.wholePath("obj", 6)))
 }
 
-// A read whose bytes the download writes later than a range read fetches them goes to a
-// range read at once, and a read of bytes already written still reads the download.
-func TestDiskCacheReadDeclinesDownloadFarBehind(t *testing.T) {
-	rangeReadsCost(t, time.Nanosecond)
-	downloadsRate(t, 1)
+// A read of bytes the download writes far behind the bytes it has written waits for them,
+// and a read of bytes already written reads them at once.
+func TestDiskCacheReadJoinsDownloadFarBehind(t *testing.T) {
 	cache, pw, filled := downloading(t)
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
 	download := cache.download(cache.objectKey("obj"))
-	require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
+	require.Eventually(t, func() bool { return download.writtenTo(0, 5) },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
 
-	vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 1, Size: 3}, {Offset: 100 << 20, Size: 3}}}
-	defer vec.Release()
+	vec := &IOVector{FilePath: "obj", Entries: []IOEntry{{Offset: 1, Size: 3}}}
 	require.NoError(t, cache.Read(context.Background(), vec))
 	require.True(t, vec.Entries[0].done, "bytes already written")
 	require.Equal(t, []byte("ell"), vec.Entries[0].Data)
-	require.False(t, vec.Entries[1].done)
-	require.True(t, vec.downloadDeclined)
+	vec.Release()
 
-	require.NoError(t, pw.Close())
-	require.NoError(t, <-filled)
-}
-
-func TestDiskDownloadMaxExtraWaitConfig(t *testing.T) {
-	config := func(extra *toml.Duration) CacheConfig {
-		path := t.TempDir()
-		capacity := toml.ByteSize(1 << 20)
-		return CacheConfig{DiskPath: &path, DiskCapacity: &capacity, DiskDownloadMaxExtraWait: extra}
-	}
-	caches := newTestFileServiceCaches(t, config(nil))
-	require.Equal(t, DefaultDiskDownloadMaxExtraWait, caches.disk.downloadMaxExtraWait)
-	caches = newTestFileServiceCaches(t, config(&toml.Duration{Duration: 7 * time.Millisecond}))
-	require.Equal(t, 7*time.Millisecond, caches.disk.downloadMaxExtraWait)
-}
-
-// A read whose bytes are most of what the download still writes before them waits for
-// the download even without a margin, instead of fetching those bytes again.
-func TestDiskCacheReadWaitsWhenItWouldDuplicateTheDownload(t *testing.T) {
-	rangeReadsCost(t, time.Nanosecond)
-	downloadsRate(t, 1)
-	cache, pw, filled := downloading(t)
-	cache.downloadMaxExtraWait = 0
-	_, err := pw.Write([]byte("hello"))
+	pending := readRange(t, context.Background(), cache, 64<<10, 3)
+	require.Never(t, func() bool { return len(pending) > 0 }, 50*time.Millisecond, time.Millisecond,
+		"the read waits for the download")
+	_, err = pw.Write(make([]byte, 64<<10+10))
 	require.NoError(t, err)
-	download := cache.download(cache.objectKey("obj"))
-	require.Eventually(t, func() bool { behind, _ := download.estimate(0, 5); return behind == 0 },
-		diskCacheLifecycleTestTimeout, time.Millisecond)
-
-	pending := readRange(t, context.Background(), cache, 5, 20)
-	select {
-	case <-pending:
-		t.Fatal("a read most of the download's next bytes did not wait for them")
-	case <-time.After(20 * time.Millisecond):
-	}
-	_, err = pw.Write([]byte("0123456789abcdefghij"))
-	require.NoError(t, err)
-	vec := waitVector(t, pending)
+	vec = waitVector(t, pending)
 	require.True(t, vec.Entries[0].done)
-	require.Equal(t, []byte("0123456789abcdefghij"), vec.Entries[0].Data)
-	require.False(t, vec.downloadDeclined)
+	require.False(t, vec.fillStopped)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
+}
+
+// A configuration that still sets the removed disk-download-max-extra-wait loads.
+func TestDiskDownloadMaxExtraWaitRemovedConfigLoads(t *testing.T) {
+	var config CacheConfig
+	_, err := btoml.Decode("disk-download-max-extra-wait = \"7ms\"\ndisk-path = \"cache\"\n", &config)
+	require.NoError(t, err)
+	require.Equal(t, "cache", *config.DiskPath)
 }
 
 // Bytes a read takes from a download count as read from the cached file once the
 // download publishes it.
 func TestDiskCacheDownloadReadsCountAsCachedFileReads(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	cache, pw, filled := downloading(t)
 	_, err := pw.Write([]byte("hello"))
 	require.NoError(t, err)
@@ -475,24 +428,23 @@ func TestDiskCacheDownloadReadsCountAsCachedFileReads(t *testing.T) {
 	require.Equal(t, int64(3), served)
 }
 
-// Caching content already in memory does not feed the download rate, while a fill from
-// object storage does; both count toward the size of whole objects.
-func TestDiskCacheContentFillDoesNotFeedDownloadRate(t *testing.T) {
+// Caching content already in memory and a fill from object storage both count toward the
+// size of whole objects.
+func TestDiskCacheContentAndDownloadFillsCountTowardWholeFileMax(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(64<<20), nil, false, nil, "")
 	require.NoError(t, err)
 	defer cache.Close(ctx)
 	content := make([]byte, 4<<20)
 
-	downloadsRate(t, 1)
 	require.NoError(t, cache.setFileContent(ctx, "content", content, false))
-	require.Equal(t, float64(1), downloadRates.rate())
 	require.Equal(t, int64(len(content)), cache.wholeFileMax.Load())
 
+	larger := make([]byte, 5<<20)
 	require.NoError(t, cache.SetFile(ctx, "download", func(context.Context) (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(content)), nil
+		return io.NopCloser(bytes.NewReader(larger)), nil
 	}))
-	require.NotEqual(t, float64(1), downloadRates.rate())
+	require.Equal(t, int64(len(larger)), cache.wholeFileMax.Load())
 }
 
 // A range read is timed only when the file service drains it itself.
@@ -523,9 +475,8 @@ func TestS3FSRangeReadCostTimesDrainedReads(t *testing.T) {
 	require.NotEqual(t, float64(sentinel), rangeReadCosts.get().latency, "a read the file service drains")
 }
 
-// A fill from memory is tracked as a download that readers can read, without measuring
-// its rate.
-func TestDiskCacheContentFillIsAnUnmeasuredDownload(t *testing.T) {
+// A fill from memory is tracked as a download that readers can read.
+func TestDiskCacheContentFillIsADownload(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	require.NoError(t, err)
@@ -537,7 +488,6 @@ func TestDiskCacheContentFillIsAnUnmeasuredDownload(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool { return cache.download(cache.objectKey("obj")) != nil },
 		diskCacheLifecycleTestTimeout, time.Millisecond)
-	require.False(t, cache.download(cache.objectKey("obj")).measured)
 	require.NoError(t, pw.Close())
 	require.NoError(t, <-filled)
 }
@@ -545,7 +495,6 @@ func TestDiskCacheContentFillIsAnUnmeasuredDownload(t *testing.T) {
 // Bytes read from a download count toward its file's read share also when the file is
 // evicted as soon as it is published.
 func TestDiskCacheDownloadReadsCountWhenEvictedOnPublish(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1024), nil, false, nil, "")
 	require.NoError(t, err)
@@ -629,7 +578,6 @@ func startTestBlockedRead(t *testing.T, pw *io.PipeWriter, w blockingWriter, fn 
 // Bytes of a read still running when its download publishes the file, which is then
 // evicted at once, count toward the file's read share.
 func TestDiskCacheDownloadReadOverlappingPublicationCounts(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1024), nil, false, nil, "")
 	require.NoError(t, err)
@@ -669,7 +617,6 @@ func TestDiskCacheDownloadReadOverlappingPublicationCounts(t *testing.T) {
 // Bytes the read that started a download captures count toward the file's read share also
 // when the file is evicted as soon as it is published.
 func TestDiskCacheDownloadCaptureCountsWhenEvictedOnPublish(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1024), nil, false, nil, "")
 	require.NoError(t, err)
@@ -741,7 +688,7 @@ func newPreloadGeneration(t *testing.T, p *preloadUsage, diskPath string, data [
 	t.Helper()
 	tempPath := filepath.Join(t.TempDir(), "download")
 	require.NoError(t, os.WriteFile(tempPath, data, 0600))
-	o := newObjectDownload(tempPath, false, nil)
+	o := newObjectDownload(tempPath, nil)
 	t.Cleanup(o.retire)
 	o.credit = func(n int64) { p.readDownload(diskPath, o, n) }
 	p.cachedDownload(diskPath, diskPath, o)
@@ -832,7 +779,6 @@ func TestDiskCacheDownloadReadShareOnlyCountsSuccessfulReads(t *testing.T) {
 // A failed read that overlaps publication and immediate eviction must not turn
 // its reservation into a non-zero read-share sample.
 func TestDiskCacheDownloadFailedReadDoesNotCountWhenEvictedOnPublish(t *testing.T) {
-	rangeReadsCost(t, time.Hour)
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1024), nil, false, nil, "")
 	require.NoError(t, err)
@@ -1072,7 +1018,7 @@ func TestDiskCacheDownloadCaptureDoesNotCountShortReads(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tempPath := filepath.Join(t.TempDir(), "download")
 			require.NoError(t, os.WriteFile(tempPath, []byte(tc.data), 0600))
-			o := newObjectDownload(tempPath, false, nil)
+			o := newObjectDownload(tempPath, nil)
 			defer o.retire()
 			o.advance(0, tc.advertised)
 			o.end(true)

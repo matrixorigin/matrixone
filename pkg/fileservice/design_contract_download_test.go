@@ -81,12 +81,11 @@ func (g *gatedReader) Read(p []byte) (int, error) {
 
 func (g *gatedReader) Close() error { return g.r.Close() }
 
-func newDownloadContractFS(t *testing.T, maxExtraWait time.Duration) (*S3FS, *gatedStorage, []byte) {
+func newDownloadContractFS(t *testing.T) (*S3FS, *gatedStorage, []byte) {
 	ctx := context.Background()
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
 		DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
-		MemoryCapacity:           ptrTo[toml.ByteSize](0),
-		DiskDownloadMaxExtraWait: &toml.Duration{Duration: maxExtraWait},
+		MemoryCapacity: ptrTo[toml.ByteSize](0),
 	}, nil, false, false)
 	require.NoError(t, err)
 	data := make([]byte, 8<<20)
@@ -148,9 +147,9 @@ func requireReturns(t *testing.T, done <-chan downloadContractRead) []byte {
 
 // The read that starts a download returns once its own bytes are written, other reads of
 // written bytes take them from the download, a read of bytes not yet written waits for
-// them when the margin allows, and the object is fetched from storage once.
+// them, and the object is fetched from storage once.
 func TestDesignDownloadFetchedOnce(t *testing.T) {
-	fs, storage, data := newDownloadContractFS(t, time.Hour)
+	fs, storage, data := newDownloadContractFS(t)
 
 	leader := requireReturns(t, storage.readAsync(fs, 1024, 4))
 	require.Equal(t, data[1024:1028], leader, "the first reader returned before the download finished")
@@ -175,21 +174,24 @@ func TestDesignDownloadFetchedOnce(t *testing.T) {
 	require.FileExists(t, fs.diskCache.wholePath("object", int64(len(data))))
 }
 
-// "Otherwise it reads its range at once": with no margin, a read far behind the download
-// fetches its range instead of waiting, and gets the right bytes.
-func TestDesignDownloadFarBehindReadsRange(t *testing.T) {
-	fs, storage, data := newDownloadContractFS(t, 0)
-	// The download stops before it measures its own rate, and the recent rate puts the
-	// read's bytes seconds after a range read.
-	storage.gateAt = downloadRateMinBytes / 2
-	downloadsRate(t, 1<<20)
-	rangeCosts(t, 0.001, 1<<30)
+// A read far behind a download stalled after its first bytes waits for it instead of
+// reading its range, and gets the right bytes once the download goes on.
+func TestDesignDownloadFarBehindWaits(t *testing.T) {
+	fs, storage, data := newDownloadContractFS(t)
+	storage.gateAt = 128 << 10
 
 	requireReturns(t, storage.readAsync(fs, 1024, 4))
 	ranges := storage.ranges.Load()
 
-	far := requireReturns(t, storage.readAsync(fs, 6<<20, 17))
+	done := storage.readAsync(fs, 6<<20, 17)
+	select {
+	case result := <-done:
+		t.Fatalf("a read far behind the download returned before its bytes were written: %v", result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.Equal(t, ranges, storage.ranges.Load(), "the read fetched no range")
+	close(storage.release)
+	far := requireReturns(t, done)
 	require.Equal(t, data[6<<20:6<<20+17], far)
-	require.Greater(t, storage.ranges.Load(), ranges, "the read fetched its range")
-	require.NotNil(t, fs.diskCache.download(fs.diskCache.objectKey("object")), "without waiting for the stalled download")
+	require.Equal(t, int64(1), storage.opens.Load(), "the object was fetched from storage once")
 }

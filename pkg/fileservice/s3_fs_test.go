@@ -4087,7 +4087,7 @@ func TestS3FSCacheUpdatesPreserveRetryOrder(t *testing.T) {
 
 // Exercise both real disk-cache fallback paths while another fill owns the file.
 func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
-	for _, mode := range []string{"download declined", "fill admission skipped"} {
+	for _, mode := range []string{"fill stopped", "fill admission skipped"} {
 		for _, tc := range []struct {
 			name                    string
 			first, second           int64
@@ -4120,11 +4120,24 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(WithEventLogger(t.Context()))
 				defer cancel()
-				rangeReadsCost(t, time.Nanosecond)
 				var disk *DiskCache
-				if mode == "download declined" {
-					disk, _, _ = downloading(t)
-					disk.downloadMaxExtraWait = 0
+				if mode == "fill stopped" {
+					// The download ends with no bytes once the read joined it.
+					var pw *io.PipeWriter
+					disk, pw, _ = downloading(t)
+					download := disk.download(disk.objectKey("obj"))
+					go func() {
+						for ctx.Err() == nil {
+							download.mu.Lock()
+							joined := len(download.waiters) > 0
+							download.mu.Unlock()
+							if joined {
+								_ = pw.Close()
+								return
+							}
+							time.Sleep(time.Millisecond)
+						}
+					}()
 				} else {
 					var err error
 					disk, err = NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
@@ -4235,7 +4248,7 @@ func TestS3FSSparseDiskFallbackErrors(t *testing.T) {
 					require.True(t, ok, "%v", err)
 					require.Equal(t, 416, status)
 				}
-				require.Equal(t, mode == "download declined", vector.downloadDeclined)
+				require.Equal(t, mode == "fill stopped", vector.fillStopped)
 				require.Equal(t, wantOpens, opens)
 				require.Equal(t, wantCloses, closes)
 				wantOffsets := []int64{tc.first}

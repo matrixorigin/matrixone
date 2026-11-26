@@ -76,7 +76,6 @@ func TestJoinedWholeReadFallsBackAfterPartIdleTimeout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: tc.parts, min: 1}, 256<<10)
-			fs.diskCache.downloadMaxExtraWait = time.Minute
 			<-fs.diskCache.load.done
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

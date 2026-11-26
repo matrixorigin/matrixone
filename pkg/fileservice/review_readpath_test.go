@@ -29,7 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLargeReadPastDeclinedFilePrefetch(t *testing.T) {
+// A large exact read of bytes a stalled file prefetch holds joins it: it waits, opens no
+// source of its own, and returns the bytes once the prefetch goes on.
+func TestLargeReadJoinsStalledFilePrefetch(t *testing.T) {
 	const size = 9 << 20
 	for _, tc := range []struct {
 		name   string
@@ -39,13 +41,9 @@ func TestLargeReadPastDeclinedFilePrefetch(t *testing.T) {
 		{name: "cache_writes_enabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rangeCosts(t, 0.001, 100<<20)
-			downloadsRate(t, 1024)
-
 			fs, _, data := newPrefetchRangeFS(t, 0, 2*size)
 			d := fs.diskCache
 			d.memoryPrefetchMax = minDiskPrefetchMemoryMax
-			d.downloadMaxExtraWait = 0
 			d.objectSplit.parts = 1
 			<-d.load.done
 
@@ -54,7 +52,8 @@ func TestLargeReadPastDeclinedFilePrefetch(t *testing.T) {
 				return opens.Add(1) == 1
 			})
 			fs.server.raw = storage
-			defer close(storage.gate)
+			release := sync.OnceFunc(func() { close(storage.gate) })
+			defer release()
 
 			ctx := context.Background()
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
@@ -63,20 +62,23 @@ func TestLargeReadPastDeclinedFilePrefetch(t *testing.T) {
 			require.Eventually(t, func() bool { return opens.Load() == 1 }, 5*time.Second, time.Millisecond)
 			download, _ := d.fileDownload(d.objectKey("object"), 0, size)
 			require.NotNil(t, download)
-			_, eta := download.estimate(0, size)
-			require.Greater(t, eta, rangeReadCosts.cost(size), "the original file prefetch is too slow to join")
 
-			readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			vec := &IOVector{
 				FilePath: "object", Policy: ExactColumnsRead | SkipMemoryCache | tc.policy,
 				Entries: []IOEntry{{Size: size}},
 			}
 			defer vec.Release()
-			err := fs.Read(readCtx, vec)
-			require.NoError(t, err, "an exact read that declines the slow prefetch should open its own source; source opens=%d", opens.Load())
+			done := make(chan error, 1)
+			go func() { done <- fs.Read(readCtx, vec) }()
+			require.Never(t, func() bool { return len(done) > 0 }, 200*time.Millisecond, time.Millisecond,
+				"the read waits for the prefetch it joined")
+			require.EqualValues(t, 1, opens.Load(), "the read opens no source of its own")
+			release()
+			require.NoError(t, <-done)
 			require.True(t, bytes.Equal(data[:size], vec.Entries[0].Data), "the exact range should be returned")
-			require.EqualValues(t, 2, opens.Load(), "the read should fall back to object storage")
+			require.EqualValues(t, 1, opens.Load())
 		})
 	}
 }
@@ -100,7 +102,6 @@ func TestJoinedFileRangeWaitsForCaller(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
 			d := fs.diskCache
 			d.memoryPrefetchMax = 128 << 10
-			d.downloadMaxExtraWait = 5 * time.Second
 			d.objectSplit.parts = 1
 			<-d.load.done
 			storage := newBlackBoxStorage(fs.server.raw, func(_ string, start int64) bool { return start == 0 })

@@ -142,35 +142,33 @@ func TestS3FSObjectSplitFailedPartPublishesNothing(t *testing.T) {
 // A reader of a part waits only for that part.
 func TestObjectDownloadWaitsForItsPart(t *testing.T) {
 	ctx := context.Background()
-	o := newObjectDownload("", false, []int64{0, 4, 8})
-	_, wait := o.estimate(0, 1)
-	require.Equal(t, rangeReadCosts.firstByte()+time.Duration(float64(time.Second)/downloadRates.rate()), wait,
-		"a part that has not begun is estimated as beginning now")
+	o := newObjectDownload("", []int64{0, 4, 8})
+	short := func() context.Context {
+		ctx, cancel := context.WithTimeout(ctx, time.Millisecond)
+		t.Cleanup(cancel)
+		return ctx
+	}
+	require.False(t, o.hasBegun())
 	o.begin(0)
 	o.begin(1)
-	_, wait = o.estimate(0, 1)
-	require.Positive(t, wait, "a part begun but not yet read is up to a latency away")
-	require.LessOrEqual(t, wait, rangeReadCosts.firstByte()+time.Duration(float64(time.Second)/downloadRates.rate()))
+	require.True(t, o.hasBegun())
 	o.advance(1, 4)
-	written, ok := o.waitFor(ctx, 4, 8, time.Millisecond)
+	written, ok := o.waitFor(short(), 4, 8)
 	require.True(t, ok)
 	require.Equal(t, int64(8), written)
-	behind, wait := o.estimate(4, 8)
-	require.Zero(t, behind)
-	require.Zero(t, wait)
+	require.True(t, o.writtenTo(4, 8))
 
-	_, ok = o.waitFor(ctx, 0, 1, time.Millisecond)
+	_, ok = o.waitFor(short(), 0, 1)
 	require.False(t, ok, "the first part has no byte")
-	behind, _ = o.estimate(0, 8)
-	require.Equal(t, int64(4), behind)
+	require.False(t, o.writtenTo(0, 8))
 
 	o.advance(0, 2)
-	written, ok = o.waitFor(ctx, 0, 2, time.Millisecond)
+	written, ok = o.waitFor(short(), 0, 2)
 	require.True(t, ok)
 	require.Equal(t, int64(2), written, "the bytes written from the start stop at the gap")
 	o.advance(0, 2)
 	o.end(true)
-	written, ok = o.waitFor(ctx, 0, -1, time.Millisecond)
+	written, ok = o.waitFor(short(), 0, -1)
 	require.True(t, ok)
 	require.Equal(t, int64(8), written)
 }
@@ -282,7 +280,7 @@ func waitingForConn(d *DiskCache, diskPath string) bool {
 		}
 		if download := p.joinableDownload(); download != nil {
 			download.mu.Lock()
-			began := slices.ContainsFunc(download.parts, func(part downloadPart) bool { return !part.began.IsZero() })
+			began := slices.ContainsFunc(download.parts, func(part downloadPart) bool { return part.begun })
 			download.mu.Unlock()
 			if !began {
 				return true
@@ -541,13 +539,13 @@ func TestJoinableTakesPartNotBegun(t *testing.T) {
 	f.registerLocked(diskPath, p)
 	f.mu.Unlock()
 	defer d.endFilePrefetch(diskPath, p)(nil)
-	o := newObjectDownload("", false, []int64{0, 4, 8})
+	o := newObjectDownload("", []int64{0, 4, 8})
 	o.begin(0)
 	p.started(o)
 	covering := func(lo, hi int64) prefetchObject {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return d.joinableLocked(diskPath, false, lo, hi, time.Now(), true)
+		return d.prefetchObjects.joinableLocked(diskPath, false, lo, hi, true)
 	}
 	require.NotNil(t, covering(1, 2), "the first part has begun")
 	require.NotNil(t, covering(5, 6), "the second part has not begun")

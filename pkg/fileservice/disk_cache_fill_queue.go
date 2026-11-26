@@ -22,7 +22,6 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -576,8 +575,7 @@ func (d *DiskCache) startFillLocked(q *queuedFill, background bool, memory bool)
 		end()
 		return
 	}
-	now := time.Now()
-	if o := f.holdingLocked(diskPath, false, q.start, q.end, now, d.downloadMaxExtraWait); o != nil {
+	if o := f.holdingLocked(diskPath, false, q.start, q.end); o != nil {
 		if p, ok := o.(*filePrefetchObject); ok {
 			p.kept = true
 		}
@@ -599,7 +597,7 @@ func (d *DiskCache) startFillLocked(q *queuedFill, background bool, memory bool)
 	p := d.newFileObject(ctx, filePath, q.start, q.end, q.src, needs)
 	p.fill = q
 	setStateLocked(p, objectRegistered)
-	p.registerLocked(ctx, closing, now)
+	p.registerLocked(ctx, closing)
 	go p.run()
 }
 

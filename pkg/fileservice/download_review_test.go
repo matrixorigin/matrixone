@@ -154,23 +154,24 @@ func TestSplitReadReservesFirstConnectionForNeededPart(t *testing.T) {
 	}
 }
 
-func TestFileRangeRespectsZeroExtraWait(t *testing.T) {
+// An exact read of bytes a stalled file-backed fill holds joins it and waits for its
+// bytes; one that skips disk-cache reads cannot read what the fill caches and reads its
+// bytes itself.
+func TestFileRangeReadJoinsStalledFileFill(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		policy Policy
+		joins  bool
 	}{
 		{name: "bypass_disk_reads", policy: SkipDiskCacheReads},
-		{name: "can_read_disk_cache"},
+		{name: "can_read_disk_cache", joins: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rangeCosts(t, 0.001, 100<<20)
-			downloadsRate(t, 1024)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
 			d := fs.diskCache
 			d.memoryPrefetchMax = 128 << 10
-			d.downloadMaxExtraWait = 0
 			<-d.load.done
 
 			open := make(chan struct{})
@@ -195,8 +196,6 @@ func TestFileRangeRespectsZeroExtraWait(t *testing.T) {
 			}
 			download, _ := d.fileDownload(d.objectKey("object"), 16, 80)
 			require.NotNil(t, download)
-			_, eta := download.estimate(16, 80)
-			require.Greater(t, eta, rangeReadCosts.cost(64))
 
 			vec := &IOVector{FilePath: "object", Policy: ExactColumnsRead | SkipDiskCacheWrites | tc.policy,
 				Entries: []IOEntry{{Offset: 16, Size: 64}}}
@@ -227,7 +226,7 @@ func TestFileRangeRespectsZeroExtraWait(t *testing.T) {
 			unblock()
 			require.NoError(t, <-readDone)
 			require.Equal(t, data[16:80], vec.Entries[0].Data)
-			require.Zero(t, queuedWaiters, "a read joined the file prefetch despite its ETA exceeding the zero extra-wait budget")
+			require.Equal(t, tc.joins, queuedWaiters > 0, "the read waits on the file fill it joined")
 		})
 	}
 }
@@ -267,9 +266,6 @@ func TestExactReadsShareLargeRange(t *testing.T) {
 			defer cancel()
 			fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
 			fs.diskCache.memoryPrefetchMax = 128 << 10
-			// A read joins a FilePrefetchObject only within the extra wait of a range read;
-			// the stalled download here is joined only under a budget that covers it.
-			fs.diskCache.downloadMaxExtraWait = time.Hour
 			<-fs.diskCache.load.done
 
 			// Exact column reads skip the grid. Use distinct start offsets so the

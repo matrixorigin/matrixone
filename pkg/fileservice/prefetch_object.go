@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -33,8 +32,8 @@ type prefetchObject interface {
 	live() bool
 	// joinable reports whether reads can join it yet.
 	joinable() bool
-	// eta estimates how long after now its bytes [lo, hi) arrive.
-	eta(now time.Time, lo, hi int64) time.Duration
+	// hasBytes reports whether it read its bytes [lo, hi), or may still.
+	hasBytes(lo, hi int64) bool
 	// caches reports whether it caches its bytes.
 	caches() bool
 	// endsCached reports whether its bytes end cached, by it or by the read that started
@@ -70,6 +69,12 @@ func (f *memoryPrefetchObject) span() (int64, int64) { return f.start, f.end }
 func (f *memoryPrefetchObject) joinable() bool { return true }
 
 func (f *memoryPrefetchObject) live() bool { return f.ctx == nil || f.ctx.Err() == nil }
+
+func (f *memoryPrefetchObject) hasBytes(lo, hi int64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.finished || f.start+f.n >= hi
+}
 
 func (f *memoryPrefetchObject) caches() bool { return !f.skipCache }
 
@@ -116,13 +121,10 @@ func (p *filePrefetchObject) live() bool {
 	return o != nil && o.isComplete()
 }
 
-func (p *filePrefetchObject) eta(_ time.Time, lo, hi int64) time.Duration {
+// hasBytes reports whether its download wrote the bytes [lo, hi), or may still.
+func (p *filePrefetchObject) hasBytes(lo, hi int64) bool {
 	o := p.joinableDownload()
-	if o == nil {
-		return time.Duration(1<<63 - 1)
-	}
-	_, wait := o.estimate(lo-p.start, hi-p.start)
-	return wait
+	return o == nil || o.hasBytes(lo-p.start, hi-p.start)
 }
 
 func (p *filePrefetchObject) caches() bool { return true }
@@ -200,7 +202,7 @@ func (p *filePrefetchObject) readOwnAt(ctx context.Context, off int64, dst []byt
 	if o == nil || !held {
 		return p.readAt(ctx, off, dst)
 	}
-	if _, ok := o.waitFor(ctx, off-p.start, off-p.start+int64(len(dst)), 0); !ok {
+	if _, ok := o.waitFor(ctx, off-p.start, off-p.start+int64(len(dst))); !ok {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

@@ -44,13 +44,6 @@ type CacheConfig struct {
 	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
 	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
 	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
-	// DiskDownloadMaxExtraWait bounds how much later than a range read from object
-	// storage a read may get its bytes by waiting for the download of their object to
-	// the disk cache. A read waits only if the download will write its bytes within that
-	// margin, otherwise it reads its range at once. Larger values make fewer object
-	// storage requests and slower reads; 0 makes the fastest reads. Default
-	// DefaultDiskDownloadMaxExtraWait.
-	DiskDownloadMaxExtraWait *toml.Duration `toml:"disk-download-max-extra-wait"`
 	// DiskPrefetchObjectSplit is how many parts, from 1 to 4, the download of a whole
 	// object, or a prefetch run, of at least DiskPrefetchObjectSplitMin bytes reads at
 	// once; 1 reads it as one part. Default DefaultDiskPrefetchObjectSplit.
@@ -198,11 +191,10 @@ func newFileServiceCaches(
 			name,
 			config.MetricScope,
 			diskCacheOptions{
-				downloadMaxExtraWait: config.diskDownloadMaxExtraWait(),
-				prefetchRange:        prefetchRangeConfig{on: true},
-				objectSplit:          config.diskObjectSplit(),
-				memoryPrefetchMax:    config.diskPrefetchMemoryMax(),
-				openFilesMax:         config.diskOpenFilesMax(),
+				prefetchRange:     prefetchRangeConfig{on: true},
+				objectSplit:       config.diskObjectSplit(),
+				memoryPrefetchMax: config.diskPrefetchMemoryMax(),
+				openFilesMax:      config.diskOpenFilesMax(),
 			},
 		)
 		if err != nil {
@@ -237,16 +229,6 @@ func checkIndexFileDiskPath(diskPath, indexPath string) error {
 		return moerr.NewInvalidInputNoCtxf("index-file-disk-path %q overlaps disk-path %q", indexPath, diskPath)
 	}
 	return nil
-}
-
-// DefaultDiskDownloadMaxExtraWait is the default DiskDownloadMaxExtraWait.
-const DefaultDiskDownloadMaxExtraWait = 200 * time.Millisecond
-
-func (c *CacheConfig) diskDownloadMaxExtraWait() time.Duration {
-	if c.DiskDownloadMaxExtraWait == nil {
-		return DefaultDiskDownloadMaxExtraWait
-	}
-	return c.DiskDownloadMaxExtraWait.Duration
 }
 
 const (

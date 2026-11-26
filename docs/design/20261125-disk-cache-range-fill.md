@@ -87,9 +87,10 @@ whole-object downloads.
 ### How a read joins, without a cost model (decision 2026-11-25)
 
 - A read that misses the cache joins every fill of its own cache that holds bytes it
-  needs, waiting or running, whatever the fill's backing, parts or starter, and makes
-  fills of its own only for the bytes no fill holds, or reads object storage without
-  caching, as today.
+  needs, waiting or running, whatever the fill's backing, parts or starter, each for the
+  bytes it holds, and makes fills of its own only for the bytes no fill holds, or reads
+  object storage without caching, as today. A fill that ended holds only the bytes it
+  wrote.
 - Joining a waiting fill makes it foreground: it orders before every background fill, may
   use any free room, and is no longer charged to the background bytes. A waiting fill of
   a whole object large enough to split starts its first part at the first block the first
@@ -98,9 +99,9 @@ whole-object downloads.
   foreground charge.
 - A joined read waits until its own context ends or the fill stops; a fill that is
   canceled, sends no bytes within the idle timeout, or ends short of its range leaves the
-  read to make a fill of its own. There is no estimate of when bytes will arrive, no
-  extra-wait budget and no duplicate-size rule; the extra-wait setting is accepted and
-  ignored.
+  read to make a fill of its own for the bytes it did not write. There is no estimate of
+  when bytes will arrive, no extra-wait budget, no duplicate-size rule and no choice of
+  the fastest fill; the extra-wait setting is removed.
 
 There is one rule for which fill a read may join, applied the same way at every place a
 read looks:
@@ -313,10 +314,15 @@ neither of which waits for a read or for caller code, and nothing waits for memo
 - No persisted data format changes; only the disk cache's own file layout does.
 - After an upgrade, whole objects cached by the earlier version are removed at startup,
   so the first reads of them download them again. Range files keep their names and stay.
-- Configuration is unchanged, except that the extra-wait setting is accepted and ignored,
-  with a deprecation log, and the object-storage arguments add `object-storage-memory`. The
-  publisher adds queue-depth and wait metrics, and the server reports the memory it holds
-  by class.
+- Configuration is unchanged, except that the extra-wait setting
+  (`disk-download-max-extra-wait`) is removed, and the object-storage arguments add
+  `object-storage-memory`. A configuration file that still sets it loads, as the
+  configuration ignores settings it does not know. The publisher adds queue-depth and
+  wait metrics, and the server reports the memory it holds by class.
+- Reads of a download are counted as served from bytes written, after waiting, or after
+  the download stopped (`mo_fs_disk_cache_download_read_total{type="stopped"}`, which
+  replaces `timed-out`); the `declined` count and
+  `mo_fs_disk_cache_download_declined_bytes_total` are removed.
 - Fix-missing no longer restores objects from the disk cache: the `fix-missing` setting is
   accepted and ignored, with a deprecation log.
 - Upgrade is by full shutdown; no mixed-version behavior is involved.
