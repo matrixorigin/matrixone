@@ -24,7 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
@@ -270,4 +272,77 @@ func TestTableMetaReaderMaterializesAppendableVisibility(t *testing.T) {
 	require.NoError(t, txn.engine.DrainUnpublishedPendingForTest(ctx))
 	issue25590RequireGone(t, fs, failedName, "failed replacement is reclaimed")
 	issue25590RequireKept(t, fs, shared.ObjectName().String(), "committed shared source survives mixed collection failure")
+}
+
+func TestTableMetaReaderMaterializesEvolvedAppendableLayout(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		secondSeq uint16
+	}{
+		{name: "missing tail column", secondSeq: 1},
+		{name: "missing interior column", secondSeq: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn, _, fs, table := newR32MaterializingFixture(t)
+			ctx := t.Context()
+			mp := txn.proc.Mp()
+			disarm := issue25590ArmKeyedFault(t, objectio.FJ_CNFlushSmallObjs, 20, "")
+			defer disarm()
+			def := table.tableDef
+			def.FeatureFlag = features.SchemaEvolved
+			intType := types.T_int64.ToType()
+			rowID := def.Cols[2]
+			rowID.Seqnum = objectio.SEQNUM_ROWID
+			def.Cols = append(def.Cols[:2], &plan.ColDef{Name: "extra", Seqnum: 2, Typ: intType.PlanType()}, rowID)
+
+			input := batch.NewWithSize(4)
+			defer input.Clean(mp)
+			for i, typ := range []types.Type{intType, intType, types.T_TS.ToType(), types.T_bool.ToType()} {
+				input.Vecs[i] = vector.NewVec(typ, mp)
+			}
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(7), false, mp))
+			require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(42), false, mp))
+			commitTS := types.BuildTS(1, 0)
+			require.NoError(t, vector.AppendFixed(input.Vecs[2], commitTS, false, mp))
+			require.NoError(t, vector.AppendFixed(input.Vecs[3], false, false, mp))
+			input.SetRowCount(1)
+			writer := ioutil.ConstructWriter(0, []uint16{0, tc.secondSeq, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}, 0, true, false, fs)
+			writer.SetAppendable()
+			_, err := writer.WriteBatch(input)
+			require.NoError(t, err)
+			_, _, err = writer.Sync(ctx)
+			require.NoError(t, err)
+			sourceStats := writer.GetObjectStats(objectio.WithAppendable())
+			state := newTestMaterializedSnapshotPartitionState(t, mp, nil)
+			require.NoError(t, state.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{ObjectStats: sourceStats, CreateTime: commitTS}, false))
+
+			reader := &TableMetaReader{
+				table: table, fs: fs, snapshot: types.BuildTS(2, 0), pState: state, sinkerOption: txn.SinkerCapacityOption(),
+			}
+			out := colexec.AllocCNS3ResultBat(false, mp)
+			defer out.Clean(mp)
+			before := fs.persistedSnapshot()
+			_, err = reader.Read(ctx, nil, nil, mp, out)
+			if tc.secondSeq == 2 {
+				require.ErrorContains(t, err, "column sequence 1 is missing within block layout")
+				require.Zero(t, out.RowCount())
+				require.Equal(t, before, fs.persistedSnapshot())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, out.RowCount())
+			written := r32FirstOutBatchStats(t, out)
+			require.NotEqual(t, sourceStats.ObjectName(), written.ObjectName())
+			objectReader, err := ioutil.NewObjectReader(fs, written.ObjectLocation())
+			require.NoError(t, err)
+			rows, release, err := objectReader.LoadColumns(ctx, []uint16{0, 1, 2}, nil, 0, mp)
+			require.NoError(t, err)
+			defer release()
+			require.Equal(t, 1, rows.RowCount())
+			require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](rows.Vecs[0]))
+			require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](rows.Vecs[1]))
+			require.Equal(t, intType, *rows.Vecs[2].GetType())
+			require.True(t, rows.Vecs[2].IsNull(0))
+		})
+	}
 }

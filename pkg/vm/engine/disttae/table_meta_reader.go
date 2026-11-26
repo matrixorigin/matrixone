@@ -528,14 +528,15 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	// txn visibility rules as regular table reads.
 	source.snapshotTS = r.snapshot
 
+	readCtx := objectio.WithColumnReadSpec(objectio.WithoutColumnReadSpec(ctx), source.readSpec)
 	dataReader = readutil.SimpleReaderWithDataSource(
-		ctx, r.fs,
+		readCtx, r.fs,
 		source, r.snapshot.ToTimestamp(),
 		readutil.WithColumns(seqnums, colTypes),
 	)
 
 	if objCnt, blkCnt, rowCnt, err = readWriteHelper(
-		ctx, dataReader, outBatch, mp, attrs, colTypes, s3Writer,
+		readCtx, dataReader, outBatch, mp, attrs, colTypes, s3Writer,
 	); err != nil {
 		return zap.Skip(), err
 	}

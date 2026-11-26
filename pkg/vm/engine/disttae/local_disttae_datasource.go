@@ -689,17 +689,18 @@ func checkWorkspaceEntryType(
 }
 
 // Workspace INSERTs store logical columns after the generated rowid.
+// The table definition can synthesize that rowid with a zero sequence number.
 func workspaceColumnPositions(def *plan.TableDef) map[uint16]int {
 	logical := 0
 	for _, col := range def.GetCols() {
-		if col.Seqnum == objectio.SEQNUM_ROWID {
+		if objectio.IsPhysicalAddr(col.Name) {
 			continue
 		}
 		if col.Seqnum != uint32(logical) {
 			positions := make(map[uint16]int, len(def.Cols))
 			pos := 1
 			for _, col := range def.Cols {
-				if col.Seqnum != objectio.SEQNUM_ROWID {
+				if !objectio.IsPhysicalAddr(col.Name) {
 					positions[uint16(col.Seqnum)] = pos
 					pos++
 				}

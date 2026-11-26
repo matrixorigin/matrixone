@@ -310,6 +310,66 @@ func TestSchemaEvolutionDisttaeOracle(t *testing.T) {
 	})
 }
 
+func TestWorkspaceReadsWithGeneratedRowID(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "id")
+	defer txn.closeWorkspaceAllocation()
+	defer func() {
+		for _, entry := range txn.writes {
+			entry.bat.Clean(txn.workspaceMP())
+		}
+	}()
+	ctx := defines.AttachAccountId(t.Context(), 1)
+	mp := txn.proc.Mp()
+	op := txn.op.(*mock_frontend.MockTxnOperator)
+	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	txn.tnStores = []DNStore{{}}
+	txn.writeWorkspaceThreshold = 64 << 20
+
+	table := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	table.proc.Store(txn.proc)
+	table.extraInfo = &api.SchemaExtra{}
+	table.primaryIdx, table.primarySeqnum = 0, 0
+	typ := types.T_int64.ToType()
+	table.defs = []engine.TableDef{
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "id", Type: typ, Primary: true}},
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "value", Type: typ, Seqnum: 1}},
+	}
+	table.tableDef = nil
+	def := table.GetTableDef(ctx)
+	require.Len(t, def.Cols, 3)
+	require.Equal(t, catalog.Row_ID, def.Cols[2].Name)
+
+	data := batch.NewWithSize(2)
+	defer data.Clean(mp)
+	for i, value := range []int64{10, 42} {
+		data.Vecs[i] = vector.NewVec(typ, mp)
+		require.NoError(t, vector.AppendFixed(data.Vecs[i], value, false, mp))
+	}
+	data.SetRowCount(1)
+	require.NoError(t, table.Write(ctx, data, []string{"id", "value"}))
+	require.Len(t, txn.writes, 1)
+
+	source, err := NewLocalDataSource(ctx, table, len(txn.writes), nil, nil, nil, false, engine.Policy_SkipAll, engine.ShardingLocalDataSource)
+	require.NoError(t, err)
+	defer source.Close()
+	out := batch.NewWithSize(3)
+	defer out.Clean(mp)
+	for i, typ := range []types.Type{typ, typ, objectio.RowidType} {
+		out.Vecs[i] = vector.NewVec(typ, mp)
+	}
+	_, state, err := source.Next(ctx, []string{"id", "value", catalog.Row_ID},
+		[]types.Type{typ, typ, objectio.RowidType}, []uint16{0, 1, objectio.SEQNUM_ROWID},
+		0, &readutil.MemPKFilter{}, mp, out)
+	require.NoError(t, err)
+	require.Equal(t, engine.InMem, state)
+	require.Equal(t, 1, out.RowCount())
+	require.Equal(t, []int64{10}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[1]))
+	require.Equal(t, vector.MustFixedColWithTypeCheck[types.Rowid](txn.writes[0].bat.Vecs[0]),
+		vector.MustFixedColWithTypeCheck[types.Rowid](out.Vecs[2]))
+}
+
 func TestWorkspaceReadsSparseColumnSequences(t *testing.T) {
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	defer txn.closeWorkspaceAllocation()
@@ -340,7 +400,7 @@ func TestWorkspaceReadsSparseColumnSequences(t *testing.T) {
 			{Name: attrs[0], Seqnum: 9, Typ: typ.PlanType()},
 			{Name: attrs[1], Seqnum: 3, Typ: typ.PlanType(), Primary: true},
 			{Name: attrs[2], Seqnum: 0, Typ: typ.PlanType()},
-			{Name: catalog.Row_ID, Seqnum: objectio.SEQNUM_ROWID, Typ: objectio.RowidType.PlanType()},
+			plan2.MakeRowIdColDef(),
 		},
 		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "pk"},
 		Name2ColIndex: map[string]int32{attrs[0]: 0, attrs[1]: 1, attrs[2]: 2, catalog.Row_ID: 3},
