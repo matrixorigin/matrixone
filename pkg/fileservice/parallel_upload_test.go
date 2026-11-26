@@ -140,11 +140,15 @@ func (p *partStorage) completeMultipart(_ context.Context, _, _ string, parts []
 
 func (p *partStorage) abortMultipart(context.Context, string, string) error { return nil }
 
+// newPartFS returns an S3FS on storage whose governor has room free for room requests,
+// the rest held until the test ends.
 func newPartFS(t *testing.T, storage ObjectStorage, mode ParallelMode, room int) *S3FS {
 	prev := writePartSize
 	writePartSize = minMultipartPartSize
 	t.Cleanup(func() { writePartSize = prev })
-	return &S3FS{name: "s3", governor: newGovernor(storage, room), rawStorage: storage, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: mode}
+	fs := &S3FS{name: "s3", governor: newGovernor(storage, minRequestRoom), rawStorage: storage, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: mode}
+	limitRoom(t, fs.governor, room, max(room/2, 1))
+	return fs
 }
 
 // A write that ends within its first part is one put; a longer one is a multipart upload

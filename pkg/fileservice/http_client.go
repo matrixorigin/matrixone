@@ -35,11 +35,7 @@ var (
 	maxIdleConns        = 128
 	maxIdleConnsPerHost = 128
 	maxConnsPerHost     = 128
-	// minMaxConnsPerHost is the fewest connections per host a configured limit may set.
-	minMaxConnsPerHost = 64
-	// minConcurrency is the fewest storage operations at once a configured concurrency may set.
-	minConcurrency  = int64(64)
-	idleConnTimeout = 10 * time.Second
+	idleConnTimeout     = 10 * time.Second
 )
 
 var dnsResolver = dns.NewCachingResolver(

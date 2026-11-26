@@ -110,6 +110,7 @@ func NewS3FS(
 ) (*S3FS, error) {
 
 	args.NoDefaultCredentials = args.NoDefaultCredentials || noDefaultCredential || args.callerCredentialsOnly
+	args.raiseRequestRoom()
 
 	fs := &S3FS{
 		name:            args.Name,

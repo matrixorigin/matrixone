@@ -25,6 +25,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 type ObjectStorageArguments struct {
@@ -184,6 +186,26 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 	return nil
 }
 
+// raiseRequestRoom raises a max-conns-per-host or a concurrency below minRequestRoom to
+// minRequestRoom, logging one warning that names the configured values.
+func (o *ObjectStorageArguments) raiseRequestRoom() {
+	conns, concurrency := o.MaxConnsPerHost, o.Concurrency
+	if conns > 0 && conns < minRequestRoom {
+		o.MaxConnsPerHost = minRequestRoom
+	}
+	if concurrency > 0 && concurrency < minRequestRoom {
+		o.Concurrency = minRequestRoom
+	}
+	if o.MaxConnsPerHost != conns || o.Concurrency != concurrency {
+		logutil.Warn("fileservice: object storage request room raised to its minimum",
+			zap.String("name", o.Name),
+			zap.Int("max-conns-per-host", conns),
+			zap.Int64("concurrency", concurrency),
+			zap.Int("room", minRequestRoom),
+		)
+	}
+}
+
 var qcloudEndpointPattern = regexp.MustCompile(`cos\.([^.]+)\.myqcloud\.com`)
 
 func (o *ObjectStorageArguments) validate() error {
@@ -194,13 +216,11 @@ func (o *ObjectStorageArguments) validateWithRegionProbe(
 	probe func(context.Context, string) (string, error),
 ) error {
 
-	if o.MaxConnsPerHost < 0 || (o.MaxConnsPerHost > 0 && o.MaxConnsPerHost < minMaxConnsPerHost) {
-		return moerr.NewInvalidInputNoCtxf("max-conns-per-host must be 0 for the default or at least %d, got %d",
-			minMaxConnsPerHost, o.MaxConnsPerHost)
+	if o.MaxConnsPerHost < 0 {
+		return moerr.NewInvalidInputNoCtxf("max-conns-per-host must not be negative, got %d", o.MaxConnsPerHost)
 	}
-	if o.Concurrency < 0 || (o.Concurrency > 0 && o.Concurrency < minConcurrency) {
-		return moerr.NewInvalidInputNoCtxf("concurrency must be 0 for the default or at least %d, got %d",
-			minConcurrency, o.Concurrency)
+	if o.Concurrency < 0 {
+		return moerr.NewInvalidInputNoCtxf("concurrency must not be negative, got %d", o.Concurrency)
 	}
 
 	// validate endpoint

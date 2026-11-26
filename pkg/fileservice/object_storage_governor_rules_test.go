@@ -135,8 +135,9 @@ func (o *openCountingStorage) List(ctx context.Context, prefix string) iter.Seq2
 	}
 }
 
-// newRoomFS returns an S3FS on a disk object storage whose governor has room for room
-// requests, and objects of size bytes written.
+// newRoomFS returns an S3FS on a disk object storage whose governor has room free for
+// room requests, at most half of it, or one, for background requests, the rest held until
+// the test ends, and objects of size bytes written.
 func newRoomFS(t *testing.T, room int, objects []string, size int) (*S3FS, []byte) {
 	ctx := context.Background()
 	fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}, CacheConfig{
@@ -153,7 +154,7 @@ func newRoomFS(t *testing.T, room int, objects []string, size int) (*S3FS, []byt
 	for _, name := range objects {
 		require.NoError(t, fs.Write(ctx, IOVector{FilePath: name, Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipAllCache}))
 	}
-	fs.governor.setCapacity(room)
+	limitRoom(t, fs.governor, room, max(room/2, 1))
 	return fs, data
 }
 
@@ -529,7 +530,7 @@ func TestGovernorProbeBystanderForegroundRead(t *testing.T) {
 	}
 	require.Eventually(t, func() bool {
 		running, waiting := fs.governor.counts()
-		return running[backgroundRequest] == room/2 && waiting[backgroundRequest] > 0
+		return running[backgroundRequest] == fs.governor.backgroundMax && waiting[backgroundRequest] > 0
 	}, 5*time.Second, time.Millisecond, "background holds its half and more waits")
 	for _, policy := range []Policy{0, SkipMemoryCache, SkipAllCache, SkipMemoryCache | SkipFullFilePreloads,
 		ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache, SkipAllCache | ExactColumnsRead} {
@@ -541,5 +542,5 @@ func TestGovernorProbeBystanderForegroundRead(t *testing.T) {
 		cancel()
 	}
 	running, _ := fs.governor.counts()
-	require.LessOrEqual(t, running[backgroundRequest], room/2)
+	require.LessOrEqual(t, running[backgroundRequest], fs.governor.backgroundMax)
 }

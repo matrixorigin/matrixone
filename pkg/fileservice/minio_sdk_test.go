@@ -154,7 +154,7 @@ func TestMinioSDKConditionalObjectIdentityReads(t *testing.T) {
 		Region:    "us-east-1",
 	})
 	require.NoError(t, err)
-	sdk := &MinioSDK{bucket: "bucket", client: client}
+	sdk := &MinioSDK{bucket: "bucket", client: client, retryingClient: client}
 
 	testOrdinaryObjectReadRanges(t, sdk)
 
@@ -227,7 +227,7 @@ func TestMinioPutObjectPhysicalAccounting(t *testing.T) {
 		Transport: server.Client().Transport,
 	})
 	require.NoError(t, err)
-	sdk := &MinioSDK{bucket: "bucket", client: client}
+	sdk := &MinioSDK{bucket: "bucket", client: client, retryingClient: client}
 
 	data := []byte("accepted")
 	size := int64(len(data))
@@ -337,7 +337,7 @@ func TestMinioSDKWriteInParts(t *testing.T) {
 		Endpoint: "http://localhost:9007", Bucket: "test", KeyID: "minioadmin", KeySecret: "minioadmin",
 	}, nil)
 	require.NoError(t, err)
-	g := newGovernor(sdk, 1)
+	g := newGovernor(sdk, minRequestRoom)
 	opt := &ParallelMultipartOption{PartSize: minMultipartPartSize, Concurrency: 4}
 	read := func(key string) []byte {
 		data, _, err := g.read(ctx, rangeRead{key: key, end: -1})

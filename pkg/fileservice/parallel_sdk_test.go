@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -294,7 +295,7 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 		traceMu.Unlock()
 		return upstream.RoundTrip(req)
 	}))
-	g := newGovernor(newTestAWSClientWithTransport(t, server, transport), 8)
+	g := newGovernor(newTestAWSClientWithTransport(t, server, transport), minRequestRoom)
 	counter := new(perfcounter.CounterSet)
 	ctx := perfcounter.WithCounterSet(context.Background(), counter)
 	var callerHooks atomic.Int64
@@ -802,8 +803,8 @@ func TestAwsDeleteMultiDoesNotFallbackOnOtherErrors(t *testing.T) {
 	if err := sdk.Delete(context.Background(), "a", "b"); err == nil {
 		t.Fatalf("expected delete error")
 	}
-	if state.deleteMultiCount != 1 {
-		t.Fatalf("expected 1 batch delete attempt, got %d", state.deleteMultiCount)
+	if state.deleteMultiCount != retry.DefaultMaxAttempts {
+		t.Fatalf("expected %d batch delete attempts, got %d", retry.DefaultMaxAttempts, state.deleteMultiCount)
 	}
 	if len(state.deleteSingleKeys) != 0 {
 		t.Fatalf("expected no single-delete fallback, got %v", state.deleteSingleKeys)

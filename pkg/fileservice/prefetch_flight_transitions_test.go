@@ -40,7 +40,7 @@ func prefetchBytes(fs *S3FS) int64 {
 // bytes once the connection frees.
 func TestFlightTransitionForegroundFileReadWaitsForConnection(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.governor.setCapacity(2 * 1)
+	limitRoom(t, fs.governor, 2, 1)
 	fs.diskCache.memoryPrefetchMax = 1
 	ranges := columnRanges(2, 40<<10, 1<<10)
 	held := make(chan struct{})
@@ -423,8 +423,7 @@ func TestFlightTransitionPrefetchReadJoinedFailedFlightFails(t *testing.T) {
 // background requests never pass their room.
 func TestFlightTransitionColumnPrefetchReturnsBudgetAndConns(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	fs.governor.setCapacity(2 * 16)
-	defer occupy(t, fs.governor, backgroundRequest, 14)()
+	limitRoom(t, fs.governor, 18, 2)
 	ranges := columnRanges(8, 20<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = 3 * flightBufSize(ranges[0].Size)
 	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
@@ -432,12 +431,12 @@ func TestFlightTransitionColumnPrefetchReturnsBudgetAndConns(t *testing.T) {
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: 8 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
 	key := fs.pathToKey("object")
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(key); return cur == 2 }, 5*time.Second, time.Millisecond)
-	require.LessOrEqual(t, heldRoom(fs.governor), 16)
+	require.LessOrEqual(t, heldRoom(fs.governor), 2)
 	close(g.gate)
 	require.Eventually(t, func() bool { return !fs.prefetcher.isRunning("object") }, 5*time.Second, time.Millisecond)
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Zero(t, prefetchBytes(fs))
-	require.Equal(t, 14, heldRoom(fs.governor))
+	require.Zero(t, heldRoom(fs.governor))
 	_, most, total := g.counts(key)
 	require.Equal(t, len(ranges), total)
 	require.LessOrEqual(t, most, 2)

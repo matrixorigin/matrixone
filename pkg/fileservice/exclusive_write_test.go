@@ -171,7 +171,7 @@ func TestWriteExclusiveObjectStorage(t *testing.T) {
 					require.NoError(t, err)
 					client, err := minio.New(endpoint.Host, &minio.Options{Creds: credentials.NewStaticV4("id", "secret", ""), Region: "us-east-1", Secure: false, Transport: server.Client().Transport})
 					require.NoError(t, err)
-					storage = &MinioSDK{bucket: "bucket", client: client, supportsConditionalPut: true}
+					storage = &MinioSDK{bucket: "bucket", client: client, retryingClient: client, supportsConditionalPut: true}
 				}
 			}
 			fs := &S3FS{name: "etl", governor: newGovernor(storage, 1024), rawStorage: storage, parallelMode: ParallelForce}

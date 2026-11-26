@@ -3133,7 +3133,7 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 				return &readCloser{r: strings.NewReader("abc"), closeFunc: func() error { closes[1]++; return closeErr }}, nil
 			}, 0, func(err error) bool { return errors.Is(err, io.ErrUnexpectedEOF) })
 		}}
-		fs := &S3FS{name: "test", governor: newGovernor(source, 1), rawStorage: source, ioMerger: NewIOMerger()}
+		fs := &S3FS{name: "test", governor: newGovernor(source, minRequestRoom), rawStorage: source, ioMerger: NewIOMerger()}
 		var reader io.ReadCloser
 		vector := IOVector{FilePath: "test:key", Policy: SkipAllCache | SkipFullFilePreloads, Entries: []IOEntry{{Size: 3, ReadCloserForRead: &reader}}}
 		t.Cleanup(vector.Release)
@@ -3160,7 +3160,7 @@ func TestS3FSReadWrapperOwnership(t *testing.T) {
 			require.Equal(t, &ObjectIdentity{ETag: "version1", Size: 8}, expected)
 			return &readCloser{r: strings.NewReader("abc"), closeFunc: func() error { closes++; return closeErr }}, nil
 		}}
-		fs := &S3FS{name: "test", governor: newGovernor(source, 1), rawStorage: source}
+		fs := &S3FS{name: "test", governor: newGovernor(source, minRequestRoom), rawStorage: source}
 		reader := NewLeasedRangeReader(fs).(ConditionalLeasedRangeReader)
 		identity, err := reader.StatIdentity(t.Context(), "test:key")
 		require.NoError(t, err)

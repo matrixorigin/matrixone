@@ -42,11 +42,16 @@ type MinioSDK struct {
 	endpoint               string
 	supportsConditionalPut bool
 	bucket                 string
-	core                   *minio.Core
-	client                 *minio.Client
-	copyCredentialDomain   objectStorageCopyCredentialDomain
-	perfCounterSets        []*perfcounter.CounterSet
-	listMaxKeys            int
+	// core and client make one attempt per call; the calls on them are retried by
+	// DoWithRetryContext.
+	core   *minio.Core
+	client *minio.Client
+	// retryingClient retries within the SDK; it makes the calls DoWithRetryContext does
+	// not retry: copies, the bucket check and object reads.
+	retryingClient       *minio.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
 }
 
 var _ objectStorageCopier = new(MinioSDK)
@@ -63,7 +68,7 @@ func (a *MinioSDK) CopyObject(
 		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
 		return false, nil
 	}
-	_, err := a.client.CopyObject(
+	_, err := a.retryingClient.CopyObject(
 		ctx,
 		minio.CopyDestOptions{Bucket: a.bucket, Object: dstKey},
 		minio.CopySrcOptions{Bucket: s.bucket, Object: srcKey},
@@ -215,6 +220,11 @@ func NewMinioSDK(
 	}
 	options.Secure = isSecure
 
+	retryingClient, err := minio.New(args.Endpoint, options)
+	if err != nil {
+		return nil, err
+	}
+	options.MaxRetries = 1
 	client, err := minio.New(args.Endpoint, options)
 	if err != nil {
 		return nil, err
@@ -231,7 +241,7 @@ func NewMinioSDK(
 
 	if !args.NoBucketValidation {
 		// validate
-		ok, err := client.BucketExists(ctx, args.Bucket)
+		ok, err := retryingClient.BucketExists(ctx, args.Bucket)
 		if err != nil {
 			return nil, err
 		}
@@ -250,6 +260,7 @@ func NewMinioSDK(
 		bucket:                 args.Bucket,
 		client:                 client,
 		core:                   core,
+		retryingClient:         retryingClient,
 		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
 			keyID, keySecret, sessionToken, args.RoleARN, args.ExternalID,
 		),
@@ -449,7 +460,7 @@ func (a *MinioSDK) Write(
 				sizeHint,
 				expire,
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, minioRetryable())
 		if err != nil {
 			return err
 		}
@@ -543,7 +554,7 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 			)
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		minioRetryable(),
 	)
 }
 
@@ -565,7 +576,7 @@ func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo
 			)
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		minioRetryable(),
 	)
 }
 
@@ -619,14 +630,14 @@ func (a *MinioSDK) createMultipart(ctx context.Context, key string, expire *time
 	}
 	return DoWithRetryContext(ctx, "create multipart upload", func() (string, error) {
 		return a.core.NewMultipartUpload(ctx, a.bucket, key, opts)
-	}, maxRetryAttemps, IsRetryableError)
+	}, maxRetryAttemps, minioRetryable())
 }
 
 func (a *MinioSDK) uploadPart(ctx context.Context, key, uploadID string, num int32, data []byte) (string, error) {
 	part, err := DoWithRetryContext(ctx, "upload part", func() (minio.ObjectPart, error) {
 		recordS3PutRequest(ctx, a.perfCounterSets...)
 		return a.core.PutObjectPart(ctx, a.bucket, key, uploadID, int(num), bytes.NewReader(data), int64(len(data)), minio.PutObjectPartOptions{})
-	}, maxRetryAttemps, IsRetryableError)
+	}, maxRetryAttemps, minioRetryable())
 	if err != nil {
 		return "", err
 	}
@@ -641,14 +652,14 @@ func (a *MinioSDK) completeMultipart(ctx context.Context, key, uploadID string, 
 	}
 	_, err := DoWithRetryContext(ctx, "complete multipart upload", func() (minio.UploadInfo, error) {
 		return a.core.CompleteMultipartUpload(ctx, a.bucket, key, uploadID, completed, minio.PutObjectOptions{})
-	}, maxRetryAttemps, IsRetryableError)
+	}, maxRetryAttemps, minioRetryable())
 	return err
 }
 
 func (a *MinioSDK) abortMultipart(ctx context.Context, key, uploadID string) error {
 	_, err := DoWithRetryContext(ctx, "abort multipart upload", func() (bool, error) {
 		return true, a.core.AbortMultipartUpload(ctx, a.bucket, key, uploadID)
-	}, maxRetryAttemps, IsRetryableError)
+	}, maxRetryAttemps, minioRetryable())
 	return err
 }
 
@@ -685,7 +696,7 @@ func (a *MinioSDK) getObjectWithOptions(
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 						counter.FileService.S3.Get.Add(1)
 					}, a.perfCounterSets...)
-					return a.client.GetObject(ctx, a.bucket, key, options)
+					return a.retryingClient.GetObject(ctx, a.bucket, key, options)
 				},
 				maxRetryAttemps,
 				IsRetryableError,
@@ -741,7 +752,7 @@ func (a *MinioSDK) deleteObject(ctx context.Context, key string) (any, error) {
 			return nil, nil
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		minioRetryable(),
 	)
 }
 
@@ -769,8 +780,42 @@ func (a *MinioSDK) deleteObjects(ctx context.Context, keys ...string) (any, erro
 			return nil, nil
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		minioRetryable(),
 	)
+}
+
+// minioRetryableStatus and minioRetryableCodes are the response statuses and error codes
+// the MinIO SDK retries.
+var (
+	minioRetryableStatus = map[int]bool{
+		http.StatusRequestTimeout: true, http.StatusTooManyRequests: true, 499: true,
+		http.StatusInternalServerError: true, http.StatusBadGateway: true,
+		http.StatusServiceUnavailable: true, http.StatusGatewayTimeout: true, 520: true,
+	}
+	minioRetryableCodes = map[string]bool{
+		"RequestError": true, "RequestTimeout": true, "Throttling": true, "ThrottlingException": true,
+		"RequestLimitExceeded": true, "RequestThrottled": true, "InternalError": true,
+		"ExpiredToken": true, "ExpiredTokenException": true,
+		"SlowDown": true, "SlowDownWrite": true, "SlowDownRead": true,
+	}
+)
+
+// minioRetryable returns the retry check of one call: an error IsRetryableError retries
+// is retried; an error whose response has a status or an error code the MinIO SDK retries
+// is retried as often as the SDK retries it.
+func minioRetryable() func(error) bool {
+	sdkRetries := minio.MaxRetry - 1
+	return func(err error) bool {
+		if IsRetryableError(err) {
+			return true
+		}
+		resp := minio.ToErrorResponse(err)
+		if sdkRetries > 0 && (minioRetryableStatus[resp.StatusCode] || minioRetryableCodes[resp.Code]) {
+			sdkRetries--
+			return true
+		}
+		return false
+	}
 }
 
 func (a *MinioSDK) is404(err error) bool {

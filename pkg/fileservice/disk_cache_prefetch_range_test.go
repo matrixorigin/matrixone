@@ -733,7 +733,7 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	var calls int
 	avail := uint64(4 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
-	d := &DiskCache{memoryPrefetchMax: 20 << 20, governor: newGovernor(nil, 32)}
+	d := &DiskCache{memoryPrefetchMax: 20 << 20, governor: newGovernor(nil, minRequestRoom)}
 	share := int64(avail / 100 * flightMemoryPercent)
 	require.Equal(t, share, d.flightBytes())
 	avail = 1 << 20
@@ -746,7 +746,7 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	require.Zero(t, d.flightBytes(), "exhausted memory holds none")
 	avail = 1 << 40
 	d.flightBudget.at.Store(0)
-	require.Equal(t, int64(16*32<<20), d.flightBytes(), "at most a MemoryPrefetchObject's buffer per connection")
+	require.Equal(t, int64(minRequestRoom/2*32<<20), d.flightBytes(), "at most a MemoryPrefetchObject's buffer per connection")
 	memoryAvailable = func() (uint64, bool) { return 0, false }
 	d.flightBudget.at.Store(0)
 	require.Equal(t, int64(prefetchFlightBytesMax), d.flightBytes())
@@ -958,8 +958,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	g := &gatedOpener{data: data, gate: make(chan struct{})}
 	src := openerSource(g.open)
-	src.g.setCapacity(32)
-	defer occupy(t, src.g, backgroundRequest, 14)()
+	limitRoom(t, src.g, 18, 2)
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ranges := make([]PrefetchRange, 0, 8)
@@ -979,7 +978,7 @@ func TestReadRangesHoldDownloadConnections(t *testing.T) {
 	_, most, total := g.counts()
 	require.Equal(t, 2, most)
 	require.Equal(t, 8, total)
-	require.Equal(t, 14, heldRoom(src.g))
+	require.Zero(t, heldRoom(src.g))
 }
 
 // A prefetch of ranges to files starts no range once its object was deleted.

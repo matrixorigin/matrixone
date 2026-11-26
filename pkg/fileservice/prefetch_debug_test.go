@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,7 +35,7 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	fs.governor.setCapacity(2)
+	limitRoom(t, fs.governor, 2, 1)
 	otherKey := fs.pathToKey("other")
 	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
 	fs.governor.raw = g
@@ -53,7 +54,7 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 		return strings.Contains(page(), "memory "+objectPath+" [0, 1024) registered")
 	}, 5*time.Second, time.Millisecond, "the waiting object is listed")
 	require.Eventually(t, func() bool {
-		return strings.Contains(page(), "background running 1 of 1 waiting 1")
+		return strings.Contains(page(), fmt.Sprintf("background running %d of %d waiting 1", fs.governor.backgroundMax, fs.governor.backgroundMax))
 	}, 5*time.Second, time.Millisecond, "its request waits")
 	require.Contains(t, page(), "file "+fs.diskCache.objectKey("other")+" [0, ")
 	release()

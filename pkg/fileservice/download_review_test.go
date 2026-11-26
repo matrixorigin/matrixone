@@ -117,9 +117,7 @@ func TestSplitReadReservesFirstConnectionForNeededPart(t *testing.T) {
 			fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 			d := fs.diskCache
 			<-d.load.done
-			fs.governor.setCapacity(4)
-			bystanders := 3
-			defer occupy(t, fs.governor, foregroundRequest, bystanders)()
+			limitRoom(t, fs.governor, 1, 1)
 
 			opened := make(chan int64, 2)
 			storage := newBlackBoxStorage(fs.governor.raw, func(_ string, start int64) bool {
@@ -147,10 +145,10 @@ func TestSplitReadReservesFirstConnectionForNeededPart(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			require.Equal(t, fs.governor.capacity, heldRoom(fs.governor))
+			require.Equal(t, 1, heldRoom(fs.governor))
 			unblock()
 			require.NoError(t, <-result)
-			require.Equal(t, bystanders, heldRoom(fs.governor))
+			require.Zero(t, heldRoom(fs.governor))
 			require.Equal(t, offset, first, "with room for one the read's part must start first")
 		})
 	}

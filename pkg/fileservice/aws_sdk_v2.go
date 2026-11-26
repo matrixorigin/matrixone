@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -468,7 +469,7 @@ func (a *AwsSDKv2) Write(
 					opts.Retryer = aws.NopRetryer{}
 				},
 			)
-		}, maxRetryAttemps, IsRetryableError)
+		}, maxRetryAttemps, awsRetryable())
 		if err != nil {
 			return err
 		}
@@ -541,8 +542,8 @@ func (a *AwsSDKv2) createMultipart(ctx context.Context, key string, expire *time
 			Bucket:  ptrTo(a.bucket),
 			Key:     ptrTo(key),
 			Expires: expire,
-		})
-	}, maxRetryAttemps, IsRetryableError)
+		}, withoutSDKRetries(nil)...)
+	}, maxRetryAttemps, awsRetryable())
 	if err != nil {
 		return "", err
 	}
@@ -558,8 +559,8 @@ func (a *AwsSDKv2) uploadPart(ctx context.Context, key, uploadID string, num int
 			PartNumber: &num,
 			UploadId:   &uploadID,
 			Body:       bytes.NewReader(data),
-		})
-	}, maxRetryAttemps, IsRetryableError)
+		}, withoutSDKRetries(nil)...)
+	}, maxRetryAttemps, awsRetryable())
 	if err != nil {
 		return "", err
 	}
@@ -578,8 +579,8 @@ func (a *AwsSDKv2) completeMultipart(ctx context.Context, key, uploadID string, 
 			Key:             ptrTo(key),
 			UploadId:        &uploadID,
 			MultipartUpload: &types.CompletedMultipartUpload{Parts: completed},
-		})
-	}, maxRetryAttemps, IsRetryableError)
+		}, withoutSDKRetries(nil)...)
+	}, maxRetryAttemps, awsRetryable())
 	return err
 }
 
@@ -766,10 +767,10 @@ func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput,
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 				counter.FileService.S3.List.Add(1)
 			}, a.perfCounterSets...)
-			return a.client.ListObjects(ctx, params, optFns...)
+			return a.client.ListObjects(ctx, params, withoutSDKRetries(optFns)...)
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		awsRetryable(),
 	)
 }
 
@@ -783,10 +784,10 @@ func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, o
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 				counter.FileService.S3.Head.Add(1)
 			}, a.perfCounterSets...)
-			return a.client.HeadObject(ctx, params, optFns...)
+			return a.client.HeadObject(ctx, params, withoutSDKRetries(optFns)...)
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		awsRetryable(),
 	)
 }
 
@@ -837,10 +838,10 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 						counter.FileService.S3.Get.Add(1)
 					}, a.perfCounterSets...)
-					return a.client.GetObject(ctx, params, optFns...)
+					return a.client.GetObject(ctx, params, withoutSDKRetries(optFns)...)
 				},
 				maxRetryAttemps,
-				IsRetryableError,
+				awsRetryable(),
 			)
 			if err != nil {
 				return nil, err
@@ -873,10 +874,10 @@ func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInpu
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 				counter.FileService.S3.Delete.Add(1)
 			}, a.perfCounterSets...)
-			return a.client.DeleteObject(ctx, params, optFns...)
+			return a.client.DeleteObject(ctx, params, withoutSDKRetries(optFns)...)
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		awsRetryable(),
 	)
 }
 
@@ -890,10 +891,10 @@ func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsIn
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 				counter.FileService.S3.DeleteMulti.Add(1)
 			}, a.perfCounterSets...)
-			return a.client.DeleteObjects(ctx, params, optFns...)
+			return a.client.DeleteObjects(ctx, params, withoutSDKRetries(optFns)...)
 		},
 		maxRetryAttemps,
-		IsRetryableError,
+		awsRetryable(),
 	)
 }
 
@@ -995,6 +996,33 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(ctx context.Conte
 		upstream = aws.NewCredentialsCache(upstream)
 	}
 	return upstream, nil
+}
+
+// awsRetryables are the checks of the SDK's standard retryer.
+var awsRetryables = retry.IsErrorRetryables(retry.DefaultRetryables)
+
+// awsRetryable returns the retry check of one call: an error IsRetryableError retries is
+// retried; another error the SDK's standard retryer retries is retried as often as that
+// retryer retries it.
+func awsRetryable() func(error) bool {
+	sdkRetries := retry.DefaultMaxAttempts - 1
+	return func(err error) bool {
+		if IsRetryableError(err) {
+			return true
+		}
+		if sdkRetries > 0 && awsRetryables.IsErrorRetryable(err) == aws.TrueTernary {
+			sdkRetries--
+			return true
+		}
+		return false
+	}
+}
+
+// withoutSDKRetries returns optFns and an option that makes the operation one attempt.
+func withoutSDKRetries(optFns []func(*s3.Options)) []func(*s3.Options) {
+	return append(slices.Clip(optFns), func(opts *s3.Options) {
+		opts.Retryer = aws.NopRetryer{}
+	})
 }
 
 type awsRetryer struct {

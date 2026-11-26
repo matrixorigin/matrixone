@@ -72,7 +72,7 @@ func newMinioRangeTestSDK(t *testing.T, transport http.RoundTripper) *MinioSDK {
 		Creds: credentials.NewStaticV4("", "", ""), Region: "us-east-1", Transport: transport,
 	})
 	require.NoError(t, err)
-	return &MinioSDK{bucket: "bucket", client: client}
+	return &MinioSDK{bucket: "bucket", client: client, retryingClient: client}
 }
 
 func minioRangeTestResponse(req *http.Request, body io.ReadCloser, size int) *http.Response {

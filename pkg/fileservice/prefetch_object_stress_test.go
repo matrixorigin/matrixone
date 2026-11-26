@@ -110,7 +110,7 @@ func TestPrefetchObjectsUnderStress(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, unit, 1)
 	d := fs.diskCache
 	d.prefetchFlightBytes = 4 * prefetchBlockMax
-	d.governor.setCapacity(2 * 3)
+	limitRoom(t, d.governor, 6, 3)
 	d.memoryPrefetchMax = 256 << 10
 	d.objectSplit = objectSplitConfig{parts: 2, min: 256 << 10}
 	storage := &stressStorage{ObjectStorage: fs.governor.raw}

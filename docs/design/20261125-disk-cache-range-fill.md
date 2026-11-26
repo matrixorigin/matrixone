@@ -132,7 +132,8 @@ or several ranges that together cover its bytes.
 ### Every connection from the governor (decision 2026-11-25)
 
 The governor allows as many requests to object storage at once as the configured
-connections per host or the storage concurrency, whichever is smaller.
+connections per host or the storage concurrency, whichever is smaller, and never fewer
+than 64: a smaller configured value is raised to 64, with a warning that names it.
 
 - **The governor makes every request.** It offers a fixed set of requests: read a range
   into a buffer, read a range into a fill's file, write a part from a buffer, read a page
@@ -145,9 +146,16 @@ connections per host or the storage concurrency, whichever is smaller.
   without waiting. Buffers, files, the registry, paths, eviction, the publisher and the
   caller's code are dealt with before the request starts or after it ends.
 - **Order.** Waiting requests are admitted foreground first, then background, then in
-  arrival order. Background requests hold at most half of the room. A running request is
-  never stopped to make room.
-- **Every wait ends with the waiter's own context.** A retry waits with no room held.
+  arrival order. Background requests hold at most half of the room, so at least 32. A
+  running request is never stopped to make room.
+- **Every wait ends with the waiter's own context.** A retry the file service makes
+  waits with no room held.
+- **The file service retries; the SDK does not.** A call the file service retries makes
+  one attempt in the object storage SDK, and is retried on every error the SDK would
+  retry, at least as often as the SDK would. A call the file service does not retry keeps the SDK's own retries, where the
+  SDK has them, and they wait holding room: a provider copy, the abort of a multipart
+  upload, the bucket check, and a MinIO object read, whose request starts at its first
+  read.
 
 No deadlock is possible: a request that holds room waits only for object storage, which
 ends with its bytes, an error, its context, or the idle timeout; nothing that holds room

@@ -93,7 +93,7 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, unit, 4*unit)
 	d := fs.diskCache
 	d.memoryPrefetchMax = 16 << 10
-	d.governor.setCapacity(1)
+	limitRoom(t, d.governor, 1, 1)
 	release := occupy(t, d.governor, foregroundRequest, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())

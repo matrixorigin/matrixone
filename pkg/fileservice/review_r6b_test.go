@@ -27,18 +27,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConcurrencyBelowMinimumIsRejected(t *testing.T) {
+func TestNegativeConcurrencyIsRejected(t *testing.T) {
 	noProbe := func(context.Context, string) (string, error) { return "", nil }
 	for _, tc := range []struct {
 		concurrency int64
 		ok          bool
-	}{{0, true}, {minConcurrency, true}, {1024, true}, {1, false}, {2, false}, {minConcurrency - 1, false}, {-1, false}} {
+	}{{0, true}, {1, true}, {minRequestRoom - 1, true}, {minRequestRoom, true}, {1024, true}, {-1, false}} {
 		args := ObjectStorageArguments{Endpoint: "disk", Bucket: t.TempDir(), Concurrency: tc.concurrency}
 		err := args.validateWithRegionProbe(noProbe)
 		if tc.ok {
 			require.NoError(t, err, "concurrency=%d", tc.concurrency)
 		} else {
-			require.ErrorContains(t, err, fmt.Sprintf("concurrency must be 0 for the default or at least 64, got %d", tc.concurrency))
+			require.ErrorContains(t, err, fmt.Sprintf("concurrency must not be negative, got %d", tc.concurrency))
 		}
 		fs, err := NewS3FS(context.Background(), ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), Concurrency: tc.concurrency},
 			CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, true)
@@ -46,7 +46,7 @@ func TestConcurrencyBelowMinimumIsRejected(t *testing.T) {
 			require.NoError(t, err, "concurrency=%d", tc.concurrency)
 			fs.Close(context.Background())
 		} else {
-			require.ErrorContains(t, err, "concurrency must be 0 for the default or at least 64")
+			require.ErrorContains(t, err, "concurrency must not be negative")
 		}
 	}
 }
@@ -58,6 +58,9 @@ func TestDownloadConnsAreHalfTheStorageConcurrency(t *testing.T) {
 		want        int
 	}{
 		{0, 0, maxConnsPerHost / 2},
+		{1, 0, 32},
+		{0, 1, 32},
+		{2, 3, 32},
 		{64, 0, 32},
 		{256, 0, 128},
 		{0, 64, 32},
@@ -122,7 +125,7 @@ func TestPrefetchLeavesStorageSlotForForegroundRead(t *testing.T) {
 		concurrency int64
 	}{
 		{name: "default_storage_concurrency"},
-		{name: "storage_concurrency_64", concurrency: minConcurrency},
+		{name: "storage_concurrency_64", concurrency: minRequestRoom},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -156,7 +159,7 @@ func TestStalledDownloadsLeaveStorageConcurrencyForForegroundRead(t *testing.T) 
 		for i := range 32 {
 			paths = append(paths, fmt.Sprintf("prefetch-%d", i))
 		}
-		fs, gated := newStorageSlotFS(t, minConcurrency, 0, paths, data,
+		fs, gated := newStorageSlotFS(t, minRequestRoom, 0, paths, data,
 			func(key string) bool { return strings.HasPrefix(key, "prefetch-") })
 		defer fs.Close(ctx)
 		defer close(gated.gate)

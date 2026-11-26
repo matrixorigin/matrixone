@@ -22,21 +22,51 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMaxConnsPerHostBelowMinimumIsRejected(t *testing.T) {
+// A max-conns-per-host or a concurrency below minRequestRoom is raised to it: the
+// governor has room for minRequestRoom requests, half of them background; a negative one
+// is rejected.
+func TestRoomBelowMinimumIsRaised(t *testing.T) {
 	noProbe := func(context.Context, string) (string, error) { return "", nil }
-	for _, tc := range []struct {
-		conns int
-		ok    bool
-	}{{0, true}, {minMaxConnsPerHost, true}, {256, true}, {1, false}, {2, false}, {minMaxConnsPerHost - 1, false}, {-1, false}} {
-		args := ObjectStorageArguments{Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns}
+	for _, conns := range []int{-1, 0, 1, 2, minRequestRoom - 1, minRequestRoom, 256} {
+		args := ObjectStorageArguments{Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: conns}
 		err := args.validateWithRegionProbe(noProbe)
-		if tc.ok {
-			require.NoError(t, err, "max-conns-per-host=%d", tc.conns)
+		if conns < 0 {
+			require.ErrorContains(t, err, "max-conns-per-host", "max-conns-per-host=%d", conns)
 		} else {
-			require.ErrorContains(t, err, "max-conns-per-host", "max-conns-per-host=%d", tc.conns)
+			require.NoError(t, err, "max-conns-per-host=%d", conns)
 		}
 	}
-	_, err := NewS3FS(context.Background(), ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: 2},
+	for _, tc := range []struct {
+		conns       int
+		concurrency int64
+		room        int
+	}{
+		{1, 0, minRequestRoom},
+		{2, 0, minRequestRoom},
+		{minRequestRoom - 1, 0, minRequestRoom},
+		{0, 1, minRequestRoom},
+		{0, minRequestRoom - 1, minRequestRoom},
+		{3, 5, minRequestRoom},
+		{256, 7, minRequestRoom},
+		{minRequestRoom, 0, minRequestRoom},
+		{0, 0, maxConnsPerHost},
+	} {
+		args := ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns, Concurrency: tc.concurrency}
+		raised := args
+		raised.raiseRequestRoom()
+		if tc.conns > 0 {
+			require.Equal(t, max(tc.conns, minRequestRoom), raised.MaxConnsPerHost, "conns %d", tc.conns)
+		}
+		if tc.concurrency > 0 {
+			require.Equal(t, max(tc.concurrency, minRequestRoom), raised.Concurrency, "concurrency %d", tc.concurrency)
+		}
+		fs, err := NewS3FS(context.Background(), args, CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, true)
+		require.NoError(t, err, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, tc.room, fs.governor.capacity, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, tc.room/2, fs.governor.backgroundMax, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		fs.Close(context.Background())
+	}
+	_, err := NewS3FS(context.Background(), ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: -1},
 		CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, true)
 	require.ErrorContains(t, err, "max-conns-per-host")
 }

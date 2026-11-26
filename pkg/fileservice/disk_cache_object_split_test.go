@@ -238,14 +238,13 @@ func TestS3FSFullObjectReadSkipsMergeWait(t *testing.T) {
 func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	fs.governor.setCapacity(2)
-	defer occupy(t, fs.governor, foregroundRequest, 1)()
+	limitRoom(t, fs.governor, 1, 1)
 	got, err := readFullObjectOf(fs, 100, 10)
 	require.NoError(t, err)
 	require.Equal(t, data[100:110], got)
 	require.Equal(t, int64(2), storage.reads.Load())
 	require.ElementsMatch(t, []int64{0, 192 << 10}, storage.starts, "the split stays with room for one")
-	require.Equal(t, 1, heldRoom(fs.governor), "its requests free their room")
+	require.Zero(t, heldRoom(fs.governor), "its requests free their room")
 	require.True(t, d.cache.Contains(d.wholePath("object", int64(len(data)))))
 }
 
@@ -253,7 +252,7 @@ func TestS3FSDownloadConnsReservedPerPart(t *testing.T) {
 func TestS3FSDownloadWaitsForConn(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	d := fs.diskCache
-	fs.governor.setCapacity(1)
+	limitRoom(t, fs.governor, 1, 1)
 	free := occupy(t, fs.governor, foregroundRequest, 1)
 	done := make(chan []byte, 1)
 	go func() {
@@ -301,7 +300,7 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 			fs, _, data := newObjectSplitFS(t, objectSplitConfig{}, 300<<10)
 			fs.governor.raw = keepOnDeleteStorage{fs.governor.raw}
 			d := fs.diskCache
-			fs.governor.setCapacity(2)
+			limitRoom(t, fs.governor, 2, 1)
 			bystanders := occupy(t, fs.governor, foregroundRequest, 2)
 			diskPath := d.objectKey("object")
 			done := make(chan []byte, 1)
@@ -323,7 +322,7 @@ func TestS3FSReadWaitingForConnectionEndsOnDeleteOrClose(t *testing.T) {
 			}
 			require.Eventually(t, func() bool { return d.wholeFill(diskPath, false) == nil }, 5*time.Second, time.Millisecond,
 				"the download ends")
-			require.Equal(t, 2, heldRoom(fs.governor), "it took no room")
+			require.Zero(t, heldRoom(fs.governor), "it took no room")
 			// The read's own range read waits for room of its own.
 			bystanders()
 			require.Equal(t, data[100:110], <-done)
@@ -420,13 +419,13 @@ func TestPrefetchBeforeDeleteKeepsNoSize(t *testing.T) {
 }
 
 // Background requests run at most half the connections per host, which are at least
-// minMaxConnsPerHost: the fewest configured connections still cache whole objects.
+// minRequestRoom: the fewest configured connections still cache whole objects.
 func TestS3FSConfiguredConnsBoundDownloads(t *testing.T) {
 	for _, tc := range []struct {
 		conns    int
 		limit    int
 		download bool
-	}{{minMaxConnsPerHost, minMaxConnsPerHost / 2, true}, {256, 128, true}} {
+	}{{1, minRequestRoom / 2, true}, {minRequestRoom, minRequestRoom / 2, true}, {256, 128, true}} {
 		ctx := context.Background()
 		fs, err := NewS3FS(ctx, ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: tc.conns}, CacheConfig{
 			DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20),
@@ -457,7 +456,7 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 	)
 	fs, _, _ := newPrefetchRangeFS(t, 0, 1)
 	fs.diskCache.objectSplit = objectSplitConfig{parts: 2, min: 128 << 10}
-	fs.governor.setCapacity(2)
+	limitRoom(t, fs.governor, 2, 1)
 	ctx := context.Background()
 	contents := make([][]byte, objects)
 	for i := range objects {
@@ -496,7 +495,7 @@ func TestS3FSObjectSplitDownloadsShareFewConnections(t *testing.T) {
 // no read joins a part that has not begun.
 func TestS3FSReadOfPartWaitingForConnectionReadsItsRange(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
-	fs.governor.setCapacity(2)
+	limitRoom(t, fs.governor, 2, 1)
 	bystander := occupy(t, fs.governor, foregroundRequest, 1)
 	key := fs.pathToKey("object")
 	g := newBlackBoxStorage(fs.governor.raw, func(k string, off int64) bool { return k == key && off == 0 })

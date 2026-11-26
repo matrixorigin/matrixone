@@ -53,6 +53,9 @@ func requestClassOf(ctx context.Context) requestClass {
 
 var errGovernorClosed = moerr.NewInternalErrorNoCtx("fileservice: object storage governor closed")
 
+// minRequestRoom is the least room of a governor.
+const minRequestRoom = 64
+
 // governor makes every request to the object storage raw, at most capacity at once.
 // Waiting requests are admitted foreground first, then background, each in arrival
 // order; background requests run at most backgroundMax at once. A running request is
@@ -76,21 +79,16 @@ type roomWaiter struct {
 	elem    *list.Element
 }
 
+// newGovernor returns a governor of raw with room for capacity requests, at least
+// minRequestRoom, half of it for background requests.
 func newGovernor(raw ObjectStorage, capacity int) *governor {
 	g := &governor{raw: raw, closedCh: make(chan struct{})}
 	for op, name := range opNames {
 		g.ops[op] = metric.FSObjectStorageOperations.WithLabelValues("s3", name)
 	}
-	g.setCapacity(capacity)
+	g.capacity = max(capacity, minRequestRoom)
+	g.backgroundMax = g.capacity / 2
 	return g
-}
-
-// setCapacity sets the room of g, half of it, at least 1, for background requests.
-func (g *governor) setCapacity(capacity int) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.capacity, g.backgroundMax = max(capacity, 1), max(capacity/2, 1)
-	g.grantLocked()
 }
 
 func (g *governor) canRunLocked(c requestClass) bool {
