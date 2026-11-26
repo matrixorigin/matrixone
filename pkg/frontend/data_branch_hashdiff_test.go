@@ -106,7 +106,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(2), []byte("alice"), []byte("h1")},
 		bat,
 		0,
-		true,
+		true, nil,
 	)
 	require.NoError(t, err)
 	require.Zero(t, cmp)
@@ -116,7 +116,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(2), []byte("alice"), []byte("h1")},
 		bat,
 		0,
-		false,
+		false, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, cmp)
@@ -126,7 +126,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(1), []byte("bob"), []byte("h1")},
 		bat,
 		0,
-		true,
+		true, nil,
 	)
 	require.NoError(t, err)
 	require.NotZero(t, cmp)
@@ -137,7 +137,7 @@ func TestCompareTupleWithBatchRow(t *testing.T) {
 		types.Tuple{int64(1), []byte("alice"), []byte("h1")},
 		bat,
 		0,
-		false,
+		false, nil,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of range")
@@ -341,7 +341,7 @@ func TestCompareTupleValueWithVectorNormalizesValues(t *testing.T) {
 		bat.Vecs[1] = buildFixedVector(t, mp, decimalTyp, amount)
 		bat.SetRowCount(1)
 
-		cmp, err := compareTupleWithBatchRow(tblStuff, tuple, bat, 0, false)
+		cmp, err := compareTupleWithBatchRow(tblStuff, tuple, bat, 0, false, nil)
 		require.NoError(t, err)
 		require.Zero(t, cmp)
 	})
@@ -568,6 +568,7 @@ func TestDiffDataHelper_Basic(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
@@ -603,6 +604,7 @@ func TestDiffDataHelperClosesMigratedHashmaps(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, baseHashmap.migrateCalls)
@@ -678,6 +680,7 @@ func TestDiffDataHelperFakePKUsesCommonVisibleColumnsAsKey(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Empty(t, got)
@@ -871,6 +874,7 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdate(t *testing.T) {
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(7), "after", "target"}}, got["INSERT-1"])
@@ -938,6 +942,7 @@ func TestDiffDataHelper_ConflictAcceptExpandUpdateWithSparseCommonIdxes(t *testi
 		},
 		tarHashmap,
 		baseHashmap,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, [][]any{{int64(7), "same-extra", "target-update"}}, got["INSERT-1"])
@@ -1754,7 +1759,7 @@ func TestDataBranchHistoricalHydrationRejectsMismatchedRelationSnapshot(t *testi
 	projected := buildIntDataBatch(t, mp, []string{catalog.Row_ID, "id"},
 		[]types.Type{types.T_Rowid.ToType(), types.T_int64.ToType()}, [][]any{{types.Rowid{}, int64(1)}})
 	defer projected.Clean(mp)
-	err := hydrateHistoricalDataBranchBatch(ctx, ses, projected, tables, branchIdentity{}, segment, betweenTo, alterBoundary)
+	err := hydrateHistoricalDataBranchBatch(ctx, ses, projected, tables, branchIdentity{}, segment, betweenTo, alterBoundary, nil)
 	require.ErrorIs(t, err, lookupErr)
 }
 
@@ -1762,12 +1767,11 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 	ts := func(seconds int64) types.TS { return types.BuildTS(seconds*1_000_000_000, 0) }
 	alter := ts(30)
 	for _, tc := range []struct {
-		name       string
-		betweenTo  types.TS
-		wantRanges bool
+		name      string
+		betweenTo types.TS
 	}{
 		{name: "upper bound before handle snapshot", betweenTo: ts(25)},
-		{name: "upper bound matches handle snapshot", betweenTo: alter, wantRanges: true},
+		{name: "upper bound matches handle snapshot", betweenTo: alter},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -1822,6 +1826,17 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 				storage.EXPECT().GetRelationById(gomock.Any(), openTxn, id).Return(def.DbName, def.Name, rel, nil)
 				segments[i] = rel
 			}
+			// The collection range retains the generation opened at the ALTER. Hydration
+			// must use the separate relation opened at the requested upper bound.
+			upperRel := mock_frontend.NewMockRelation(ctrl)
+			upperRel.EXPECT().GetTableID(gomock.Any()).Return(hydrationID).AnyTimes()
+			upperRel.EXPECT().GetTableName().Return(hydrationDef.Name).AnyTimes()
+			upperRel.EXPECT().GetTableDef(gomock.Any()).Return(hydrationDef).AnyTimes()
+			upperTxn := mock_frontend.NewMockTxnOperator(ctrl)
+			backTxn.EXPECT().CloneSnapshotOp(tc.betweenTo.ToTimestamp()).Return(upperTxn)
+			storage.EXPECT().GetRelationById(gomock.Any(), upperTxn, hydrationID).
+				Return(hydrationDef.DbName, hydrationDef.Name, upperRel, nil)
+			tables.tarPathDefs = []*plan.TableDef{sourceDef, sourceDef, hydrationDef, targetDef}
 			sourceHandle := mock_frontend.NewMockChangesHandle(ctrl)
 			rowID := buildHashDiffRowID(t, 1)
 			commit := ts(15)
@@ -1837,7 +1852,7 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 			sourceHandle.EXPECT().Close().Return(nil)
 			segments[1].EXPECT().CollectChanges(gomock.Any(), betweenFrom.Next(), creation[2], false, mp).
 				Return(sourceHandle, nil)
-			segments[2].EXPECT().CollectChanges(gomock.Any(), creation[2].Next(), tc.betweenTo, false, mp).
+			upperRel.EXPECT().CollectChanges(gomock.Any(), creation[2].Next(), tc.betweenTo, false, mp).
 				Return(nil, nil)
 			base.EXPECT().CollectChanges(gomock.Any(), types.MinTs(), now, false, mp).Return(nil, nil)
 
@@ -1879,12 +1894,13 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 				return onBatch(read)
 			}
 			info := &branchMetaInfo{
-				pathFromLCAToTar:    generationIDs,
-				pathFromLCAToTarTS:  []types.TS{{}, openedAt[0], openedAt[1], openedAt[2]},
-				pathFromLCAToBase:   []uint64{baseID},
-				pathFromLCAToBaseTS: []types.TS{{}},
+				pathFromLCAToTar:            generationIDs,
+				pathFromLCAToTarLineageOnly: []bool{false, true, true, true},
+				pathFromLCAToTarTS:          []types.TS{{}, openedAt[0], openedAt[1], openedAt[2]},
+				pathFromLCAToBase:           []uint64{baseID},
+				pathFromLCAToBaseTS:         []types.TS{{}},
 			}
-			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, tables, info, nil, &betweenFrom, &tc.betweenTo)
+			targetHandles, baseHandles, err := constructChangeHandle(ctx, ses, bh, &tables, info, nil, &betweenFrom, &tc.betweenTo, nil)
 			for _, h := range append(targetHandles, baseHandles...) {
 				t.Cleanup(func() { require.NoError(t, h.Close()) })
 			}
@@ -1895,11 +1911,9 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 			lookupErr := moerr.NewInternalErrorNoCtx("cannot reopen the bounded hydration relation")
 			txnOp.EXPECT().CloneSnapshotOp(tc.betweenTo.ToTimestamp()).Return(probeTxn)
 			storage.EXPECT().GetRelationById(gomock.Any(), probeTxn, hydrationID).Return("", "", nil, lookupErr)
-			if tc.wantRanges {
-				scanSnapshotRelationWithPreopened = original
-				stubDataBranchSnapshotRowsAfterRanges(t, segments[2], []string{"id", "name_at_bound", "hidden"},
-					[]any{int64(1), "renamed", "added by alter"})
-			}
+			scanSnapshotRelationWithPreopened = original
+			stubDataBranchSnapshotRowsAfterRanges(t, upperRel, []string{"id", "name_at_bound", "hidden"},
+				[]any{int64(1), "renamed", "added by alter"})
 
 			data, tombstone, hint, err := targetHandles[0].Next(ctx, mp)
 			if data != nil {
@@ -1909,11 +1923,6 @@ func TestConstructChangeHandleBetweenCompactsHydrationSnapshot(t *testing.T) {
 				defer tombstone.Clean(mp)
 			}
 			require.Nil(t, tombstone)
-			if !tc.wantRanges {
-				require.ErrorIs(t, err, lookupErr)
-				require.Nil(t, data)
-				return
-			}
 			require.NoError(t, err)
 			require.Equal(t, engine.ChangesHandle_Snapshot, hint)
 			require.NotNil(t, data)

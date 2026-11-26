@@ -86,6 +86,7 @@ type collectRange struct {
 	rel              []engine.Relation
 	relSnapshot      []types.TS // The snapshot at which each relation was opened.
 	startBoundaryRel []engine.Relation
+	clearAt          []types.TS
 	// idents carries the physical identity each segment was opened under
 	// (design §6): the walking side's endpoint identity for the endpoint
 	// segment and the winning candidate identity for reopened lineage
@@ -113,6 +114,74 @@ func (r collectRange) startBoundary(i int) engine.Relation {
 		return nil
 	}
 	return r.startBoundaryRel[i]
+}
+
+// restrict intersects the source segments with the PICK window (lo, hi].
+func (r *collectRange) restrict(lo, hi types.TS) {
+	first := lo.Next()
+	j := 0
+	for i := range r.rel {
+		from, end := r.from[i], r.end[i]
+		boundary := r.startBoundary(i)
+		if first.GT(&from) {
+			from = first
+			boundary = nil
+		}
+		if hi.LT(&end) {
+			end = hi
+		}
+		if from.GT(&end) {
+			continue
+		}
+		r.from[j], r.end[j], r.rel[j] = from, end, r.rel[i]
+		if r.relSnapshot != nil {
+			r.relSnapshot[j] = r.relSnapshot[i]
+		}
+		if r.idents != nil {
+			r.idents[j] = r.idents[i]
+		}
+		if r.startBoundaryRel != nil {
+			r.startBoundaryRel[j] = boundary
+		}
+		if r.clearAt != nil {
+			at := r.clearAt[i]
+			if at.LT(&first) {
+				at = types.TS{}
+			}
+			r.clearAt[j] = at
+		}
+		j++
+	}
+	r.from, r.end, r.rel = r.from[:j], r.end[:j], r.rel[:j]
+	if r.relSnapshot != nil {
+		r.relSnapshot = r.relSnapshot[:j]
+	}
+	if r.idents != nil {
+		r.idents = r.idents[:j]
+	}
+	if r.startBoundaryRel != nil {
+		r.startBoundaryRel = r.startBoundaryRel[:j]
+	}
+	if r.clearAt != nil {
+		r.clearAt = r.clearAt[:j]
+	}
+}
+
+func (r collectRange) crossesClear() bool {
+	for _, at := range r.clearAt {
+		if !at.IsEmpty() {
+			return true
+		}
+	}
+	return false
+}
+
+type dataBranchSnapshotRelation struct {
+	rel          engine.Relation
+	ident        branchIdentity
+	at           types.TS
+	columns      *dataBranchClearColumns
+	upperColumns []*plan.ColDef // nil when the upper boundary uses the endpoint schema
 }
 
 // branchMetaInfo describes the lineage relationship between the two
@@ -163,13 +232,19 @@ type branchMetaInfo struct {
 
 	pathFromLCAToTar   []uint64
 	pathFromLCAToTarTS []types.TS
-	// LineageOnly[i] marks an ALTER copy-and-swap edge into path[i]. Such
+	// LineageOnly[i] marks a physical rebuild edge into path[i]. Such
 	// edges split physical collection ranges but do not represent a branch
 	// fork for LCA probing/conflict semantics.
 	pathFromLCAToTarLineageOnly  []bool
+	pathFromLCAToTarClearsRows   []bool
 	pathFromLCAToBase            []uint64
 	pathFromLCAToBaseTS          []types.TS
 	pathFromLCAToBaseLineageOnly []bool
+	pathFromLCAToBaseClearsRows  []bool
+	// The source's physical lineage continues above the LCA when a bounded
+	// PICK needs to read a lower snapshot from before that ancestor.
+	tarRebuildChain   []uint64
+	tarRebuildChainTS []types.TS
 }
 
 // hasLCA reports whether tar and base share a common ancestor in the
@@ -274,6 +349,16 @@ type tableStuff struct {
 	lcaProbeTableId   uint64   // nonzero when the probe uses a different generation from lcaRel
 	lcaCTS            types.TS
 	lcaHasZeroHistory bool
+
+	// A side crossing a truncate is collected as visible rows at its upper
+	// boundary. A bounded source also carries its own lower snapshot image.
+	tarVisibleState, baseVisibleState bool
+	boundedPick                       bool
+	tarClearBaseline                  *dataBranchSnapshotRelation
+	tarPathDefs, basePathDefs         []*plan.TableDef
+	// Bounded PICK copies source values without firing destination ON UPDATE
+	// expressions for columns its generated UPDATE leaves unchanged.
+	pickOnUpdateNames []string
 	// lcaIdent is the winning owner identity lcaRel was reopened under
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.

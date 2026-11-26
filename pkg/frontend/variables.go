@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -4115,7 +4116,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("probe_limit", 1, 80000, false),
+		Type:              InitSystemVariableIntType("probe_limit", 1, catalog.MaxIVFProbeLimit, false),
 		Default:           int64(5),
 	},
 	"vector_itopk": {
