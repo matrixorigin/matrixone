@@ -50,6 +50,7 @@ type FetchLockRowsFunc func(
 
 // LockOptions lock operation options
 type LockOptions struct {
+	requireExactRows         bool
 	maxCountPerLock          int
 	mode                     lock.LockMode
 	sharding                 lock.Sharding
@@ -107,6 +108,7 @@ func (lockOp *LockOp) Release() {
 }
 
 type lockTarget struct {
+	requireExactRows             bool
 	tableID                      uint64
 	objRef                       *plan.ObjectRef
 	primaryColumnIndexInBatch    int32

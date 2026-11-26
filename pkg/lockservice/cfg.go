@@ -52,9 +52,9 @@ type Config struct {
 	// ServiceAddress service address for communication, if this address is not set, use
 	// ListenAddress as the communication address.
 	ServiceAddress string `toml:"service-address"`
-	// MaxFixedSliceSize lockservice uses fixedSlice to store all lock information, a pool
-	// of fixedSlice will be built internally, there are various specifications of fixexSlice,
-	// this value sets how big the maximum specification of FixedSlice is.
+	// MaxFixedSliceSize sizes the largest pooled lock-key segment. Ordinary
+	// locks escalate at this capacity. Exact catalog rows retain additional
+	// segments until transaction close because they cannot use a covering lock.
 	MaxFixedSliceSize toml.ByteSize `toml:"max-fixed-slice-size"`
 	// KeepBindDuration Maintain the period of the locktable bound to the current service
 	KeepBindDuration toml.Duration `toml:"keep-bind-duration"`

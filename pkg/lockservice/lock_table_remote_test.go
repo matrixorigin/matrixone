@@ -1656,12 +1656,15 @@ func TestFencedRemoteGrantIsReleasedWithOrWithoutReply(t *testing.T) {
 			name = "lost"
 		}
 		t.Run(name, func(t *testing.T) {
-			testFencedRemoteGrantRelease(t, lost)
+			testFencedRemoteGrantRelease(t, lost, false)
+		})
+		t.Run(name+"/exact-segments", func(t *testing.T) {
+			testFencedRemoteGrantRelease(t, lost, true)
 		})
 	}
 }
 
-func testFencedRemoteGrantRelease(t *testing.T, lost bool) {
+func testFencedRemoteGrantRelease(t *testing.T, lost, exact bool) {
 	previous := remoteLockAdmissionWindow
 	remoteLockAdmissionWindow = 500 * time.Millisecond
 	defer func() { remoteLockAdmissionWindow = previous }()
@@ -1670,14 +1673,20 @@ func testFencedRemoteGrantRelease(t *testing.T, lost bool) {
 		origin, owner := ss[0], ss[1]
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		id, row := []byte("txn"), []byte("row")
+		id := []byte("txn")
+		rows := [][]byte{[]byte("row")}
 		opts := newTestRowExclusiveOptions()
+		if exact {
+			origin.activeTxnHolder.(*mapBasedTxnHolder).fsp = newFixedSlicePool(2)
+			rows = newTestRows(1, 2, 3)
+			opts = opts.WithExactRows()
+		}
 		_, err := origin.Lock(ctx, 201, [][]byte{{1}}, id, opts)
 		require.NoError(t, err)
-		_, err = owner.Lock(ctx, 202, [][]byte{row}, []byte("seed"), opts)
+		_, err = owner.Lock(ctx, 202, rows[:1], []byte("seed"), opts)
 		require.NoError(t, err)
 		require.NoError(t, owner.Unlock(ctx, []byte("seed"), timestamp.Timestamp{}))
-		l, err := origin.getLockTableWithCreate(ctx, 0, 202, [][]byte{row}, pb.Sharding_None)
+		l, err := origin.getLockTableWithCreate(ctx, 0, 202, rows[:1], pb.Sharding_None)
 		require.NoError(t, err)
 		gate := &grantedLockResponseGate{Client: origin.remote.client, acquired: make(chan struct{}), release: make(chan struct{}), lost: lost}
 		resume := sync.OnceFunc(func() { close(gate.release) })
@@ -1688,14 +1697,14 @@ func testFencedRemoteGrantRelease(t *testing.T, lost bool) {
 		go func() {
 			txn.Lock()
 			defer txn.Unlock()
-			remote.lock(ctx, txn, [][]byte{row}, LockOptions{LockOptions: opts}, func(_ pb.Result, e error) { done <- e })
+			remote.lock(ctx, txn, rows, LockOptions{LockOptions: opts}, func(_ pb.Result, e error) { done <- e })
 		}()
 		select {
 		case <-gate.acquired:
 		case <-ctx.Done():
 			t.Fatal("owner did not grant")
 		}
-		holder, found, err := owner.GetLockHolder(ctx, 202, row, opts)
+		holder, found, err := owner.GetLockHolder(ctx, 202, rows[len(rows)-1], opts)
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, id, holder.TxnID)
@@ -1704,11 +1713,25 @@ func testFencedRemoteGrantRelease(t *testing.T, lost bool) {
 		require.True(t, txn.fenceByBindChanged(changed, origin.logger))
 		resume()
 		require.True(t, moerr.IsMoErrCode(<-done, moerr.ErrLockTableBindChanged))
+		if exact {
+			// A fenced grant is recorded for cleanup, including keys beyond one segment.
+			func() {
+				txn.Lock()
+				defer txn.Unlock()
+				ledger := txn.getHoldLocksLocked(0)
+				tracked := ledger.tableKeys[202]
+				require.NotNil(t, tracked)
+				require.Equal(t, rows, tracked.mustGet().all())
+				require.Len(t, ledger.uncertainLockKeys[202], len(rows))
+			}()
+		}
 		require.NoError(t, origin.Unlock(ctx, id, timestamp.Timestamp{}))
-		_, retained, err := owner.GetLockHolder(ctx, 202, row, opts)
-		require.NoError(t, err)
+		for _, row := range rows {
+			_, retained, err := owner.GetLockHolder(ctx, 202, row, opts)
+			require.NoError(t, err)
+			require.False(t, retained, "owner still holds row %x after source transaction unlock", row)
+		}
 		require.NoError(t, owner.Unlock(ctx, id, timestamp.Timestamp{}))
-		require.False(t, retained, "owner still holds the granted row after source transaction unlock")
 	})
 }
 

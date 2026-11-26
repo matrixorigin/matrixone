@@ -1069,3 +1069,49 @@ func TestHandoffReplacementKeepsOriginalTableInstance(t *testing.T) {
 		require.Zero(t, refs)
 	})
 }
+
+func TestProxyExactRowsUseOwnerThroughUnlock(t *testing.T) {
+	const table = uint64(17)
+	runLockServiceTests(t, []string{"owner", "client"}, func(_ *lockTableAllocator, ss []*service) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		owner, client := ss[0], ss[1]
+		client.cfg.EnableRemoteLocalProxy = true
+		shared := newTestRowSharedOptions()
+		rows := [][]byte{{1}, {3}}
+		proxyTxn, exactTxn := newTestTxnID(1), newTestTxnID(2)
+		_, err := owner.Lock(ctx, table, rows[:1], proxyTxn, shared)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, proxyTxn, timestamp.Timestamp{}))
+		_, err = client.Lock(ctx, table, rows[:1], proxyTxn, shared)
+		require.NoError(t, err)
+		_, err = client.Lock(ctx, table, rows, exactTxn, shared.WithExactRows())
+		require.NoError(t, err)
+		// Revisiting a point as an ordinary reader must keep its direct ownership.
+		_, err = client.Lock(ctx, table, rows[:1], exactTxn, shared)
+		require.NoError(t, err)
+		_, err = client.Lock(ctx, table, rows[:1], proxyTxn, shared.WithExactRows())
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+		// Restore replays both grants in one transaction. Pin the route on
+		// the ordinary request while a different transaction uses the proxy.
+		restoreTxn := newTestTxnID(4)
+		restoreShared := shared
+		restoreShared.BypassLocalProxy = true
+		_, err = client.Lock(ctx, table, rows[:1], restoreTxn, restoreShared)
+		require.NoError(t, err)
+		_, err = client.Lock(ctx, table, rows, restoreTxn, restoreShared.WithExactRows())
+		require.NoError(t, err)
+		require.NoError(t, client.Unlock(ctx, restoreTxn, timestamp.Timestamp{}))
+		require.NoError(t, client.Unlock(ctx, proxyTxn, timestamp.Timestamp{}))
+		exclusive := newTestRowExclusiveOptions()
+		exclusive.Policy = pb.WaitPolicy_FastFail
+		writer := newTestTxnID(3)
+		_, err = owner.Lock(ctx, table, rows[:1], writer, exclusive)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockConflict))
+		require.NoError(t, owner.Unlock(ctx, writer, timestamp.Timestamp{}))
+		require.NoError(t, client.Unlock(ctx, exactTxn, timestamp.Timestamp{}))
+		_, err = owner.Lock(ctx, table, rows, writer, exclusive)
+		require.NoError(t, err)
+		require.NoError(t, owner.Unlock(ctx, writer, timestamp.Timestamp{}))
+	})
+}

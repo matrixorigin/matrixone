@@ -231,7 +231,7 @@ func (q *sliceBasedWaiterQueue) rollbackChange() {
 
 	n := len(q.waiters)
 	for i := q.beginChangeIdx; i < n; i++ {
-		q.waiters[i].close("sliceBasedWaiterQueue rollbackChange", q.logger)
+		q.waiters[i].unref("sliceBasedWaiterQueue rollbackChange", q.logger)
 		q.waiters[i] = nil
 	}
 	q.waiters = q.waiters[:q.beginChangeIdx]

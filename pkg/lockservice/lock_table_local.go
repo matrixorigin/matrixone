@@ -443,7 +443,7 @@ func (l *localLockTable) releaseLocks(
 
 				l.logger.Fatal("BUG: unlock a lock that is not held by the current txn",
 					zap.Bool("row", lock.isLockRow()),
-					zap.Int("keys-count", locks.len()),
+					zap.Int("keys-count", locks.totalLen()),
 					zap.String("hold-bind", b.DebugString()),
 					zap.String("bind", l.bind.DebugString()),
 					waitTxnArrayField("holders", lock.holders.getTxnSlice()),
@@ -718,6 +718,9 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 	case pb.Granularity_Row:
 		return l.acquireRowLockLocked(c)
 	case pb.Granularity_Range:
+		if c.opts.ExactRows {
+			return moerr.NewLockNeedUpgradeNoCtx()
+		}
 		if len(c.rows) == 0 ||
 			len(c.rows)%2 != 0 {
 			panic("invalid range lock")
@@ -741,11 +744,11 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				l.logger,
 				c,
 				func() error {
-					return c.txn.lockAdded(
+					return c.txn.addLocks(
 						l.bind.Group,
 						l.bind,
-						[][]byte{key},
-						l.logger,
+						[][]byte{key}, nil,
+						l.logger, true, c.opts.ExactRows,
 					)
 				},
 			)
@@ -846,7 +849,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row}, l.logger)
+	err := c.txn.addLocks(l.bind.Group, l.bind, [][]byte{row}, nil, l.logger, true, c.opts.ExactRows)
 	if err != nil {
 		return err
 	}
@@ -1263,18 +1266,21 @@ func (l *localLockTable) addRangeLockLocked(
 		break
 	}
 
-	mc.commit(l.bind, c.txn, l.mu.store, l.logger)
+	// Admit the replacement before publishing changes to the store or wait queues.
+	err = c.txn.addLocks(
+		l.bind.Group, l.bind, [][]byte{start, end}, mc.mergedLocks, l.logger, true, false,
+	)
+	if err != nil {
+		mc.rollback()
+		return nil, Lock{}, err
+	}
+	mc.commit(l.mu.store, l.logger)
 	startLock, endLock := newRangeLock(l.logger, c)
 
 	wq.resetCommittedAt(l.mu.tableCommittedAt)
 	startLock.waiters = wq
 	endLock.waiters = wq
 
-	// similar to row lock
-	err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
-	if err != nil {
-		return nil, Lock{}, err
-	}
 	c.result.NewLockAdd = true
 
 	l.mu.store.Add(start, startLock)
@@ -1288,7 +1294,7 @@ func (l *localLockTable) addRangeLockLocked(
 				zap.Uint64("table", l.bind.OriginTable),
 				zap.String("txn", c.txn.txnKey),
 				zap.Int("merged", n),
-				zap.Int("current", v.mustGet().len()),
+				zap.Int("current", v.mustGet().totalLen()),
 			)
 		}
 	}
@@ -1590,8 +1596,6 @@ func (c *mergeContext) mergeLocks(locks [][]byte) {
 }
 
 func (c *mergeContext) commit(
-	bind pb.LockTable,
-	txn *activeTxn,
 	s LockStorage,
 	logger *log.MOLogger,
 ) {
@@ -1599,16 +1603,10 @@ func (c *mergeContext) commit(
 		s.Delete(util.UnsafeStringToBytes(k))
 	}
 
-	txn.lockRemoved(
-		bind.Group,
-		bind.Table,
-		c.mergedLocks,
-	)
-
 	for _, q := range c.mergedWaiters {
 		// release ref in merged waiters. The ref is moved to c.to.
 		q.iter(func(w *waiter) bool {
-			w.close("mergeContext commit", logger)
+			w.unref("mergeContext commit", logger)
 			return true
 		})
 		q.reset()

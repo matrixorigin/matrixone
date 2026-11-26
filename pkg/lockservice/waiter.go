@@ -152,6 +152,11 @@ func (w *waiter) close(
 	logger *log.MOLogger,
 ) {
 	w.stopLockWaitTimer()
+	w.unref(info, logger)
+}
+
+// unref releases a bookkeeping reference without ending an active lock wait.
+func (w *waiter) unref(info string, logger *log.MOLogger) {
 	if w.enableChecker {
 		logCloseWaiter(logger, info, w.txn.TxnID, w)
 	}

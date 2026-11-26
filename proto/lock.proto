@@ -62,6 +62,10 @@ message LockOptions {
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
   int64               LockWaitTimeout   = 10;
   int64               LockWaitDeadline  = 11;
+  // Internal catalog DDL must acquire individual rows even under contention.
+  bool                ExactRows         = 12;
+  // This transaction uses the remote lock owner throughout catalog maintenance.
+  bool                BypassLocalProxy  = 13;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -424,7 +428,7 @@ message Result {
   uint32              Waiters         = 9;  
   // NewLockAdd if true means new lock added, false means lock is added before by current 
   // txn
-  bool                NewLockAdd      = 10;                
+  bool                NewLockAdd      = 10;
 }
 
 message ExtraMutation {

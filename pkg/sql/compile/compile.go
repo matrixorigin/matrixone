@@ -5965,6 +5965,9 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
 	for _, tbl := range node.LockTargets {
+		if tbl.RequireExactRows && tbl.LockTable {
+			return nil, moerr.NewLockNeedUpgradeNoCtx()
+		}
 		if c.shouldPrePipelineLockTable(tbl) {
 			c.lockTables[tbl.TableId] = tbl
 		} else {
