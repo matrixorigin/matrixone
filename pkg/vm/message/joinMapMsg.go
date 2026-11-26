@@ -640,7 +640,9 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 		return nil, err
 	}
 	if buildErr := result.BuildError(); buildErr != nil {
-		return nil, buildErr.AsMoErr()
+		// AsError preserves cancellation identity for scope arbitration; a
+		// substantive build failure still surfaces as a typed moerr.
+		return nil, buildErr.AsError()
 	}
 	return result.JoinMap(), nil
 }

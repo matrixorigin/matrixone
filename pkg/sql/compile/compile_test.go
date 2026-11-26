@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	pipelinepb "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -741,6 +742,49 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestJoinMapCancellationScopeCause exercises the error across the message and
+// scope owners, including both result arrival orders and query cancellation.
+func TestJoinMapCancellationScopeCause(t *testing.T) {
+	fk := moerr.NewErrFKNoReferencedRow2(context.Background())
+	query := context.Background()
+	pipeCtx, cancel := context.WithCancelCause(query)
+	cancel(fk)
+	board := message.NewMessageBoard()
+	require.True(t, message.FinalizeJoinMapBuildError(board, 32560, false, 0, context.Canceled))
+	_, buildErr := message.ReceiveJoinMap(32560, false, 0, board, context.Background())
+	require.Error(t, buildErr)
+
+	wire := &pipelinepb.Message{}
+	wire.SetMoError(query, buildErr)
+	wireErr, ok := wire.TryToGetMoErr()
+	require.True(t, ok)
+	for _, candidate := range []error{buildErr, wireErr} {
+		for _, cancellationFirst := range []bool{true, false} {
+			first := scopeRunResult{err: candidate, ctx: pipeCtx, queryCtx: query}
+			second := scopeRunResult{err: fk, ctx: pipeCtx, queryCtx: query}
+			if !cancellationFirst {
+				first, second = second, first
+			}
+			got := preferPrimaryScopeResult(first, second)
+			require.True(t, moerr.IsMoErrCode(got.err, fk.ErrorCode()), got.err)
+		}
+	}
+
+	queryCanceled, stopQuery := context.WithCancel(context.Background())
+	stopQuery()
+	got := preferPrimaryScopeResult(scopeRunResult{err: buildErr, ctx: queryCanceled, queryCtx: queryCanceled}, scopeRunResult{err: fk})
+	require.ErrorIs(t, got.err, context.Canceled)
+
+	deadlineWire := &pipelinepb.Message{}
+	deadlineWire.SetMoError(query, message.NewJoinMapBuildError(context.DeadlineExceeded).AsError())
+	deadlineErr, ok := deadlineWire.TryToGetMoErr()
+	require.True(t, ok)
+	independentPipeline, stopPipeline := context.WithCancel(query)
+	stopPipeline()
+	gotErr, _ := normalizeScopeRunError(deadlineErr, independentPipeline, query)
+	require.True(t, moerr.IsMoErrCode(gotErr, moerr.ErrRPCTimeout), gotErr)
 }
 
 type scopeRunCancelErrorOperator struct {

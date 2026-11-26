@@ -15,6 +15,7 @@
 package message
 
 import (
+	"context"
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,24 +40,125 @@ const (
 // HashBuild.  The error is snapshotted when it is constructed; consumers get a
 // fresh moerr clone through AsMoErr so a caller cannot mutate the value seen by
 // another broadcast consumer.
+//
+// A build that stops because its pipeline context was canceled is not a build
+// failure: it is cleanup fallout.  Such an error keeps its cancellation
+// identity in contextErr instead of being laundered into an ErrInternal
+// "internal error: context canceled".  Scope aggregation only demotes
+// cancellation-shaped results, so laundering the identity would let cleanup
+// fallout outrank the execution error that canceled the pipeline.
 type JoinMapBuildError struct {
-	err *moerr.Error
+	err        *moerr.Error
+	contextErr error
+	message    string
 }
 
 var _ error = new(JoinMapBuildError)
 
-// NewJoinMapBuildError snapshots err as a typed build error.  Non-moerr
-// errors are converted to an internal MatrixOne error so callers still get a
-// stable error code from every consumer.
+// NewJoinMapBuildError snapshots err as a typed build error.  Substantive
+// errors keep their stable MatrixOne code; a pure cancellation tree keeps its
+// cancellation identity so scope aggregation can recover the causal execution
+// error from the canceled pipeline context.  Other non-moerr errors are
+// converted to a stable internal MatrixOne error.
 func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	if err == nil {
 		err = moerr.NewInternalErrorNoCtx("hash build failed without an error")
 	}
-	var me *moerr.Error
-	if !errors.As(err, &me) {
-		me = moerr.NewInternalErrorNoCtx(err.Error())
+	classification := classifyBuildError(err)
+	if classification.pureCancellation {
+		contextErr := classification.contextError()
+		typed := classification.interrupted
+		if contextErr != nil {
+			buildErr := &JoinMapBuildError{contextErr: contextErr, message: err.Error()}
+			// Preserve the stable moerr detail for compatibility even though the
+			// cancellation identity, not the moerr, owns error unwrapping.
+			if typed != nil {
+				buildErr.err = cloneMoErr(typed)
+			}
+			return buildErr
+		}
+		if typed != nil {
+			// A pure "query interrupted" tree already carries a cancellation code
+			// that scope aggregation classifies as secondary.  Keep that code and
+			// its detail instead of downgrading it to an internal error.
+			return &JoinMapBuildError{err: cloneMoErr(typed)}
+		}
 	}
-	return &JoinMapBuildError{err: cloneMoErr(me)}
+	if classification.substantive != nil {
+		return &JoinMapBuildError{err: cloneMoErr(classification.substantive)}
+	}
+	return &JoinMapBuildError{err: moerr.NewInternalErrorNoCtx(err.Error())}
+}
+
+type buildErrorClassification struct {
+	pureCancellation bool
+	canceled         bool
+	deadline         bool
+	interrupted      *moerr.Error
+	substantive      *moerr.Error
+}
+
+func (c buildErrorClassification) contextError() error {
+	if c.canceled && c.deadline {
+		return errors.Join(context.Canceled, context.DeadlineExceeded)
+	}
+	if c.canceled {
+		return context.Canceled
+	}
+	if c.deadline {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// classifyBuildError walks the error tree once. A cancellation is secondary
+// only if every leaf is cancellation-shaped; otherwise retain the first
+// substantive MatrixOne error, if any.
+func classifyBuildError(err error) buildErrorClassification {
+	if err == nil {
+		return buildErrorClassification{}
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return buildErrorClassification{}
+		}
+		result := buildErrorClassification{pureCancellation: true}
+		for _, child := range children {
+			item := classifyBuildError(child)
+			result.pureCancellation = result.pureCancellation && item.pureCancellation
+			result.canceled = result.canceled || item.canceled
+			result.deadline = result.deadline || item.deadline
+			if result.interrupted == nil {
+				result.interrupted = item.interrupted
+			}
+			if result.substantive == nil {
+				result.substantive = item.substantive
+			}
+		}
+		return result
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return classifyBuildError(child)
+		}
+	}
+	var me *moerr.Error
+	if errors.As(err, &me) {
+		if contextCancellationMoErr(me) {
+			return buildErrorClassification{pureCancellation: true, interrupted: me}
+		}
+		return buildErrorClassification{substantive: me}
+	}
+	canceled := errors.Is(err, context.Canceled)
+	deadline := errors.Is(err, context.DeadlineExceeded)
+	return buildErrorClassification{pureCancellation: canceled || deadline, canceled: canceled, deadline: deadline}
+}
+
+// contextCancellationMoErr reports whether a MatrixOne error already denotes
+// cancellation rather than a substantive execution failure.
+func contextCancellationMoErr(err *moerr.Error) bool {
+	return err != nil && err.ErrorCode() == moerr.ErrQueryInterrupted
 }
 
 func cloneMoErr(src *moerr.Error) *moerr.Error {
@@ -79,20 +181,62 @@ func cloneMoErr(src *moerr.Error) *moerr.Error {
 }
 
 func (e *JoinMapBuildError) Error() string {
-	if e == nil || e.err == nil {
+	if e == nil {
+		return "hash build failed"
+	}
+	if e.contextErr != nil {
+		if e.message != "" {
+			return e.message
+		}
+		return e.contextErr.Error()
+	}
+	if e.err == nil {
 		return "hash build failed"
 	}
 	return e.err.Error()
 }
 
-// Unwrap lets errors.As/errors.Is inspect the MatrixOne error while keeping
-// the published BuildError as the outer, typed terminal value.
+// Unwrap lets errors.As/errors.Is inspect either the MatrixOne error or the
+// preserved cancellation identity while keeping the published BuildError as
+// the outer, typed terminal value.
 func (e *JoinMapBuildError) Unwrap() error {
+	if e != nil && e.contextErr != nil {
+		if errors.Is(e.contextErr, context.DeadlineExceeded) {
+			if errors.Is(e.contextErr, context.Canceled) {
+				// errors.Join exposes its backing child slice through Unwrap.  Return a
+				// fresh value so one broadcast consumer cannot mutate another's view.
+				return errors.Join(context.Canceled, context.DeadlineExceeded)
+			}
+			return context.DeadlineExceeded
+		}
+		return context.Canceled
+	}
 	return e.AsMoErr()
 }
 
+// As preserves the pre-existing errors.As contract for MatrixOne errors while
+// Unwrap carries the cancellation identity for scope arbitration.  Each caller
+// receives an independent moerr snapshot.
+func (e *JoinMapBuildError) As(target any) bool {
+	me, ok := target.(**moerr.Error)
+	if !ok {
+		return false
+	}
+	*me = e.AsMoErr()
+	return true
+}
+
 func (e *JoinMapBuildError) ErrorCode() uint16 {
-	if e == nil || e.err == nil {
+	if e == nil {
+		return moerr.ErrInternal
+	}
+	if e.contextErr != nil {
+		if errors.Is(e.contextErr, context.DeadlineExceeded) {
+			return moerr.ErrRPCTimeout
+		}
+		return moerr.ErrQueryInterrupted
+	}
+	if e.err == nil {
 		return moerr.ErrInternal
 	}
 	return e.err.ErrorCode()
@@ -110,7 +254,31 @@ func (e *JoinMapBuildError) AsMoErr() *moerr.Error {
 	if e == nil {
 		return moerr.NewInternalErrorNoCtx("hash build failed")
 	}
+	if e.contextErr != nil {
+		var me *moerr.Error
+		if errors.Is(e.contextErr, context.DeadlineExceeded) {
+			me = moerr.NewRPCTimeout(context.Background())
+		} else {
+			me = moerr.NewQueryInterrupted(context.Background())
+		}
+		me.SetDetail(e.Detail())
+		return me
+	}
+	if e.err == nil {
+		return moerr.NewInternalErrorNoCtx(e.Error())
+	}
 	return cloneMoErr(e.err)
+}
+
+// AsError returns the immutable cancellation wrapper when cancellation
+// identity must survive errors.Is, or a fresh moerr clone for substantive
+// failures.  Execution operators should propagate this value to their scope so
+// cleanup fallout cannot outrank the error that canceled the pipeline.
+func (e *JoinMapBuildError) AsError() error {
+	if e != nil && e.contextErr != nil {
+		return e
+	}
+	return e.AsMoErr()
 }
 
 // JoinMapResult is the immutable terminal dependency value shared by all
