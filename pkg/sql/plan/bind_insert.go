@@ -33,6 +33,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"go.uber.org/zap"
 )
@@ -6558,6 +6559,7 @@ func (builder *QueryBuilder) buildValueScan(
 	}
 
 	proc := builder.compCtx.GetProcess()
+	strictMode := function.StrictSqlModeForAssignment(proc)
 	lastTag := builder.genNewBindTag()
 	colCount := len(colNames)
 	rowsetData := &plan.RowsetData{
@@ -6679,7 +6681,7 @@ func (builder *QueryBuilder) buildValueScan(
 					literal = unwrapParenExpr(literal)
 				}
 				if nv, ok := literal.(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) && !isAttributedDecimalPlanType(col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
+					expr, err := makeInsertValueConstExprWithMode(proc, nv, &colTyp, builder.isInsertIgnore, strictMode)
 					if err != nil {
 						return 0, nil, err
 					}
