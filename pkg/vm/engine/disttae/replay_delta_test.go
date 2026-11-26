@@ -79,7 +79,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 			cli := &replayTxnClient{TxnClient: client.NewTxnClient(sid, sender, client.WithLockService(blocker))}
 			cli.Resume()
 			t.Cleanup(func() { require.NoError(t, cli.Close()) })
-			e := &Engine{service: sid, cli: cli, mp: mp, ls: blocker, partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 16)}, packerPool: fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, nil)}
+			e := &Engine{service: sid, cli: cli, mp: mp, ls: blocker, partitions: make(map[[2]uint64]*logtailreplay.Partition), globalStats: &GlobalStats{tailC: make(chan statsLogtail, 16)}, packerPool: fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, nil)}
 			e.catalog.Store(cache.NewCatalog())
 			tw := client.NewTimestampWaiter(runtime.GetLogger(sid))
 			t.Cleanup(tw.Close)

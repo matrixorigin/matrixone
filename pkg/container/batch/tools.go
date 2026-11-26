@@ -35,82 +35,38 @@ func MarshalVectors(vecs []*vector.Vector) ([]byte, error) {
 
 // EncodeVectors encodes vecs as one batch whose row count is the length of
 // the first vector. Only the vectors are encoded: no extra buffer, and a
-// zero Recursive and ShuffleIDX. The result borrows the vectors' buffers;
-// see Encode.
+// zero Recursive and ShuffleIDX. It allocates the batch header the result
+// borrows; see Encode.
 func EncodeVectors(vecs []*vector.Vector) (api.EncodedBatch, error) {
-	bat := Batch{Vecs: vecs}
+	bat := &Batch{Vecs: vecs}
 	if len(vecs) > 0 {
 		bat.rowCount = vecs[0].Length()
 	}
-	return Encode(&bat)
+	return Encode(bat)
 }
 
 // Encode returns bat's MarshalBinary encoding as an api.EncodedBatch that
-// borrows its vectors' data and area buffers and its extra buffer: only the
-// headers and null bitmaps are copied. bat must stay unchanged until the
-// result is marshaled or dropped.
+// borrows bat and writes it straight into the message buffer when the Entry
+// is marshaled. It allocates nothing and copies nothing. bat, its vectors
+// and their buffers must stay unchanged until the result is marshaled or
+// dropped; marshaling fails if bat no longer has the size it had here.
 //
 // bat must be valid, as an engine's batches are: Encode sends each varlen
 // area as is, without the codec's linear check of its descriptors.
 func Encode(bat *Batch) (api.EncodedBatch, error) {
-	var w partsWriter
-	if err := bat.marshalBinaryTo(&w, true); err != nil {
+	size, err := bat.marshalTrustedSize()
+	if err != nil {
 		return api.EncodedBatch{}, err
 	}
-	return api.NewEncodedBatch(w.finish()...), nil
+	return api.NewBorrowedEncodedBatch((*trustedEncoder)(bat), size), nil
 }
 
-// minBorrowedPart is the smallest buffer partsWriter keeps by reference;
-// copying a smaller one costs less than another part.
-const minBorrowedPart = 256
+// trustedEncoder is the api.BatchEncoder of a valid batch. Being a pointer
+// type, it is stored in the interface without an allocation.
+type trustedEncoder Batch
 
-// partsWriter collects an encoding as parts. It copies ordinary writes into
-// its own buffer and keeps borrowed buffers by reference.
-type partsWriter struct {
-	binaryAppender
-	parts [][]byte
-	// owned is where the owned bytes not yet in a part begin.
-	owned int
-}
-
-// reserve sizes the owned buffer and the part list for bat, so the encoding
-// allocates each once.
-func (w *partsWriter) reserve(bat *Batch, plans []vector.MarshalBinaryPlan) {
-	copied := 8 + 4 + 4 + 4 + 4
-	for _, plan := range plans {
-		copied += 4 + plan.CopiedSize(minBorrowedPart)
-	}
-	if len(bat.extraBuf) < minBorrowedPart {
-		copied += len(bat.extraBuf)
-	}
-	w.buf = make([]byte, 0, copied)
-	// Each vector borrows at most its data and area, each followed by owned
-	// bytes; the extra buffer adds one more pair.
-	w.parts = make([][]byte, 0, 4*len(plans)+3)
-}
-
-func (w *partsWriter) WriteBorrowed(data []byte) error {
-	if len(data) < minBorrowedPart {
-		_, err := w.Write(data)
-		return err
-	}
-	w.closeOwned()
-	w.parts = append(w.parts, data)
-	return nil
-}
-
-// closeOwned ends the current owned part. The part stays valid if the owned
-// buffer grows later: its bytes are final and stay in the old array.
-func (w *partsWriter) closeOwned() {
-	if end := len(w.buf); end > w.owned {
-		w.parts = append(w.parts, w.buf[w.owned:end:end])
-		w.owned = end
-	}
-}
-
-func (w *partsWriter) finish() [][]byte {
-	w.closeOwned()
-	return w.parts
+func (e *trustedEncoder) EncodeTo(dst []byte) error {
+	return (*Batch)(e).marshalTrustedTo(dst)
 }
 
 // ViewBinary decodes data, a MarshalBinary encoding, into a new batch whose
@@ -125,6 +81,33 @@ func ViewBinary(data []byte) (*Batch, error) {
 // framing, sizes and row counts, but not the null bitmaps or varlen payloads.
 func ViewTrustedBinary(data []byte) (*Batch, error) {
 	return viewBinary(data, false)
+}
+
+// ViewTrustedBinaryInto is ViewTrustedBinary decoding into bat, which must
+// be a view from an earlier decode or a new batch. It reuses bat's vectors,
+// so decoding an encoding with as many vectors as the last allocates
+// nothing. The previous views are replaced.
+func ViewTrustedBinaryInto(bat *Batch, data []byte) error {
+	if bat.mp != nil || bat.selection != nil {
+		return moerr.NewInvalidInputNoCtx("batch is not a view")
+	}
+	if err := bat.unmarshalBinary(data, nil, false); err != nil {
+		return err
+	}
+	if err := bat.CheckLength(); err != nil {
+		return moerr.NewInvalidInputNoCtx("batch vector length does not match row count")
+	}
+	return nil
+}
+
+// DropViews drops the references of bat, a batch from ViewTrustedBinaryInto,
+// to its encoding, and keeps its vectors for the next decode.
+func DropViews(bat *Batch) {
+	for _, vec := range bat.Vecs {
+		vec.Free(nil)
+	}
+	bat.extraBuf = nil
+	bat.rowCount = 0
 }
 
 func viewBinary(data []byte, validateValues bool) (*Batch, error) {

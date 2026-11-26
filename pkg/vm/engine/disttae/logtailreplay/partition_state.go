@@ -682,14 +682,16 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			p.HandleRowsInsert(ctx, entry.Bat.Bytes(), entry.Attrs, primarySeqnum, packer, pool, keys...)
+			// The rows outlive the receive buffer, which the client reuses:
+			// they keep bytes of their own, copied unless already detached.
+			p.HandleRowsInsert(ctx, entry.Bat.Detach().Bytes(), entry.Attrs, primarySeqnum, packer, pool, keys...)
 		}
 
 	case api.Entry_Delete:
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
 		}
-		p.HandleRowsDelete(ctx, entry.Bat.Bytes(), packer, pool)
+		p.HandleRowsDelete(ctx, entry.Bat.Detach().Bytes(), packer, pool)
 	case api.Entry_DataObject:
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
@@ -715,7 +717,8 @@ func (p *PartitionState) HandleDataObjectList(
 
 	var numDeleted, blockDeleted int64
 
-	objBat := mustViewEntryBatch(ee.Bat.Bytes())
+	objBat := viewObjectList(ee.Bat.Bytes())
+	defer releaseObjectList(objBat)
 	statsVec := objBat.Vecs[2]
 	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
 	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])
@@ -825,7 +828,8 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	var clusterPacker types.Packer
 	defer clusterPacker.Close()
 
-	objBat := mustViewEntryBatch(ee.Bat.Bytes())
+	objBat := viewObjectList(ee.Bat.Bytes())
+	defer releaseObjectList(objBat)
 	statsVec := objBat.Vecs[2]
 	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
 	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])

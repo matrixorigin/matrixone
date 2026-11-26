@@ -246,7 +246,7 @@ type GlobalStats struct {
 	// tailC is the chan to receive entries from logtail
 	// and then update the stats info map.
 	// TODO(volgariver6): add metrics of the chan length.
-	tailC chan *logtail.TableLogtail
+	tailC chan statsLogtail
 
 	updateC chan statsUpdateJob
 
@@ -340,7 +340,7 @@ func NewGlobalStats(
 		ctx:          ownerCtx,
 		cancel:       cancel,
 		engine:       e,
-		tailC:        make(chan *logtail.TableLogtail, 10000),
+		tailC:        make(chan statsLogtail, 10000),
 		updateC:      make(chan statsUpdateJob, 3000),
 		KeyRouter:    keyRouter,
 		queueWatcher: newQueueWatcher(),
@@ -913,16 +913,52 @@ func (gs *GlobalStats) waitForStatsUpdate(
 	}
 }
 
+// statsLogtail is what the stats consumer needs of a table's logtail. It is
+// taken when the logtail is enqueued: the consumer runs later, after the
+// logtail's batches, views of a reused receive buffer, are gone.
+type statsLogtail struct {
+	key           pb.StatsInfoKey
+	hasCheckpoint bool
+	metaChanges   int
+}
+
+func newStatsLogtail(tail *logtail.TableLogtail) statsLogtail {
+	// Count meta changes from logtail by checking batch length
+	metaChanges := 0
+	for i := range tail.Commands {
+		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
+			if rows, err := batch.EncodedRowCount(tail.Commands[i].Bat.Bytes()); err == nil {
+				metaChanges += rows
+			}
+		}
+	}
+	return statsLogtail{
+		key: pb.StatsInfoKey{
+			AccId:      tail.Table.AccId,
+			DatabaseID: tail.Table.DbId,
+			TableID:    tail.Table.TbId,
+			TableName:  tail.Table.GetTbName(),
+			DbName:     tail.Table.GetDbName(),
+		},
+		hasCheckpoint: len(tail.CkpLocation) > 0,
+		metaChanges:   metaChanges,
+	}
+}
+
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 	if gs.ctx != nil {
 		if cause := context.Cause(gs.ctx); cause != nil {
 			return
 		}
 	}
+	change := newStatsLogtail(tail)
+	if !change.hasCheckpoint && change.metaChanges == 0 {
+		return
+	}
 	select {
 	case <-gs.lifecycleDone():
 		return
-	case gs.tailC <- tail:
+	case gs.tailC <- change:
 	default:
 		logutil.Errorf("the channel of logtails is full")
 	}
@@ -1056,33 +1092,15 @@ func (gs *GlobalStats) lifecycleDone() <-chan struct{} {
 	return gs.ctx.Done()
 }
 
-func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLogtail) {
-	key := pb.StatsInfoKey{
-		AccId:      tail.Table.AccId,
-		DatabaseID: tail.Table.DbId,
-		TableID:    tail.Table.TbId,
-		TableName:  tail.Table.GetTbName(),
-		DbName:     tail.Table.GetDbName(),
-	}
-
-	// Count meta changes from logtail by checking batch length
-	metaChanges := 0
-	for i := range tail.Commands {
-		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
-			if rows, err := batch.EncodedRowCount(tail.Commands[i].Bat.Bytes()); err == nil {
-				metaChanges += rows
-			}
-		}
-	}
-
-	if len(tail.CkpLocation) > 0 || metaChanges > 0 {
+func (gs *GlobalStats) processLogtail(ctx context.Context, change statsLogtail) {
+	if change.hasCheckpoint || change.metaChanges > 0 {
 		record, ok := gs.shouldEnqueueExistingStatsUpdateGeneration(
-			key, metaChanges, len(tail.CkpLocation) > 0,
+			change.key, change.metaChanges, change.hasCheckpoint,
 		)
 		if ok {
 			gs.enqueueStatsUpdateForRecord(pb.StatsInfoKeyWithContext{
 				Ctx: ctx,
-				Key: key,
+				Key: change.key,
 			}, false, record)
 		}
 	}

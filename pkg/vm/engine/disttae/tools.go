@@ -108,13 +108,22 @@ func genWriteReqs(
 	}
 
 	reqs := make([]txn.TxnRequest, 0, len(entries))
-	payload, err := types.Encode(&api.PrecommitWriteCmd{
+	// Every shard's request shares one payload, marshaled straight into a
+	// recycled off-heap buffer that the transaction holds until it ends.
+	cmd := api.PrecommitWriteCmd{
 		EntryList:           entries,
 		SyncProtectionJobId: txnCommit.GetSyncProtectionJobID(),
-	})
+	}
+	buf := commitPayloads.get()
+	payload, err := buf.Resize(cmd.ProtoSize())
+	if err == nil {
+		_, err = cmd.MarshalToSizedBuffer(payload)
+	}
 	if err != nil {
+		commitPayloads.put(buf)
 		return nil, err
 	}
+	txnCommit.holdCommitPayload(buf)
 	for _, info := range tn.Shards {
 		reqs = append(reqs, txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
@@ -199,9 +208,17 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		ebat = e.bat
 		eattrs = e.attrs
 	}
-	// The entry borrows the workspace vectors, which stay unchanged until the
-	// commit request has been marshaled.
-	bat, err := batch.EncodeVectors(ebat.Vecs)
+	// The entry encodes only the vectors, through a header of its own, and
+	// borrows the workspace vectors: genWriteReqs marshals the commit request
+	// before anything changes them.
+	if ebat == e.bat {
+		ebat = batch.NewWithSize(0)
+		ebat.Vecs = e.bat.Vecs
+	}
+	if len(ebat.Vecs) > 0 {
+		ebat.SetRowCount(ebat.Vecs[0].Length())
+	}
+	bat, err := batch.Encode(ebat)
 	if err != nil {
 		return nil, err
 	}

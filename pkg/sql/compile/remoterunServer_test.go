@@ -710,6 +710,7 @@ func TestMessageReceiverSendBatchUsesNegotiatedCredits(t *testing.T) {
 		})
 
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       401,
@@ -977,6 +978,7 @@ func TestMessageReceiverSendBatchCarriesStaticBinaryType(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       404,
@@ -1017,6 +1019,7 @@ func TestMessageReceiverSendBatchSendsRolledUpNullsUngated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
 	receiver := &messageReceiverOnServer{
+		batchOut:   newTestRemoteBatchBuffer(t),
 		messageCtx: context.Background(), connectionCtx: context.Background(),
 		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
 		maxMessageSize: 1 << 20,
@@ -1059,6 +1062,7 @@ func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *test
 		}).Times(2)
 
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       402,
@@ -1094,6 +1098,7 @@ func TestMessageReceiverSendFragmentedBatchKeepsCreditUntilAck(t *testing.T) {
 		}).Times(2)
 
 	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
 		messageCtx:      context.Background(),
 		connectionCtx:   context.Background(),
 		messageId:       403,
@@ -1135,4 +1140,226 @@ func TestLiveReceiverStopRejectsConnectionAndMessageCancellation(t *testing.T) {
 	r := &messageReceiverOnServer{messageCtx: context.Background(), connectionCtx: context.Background(),
 		streamLifecycle: &pipelineStreamLifecycle{batchFlow: flow}}
 	require.False(t, r.hasLiveReceiverStop(), "a later stop must not certify a previously failed flow")
+}
+
+// newTestRemoteBatchBuffer returns a stream batch buffer that is closed,
+// and checked to have freed its memory, when the test ends.
+func newTestRemoteBatchBuffer(t *testing.T) *remoteBatchBuffer {
+	mp := mpool.MustNewZero()
+	b := &remoteBatchBuffer{buf: mpool.NewMessageBuffer(mp, maxRetainedRemoteBatchBuffer)}
+	t.Cleanup(func() {
+		b.close()
+		require.Zero(t, mp.CurrNB())
+	})
+	return b
+}
+
+// A stream marshals every result batch into its one buffer, and a closed
+// stream sends nothing.
+func TestRemoteBatchBufferIsReusedAndClosed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var data [][]byte
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			data = append(data, message.(*pipeline.Message).Data)
+			return nil
+		}).Times(2)
+	out := newTestRemoteBatchBuffer(t)
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	for i := 0; i < 100; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
+	}
+	bat.SetRowCount(100)
+	defer bat.Clean(mp)
+
+	require.NoError(t, receiver.sendBatch(bat))
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Len(t, data, 2)
+	require.True(t, &data[0][0] == &data[1][0], "both batches use the stream's buffer")
+
+	out.close()
+	require.Error(t, receiver.sendBatch(bat))
+}
+
+func newRemoteSendTestBatch(t *testing.T, mp *mpool.MPool, base int64, rows int) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], base+int64(i), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("remote-batch-value-past-inline"), i%3 == 0, mp))
+	}
+	bat.SetRowCount(rows)
+	return bat
+}
+
+// A batch larger than a message goes out in chunks of the stream's buffer;
+// they reassemble to the batch, and a failure part way leaves the stream
+// usable.
+func TestRemoteBatchBufferChunkedSends(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var chunks [][]byte
+	var assembled []byte
+	failAt := -1
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
+		func(_ context.Context, message any) error {
+			if len(chunks) == failAt {
+				return moerr.NewInternalErrorNoCtx("broken")
+			}
+			msg := message.(*pipeline.Message)
+			chunks = append(chunks, msg.Data)
+			// Copy now: the stream reuses its buffer once Write returns.
+			assembled = append(assembled, msg.Data...)
+			return nil
+		})
+	out := newTestRemoteBatchBuffer(t)
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  100,
+	}
+	mp := mpool.MustNewZero()
+	bat := newRemoteSendTestBatch(t, mp, 0, 30)
+	defer bat.Clean(mp)
+	want, err := bat.MarshalBinary()
+	require.NoError(t, err)
+
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, want, assembled)
+	require.Equal(t, (len(want)+99)/100, len(chunks))
+	for i := 1; i < len(chunks); i++ {
+		require.True(t, &chunks[i-1][0] != &chunks[i][0])
+		require.Len(t, chunks[i-1], 100, "chunks before the last are full")
+	}
+
+	chunks, assembled, failAt = nil, nil, 2
+	require.Error(t, receiver.sendBatch(bat), "a failed chunk fails the batch")
+	chunks, assembled, failAt = nil, nil, -1
+	require.NoError(t, receiver.sendBatch(bat))
+	require.Equal(t, want, assembled, "the stream is still usable")
+
+	bat.Vecs = append(bat.Vecs, nil)
+	chunks = nil
+	require.Error(t, receiver.sendBatch(bat), "a batch that cannot marshal")
+	require.Empty(t, chunks, "is not sent")
+	bat.Vecs = bat.Vecs[:2]
+}
+
+// Concurrent sends on a stream are serialized on its buffer: every message
+// carries a whole, uncorrupted batch.
+func TestRemoteBatchBufferConcurrentSends(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	var mu sync.Mutex
+	seen := map[int64]int{}
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
+		func(_ context.Context, message any) error {
+			decoded, err := batch.ViewBinary(message.(*pipeline.Message).Data)
+			if err != nil {
+				return err
+			}
+			first := vector.GetFixedAtNoTypeCheck[int64](decoded.Vecs[0], 0)
+			for i := 0; i < decoded.RowCount(); i++ {
+				if vector.GetFixedAtNoTypeCheck[int64](decoded.Vecs[0], i) != first+int64(i) {
+					return moerr.NewInternalErrorNoCtx("corrupt batch")
+				}
+			}
+			mu.Lock()
+			seen[first]++
+			mu.Unlock()
+			return nil
+		})
+	receiver := &messageReceiverOnServer{
+		batchOut:        newTestRemoteBatchBuffer(t),
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	mp := mpool.MustNewZero()
+	var wg sync.WaitGroup
+	for g := int64(0); g < 8; g++ {
+		bat := newRemoteSendTestBatch(t, mp, g*1000, 10+int(g)*20)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				require.NoError(t, receiver.sendBatch(bat))
+			}
+		}()
+		defer bat.Clean(mp)
+	}
+	wg.Wait()
+	require.Len(t, seen, 8)
+	for _, n := range seen {
+		require.Equal(t, 20, n)
+	}
+}
+
+// close does not free the buffer under an in-flight Write: it waits for the
+// send, so the transport never reads freed memory, and later sends fail.
+func TestRemoteBatchBufferCloseWaitsForInFlightSend(t *testing.T) {
+	mpool.EnableDebugPoisonOnFree()
+	defer mpool.DisableDebugPoisonOnFree()
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	inWrite := make(chan struct{})
+	release := make(chan struct{})
+	var readOK bool
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			close(inWrite)
+			<-release
+			// The transport encodes the message only now.
+			_, err := batch.ViewBinary(message.(*pipeline.Message).Data)
+			readOK = err == nil
+			return nil
+		})
+	out := newTestRemoteBatchBuffer(t)
+	receiver := &messageReceiverOnServer{
+		batchOut:        out,
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	mp := mpool.MustNewZero()
+	bat := newRemoteSendTestBatch(t, mp, 0, 40)
+	defer bat.Clean(mp)
+
+	sent := make(chan error, 1)
+	go func() { sent <- receiver.sendBatch(bat) }()
+	<-inWrite
+	closed := make(chan struct{})
+	go func() {
+		out.close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("close freed the buffer during a Write")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-sent)
+	<-closed
+	require.True(t, readOK, "the transport read a live buffer")
+	require.Error(t, receiver.sendBatch(bat), "a closed stream sends nothing")
 }

@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
@@ -57,6 +58,26 @@ func matchesObjectListName(name, suffix string) bool {
 
 func IsTransferredDels(name string) bool {
 	return strings.HasPrefix(name, "trans_del")
+}
+
+// objectListViews pools the view batches of object-list entries, whose
+// batches are read only while the entry is handled.
+var objectListViews = sync.Pool{New: func() any { return new(batch.Batch) }}
+
+// viewObjectList is mustViewEntryBatch for a batch read only during the
+// call; it decodes into a pooled batch and allocates nothing once warm.
+// Release the batch with releaseObjectList.
+func viewObjectList(data []byte) *batch.Batch {
+	bat := objectListViews.Get().(*batch.Batch)
+	if err := batch.ViewTrustedBinaryInto(bat, data); err != nil {
+		panic(err)
+	}
+	return bat
+}
+
+func releaseObjectList(bat *batch.Batch) {
+	batch.DropViews(bat)
+	objectListViews.Put(bat)
 }
 
 // mustViewEntryBatch decodes the batch of a logtail entry as read-only views

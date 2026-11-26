@@ -67,7 +67,7 @@ func consumeEntry(
 		return nil
 	}
 
-	if engine.PushClient().dcaTryDelay(isSub, func() { applyToCatalogCache(cache, e) }) {
+	if engine.PushClient().dcaTryDelayEntry(isSub, cache, e) {
 		return nil
 	}
 

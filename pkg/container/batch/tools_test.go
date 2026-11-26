@@ -190,16 +190,6 @@ func TestEncodedRowCountRejectsMalformedHeader(t *testing.T) {
 	require.Error(t, err)
 }
 
-// partOf reports whether some part of parts starts at buf's memory.
-func partOf(buf []byte, parts [][]byte) bool {
-	for _, part := range parts {
-		if len(part) > 0 && len(buf) > 0 && &part[0] == &buf[0] {
-			return true
-		}
-	}
-	return false
-}
-
 func newEncodeTestBatch(t *testing.T, mp *mpool.MPool, rows int) *Batch {
 	t.Helper()
 	bat := NewWithSize(5)
@@ -220,15 +210,22 @@ func newEncodeTestBatch(t *testing.T, mp *mpool.MPool, rows int) *Batch {
 	return bat
 }
 
-// Encode produces MarshalBinary's bytes, but borrows every large vector
-// buffer and the extra buffer instead of copying them.
-func TestEncodeMatchesMarshalBinaryAndBorrows(t *testing.T) {
+// Encode produces MarshalBinary's bytes without allocating: it borrows the
+// batch and writes it into the message buffer, the one allocation.
+func TestEncodeMatchesMarshalBinary(t *testing.T) {
 	for _, rows := range []int{0, 1, 3, 8192} {
 		t.Run(fmt.Sprint(rows), func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			bat := newEncodeTestBatch(t, mp, rows)
-			extra := bytes.Repeat([]byte("e"), minBorrowedPart)
-			require.NoError(t, bat.SetExtraBuf(mp, extra))
+			require.NoError(t, bat.SetExtraBuf(mp, []byte("extra")))
+			if rows > 3 {
+				// A null row with a stale descriptor: MarshalBinary clears
+				// it, and so must Encode.
+				vec := bat.Vecs[1]
+				vector.MustFixedColNoTypeCheck[types.Varlena](vec)[2] =
+					vector.MustFixedColNoTypeCheck[types.Varlena](vec)[1]
+				vec.GetNulls().Add(2)
+			}
 			defer func() {
 				bat.Clean(mp)
 				require.Zero(t, mp.CurrNB())
@@ -239,39 +236,48 @@ func TestEncodeMatchesMarshalBinaryAndBorrows(t *testing.T) {
 			encoded, err := Encode(bat)
 			require.NoError(t, err)
 			require.Equal(t, len(want), encoded.Len())
-			require.Equal(t, want, encoded.Bytes())
 			wire, err := encoded.Marshal()
 			require.NoError(t, err)
 			require.Equal(t, want, wire)
 
-			var w partsWriter
-			require.NoError(t, bat.MarshalBinaryTo(&w))
-			parts := w.finish()
-			require.True(t, partOf(bat.ExtraBuf(), parts), "extra buffer is borrowed")
-			for i, vec := range bat.Vecs[:3] {
-				for _, buf := range [][]byte{vec.GetData(), vec.GetArea()} {
-					if len(buf) >= minBorrowedPart {
-						require.True(t, partOf(buf, parts), "vector %d buffer is borrowed", i)
-					} else if len(buf) > 0 {
-						require.False(t, partOf(buf, parts), "vector %d small buffer is copied", i)
-					}
-				}
-			}
-
-			// The borrowed bytes are the vectors': a change before marshaling
-			// shows in the encoding.
-			if rows == 8192 {
-				vector.MustFixedColNoTypeCheck[int32](bat.Vecs[2])[1] = -1
-				changed, err := bat.MarshalBinary()
-				require.NoError(t, err)
-				require.Equal(t, changed, encoded.Bytes())
-			}
+			require.Zero(t, testing.AllocsPerRun(10, func() {
+				encoded, err = Encode(bat)
+			}))
+			buf := make([]byte, encoded.Len())
+			require.Zero(t, testing.AllocsPerRun(10, func() {
+				_, err = encoded.MarshalTo(buf)
+			}))
+			require.Equal(t, want, buf)
 		})
 	}
 }
 
-// An Entry carries the encoding through protobuf unchanged, and the decoded
-// entry owns its copy: the wire buffer may be reused.
+// Encode borrows its batch: a change before marshaling shows in the
+// encoding, and one that changes its size fails the marshal.
+func TestEncodeBorrowsBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := newEncodeTestBatch(t, mp, 100)
+	defer func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	encoded, err := Encode(bat)
+	require.NoError(t, err)
+
+	vector.MustFixedColNoTypeCheck[int32](bat.Vecs[2])[1] = -1
+	want, err := bat.MarshalBinary()
+	require.NoError(t, err)
+	wire, err := encoded.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, want, wire)
+
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], int32(7), false, mp))
+	_, err = encoded.Marshal()
+	require.ErrorContains(t, err, "changed while marshaling")
+}
+
+// An Entry carries the encoding through protobuf unchanged. Unmarshal and a
+// reused trusted view allocate nothing: the views point into the buffer.
 func TestEncodeEntryRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := newEncodeTestBatch(t, mp, 1000)
@@ -292,15 +298,24 @@ func TestEncodeEntryRoundTrip(t *testing.T) {
 	var got api.Entry
 	require.NoError(t, got.Unmarshal(wire))
 	require.Equal(t, want, got.Bat.Bytes())
-	for i := range wire {
-		wire[i] = 0
-	}
-	require.Equal(t, want, got.Bat.Bytes())
+	require.True(t, &got.Bat.Bytes()[0] == &wire[len(wire)-len(want)], "Unmarshal keeps a view of the buffer")
 
-	view, err := ViewBinary(got.Bat.Bytes())
-	require.NoError(t, err)
+	view := new(Batch)
+	require.NoError(t, ViewTrustedBinaryInto(view, got.Bat.Bytes()))
 	require.Equal(t, 1000, view.RowCount())
 	require.Equal(t, bat.Vecs[1].GetBytesAt(999), view.Vecs[1].GetBytesAt(999))
+	require.True(t, view.Vecs[0].IsNull(7))
+	require.Zero(t, testing.AllocsPerRun(10, func() {
+		DropViews(view)
+		err = ViewTrustedBinaryInto(view, got.Bat.Bytes())
+	}))
+	require.NoError(t, err)
+	DropViews(view)
+	require.Zero(t, view.RowCount())
+	for _, vec := range view.Vecs {
+		require.Nil(t, vec.GetData(), "dropped views keep no reference")
+	}
+	require.Error(t, ViewTrustedBinaryInto(bat, want), "a batch with a pool is not a view")
 
 	// An entry without a batch round-trips to an empty encoding.
 	wire, err = (&api.Entry{TableName: "t"}).Marshal()

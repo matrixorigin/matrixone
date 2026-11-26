@@ -193,10 +193,6 @@ func (bat *Batch) prepareMarshalBinary(plans []vector.MarshalBinaryPlan, trusted
 }
 
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
-	return bat.marshalBinaryTo(w, false)
-}
-
-func (bat *Batch) marshalBinaryTo(w io.Writer, trusted bool) error {
 	if bat == nil || w == nil {
 		return io.ErrClosedPipe
 	}
@@ -210,13 +206,11 @@ func (bat *Batch) marshalBinaryTo(w io.Writer, trusted bool) error {
 	} else {
 		plans = make([]vector.MarshalBinaryPlan, len(bat.Vecs))
 	}
-	size, err := bat.prepareMarshalBinary(plans, trusted)
+	size, err := bat.prepareMarshalBinary(plans, false)
 	if err != nil {
 		return err
 	}
-	if parts, ok := w.(*partsWriter); ok {
-		parts.reserve(bat, plans)
-	} else if sized, ok := w.(interface {
+	if sized, ok := w.(interface {
 		Len() int
 		EnsureCapacity(int) error
 	}); ok {
@@ -248,7 +242,7 @@ func (bat *Batch) marshalBinaryTo(w io.Writer, trusted bool) error {
 	if err := writeBatchMarshalInt32(w, extraSize); err != nil {
 		return err
 	}
-	if err := types.WriteBorrowed(w, bat.extraBuf); err != nil {
+	if err := types.WriteFull(w, bat.extraBuf); err != nil {
 		return err
 	}
 
@@ -256,6 +250,64 @@ func (bat *Batch) marshalBinaryTo(w io.Writer, trusted bool) error {
 		return err
 	}
 	return writeBatchMarshalInt32(w, bat.ShuffleIDX)
+}
+
+// marshalTrustedSize is MarshalBinarySize for a valid batch; see
+// vector.PrepareMarshalBinaryTrusted. It allocates nothing.
+func (bat *Batch) marshalTrustedSize() (int, error) {
+	return bat.prepareMarshalBinary(nil, true)
+}
+
+// errBatchChanged reports a batch that no longer matches the size its
+// encoding was given: it changed while borrowed.
+func errBatchChanged() error {
+	return moerr.NewInvalidInputNoCtx("batch changed while marshaling")
+}
+
+// marshalTrustedTo writes MarshalBinary's encoding of a valid batch into dst,
+// which must hold exactly marshalTrustedSize bytes. It allocates nothing.
+func (bat *Batch) marshalTrustedTo(dst []byte) error {
+	if bat == nil {
+		return io.ErrClosedPipe
+	}
+	dst = dst[:len(dst):len(dst)]
+	if bat.selection != nil {
+		return errSelectedBatch()
+	}
+	if len(dst) < 12 {
+		return errBatchChanged()
+	}
+	binary.NativeEndian.PutUint64(dst, uint64(bat.rowCount))
+	binary.NativeEndian.PutUint32(dst[8:], uint32(len(bat.Vecs)))
+	n := 12
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return moerr.NewInvalidInputNoCtx("cannot marshal a nil batch vector")
+		}
+		plan, err := vec.PrepareMarshalBinaryTrusted()
+		if err != nil {
+			return err
+		}
+		if len(dst)-n < 4+plan.Size() {
+			return errBatchChanged()
+		}
+		binary.NativeEndian.PutUint32(dst[n:], uint32(plan.Size()))
+		end := n + 4 + plan.Size()
+		written, err := plan.MarshalToBytes(dst[n+4 : end : end])
+		if err != nil {
+			return err
+		}
+		n += 4 + written
+	}
+	if len(dst)-n != 4+len(bat.extraBuf)+8 {
+		return errBatchChanged()
+	}
+	binary.NativeEndian.PutUint32(dst[n:], uint32(len(bat.extraBuf)))
+	n += 4
+	n += copy(dst[n:], bat.extraBuf)
+	binary.NativeEndian.PutUint32(dst[n:], uint32(bat.Recursive))
+	binary.NativeEndian.PutUint32(dst[n+4:], uint32(bat.ShuffleIDX))
+	return nil
 }
 
 type batchPrimitiveWriter interface {

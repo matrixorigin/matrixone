@@ -230,6 +230,8 @@ func decodePrecommitWriteCmdForTest(t *testing.T, req txnpb.TxnRequest) *api.Pre
 }
 
 func cleanTxnWritesForTest(txn *Transaction) {
+	// The commit's terminal hook would give the payload buffer back.
+	txn.releaseCommitPayload()
 	for i := range txn.writes {
 		if txn.writes[i].bat != nil {
 			txn.writes[i].bat.Clean(txn.workspaceMP())

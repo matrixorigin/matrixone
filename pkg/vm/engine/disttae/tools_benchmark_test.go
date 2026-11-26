@@ -47,16 +47,18 @@ func TestToPBEntryPreservesRepresentation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, api.Entry_Alter, pb.EntryType)
 	require.Equal(t, batAttrs, pb.Attrs)
-	rows, err := batch.EncodedRowCount(pb.Bat.Bytes())
+	// The entry borrows the vectors until it is marshaled; after that the
+	// sender may reuse them.
+	wire, err := pb.Bat.Marshal()
+	require.NoError(t, err)
+	rows, err := batch.EncodedRowCount(wire)
 	require.NoError(t, err)
 	require.Equal(t, 1, rows)
-
-	// The encoding is a copy: the sender may reuse its vectors.
 	require.NotEmpty(t, bat.Vecs[1].GetArea())
 	clear(bat.Vecs[0].GetData())
 	clear(bat.Vecs[1].GetArea())
 
-	view, err := batch.ViewBinary(pb.Bat.Bytes())
+	view, err := batch.ViewBinary(wire)
 	require.NoError(t, err)
 	require.Len(t, view.Vecs, 4)
 	require.Equal(t, 1, view.RowCount())

@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -213,6 +214,33 @@ func (c *PushClient) dcaTryDelay(isSub bool, f func()) (delayed bool) {
 	}
 	c.dca.flist = append(c.dca.flist, f)
 	return true
+}
+
+// dcaTryDelayEntry is dcaTryDelay for applying e to cache. A delayed entry
+// outlives the response's receive buffer, which the client reuses, so it
+// keeps a detached copy of its batch.
+func (c *PushClient) dcaTryDelayEntry(isSub bool, cache *cache.CatalogCache, e *api.Entry) (delayed bool) {
+	c.dca.Lock()
+	defer c.dca.Unlock()
+	if c.dca.replayed {
+		return false
+	}
+	if isSub {
+		return true
+	}
+	owned := *e
+	owned.Bat = e.Bat.Detach()
+	c.dca.flist = append(c.dca.flist, func() { applyToCatalogCache(cache, &owned) })
+	return true
+}
+
+// detachTableLogtail gives tail's entries batches of their own. A table's
+// logtail is detached before it is queued to a consumer routine: the
+// response's receive buffer is reused once dispatch returns.
+func detachTableLogtail(tail *logtail.TableLogtail) {
+	for i := range tail.Commands {
+		tail.Commands[i].Bat = tail.Commands[i].Bat.Detach()
+	}
 }
 
 func (c *PushClient) dcaConfirmAndApply() {
@@ -861,6 +889,9 @@ func (c *PushClient) receiveOneLogtail(ctx context.Context, e *Engine) error {
 		)
 		return resp.err
 	}
+	// Dispatch either consumes the response's batches here or queues
+	// detached copies of them, so the receive buffer is reused afterwards.
+	defer resp.response.Release()
 
 	receiveAt := time.Now()
 	v2.LogtailTotalReceivedCounter.Inc()
@@ -2592,7 +2623,9 @@ func dispatchSubscribeResponse(
 		e.pClient.subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
-		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt, e.captureReplayClusterKey(&lt, *lt.Ts))
+		key := e.captureReplayClusterKey(&lt, *lt.Ts)
+		detachTableLogtail(&response.Logtail)
+		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt, key)
 	}
 	// no matter how we consume the response, should update all timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
@@ -2659,12 +2692,14 @@ func dispatchUpdateResponse(
 		recIndex := table.TbId % consumerNumber
 		hasLogtail[recIndex] = true
 		e.pClient.subscribed.setTablePendingUpdate(table.DbId, table.TbId, *response.To)
+		key := e.captureReplayClusterKey(&list[index], *response.To)
+		detachTableLogtail(&list[index])
 		recRoutines[recIndex].sendTableLogTailWithTimestamp(
 			list[index],
 			*response.To,
 			lastLogtailIndex[recIndex] == index,
 			receiveAt,
-			e.captureReplayClusterKey(&list[index], *response.To),
+			key,
 		)
 	}
 	// should update all the timestamp.

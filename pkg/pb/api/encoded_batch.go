@@ -17,46 +17,52 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 )
 
-// EncodedBatch is Entry.Bat: one batch.MarshalBinary encoding held as the
-// concatenation of its parts. An encoder can pass the vectors' own data and
-// area buffers as parts, so marshaling the Entry copies them once, straight
-// into the message buffer. The parts are borrowed: they must stay unchanged
-// until the Entry is marshaled or dropped.
+// BatchEncoder writes a batch encoding whose size was fixed when the
+// encoder was made.
+type BatchEncoder interface {
+	// EncodeTo writes the encoding into dst, whose length is the size. It
+	// fails if the batch no longer encodes to that size.
+	EncodeTo(dst []byte) error
+}
+
+// EncodedBatch is Entry.Bat: one batch.MarshalBinary encoding. It holds
+// either the bytes or an encoder that borrows a batch and writes it straight
+// into the message buffer when the Entry is marshaled. The borrowed batch
+// must stay unchanged until then.
 //
-// After Unmarshal it holds one part, its own copy of the message bytes.
+// Unmarshal keeps a view of the message buffer, which the receiver may
+// reuse once it has handled the message. Whatever outlives that keeps a
+// Detach copy.
 type EncodedBatch struct {
-	// data is the encoding when it is one part; parts is nil then.
-	data  []byte
-	parts [][]byte
-	size  int
+	data []byte
+	enc  BatchEncoder
+	size int
+	// view marks data as a view of a message buffer.
+	view bool
 }
 
-// NewEncodedBatch returns the encoding made of parts, in order.
-func NewEncodedBatch(parts ...[]byte) EncodedBatch {
-	if len(parts) == 1 {
-		return EncodedBatch{data: parts[0], size: len(parts[0])}
-	}
-	size := 0
-	for _, part := range parts {
-		size += len(part)
-	}
-	return EncodedBatch{parts: parts, size: size}
+// NewEncodedBatch returns the encoding data.
+func NewEncodedBatch(data []byte) EncodedBatch {
+	return EncodedBatch{data: data, size: len(data)}
 }
 
-// Bytes returns the encoding as one slice. A single part is returned as is;
-// several parts are concatenated into a new slice.
+// NewBorrowedEncodedBatch returns the size-byte encoding that enc writes.
+func NewBorrowedEncodedBatch(enc BatchEncoder, size int) EncodedBatch {
+	return EncodedBatch{enc: enc, size: size}
+}
+
+// Bytes returns the encoding. Bytes of an encoder's encoding writes it into
+// a new slice, and returns nil if the encoder fails.
 func (b EncodedBatch) Bytes() []byte {
-	switch len(b.parts) {
-	case 0:
+	if b.enc == nil {
 		return b.data
-	case 1:
-		return b.parts[0]
 	}
-	data := make([]byte, 0, b.size)
-	for _, part := range b.parts {
-		data = append(data, part...)
+	data, err := b.Marshal()
+	if err != nil {
+		return nil
 	}
 	return data
 }
@@ -70,27 +76,48 @@ func (b EncodedBatch) ProtoSize() int { return b.size }
 
 func (b EncodedBatch) Marshal() ([]byte, error) {
 	data := make([]byte, b.size)
-	_, err := b.MarshalTo(data)
-	return data, err
+	if _, err := b.MarshalTo(data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
+// MarshalTo writes the encoding at the start of data, which gogoproto sizes
+// from ProtoSize.
 func (b EncodedBatch) MarshalTo(data []byte) (int, error) {
-	if b.parts == nil {
+	if len(data) < b.size {
+		return 0, io.ErrShortBuffer
+	}
+	if b.enc == nil {
 		return copy(data, b.data), nil
 	}
-	n := 0
-	for _, part := range b.parts {
-		n += copy(data[n:], part)
+	if err := b.enc.EncodeTo(data[:b.size:b.size]); err != nil {
+		return 0, err
 	}
-	return n, nil
+	return b.size, nil
 }
 
-// Unmarshal copies data: gogoproto passes a view of the message buffer,
-// which the caller may reuse. Decoders then borrow from the copy.
+// Unmarshal keeps data, a view of the message buffer, without copying it.
 func (b *EncodedBatch) Unmarshal(data []byte) error {
-	*b = EncodedBatch{data: bytes.Clone(data), size: len(data)}
+	*b = EncodedBatch{data: data[:len(data):len(data)], size: len(data), view: true}
 	return nil
 }
+
+// Detach returns the encoding as bytes of its own, for a user that outlives
+// the message buffer or the borrowed batch: a view is copied and an
+// encoder's encoding written out; bytes already owned are returned as is.
+func (b EncodedBatch) Detach() EncodedBatch {
+	switch {
+	case b.enc != nil:
+		return NewEncodedBatch(b.Bytes())
+	case b.view:
+		return NewEncodedBatch(bytes.Clone(b.data))
+	}
+	return b
+}
+
+// IsView reports whether the encoding is a view of a message buffer.
+func (b EncodedBatch) IsView() bool { return b.view }
 
 func (b EncodedBatch) MarshalJSON() ([]byte, error) {
 	return json.Marshal(b.Bytes())

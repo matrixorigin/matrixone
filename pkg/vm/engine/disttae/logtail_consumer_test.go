@@ -985,7 +985,7 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 
 	e := &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+		globalStats: &GlobalStats{tailC: make(chan statsLogtail, 8)},
 		mp:          mp,
 		packerPool: fileservice.NewPool(1,
 			func() *types.Packer { return packer },
@@ -1109,7 +1109,7 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 
 	e := &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
-		globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 8)},
+		globalStats: &GlobalStats{tailC: make(chan statsLogtail, 8)},
 	}
 	e.pClient.eng = e
 	e.pClient.subscribed = subscribedTable{
@@ -3879,7 +3879,7 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 			packer := types.NewPacker()
 			t.Cleanup(packer.Close)
 			e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition),
-				globalStats: &GlobalStats{tailC: make(chan *logtail.TableLogtail, 16)}, mp: mp,
+				globalStats: &GlobalStats{tailC: make(chan statsLogtail, 16)}, mp: mp,
 				packerPool: fileservice.NewPool(1, func() *types.Packer { return packer }, func(p *types.Packer) { p.Reset() }, nil)}
 			e.catalog.Store(cache.NewCatalog())
 			e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)

@@ -2296,9 +2296,11 @@ func TestReplayInsertPayloadLifetime(t *testing.T) {
 				require.NoError(t, err)
 				var received api.Entry
 				require.NoError(t, received.Unmarshal(wire))
-				clear(wire)
 				state.HandleLogtailEntry(t.Context(), nil, &received, 0, packer, mp)
 				received.Reset()
+				// The client reuses its receive buffer once the response is
+				// consumed: the rows keep their own copy.
+				clear(wire)
 				// The sender can reuse its encoding buffer once it is on the wire.
 				clear(input)
 			}

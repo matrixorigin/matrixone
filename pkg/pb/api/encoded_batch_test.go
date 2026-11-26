@@ -15,51 +15,77 @@
 package api
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestEncodedBatchParts(t *testing.T) {
-	head, body, tail := []byte("head"), []byte("body"), []byte("!")
-	b := NewEncodedBatch(head, nil, body, tail)
-	require.Equal(t, 9, b.Len())
-	require.Equal(t, 9, b.ProtoSize())
-	require.Equal(t, []byte("headbody!"), b.Bytes())
+// testEncoder encodes its bytes, which it reads only when asked to write.
+type testEncoder struct{ data []byte }
 
-	data, err := b.Marshal()
-	require.NoError(t, err)
-	require.Equal(t, []byte("headbody!"), data)
-	buf := make([]byte, 12)
-	n, err := b.MarshalTo(buf)
-	require.NoError(t, err)
-	require.Equal(t, 9, n)
-	require.Equal(t, []byte("headbody!"), buf[:n])
-
-	// The parts are borrowed until marshaling.
-	body[0] = 'B'
-	require.Equal(t, []byte("headBody!"), b.Bytes())
-
-	// One part is returned as is.
-	single := NewEncodedBatch(body)
-	require.Equal(t, &body[0], &single.Bytes()[0])
-	require.Nil(t, EncodedBatch{}.Bytes())
-
-	require.True(t, b.Equal(NewEncodedBatch([]byte("headBody!"))))
-	require.False(t, b.Equal(single))
-	require.Zero(t, b.Compare(NewEncodedBatch([]byte("headBody!"))))
+func (e *testEncoder) EncodeTo(dst []byte) error {
+	if len(dst) != len(e.data) {
+		return errors.New("size changed")
+	}
+	copy(dst, e.data)
+	return nil
 }
 
-func TestEncodedBatchUnmarshalCopies(t *testing.T) {
-	wire := []byte("payload")
+func TestEncodedBatchBytes(t *testing.T) {
+	body := []byte("payload")
+	b := NewEncodedBatch(body)
+	require.Equal(t, 7, b.Len())
+	require.Equal(t, 7, b.ProtoSize())
+	require.Equal(t, &body[0], &b.Bytes()[0], "the bytes are kept as is")
+	require.Nil(t, EncodedBatch{}.Bytes())
+
+	buf := make([]byte, 9)
+	n, err := b.MarshalTo(buf)
+	require.NoError(t, err)
+	require.Equal(t, 7, n)
+	require.Equal(t, body, buf[:n])
+	_, err = b.MarshalTo(buf[:6])
+	require.Error(t, err)
+
+	require.True(t, b.Equal(NewEncodedBatch([]byte("payload"))))
+	require.False(t, b.Equal(NewEncodedBatch([]byte("payloaD"))))
+	require.Zero(t, b.Compare(NewEncodedBatch([]byte("payload"))))
+}
+
+func TestBorrowedEncodedBatch(t *testing.T) {
+	enc := &testEncoder{data: []byte("abcd")}
+	b := NewBorrowedEncodedBatch(enc, 4)
+	require.Equal(t, 4, b.ProtoSize())
+
+	// The encoder is read when the batch is marshaled, not before.
+	enc.data[0] = 'A'
+	buf := make([]byte, 6)
+	n, err := b.MarshalTo(buf)
+	require.NoError(t, err)
+	require.Equal(t, []byte("Abcd"), buf[:n])
+	require.Equal(t, []byte("Abcd"), b.Bytes())
+	require.True(t, b.Equal(NewEncodedBatch([]byte("Abcd"))))
+
+	enc.data = []byte("abcde")
+	_, err = b.MarshalTo(buf)
+	require.Error(t, err, "a batch that changed size fails")
+	require.Nil(t, b.Bytes())
+}
+
+func TestEncodedBatchUnmarshalViews(t *testing.T) {
+	wire := []byte("payload!")
 	var b EncodedBatch
-	require.NoError(t, b.Unmarshal(wire))
-	wire[0] = 'X'
-	require.Equal(t, []byte("payload"), b.Bytes())
+	allocs := testing.AllocsPerRun(10, func() {
+		require.NoError(t, b.Unmarshal(wire[:7]))
+	})
+	require.Zero(t, allocs)
+	require.Equal(t, &wire[0], &b.Bytes()[0], "Unmarshal keeps a view")
+	require.Equal(t, 7, cap(b.Bytes()), "the view cannot grow into the buffer")
 }
 
 func TestEncodedBatchJSON(t *testing.T) {
-	b := NewEncodedBatch([]byte("ab"), []byte("cd"))
+	b := NewBorrowedEncodedBatch(&testEncoder{data: []byte("abcd")}, 4)
 	data, err := b.MarshalJSON()
 	require.NoError(t, err)
 	var got EncodedBatch
@@ -68,7 +94,7 @@ func TestEncodedBatchJSON(t *testing.T) {
 }
 
 func TestEntryCarriesEncodedBatch(t *testing.T) {
-	e := Entry{TableName: "t", Attrs: []string{"a"}, Bat: NewEncodedBatch([]byte("12"), []byte("345"))}
+	e := Entry{TableName: "t", Attrs: []string{"a"}, Bat: NewBorrowedEncodedBatch(&testEncoder{data: []byte("12345")}, 5)}
 	wire, err := e.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, e.ProtoSize(), len(wire))
@@ -76,4 +102,23 @@ func TestEntryCarriesEncodedBatch(t *testing.T) {
 	require.NoError(t, got.Unmarshal(wire))
 	require.Equal(t, []byte("12345"), got.Bat.Bytes())
 	require.Equal(t, e.Attrs, got.Attrs)
+}
+
+// Detach gives a view or an encoder's encoding bytes of its own, and keeps
+// owned bytes as they are.
+func TestEncodedBatchDetach(t *testing.T) {
+	wire := []byte("payload")
+	var view EncodedBatch
+	require.NoError(t, view.Unmarshal(wire))
+	require.True(t, view.IsView())
+	owned := view.Detach()
+	require.False(t, owned.IsView())
+	clear(wire)
+	require.Equal(t, []byte("payload"), owned.Bytes())
+	require.Equal(t, &owned.Bytes()[0], &owned.Detach().Bytes()[0], "owned bytes are not copied again")
+
+	enc := &testEncoder{data: []byte("abc")}
+	written := NewBorrowedEncodedBatch(enc, 3).Detach()
+	enc.data[0] = 'X'
+	require.Equal(t, []byte("abc"), written.Bytes())
 }
