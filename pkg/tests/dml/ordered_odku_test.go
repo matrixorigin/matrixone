@@ -111,6 +111,16 @@ func TestODKUSystematicSQL(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, count, q)
 		}
+		t.Run("sole physical primary key reuses the original row probe", func(t *testing.T) {
+			const table = "odku_pk_only_probe"
+			exec(t, "create table "+table+" (id int primary key, v int, payload varchar(32))")
+			exec(t, "insert into "+table+" values (1,2,'old')")
+			const upsert = "insert into " + table + " values (1,3,'x'),(2,7,'new'),(1,5,'y') on duplicate key update v=v+values(v)"
+			planText := strings.Join(rows(t, "explain "+upsert), "\n")
+			require.Equal(t, 1, strings.Count(planText, "Table Scan on odku_systematic."+table), planText)
+			affected(t, 5, upsert)
+			require.Equal(t, []string{"1|10|old", "2|7|new"}, rows(t, "select * from "+table+" order by id"))
+		})
 		t.Run("ordered Top source preserves typed NULL rows", func(t *testing.T) {
 			exec(t, "create table top_odku_source(v int)")
 			exec(t, "insert into top_odku_source values(2)")

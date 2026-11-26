@@ -989,8 +989,10 @@ func (builder *QueryBuilder) buildODKUInput(
 	keyExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 	targetExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 
+	var primaryProbeTag int32
 	if pkName != catalog.FakePrimaryKeyColName {
 		probeTag := builder.genNewBindTag()
+		primaryProbeTag = probeTag
 		builder.addNameByColRef(probeTag, tableDef)
 		probeScanID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
@@ -1045,6 +1047,7 @@ func (builder *QueryBuilder) buildODKUInput(
 	// candi: each usable unique index. LEFT JOIN the index table on its index
 	// column = the incoming unique-key value; project the index's primary column
 	// (the conflicting row's primary key).
+	var replacements map[int32]*plan.Expr
 	for i, idxDef := range tableDef.Indexes {
 		if !idxDef.Unique {
 			continue
@@ -1082,10 +1085,12 @@ func (builder *QueryBuilder) buildODKUInput(
 		// composite index the serial composite already materialized in colName2Idx.
 		// Using the raw column for a prefix index would miss conflicts whose stored
 		// prefix keys collide (e.g. existing 'abcdxxxx' vs incoming 'abcdyyyy').
-		replacements := make(map[int32]*plan.Expr, len(tableDef.Cols))
-		for pos, col := range tableDef.Cols {
-			if p, ok := colName2Idx[tableDef.Name+"."+col.Name]; ok {
-				replacements[int32(pos)] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: p}}}
+		if replacements == nil {
+			replacements = make(map[int32]*plan.Expr, len(tableDef.Cols))
+			for pos, col := range tableDef.Cols {
+				if p, ok := colName2Idx[tableDef.Name+"."+col.Name]; ok {
+					replacements[int32(pos)] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: p}}}
+				}
 			}
 		}
 		incomingValExpr, err := builder.buildUpdateMutationIndexKey(tableDef, idxDef, selectTag, replacements)
@@ -1146,37 +1151,45 @@ func (builder *QueryBuilder) buildODKUInput(
 	var snapshotTargets []*plan.Expr
 	for i, key := range actions.Constraints {
 		if key.TargetEligible {
-			snapshotTargets = append(snapshotTargets, DeepCopyExpr(targetExprs[i]))
+			snapshotTargets = append(snapshotTargets, targetExprs[i])
 		}
 	}
 	if len(snapshotTargets) == 0 {
 		return 0, 0, moerr.NewInternalError(builder.GetContext(), "ODKU has no eligible target")
 	}
-	snapshotPK := snapshotTargets[0]
-	if len(snapshotTargets) > 1 {
-		var err error
-		snapshotPK, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce", snapshotTargets)
+	// If the physical PK is the only eligible target, its first probe
+	// already has the complete old row, including the row id used by writes.
+	oldTag := primaryProbeTag
+	if pkName == catalog.FakePrimaryKeyColName || len(snapshotTargets) > 1 {
+		for i, target := range snapshotTargets {
+			snapshotTargets[i] = DeepCopyExpr(target)
+		}
+		snapshotPK := snapshotTargets[0]
+		if len(snapshotTargets) > 1 {
+			var err error
+			snapshotPK, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce", snapshotTargets)
+			if err != nil {
+				return 0, 0, err
+			}
+		}
+		oldTag = builder.genNewBindTag()
+		builder.addNameByColRef(oldTag, tableDef)
+		oldScan := builder.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef, ObjRef: objRef, BindingTags: []int32{oldTag}, ScanSnapshot: bindCtx.snapshot}, bindCtx)
+		oldPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldTag, ColPos: pkColIdx}}}
+		oldIdentity, err := bindPrimaryKeyIdentityExpr(builder, oldPK, pkTyp)
 		if err != nil {
 			return 0, 0, err
 		}
+		snapshotIdentity, err := bindPrimaryKeyIdentityExpr(builder, snapshotPK, pkTyp)
+		if err != nil {
+			return 0, 0, err
+		}
+		oldMatch, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{oldIdentity, snapshotIdentity})
+		if err != nil {
+			return 0, 0, err
+		}
+		lastNodeID = builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_LEFT, Children: []int32{lastNodeID, oldScan}, OnList: []*plan.Expr{oldMatch}}, bindCtx)
 	}
-	oldTag := builder.genNewBindTag()
-	builder.addNameByColRef(oldTag, tableDef)
-	oldScan := builder.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef, ObjRef: objRef, BindingTags: []int32{oldTag}, ScanSnapshot: bindCtx.snapshot}, bindCtx)
-	oldPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldTag, ColPos: pkColIdx}}}
-	oldIdentity, err := bindPrimaryKeyIdentityExpr(builder, oldPK, pkTyp)
-	if err != nil {
-		return 0, 0, err
-	}
-	snapshotIdentity, err := bindPrimaryKeyIdentityExpr(builder, snapshotPK, pkTyp)
-	if err != nil {
-		return 0, 0, err
-	}
-	oldMatch, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{oldIdentity, snapshotIdentity})
-	if err != nil {
-		return 0, 0, err
-	}
-	lastNodeID = builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_LEFT, Children: []int32{lastNodeID, oldScan}, OnList: []*plan.Expr{oldMatch}}, bindCtx)
 
 	projectTag := builder.genNewBindTag()
 	projectList := make([]*plan.Expr, 0, len(incomingProjectList)+1+2*len(keyExprs))
