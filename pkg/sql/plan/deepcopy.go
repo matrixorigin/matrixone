@@ -177,6 +177,20 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	return newCtx
 }
 
+func DeepCopyUpdateUniqueCtx(ctx *plan.UpdateUniqueCtx) *plan.UpdateUniqueCtx {
+	if ctx == nil {
+		return nil
+	}
+	return &plan.UpdateUniqueCtx{RowId: ctx.RowId, Active: ctx.Active, Keys: slices.Clone(ctx.Keys), Values: slices.Clone(ctx.Values), Checks: slices.Clone(ctx.Checks)}
+}
+
+func DeepCopyUpdateCountCtx(ctx *plan.UpdateCountCtx) *plan.UpdateCountCtx {
+	if ctx == nil {
+		return nil
+	}
+	return &plan.UpdateCountCtx{Column: ctx.Column}
+}
+
 func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 	if target == nil {
 		return nil
@@ -265,6 +279,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		SourceStep:             node.SourceStep,
 		PreInsertCtx:           DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		UpdateUniqueCtx:        DeepCopyUpdateUniqueCtx(node.UpdateUniqueCtx),
+		UpdateCountCtx:         DeepCopyUpdateCountCtx(node.UpdateCountCtx),
 		LockTargets:            make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:            DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:                  node.IsEnd,

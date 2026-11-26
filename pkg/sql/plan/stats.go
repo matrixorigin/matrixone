@@ -1410,6 +1410,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		}
 	}
 
+	if builder.repeatedUpdateStats != nil {
+		builder.applyRepeatedUpdateStats(nodeID)
+	}
+
 	// LIMIT caps the output cardinality. It never increases an estimate, and a
 	// fold failure must not turn into an optimizer panic.
 	if node.Limit != nil {

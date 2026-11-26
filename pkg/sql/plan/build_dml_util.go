@@ -113,6 +113,9 @@ type dmlPlanCtx struct {
 	// Recursive child actions still build their normal delete/update branches.
 	skipTargetDelete               bool
 	preserveUpdateSourceProjection bool
+	logicalAffectedRows            bool
+	asyncDatalinkAdmitted          bool
+	skipForeignKeyChecks           bool
 }
 
 // information of deleteNode, which is about the deleted table
@@ -263,9 +266,12 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	// Legacy DML is appended after column remapping. Admit final target values
 	// before the shared delete/insert sink, preserving its positional row layout.
-	asyncColumns, err := legacyAsyncDatalinkUpdateColumns(updatePlanCtx.tableDef, updatePlanCtx.updateColPosMap, allAsyncSources)
-	if err != nil {
-		return err
+	var asyncColumns []string
+	if !updatePlanCtx.asyncDatalinkAdmitted {
+		asyncColumns, err = legacyAsyncDatalinkUpdateColumns(updatePlanCtx.tableDef, updatePlanCtx.updateColPosMap, allAsyncSources)
+		if err != nil {
+			return err
+		}
 	}
 	if len(asyncColumns) > 0 {
 		var projection []*Expr
@@ -382,7 +388,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
 	return buildInsertPlansWithRelatedHiddenTable(nil, ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef,
-		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
+		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall || updatePlanCtx.skipForeignKeyChecks, updatePlanCtx.updatePkCol,
 		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
 		updatePlanCtx.updateColPosMap, nil)
 }
@@ -800,7 +806,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 		// delete origin table
 		pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
-		delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, true, pkPos, pkTyp, delCtx.lockTable)
+		delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, !delCtx.logicalAffectedRows, pkPos, pkTyp, delCtx.lockTable)
 		delNodeInfo.preserveProjection = delCtx.sourceTag != 0
 		lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
 		putDeleteNodeInfo(delNodeInfo)
@@ -811,7 +817,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 
 	// if some table references to this table
-	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 {
+	if enabled && !delCtx.skipForeignKeyChecks && len(delCtx.tableDef.RefChildTbls) > 0 {
 		nameTypMap := make(map[string]*plan.Type)
 		idNameMap := make(map[uint64]string)
 		nameIdxMap := make(map[string]int32)
@@ -3425,7 +3431,7 @@ func appendPreInsertPlan(
 
 	pkColumn, originPkType := getPkPos(tableDef, false)
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
-	lastNodeId, useColumns, err = appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths)
+	lastNodeId, useColumns, err = appendIndexPrefixProjection(builder, bindCtx, tableDef, lastNodeId, keyParts, colsMap, useColumns, prefixLengths, isUpddate)
 	if err != nil {
 		return -1, err
 	}
@@ -3802,14 +3808,22 @@ func appendIndexPrefixProjection(
 	colsMap map[string]int,
 	useColumns []int32,
 	prefixLengths map[string]int,
+	isUpdate bool,
 ) (int32, []int32, error) {
 	if len(prefixLengths) == 0 {
 		return lastNodeId, useColumns, nil
 	}
 
 	lastProject := builder.qry.Nodes[lastNodeId].ProjectList
-	projectProjection := make([]*Expr, len(lastProject), len(lastProject)+len(prefixLengths))
-	for i := range lastProject {
+	width := len(lastProject)
+	if isUpdate {
+		if width == 0 || types.T(lastProject[width-1].Typ.Id) != types.T_Rowid {
+			return -1, nil, moerr.NewInternalErrorNoCtx("missing UPDATE row identity in index projection")
+		}
+		width--
+	}
+	projectProjection := make([]*Expr, width, len(lastProject)+len(prefixLengths))
+	for i := 0; i < width; i++ {
 		projectProjection[i] = &plan.Expr{
 			Typ: lastProject[i].Typ,
 			Expr: &plan.Expr_Col{
@@ -3865,6 +3879,13 @@ func appendIndexPrefixProjection(
 
 	if !hasPrefixPart {
 		return lastNodeId, useColumns, nil
+	}
+	if isUpdate {
+		// PRE_INSERT_UK/SK uses the last column to carry the old RowID.
+		projectProjection = append(projectProjection, &plan.Expr{
+			Typ:  lastProject[width].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(width), Name: catalog.Row_ID}},
+		})
 	}
 
 	projectNode := &Node{
@@ -4527,7 +4548,7 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	// merge one sink to one sinkScan
 	pointToNodeMap := make(map[int32][]int32)
 	for sinkNodeId, meta := range sinks {
-		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive {
+		if len(meta.scans) == 1 && !meta.scans[0].preNodeIsUnion && !meta.scans[0].recursive && qry.Nodes[sinkNodeId].UpdateCountCtx == nil {
 			// one sink to one sinkScan
 			sinkNode := qry.Nodes[sinkNodeId]
 			sinkScanPreNode := qry.Nodes[meta.scans[0].preNodeId]
