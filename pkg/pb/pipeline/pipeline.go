@@ -131,7 +131,7 @@ func EncodedMessageError(ctx context.Context, err error) []byte {
 }
 
 func dependencyWireError(ctx context.Context, err error) *moerr.Error {
-	var hasSnapshot, hasGeneric, canceled, deadline bool
+	var hasSnapshot, hasGeneric, interrupted, canceled, deadline bool
 	var substantive *moerr.Error
 	var visit func(error)
 	visit = func(e error) {
@@ -165,6 +165,7 @@ func dependencyWireError(ctx context.Context, err error) *moerr.Error {
 		if me, ok := e.(*moerr.Error); ok {
 			switch me.ErrorCode() {
 			case moerr.ErrQueryInterrupted:
+				interrupted = true
 				canceled = true
 			default:
 				if substantive == nil {
@@ -183,11 +184,13 @@ func dependencyWireError(ctx context.Context, err error) *moerr.Error {
 		}
 	}
 	visit(err)
+	// After a wire hop the dependency wrapper is gone, but the decoded
+	// interruption code still identifies cancellation as secondary.
+	if substantive != nil && (hasSnapshot || interrupted) {
+		return substantive
+	}
 	if !hasSnapshot {
 		return nil
-	}
-	if substantive != nil {
-		return substantive
 	}
 	if hasGeneric {
 		return moerr.ConvertGoError(ctx, err).(*moerr.Error)

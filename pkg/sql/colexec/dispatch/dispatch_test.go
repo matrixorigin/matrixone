@@ -595,6 +595,25 @@ func TestDispatchRemoteJoinMapErrorWireCode(t *testing.T) {
 	}
 }
 
+func TestJoinMapWireErrorSurvivesTwoHops(t *testing.T) {
+	ctx := context.Background()
+	fk := moerr.NewErrFKNoReferencedRow2(ctx)
+	for _, input := range []error{context.Canceled, moerr.NewQueryInterrupted(ctx)} {
+		var first pipeline.Message
+		first.SetMoError(ctx, message.NewJoinMapBuildError(input).AsError())
+		interrupted, ok := first.TryToGetMoErr()
+		require.True(t, ok)
+		require.True(t, moerr.IsMoErrCode(interrupted, moerr.ErrQueryInterrupted))
+		for _, combined := range []error{errors.Join(interrupted, fk), errors.Join(fk, interrupted)} {
+			var second pipeline.Message
+			second.SetMoError(ctx, combined)
+			result, ok := second.TryToGetMoErr()
+			require.True(t, ok)
+			require.True(t, moerr.IsMoErrCode(result, moerr.ErrFKNoReferencedRow2), "%v", result)
+		}
+	}
+}
+
 func TestDispatchResetSkipsInvalidRemoteReceiversAndNotifiesHealthyPeer(t *testing.T) {
 	_ = colexec.NewServer("")
 

@@ -90,6 +90,20 @@ func NewJoinMapBuildError(err error) *JoinMapBuildError {
 	return &JoinMapBuildError{err: moerr.NewInternalErrorNoCtx(err.Error())}
 }
 
+// PreserveJoinMapInputFailure keeps a cancellation-shaped error returned by
+// an input while the build context is live from becoming cleanup fallout.
+// Once cleanup cancels the scope, the original context state is lost.
+func PreserveJoinMapInputFailure(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	c := classifyBuildError(err)
+	if c.pureCancellation && !c.deadline {
+		return moerr.NewInternalError(ctx, err.Error())
+	}
+	return err
+}
+
 type buildErrorClassification struct {
 	pureCancellation bool
 	canceled         bool

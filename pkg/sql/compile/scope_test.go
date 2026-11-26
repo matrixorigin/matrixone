@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -2479,6 +2480,69 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
 		t.Fatal("merge run hung after malformed remote pre-scope failed")
+	}
+}
+
+func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		code uint16
+	}{
+		{name: "end"},
+		{name: "canceled input", err: context.Canceled, code: moerr.ErrInternal},
+		{name: "foreign key", err: moerr.NewErrFKNoReferencedRow2(context.Background()), code: moerr.ErrFKNoReferencedRow2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.hasMergeOp = true
+			defer c.proc.Free()
+			ctx := defines.AttachAccountId(c.proc.GetTopContext(), catalog.System_Account)
+			query := c.proc.Base.GetContextBase().BuildQueryCtx(ctx)
+			c.proc.BuildPipelineContext(query)
+			defer c.proc.Cancel(nil)
+			c.proc.SetMessageBoard(message.NewMessageBoard())
+
+			build := hashbuild.NewArgument()
+			build.JoinMapTag, build.JoinMapRefCnt = 1, 1
+			input := merge.NewArgument()
+			defer input.Release()
+			defer build.Release()
+			build.AppendChild(input)
+			producer := &Scope{Magic: Normal, Proc: c.proc.NewContextChildProc(1), RootOp: build}
+			join := hashjoin.NewArgument()
+			join.JoinMapTag = 1
+			join.JoinType = plan.Node_INNER
+			key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			join.EqConds = [][]*plan.Expr{{key}, {key}}
+			probe := colexec.NewMockOperator()
+			defer probe.Release()
+			defer join.Release()
+			join.AppendChild(probe)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+			require.NoError(t, err)
+			account, err := registry.Open(1 << 20)
+			require.NoError(t, err)
+			require.NoError(t, build.SetAllocationAccount(account))
+			require.NoError(t, join.SetAllocationAccount(account))
+			consumer := &Scope{Magic: Merge, Proc: c.proc.NewContextChildProc(0), RootOp: join, PreScopes: []*Scope{producer}}
+			signal := process.NewEndSignal()
+			if tc.err != nil {
+				signal = process.NewErrorSignal(tc.err)
+			}
+			require.NoError(t, query.Err())
+			require.NoError(t, producer.Proc.Ctx.Err())
+			require.NoError(t, consumer.Proc.Ctx.Err())
+			require.True(t, process.TrySendPipelineSignal(producer.Proc.Reg.MergeReceivers[0], signal))
+
+			err = consumer.MergeRun(c)
+			if tc.err == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.err.Error())
+				require.True(t, moerr.IsMoErrCode(err, tc.code), "%v", err)
+			}
+		})
 	}
 }
 
