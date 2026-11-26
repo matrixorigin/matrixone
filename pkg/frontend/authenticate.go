@@ -12549,8 +12549,9 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 	var body string
+	sqlMode := sessionSQLModeForParser(ses)
 	if cf.Language == string(tree.SQL) {
-		body = cf.Body
+		body = encodeSQLUdfDefinitionBody(cf.Body, sqlMode)
 	} else {
 		if cf.Import {
 			// check
@@ -12596,7 +12597,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		retType:  retTypeStr,
 		body:     body,
 		lang:     cf.Language,
-		sqlMode:  sessionSQLModeForParser(ses),
+		sqlMode:  sqlMode,
 		dbName:   dbName,
 	}
 	if execResultArrayHasData(erArray) { // replace
@@ -12611,6 +12612,15 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	return persistUserDefinedFunction(
 		execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, nil,
 	)
+}
+
+// Store definition metadata only when the body binds POW itself. Calls to
+// other SQL functions are bound with the callee's own persisted policy.
+func encodeSQLUdfDefinitionBody(body, sqlMode string) string {
+	if plan2.SQLUdfBodyReferencesPower(body, sqlMode) {
+		return function.EncodeSQLUdfBody(body)
+	}
+	return body
 }
 
 func escapeSQLStringForDoubleQuotes(s string) string {

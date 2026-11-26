@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -450,8 +451,11 @@ func collectCloneRoutineReferences(
 		return references, cloneRoutineDependenciesUninspectable, nil
 	}
 
+	if isFunction {
+		body, _ = function.DecodeSQLUdfBody(body)
+	}
 	parseBody := body
-	parseAsExpression := isFunction && !cloneSQLFunctionBodyIsQuery(body)
+	parseAsExpression := isFunction && !function.SQLUdfBodyIsQuery(body, sqlMode)
 	if parseAsExpression {
 		// SQL UDF metadata stores scalar bodies without a SELECT wrapper. Parse
 		// them as a projection so calls to another SQL UDF remain visible to the
@@ -927,20 +931,6 @@ func rewriteCloneUserDefinedFunctionBodies(
 	return rewritten, nil
 }
 
-func cloneSQLFunctionBodyIsQuery(body string) bool {
-	trimmed := strings.TrimSpace(body)
-	lower := strings.ToLower(trimmed)
-	return strings.HasPrefix(lower, "select ") ||
-		strings.HasPrefix(lower, "select\n") ||
-		strings.HasPrefix(lower, "select\t") ||
-		strings.HasPrefix(lower, "with ") ||
-		strings.HasPrefix(lower, "with\n") ||
-		strings.HasPrefix(lower, "with\t")
-}
-
-// SQL UDF query bodies need the same case-insensitive query detection as the
-// binder. Scalar expressions cannot contain a qualified table reference, so
-// they need no database remap and remain byte-for-byte unchanged.
 func rewriteCloneSQLFunctionBody(
 	ctx context.Context,
 	body string,
@@ -949,12 +939,20 @@ func rewriteCloneSQLFunctionBody(
 	dstDBName string,
 	lowerCaseTableNames int64,
 ) (string, error) {
-	if !cloneSQLFunctionBodyIsQuery(body) {
+	sql, nullOnNonFinite := function.DecodeSQLUdfBody(body)
+	if !function.SQLUdfBodyIsQuery(sql, sqlMode) {
 		return body, nil
 	}
-	return rewriteCloneSQLRoutineBody(
-		ctx, body, sqlMode, srcDBName, dstDBName, lowerCaseTableNames,
-	)
+	rewritten, err := plan2.RewriteSQLUdfBodyPreservingArguments(sql, sqlMode, dstDBName, func(protected string) (string, error) {
+		return rewriteCloneSQLRoutineBody(ctx, protected, sqlMode, srcDBName, dstDBName, lowerCaseTableNames)
+	})
+	if err != nil {
+		return "", err
+	}
+	if nullOnNonFinite {
+		rewritten = function.EncodeSQLUdfBody(rewritten)
+	}
+	return rewritten, nil
 }
 
 func rewriteCloneSQLRoutineBody(

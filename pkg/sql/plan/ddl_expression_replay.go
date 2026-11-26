@@ -184,7 +184,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			}
 		}
 	}
-	copyExpression := func(expr *planpb.Expr, positions map[int32]int32, retainedCheck bool) *planpb.Expr {
+	copyExpression := func(expr *planpb.Expr, positions map[int32]int32, retainLegacyPower bool) *planpb.Expr {
 		if expr == nil {
 			return nil
 		}
@@ -215,7 +215,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			}
 			if f := e.GetF(); f != nil {
 				fid, overload := function.DecodeOverloadID(f.GetFunc().GetObj())
-				legacyPower := retainedCheck && fid == function.POW && overload == 0
+				legacyPower := retainLegacyPower && fid == function.POW && overload == 0
 				changed := false
 				for _, arg := range f.Args {
 					if arg == nil {
@@ -284,21 +284,18 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 		return copy
 	}
-	copyExpr := func(expr *planpb.Expr, positions map[int32]int32) *planpb.Expr {
-		return copyExpression(expr, positions, false)
-	}
 	// CONVERT may add a destination assignment around an otherwise unchanged
 	// typed expression. Prove that exact transformation before preserving it;
 	// physical dependency changes or newly authored SQL still take the ordinary binder.
-	copyAssignment := func(source, target *planpb.Expr, typ planpb.Type) *planpb.Expr {
-		raw := copyExpr(source, rawPositions)
+	copyAssignment := func(source, target *planpb.Expr, typ planpb.Type, retainLegacyPower bool) *planpb.Expr {
+		raw := copyExpression(source, rawPositions, retainLegacyPower)
 		if raw == nil {
 			return nil
 		}
 		unchanged := DeepCopyExpr(source)
 		remapGeneratedColExprPositions(unchanged, rawPositions)
 		if proto.Equal(raw, target) || proto.Equal(unchanged, target) {
-			visible := copyExpr(source, visiblePositions)
+			visible := copyExpression(source, visiblePositions, retainLegacyPower)
 			// The CONVERT skeleton still carries the old expression. Retarget
 			// its binary assignment without rebinding the typed computation.
 			if (typ.Id == int32(types.T_binary) || typ.Id == int32(types.T_varbinary)) &&
@@ -315,7 +312,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		if err != nil || !proto.Equal(converted, target) {
 			return nil
 		}
-		visible, err := convertedPersistedAssignment(ctx, copyExpr(source, visiblePositions), typ)
+		visible, err := convertedPersistedAssignment(ctx, copyExpression(source, visiblePositions, retainLegacyPower), typ)
 		if err != nil {
 			return nil
 		}
@@ -334,7 +331,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 		entry := &replayedColumnExpressions{columnType: oldCol.Typ}
 		if oldCol.Default != nil && newCol.Default != nil {
-			expr := copyAssignment(oldCol.Default.Expr, newCol.Default.Expr, newCol.Typ)
+			expr := copyAssignment(oldCol.Default.Expr, newCol.Default.Expr, newCol.Typ, false)
 			unchangedAbsentDefault := oldCol.Default.Expr == nil && newCol.Default.Expr == nil &&
 				proto.Equal(&oldCol.Typ, &newCol.Typ) && proto.Equal(oldCol.Default, newCol.Default)
 			if unchangedAbsentDefault || expr != nil {
@@ -343,13 +340,13 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			}
 		}
 		if oldCol.OnUpdate != nil && oldCol.OnUpdate.Expr != nil && newCol.OnUpdate != nil {
-			if expr := copyAssignment(oldCol.OnUpdate.Expr, newCol.OnUpdate.Expr, newCol.Typ); expr != nil {
+			if expr := copyAssignment(oldCol.OnUpdate.Expr, newCol.OnUpdate.Expr, newCol.Typ, false); expr != nil {
 				entry.onUpdate = proto.Clone(newCol.OnUpdate).(*planpb.OnUpdate)
 				entry.onUpdate.Expr = expr
 			}
 		}
 		if oldCol.GeneratedCol != nil && oldCol.GeneratedCol.Expr != nil && newCol.GeneratedCol != nil {
-			if expr := copyAssignment(oldCol.GeneratedCol.Expr, newCol.GeneratedCol.Expr, newCol.Typ); expr != nil {
+			if expr := copyAssignment(oldCol.GeneratedCol.Expr, newCol.GeneratedCol.Expr, newCol.Typ, retainedGeneratedPower(newCol)); expr != nil {
 				entry.generated = proto.Clone(newCol.GeneratedCol).(*planpb.GeneratedCol)
 				entry.generated.Expr = expr
 			}
@@ -436,4 +433,12 @@ func retainedCheckReplayError(ctx context.Context, check *planpb.CheckDef) error
 		return moerr.NewNotSupported(ctx, "changing a check constraint with legacy POW requires explicitly redefining the constraint")
 	}
 	return nil
+}
+
+func retainedGeneratedPower(col *planpb.ColDef) bool {
+	return tableDumpHasPower(col.GetGeneratedCol().GetExpr(), true)
+}
+
+func retainedGeneratedPowerReplayError(ctx context.Context, name string) error {
+	return moerr.NewNotSupportedf(ctx, "changing a generated column with legacy POW requires explicitly redefining column '%s'", name)
 }

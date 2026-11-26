@@ -62,6 +62,7 @@ import (
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -727,6 +728,98 @@ func Test_initFunction(t *testing.T) {
 			"select dat_id from mo_catalog.mo_database where datname = 'db' and account_id = 0 for update;")
 		convey.So(executed, convey.ShouldContain, "rollback;")
 	})
+}
+
+func TestSQLUdfCatalogPowerBody(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	t.Cleanup(ses.Close)
+	bh := &backgroundExecTest{}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	const db = "testdb"
+	const name = "tested"
+	const modified = "2026-11-26 12:00:00"
+	compiler := &TxnCompilerContext{dbName: db, execCtx: &ExecCtx{ses: ses, reqCtx: ctx}}
+	_, lookup := udfCatalogLookup(ctx, nil, name, db)
+	for _, tc := range []struct {
+		name, body, sqlMode string
+		power               bool
+	}{
+		{"addab", "$1 + $2", "", false},
+		{"nested function", "other_fn($1)", "", false},
+		{"nested function receives POW", "other_fn(pow($1,0.5))", "", true},
+		{"scalar", "pow($1,0.5)", "", true},
+		{"query with uppercase call", "SELECT POWER($1,0.5)", "", true},
+		{"query contains power in subquery", "select (select PoW($1,0.5))", "", true},
+		{"first query owns call", "select PoW($1,0.5); select 0", "", true},
+		{"trailing statement is unused", "select $1; select PoW($1,0.5)", "", false},
+		{"CAST and CASE", "cast(case when $2 then power($1,0.5) else 0 end as double)", "", true},
+		{"CTE name with parenthesized columns", "with power(x) as (select $1) select x from power", "", false},
+		{"ordinary comment", "/* POWER($1,0.5) */ $1", "", false},
+		{"executable comment", "/*! POWER($1,0.5) */", "", true},
+		{"string literal", "'escaped ''POWER($1,0.5)'''", "", false},
+		{"identifier named POW", "select `POW` from t", "", false},
+		{"ANSI quoted table and real call", `SELECT POWER($1,0.5) FROM "app"."table"`, "ANSI_QUOTES", true},
+		{"ANSI qualified column", `SELECT "a"."POWER" FROM "app"."table" AS "a"`, "ANSI_QUOTES", false},
+		{"double quoted string", `SELECT "POWER($1,0.5)"`, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := encodeSQLUdfDefinitionBody(tc.body, tc.sqlMode)
+			if tc.power {
+				require.Equal(t, function.EncodeSQLUdfBody(tc.body), raw)
+			} else {
+				require.Equal(t, tc.body, raw, "unrelated SQL body must be unchanged in the catalog")
+			}
+			mrs := &MysqlResultSet{}
+			for _, field := range []string{"args", "body", "language", "rettype", "db", "modified_time", "sql_mode"} {
+				col := &MysqlColumn{}
+				col.SetName(field)
+				col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+				mrs.AddColumn(col)
+			}
+			for _, record := range []struct {
+				raw    string
+				legacy bool
+			}{
+				{tc.body, true}, // Unmarked catalog records include the released writer.
+				{raw, !tc.power},
+			} {
+				mrs.Data = [][]interface{}{{"[]", record.raw, "sql", "double", db, modified, tc.sqlMode}}
+				bh.sql2result[lookup] = mrs
+				udf, err := compiler.ResolveUdf(name, nil)
+				require.NoError(t, err)
+				require.NotNil(t, udf)
+				require.Equal(t, tc.body, udf.Body)
+				require.Equal(t, record.legacy, udf.LegacyPower)
+			}
+		})
+	}
+}
+
+func TestSQLUdfPowerMarkerMatchesANSIParser(t *testing.T) {
+	const mode = "ANSI_QUOTES"
+	for _, sql := range []string{
+		`SELECT "POWER"($1,0.5)`,
+		`SELECT "app"."POWER"($1,0.5)`,
+		`SELECT app.POWER($1,0.5)`,
+	} {
+		stmt, err := mysqlparser.ParseOneWithSQLMode(t.Context(), sql, 1, mode)
+		if stmt != nil {
+			stmt.Free()
+		}
+		require.Error(t, err, "%s", sql)
+		require.Equal(t, sql, encodeSQLUdfDefinitionBody(sql, mode))
+	}
+
+	const sql = `SELECT POWER($1,0.5) FROM "app"."table"`
+	stmt, err := mysqlparser.ParseOneWithSQLMode(t.Context(), sql, 1, mode)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, function.EncodeSQLUdfBody(sql), encodeSQLUdfDefinitionBody(sql, mode))
 }
 
 func TestHandleGrantPrivilegeForcesPessimisticRC(t *testing.T) {

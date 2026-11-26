@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1917,7 +1918,7 @@ func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
 			normal, err := tableSchemaHash(def)
 			require.NoError(t, err)
 			require.NotEqual(t, tc.hash, normal)
-			hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), def, manifest)
+			hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), def, manifest, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.hash, hash)
 			require.Equal(t, tc.checkName, def.Checks[0].Name)
@@ -1948,7 +1949,7 @@ func TestTableDumpV1PowerSchemaFingerprint(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					changed := proto.Clone(def).(*plan.TableDef)
 					change(changed)
-					hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), changed, manifest)
+					hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), changed, manifest, nil)
 					require.NoError(t, err)
 					require.NotEqual(t, tc.hash, hash)
 				})
@@ -1974,12 +1975,12 @@ func TestTableDumpReleasedPowerBoundMainFingerprint(t *testing.T) {
 	}
 	manifest := tableDumpManifest{
 		Version: tableDumpBoundFormatVersion, SourceTable: def.Name, CreateSQL: sql, SchemaHash: releasedHash,
-		Relations: []tableDumpRelation{{Role: "main", SchemaHash: releasedHash, LogicalSchemaHash: releasedHash}},
+		Relations: []tableDumpRelation{{Role: "main", SourceTable: def.Name, SchemaHash: releasedHash, LogicalSchemaHash: releasedHash}},
 	}
 	normal, err := tableSchemaHash(def)
 	require.NoError(t, err)
 	require.NotEqual(t, releasedHash, normal)
-	candidate, err := tableDumpReleasedPowerMainHash(t.Context(), def, &manifest)
+	candidate, err := tableDumpReleasedPowerMainHash(t.Context(), def, &manifest, nil)
 	require.NoError(t, err)
 	require.Equal(t, releasedHash, candidate)
 	for _, tc := range []struct {
@@ -1987,6 +1988,7 @@ func TestTableDumpReleasedPowerBoundMainFingerprint(t *testing.T) {
 		edit func(*tableDumpManifest, *plan.TableDef)
 	}{
 		{"different header", func(m *tableDumpManifest, _ *plan.TableDef) { m.SchemaHash = normal }},
+		{"different main relation", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].SourceTable = "other" }},
 		{"different relation fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].SchemaHash = normal }},
 		{"different logical fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].LogicalSchemaHash = normal }},
 		{"missing logical fingerprint", func(m *tableDumpManifest, _ *plan.TableDef) { m.Relations[0].LogicalSchemaHash = "" }},
@@ -1999,7 +2001,7 @@ func TestTableDumpReleasedPowerBoundMainFingerprint(t *testing.T) {
 			m.Relations = append([]tableDumpRelation(nil), manifest.Relations...)
 			d := proto.Clone(def).(*plan.TableDef)
 			tc.edit(&m, d)
-			candidate, err := tableDumpReleasedPowerMainHash(t.Context(), d, &m)
+			candidate, err := tableDumpReleasedPowerMainHash(t.Context(), d, &m, nil)
 			require.NoError(t, err)
 			require.Empty(t, candidate)
 		})
@@ -2067,15 +2069,117 @@ func TestTableDumpV1CollationIndependentExpression(t *testing.T) {
 					GeneratedCol: &plan.GeneratedCol{Expr: power, OriginString: "pow(b, 0.5)", IsStored: true}},
 			},
 		}
-		hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest)
+		hash, err := tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest, nil)
 		require.NoError(t, err)
 		require.Equal(t, want, hash, "a numeric table with only a generated POW owner can match the released hash")
 		require.Equal(t, uint32(types.CharsetUTF8), target.DefaultCharset)
 		target.Cols[2].GeneratedCol.IsStored = false
-		hash, err = tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest)
+		hash, err = tableDumpReleasedPowerSchemaHash(t.Context(), target, manifest, nil)
 		require.NoError(t, err)
 		require.NotEqual(t, want, hash, "changing STORED to VIRTUAL changes the fingerprint")
 	})
+}
+
+func TestTableDumpRestoreReleasedAnonymousPowerCheck(t *testing.T) {
+	// The upgraded archive contains the original release's auto-generated
+	// CHECK name and complete bound tree. The fresh target keeps its own name.
+	const sql = "create table ac(id int primary key,b double, check (power(b,0.5)>0))"
+	const expectedHash = "9dac0a8d3fbcc08e0a42eb070a4e9e71fef211047905d27009c01ff842c06a31"
+	const digest = "2178407bdd62005696361478374e4b3ed307051e5408364d52c588a0672a1637"
+	payload, err := base64.StdEncoding.DecodeString("Ih0SAmlkKhUIFhABICAo////////////ATICYWM6ACIaEgFiKhEIHyj///////////8BMgJhYzoCGAEiGhIKX19tb19yb3dpZBgBKggIZRABMgJhYzoAevcBCgpfX21vX2Noa18xEtMBCgIICjrMAQoJIICAgIAgQgE+Eo8BCgIIHzqIAQoOIICAgIDQEkIFcG93ZXISEwoNCB8o////////////ASoCEAESYQoGCB8QASgBOlcKDSCAgICA0AJCBGNhc3QSOgoICCAQASACKAE6LgoNIICAgIDQAkIEY2FzdBIPCgYIPRABIAMSBVoDMC41EgwKCAggEAEgAigBWgASCgoGCB8QASgBWgASLQoECB8QATolCg0ggICAgNACQgRjYXN0EgoKBAgXEAESAigAEggKBAgfEAFaABoTcG93ZXIoYGJgLCAwLjUpID4gMA==")
+	require.NoError(t, err)
+	var source plan.TableDef
+	require.NoError(t, source.Unmarshal(payload))
+	require.Equal(t, "__mo_chk_1", source.Checks[0].Name)
+
+	target := proto.Clone(&source).(*plan.TableDef)
+	target.Name, target.Createsql = "ac", sql
+	target.DefaultCharset = uint32(types.CharsetUTF8)
+	target.Cols[0].Primary = true
+	target.Pkey = &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+	target.Checks[0].Name = "ac_chk_1"
+	target.Checks[0].Check = sqlplan.MakePlan2Int32ConstExprWithType(0)
+
+	manifest := tableDumpManifest{
+		Version: tableDumpBoundFormatVersion, SourceTable: "ac", SourceDatabase: "r33147", CreateSQL: sql, SchemaHash: expectedHash,
+		Relations: []tableDumpRelation{{Role: "main", SourceTable: "ac", SchemaHash: expectedHash, LogicalSchemaHash: expectedHash}},
+	}
+	aliases := make(map[string]string)
+	hash, err := tableDumpReleasedPowerMainHash(t.Context(), target, &manifest, aliases)
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, hash)
+	require.Equal(t, map[string]string{"ac_chk_1": "__mo_chk_1"}, aliases)
+	restored, changed, err := tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, aliases)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "ac_chk_1", restored.Checks[0].Name)
+	require.True(t, proto.Equal(source.Checks[0].Check, restored.Checks[0].Check))
+	ctx := sqlplan.NewMockCompilerContext(true, newPlanTestProcess(t))
+	releasedPower, err := sqlplan.ProveTableDumpReleasedPower(ctx, target, restored)
+	require.NoError(t, err)
+	require.True(t, releasedPower)
+	_, _, err = tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil)
+	require.ErrorContains(t, err, "checks do not match target schema")
+
+	for _, owner := range []string{"source", "target"} {
+		t.Run("explicit "+owner+" name", func(t *testing.T) {
+			explicit := strings.Replace(sql, "check (", "constraint __mo_chk_1 check (", 1)
+			edited := manifest
+			dst := proto.Clone(target).(*plan.TableDef)
+			if owner == "source" {
+				edited.CreateSQL = explicit
+			} else {
+				dst.Createsql = explicit
+			}
+			aliases := make(map[string]string)
+			hash, err := tableDumpReleasedPowerMainHash(t.Context(), dst, &edited, aliases)
+			require.NoError(t, err)
+			require.Empty(t, hash)
+			require.Empty(t, aliases)
+		})
+	}
+}
+
+func TestTableDumpReleasedPowerNonTextAndCopyFingerprints(t *testing.T) {
+	for _, tc := range []struct {
+		table, sourceSQL, targetDDL, hash string
+		column                            *plan.ColDef
+	}{
+		{"uid", "create table uid(id int primary key,b double,u uuid, constraint ck check(power(b,0.5)>0))", "create table uid(id int primary key,b double,u uuid, constraint ck check(power(b,0.5)>0))",
+			"9712e89c19b201c827d6c04df4dceff632b4b64147e5baeee2846169b127a735", &plan.ColDef{Name: "u", Typ: plan.Type{Id: int32(types.T_uuid)}}},
+		{"octets", "create table octets(id int primary key,b double,v varbinary(16), constraint ck check(power(b,0.5)>0))", "create table octets(id int primary key,b double,v varbinary(16), constraint ck check(power(b,0.5)>0))",
+			"6c54a9034cb82b8a2e462b91e71f86b69c32d9ed63ac2e40e8b0003721ee2a65", &plan.ColDef{Name: "v", Typ: plan.Type{Id: int32(types.T_varbinary), Width: 16, Charset: uint32(types.CharsetBinary)}}},
+		{"ckalt", "CREATE TABLE `r33147`.`ckalt_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709` (\n  `id` int NOT NULL,\n  `b` double DEFAULT NULL,\n  `other` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  CONSTRAINT `ck` CHECK (power(`b`, 0.5) > 0)\n)", "create table ckalt(id int primary key,b double,other int, constraint ck check(power(b,0.5)>0))",
+			"3428c1496e76706187820a918daba346769e7a949030a54ac2abb445398a845e", &plan.ColDef{Name: "other", Typ: plan.Type{Id: int32(types.T_int32)}}},
+	} {
+		t.Run(tc.table, func(t *testing.T) {
+			tc.column.Default = &plan.Default{NullAbility: true}
+			def := &plan.TableDef{
+				Name: tc.table, DbName: "target", Createsql: tc.targetDDL, DefaultCharset: uint32(types.CharsetUTF8),
+				Cols: []*plan.ColDef{
+					{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Default: &plan.Default{}},
+					{Name: "b", Typ: plan.Type{Id: int32(types.T_float64), Scale: -1}, Default: &plan.Default{NullAbility: true}},
+					tc.column,
+				},
+				Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+				Checks: []*plan.CheckDef{{Name: "ck", OriginSql: "power(`b`, 0.5) > 0"}},
+			}
+			for _, version := range []int{tableDumpFormatVersion, tableDumpBoundFormatVersion} {
+				manifest := &tableDumpManifest{
+					Version: version, SourceTable: tc.table, SourceDatabase: "r33147", CreateSQL: tc.sourceSQL, SchemaHash: tc.hash,
+					Relations: []tableDumpRelation{{Role: "main", SourceTable: tc.table, SchemaHash: tc.hash, LogicalSchemaHash: tc.hash}},
+				}
+				hash, err := tableDumpReleasedPowerMainHash(t.Context(), def, manifest, nil)
+				require.NoError(t, err)
+				require.Equal(t, tc.hash, hash)
+				changed := proto.Clone(def).(*plan.TableDef)
+				changed.Cols[2].Typ = plan.Type{Id: int32(types.T_varchar), Width: 16, Charset: uint32(types.CharsetUTF8)}
+				hash, err = tableDumpReleasedPowerMainHash(t.Context(), changed, manifest, nil)
+				require.NoError(t, err)
+				require.Empty(t, hash)
+			}
+		})
+	}
 }
 
 func TestTableDumpV1CheckDeclarations(t *testing.T) {
@@ -2087,15 +2191,39 @@ func TestTableDumpV1CheckDeclarations(t *testing.T) {
 		"create table other (a int)",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			_, _, ok := tableDumpV1CheckDeclarations(t.Context(), sql, "t")
+			_, _, ok := tableDumpCheckDeclarations(t.Context(), sql, "", "t")
 			require.False(t, ok)
 		})
 	}
-	names, implicitCharset, ok := tableDumpV1CheckDeclarations(t.Context(),
-		"create table t(a int check (a > 0), constraint named check (a < 10)) character set utf8mb4", "t")
+	names, implicitCharset, ok := tableDumpCheckDeclarations(t.Context(),
+		"create table t(a int check (a > 0), constraint named check (a < 10)) character set utf8mb4", "", "t")
 	require.True(t, ok)
 	require.False(t, implicitCharset)
 	require.Equal(t, []string{"", "named"}, names)
+
+	const prefix = "create table "
+	const suffix = " (b double, constraint ck check(power(b,0.5)>0))"
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{"`db`.`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", true},
+		{"`other_db`.`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", false},
+		{"`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", false},
+		{"`db`.`tt_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709`", false},
+		{"`db`.`t_copy_01A2174A-ABC9-7BE1-B0FD-9068F52CF709`", false},
+		{"`db`.`t_copy_01a2174a-abc9-4be1-b0fd-9068f52cf709`", false},
+		{"`db`.`t_copy_01a2174a-abc9-7be1-30fd-9068f52cf709`", false},
+		{"`db`.`t_copy_01a2174a-abc9-7be1-b0fd-9068f52cf709_extra`", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			names, _, ok := tableDumpCheckDeclarations(t.Context(), prefix+tc.name+suffix, "db", "t")
+			require.Equal(t, tc.valid, ok)
+			if tc.valid {
+				require.Equal(t, []string{"ck"}, names)
+			}
+		})
+	}
 }
 
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {

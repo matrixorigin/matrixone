@@ -1163,6 +1163,11 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 			if err != nil {
 				return nil, err
 			}
+			if udf.Language == string(tree.SQL) {
+				var nullOnNonFinite bool
+				udf.Body, nullOnNonFinite = function.DecodeSQLUdfBody(udf.Body)
+				udf.LegacyPower = !nullOnNonFinite
+			}
 			udf.RetType, err = erArray[0].GetString(ctx, i, 3)
 			if err != nil {
 				return nil, err

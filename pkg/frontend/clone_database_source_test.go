@@ -30,7 +30,11 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // filterCloneDatabaseRoutines keeps independent routine families and omits
@@ -1174,4 +1178,93 @@ func TestCloneDatabaseTargetLockProcessUsesOwningBackgroundTxn(t *testing.T) {
 	defer lockProc.Free()
 	require.Same(t, cloneTxn, lockProc.GetTxnOperator())
 	require.Same(t, outerTxn, ses.proc.GetTxnOperator())
+}
+
+type clonedPowerUdfCompiler struct {
+	*sqlplan.MockCompilerContext
+	definition function.Udf
+}
+
+func (c *clonedPowerUdfCompiler) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
+	if name == "cloned_pow" {
+		return &c.definition, nil
+	}
+	return nil, nil
+}
+
+func TestCloneSQLUdfPreservesPowerDefinition(t *testing.T) {
+	const query = "select power($1,0.5) from source_db.nation where n_nationkey = 1"
+	for _, modern := range []bool{false, true} {
+		t.Run(fmt.Sprintf("modern=%v", modern), func(t *testing.T) {
+			body := query
+			if modern {
+				body = function.EncodeSQLUdfBody(body)
+			}
+			refs, _, err := collectCloneRoutineReferences(t.Context(), body, "sql", "", "source_db", 1, true)
+			require.NoError(t, err)
+			require.NotEmpty(t, refs.tables)
+			clone, err := rewriteCloneSQLFunctionBody(t.Context(), body, "", "source_db", "tpch", 1)
+			require.NoError(t, err)
+			text, current := function.DecodeSQLUdfBody(clone)
+			require.Equal(t, modern, current)
+			require.Contains(t, text, "`tpch`.`nation`")
+
+			compiler := &clonedPowerUdfCompiler{
+				MockCompilerContext: sqlplan.NewMockCompilerContext(true, newPlanTestProcess(t)),
+				definition:          function.Udf{Body: text, Language: "sql", LegacyPower: !current},
+			}
+			const call = "select cloned_pow(cast(? as double))"
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, call, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := sqlplan.BuildPlan(compiler, stmt, true, nil)
+			require.NoError(t, err)
+			found := false
+			require.NoError(t, plan.VisitExpressionsInOwner(built.GetQuery(), func(root *plan.Expr) error {
+				return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+					call := expr.GetF()
+					if call.GetFunc() == nil {
+						return nil
+					}
+					id, ordinal := function.DecodeOverloadID(call.Func.Obj)
+					if id != function.POW {
+						return nil
+					}
+					found = true
+					if modern {
+						require.Equal(t, int32(1), ordinal)
+					} else {
+						require.Zero(t, ordinal)
+					}
+					bindsArgument := false
+					require.NoError(t, plan.VisitExprTree(call.Args[0], func(arg *plan.Expr) error {
+						if param := arg.GetP(); param != nil {
+							// BuildPlan retains the lexer's one-based position here.
+							require.Equal(t, int32(1), param.Pos)
+							bindsArgument = true
+						}
+						return nil
+					}))
+					require.True(t, bindsArgument, "the cloned POWER receives the caller's first parameter")
+					return nil
+				})
+			}))
+			require.True(t, found, "the cloned POWER must remain executable for a prepared argument")
+		})
+	}
+}
+
+func TestCloneSQLUdfRetainsQuotedIdentifiersAndParameters(t *testing.T) {
+	const body = "select $1, `$1`, '`__mo_clone_udf_arg_1`', $2 from source_db.nation"
+	rewritten, err := rewriteCloneSQLFunctionBody(t.Context(), body, "", "source_db", "tpch", 1)
+	require.NoError(t, err)
+	require.Equal(t, "select $1, `$1`, '`__mo_clone_udf_arg_1`', $2 from `tpch`.`nation`", rewritten)
+}
+
+func TestCloneSQLUdfArgumentMarkerDoesNotCaptureTargetDatabase(t *testing.T) {
+	const body = "select /*! $1 */, $2 from source_db.nation"
+	const target = "__mo_clone_udf_arg_1"
+	rewritten, err := rewriteCloneSQLFunctionBody(t.Context(), body, "", "source_db", target, 1)
+	require.NoError(t, err)
+	require.Equal(t, "select $1, $2 from `"+target+"`.`nation`", rewritten)
 }

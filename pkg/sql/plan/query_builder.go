@@ -13436,7 +13436,7 @@ func (builder *QueryBuilder) bindView(
 		builder.isForUpdate = savedIsForUpdate
 	}()
 	previousWarningContext := builder.compCtx.GetContext()
-	storedViewContext := function.WithViewPowerBinding(previousWarningContext, !viewData.PowerNullOnNonFinite)
+	storedViewContext := function.WithPersistedPowerBinding(previousWarningContext, !viewData.PowerNullOnNonFinite)
 	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
 		defines.WithPersistentViewBinding(storedViewContext), JSONMergeWarningStoredView))
 	defer builder.compCtx.SetContext(previousWarningContext)

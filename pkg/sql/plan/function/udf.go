@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
@@ -41,8 +44,32 @@ type Udf struct {
 	Db           string  `json:"db"`
 	ModifiedTime string  `json:"modified_time"`
 	SQLMode      *string `json:"-"`
+	LegacyPower  bool    `json:"-"`
 
 	ArgsType []types.Type `json:"-"`
+}
+
+// This header cannot start a valid SQL expression or SELECT. Mark only new
+// authoring; catalog copies and restores must retain the original body format.
+const sqlUdfPowerNullHeader = "{mo_sql_udf_pow_null_v1}\n"
+
+func EncodeSQLUdfBody(body string) string {
+	return sqlUdfPowerNullHeader + body
+}
+
+// DecodeSQLUdfBody returns the SQL text and whether it was authored with
+// row-local NULL results for POW.
+func DecodeSQLUdfBody(body string) (string, bool) {
+	return strings.CutPrefix(body, sqlUdfPowerNullHeader)
+}
+
+// SQLUdfBodyIsQuery distinguishes standalone SELECT/WITH from an expression
+// that may itself contain a subquery, comment or quoted SQL keyword.
+func SQLUdfBodyIsQuery(body, sqlMode string) bool {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, body, mysql.ParseSQLModeFlags(sqlMode))
+	defer mysql.PutScanner(scanner)
+	token, _ := scanner.Scan()
+	return token == mysql.SELECT || token == mysql.WITH
 }
 
 type UdfWithContext struct {

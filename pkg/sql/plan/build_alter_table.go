@@ -530,17 +530,30 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	// schema clauses. Validate them only against the final source-to-target
 	// replay, never against a reordered intermediate column slice. The same
 	// replay will preserve their bound identity in the internal CREATE.
-	var checkReplay *persistedDDLReplay
+	var replay *persistedDDLReplay
 	for _, check := range copyTableDef.Checks {
 		replayErr := retainedCheckReplayError(ctx, check)
 		if replayErr == nil {
 			continue
 		}
-		if checkReplay == nil {
-			checkReplay = ddlReplayForTable(WithPersistedDDLReplay(ctx, tableDef, copyTableDef), copyTableDef.Name)
+		if replay == nil {
+			replay = ddlReplayForTable(WithPersistedDDLReplay(ctx, tableDef, copyTableDef), copyTableDef.Name)
 		}
-		if checkReplay == nil || checkReplay.checks[strings.ToLower(check.Name)] == nil {
+		if replay == nil || replay.checks[strings.ToLower(check.Name)] == nil {
 			return nil, replayErr
+		}
+	}
+
+	for _, col := range copyTableDef.Cols {
+		if !retainedGeneratedPower(col) {
+			continue
+		}
+		if replay == nil {
+			replay = ddlReplayForTable(WithPersistedDDLReplay(ctx, tableDef, copyTableDef), copyTableDef.Name)
+		}
+		if replay == nil || replay.columns[strings.ToLower(col.Name)] == nil ||
+			replay.columns[strings.ToLower(col.Name)].generated == nil {
+			return nil, retainedGeneratedPowerReplayError(ctx, col.Name)
 		}
 	}
 

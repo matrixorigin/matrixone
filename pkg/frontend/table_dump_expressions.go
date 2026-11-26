@@ -213,6 +213,10 @@ func tableDumpHasBoundExpressions(def *plan.TableDef) bool {
 // transplanting bound expressions. A table created from the same SQL under a
 // different session value has matching declarations but different bindings.
 func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest string) (*plan.TableDef, bool, error) {
+	return tableDumpRestoredExpressionsWithCheckAliases(target, payload, digest, nil)
+}
+
+func tableDumpRestoredExpressionsWithCheckAliases(target *plan.TableDef, payload []byte, digest string, checkAliases map[string]string) (*plan.TableDef, bool, error) {
 	if target == nil || len(payload) == 0 || len(payload) > tableDumpMaxManifest/2 {
 		return nil, false, moerr.NewInvalidInputNoCtx("invalid table dump expression metadata")
 	}
@@ -290,11 +294,15 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 		if dest == nil {
 			return nil, false, moerr.NewInvalidInputNoCtx("target table contains a nil check")
 		}
-		source := sourceChecks[strings.ToLower(dest.Name)]
-		if source == nil || !strings.EqualFold(source.Name, dest.Name) ||
-			source.OriginSql != dest.OriginSql {
+		key := strings.ToLower(dest.Name)
+		if alias := checkAliases[key]; alias != "" {
+			key = alias
+		}
+		source := sourceChecks[key]
+		if source == nil || source.OriginSql != dest.OriginSql {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump checks do not match target schema")
 		}
+		delete(sourceChecks, key)
 		changed = changed || !proto.Equal(source.Check, dest.Check)
 		replacement.Checks[i].Check = source.Check
 	}

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1701,34 +1702,38 @@ var lockTableDumpLoadTargets = func(
 // tableDumpReleasedPowerSchemaHash reconstructs the released fingerprint
 // for v1 LOAD or for a bound re-dump of a released table. The original DDL
 // must confirm the implicit table collation or automatic CHECK name.
-func tableDumpReleasedPowerSchemaHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest) (string, error) {
+func tableDumpReleasedPowerSchemaHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest, checkAliases map[string]string) (string, error) {
 	if !canReconstructTableSchema(target) {
 		return "", nil
 	}
-	sourceNames, sourceImplicit, ok := tableDumpV1CheckDeclarations(ctx, manifest.CreateSQL, manifest.SourceTable)
+	sourceNames, sourceImplicit, ok := tableDumpCheckDeclarations(ctx, manifest.CreateSQL, manifest.SourceDatabase, manifest.SourceTable)
 	if !ok {
 		return "", nil
 	}
-	targetNames, targetImplicit, ok := tableDumpV1CheckDeclarations(ctx, target.Createsql, target.Name)
+	targetNames, targetImplicit, ok := tableDumpCheckDeclarations(ctx, target.Createsql, target.DbName, target.Name)
 	if !ok || len(sourceNames) != len(target.Checks) || len(targetNames) != len(target.Checks) {
 		return "", nil
 	}
 	legacy := *target
 	legacy.Checks = make([]*plan.CheckDef, len(target.Checks))
+	renamed := false
 	for i, check := range target.Checks {
 		if check == nil || !strings.EqualFold(sourceNames[i], targetNames[i]) {
 			return "", nil
 		}
 		copy := *check
-		if manifest.Version == tableDumpFormatVersion && sourceNames[i] == "" &&
-			check.Name == fmt.Sprintf("%s_chk_%d", target.Name, i+1) {
+		if sourceNames[i] == "" && check.Name == fmt.Sprintf("%s_chk_%d", target.Name, i+1) {
 			copy.Name = fmt.Sprintf("__mo_chk_%d", i+1)
+			if checkAliases != nil {
+				checkAliases[strings.ToLower(check.Name)] = copy.Name
+			}
+			renamed = true
 		}
 		legacy.Checks[i] = &copy
 	}
 	if sourceImplicit && targetImplicit && tableDumpV1CollationIndependent(target) {
 		legacy.DefaultCharset = uint32(types.CharsetLegacy)
-	} else if manifest.Version == tableDumpBoundFormatVersion {
+	} else if manifest.Version == tableDumpBoundFormatVersion && !renamed {
 		return "", nil
 	}
 	return tableSchemaHashWithResolver(ctx, &legacy, nil)
@@ -1736,13 +1741,13 @@ func tableDumpReleasedPowerSchemaHash(ctx context.Context, target *plan.TableDef
 
 // A compatibility match requires the same full fingerprint in the header
 // and in the main relation. Index relations keep their normal checks.
-func tableDumpReleasedPowerMainHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest) (string, error) {
-	hash, err := tableDumpReleasedPowerSchemaHash(ctx, target, manifest)
+func tableDumpReleasedPowerMainHash(ctx context.Context, target *plan.TableDef, manifest *tableDumpManifest, checkAliases map[string]string) (string, error) {
+	hash, err := tableDumpReleasedPowerSchemaHash(ctx, target, manifest, checkAliases)
 	if hash == "" || hash != manifest.SchemaHash || err != nil {
 		return "", err
 	}
 	for _, relation := range manifest.Relations {
-		if relation.Role == "main" && relation.SchemaHash == hash &&
+		if relation.Role == "main" && strings.EqualFold(relation.SourceTable, manifest.SourceTable) && relation.SchemaHash == hash &&
 			(relation.LogicalSchemaHash == hash || relation.LogicalSchemaHash == "" && manifest.Version == tableDumpFormatVersion) {
 			return hash, nil
 		}
@@ -1750,14 +1755,15 @@ func tableDumpReleasedPowerMainHash(ctx context.Context, target *plan.TableDef, 
 	return "", nil
 }
 
-func tableDumpV1CheckDeclarations(ctx context.Context, sql, name string) (names []string, implicitCharset, ok bool) {
-	stmt, err := mysql.ParseOne(ctx, sql, 1)
+func tableDumpCheckDeclarations(ctx context.Context, sql, database, name string) (names []string, implicitCharset, ok bool) {
+	// Keep the original identifier spelling for the internal UUID check.
+	stmt, err := mysql.ParseOne(ctx, sql, 0)
 	if err != nil {
 		return nil, false, false
 	}
 	defer stmt.Free()
 	create, ok := stmt.(*tree.CreateTable)
-	if !ok || create.IsAsLike || create.IsAsSelect || !strings.EqualFold(string(create.Table.ObjectName), name) {
+	if !ok || create.IsAsLike || create.IsAsSelect || !tableDumpCreateTableMatches(&create.Table, database, name) {
 		return nil, false, false
 	}
 	for _, def := range create.Defs {
@@ -1782,9 +1788,31 @@ func tableDumpV1CheckDeclarations(ctx context.Context, sql, name string) (names 
 	return names, implicitCharset, true
 }
 
+// The released COPY implementation left its internal CREATE in the catalog
+// after renaming the relation. It used this qualified, canonical UUIDv7 name.
+func tableDumpCreateTableMatches(table *tree.TableName, database, name string) bool {
+	actual := string(table.ObjectName)
+	if strings.EqualFold(actual, name) {
+		return true
+	}
+	if database == "" || !table.ExplicitSchema || table.AtTsExpr != nil || table.IcebergRef != nil ||
+		!strings.EqualFold(string(table.SchemaName), database) {
+		return false
+	}
+	prefix := name + "_copy_"
+	if len(actual) != len(prefix)+36 || !strings.EqualFold(actual[:len(prefix)], prefix) {
+		return false
+	}
+	suffix := actual[len(prefix):]
+	id, err := uuid.Parse(suffix)
+	return err == nil && id.Version() == 7 && id.Variant() == uuid.RFC4122 && id.String() == suffix
+}
+
 func tableDumpV1CollationIndependentType(typ types.T) bool {
-	// Numeric, boolean and date/time keys compare their native values.
-	return typ.ToType().IsNumeric() || typ == types.T_bool || typ.IsDateRelate()
+	// These domains compare native values or bytes independent of the
+	// default text collation.
+	return typ.ToType().IsNumeric() || typ == types.T_bool || typ.IsDateRelate() ||
+		typ == types.T_uuid || typ == types.T_binary || typ == types.T_varbinary
 }
 
 func tableDumpV1CollationIndependent(def *plan.TableDef) bool {
@@ -1863,6 +1891,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	var restoredDef *plan.TableDef
 	var restoreExpressions bool
 	var releasedHash string
+	var checkAliases map[string]string
 	if manifest.Version == tableDumpFormatVersion && tableDumpHasBoundExpressions(targetDef) {
 		var releasedPower bool
 		restoredDef, releasedPower, err = sqlplan.RecoverTableDumpV1Bindings(ses.GetTxnCompileCtx(), targetDef)
@@ -1871,14 +1900,15 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		restoreExpressions = restoredDef != nil
 		if releasedPower && targetRefs[0].SchemaHash != manifest.SchemaHash {
-			releasedHash, err = tableDumpReleasedPowerMainHash(ctx, targetDef, manifest)
+			releasedHash, err = tableDumpReleasedPowerMainHash(ctx, targetDef, manifest, nil)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	if manifest.Version == tableDumpBoundFormatVersion && targetRefs[0].SchemaHash != manifest.SchemaHash {
-		releasedHash, err = tableDumpReleasedPowerMainHash(ctx, targetDef, manifest)
+		checkAliases = make(map[string]string)
+		releasedHash, err = tableDumpReleasedPowerMainHash(ctx, targetDef, manifest, checkAliases)
 		if err != nil {
 			return err
 		}
@@ -1887,8 +1917,8 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		return moerr.NewInvalidInputNoCtx("target table schema does not match table dump")
 	}
 	if manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion {
-		restoredDef, restoreExpressions, err = tableDumpRestoredExpressions(
-			targetDef, manifest.BoundExpressions, manifest.ExpressionHash)
+		restoredDef, restoreExpressions, err = tableDumpRestoredExpressionsWithCheckAliases(
+			targetDef, manifest.BoundExpressions, manifest.ExpressionHash, checkAliases)
 		if err != nil {
 			return err
 		}

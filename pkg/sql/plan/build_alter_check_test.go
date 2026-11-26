@@ -1055,3 +1055,56 @@ func TestAlterRetainedReleasedPowerCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestAlterRetainedReleasedPowerGenerated(t *testing.T) {
+	for _, storage := range []string{"stored", "virtual"} {
+		for _, tc := range []struct {
+			name, expression, alter string
+			legacy, rejected        bool
+		}{
+			{"safe operand conversion", "power(b,0.5)", "modify column b float", true, false},
+			{"unrelated alteration", "power(b,0.5)", "modify column other float", true, false},
+			{"incompatible dependent arithmetic", "power(b+1,0.5)", "modify column b float", false, true},
+			{"explicit redefinition", "power(b,0.5)", "modify column b float, modify column g double generated always as (power(b,0.5)) %s", false, false},
+		} {
+			t.Run(storage+"/"+tc.name, func(t *testing.T) {
+				mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key, b double, other double, g double generated always as ("+tc.expression+") "+storage+")")
+				before := tableDumpDDLCatalog(mock.ctxt.tables["check_t"])
+				// ALTER discovers generated dependents using the catalog's
+				// column positions and preserves the original column identities.
+				before.Name2ColIndex = make(map[string]int32, len(before.Cols))
+				for i, col := range before.Cols {
+					col.ColId = uint64(i + 1)
+					before.Name2ColIndex[col.Name] = int32(i)
+				}
+				source, found, err := RecoverTableDumpV1Bindings(&mock.ctxt, before)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.NotNil(t, source)
+				mock.ctxt.tables["check_t"] = source
+				alterSQL := tc.alter
+				if strings.Contains(alterSQL, "%s") {
+					alterSQL = fmt.Sprintf(alterSQL, storage)
+				}
+				p, err := runOneStmt(mock, t, "alter table check_t "+alterSQL)
+				if tc.rejected {
+					require.ErrorContains(t, err, "explicitly redefining column 'g'")
+					return
+				}
+				require.NoError(t, err)
+				alter := p.GetDdl().GetAlterTable()
+				parent, err := WithAlterTableDDLReplay(t.Context(), mock.ctxt.DefaultDatabase(), alter.TableDef, alter.CopyTableDef)
+				require.NoError(t, err)
+				mock.ctxt.SetContext(parent)
+				rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+				require.NoError(t, err)
+				def := rebuilt.GetDdl().GetCreateTable().TableDef
+				generated := FindColumn(def.Cols, "g").GeneratedCol
+				require.Equal(t, storage == "stored", generated.IsStored)
+				require.Equal(t, tc.legacy, tableDumpHasPower(generated.Expr, true))
+				_, err = AnalyzeTableDumpBindings(&mock.ctxt, def, def)
+				require.NoError(t, err, "the rebuilt generated definition remains dumpable")
+			})
+		}
+	}
+}

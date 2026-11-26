@@ -740,6 +740,79 @@ func TestSQLIdentityUDFKeepsZeroScalarDependentProgram(t *testing.T) {
 	require.GreaterOrEqual(t, programRoot, int32(0))
 }
 
+type powerUdfCompilerContext struct {
+	*MockCompilerContext
+	bodies map[string]function.Udf
+}
+
+func (c *powerUdfCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
+	udf, ok := c.bodies[name]
+	if !ok {
+		return nil, nil
+	}
+	udf.Language = string(tree.SQL)
+	return &udf, nil
+}
+
+func TestSQLUDFBindsPowerInDefinitionScope(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		callerLegacy     bool
+		overloads        []int32
+	}{
+		{"old scalar under current caller", "old_scalar(n_nationkey)", false, []int32{0}},
+		{"old query under current caller", "old_query(n_nationkey)", false, []int32{0}},
+		{"new scalar under old caller", "new_scalar(n_nationkey)", true, []int32{1}},
+		{"new query under old caller", "new_query(n_nationkey)", true, []int32{1}},
+		{"current callee inside old query", "mixed_old(n_nationkey)", false, []int32{0, 1}},
+		{"old callee inside current scalar", "mixed_new(n_nationkey)", true, []int32{0, 1}},
+		{"old argument inside new body", "new_scalar(pow(n_nationkey,0.5))", true, []int32{0, 1}},
+		{"new argument inside old body", "old_query(pow(n_nationkey,0.5))", false, []int32{0, 1}},
+		{"unmarked forwarding routine selects callee mode", "unmarked_forward(n_nationkey)", true, []int32{1}},
+		{"argument inside CASE CAST and child SELECT", "new_wrapped(pow(n_nationkey,0.5))", true, []int32{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &powerUdfCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
+				bodies: map[string]function.Udf{
+					"old_scalar":       {Body: "power($1,0.5)", LegacyPower: true},
+					"old_query":        {Body: "select power($1,0.5)", LegacyPower: true},
+					"new_scalar":       {Body: "pow($1,0.5)"},
+					"new_query":        {Body: "SELECT POWER($1,0.5)"},
+					"unmarked_forward": {Body: "new_scalar($1)", LegacyPower: true},
+					"new_wrapped":      {Body: "SELECT cast(case when $1 > 0 then (select power($1,0.5)) else 0 end as double)"},
+					"mixed_old":        {Body: "select new_scalar($1)+pow($1,0.5)", LegacyPower: true},
+					"mixed_new":        {Body: "old_query($1)+pow($1,0.5)"},
+				},
+			}
+			caller := function.WithPersistedPowerBinding(t.Context(), tc.callerLegacy)
+			ctx.SetContext(caller)
+			stmt, err := parsers.ParseOne(caller, dialect.MYSQL, "select "+tc.expression+" from nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false, nil)
+			require.NoError(t, err)
+			seen := make(map[int32]struct{})
+			require.NoError(t, plan.VisitExpressionsInOwner(built.GetQuery(), func(expr *plan.Expr) error {
+				return plan.VisitExprTree(expr, func(e *plan.Expr) error {
+					if ref := e.GetF().GetFunc(); ref != nil {
+						id, ordinal := function.DecodeOverloadID(ref.Obj)
+						if id == function.POW {
+							seen[ordinal] = struct{}{}
+						}
+					}
+					return nil
+				})
+			}))
+			require.Len(t, seen, len(tc.overloads))
+			for _, ordinal := range tc.overloads {
+				require.Contains(t, seen, ordinal)
+			}
+			require.Same(t, caller, ctx.GetContext())
+		})
+	}
+}
+
 func TestBindSQLUDFTableReadCorrelatesColumnArgument(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.Background(),

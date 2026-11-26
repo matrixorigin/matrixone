@@ -43,21 +43,21 @@ func LegacyPowerForTableDump(ctx context.Context) bool {
 	return legacy
 }
 
-type viewPowerContextKey struct{}
+type persistedPowerContextKey struct{}
 
-// WithViewPowerBinding scopes POW binding to one stored view definition.
-func WithViewPowerBinding(ctx context.Context, legacy bool) context.Context {
+// WithPersistedPowerBinding scopes POW binding to one stored SQL definition.
+func WithPersistedPowerBinding(ctx context.Context, legacy bool) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, viewPowerContextKey{}, legacy)
+	return context.WithValue(ctx, persistedPowerContextKey{}, legacy)
 }
 
-func legacyViewPowerBinding(ctx context.Context) bool {
+func legacyPersistedPowerBinding(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	legacy, _ := ctx.Value(viewPowerContextKey{}).(bool)
+	legacy, _ := ctx.Value(persistedPowerContextKey{}).(bool)
 	return legacy
 }
 

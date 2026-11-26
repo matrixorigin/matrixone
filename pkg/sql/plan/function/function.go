@@ -701,7 +701,7 @@ func getFunctionByName(
 	if r.fid == POW {
 		if LegacyPowerForTableDump(ctx) {
 			check = fixedTypeMatch(f.Overloads[:1], args)
-		} else if legacyViewPowerBinding(ctx) && (check.status == succeedMatched || check.status == succeedWithCast) {
+		} else if legacyPersistedPowerBinding(ctx) && (check.status == succeedMatched || check.status == succeedWithCast) {
 			check.idx = 0
 		}
 	}

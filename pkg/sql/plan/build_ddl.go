@@ -230,7 +230,7 @@ func inferViewColumns(
 		previous := ctx.GetContext()
 		binding := previous
 		if hasStoredDefinition {
-			binding = function.WithViewPowerBinding(binding, !stored.powerNullOnNonFinite)
+			binding = function.WithPersistedPowerBinding(binding, !stored.powerNullOnNonFinite)
 		}
 		if !forAuthoring {
 			// Description and regeneration resolve names in the stored view.
@@ -4010,6 +4010,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if preserved != nil && preserved.generated != nil {
 					generatedCol = proto.Clone(preserved.generated).(*plan.GeneratedCol)
 				} else {
+					if replay != nil && replay.target != nil &&
+						retainedGeneratedPower(FindColumn(replay.target.Cols, colName)) {
+						return retainedGeneratedPowerReplayError(ctx.GetContext(), colNameOrigin)
+					}
 					generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), def, colType, allColDefs, ctx.GetProcess(), crc32CopyColumn(replay, colName))
 				}
 				if err != nil {
