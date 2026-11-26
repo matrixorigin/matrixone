@@ -1064,12 +1064,12 @@ func diffMergeAgency(
 	}
 	defer tblStuff.worker.Release()
 
+	tblStuff.boundedPick = pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != ""
 	if dagInfo, err = decideLCABranchTSFromBranchDAG(
 		ctx, ses, bh, tblStuff,
 	); err != nil {
 		return
 	}
-	tblStuff.boundedPick = pickStmt != nil && pickStmt.BetweenFrom != "" && pickStmt.BetweenTo != ""
 	if err = reconcileDataBranchEndpointSchema(ctx, ses, bh, &tblStuff, &dagInfo); err != nil {
 		return
 	}
@@ -2410,8 +2410,6 @@ func constructChangeHandle(
 		return
 	}
 	tables.zeroHistoryBaseStarts = baseRange.zeroHistoryStarts
-	tables.zeroHistorySourceStart = tarRange.firstCommitted
-	tables.zeroHistoryBaseFork = branchInfo.baseFirstFork
 	if tables.lcaHasZeroHistory && tables.lcaRel != nil &&
 		tarRange.firstCommitted.tableID != 0 && baseRange.firstCommitted.tableID != 0 &&
 		tarRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) && baseRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) {
@@ -4431,8 +4429,16 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBase = baseIDs
 		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
 		branchInfo.pathFromLCAToBaseLineageOnly = dataBranchPathLineageOnly(dag, baseIDs)
-		if i, ok := firstDataBranchForkIndex(branchInfo.pathFromLCAToBaseLineageOnly, len(baseIDs)); ok {
-			branchInfo.baseFirstFork = dataBranchForkKeyRef{tableID: baseIDs[i], account: dag.Creator(baseIDs[i])}
+		if tblStuff.boundedPick {
+			for i := 1; i < len(baseIDs); i++ {
+				if branchInfo.pathFromLCAToBaseLineageOnly[i] {
+					continue
+				}
+				branchInfo.baseForks = append(branchInfo.baseForks, dataBranchFork{
+					child: baseIDs[i], parent: baseIDs[i-1], snapshot: branchInfo.pathFromLCAToBaseTS[i],
+					parentOwner: dag.Creator(baseIDs[i-1]), childOwner: dag.Creator(baseIDs[i]),
+				})
+			}
 		}
 		return
 	}

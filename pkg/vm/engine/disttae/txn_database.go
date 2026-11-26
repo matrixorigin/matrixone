@@ -89,8 +89,8 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (engine.Relation, error) {
-	if db.databaseId == catalog.MO_CATALOG_ID && strings.EqualFold(name, catalog.MO_BRANCH_FORK_KEYS) &&
-		ctx.Value(defines.BranchForkKeyAccess{}) == nil {
+	forkKeys := db.databaseId == catalog.MO_CATALOG_ID && strings.EqualFold(name, catalog.MO_BRANCH_FORK_KEYS)
+	if forkKeys && ctx.Value(defines.BranchForkKeyAccess{}) == nil {
 		return nil, nil
 	}
 	txn := db.getTxn()
@@ -108,8 +108,8 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 	if err != nil {
 		return nil, err
 	}
-	if openSys {
-		accountId = 0
+	if openSys || forkKeys {
+		accountId = catalog.System_Account
 	}
 
 	key := genTableKey(accountId, name, db.databaseId, db.databaseName)

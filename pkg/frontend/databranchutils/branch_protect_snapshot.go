@@ -773,36 +773,30 @@ func BuildBranchSnapshotDeleteSQL(snames []string) string {
 // ReclaimBranchForkKeys removes fork evidence after every descendant of the
 // logical fork has been deleted. An intermediate table may be gone while
 // its ledger is still needed by a live descendant.
-func ReclaimBranchForkKeys(dag BranchReclaimDag, names []string, deleteSQL func(uint32, string) error) error {
-	byOwner := make(map[uint32][]uint64)
-	for _, name := range names {
-		id, ok := ParseBranchSnapshotName(name)
-		if !ok {
-			continue
-		}
-		node, ok := dag.Info[id]
-		if !ok || IsAlterLineageLevel(node.Level) {
-			continue
-		}
-		owner := uint32(node.Creator)
-		byOwner[owner] = append(byOwner[owner], id)
-	}
-	owners := make([]uint32, 0, len(byOwner))
-	for owner := range byOwner {
-		owners = append(owners, owner)
-	}
-	sort.Slice(owners, func(i, j int) bool { return owners[i] < owners[j] })
-	for _, owner := range owners {
+func ReclaimBranchForkKeys(names []string, deleteSQL func(string) error) error {
+	// Keep the filter bounded for large database drops. Physical IDs are
+	// cluster-unique, so a single system catalog suffices.
+	const batchSize = 512
+	for start := 0; start < len(names); start += batchSize {
 		var b strings.Builder
 		b.WriteString("delete from " + catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS + " where table_id in (")
-		for i, id := range byOwner[owner] {
-			if i > 0 {
+		count := 0
+		for _, name := range names[start:min(start+batchSize, len(names))] {
+			id, ok := ParseBranchSnapshotName(name)
+			if !ok {
+				continue
+			}
+			if count > 0 {
 				b.WriteByte(',')
 			}
 			b.WriteString(strconv.FormatUint(id, 10))
+			count++
+		}
+		if count == 0 {
+			continue
 		}
 		b.WriteByte(')')
-		if err := deleteSQL(owner, b.String()); err != nil {
+		if err := deleteSQL(b.String()); err != nil {
 			return err
 		}
 	}

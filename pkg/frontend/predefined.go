@@ -423,11 +423,14 @@ var (
 	)`, catalog.MO_BRANCH_METADATA)
 
 	// A NULL key is the completion marker for a captured fork image, including
-	// an empty fork. Keep the ledger partitioned by physical child table ID.
+	// an empty fork. The primary key orders rows by child ID. Explicit UUIDs
+	// avoid tenant-local auto-increment allocation during cross-owner capture.
 	MoCatalogBranchForkKeysDDL = fmt.Sprintf(`create table mo_catalog.%s(
 		table_id bigint unsigned not null,
-		key_bytes longblob
-	) cluster by (table_id)`, catalog.MO_BRANCH_FORK_KEYS)
+		entry_id uuid not null default uuid(),
+		key_bytes longblob,
+		primary key(table_id, entry_id)
+	)`, catalog.MO_BRANCH_FORK_KEYS)
 
 	MoCatalogFeatureLimitDDL = fmt.Sprintf(`create table mo_catalog.%s(
     	account_id bigint unsigned not null comment 'this limit applies on this account',

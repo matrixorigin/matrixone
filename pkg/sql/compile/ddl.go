@@ -3065,7 +3065,6 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		return false, nil
 	}
 
-	var dag databranchutils.BranchReclaimDag
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
 		// `FOR UPDATE` serialises sibling reclaim paths: two concurrent
 		// drops from the same parent would otherwise each miss the
@@ -3075,7 +3074,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		// above already confirmed the drop touches mo_branch_metadata,
 		// so the lock scope is limited to real branch drops.
 		querySql := fmt.Sprintf(
-			"select table_id, p_table_id, clone_ts, level, table_deleted, creator from %s.%s for update",
+			"select table_id, p_table_id, clone_ts, level, table_deleted from %s.%s for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 		)
 		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
@@ -3092,7 +3091,6 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 			parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 			cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
 			levels := executor.GetStringRows(cols[3])
-			creators := vector.MustFixedColWithTypeCheck[uint64](cols[5])
 			for i := 0; i < n; i++ {
 				deleted := !cols[4].IsNull(uint64(i)) &&
 					vector.GetFixedAtWithTypeCheck[bool](cols[4], i)
@@ -3100,15 +3098,13 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 					TableID:      tableIDs[i],
 					CloneTS:      cloneTSs[i],
 					PTableID:     parentIDs[i],
-					Creator:      creators[i],
 					Level:        levels[i],
 					TableDeleted: deleted,
 				})
 			}
 			return true
 		})
-		dag = databranchutils.NewBranchReclaimDag(rows)
-		return dag, nil
+		return databranchutils.NewBranchReclaimDag(rows), nil
 	}
 	markDeleted := func() error {
 		return c.runSqlWithSystemTenant(fmt.Sprintf(
@@ -3120,7 +3116,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		if err := c.runSqlWithSystemTenant(databranchutils.BuildBranchSnapshotDeleteSQL(snames)); err != nil {
 			return err
 		}
-		return databranchutils.ReclaimBranchForkKeys(dag, snames, c.deleteBranchForkKeys)
+		return databranchutils.ReclaimBranchForkKeys(snames, c.deleteBranchForkKeys)
 	}
 	return true, databranchutils.MarkAndReclaimBranchSnapshotsCore(
 		deadTIDs, loadDAG, markDeleted, execDelete,

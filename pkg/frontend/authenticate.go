@@ -4449,11 +4449,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
-		forkKeysCtx := context.WithValue(deleteCtx, defines.BranchForkKeyAccess{}, true)
-		rtnErr = bh.Exec(forkKeysCtx, "drop table if exists mo_catalog.mo_branch_fork_keys")
-		if rtnErr != nil {
-			return rtnErr
-		}
 		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_database_defaults")
 		if rtnErr != nil {
 			return rtnErr
@@ -11793,7 +11788,8 @@ func isSysOnlyCatalogRelationSQL(sql string) bool {
 	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
 		return true
 	}
-	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+	if strings.HasPrefix(sql, "create table mo_catalog."+catalog.MO_BRANCH_METADATA) ||
+		strings.HasPrefix(sql, "create table mo_catalog."+catalog.MO_BRANCH_FORK_KEYS) {
 		return true
 	}
 

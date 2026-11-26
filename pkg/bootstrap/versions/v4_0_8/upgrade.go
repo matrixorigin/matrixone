@@ -46,8 +46,9 @@ func (*versionHandle) HandleClusterUpgrade(_ context.Context, txn executor.TxnEx
 	return branchForkKeys.Upgrade(txn, catalog.System_Account)
 }
 
-func (*versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	return branchForkKeys.Upgrade(txn, uint32(tenantID))
+func (*versionHandle) HandleTenantUpgrade(context.Context, int32, executor.TxnExecutor) error {
+	// All accounts share the system-owned ledger.
+	return nil
 }
 
 func (*versionHandle) HandleCreateFrameworkDeps(executor.TxnExecutor) error {

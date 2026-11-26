@@ -406,7 +406,11 @@ func reclaimAccountOwnedBranchMetadataWithBH(
 			return err
 		}
 	}
-	return nil
+	forkCtx := context.WithValue(sysCtx, defines.BranchForkKeyAccess{}, true)
+	return databranchutils.ReclaimBranchForkKeys(plan.SnapshotNames, func(sql string) error {
+		bh.ClearExecResultSet()
+		return bh.Exec(forkCtx, sql)
+	})
 }
 
 // getBranchParentAccountName resolves the account name for the source

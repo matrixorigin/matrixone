@@ -16,6 +16,7 @@ package embed
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -88,5 +89,58 @@ func TestBoundedPickWithMissingForkEvidence(t *testing.T) {
 		}
 		execSQL(pick + "accept")
 		checkDestination("1:10,2:52,3:80")
+	})
+}
+
+func TestBoundedPickForkEvidenceSurvivesPublisherDrop(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		sys := recoverySQLClient(t, cn)
+		defer sys.Close()
+		control, err := sys.Conn(t.Context())
+		require.NoError(t, err)
+		defer control.Close()
+		run := func(conn *sql.Conn, statements ...string) {
+			t.Helper()
+			for _, statement := range statements {
+				_, err := conn.ExecContext(t.Context(), statement)
+				require.NoError(t, err, statement)
+			}
+		}
+
+		run(control, "create account fork_publisher admin_name 'tester' identified by '111'")
+		publisher := recoverySQLClientWithUser(t, cn, "fork_publisher#tester")
+		defer publisher.Close()
+		owned, err := publisher.Conn(t.Context())
+		require.NoError(t, err)
+		defer owned.Close()
+		run(owned, "create database published", "use published", "begin",
+			"create table root(k int primary key,v int)", "insert into root values(1,10),(2,20)",
+			"data branch create table dst from root", "delete from dst where k=2",
+			"data branch create table src from root", "commit",
+			"create publication fork_pub database published account sys")
+		run(control, "create database fork_subscription from fork_publisher publication fork_pub",
+			"create database fork_survivor", "use fork_survivor",
+			"data branch create table src from fork_subscription.src",
+			"data branch create table dst from fork_subscription.dst")
+		require.NoError(t, owned.Close())
+		run(control, "drop account fork_publisher", "create snapshot surviving_fork_lo for account sys",
+			"update src set v=52 where k=2", "insert into src values(3,80)",
+			"create snapshot surviving_fork_hi for account sys")
+
+		const pick = "data branch pick src into dst between snapshot surviving_fork_lo and surviving_fork_hi when conflict "
+		_, err = control.ExecContext(t.Context(), pick+"fail")
+		require.ErrorContains(t, err, "conflict:")
+		var rows string
+		require.NoError(t, control.QueryRowContext(t.Context(),
+			"select group_concat(concat_ws(':',k,v) order by k) from dst").Scan(&rows))
+		require.Equal(t, "1:10", rows)
+		run(control, pick+"skip")
+		require.NoError(t, control.QueryRowContext(t.Context(),
+			"select group_concat(concat_ws(':',k,v) order by k) from dst").Scan(&rows))
+		require.Equal(t, "1:10,3:80", rows)
+		run(control, "drop snapshot surviving_fork_hi", "drop snapshot surviving_fork_lo",
+			"drop database fork_survivor", "drop database if exists fork_subscription")
 	})
 }

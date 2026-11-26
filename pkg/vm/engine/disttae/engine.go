@@ -821,6 +821,20 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		}
 	}
 
+	// A fork capture binds the user table in its own account and the
+	// ledger in sys. An executor reopening the ledger by physical ID still
+	// carries the user's account. Route only the protected ledger identity.
+	if tableName == "" && accountId != catalog.System_Account && ctx.Value(defines.BranchForkKeyAccess{}) != nil {
+		catalogDB := &txnDatabase{op: op, databaseId: catalog.MO_CATALOG_ID, databaseName: catalog.MO_CATALOG}
+		ledger, err := catalogDB.relation(ctx, catalog.MO_BRANCH_FORK_KEYS, nil)
+		if err != nil {
+			return "", "", nil, err
+		}
+		if ledger != nil && ledger.GetTableID(ctx) == tableId {
+			return catalog.MO_CATALOG, catalog.MO_BRANCH_FORK_KEYS, ledger, nil
+		}
+	}
+
 	if tableName == "" {
 		accountId, _ := defines.GetAccountId(ctx)
 		return "", "", nil, moerr.NewNoSuchTablef(

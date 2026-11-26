@@ -1510,15 +1510,17 @@ func hashDiffIfHasLCA(
 		}
 	}
 
+	forkHistory := pickForkHistory{branches: dagInfo.pathFromLCAToBase, forks: dagInfo.baseForks}
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
 		if (tblStuff.boundedPick || tblStuff.pickWindowStart != nil) && copt.conflictOpt != nil &&
 			((wrapped.kind == diffDelete && !wrapped.fromUpdate) ||
 				(wrapped.kind == diffInsert && wrapped.fromUpdate)) &&
 			wrapped.batch.RowCount() > 0 &&
-			(baseDataHashmap.ItemCount() > 0 || tblStuff.lcaHasZeroHistory && wrapped.fromUpdate) {
+			(baseDataHashmap.ItemCount() > 0 || wrapped.fromUpdate &&
+				(tblStuff.lcaHasZeroHistory || copt.protectMissingPickHistory && len(forkHistory.forks) != 0)) {
 			stop, err := reconcilePickWindowDestinationInsert(ctx, ses, bh, baseProbeStuff, tarProbeStuff,
-				copt, emit, wrapped, baseDataHashmap, inheritedAt)
+				copt, emit, wrapped, baseDataHashmap, inheritedAt, &forkHistory)
 			if stop || err != nil || wrapped.batch.RowCount() == 0 {
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return err
@@ -1999,7 +2001,7 @@ func hashDiffIfHasLCA(
 // deletes and window replacements before emitting their writes.
 func reconcilePickWindowDestinationInsert(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables, sourceBefore tableStuff, copt compositeOption,
-	emit emitFunc, src batchWithKind, baseDataHashmap databranchutils.BranchHashmap, inheritedAt types.TS,
+	emit emitFunc, src batchWithKind, baseDataHashmap databranchutils.BranchHashmap, inheritedAt types.TS, forkHistory *pickForkHistory,
 ) (bool, error) {
 	var matches *batch.Batch
 	defer func() {
@@ -2025,7 +2027,9 @@ func reconcilePickWindowDestinationInsert(
 	if err != nil {
 		return false, err
 	}
-	if tables.lcaHasZeroHistory && src.fromUpdate && len(srcRows) < src.batch.RowCount() {
+	protectForks := copt.protectMissingPickHistory && forkHistory != nil && len(forkHistory.forks) != 0 &&
+		tables.boundedPick && tables.def.pkKind != fakeKind
+	if (tables.lcaHasZeroHistory || protectForks) && src.fromUpdate && len(srcRows) < src.batch.RowCount() {
 		// The destination's live image has no tombstones. Use the first
 		// committed image only to distinguish a proven deletion from a key
 		// that was already absent, never to classify an existing row.
@@ -2043,8 +2047,15 @@ func reconcilePickWindowDestinationInsert(
 				}
 			}
 		}
-		if stop, err := emitPreviouslyPresentPickKeys(ctx, ses, bh, tables, missingKeys, inheritedAt, copt.protectMissingPickHistory, emit); err != nil || stop {
-			return stop, err
+		if tables.lcaHasZeroHistory {
+			if stop, err := emitPreviouslyPresentPickKeys(ctx, ses, bh, tables, missingKeys, inheritedAt, emit); err != nil || stop {
+				return stop, err
+			}
+		}
+		if protectForks && missingKeys.Length() != 0 {
+			if stop, err := forkHistory.emitMissingConflicts(ctx, ses, bh, tables, src.batch, missingKeys, emit); err != nil || stop {
+				return stop, err
+			}
 		}
 	}
 	if matches == nil {
@@ -2345,18 +2356,11 @@ func probePickKeyMembership(
 
 func emitPreviouslyPresentPickKeys(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
-	keys *vector.Vector, creation types.TS, protect bool, emit emitFunc,
+	keys *vector.Vector, creation types.TS, emit emitFunc,
 ) (bool, error) {
 	starts := append([]dataBranchPickWindowStart{
 		{tableID: tables.baseRel.GetTableID(ctx), snapshot: creation, identity: tables.resolvedLCAIdentity(ctx, ses)},
 	}, tables.zeroHistoryBaseStarts...)
-	// The earliest visible destination generation can be a descendant of
-	// the fork. Validate its primary key before interpreting fork bytes.
-	oldest := starts[0].tableID
-	if len(tables.zeroHistoryBaseStarts) != 0 {
-		oldest = tables.zeroHistoryBaseStarts[0].tableID
-	}
-	var compatibleForkKey bool
 	proof := newDataBranchRenameProof(tables.pickForkColumns)
 	emitDeletion := func(prior *batch.Batch) (bool, error) {
 		return emitBatch(emit, batchWithKind{
@@ -2373,9 +2377,6 @@ func emitPreviouslyPresentPickKeys(
 		if prior == nil {
 			continue
 		}
-		if start.tableID == oldest {
-			compatibleForkKey = true
-		}
 		if prior.RowCount() == 0 {
 			tables.retPool.releaseRetBatch(prior, false)
 			continue
@@ -2384,6 +2385,7 @@ func emitPreviouslyPresentPickKeys(
 			return stop, err
 		}
 		if len(missing) == 0 {
+			keys.CleanOnlyData()
 			return false, nil
 		}
 		if err = keys.Shrink(missing, false, ses.proc.Mp()); err != nil {
@@ -2391,45 +2393,7 @@ func emitPreviouslyPresentPickKeys(
 		}
 	}
 
-	fork := tables.zeroHistoryBaseFork
-	source := tables.zeroHistorySourceStart
-	if !protect || !tables.boundedPick || fork.tableID == 0 || source.tableID == 0 || !compatibleForkKey || tables.def.pkKind == fakeKind {
-		return false, nil
-	}
-	// Only consider keys from the source's initial committed state. A key
-	// added later on the source and updated in the window is a source-only
-	// addition relative to the fork.
-	prior, _, err := probePickKeyMembership(ctx, ses, bh, tables, keys, source,
-		tables.pickSourceDefs, tables.pickSourceEdges, proof)
-	if err != nil || prior == nil {
-		return false, err
-	}
-	transfer := false
-	defer func() {
-		if !transfer {
-			tables.retPool.releaseRetBatch(prior, false)
-		}
-	}()
-	if prior.RowCount() == 0 {
-		return false, nil
-	}
-
-	found, recorded, err := lookupDataBranchForkKeys(ctx, ses, bh, fork, prior.Vecs[tables.def.pkColIdx],
-		tables.def.pkKind == compositeKind)
-	if err != nil {
-		return false, err
-	}
-	if !recorded {
-		return false, moerr.NewNotSupportedNoCtx("DATA BRANCH PICK cannot distinguish an inherited deletion from an absent key without fork history")
-	}
-	if len(found) == 0 {
-		return false, nil
-	}
-	if err = prior.Shrink(found, false, ses.proc.Mp()); err != nil {
-		return false, err
-	}
-	transfer = true
-	return emitDeletion(prior)
+	return false, nil
 }
 
 func hashDiffIfNoLCA(
