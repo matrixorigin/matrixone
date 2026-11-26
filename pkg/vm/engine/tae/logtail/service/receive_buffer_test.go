@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -88,6 +89,10 @@ func TestLogtailClientReceiveFailureReturnsBuffer(t *testing.T) {
 				_, err := client.Receive(ctx)
 				done <- err
 			}()
+			// Fail only once the response is part way through reassembly,
+			// in its buffer.
+			require.Eventually(t, func() bool { return mp.CurrNB() > 0 },
+				10*time.Second, time.Millisecond)
 			fail(cancel, recvC)
 			require.Error(t, <-done)
 			cancel()
