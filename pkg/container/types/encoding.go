@@ -857,6 +857,23 @@ func WriteFull(w io.Writer, data []byte) error {
 	return nil
 }
 
+// BorrowingWriter is a writer that can keep a reference to a buffer
+// instead of copying it.
+type BorrowingWriter interface {
+	// WriteBorrowed writes data, which the writer may retain: the caller
+	// keeps data unchanged until the writer's output has been consumed.
+	WriteBorrowed(data []byte) error
+}
+
+// WriteBorrowed writes data, by reference when w is a BorrowingWriter. Pass
+// only buffers that outlive the write, such as a vector's own data.
+func WriteBorrowed(w io.Writer, data []byte) error {
+	if borrowing, ok := w.(BorrowingWriter); ok {
+		return borrowing.WriteBorrowed(data)
+	}
+	return WriteFull(w, data)
+}
+
 func ReadInt32AsInt(r io.Reader) (int, error) {
 	var buf [4]byte
 	if _, err := io.ReadFull(r, buf[:]); err != nil {

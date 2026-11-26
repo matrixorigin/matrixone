@@ -50,7 +50,7 @@ func TestClusterReplayDispatcherBindsCatalogGeneration(t *testing.T) {
 	// catalog bootstrap/column publication boundary. No batch name declares it.
 	installClusterReplaySchema(t, item, "")
 	input, inputAttrs, _ := clusterReplaySpecBatch(t, mp, packer, []clusterRowSpec{{device: 0, metric: 0, tsOrdinal: 18, value: 19}}, 5, 0, clusterReplayBatchOptions{})
-	frame := &logtail.TableLogtail{Table: &api.TableID{AccId: 7, DbId: 10, TbId: 22, TbName: "metrics", DbName: "db"}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 22, TableName: "metrics", Attrs: inputAttrs, Bat: input}}}
+	frame := &logtail.TableLogtail{Table: &api.TableID{AccId: 7, DbId: 10, TbId: 22, TbName: "metrics", DbName: "db"}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: 22, TableName: "metrics", Attrs: inputAttrs, Bat: api.NewEncodedBatch(input)}}}
 	through := types.BuildTS(20, 0).ToTimestamp()
 	require.Nil(t, eng.captureReplayClusterKey(frame, through), "bootstrap is not complete")
 	eng.pClient.dcaConfirmAndApply()

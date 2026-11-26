@@ -35,7 +35,7 @@ func BenchmarkPartitionStateHandleRowsInsert(b *testing.B) {
 	packer := types.NewPacker()
 	b.Cleanup(packer.Close)
 	ctx := context.Background()
-	entry := &api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: attrs, Bat: input}
+	entry := &api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: attrs, Bat: api.NewEncodedBatch(input)}
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -169,7 +169,7 @@ func BenchmarkTombstoneObjectReplayWithUnrelatedDeletes(b *testing.B) {
 						b.StartTimer()
 					}
 					if mode.live {
-						state.HandleTombstoneObjectList(ctx, &api.Entry{Bat: live}, nil, pool)
+						state.HandleTombstoneObjectList(ctx, &api.Entry{Bat: api.NewEncodedBatch(live)}, nil, pool)
 					} else {
 						if err := state.HandleObjectEntry(ctx, nil, entry, true); err != nil {
 							b.Fatal(err)

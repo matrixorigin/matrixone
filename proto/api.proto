@@ -240,7 +240,12 @@ message Entry {
     repeated string attrs = 11;
     // bat is the batch in its batch.MarshalBinary encoding. Entries travel
     // only between the CN and TN of one cluster and are never persisted.
-    bytes bat = 12;
+    // EncodedBatch lets the encoder borrow the vectors' buffers, so the
+    // payload is copied once, into the message.
+    bytes bat = 12 [
+        (gogoproto.customtype) = "EncodedBatch",
+        (gogoproto.nullable) = false
+    ];
 };
 
 // For AlterTable

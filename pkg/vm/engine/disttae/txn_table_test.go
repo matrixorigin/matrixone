@@ -123,7 +123,7 @@ func TestTxnTableWriteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				require.NoError(t, err)
 				req, remaining, err := catalog.ParseEntryList([]*api.Entry{{
 					EntryType: api.Entry_Insert, DatabaseId: catalog.MO_CATALOG_ID,
-					TableId: catalog.MO_COLUMNS_ID, TableName: tc.want, Attrs: batAttrs, Bat: encoded,
+					TableId: catalog.MO_COLUMNS_ID, TableName: tc.want, Attrs: batAttrs, Bat: api.NewEncodedBatch(encoded),
 				}})
 				require.NoError(t, err)
 				require.Equal(t, tc.want, req.(*api.Entry).TableName)
@@ -173,7 +173,7 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				TableId:    catalog.MO_COLUMNS_ID,
 				TableName:  txn.writes[0].tableName,
 				Attrs:      batAttrs,
-				Bat:        encoded,
+				Bat:        api.NewEncodedBatch(encoded),
 			}})
 			require.NoError(t, err)
 			require.Equal(t, txn.writes[0].tableName, req.(*api.Entry).TableName)
@@ -184,7 +184,7 @@ func TestTxnTableDeleteObjectStatsUsesAuthorizedTableName(t *testing.T) {
 				TableId:    catalog.MO_COLUMNS_ID,
 				TableName:  catalog.MO_COLUMNS,
 				Attrs:      batAttrs,
-				Bat:        encoded,
+				Bat:        api.NewEncodedBatch(encoded),
 			}})
 			require.ErrorContains(t, err, "bad write format")
 			txn.writes[0].bat.Clean(txn.workspaceMP())

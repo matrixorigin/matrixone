@@ -2291,7 +2291,7 @@ func TestReplayInsertPayloadLifetime(t *testing.T) {
 			if mode == "local" {
 				state.HandleRowsInsert(t.Context(), input, attrs, 0, packer, mp)
 			} else {
-				msg := api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: attrs, Bat: input}
+				msg := api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: attrs, Bat: api.NewEncodedBatch(input)}
 				wire, err := msg.Marshal()
 				require.NoError(t, err)
 				var received api.Entry
@@ -3044,9 +3044,9 @@ func TestCheckpointDurableAppendableObjectReplay(t *testing.T) {
 			mp := mpool.MustNewZero()
 			liveProto := newReplayObjectListBatch(t, mp, entry, entry.CreateTime)
 			if tombstone {
-				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(liveProto)}, nil, mp)
 			} else {
-				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: liveProto}, nil, mp)
+				state.HandleDataObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(liveProto)}, nil, mp)
 			}
 			require.Zero(t, index.Len(), "live creation is filtered even when stats are nonzero")
 			require.NoError(t, state.HandleObjectEntry(t.Context(), nil, entry, tombstone))
@@ -3128,7 +3128,7 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 					return
 				}
 				proto := newReplayObjectListBatch(t, pool, entry, types.BuildTS(2, 0))
-				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: proto}, nil, pool)
+				state.HandleTombstoneObjectList(t.Context(), &api.Entry{Bat: api.NewEncodedBatch(proto)}, nil, pool)
 			}
 			checkRows := func(expected []types.Rowid) {
 				iter := state.NewRowsIter(types.BuildTS(10, 0), nil, true)

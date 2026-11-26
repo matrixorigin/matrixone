@@ -48,7 +48,7 @@ func TestApplyPreparedMetadataToCatalogCache(t *testing.T) {
 		EntryType:    api.Entry_Update,
 		DatabaseName: catalog.MO_CATALOG,
 		TableName:    catalog.MO_PUBS,
-		Bat:          encoded,
+		Bat:          api.NewEncodedBatch(encoded),
 	})
 
 	require.Equal(t,

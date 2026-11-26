@@ -98,7 +98,7 @@ func TestReplayAutomaticallyConfirmsNamedDelta(t *testing.T) {
 				// Re-encode: the commit timestamps changed after the fill.
 				encoded, err := batch.MarshalVectors(b.Vecs)
 				require.NoError(t, err)
-				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Attrs: attrs, Bat: encoded}}}
+				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq}, Commands: []api.Entry{{EntryType: api.Entry_Insert, TableId: id, TableName: name, DatabaseId: catalog.MO_CATALOG_ID, DatabaseName: catalog.MO_CATALOG, Attrs: attrs, Bat: api.NewEncodedBatch(encoded)}}}
 			}
 			cols, err := catalog.GenColumnsFromDefs(7, "delayed_table", "db", 90, 80, []engine.TableDef{&engine.AttributeDef{Attr: engine.Attribute{Name: "delta_column", Type: types.T_uint64.ToType()}}})
 			require.NoError(t, err)

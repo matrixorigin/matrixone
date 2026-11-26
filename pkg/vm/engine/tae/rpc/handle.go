@@ -486,7 +486,7 @@ func (h *Handle) apiEntryToWriteEntry(
 	prefetch bool,
 ) *cmd_util.WriteReq {
 
-	moBat, err := batch.ViewBinary(pe.GetBat())
+	moBat, err := batch.ViewBinary(pe.Bat.Bytes())
 	if err != nil {
 		panic(err)
 	}

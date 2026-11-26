@@ -3232,7 +3232,7 @@ func (e *Engine) captureReplayClusterKey(tail *logtail.TableLogtail, at timestam
 	}
 	candidate := false
 	for _, entry := range tail.Commands {
-		if entry.EntryType != api.Entry_Insert || entry.Bat == nil || logtailreplay.IsMetaEntry(entry.TableName) {
+		if entry.EntryType != api.Entry_Insert || entry.Bat.Len() == 0 || logtailreplay.IsMetaEntry(entry.TableName) {
 			continue
 		}
 		for _, attr := range entry.Attrs {

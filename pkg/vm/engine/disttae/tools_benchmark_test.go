@@ -47,7 +47,7 @@ func TestToPBEntryPreservesRepresentation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, api.Entry_Alter, pb.EntryType)
 	require.Equal(t, batAttrs, pb.Attrs)
-	rows, err := batch.EncodedRowCount(pb.Bat)
+	rows, err := batch.EncodedRowCount(pb.Bat.Bytes())
 	require.NoError(t, err)
 	require.Equal(t, 1, rows)
 
@@ -56,7 +56,7 @@ func TestToPBEntryPreservesRepresentation(t *testing.T) {
 	clear(bat.Vecs[0].GetData())
 	clear(bat.Vecs[1].GetArea())
 
-	view, err := batch.ViewBinary(pb.Bat)
+	view, err := batch.ViewBinary(pb.Bat.Bytes())
 	require.NoError(t, err)
 	require.Len(t, view.Vecs, 4)
 	require.Equal(t, 1, view.RowCount())
@@ -72,7 +72,7 @@ func TestToPBEntryEncodesEmptyBatch(t *testing.T) {
 	pb, err := toPBEntry(Entry{typ: ALTER, bat: new(batch.Batch)})
 	require.NoError(t, err)
 	require.Nil(t, pb.Attrs)
-	view, err := batch.ViewBinary(pb.Bat)
+	view, err := batch.ViewBinary(pb.Bat.Bytes())
 	require.NoError(t, err)
 	require.Empty(t, view.Vecs)
 	require.Zero(t, view.RowCount())
@@ -89,7 +89,7 @@ func BenchmarkToPBEntry(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if len(pb.Bat) == 0 {
+				if pb.Bat.Len() == 0 {
 					b.Fatal("empty encoding")
 				}
 			}

@@ -66,7 +66,7 @@ func TestGenWriteReqsValidatesCreatedDatabaseCatalogWrites(t *testing.T) {
 		entry := cmd.EntryList[0]
 		require.Equal(t, uint64(catalog.MO_CATALOG_ID), entry.DatabaseId)
 		require.Equal(t, uint64(catalog.MO_DATABASE_ID), entry.TableId)
-		bat, err := batch.ViewBinary(entry.Bat)
+		bat, err := batch.ViewBinary(entry.Bat.Bytes())
 		require.NoError(t, err)
 		require.Equal(t, uint64(42), vector.GetFixedAtNoTypeCheck[uint64](bat.Vecs[catalog.MO_DATABASE_DAT_ID_IDX], 0))
 		require.Equal(t, "db", string(bat.Vecs[catalog.MO_DATABASE_DAT_NAME_IDX].GetBytesAt(0)))

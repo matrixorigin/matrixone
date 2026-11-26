@@ -261,7 +261,7 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 	}
 	return &api.Entry{
 		Attrs:        e.attrs,
-		Bat:          bat,
+		Bat:          api.NewEncodedBatch(bat),
 		EntryType:    typ,
 		TableId:      e.tableId,
 		DatabaseId:   e.databaseId,

@@ -209,7 +209,7 @@ func TestTransferFlowStagesOnlyObjectsDeletedInWindow(t *testing.T) {
 	liveBatch.SetRowCount(1)
 	liveEncoded, err := liveBatch.MarshalBinary()
 	require.NoError(t, err)
-	state.HandleDataObjectList(ctx, &api.Entry{Bat: liveEncoded}, nil, mp)
+	state.HandleDataObjectList(ctx, &api.Entry{Bat: api.NewEncodedBatch(liveEncoded)}, nil, mp)
 	_, exists := state.GetObject(*liveAppendableStats.ObjectShortName())
 	require.False(t, exists)
 

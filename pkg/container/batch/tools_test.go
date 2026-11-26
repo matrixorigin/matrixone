@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"testing"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
 // within reports whether part is a non-empty sub-slice of whole's memory.
@@ -186,4 +188,125 @@ func TestEncodedRowCountRejectsMalformedHeader(t *testing.T) {
 	negative := int64(-1)
 	_, err := EncodedRowCount(types.EncodeInt64(&negative))
 	require.Error(t, err)
+}
+
+// partOf reports whether some part of parts starts at buf's memory.
+func partOf(buf []byte, parts [][]byte) bool {
+	for _, part := range parts {
+		if len(part) > 0 && len(buf) > 0 && &part[0] == &buf[0] {
+			return true
+		}
+	}
+	return false
+}
+
+func newEncodeTestBatch(t *testing.T, mp *mpool.MPool, rows int) *Batch {
+	t.Helper()
+	bat := NewWithSize(5)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
+	bat.Vecs[2] = vector.NewVec(types.T_int32.ToType(), mp)
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), i%7 == 0, mp))
+		value := bytes.Repeat([]byte{byte('a' + i%26)}, types.VarlenaInlineSize+1+i%5)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], value, i%11 == 0, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int32(i), false, mp))
+	}
+	var err error
+	bat.Vecs[3], err = vector.NewConstFixed(types.T_int64.ToType(), int64(9), rows, mp)
+	require.NoError(t, err)
+	bat.Vecs[4] = vector.NewConstNull(types.T_varchar.ToType(), rows, mp)
+	bat.SetRowCount(rows)
+	return bat
+}
+
+// Encode produces MarshalBinary's bytes, but borrows every large vector
+// buffer and the extra buffer instead of copying them.
+func TestEncodeMatchesMarshalBinaryAndBorrows(t *testing.T) {
+	for _, rows := range []int{0, 1, 3, 8192} {
+		t.Run(fmt.Sprint(rows), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			bat := newEncodeTestBatch(t, mp, rows)
+			extra := bytes.Repeat([]byte("e"), minBorrowedPart)
+			require.NoError(t, bat.SetExtraBuf(mp, extra))
+			defer func() {
+				bat.Clean(mp)
+				require.Zero(t, mp.CurrNB())
+			}()
+
+			want, err := bat.MarshalBinary()
+			require.NoError(t, err)
+			encoded, err := Encode(bat)
+			require.NoError(t, err)
+			require.Equal(t, len(want), encoded.Len())
+			require.Equal(t, want, encoded.Bytes())
+			wire, err := encoded.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, want, wire)
+
+			var w partsWriter
+			require.NoError(t, bat.MarshalBinaryTo(&w))
+			parts := w.finish()
+			require.True(t, partOf(bat.ExtraBuf(), parts), "extra buffer is borrowed")
+			for i, vec := range bat.Vecs[:3] {
+				for _, buf := range [][]byte{vec.GetData(), vec.GetArea()} {
+					if len(buf) >= minBorrowedPart {
+						require.True(t, partOf(buf, parts), "vector %d buffer is borrowed", i)
+					} else if len(buf) > 0 {
+						require.False(t, partOf(buf, parts), "vector %d small buffer is copied", i)
+					}
+				}
+			}
+
+			// The borrowed bytes are the vectors': a change before marshaling
+			// shows in the encoding.
+			if rows == 8192 {
+				vector.MustFixedColNoTypeCheck[int32](bat.Vecs[2])[1] = -1
+				changed, err := bat.MarshalBinary()
+				require.NoError(t, err)
+				require.Equal(t, changed, encoded.Bytes())
+			}
+		})
+	}
+}
+
+// An Entry carries the encoding through protobuf unchanged, and the decoded
+// entry owns its copy: the wire buffer may be reused.
+func TestEncodeEntryRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := newEncodeTestBatch(t, mp, 1000)
+	defer func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	want, err := bat.MarshalBinary()
+	require.NoError(t, err)
+
+	encoded, err := EncodeVectors(bat.Vecs)
+	require.NoError(t, err)
+	entry := api.Entry{EntryType: api.Entry_Insert, TableName: "t", Attrs: []string{"a", "b", "c", "d", "e"}, Bat: encoded}
+	wire, err := entry.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, entry.ProtoSize(), len(wire))
+
+	var got api.Entry
+	require.NoError(t, got.Unmarshal(wire))
+	require.Equal(t, want, got.Bat.Bytes())
+	for i := range wire {
+		wire[i] = 0
+	}
+	require.Equal(t, want, got.Bat.Bytes())
+
+	view, err := ViewBinary(got.Bat.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, 1000, view.RowCount())
+	require.Equal(t, bat.Vecs[1].GetBytesAt(999), view.Vecs[1].GetBytesAt(999))
+
+	// An entry without a batch round-trips to an empty encoding.
+	wire, err = (&api.Entry{TableName: "t"}).Marshal()
+	require.NoError(t, err)
+	got = api.Entry{}
+	require.NoError(t, got.Unmarshal(wire))
+	require.Zero(t, got.Bat.Len())
+	require.Empty(t, got.Bat.Bytes())
 }

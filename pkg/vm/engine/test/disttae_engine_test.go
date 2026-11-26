@@ -358,7 +358,7 @@ func TestLogtailBasic(t *testing.T) {
 	// viewEntry decodes e's batch as read-only views of e.Bat, one vector
 	// per attr.
 	viewEntry := func(e *api.Entry) *batch.Batch {
-		bat, err := batch.ViewBinary(e.Bat)
+		bat, err := batch.ViewBinary(e.Bat.Bytes())
 		require.NoError(t, err)
 		require.Equal(t, len(e.Attrs), len(bat.Vecs))
 		return bat
@@ -519,7 +519,7 @@ func TestAlterTableBasic(t *testing.T) {
 		Table:  &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: catalog.MO_TABLES_ID},
 	}, true)
 
-	bat, err := batch.ViewBinary(resp.Commands[2].Bat)
+	bat, err := batch.ViewBinary(resp.Commands[2].Bat.Bytes())
 	require.NoError(t, err)
 	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())

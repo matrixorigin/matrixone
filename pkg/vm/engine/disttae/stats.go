@@ -1069,7 +1069,7 @@ func (gs *GlobalStats) processLogtail(ctx context.Context, tail *logtail.TableLo
 	metaChanges := 0
 	for i := range tail.Commands {
 		if cmd := tail.Commands[i]; cmd.EntryType == api.Entry_DataObject || logtailreplay.IsMetaEntry(tail.Commands[i].TableName) {
-			if rows, err := batch.EncodedRowCount(tail.Commands[i].Bat); err == nil {
+			if rows, err := batch.EncodedRowCount(tail.Commands[i].Bat.Bytes()); err == nil {
 				metaChanges += rows
 			}
 		}

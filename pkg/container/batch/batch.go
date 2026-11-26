@@ -236,7 +236,7 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	if err := writeBatchMarshalInt32(w, extraSize); err != nil {
 		return err
 	}
-	if err := types.WriteFull(w, bat.extraBuf); err != nil {
+	if err := types.WriteBorrowed(w, bat.extraBuf); err != nil {
 		return err
 	}
 

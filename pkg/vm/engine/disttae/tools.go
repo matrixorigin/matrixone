@@ -199,7 +199,9 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		ebat = e.bat
 		eattrs = e.attrs
 	}
-	bat, err := batch.MarshalVectors(ebat.Vecs)
+	// The entry borrows the workspace vectors, which stay unchanged until the
+	// commit request has been marshaled.
+	bat, err := batch.EncodeVectors(ebat.Vecs)
 	if err != nil {
 		return nil, err
 	}

@@ -217,7 +217,7 @@ func makeBenchmarkPayload(entryCount int) []byte {
 		entries[i] = &api.Entry{
 			PkCheckByTn: int32(i % 2),
 			Attrs:       []string{"a", "b", "c", "d"},
-			Bat:         bat,
+			Bat:         api.NewEncodedBatch(bat),
 		}
 	}
 	payload, err := (&api.PrecommitWriteCmd{EntryList: entries}).MarshalBinary()

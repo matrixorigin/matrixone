@@ -133,9 +133,9 @@ func (w *wireBatch) encode() []byte {
 
 // editWire decodes e.Bat, applies edit and re-encodes it.
 func editWire(e *api.Entry, edit func(*wireBatch)) {
-	w := decodeWireBatch(e.Bat)
+	w := decodeWireBatch(e.Bat.Bytes())
 	edit(w)
-	e.Bat = w.encode()
+	e.Bat = api.NewEncodedBatch(w.encode())
 }
 
 func mustWireVector(vec *vector.Vector) wireVector {
@@ -162,7 +162,7 @@ func TestParseError(t *testing.T) {
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_TABLES_ID,
 			Attrs:      slices.Clone(MoTablesSchema),
-			Bat:        mustMarshalBatch(bat1),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat1)),
 		}
 		_, _, err := ParseEntryList([]*api.Entry{e})
 		t.Log(err)
@@ -187,7 +187,7 @@ func TestParseError(t *testing.T) {
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_COLUMNS_ID,
 			Attrs:      slices.Clone(MoColumnsSchema),
-			Bat:        mustMarshalBatch(bat2),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat2)),
 		}
 
 		_, _, err := ParseEntryList([]*api.Entry{e2})
@@ -201,7 +201,7 @@ func TestParseError(t *testing.T) {
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_TABLES_ID,
 			Attrs:      slices.Clone(MoTablesSchema),
-			Bat:        mustMarshalBatch(bat1),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat1)),
 		}
 		typ := types.T_int64.ToType()
 		typBytes, _ := types.Encode(&typ)
@@ -223,7 +223,7 @@ func TestParseError(t *testing.T) {
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    100000, // bad target table id
 			Attrs:      slices.Clone(MoColumnsSchema),
-			Bat:        mustMarshalBatch(bat2),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat2)),
 		}
 		_, _, err := ParseEntryList([]*api.Entry{e1, e2})
 		require.Error(t, err) // mismatched column batch
@@ -242,7 +242,7 @@ func TestParseError(t *testing.T) {
 			DatabaseId: MO_CATALOG_ID,
 			TableId:    MO_COLUMNS_ID,
 			Attrs:      slices.Clone(MoColumnsSchema),
-			Bat:        mustMarshalBatch(bat2),
+			Bat:        api.NewEncodedBatch(mustMarshalBatch(bat2)),
 		}
 		_, _, err = ParseEntryList([]*api.Entry{e1, e3})
 		t.Log(err)
@@ -268,7 +268,7 @@ func TestParseMoColumnsUpdateEntry(t *testing.T) {
 		DatabaseId: MO_CATALOG_ID,
 		TableId:    MO_COLUMNS_ID,
 		TableName:  MO_COLUMNS_UPDATE,
-		Bat:        []byte{},
+		Bat:        api.NewEncodedBatch([]byte{}),
 	}
 
 	req, remaining, err := ParseEntryList([]*api.Entry{e})
@@ -319,7 +319,7 @@ func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
 			TableId:    MO_DATABASE_ID,
 			// Tests mutate the names; never alias the shared schema slices.
 			Attrs: slices.Clone(attrs),
-			Bat:   mustMarshalBatch(bat),
+			Bat:   api.NewEncodedBatch(mustMarshalBatch(bat)),
 		}
 	}
 	// nameIdx is the datname column, a varchar longer than the inline limit.
@@ -355,9 +355,9 @@ func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
 
 		// The wire helpers below round-trip an untouched encoding exactly,
 		// so each rejection comes from its mutation alone.
-		original := slices.Clone(e.Bat)
+		original := slices.Clone(e.Bat.Bytes())
 		editWire(e, func(*wireBatch) {})
-		require.Equal(t, original, e.Bat)
+		require.Equal(t, original, e.Bat.Bytes())
 
 		// Two valid rows parse; "invalid later row" differs only by its null.
 		editWire(e, func(w *wireBatch) {
@@ -376,8 +376,8 @@ func TestParseDatabaseEntryRejectsMalformedTuple(t *testing.T) {
 		name   string
 		mutate func(*api.Entry)
 	}{
-		{"nil batch", func(e *api.Entry) { e.Bat = nil }},
-		{"truncated batch", func(e *api.Entry) { e.Bat = e.Bat[:len(e.Bat)-1] }},
+		{"nil batch", func(e *api.Entry) { e.Bat = api.EncodedBatch{} }},
+		{"truncated batch", func(e *api.Entry) { data := e.Bat.Bytes(); e.Bat = api.NewEncodedBatch(data[:len(data)-1]) }},
 		{"generic DML delete", func(e *api.Entry) {
 			editWire(e, func(w *wireBatch) { w.vecs = w.vecs[:2] })
 			e.Attrs = e.Attrs[:2]

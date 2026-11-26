@@ -1323,7 +1323,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 			if p.normalizedVarlenData != nil {
 				data = p.normalizedVarlenData
 			}
-			if err := types.WriteFull(w, data); err != nil {
+			if err := types.WriteBorrowed(w, data); err != nil {
 				return err
 			}
 		}
@@ -1339,12 +1339,12 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 					continue
 				}
 				offset, length := descriptor.OffsetLen()
-				if err := types.WriteFull(w, v.area[offset:offset+length]); err != nil {
+				if err := types.WriteBorrowed(w, v.area[offset:offset+length]); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := types.WriteFull(w, v.area); err != nil {
+			if err := types.WriteBorrowed(w, v.area); err != nil {
 				return err
 			}
 		}

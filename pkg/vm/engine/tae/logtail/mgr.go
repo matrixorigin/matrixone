@@ -56,7 +56,7 @@ func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail
 	for _, tail := range tails {
 		s = fmt.Sprintf("%s\nts %v, dbid %d, tid %d,entries cnt %d", s, tail.Ts, tail.Table.DbId, tail.Table.TbId, len(tail.Commands))
 		for _, entry := range tail.Commands {
-			bat, err := batch.ViewBinary(entry.Bat)
+			bat, err := batch.ViewBinary(entry.Bat.Bytes())
 			if err != nil {
 				s = fmt.Sprintf("%s\n    db name %s, table name %s: %v", s, entry.DatabaseName, entry.TableName, err)
 				continue

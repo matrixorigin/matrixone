@@ -398,7 +398,7 @@ func (p *PartitionState) GetEnd() types.TS {
 }
 
 func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
-	data, _ := batch.ViewBinary(entry.Bat)
+	data, _ := batch.ViewBinary(entry.Bat.Bytes())
 	logutil.Info(
 		msg,
 		zap.String("table-name", entry.TableName),
@@ -682,14 +682,14 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			p.HandleRowsInsert(ctx, entry.Bat, entry.Attrs, primarySeqnum, packer, pool, keys...)
+			p.HandleRowsInsert(ctx, entry.Bat.Bytes(), entry.Attrs, primarySeqnum, packer, pool, keys...)
 		}
 
 	case api.Entry_Delete:
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-MEM-DEL")
 		}
-		p.HandleRowsDelete(ctx, entry.Bat, packer, pool)
+		p.HandleRowsDelete(ctx, entry.Bat.Bytes(), packer, pool)
 	case api.Entry_DataObject:
 		if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 			p.LogEntry(entry, "INJECT-TRACE-PS-OBJ-INS")
@@ -715,7 +715,7 @@ func (p *PartitionState) HandleDataObjectList(
 
 	var numDeleted, blockDeleted int64
 
-	objBat := mustViewEntryBatch(ee.Bat)
+	objBat := mustViewEntryBatch(ee.Bat.Bytes())
 	statsVec := objBat.Vecs[2]
 	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
 	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])
@@ -825,7 +825,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 	var clusterPacker types.Packer
 	defer clusterPacker.Close()
 
-	objBat := mustViewEntryBatch(ee.Bat)
+	objBat := mustViewEntryBatch(ee.Bat.Bytes())
 	statsVec := objBat.Vecs[2]
 	createTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[5])
 	deleteTSCol := vector.MustFixedColWithTypeCheck[types.TS](objBat.Vecs[6])

@@ -133,7 +133,7 @@ func TestIVFFlushPreservesPartitionOwnership(t *testing.T) {
 	objectList.SetRowCount(2)
 	objects, err := batch.MarshalVectors(objectList.Vecs)
 	require.NoError(t, err)
-	after.HandleDataObjectList(ctx, &api.Entry{EntryType: api.Entry_DataObject, DatabaseId: 12, TableId: 1234, Attrs: objectListAttrs, Bat: objects}, fs, mp)
+	after.HandleDataObjectList(ctx, &api.Entry{EntryType: api.Entry_DataObject, DatabaseId: 12, TableId: 1234, Attrs: objectListAttrs, Bat: api.NewEncodedBatch(objects)}, fs, mp)
 	require.Zero(t, after.ApproxInMemRows(), "applied flush removes committed rows from the replay memtable")
 	require.Equal(t, 1, before.ApproxInMemRows(), "other replica still precedes the flush")
 

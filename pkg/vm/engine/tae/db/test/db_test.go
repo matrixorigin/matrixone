@@ -2832,7 +2832,7 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, 2, len(resp.Commands)) // data object + tombstone object
 
 	assert.Equal(t, api.Entry_DataObject, resp.Commands[0].EntryType)
-	dataObjectBat, err := batch.ViewBinary(resp.Commands[0].Bat)
+	dataObjectBat, err := batch.ViewBinary(resp.Commands[0].Bat.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, 9, dataObjectBat.Vecs[0].Length()) /* 5 create + 4 delete */
 	// start ts should not be empty
@@ -2843,7 +2843,7 @@ func TestSegDelLogtail(t *testing.T) {
 	}
 
 	assert.Equal(t, api.Entry_TombstoneObject, resp.Commands[1].EntryType)
-	tombstoneObjectBat, err := batch.ViewBinary(resp.Commands[1].Bat)
+	tombstoneObjectBat, err := batch.ViewBinary(resp.Commands[1].Bat.Bytes())
 	require.NoError(t, err)
 	assert.Equal(t, 4, tombstoneObjectBat.Vecs[0].Length()) /* 2 create + 2 delete */
 	// start ts should not be empty
@@ -6973,7 +6973,7 @@ func TestAlterFakePk(t *testing.T) {
 	assert.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)          // data insert
 	assert.Equal(t, api.Entry_Delete, resp.Commands[3].EntryType)          // data delete
 
-	dataObjectBat, err := batch.ViewBinary(resp.Commands[0].Bat)
+	dataObjectBat, err := batch.ViewBinary(resp.Commands[0].Bat.Bytes())
 	assert.NoError(t, err)
 	tnDataObjectBat := containers.NewNonNullBatchWithSharedMemory(dataObjectBat, resp.Commands[0].Attrs, common.DefaultAllocator)
 	t.Log(tnDataObjectBat.Attrs)
@@ -6982,7 +6982,7 @@ func TestAlterFakePk(t *testing.T) {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	tombstoneObjectBat, err := batch.ViewBinary(resp.Commands[1].Bat)
+	tombstoneObjectBat, err := batch.ViewBinary(resp.Commands[1].Bat.Bytes())
 	assert.NoError(t, err)
 	tnTombstoneObjectBat := containers.NewNonNullBatchWithSharedMemory(tombstoneObjectBat, resp.Commands[1].Attrs, common.DefaultAllocator)
 	t.Log(tnTombstoneObjectBat.Attrs)
@@ -6991,7 +6991,7 @@ func TestAlterFakePk(t *testing.T) {
 		assert.Equal(t, 1, v.Length())
 	}
 
-	insBat, err := batch.ViewBinary(resp.Commands[2].Bat)
+	insBat, err := batch.ViewBinary(resp.Commands[2].Bat.Bytes())
 	assert.NoError(t, err)
 	tnInsBat := containers.NewNonNullBatchWithSharedMemory(insBat, resp.Commands[2].Attrs, common.DefaultAllocator)
 	t.Log(tnInsBat.Attrs)
@@ -7001,7 +7001,7 @@ func TestAlterFakePk(t *testing.T) {
 	}
 	t.Log(tnInsBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
 
-	delBat, err := batch.ViewBinary(resp.Commands[3].Bat)
+	delBat, err := batch.ViewBinary(resp.Commands[3].Bat.Bytes())
 	assert.NoError(t, err)
 	tnDelBat := containers.NewNonNullBatchWithSharedMemory(delBat, resp.Commands[3].Attrs, common.DefaultAllocator)
 	t.Log(tnDelBat.Attrs)
@@ -7407,7 +7407,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	// its position as an unnamed constant-null placeholder.
 	placeholders := 0
 	for _, cmd := range resp.Commands[1:] {
-		decoded, err := batch.ViewBinary(cmd.Bat)
+		decoded, err := batch.ViewBinary(cmd.Bat.Bytes())
 		require.NoError(t, err)
 		require.Equal(t, len(cmd.Attrs), len(decoded.Vecs))
 		for i, attr := range cmd.Attrs {
