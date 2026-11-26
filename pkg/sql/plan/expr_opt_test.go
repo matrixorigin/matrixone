@@ -436,20 +436,29 @@ func TestLeadingCompositeRangeReachableFromSQL(t *testing.T) {
 	table := makeExprOptCompositeClusterKeyTableDef()
 	table.Name = "range_probe"
 	table.TblId = 29507
-	for i, col := range table.Cols {
-		col.Seqnum = uint32(i + 1)
+	temporalTable := makeExprOptCompositeClusterKeyTableDef()
+	temporalTable.Name = "datetime_range_probe"
+	temporalTable.TblId = 29510
+	temporalTable.Cols[0].Typ = planpb.Type{Id: int32(types.T_datetime), Scale: 6}
+	for _, def := range []*planpb.TableDef{table, temporalTable} {
+		for i, col := range def.Cols {
+			col.Seqnum = uint32(i + 1)
+		}
+		ctx.tables[def.Name] = def
+		ctx.objects[def.Name] = &planpb.ObjectRef{Obj: int64(def.TblId), ObjName: def.Name, SchemaName: "tpch"}
 	}
-	ctx.tables[table.Name] = table
-	ctx.objects[table.Name] = &planpb.ObjectRef{Obj: int64(table.TblId), ObjName: table.Name, SchemaName: "tpch"}
 	for _, tc := range []struct {
 		sql      string
+		table    *planpb.TableDef
 		readCols []string
 	}{
-		{"select a from range_probe where a >= 10 and a < 20", []string{"a"}},
-		{"select a from range_probe where a > 10", []string{"a"}},
-		{"select b from range_probe where a > 10", []string{"a", "b"}},
+		{"select a from range_probe where a >= 10 and a < 20", table, []string{"a"}},
+		{"select a from range_probe where a > 10", table, []string{"a"}},
+		{"select b from range_probe where a > 10", table, []string{"a", "b"}},
+		{"select a from datetime_range_probe where a >= now() - interval 1 minute order by a desc limit 1", temporalTable, []string{"a"}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
+			table := tc.table
 			stmt, err := mysql.ParseOne(ctx.GetContext(), tc.sql, 1)
 			require.NoError(t, err)
 			built, err := BuildPlan(ctx, stmt, false, nil)
