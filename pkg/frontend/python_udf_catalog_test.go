@@ -565,6 +565,7 @@ func TestPersistPythonCreateIdentityLookupIncludesLanguage(t *testing.T) {
 func TestPersistSQLCreateKeepsHistoricalCatalogCompatibility(t *testing.T) {
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
+	seedAccountUser(&bh.backgroundExecTest, 0, "owner")
 	bh.sql2err[functionRevisionCatalogSchemaCheck] = moerr.NewNoSuchTableNoCtx(
 		"mo_catalog", "mo_function_revisions")
 
@@ -578,10 +579,10 @@ func TestPersistSQLCreateKeepsHistoricalCatalogCompatibility(t *testing.T) {
 		dbName:   "db1",
 	}, nil)
 	require.NoError(t, err)
-	require.Len(t, bh.executedSqls, 2)
+	require.Len(t, bh.executedSqls, 3)
 	require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSqls[0])
-	require.NotContains(t, bh.executedSqls[1], "canonical_input_descriptor")
-	require.NotContains(t, bh.executedSqls[1], "mo_function_revisions")
+	require.NotContains(t, bh.executedSqls[2], "canonical_input_descriptor")
+	require.NotContains(t, bh.executedSqls[2], "mo_function_revisions")
 }
 
 func setRoutineProtocolForTest(t *testing.T, version int64) {
@@ -653,6 +654,7 @@ func TestPersistSQLCreatePublishesSharedRevisionWhenCatalogIsReady(t *testing.T)
 	setRoutineProtocolForTest(t, defines.MORPCMinVersion)
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
+	seedAccountUser(&bh.backgroundExecTest, 0, "owner")
 	bh.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
 	definition := userDefinedFunctionDefinition{
 		name:     "sql_revision",
@@ -668,19 +670,20 @@ func TestPersistSQLCreatePublishesSharedRevisionWhenCatalogIsReady(t *testing.T)
 
 	err := persistUserDefinedFunction(context.Background(), bh, &TenantInfo{User: "owner"}, 7, definition, nil)
 	require.NoError(t, err)
-	require.Len(t, bh.executedSqls, 5)
+	require.Len(t, bh.executedSqls, 6)
 	require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSqls[0])
-	require.Contains(t, bh.executedSqls[1], "insert into mo_catalog.mo_user_defined_function")
-	require.Equal(t, findSQL, bh.executedSqls[2])
-	require.Contains(t, bh.executedSqls[3], "insert into mo_catalog.mo_function_revisions")
-	require.Contains(t, bh.executedSqls[3], `"sql_revision"`)
-	require.Contains(t, bh.executedSqls[3], `"select value + 1"`)
-	require.Contains(t, bh.executedSqls[4], "active_revision = 1, namespace_version = 1")
+	require.Contains(t, bh.executedSqls[2], "insert into mo_catalog.mo_user_defined_function")
+	require.Equal(t, findSQL, bh.executedSqls[3])
+	require.Contains(t, bh.executedSqls[4], "insert into mo_catalog.mo_function_revisions")
+	require.Contains(t, bh.executedSqls[4], `"sql_revision"`)
+	require.Contains(t, bh.executedSqls[4], `"select value + 1"`)
+	require.Contains(t, bh.executedSqls[5], "active_revision = 1, namespace_version = 1")
 }
 
 func TestPersistPythonCreatePublishesInvokerSecurityType(t *testing.T) {
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
+	seedAccountUser(&bh.backgroundExecTest, 0, "current_owner")
 	body := pythonCatalogTestBody(t, types.T_int64)
 	decoded, err := function.DecodePythonRoutineBody(body)
 	require.NoError(t, err)
@@ -707,8 +710,9 @@ func TestPersistPythonCreatePublishesInvokerSecurityType(t *testing.T) {
 
 	err = persistUserDefinedFunction(context.Background(), bh, &TenantInfo{User: "owner"}, 7, definition, nil)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(bh.executedSqls), 1)
-	require.Contains(t, bh.executedSqls[0], `"FUNCTION","INVOKER"`)
+	require.GreaterOrEqual(t, len(bh.executedSqls), 2)
+	require.Contains(t, bh.executedSqls[1], `,'current_owner',`)
+	require.Contains(t, bh.executedSqls[1], `"FUNCTION","INVOKER"`)
 	for _, sql := range bh.executedSqls {
 		if strings.Contains(sql, "mo_function_revisions") {
 			require.Contains(t, sql, `"python_invoker"`)
@@ -799,6 +803,7 @@ func TestPublishRestoredPythonArtifactsRejectsMissingArtifactStore(t *testing.T)
 func TestPersistSQLReplacePublishesNextImmutableRevision(t *testing.T) {
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
+	seedAccountUser(&bh.backgroundExecTest, 0, "owner")
 	bh.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
 	functionID := int64(92)
 	bh.sql2result[fmt.Sprintf(
@@ -827,13 +832,13 @@ func TestPersistSQLReplacePublishesNextImmutableRevision(t *testing.T) {
 		dbName:   "db1",
 	}, &functionID)
 	require.NoError(t, err)
-	require.Len(t, bh.executedSqls, 6)
+	require.Len(t, bh.executedSqls, 7)
 	require.Equal(t, functionRevisionCatalogSchemaCheck, bh.executedSqls[0])
-	require.Contains(t, bh.executedSqls[3], "retType = 'varchar'")
-	require.Contains(t, bh.executedSqls[4], "function_id, revision, namespace_version")
-	require.Contains(t, bh.executedSqls[4], ", 3, 6,")
-	require.Contains(t, bh.executedSqls[4], "\"varchar\", \"select value + 2\"")
-	require.Contains(t, bh.executedSqls[5], "active_revision = 3, namespace_version = 6")
+	require.Contains(t, bh.executedSqls[4], "retType = 'varchar'")
+	require.Contains(t, bh.executedSqls[5], "function_id, revision, namespace_version")
+	require.Contains(t, bh.executedSqls[5], ", 3, 6,")
+	require.Contains(t, bh.executedSqls[5], "\"varchar\", \"select value + 2\"")
+	require.Contains(t, bh.executedSqls[6], "active_revision = 3, namespace_version = 6")
 }
 
 func TestReadSQLRevisionBindsActiveHeadAndRejectsTampering(t *testing.T) {

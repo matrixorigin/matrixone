@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
@@ -55,11 +56,12 @@ func newDiskObjectStorage(
 	if err != nil {
 		return nil, err
 	}
-
-	if err := os.MkdirAll(path, 0755); err != nil {
-		if !os.IsExist(err) {
+	if strings.EqualFold(args.Name, defines.SharedFileServiceName) {
+		if err := ensureDurableLocalRoot(path, (*os.File).Sync); err != nil {
 			return nil, err
 		}
+	} else if err := os.MkdirAll(path, 0755); err != nil && !os.IsExist(err) {
+		return nil, err
 	}
 
 	return &diskObjectStorage{

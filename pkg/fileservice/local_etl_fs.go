@@ -43,12 +43,9 @@ type LocalETLFS struct {
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
-	rootPath, rootFile, err := prepareLocalRoot(rootPath)
+	rootPath, err := prepareLocalRoot(name, rootPath)
 	if err != nil {
 		return nil, err
-	}
-	if rootFile != nil {
-		defer rootFile.Close()
 	}
 
 	// resolve symlinks in the path to get the canonical path

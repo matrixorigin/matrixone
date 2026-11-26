@@ -474,7 +474,7 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 	require.Contains(t, bh.executedSQLs[5], "update mo_catalog.mo_user_defined_function set active_revision")
 	// SQL literal quoting is an implementation detail of EscapeFormat; preserve
 	// the behavior under test rather than coupling this regression to its style.
-	require.Contains(t, bh.executedSQLs[1], "PIPES_AS_CONCAT")
+	require.Contains(t, bh.executedSQLs[2], "PIPES_AS_CONCAT")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
 	failingBase := &backgroundExecTest{}
@@ -550,6 +550,7 @@ func TestRestoreCloneDatabasePythonRoutineRepublishesTargetArtifact(t *testing.T
 	findSQL := `select function_id from mo_catalog.mo_user_defined_function where name = "cloned_python" and db = "target_db" and canonical_input_descriptor = "` + escapeSQLStringForDoubleQuotes(inputDescriptor) + `" and language = 'python' order by function_id desc limit 1;`
 	background := &backgroundExecTest{}
 	background.init()
+	seedAccountUser(background, 0, "root1")
 	background.sql2result[findSQL] = singleInt64Result("function_id", 97)
 	fs, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
@@ -557,8 +558,8 @@ func TestRestoreCloneDatabasePythonRoutineRepublishesTargetArtifact(t *testing.T
 	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(
 		ctx, background, tenant, []userDefinedFunctionDefinition{definition}, "target_db", fs,
 	))
-	require.Contains(t, background.executedSQLs[0], `"cloned_python"`)
-	require.Contains(t, background.executedSQLs[0], `"target_db"`)
+	require.Contains(t, background.executedSQLs[1], `"cloned_python"`)
+	require.Contains(t, background.executedSQLs[1], `"target_db"`)
 	store, err := pythonudf.NewFileArtifactStore(fs, pythonudf.DefaultMaxArtifactBytes)
 	require.NoError(t, err)
 	resolved, err := store.Resolve(ctx, uint64(accountID), decoded.Handler, decoded.ArtifactDigest)

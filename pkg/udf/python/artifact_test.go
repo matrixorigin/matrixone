@@ -57,13 +57,22 @@ func TestFileArtifactStorePublishesBelowSearchOnlyAncestor(t *testing.T) {
 			alias := filepath.Join(base, "configured-root")
 			require.NoError(t, os.Symlink(root, alias))
 			t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0700)) })
-			require.NoError(t, os.Chmod(parent, 0100))
+			require.NoError(t, os.Chmod(parent, 0300))
 			f, err := os.Open(parent)
 			if err == nil {
 				require.NoError(t, f.Close())
 				t.Skip("test user can open a directory without read permission")
 			}
 			require.ErrorIs(t, err, os.ErrPermission)
+
+			missing := filepath.Join(parent, "new", "storage")
+			unprovisioned, err := backend.open(missing)
+			if err == nil {
+				unprovisioned.Close(context.Background())
+			}
+			require.ErrorIs(t, err, os.ErrPermission)
+			_, err = os.Stat(filepath.Dir(missing))
+			require.ErrorIs(t, err, os.ErrNotExist, "failed provisioning must not create a parent")
 
 			fs, err := backend.open(alias)
 			require.NoError(t, err)

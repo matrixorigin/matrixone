@@ -73,8 +73,8 @@ func linkLocalFile(tempPath, nativePath, logicalPath string) error {
 // SyncLocalFileForPublication makes an immutable local object durable before a
 // caller publishes a reference to it. A visible link can survive a failed
 // directory sync, so this also applies to retries that find the object.
-// The configured storage root is the durability boundary. The root's entry
-// in its parent directory belongs to storage provisioning.
+// Local shared-service constructors establish the configured root. Publication
+// syncs the file and its directories within that root.
 // Non-local services retain their own persistence semantics.
 func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath string) error {
 	if sub, ok := fs.(*subPathFS); ok {

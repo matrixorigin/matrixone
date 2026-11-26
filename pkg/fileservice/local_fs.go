@@ -38,6 +38,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -108,12 +109,9 @@ func newLocalFS(
 	noChecksum bool,
 ) (*LocalFS, error) {
 
-	rootPath, rootFile, err := prepareLocalRoot(rootPath)
+	rootPath, err := prepareLocalRoot(name, rootPath)
 	if err != nil {
 		return nil, err
-	}
-	if rootFile != nil {
-		defer rootFile.Close()
 	}
 
 	fs := &LocalFS{
@@ -1260,27 +1258,101 @@ func syncLocalDir(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath str
 	return nil
 }
 
-// prepareLocalRoot keeps temporary writes on the same filesystem as their destination.
-// The caller closes the returned directory handle when its constructor returns.
-func prepareLocalRoot(rootPath string) (string, *os.File, error) {
+// prepareLocalRoot keeps temporary writes on the same filesystem as their
+// destination. The shared service also establishes its directory-entry durability.
+func prepareLocalRoot(name, rootPath string) (string, error) {
 	if rootPath == "" {
 		rootPath = "."
 	}
 	rootPath, err := filepath.Abs(rootPath)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	rootFile, err := os.Open(rootPath)
+	if strings.EqualFold(name, defines.SharedFileServiceName) {
+		return rootPath, ensureDurableLocalRoot(rootPath, (*os.File).Sync)
+	}
+	f, err := os.Open(rootPath)
 	if os.IsNotExist(err) {
-		if err := os.MkdirAll(rootPath, 0755); err != nil {
-			return "", nil, err
-		}
-		return rootPath, nil, nil
+		return rootPath, os.MkdirAll(rootPath, 0755)
 	}
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	return rootPath, rootFile, nil
+	_ = f.Close()
+	return rootPath, nil
+}
+
+func ensureDurableLocalRoot(rootPath string, syncDirectory func(*os.File) error) error {
+	existing := rootPath
+	for {
+		info, err := os.Stat(existing)
+		if err == nil {
+			if !info.IsDir() {
+				return moerr.NewInvalidPathNoCtx(existing)
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(existing) == existing {
+			return err
+		}
+		existing = filepath.Dir(existing)
+	}
+
+	// Open the parent before creating any new entries. Keep its
+	// handle until the new directory chain has been synced back to it.
+	boundary, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return err
+	}
+	anchor, err := os.Open(boundary)
+	if err != nil {
+		return err
+	}
+	defer anchor.Close()
+
+	if existing != rootPath {
+		if err := os.MkdirAll(rootPath, 0755); err != nil {
+			return err
+		}
+	}
+	resolved, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(boundary, resolved)
+	if err != nil || !filepath.IsLocal(relative) {
+		return moerr.NewInvalidPathNoCtx(rootPath)
+	}
+
+	mustSync := true
+	for dir := resolved; ; dir = filepath.Dir(dir) {
+		f := anchor
+		if dir != boundary {
+			f, err = os.Open(dir)
+			if err != nil {
+				if !mustSync && errors.Is(err, os.ErrPermission) {
+					// A search-only ancestor above the existing anchor belongs
+					// to storage provisioning. This process could not create a
+					// child there without first opening it as an anchor.
+					return nil
+				}
+				return err
+			}
+		}
+		err := syncDirectory(f)
+		if f != anchor {
+			_ = f.Close()
+		}
+		if err != nil {
+			return err
+		}
+		if filepath.Dir(dir) == dir {
+			return nil
+		}
+		// On reopen, re-sync the readable ancestors too: a previous
+		// constructor may have created an entry and then failed to sync it.
+		mustSync = mustSync && dir != boundary
+	}
 }
 
 func (l *LocalFS) toNativeFilePath(filePath string) string {

@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -180,6 +181,32 @@ func TestWriteExclusiveFilesystemAliases(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	require.NoError(t, err)
 	require.Equal(t, "winner", string(data))
+}
+
+func TestEnsureDurableLocalRootRetriesAncestorSync(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	parent := filepath.Join(base, "new-parent")
+	root := filepath.Join(parent, "storage")
+	syncFailure := errors.New("directory sync failed")
+	for _, fail := range []bool{true, true, false} {
+		var dirs []string
+		err := ensureDurableLocalRoot(root, func(dir *os.File) error {
+			dirs = append(dirs, dir.Name())
+			if fail && dir.Name() == base {
+				return syncFailure
+			}
+			return dir.Sync()
+		})
+		require.GreaterOrEqual(t, len(dirs), 3)
+		require.Equal(t, []string{root, parent, base}, dirs[:3])
+		if fail {
+			require.ErrorIs(t, err, syncFailure)
+			require.DirExists(t, root, "a failed directory sync can leave the root visible")
+		} else {
+			require.NoError(t, err)
+		}
+	}
 }
 
 func TestSyncLocalFileForPublicationResolvesWithinRoot(t *testing.T) {
