@@ -327,6 +327,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleGetTruncatedIndex(ctx, req), pb.LogRecordResponse{}
 	case pb.UPDATE_LEASEHOLDER_ID:
 		return s.handleUpdateLeaseholderID(ctx, req), pb.LogRecordResponse{}
+	case pb.CLAIM_TN_LEASE:
+		return s.handleClaimTNLease(ctx, req), pb.LogRecordResponse{}
 	case pb.CONNECT:
 		return s.handleConnect(ctx, req), pb.LogRecordResponse{}
 	case pb.CONNECT_RO:
@@ -439,6 +441,50 @@ func (s *Service) handleUpdateLeaseholderID(ctx context.Context, req pb.Request)
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
+}
+
+func (s *Service) handleClaimTNLease(ctx context.Context, req pb.Request) pb.Response {
+	r := req.LogRequest
+	resp := getResponse(req)
+	if err := s.claimTNLease(ctx, r.ShardID, r.TNID); err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+	}
+	return resp
+}
+
+func (s *Service) claimTNLease(ctx context.Context, shardID, replicaID uint64) error {
+	if replicaID == 0 {
+		return moerr.NewBadConfigNoCtx("TN writer lease requires a replica ID")
+	}
+	// Standalone tests may run a Log shard without a HAKeeper.
+	if s.cfg.DisableWorkers && atomic.LoadUint64(&s.store.haKeeperReplicaID) == 0 {
+		return s.store.getOrExtendTNLease(ctx, shardID, replicaID)
+	}
+	state, err := s.getTNLeaseCheckerState(ctx)
+	if err != nil {
+		s.runtime.Logger().Warn("failed to read the TN WAL assignment", zap.Error(err))
+		return moerr.NewNoHAKeeper(ctx)
+	}
+	assignment := state.TNWALAssignments[shardID]
+	if assignment.Epoch != 0 && assignment.ReplicaID != replicaID {
+		return moerr.NewNotLeaseHolder(ctx, assignment.ReplicaID)
+	}
+	return s.store.proposeTNLease(ctx, shardID, getTNLeaseClaimCmd(replicaID, assignment.Epoch))
+}
+
+func (s *Service) getTNLeaseCheckerState(ctx context.Context) (*pb.CheckerState, error) {
+	if atomic.LoadUint64(&s.store.haKeeperReplicaID) != 0 {
+		if state, err := s.store.getCheckerStateWithContext(ctx); err == nil {
+			return state, nil
+		}
+	}
+	client, err := NewClusterHAKeeperClient(ctx, s.cfg.UUID, s.cfg.GetHAKeeperClientConfig())
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	state, err := client.GetClusterState(ctx)
+	return &state, err
 }
 
 func (s *Service) handleConnect(ctx context.Context, req pb.Request) pb.Response {

@@ -169,12 +169,13 @@ func NewTNWriterClientFactory(sid string, cfg ClientConfig, timeout time.Duratio
 			err = moerr.AttachCause(ctx, ctx.Err())
 		} else {
 			var dispatched bool
-			dispatched, err = c.updateLeaseholderID(ctx, cfg.TNReplicaID)
+			_, _, dispatched, err = c.requestWithDispatch(ctx, pb.CLAIM_TN_LEASE, nil, 0, 0, time.Time{})
 			err = moerr.AttachCause(ctx, err)
-			// A missing shard rejects the proposal before enqueueing it.
+			// A missing shard or HAKeeper prevents the lease proposal.
 			// Otherwise, an RPC accepted for dispatch might have applied
 			// even when the client could not confirm the grant.
-			if dispatched && !errors.Is(err, dragonboat.ErrShardNotFound) {
+			if dispatched && !errors.Is(err, dragonboat.ErrShardNotFound) &&
+				!moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
 				claimFinished, claimErr = true, err
 			}
 		}

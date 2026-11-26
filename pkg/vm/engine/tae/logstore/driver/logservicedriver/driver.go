@@ -106,19 +106,35 @@ type LogServiceDriver struct {
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
+	d, err := OpenLogServiceDriver(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+func OpenLogServiceDriver(cfg *Config) (*LogServiceDriver, error) {
 	start := time.Now()
+	clientPool, err := openClientPool(cfg)
+	if err != nil {
+		return nil, err
+	}
 	// the tasks submitted to LogServiceDriver.workers append entries to logservice,
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
-	pool, _ := ants.NewPool(cfg.ClientMaxCount,
+	pool, err := ants.NewPool(cfg.ClientMaxCount,
 		ants.WithNonblocking(true),
 		ants.WithPanicHandler(func(v interface{}) {
 			panic(v)
 		}))
+	if err != nil {
+		clientPool.Close()
+		return nil, err
+	}
 
 	d := &LogServiceDriver{
-		clientPool:          newClientPool(cfg),
+		clientPool:          clientPool,
 		committer:           getCommitter(),
 		sequenceNumberState: newSequenceNumberState(),
 		commitWaitQueue:     make(chan any, 10000),
@@ -149,7 +165,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		zap.String("config", cfg.String()),
 		zap.Duration("duration", time.Since(start)),
 	)
-	return d
+	return d, nil
 }
 
 func (d *LogServiceDriver) GetMaxClient() int {

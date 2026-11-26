@@ -171,8 +171,9 @@ func parseTaskTableUserCmd(cmd []byte) pb.TaskTableUser {
 
 func GetUpdateCommandsCmd(term uint64, cmds []pb.ScheduleCommand) []byte {
 	b := pb.CommandBatch{
-		Term:     term,
-		Commands: cmds,
+		Term:             term,
+		Commands:         cmds,
+		AssignTNWALOwner: true,
 	}
 	data := make([]byte, headerSize+b.ProtoSize())
 	binaryEnc.PutUint32(data, uint32(pb.ScheduleCommandUpdate))
@@ -477,6 +478,21 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		if c.DeleteProxyStore != nil {
 			s.handleDeleteProxyCmd(c.UUID)
 			continue
+		}
+		if b.AssignTNWALOwner && c.ServiceType == pb.TNService && c.ConfigChange != nil &&
+			(c.ConfigChange.ChangeType == pb.StartReplica || c.ConfigChange.ChangeType == pb.AddReplica) {
+			replica := c.ConfigChange.Replica
+			if replica.LogShardID != 0 && replica.ReplicaID != 0 {
+				if s.state.TNWALAssignments == nil {
+					s.state.TNWALAssignments = make(map[uint64]pb.TNWALAssignment)
+				}
+				if s.state.TNWALAssignments[replica.LogShardID].ReplicaID != replica.ReplicaID {
+					s.state.TNWALAssignments[replica.LogShardID] = pb.TNWALAssignment{
+						ReplicaID: replica.ReplicaID,
+						Epoch:     s.state.Index,
+					}
+				}
+			}
 		}
 		l, ok := s.state.ScheduleCommands[c.UUID]
 		if !ok {
@@ -1088,6 +1104,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		IDWatermarkRestoreGeneration: s.state.IDWatermarkRestoreGeneration,
 		LogServiceRecoveryPrepared:   s.state.LogServiceRecoveryPrepared,
 		LogServiceRecoveryCompleted:  s.state.LogServiceRecoveryCompleted,
+		TNWALAssignments:             s.state.TNWALAssignments,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)

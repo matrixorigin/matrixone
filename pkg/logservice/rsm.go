@@ -92,6 +92,16 @@ func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	return cmd
 }
 
+const tnLeaseClaimSize = headerSize + 8 + 8
+
+func getTNLeaseClaimCmd(holder, epoch uint64) []byte {
+	cmd := make([]byte, tnLeaseClaimSize)
+	binaryEnc.PutUint32(cmd, uint32(pb.LeaseHolderIDUpdate))
+	binaryEnc.PutUint64(cmd[headerSize:], holder)
+	binaryEnc.PutUint64(cmd[headerSize+8:], epoch)
+	return cmd
+}
+
 func getWALRecoveryLeaseCmd(leaseHolderID, marker uint64, digest string, entryCount uint64) []byte {
 	if len(digest) != walRecoveryDigestSize {
 		panic("invalid WAL recovery digest")
@@ -243,9 +253,40 @@ func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
 		s.state.LeaseHolderID == walRecoveryLeaseHolderID {
 		return rejectedLeaseHolderResult(s.state.LeaseHolderID)
 	}
+	if len(cmd) == tnLeaseClaimSize {
+		epoch := binaryEnc.Uint64(cmd[headerSize+8:])
+		if epoch < s.state.TNLeaseEpoch {
+			return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+		}
+		if epoch == s.state.TNLeaseEpoch {
+			holder := s.state.LeaseHolderID
+			if epoch == 0 && holder == 0 {
+				// A released standby reader could clear the lease. Use the
+				// last recorded writer if its entry survived truncation.
+				// Without that entry, HAKeeper must assign a new writer.
+				holder = s.lastTNLeaseHolder()
+			}
+			if leaseHolderID != holder {
+				return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+			}
+		}
+		s.state.TNLeaseEpoch = epoch
+	} else if s.state.TNLeaseEpoch != 0 && leaseHolderID != s.state.LeaseHolderID {
+		return rejectedLeaseHolderResult(s.state.LeaseHolderID)
+	}
 	s.state.LeaseHolderID = leaseHolderID
 	s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
 	return sm.Result{}
+}
+
+func (s *stateMachine) lastTNLeaseHolder() uint64 {
+	var lastIndex, holder uint64
+	for index, id := range s.state.LeaseHistory {
+		if index > lastIndex && id != 0 && id != walRecoveryLeaseHolderID {
+			lastIndex, holder = index, id
+		}
+	}
+	return holder
 }
 
 func rejectedLeaseHolderResult(leaseHolderID uint64) sm.Result {

@@ -144,6 +144,9 @@ func NewClient(
 
 		logutil.Errorf("WAL-Replay failed to create log service client (attempt %d/%d): %v",
 			attempt+1, retryTimes, err)
+		if moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder) {
+			break
+		}
 
 		// Don't sleep after the last attempt
 		if attempt < retryTimes-1 {
@@ -252,7 +255,7 @@ type clientPool struct {
 	writeTokenController *writeTokenController
 }
 
-func newClientPool(cfg *Config) *clientPool {
+func openClientPool(cfg *Config) (*clientPool, error) {
 	maxPenddingWrites := cfg.ClientMaxCount
 	if maxPenddingWrites < DefaultMaxClient {
 		maxPenddingWrites = DefaultMaxClient
@@ -285,13 +288,25 @@ func newClientPool(cfg *Config) *clientPool {
 	}
 	wg.Wait()
 	close(results)
+	var openErr error
 	for res := range results {
 		if res.err != nil {
-			panic(res.err)
+			if openErr == nil || moerr.IsMoErrCode(res.err, moerr.ErrNotLeaseHolder) {
+				openErr = res.err
+			}
+			continue
 		}
 		pool.clients[res.idx] = res.client
 	}
-	return pool
+	if openErr != nil {
+		for _, client := range pool.clients {
+			if client != nil {
+				client.Close()
+			}
+		}
+		return nil, openErr
+	}
+	return pool, nil
 }
 
 func (c *clientPool) Close() {

@@ -840,8 +840,11 @@ func (l *store) read(ctx context.Context,
 
 func (l *store) getOrExtendTNLease(ctx context.Context,
 	shardID uint64, tnID uint64) error {
+	return l.proposeTNLease(ctx, shardID, getSetLeaseHolderCmd(tnID))
+}
+
+func (l *store) proposeTNLease(ctx context.Context, shardID uint64, cmd []byte) error {
 	session := l.nh.GetNoOPSession(shardID)
-	cmd := getSetLeaseHolderCmd(tnID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
 		return err

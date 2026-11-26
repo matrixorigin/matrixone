@@ -79,6 +79,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 		user,
 		currentTick,
 	)
+	commonFields.TNWALAssignments = state.TNWALAssignments
 	checkers := []hakeeper.ModuleChecker{
 		logservice.NewLogServiceChecker(
 			commonFields,

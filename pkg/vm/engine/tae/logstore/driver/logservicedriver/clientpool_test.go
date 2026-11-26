@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,7 +47,8 @@ func TestNewClientPoolRetriesThenSucceeds(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	pool := newClientPool(cfg)
+	pool, err := openClientPool(cfg)
+	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
 	require.GreaterOrEqual(t, attempts.Load(), int32(2))
@@ -55,24 +57,31 @@ func TestNewClientPoolRetriesThenSucceeds(t *testing.T) {
 	require.NotNil(t, pool.clients[0].buf)
 }
 
-func TestNewClientPoolPanicsWhenFactoryAlwaysFail(t *testing.T) {
+func TestOpenClientPoolReturnsLeaseRejection(t *testing.T) {
 	cfg := &Config{
-		ClientMaxCount:      1,
+		ClientMaxCount:      2,
 		ClientBufSize:       64,
 		MaxTimeout:          time.Second,
-		ClientRetryTimes:    1,
+		ClientRetryTimes:    3,
 		ClientRetryInterval: time.Nanosecond,
 		ClientRetryDuration: time.Nanosecond,
-		ClientFactory: func() (logservice.Client, error) {
-			return nil, moerr.NewInternalErrorNoCtx("always fail")
-		},
+	}
+	var calls atomic.Int32
+	var closed atomic.Int32
+	cfg.ClientFactory = func() (logservice.Client, error) {
+		if calls.Add(1) == 1 {
+			return &closeCountingClient{Client: newMockBackendClient(NewMockBackend()), closed: &closed}, nil
+		}
+		return nil, moerr.NewNotLeaseHolder(context.Background(), 2)
 	}
 	cfg.fillDefaults()
 	cfg.validate()
 
-	require.PanicsWithError(t, moerr.NewInternalErrorNoCtx("always fail").Error(), func() {
-		newClientPool(cfg)
-	})
+	pool, err := openClientPool(cfg)
+	require.Nil(t, pool)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
+	require.Equal(t, int32(2), calls.Load())
+	require.Equal(t, int32(1), closed.Load())
 }
 
 func TestGetOnFlyDoesNotBlockPoolGetWhileCreatingClient(t *testing.T) {
@@ -101,7 +110,8 @@ func TestGetOnFlyDoesNotBlockPoolGetWhileCreatingClient(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	pool := newClientPool(cfg)
+	pool, err := openClientPool(cfg)
+	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 
 	var wg sync.WaitGroup
@@ -180,7 +190,8 @@ func TestGetOnFlyClosesCreatedClientWhenPoolClosesConcurrently(t *testing.T) {
 	cfg.fillDefaults()
 	cfg.validate()
 
-	pool := newClientPool(cfg)
+	pool, err := openClientPool(cfg)
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		releaseOnce.Do(func() { close(releaseFactory) })
 		pool.Close()

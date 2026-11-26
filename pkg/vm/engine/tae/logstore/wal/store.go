@@ -46,13 +46,27 @@ func NewLogserviceHandle(
 	factory logservicedriver.LogServiceClientFactory,
 	maxRecordSize int,
 ) *StoreImpl {
+	w, err := OpenLogserviceHandle(factory, maxRecordSize)
+	if err != nil {
+		panic(err)
+	}
+	return w
+}
+
+func OpenLogserviceHandle(
+	factory logservicedriver.LogServiceClientFactory,
+	maxRecordSize int,
+) (*StoreImpl, error) {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),
 		logservicedriver.WithConfigOptMaxWALRecordSize(maxRecordSize),
 	)
-	driver := logservicedriver.NewLogServiceDriver(&cfg)
-	return NewStore(driver)
+	driver, err := logservicedriver.OpenLogServiceDriver(&cfg)
+	if err != nil {
+		return nil, err
+	}
+	return NewStore(driver), nil
 }
 
 func NewLocalHandle(
