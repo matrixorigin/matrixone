@@ -227,6 +227,7 @@ type remoteBackend struct {
 		state          int32
 		readLoopActive bool
 		locked         bool
+		reuseSignal    *backendReuseSignal
 	}
 
 	mu struct {
@@ -564,6 +565,21 @@ func (rb *remoteBackend) Unlock() {
 		panic("backend is not locked")
 	}
 	rb.stateMu.locked = false
+	if s := rb.stateMu.reuseSignal; s != nil {
+		rb.stateMu.reuseSignal = nil
+		s.notify()
+	}
+}
+
+func (rb *remoteBackend) watchUnlock(s *backendReuseSignal) (alreadyUnlocked bool) {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+	if !rb.stateMu.locked {
+		s.notify()
+		return true
+	}
+	rb.stateMu.reuseSignal = s
+	return false
 }
 
 func (rb *remoteBackend) Locked() bool {
