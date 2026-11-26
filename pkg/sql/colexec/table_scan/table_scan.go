@@ -161,6 +161,13 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
+			// The reader can fail independently of the context it was given.
+			// Preserve that decision before Shuffle/HashBuild and pipeline cleanup.
+			if newCtx.Err() == nil {
+				if query, _ := process.GetQueryCtxFromProc(proc); query != nil && query.Err() == nil {
+					err = message.PreserveExplicitPipelineFailure(query, err)
+				}
+			}
 			e = err
 			return vm.CancelResult, err
 		}

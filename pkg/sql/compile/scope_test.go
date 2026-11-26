@@ -23,6 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2497,6 +2498,20 @@ func (m *cancelAfterMergeTerminal) Call(proc *process.Process) (vm.CallResult, e
 	return result, err
 }
 
+type failingBuildReader struct {
+	engine.Reader
+	err error
+}
+
+func (r failingBuildReader) Read(ctx context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	return r.err == nil, r.err
+}
+
+func (failingBuildReader) Close() error { return nil }
+
 func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
@@ -2506,6 +2521,11 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 		transport          string
 	}{
 		{name: "end", cancelAfterReceive: true},
+		{name: "scan end", transport: "scan"},
+		{name: "scan timeout", err: context.DeadlineExceeded, transport: "scan"},
+		{name: "scan foreign key", err: moerr.NewErrFKNoReferencedRow2(context.Background()), code: moerr.ErrFKNoReferencedRow2, transport: "scan"},
+		{name: "scan failure", err: context.Canceled, code: moerr.ErrInternal, transport: "scan"},
+		{name: "shuffled scan failure", err: context.Canceled, code: moerr.ErrInternal, transport: "shuffle"},
 		{name: "aborted connector spool", err: context.Canceled, code: moerr.ErrInternal, transport: "spool"},
 		{name: "stored materialized failure", err: context.Canceled, code: moerr.ErrInternal, transport: "materialized"},
 		{name: "canceled input", err: context.Canceled, code: moerr.ErrInternal},
@@ -2527,7 +2547,20 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 			input := merge.NewArgument()
 			defer input.Release()
 			defer build.Release()
-			if tc.cancelAfterReceive {
+			if tc.transport == "scan" || tc.transport == "shuffle" {
+				scan := table_scan.NewArgument()
+				defer scan.Release()
+				scan.Reader = failingBuildReader{err: tc.err}
+				if tc.transport == "shuffle" {
+					s := shuffle.NewArgument()
+					defer s.Release()
+					s.BucketNum = 1
+					s.AppendChild(scan)
+					build.AppendChild(s)
+				} else {
+					build.AppendChild(scan)
+				}
+			} else if tc.cancelAfterReceive {
 				build.AppendChild(&cancelAfterMergeTerminal{Merge: input})
 			} else {
 				build.AppendChild(input)
@@ -2581,10 +2614,15 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 				require.True(t, process.TrySendPipelineSignal(reg, signal))
 			}
 
-			err = consumer.MergeRun(c)
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.affectRows = new(atomic.Uint64)
+			c.scopes = []*Scope{consumer}
+			err = c.runOnce()
 			require.NoError(t, query.Err())
 			if tc.err == nil {
 				require.NoError(t, err)
+			} else if tc.err == context.DeadlineExceeded {
+				require.ErrorIs(t, err, tc.err)
 			} else {
 				require.ErrorContains(t, err, tc.err.Error())
 				require.True(t, moerr.IsMoErrCode(err, tc.code), "%v", err)

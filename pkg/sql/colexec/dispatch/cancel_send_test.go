@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,6 +53,26 @@ func dispatchPublicationInput(t *testing.T, mp *mpool.MPool) *batch.Batch {
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(29), false, mp))
 	source.SetRowCount(1)
 	return source
+}
+
+func TestLocalShufflePreservesTargetError(t *testing.T) {
+	for name, send := range map[string]func(*Dispatch, *process.Process, *batch.Batch, uint32) error{"index": sendBatToIndex, "local": sendBatToLocalMatchedReg, "multi": sendBatToMultiMatchedReg} {
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			proc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			t.Cleanup(proc.Free)
+			reg, sibling := process.NewPipelineEdge(2, 0), process.NewPipelineEdge(2, 0)
+			op := &Dispatch{FuncId: ShuffleToAllFunc, LocalRegs: []*process.WaitRegister{reg, sibling}, ShuffleRegIdxLocal: []int{0, 1}}
+			require.NoError(t, op.Prepare(proc))
+			defer proc.Base.ClosePipelineSpoolsAfterReadersStopped()
+			fk := moerr.NewErrFKNoReferencedRow2(proc.Ctx)
+			require.True(t, reg.Abort(fk))
+			err := send(op, proc, dispatchPublicationInput(t, mp), 0)
+			op.Reset(proc, true, err)
+			require.Same(t, fk, sibling.Err())
+		})
+	}
 }
 
 func TestLocalDispatchDataSendsObserveCancellation(t *testing.T) {

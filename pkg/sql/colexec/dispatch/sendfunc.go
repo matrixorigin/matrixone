@@ -112,17 +112,11 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 }
 
 func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuffleIndex uint32) (err error) {
-	var queryDone bool
-
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if shuffleIndex == batIndex {
-			queryDone, err = ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
-			if err != nil || queryDone {
+			if done, err := sendLocalShuffleBatch(i, ap, proc, bat); done || err != nil {
 				return err
-			}
-			if !onlyOneRegToDealThis(i, ap, proc) {
-				return context.Canceled
 			}
 			break
 		}
@@ -169,14 +163,8 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if regIndex%localRegsCnt == batIndex%localRegsCnt {
-			queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
-			if err != nil || queryDone {
-				return err
-			}
-			if !onlyOneRegToDealThis(i, ap, proc) {
-				return context.Canceled
-			}
-			break
+			_, err := sendLocalShuffleBatch(i, ap, proc, bat)
+			return err
 		}
 	}
 	return nil
@@ -216,14 +204,8 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 	for i := range ap.LocalRegs {
 		batIndex := uint32(ap.ShuffleRegIdxLocal[i])
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
-			queryDone, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil)
-			if err != nil || queryDone {
-				return err
-			}
-			if !onlyOneRegToDealThis(i, ap, proc) {
-				return context.Canceled
-			}
-			break
+			_, err := sendLocalShuffleBatch(i, ap, proc, bat)
+			return err
 		}
 	}
 
@@ -261,6 +243,20 @@ func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool,
 	}
 
 	return sendToAllLocalFunc(bat, ap, proc)
+}
+
+func sendLocalShuffleBatch(i int, ap *Dispatch, proc *process.Process, bat *batch.Batch) (bool, error) {
+	if done, err := ap.ctr.sp.SendBatch(proc.Ctx, i, bat, nil); done || err != nil {
+		return done, err
+	}
+	if !onlyOneRegToDealThis(i, ap, proc) {
+		// A receiver may have stopped publication by recording its real error.
+		if err := ap.LocalRegs[i].Err(); err != nil {
+			return false, err
+		}
+		return false, context.Canceled
+	}
+	return false, nil
 }
 
 func onlyOneRegToDealThis(sendto int, ap *Dispatch, proc *process.Process) bool {
