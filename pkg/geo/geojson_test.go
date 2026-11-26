@@ -122,3 +122,28 @@ func TestGeoJSONParseErrors(t *testing.T) {
 		require.Error(t, err, s)
 	}
 }
+
+func TestGeoJSONRequiredArrayMembers(t *testing.T) {
+	invalid := []string{
+		`{"type":"Point","coordinates":null}`,
+		`{"type":"LineString","coordinates":null}`,
+		`{"type":"Polygon","coordinates":null}`,
+		`{"type":"MultiPoint","coordinates":null}`,
+		`{"type":"MultiLineString","coordinates":null}`,
+		`{"type":"MultiPolygon","coordinates":null}`,
+		`{"type":"GeometryCollection"}`,
+		`{"type":"GeometryCollection","geometries":null}`,
+	}
+	for _, input := range invalid {
+		_, err := ParseGeoJSON([]byte(input))
+		require.Error(t, err, input)
+	}
+
+	for _, input := range []string{
+		`{"type":"Point","coordinates":[]}`,
+		`{"type":"GeometryCollection","geometries":[]}`,
+	} {
+		_, err := ParseGeoJSON([]byte(input))
+		require.NoError(t, err, input)
+	}
+}
