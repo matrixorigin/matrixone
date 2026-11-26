@@ -151,10 +151,7 @@ type queuedFill struct {
 	running bool
 	// background is set while it runs counted among the background fills.
 	background bool
-	// parts counts its prefetch objects under way; err is the first error one ended with.
-	parts    int
-	err      error
-	promoted chan struct{}
+	promoted   chan struct{}
 	// started is closed once reads can join what it downloads, or it ended.
 	started     chan struct{}
 	startedOnce sync.Once
@@ -500,19 +497,13 @@ func (d *DiskCache) fillsMaxLocked() int {
 
 // memoryBacked reports whether a fill of n bytes is held in memory: it is at most
 // memoryPrefetchMax bytes and its buffer is within the share of the flight budget of its
-// class.
+// class, all of it for foreground, half of it for background.
 func (d *DiskCache) memoryBacked(n int64, background bool) bool {
-	return n <= d.memoryPrefetchMax && d.withinShare(flightBufSize(n), background)
-}
-
-// withinShare reports whether charge bytes of buffers are within the share of the flight
-// budget of their class: all of it for foreground, half of it for background.
-func (d *DiskCache) withinShare(charge int64, background bool) bool {
 	share := d.flightBytes()
 	if background {
 		share /= 2
 	}
-	return charge <= share
+	return n <= d.memoryPrefetchMax && flightBufSize(n) <= share
 }
 
 // fitsLocked reports whether a buffer of charge bytes fits the flight budget now: with the
@@ -543,34 +534,24 @@ func (d *DiskCache) startFillsLocked() {
 		if background && (f.backgroundFills >= d.fillsMaxLocked() || f.foregroundWaiting > 0) {
 			return
 		}
-		var parts [][2]int64
-		memory := false
-		if !q.whole {
-			parts = d.rangeParts(q.start, q.end, prefetchBlockMax)
-			var charge, most int64
-			for _, p := range parts {
-				charge += flightBufSize(p[1] - p[0])
-				most = max(most, p[1]-p[0])
-			}
-			memory = most <= d.memoryPrefetchMax && d.withinShare(charge, background)
-			if memory && !d.fitsLocked(charge, background) {
-				return
-			}
+		memory := !q.whole && d.memoryBacked(q.size(), background)
+		if memory && !d.fitsLocked(flightBufSize(q.size()), background) {
+			return
 		}
 		heap.Pop(&f.waitingFills)
 		if background {
 			f.queuedBytes -= q.size()
 		}
-		d.startFillLocked(q, background, parts, memory)
+		d.startFillLocked(q, background, memory)
 	}
 }
 
 // startFillLocked starts q, taken from the waiting fills. A fill of the whole object runs
 // on its own goroutine, registered until reads can join its download. A fill of a range
 // that finds its bytes cached, held by a prefetch object or its object deleted ends;
-// otherwise it registers a prefetch object for each of its parts, memory flights when
-// memory is set, file fills otherwise, each running on its own goroutine.
-func (d *DiskCache) startFillLocked(q *queuedFill, background bool, parts [][2]int64, memory bool) {
+// otherwise it registers one prefetch object of its range, a memory flight when memory is
+// set, a file fill otherwise, running on its own goroutine.
+func (d *DiskCache) startFillLocked(q *queuedFill, background bool, memory bool) {
 	f := &d.prefetchObjects
 	closing, _ := f.openLocked()
 	q.running, q.background = true, background
@@ -615,36 +596,26 @@ func (d *DiskCache) startFillLocked(q *queuedFill, background bool, parts [][2]i
 	}
 	deletes := q.req.deletes
 	needs := flightNeeds{caching: true, deletes: &deletes}
-	for _, part := range parts {
-		q.parts++
-		if memory {
-			fl := d.newFlight(filePath, part[0], part[1], rangeFillPolicy, q.src, needs)
-			fl.fill, fl.background = q, background
-			setStateLocked(fl, objectRegistered)
-			fl.registerLocked(ctx, closing, now)
-			go fl.run()
-			continue
-		}
-		p := d.newFileObject(ctx, filePath, part[0], part[1], q.src, needs)
-		p.fill = q
-		setStateLocked(p, objectRegistered)
-		p.registerLocked(ctx, closing, now)
-		go p.run()
+	if memory {
+		fl := d.newFlight(filePath, q.start, q.end, rangeFillPolicy, q.src, needs)
+		fl.fill, fl.background = q, background
+		setStateLocked(fl, objectRegistered)
+		fl.registerLocked(ctx, closing, now)
+		go fl.run()
+		return
 	}
+	p := d.newFileObject(ctx, filePath, q.start, q.end, q.src, needs)
+	p.fill = q
+	setStateLocked(p, objectRegistered)
+	p.registerLocked(ctx, closing, now)
+	go p.run()
 }
 
-// partEndedLocked ends a prefetch object of q that ended with err, why it cached nothing,
-// and ends q with its last.
-func (d *DiskCache) partEndedLocked(q *queuedFill, err error) {
-	q.parts--
-	if q.err == nil {
-		q.err = err
-	}
-	if q.parts == 0 {
-		d.countPrefetch(q.req, q.err)
-		d.endFillLocked(q)
-		d.startFillsLocked()
-	}
+// rangeEndedLocked ends q, whose prefetch object ended with err, why it cached nothing.
+func (d *DiskCache) rangeEndedLocked(q *queuedFill, err error) {
+	d.countPrefetch(q.req, err)
+	d.endFillLocked(q)
+	d.startFillsLocked()
 }
 
 // endWhole ends q, a fill of the whole object, whose run returned.

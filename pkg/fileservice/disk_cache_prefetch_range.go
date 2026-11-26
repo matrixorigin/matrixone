@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"math"
@@ -234,9 +233,9 @@ func (d *DiskCache) prefetchRead(
 
 	// Find the blocks being read under one lock, and make a prefetch object of each run of
 	// the others: a MemoryPrefetchObject of a run of at most disk-prefetch-memory-max
-	// bytes, otherwise the parts of the run, each a FilePrefetchObject the reads of its
-	// bytes share. The read holds no prefetch object while it waits for one of its own to
-	// be admitted: it holds the one reading a block it joined only to copy the block.
+	// bytes, otherwise a FilePrefetchObject of the run the reads of its bytes share. The
+	// read holds no prefetch object while it waits for one of its own to be admitted: it
+	// holds the one reading a block it joined only to copy the block.
 	f := &d.prefetchObjects
 	f.mu.Lock()
 	if _, ok := f.openLocked(); !ok {
@@ -292,25 +291,14 @@ func (d *DiskCache) prefetchRead(
 			// A run downloads to the object's end, not past it.
 			end = size
 		}
-		for _, part := range d.rangeParts(start, end, block) {
-			o := d.newFileObject(context.WithoutCancel(ctx), filePath, part[0], part[1], src, flightNeeds{deletes: &deletes})
-			o.readStarted = true
-			r := newReadRun(o)
-			r.first = -1
-			for j := p[0]; j <= p[1]; j++ {
-				if b := &blocks[j]; part[0] <= b.start && b.start < part[1] {
-					if r.first < 0 {
-						r.first = j
-					}
-					r.last = j
-				}
-			}
-			if r.first < 0 {
-				o.abandon()
-				continue
-			}
-			runs = append(runs, r)
+		o := d.newFileObject(context.WithoutCancel(ctx), filePath, start, end, src, flightNeeds{deletes: &deletes})
+		o.readStarted = true
+		r := newReadRun(o)
+		r.first, r.last = p[0], p[1]
+		for r.last > r.first && blocks[r.last].start >= end {
+			r.last--
 		}
+		runs = append(runs, r)
 	}
 
 	// The runs are admitted in order, by one goroutine, and each is read by its own once
@@ -545,29 +533,6 @@ func (r *readRun) done() {
 	})
 }
 
-// rangeParts returns the parts [start, end) of an object is read as, each by its own
-// prefetch object: disk-prefetch-object-split parts at boundaries that are multiples of
-// align from start, when it is large enough and few downloads are under way, otherwise
-// one.
-func (d *DiskCache) rangeParts(start, end, align int64) [][2]int64 {
-	whole := [][2]int64{{start, end}}
-	if d.objectSplit.parts <= 1 || d.downloading() >= cmp.Or(d.objectSplit.downloads, DefaultDiskPrefetchObjectSplitDownloads) {
-		return whole
-	}
-	bounds := d.objectSplit.bounds(end-start, 0)
-	if len(bounds) < 3 {
-		return whole
-	}
-	parts := make([][2]int64, 0, len(bounds)-1)
-	for i := 1; i < len(bounds); i++ {
-		if bounds[i-1]%align != 0 {
-			return whole
-		}
-		parts = append(parts, [2]int64{start + bounds[i-1], start + bounds[i]})
-	}
-	return parts
-}
-
 // readDownload reads the bytes of download o from off into dst, once they are written. It
 // reports whether it read them, and whether the download wrote them.
 func readDownload(ctx context.Context, o *objectDownload, off int64, dst []byte) (read, written bool) {
@@ -752,7 +717,7 @@ type prefetchTarget struct {
 	waitedFrom time.Time
 	// background is set when its requests are background.
 	background bool
-	// fill is the queued fill it is a part of, or nil.
+	// fill is the queued fill it reads, or nil.
 	fill *queuedFill
 }
 
@@ -1481,7 +1446,7 @@ func (d *DiskCache) endPrefetch(diskPath string, fl *memoryPrefetchObject) {
 	f.mu.Lock()
 	f.forgetLocked(diskPath, fl)
 	if fl.fill != nil {
-		d.partEndedLocked(fl.fill, fl.cacheErr)
+		d.rangeEndedLocked(fl.fill, fl.cacheErr)
 	}
 	f.mu.Unlock()
 	fl.finish()

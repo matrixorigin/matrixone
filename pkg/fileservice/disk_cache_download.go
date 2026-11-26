@@ -855,11 +855,6 @@ func (d *DiskCache) finishDownload(o *objectDownload, p *filePrefetchObject) {
 	o.retire()
 }
 
-// downloading returns the number of downloads of file fills in flight.
-func (d *DiskCache) downloading() int {
-	return int(d.prefetchObjects.downloads.n.Load())
-}
-
 // backgroundRequests is the most background requests the governor runs at once.
 func (d *DiskCache) backgroundRequests() int {
 	if d.governor == nil {

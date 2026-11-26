@@ -262,7 +262,7 @@ func (d *DiskCache) endFilePrefetch(objectPath string, p *filePrefetchObject) fu
 			f.forgetLocked(objectPath, p)
 		}
 		if p.fill != nil && !p.whole {
-			d.partEndedLocked(p.fill, err)
+			d.rangeEndedLocked(p.fill, err)
 		}
 		f.mu.Unlock()
 		if !p.handedOff {
