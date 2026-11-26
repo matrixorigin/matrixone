@@ -82,7 +82,7 @@ type TableMetaReader struct {
 	// constructor; an unbound reader keeps the pre-fix unhooked writers,
 	// exactly like the other producer families' forward-compat stance.
 	sinkerOption   ioutil.SinkerOption
-	writeCloneRows func(*batch.Batch, []string) error
+	writeCloneRows func(*batch.Batch) error
 }
 
 // UseCloneRowWrites stages rewritten rows in the destination transaction,
@@ -98,14 +98,20 @@ func (r *TableMetaReader) UseCloneRowWrites(ctx context.Context, destination eng
 	if len(sourceDef.Cols) != len(targetDef.Cols) {
 		return
 	}
+	attrs := make([]string, 0, len(targetDef.Cols)-1)
 	for i, src := range sourceDef.Cols {
 		dst := targetDef.Cols[i]
 		if src.Name != dst.Name || src.Typ.Enumvalues != dst.Typ.Enumvalues ||
 			!types.MustTypeFromPlan(src.Typ).Eq(types.MustTypeFromPlan(dst.Typ)) {
 			return
 		}
+		if dst.Name != catalog.Row_ID {
+			// The planner normalizes Name, but TN's physical schema retains
+			// OriginName, including mixed-case and information_schema columns.
+			attrs = append(attrs, dst.GetOriginCaseName())
+		}
 	}
-	r.writeCloneRows = func(rows *batch.Batch, attrs []string) error {
+	r.writeCloneRows = func(rows *batch.Batch) error {
 		return destination.Write(ctx, rows, attrs)
 	}
 }
@@ -550,7 +556,7 @@ func (r *TableMetaReader) collectDataOfAObjsAndInMem(
 	defer dataReader.Close()
 	if r.writeCloneRows != nil {
 		err = readCloneBatches(ctx, dataReader, mp, attrs, colTypes, func(rows *batch.Batch) error {
-			return r.writeCloneRows(rows, attrs)
+			return r.writeCloneRows(rows)
 		})
 		return zap.Skip(), err
 	}

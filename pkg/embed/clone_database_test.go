@@ -68,6 +68,8 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 		exec(t, "insert into "+source+".child values (10,1)")
 		exec(t, "create table "+source+".native_index (id int primary key, score int, key ix_score(score) invisible)")
 		exec(t, "insert into "+source+".native_index values (1,7)")
+		exec(t, "create table "+source+".mixed_case (`ID` int primary key, `MiXeD` varchar(30))")
+		exec(t, "insert into "+source+".mixed_case values (1,'preserve case')")
 		// Independent native tables exercise concurrent CREATE catalog pairs
 		// and index buffers in the same atomic database-clone transaction.
 		for _, name := range []string{"native_peer_a", "native_peer_b", "native_peer_c"} {
@@ -129,6 +131,9 @@ func TestCloneDatabaseForeignKeySourceInventory(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, "show create table "+target+".native_index").Scan(&table, &ddl))
 				require.Contains(t, ddl, "INVISIBLE")
 				count(t, "select count(*) from "+target+".native_index where score=7", 1)
+				count(t, "select count(*) from "+target+".mixed_case where `ID`=1 and `MiXeD`='preserve case'", 1)
+				require.NoError(t, conn.QueryRowContext(ctx, "show create table "+target+".mixed_case").Scan(&table, &ddl))
+				require.Contains(t, ddl, "`MiXeD`")
 				for _, name := range []string{"native_peer_a", "native_peer_b", "native_peer_c"} {
 					count(t, "select count(*) from "+target+"."+name+" where id=1 and marker='"+name+"'", 1)
 				}
