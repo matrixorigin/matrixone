@@ -92,6 +92,7 @@ func IsFullText2IndexAlgo(algo string) bool {
 
 // ------------------------[START] IndexAlgoParams------------------------
 const (
+	MaxIVFProbeLimit        = 80000
 	IndexAlgoParamLists     = "lists"
 	IndexAlgoParamOpType    = "op_type"
 	HnswM                   = "m"
