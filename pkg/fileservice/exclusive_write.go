@@ -70,11 +70,72 @@ func linkLocalFile(tempPath, nativePath, logicalPath string) error {
 	return err
 }
 
-// SyncLocalFileForPublication makes an immutable local object durable before a
-// caller publishes a reference to it. A visible link can survive a failed
+func localPublicationPaths(fs FileService) (string, func(string) string) {
+	switch f := fs.(type) {
+	case *LocalFS:
+		return f.rootPath, f.toNativeFilePath
+	case *LocalETLFS:
+		return f.rootPath, f.toNativeFilePath
+	case *S3FS:
+		if storage, ok := f.rawStorage.(*diskObjectStorage); ok {
+			return storage.path, func(file string) string {
+				return filepath.Join(storage.path, f.pathToKey(file))
+			}
+		}
+	}
+	return "", nil
+}
+
+// SyncLocalRootForPublication syncs a local storage root and the directories
+// that contain it. Constructors may create the root without opening those
+// directories. Recheck on every publication because a visible root does not
+// prove its parent entries were synced, including after a restart.
+// Non-local services retain their own persistence semantics.
+func SyncLocalRootForPublication(ctx context.Context, fs FileService) error {
+	for {
+		sub, ok := fs.(*subPathFS)
+		if !ok {
+			break
+		}
+		fs = sub.upstream
+	}
+	rootPath, nativePath := localPublicationPaths(fs)
+	if nativePath == nil {
+		return nil
+	}
+	return syncLocalRootForPublication(ctx, rootPath, (*os.File).Sync)
+}
+
+func syncLocalRootForPublication(ctx context.Context, rootPath string, syncDirectory func(*os.File) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	root, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return err
+	}
+	for dir := root; ; dir = filepath.Dir(dir) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		file, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		err = syncDirectory(file)
+		_ = file.Close()
+		if err != nil {
+			return err
+		}
+		if filepath.Dir(dir) == dir {
+			return nil
+		}
+	}
+}
+
+// SyncLocalFileForPublication syncs an immutable local object and its
+// directories within the storage root. A visible link can survive a failed
 // directory sync, so this also applies to retries that find the object.
-// Local shared-service constructors establish the configured root. Publication
-// syncs the file and its directories within that root.
 // Non-local services retain their own persistence semantics.
 func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath string) error {
 	if sub, ok := fs.(*subPathFS); ok {
@@ -85,23 +146,7 @@ func SyncLocalFileForPublication(ctx context.Context, fs FileService, filePath s
 		return SyncLocalFileForPublication(ctx, sub.upstream, upstreamPath)
 	}
 
-	var rootPath string
-	var nativePath func(string) string
-	switch f := fs.(type) {
-	case *LocalFS:
-		rootPath = f.rootPath
-		nativePath = f.toNativeFilePath
-	case *LocalETLFS:
-		rootPath = f.rootPath
-		nativePath = f.toNativeFilePath
-	case *S3FS:
-		if storage, ok := f.rawStorage.(*diskObjectStorage); ok {
-			rootPath = storage.path
-			nativePath = func(file string) string {
-				return filepath.Join(storage.path, f.pathToKey(file))
-			}
-		}
-	}
+	rootPath, nativePath := localPublicationPaths(fs)
 	if nativePath == nil {
 		return nil
 	}

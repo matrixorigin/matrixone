@@ -183,15 +183,16 @@ func TestWriteExclusiveFilesystemAliases(t *testing.T) {
 	require.Equal(t, "winner", string(data))
 }
 
-func TestEnsureDurableLocalRootRetriesAncestorSync(t *testing.T) {
+func TestSyncLocalRootForPublicationRetriesAncestorSync(t *testing.T) {
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	parent := filepath.Join(base, "new-parent")
 	root := filepath.Join(parent, "storage")
+	require.NoError(t, os.MkdirAll(root, 0700))
 	syncFailure := errors.New("directory sync failed")
 	for _, fail := range []bool{true, true, false} {
 		var dirs []string
-		err := ensureDurableLocalRoot(root, func(dir *os.File) error {
+		err := syncLocalRootForPublication(t.Context(), root, func(dir *os.File) error {
 			dirs = append(dirs, dir.Name())
 			if fail && dir.Name() == base {
 				return syncFailure
@@ -202,7 +203,7 @@ func TestEnsureDurableLocalRootRetriesAncestorSync(t *testing.T) {
 		require.Equal(t, []string{root, parent, base}, dirs[:3])
 		if fail {
 			require.ErrorIs(t, err, syncFailure)
-			require.DirExists(t, root, "a failed directory sync can leave the root visible")
+			require.DirExists(t, root, "a visible root does not prove a successful directory sync")
 		} else {
 			require.NoError(t, err)
 		}

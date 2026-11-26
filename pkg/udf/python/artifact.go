@@ -104,6 +104,9 @@ func (s *FileArtifactStore) Publish(ctx context.Context, accountID uint64, handl
 	if err != nil {
 		return "", err
 	}
+	if err := fileservice.SyncLocalRootForPublication(ctx, s.fs); err != nil {
+		return "", errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: sync Python artifact storage root")
+	}
 	path := artifactPath(accountID, digest)
 	// Existing immutable objects need no new capacity, including objects from
 	// before admission was introduced. Never remove or overwrite them.

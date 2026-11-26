@@ -77,6 +77,12 @@ new budget bounds additional retained growth, not that finite pre-existing
 baseline. Backups must preserve the admission namespace alongside artifacts;
 an absent namespace in an older backup starts the bounded additional budget.
 
+With local shared storage, Python publication syncs the resolved storage root
+and its ancestors before reserving a slot or accepting existing source. If a
+directory cannot be opened for sync, publication returns an error until a retry
+can sync it. Ordinary shared-storage startup and existing artifact reads do not
+require opening the root's ancestors for sync.
+
 The type descriptor is canonical over SQL type ID and applicable width, scale,
 charset, offset-width, JSON, and temporal encodings. The trusted adapter builds
 Arrow field/schema metadata from that descriptor; it validates both physical

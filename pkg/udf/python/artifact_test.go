@@ -23,19 +23,23 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFileArtifactStorePublishesBelowSearchOnlyAncestor(t *testing.T) {
+func TestFileArtifactStoreRequiresDurableSharedRoot(t *testing.T) {
 	ctx := t.Context()
 	shared := defines.SharedFileServiceName
 	for _, backend := range []struct {
 		name string
 		open func(string) (fileservice.FileService, error)
 	}{
+		{"disk", func(root string) (fileservice.FileService, error) {
+			return fileservice.NewLocalFS(ctx, shared, root, fileservice.DisabledCacheConfig, nil)
+		}},
 		{"disk-v2", func(root string) (fileservice.FileService, error) {
 			return fileservice.NewLocalFS2(ctx, shared, root, fileservice.DisabledCacheConfig, nil)
 		}},
@@ -51,11 +55,9 @@ func TestFileArtifactStorePublishesBelowSearchOnlyAncestor(t *testing.T) {
 	} {
 		t.Run(backend.name, func(t *testing.T) {
 			base := t.TempDir()
-			parent := filepath.Join(base, "traverse")
-			root := filepath.Join(parent, "storage")
-			require.NoError(t, os.MkdirAll(root, 0700))
-			alias := filepath.Join(base, "configured-root")
-			require.NoError(t, os.Symlink(root, alias))
+			parent := filepath.Join(base, "write-and-traverse")
+			require.NoError(t, os.Mkdir(parent, 0700))
+			root := filepath.Join(parent, "new", "storage")
 			t.Cleanup(func() { require.NoError(t, os.Chmod(parent, 0700)) })
 			require.NoError(t, os.Chmod(parent, 0300))
 			f, err := os.Open(parent)
@@ -65,32 +67,46 @@ func TestFileArtifactStorePublishesBelowSearchOnlyAncestor(t *testing.T) {
 			}
 			require.ErrorIs(t, err, os.ErrPermission)
 
-			missing := filepath.Join(parent, "new", "storage")
-			unprovisioned, err := backend.open(missing)
-			if err == nil {
-				unprovisioned.Close(context.Background())
-			}
-			require.ErrorIs(t, err, os.ErrPermission)
-			_, err = os.Stat(filepath.Dir(missing))
-			require.ErrorIs(t, err, os.ErrNotExist, "failed provisioning must not create a parent")
+			// Ordinary startup can create the root even without read
+			// permission on its ancestor. A restart sees the existing root.
+			fs, err := backend.open(root)
+			require.NoError(t, err)
+			fs.Close(context.Background())
+			require.DirExists(t, root)
 
-			fs, err := backend.open(alias)
+			alias := filepath.Join(base, "configured-root")
+			require.NoError(t, os.Symlink(root, alias))
+			fs, err = backend.open(alias)
 			require.NoError(t, err)
 			t.Cleanup(func() { fs.Close(context.Background()) })
 			store, err := NewFileArtifactStore(fs, DefaultMaxArtifactBytes)
 			require.NoError(t, err)
-			store.maxPublications = 2
-			for _, source := range []string{"def f(ctx): return 7", "def f(ctx): return 8"} {
-				want := udf.PythonInlineArtifactDigest("f", source)
-				for range 2 {
-					digest, err := store.Publish(ctx, 7, "f", source)
-					require.NoError(t, err)
-					require.Equal(t, want, digest)
-				}
-				resolved, err := store.Resolve(ctx, 7, "f", want)
-				require.NoError(t, err)
-				require.Equal(t, source, resolved)
+			store.maxPublications = 1
+			const source = "def f(ctx): return 7"
+			want := udf.PythonInlineArtifactDigest("f", source)
+			for range 2 {
+				published, err := store.Publish(ctx, 7, "f", source)
+				require.ErrorIs(t, err, os.ErrPermission)
+				require.Empty(t, published)
 			}
+			for _, path := range []string{artifactAdmissionPath(0), artifactPath(7, want)} {
+				_, err = fs.StatFile(ctx, path)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%s: %v", path, err)
+			}
+
+			require.NoError(t, os.Chmod(parent, 0700))
+			for range 2 {
+				published, err := store.Publish(ctx, 7, "f", source)
+				require.NoError(t, err)
+				require.Equal(t, want, published)
+			}
+			require.NoError(t, os.Chmod(parent, 0100))
+			published, err := store.Publish(ctx, 7, "f", source)
+			require.ErrorIs(t, err, os.ErrPermission)
+			require.Empty(t, published)
+			resolved, err := store.Resolve(ctx, 7, "f", want)
+			require.NoError(t, err)
+			require.Equal(t, source, resolved)
 		})
 	}
 }

@@ -43,7 +43,7 @@ type LocalETLFS struct {
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
-	rootPath, err := prepareLocalRoot(name, rootPath)
+	rootPath, err := prepareLocalRoot(rootPath)
 	if err != nil {
 		return nil, err
 	}
