@@ -35,6 +35,12 @@ another Conda/Pixi environment.
 
 ## Initialize the pinned sources
 
+If you previously initialized Sirius at `third_party/sirius`, Git may leave
+that directory behind after the move. Before initializing the new path, back
+up any uncommitted changes and untracked files you want to keep from the old
+checkout. Once you have verified your backup and initialized
+`thirdparties/sirius`, you can remove the old directory.
+
 Start in the MatrixOne repository root. Keep these exported variables in the
 same shell for the commands below:
 
