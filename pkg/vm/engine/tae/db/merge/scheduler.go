@@ -210,6 +210,7 @@ func (a *MergeScheduler) OnMergeDone(table catalog.MergeTable, esize int) {
 }
 
 func (a *MergeScheduler) taskObserverFactory(
+	generation *mergeSchedulerGeneration,
 	supp *todoSupporter,
 	size int,
 	rc rscthrottler.RSCThrottler,
@@ -217,7 +218,32 @@ func (a *MergeScheduler) taskObserverFactory(
 	return &taskObserver{f: func() {
 		supp.DoneTask()
 		rc.Release(int64(size))
+		if supp.mergingTaskCnt.Load() == 0 {
+			a.notifyTaskCompletion(generation, supp)
+		}
 	}}
+}
+
+func (a *MergeScheduler) notifyTaskCompletion(
+	generation *mergeSchedulerGeneration,
+	supp *todoSupporter,
+) {
+	if generation == nil {
+		return
+	}
+	msg := &MMsg{Kind: MMsgKindTaskCompleted, Value: supp, generation: generation}
+	select {
+	case <-generation.stopCh:
+		return
+	default:
+	}
+	select {
+	case a.msgChan <- msg:
+	default:
+		// Completion can run inline while the scheduler is submitting a task.
+		// Do not wait for that same scheduler to drain a full message queue.
+		go a.sendMsgForGeneration(generation, msg)
+	}
 }
 
 type taskObserver struct {
@@ -273,6 +299,7 @@ const (
 	MMsgKindConfig
 	MMsgKindVacuumCheck
 	MMsgKindConfigBootstrap
+	MMsgKindTaskCompleted
 )
 
 type MMsgSwitch struct {
@@ -1013,6 +1040,21 @@ func (a *MergeScheduler) dispatchMsg(
 		} else if tableChange.DoneTask {
 			a.handleMergeDone(tableChange.Table, tableChange.EstSize)
 		}
+	case MMsgKindTaskCompleted:
+		a.handleTaskCompleted(msg.Value.(*todoSupporter))
+	}
+}
+
+func (a *MergeScheduler) handleTaskCompleted(supp *todoSupporter) {
+	if a.supps[supp.todo.table.ID()] != supp || supp.mergingTaskCnt.Load() != 0 {
+		return
+	}
+	now := a.clock.Now()
+	for _, trigger := range supp.triggers {
+		if !trigger.retryUntil.IsZero() && now.Before(trigger.retryUntil) {
+			a.pq.Update(supp.todo, now)
+			return
+		}
 	}
 }
 
@@ -1283,7 +1325,7 @@ func (a *MergeScheduler) doSched(
 			}
 			continue
 		}
-		task.doneCB = a.taskObserverFactory(supp, task.eSize, rc)
+		task.doneCB = a.taskObserverFactory(generation, supp, task.eSize, rc)
 		if a.executor.ExecuteFor(todo.table, task) {
 			supp.AddTask()
 			task.doneCB.Admit()
