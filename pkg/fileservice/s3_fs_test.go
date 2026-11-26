@@ -1154,6 +1154,13 @@ func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T)
 	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
 	vec.Release()
 
+	// A read in async-update mode guarantees cache admission, not publication.
+	// Wait on the explicit barrier before asserting that a later read hits disk.
+	flushCtx, cancel := context.WithTimeout(ctx, diskCacheLifecycleTestTimeout)
+	defer cancel()
+	fs.FlushCache(flushCtx)
+	require.NoError(t, flushCtx.Err())
+
 	hitVec := &IOVector{
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
@@ -3229,4 +3236,145 @@ func TestS3FSFromSpecs(t *testing.T) {
 
 	}
 
+}
+
+func TestS3FSCloseDrainsDiskBeforeDirectoryReuse(t *testing.T) {
+	for _, mode := range []string{"active decode", "retry after expired close"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), diskCacheLifecycleTestTimeout)
+			defer cancel()
+			args := ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir()}
+			config := CacheConfig{
+				MemoryCapacity: ptrTo[toml.ByteSize](1 << 20),
+				DiskCapacity:   ptrTo[toml.ByteSize](1 << 20),
+				DiskPath:       ptrTo(t.TempDir()),
+			}
+			openFS := func() *S3FS {
+				fs, err := NewS3FS(ctx, args, config, nil, false, false)
+				require.NoError(t, err)
+				t.Cleanup(func() { fs.Close(context.Background()) })
+				return fs
+			}
+
+			old := openFS()
+			if mode == "active decode" {
+				// Hold the same scope that S3FS.Read releases after a shared decode.
+				require.True(t, old.decodedReads.beginRead())
+				t.Cleanup(old.decodedReads.endRead)
+			}
+			started, release := installBlockedDiskCacheFileSync(old.diskCache)
+			t.Cleanup(release)
+			require.NoError(t, old.Write(ctx, IOVector{FilePath: "obj", Policy: SkipAllCache, Entries: []IOEntry{{Size: 3, Data: []byte("old")}}}))
+			require.NoError(t, old.PrefetchFile(ctx, "obj"))
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("old file sync did not start")
+			}
+			if mode == "retry after expired close" {
+				expired, stop := context.WithDeadline(ctx, time.Unix(1, 0))
+				defer stop()
+				old.Close(expired)
+			}
+			wait := &waitStartedContext{Context: ctx, started: make(chan struct{})}
+			done := make(chan struct{})
+			go func() { old.Close(wait); close(done) }()
+			select {
+			case <-wait.started:
+				release()
+			case <-done:
+				t.Fatal("Close returned with an old disk publication still blocked")
+			case <-ctx.Done():
+				t.Fatal("Close did not reach its disk drain")
+			}
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("Close did not join the released worker")
+			}
+			require.NoError(t, ctx.Err())
+
+			next := openFS()
+			next.SetAsyncUpdate(false)
+			require.NoError(t, next.Delete(ctx, "obj"))
+			require.NoError(t, next.Write(ctx, IOVector{FilePath: "obj", Entries: []IOEntry{{Size: 3, Data: []byte("new")}}}))
+			for _, policy := range []Policy{SkipAllCache, SkipMemoryCache} {
+				v := &IOVector{FilePath: "obj", Policy: policy, Entries: []IOEntry{{Size: 3}}}
+				t.Cleanup(v.Release)
+				require.NoError(t, next.Read(ctx, v))
+				require.Equal(t, "new", string(v.Entries[0].Data))
+				if policy == SkipMemoryCache {
+					require.Same(t, next.diskCache, v.Entries[0].fromCache)
+				}
+			}
+		})
+	}
+}
+
+func TestS3FSPrefetchCanonicalObject(t *testing.T) {
+	for _, path := range []string{"foo/bar", "replay:foo/bar"} {
+		t.Run(path, func(t *testing.T) {
+			fs := newReplayWriteTestFS(t)
+			ctx := t.Context()
+			require.NoError(t, fs.Write(ctx, IOVector{
+				FilePath: "replay:foo/bar", Policy: SkipAllCache, Entries: []IOEntry{{Size: 3, Data: []byte("abc")}},
+			}))
+			require.NoError(t, fs.PrefetchFile(ctx, path))
+			require.Equal(t, []byte("abc"), readReplayCache(t, fs, "foo/bar"))
+			require.True(t, moerr.IsMoErrCode(fs.PrefetchFile(ctx, "replay:missing"), moerr.ErrFileNotFound))
+			require.True(t, moerr.IsMoErrCode(fs.PrefetchFile(ctx, "elsewhere:foo/bar"), moerr.ErrWrongService))
+		})
+	}
+}
+
+type cancelingReadWriter struct {
+	bytes.Buffer
+	cancel context.CancelFunc
+	err    error
+}
+
+func (w *cancelingReadWriter) Write(p []byte) (int, error) {
+	defer w.cancel()
+	if w.err != nil {
+		return 0, w.err
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestS3FSBufferedReadCancellationAfterDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		writerErr error
+		missing   bool
+	}{
+		{name: "delivered"},
+		{name: "writer failed", writerErr: io.ErrClosedPipe},
+		{name: "source missing", missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newReplayWriteTestFS(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if !tc.missing {
+				require.NoError(t, fs.Write(ctx, IOVector{FilePath: "obj", Policy: SkipAllCache, Entries: []IOEntry{{Size: 3, Data: []byte("abc")}}}))
+			}
+			w := &cancelingReadWriter{cancel: cancel, err: tc.writerErr}
+			v := &IOVector{FilePath: "obj", Entries: []IOEntry{{Size: 1}, {Offset: 1, Size: 2, WriterForRead: w}}}
+			defer v.ReleaseReadResultOnError()
+			err := fs.Read(ctx, v)
+			if tc.missing {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+				require.NoError(t, ctx.Err(), "writer must not run on source failure")
+				return
+			}
+			require.Equal(t, "a", string(v.Entries[0].Data))
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+			if tc.writerErr != nil {
+				require.ErrorIs(t, err, tc.writerErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "bc", w.String())
+		})
+	}
 }

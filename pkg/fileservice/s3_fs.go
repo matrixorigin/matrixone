@@ -472,7 +472,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err := s.diskCache.setFile(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
-			return s.newReadCloser(ctx, filePath)
+			return s.newReadCloser(ctx, path.File)
 		},
 		s.asyncUpdate,
 	); err != nil {
@@ -1411,7 +1411,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, mode s3ReadMode) (err
 		}, s.asyncUpdate)
 		LogEvent(ctx, str_disk_cache_setfile_end)
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
-		if err != nil {
+		// All entries, including caller-owned writers, have received their data.
+		if err != nil && err != ctx.Err() {
 			return err
 		}
 	}
@@ -1699,18 +1700,20 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close(ctx context.Context) {
-	closeCaches := func() {
+	closeMemory := func() {
 		if s.memCache != nil {
 			s.memCache.Close(ctx)
 		}
-		if s.diskCache != nil {
-			s.diskCache.Close(ctx)
-		}
 	}
 	if s.decodedReads != nil {
-		s.decodedReads.close(closeCaches)
+		s.decodedReads.close(closeMemory)
 	} else {
-		closeCaches()
+		closeMemory()
+	}
+	// Only the memory cache is leased by shared decoders. Join the disk
+	// generation on every Close so a caller can retry with a live context.
+	if s.diskCache != nil {
+		s.diskCache.Close(ctx)
 	}
 }
 
