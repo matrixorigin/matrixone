@@ -44,7 +44,8 @@ func isCacheRoutableStarCount(q *plan.Query, scan *plan.Node) bool {
 		len(scan.OrderBy) != 0 || len(scan.RuntimeFilterProbeList) != 0 ||
 		len(scan.LockTargets) != 0 || scan.Stats.GetForceOneCN() ||
 		scan.TableDef.GetTableType() != catalog.SystemOrdinaryRel ||
-		scan.ObjRef == nil || scan.ObjRef.PubInfo != nil {
+		scan.ObjRef == nil || scan.ObjRef.PubInfo != nil ||
+		scan.ValuesWarningRow() != 0 || starCountRequiresCoordinator(scan) {
 		return false
 	}
 	if q == nil || q.StmtType != plan.Query_SELECT || len(q.Steps) != 1 ||
@@ -53,7 +54,7 @@ func isCacheRoutableStarCount(q *plan.Query, scan *plan.Node) bool {
 	}
 	for id := q.Steps[0]; id >= 0 && int(id) < len(q.Nodes); {
 		node := q.Nodes[id]
-		if node == nil || len(node.Children) != 1 {
+		if node == nil || len(node.Children) != 1 || starCountRequiresCoordinator(node) {
 			return false
 		}
 		child := node.Children[0]
@@ -62,12 +63,17 @@ func isCacheRoutableStarCount(q *plan.Query, scan *plan.Node) bool {
 			id = child
 		case plan.Node_AGG:
 			return child >= 0 && int(child) < len(q.Nodes) && q.Nodes[child] == scan &&
-				len(node.GroupBy) == 0 && len(node.AggList) == 1
+				len(node.GroupingFlag) == 0 && !plan2.IsSortRollupOption(node.ExtraOptions) &&
+				isSingleStarCountNoFilterNoGroupBy(node)
 		default:
 			return false
 		}
 	}
 	return false
+}
+
+func starCountRequiresCoordinator(node *plan.Node) bool {
+	return nodeHasUserLevelLockFunction(node) || nodeHasCoordinatorSessionFunction(node)
 }
 
 func (c *Compile) placeStarCountByCache(

@@ -1628,8 +1628,14 @@ func isSingleStarCountNoFilterNoGroupBy(node *plan.Node) bool {
 func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context) error {
 	node := s.DataSource.node
 	if node != nil && len(node.AggList) > 0 {
+		// Partial results can replace input rows only when this scope also
+		// owns the matching Group and MergeGroup over its TableScan.
+		mergeGroup := findMergeGroup(s.RootOp)
 		// Fast path: single starcount without filter/groupby — only call rel.StarCount(), no scan.
 		if isSingleStarCountNoFilterNoGroupBy(node) {
+			if mergeGroup == nil {
+				return nil
+			}
 			estimatedTombstoneRows, err := rel.EstimateCommittedTombstoneCount(ctx)
 			if err != nil {
 				return err
@@ -1638,8 +1644,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 
 			if estimatedTombstoneRows > defaultStarCountTombstoneThreshold {
 				metricv2.StarcountPathPerBlockCounter.Inc()
-				if mergeGroup := findMergeGroup(s.RootOp); mergeGroup != nil &&
-					len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
+				if len(node.RuntimeFilterProbeList) == 0 && node.Limit == nil && node.Offset == nil {
 					rows, remaining, err := disttae.CountSealedBlocks(ctx, rel, s.NodeInfo.Data, s.TxnOffset)
 					if err != nil {
 						return err
@@ -1667,21 +1672,16 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				s.NodeInfo.Data = newRelData
 				partialResults := []any{int64(totalRows)}
 				partialResultTypes := []types.T{types.T_int64}
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-					s.StarCountMergeGroup = mergeGroup
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
+				s.StarCountMergeGroup = mergeGroup
 				s.StarCountOnly = true
 				return nil
 			}
 		}
 
 		partialResults, partialResultTypes, columnMap := checkAggOptimize(node)
-		if partialResults != nil && s.NodeInfo.Data.DataCnt() > 1 {
+		if partialResults != nil && mergeGroup != nil && s.NodeInfo.Data.DataCnt() > 1 {
 			//append first empty block
 			newRelData := s.NodeInfo.Data.BuildEmptyRelData(1)
 			newRelData.AppendBlockInfo(&objectio.EmptyBlockInfo)
@@ -1721,14 +1721,8 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
-				//find the last mergegroup
-				mergeGroup := findMergeGroup(s.RootOp)
-				if mergeGroup != nil {
-					mergeGroup.PartialResults = partialResults
-					mergeGroup.PartialResultTypes = partialResultTypes
-				} else {
-					panic("can't find merge group operator for agg optimize!")
-				}
+				mergeGroup.PartialResults = partialResults
+				mergeGroup.PartialResultTypes = partialResultTypes
 			}
 		}
 	}

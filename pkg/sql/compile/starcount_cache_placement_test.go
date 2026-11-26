@@ -34,6 +34,34 @@ func TestIsCacheRoutableStarCount(t *testing.T) {
 		want bool
 	}{
 		{name: "single table", want: true},
+		{name: "found rows having", edit: func(query *plan.Query, _ *plan.Node) {
+			query.Nodes[1].FilterList = []*plan.Expr{zmAggFuncExpr("found_rows", zmAggConstExpr(), 0)}
+		}},
+		{name: "advisory lock having", edit: func(query *plan.Query, _ *plan.Node) {
+			query.Nodes[1].FilterList = []*plan.Expr{zmAggFuncExpr("is_free_lock", zmAggConstExpr(), 0)}
+		}},
+		{name: "ordinary having", edit: func(query *plan.Query, _ *plan.Node) {
+			query.Nodes[1].FilterList = []*plan.Expr{zmAggLitExpr(1)}
+		}},
+		{name: "coordinator projection above aggregate", edit: func(query *plan.Query, _ *plan.Node) {
+			query.Nodes = append(query.Nodes, &plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{1},
+				ProjectList: []*plan.Expr{zmAggFuncExpr("found_rows", zmAggConstExpr(), 0)},
+			})
+			query.Steps[0] = 2
+		}},
+		{name: "coordinator projection on scan", edit: func(_ *plan.Query, scan *plan.Node) {
+			scan.ProjectList = []*plan.Expr{zmAggFuncExpr("is_free_lock", zmAggConstExpr(), 0)}
+		}},
+		{name: "ordinary projection above aggregate", want: true, edit: func(query *plan.Query, _ *plan.Node) {
+			query.Nodes = append(query.Nodes, &plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{1},
+				ProjectList: []*plan.Expr{zmAggColExpr(0)},
+			})
+			query.Steps[0] = 2
+		}},
 		{name: "published table", edit: func(_ *plan.Query, scan *plan.Node) { scan.ObjRef.PubInfo = &plan.PubInfo{} }},
 		{name: "historical", edit: func(_ *plan.Query, scan *plan.Node) { scan.ScanSnapshot = &plan.Snapshot{} }},
 		{name: "force local", edit: func(_ *plan.Query, scan *plan.Node) { scan.Stats = &plan.Stats{ForceOneCN: true} }},

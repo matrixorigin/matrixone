@@ -231,3 +231,19 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 		})
 	}
 }
+
+func TestScopeAggOptimizeWithSeparateAggregateKeepsInput(t *testing.T) {
+	data := readutil.NewBlockListRelationData(0)
+	data.AppendBlockInfo(&objectio.EmptyBlockInfo)
+	data.AppendBlockInfo(&objectio.BlockInfo{BlockID: types.Blockid{1}})
+	node := zmAggNode(nil, zmAggFuncExpr("starcount", zmAggConstExpr(), 0))
+	s := &Scope{
+		DataSource: &Source{node: node},
+		NodeInfo:   engine.Node{Mcpu: 1, Data: data},
+	}
+	// Any attempt to compute partials would call a method on the missing
+	// relation. A separated scan must simply preserve its original input.
+	require.NoError(t, s.aggOptimize(&Compile{}, nil, t.Context()))
+	require.Same(t, data, s.NodeInfo.Data)
+	require.False(t, s.StarCountOnly)
+}
