@@ -356,6 +356,8 @@ type tableStuff struct {
 	boundedPick                       bool
 	tarClearBaseline                  *dataBranchSnapshotRelation
 	tarPathDefs, basePathDefs         []*plan.TableDef
+	// Omitted destination ON UPDATE columns need explicit identity assignments.
+	pickPreserveOnUpdateNames []string
 	// lcaIdent is the winning owner identity lcaRel was reopened under
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.

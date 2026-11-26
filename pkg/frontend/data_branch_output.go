@@ -152,6 +152,7 @@ type applyBatchInfo struct {
 	writableNames          []string
 	stagedUpdateNames      []string
 	specialUpdateNames     []string
+	preserveOnUpdateNames  []string
 	updateValueIdxes       []int
 	disableInsertStage     bool
 	insertRowsIndividually bool
@@ -275,6 +276,7 @@ func newApplyBatchInfo(
 		writableNames:          writableNames,
 		stagedUpdateNames:      stagedUpdateNames,
 		specialUpdateNames:     specialUpdateNames,
+		preserveOnUpdateNames:  tblStuff.pickPreserveOnUpdateNames,
 		updateValueIdxes:       updateValueIdxes,
 		disableInsertStage:     disableInsertStage,
 		insertRowsIndividually: insertRowsIndividually,
@@ -340,13 +342,17 @@ func (batchInfo *applyBatchInfo) stagedUpdateSQL(baseTable, updateTable string) 
 	const baseAlias = "branch_apply_base"
 	const stageAlias = "branch_apply_stage"
 
-	assignments := make([]string, 0, len(batchInfo.stagedUpdateNames))
+	if len(batchInfo.stagedUpdateNames) == 0 {
+		return "", nil
+	}
+	assignments := make([]string, 0, len(batchInfo.stagedUpdateNames)+len(batchInfo.preserveOnUpdateNames))
 	for _, name := range batchInfo.stagedUpdateNames {
 		quotedName := quoteIdentifierForSQL(name)
 		assignments = append(assignments, fmt.Sprintf("%s.%s = %s.%s", baseAlias, quotedName, stageAlias, quotedName))
 	}
-	if len(assignments) == 0 {
-		return "", nil
+	for _, name := range batchInfo.preserveOnUpdateNames {
+		qualifiedName := baseAlias + "." + quoteIdentifierForSQL(name)
+		assignments = append(assignments, qualifiedName+" = "+qualifiedName)
 	}
 
 	predicates := make([]string, len(batchInfo.deleteKeyNames))
@@ -371,10 +377,14 @@ func (batchInfo *applyBatchInfo) stagedSpecialUpsertSQL(baseTable, updateTable s
 	}
 
 	columns := joinQuotedColumnNames(batchInfo.writableNames)
-	assignments := make([]string, len(batchInfo.specialUpdateNames))
-	for i, name := range batchInfo.specialUpdateNames {
+	assignments := make([]string, 0, len(batchInfo.specialUpdateNames)+len(batchInfo.preserveOnUpdateNames))
+	for _, name := range batchInfo.specialUpdateNames {
 		quotedName := quoteIdentifierForSQL(name)
-		assignments[i] = fmt.Sprintf("%s = values(%s)", quotedName, quotedName)
+		assignments = append(assignments, fmt.Sprintf("%s = values(%s)", quotedName, quotedName))
+	}
+	for _, name := range batchInfo.preserveOnUpdateNames {
+		quotedName := quoteIdentifierForSQL(name)
+		assignments = append(assignments, quotedName+" = "+quotedName)
 	}
 	return []string{fmt.Sprintf(
 		"insert into %s (%s) select %s from %s on duplicate key update %s",
@@ -2306,6 +2316,13 @@ func dataBranchDirectUpdateSQL(
 	}
 	if written == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("Data Branch update has no writable non-key columns")
+	}
+	for _, name := range tblStuff.pickPreserveOnUpdateNames {
+		quotedName := quoteIdentifierForSQL(name)
+		buf.WriteString(",")
+		buf.WriteString(quotedName)
+		buf.WriteString(" = ")
+		buf.WriteString(quotedName)
 	}
 	buf.WriteString(" where ")
 	if err := writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf); err != nil {

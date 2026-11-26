@@ -252,4 +252,22 @@ data branch pick later_src into later_dst between snapshot issue32003_later_lo a
 select k,v from later_dst order by k;
 drop snapshot issue32003_later_hi;
 drop snapshot issue32003_later_lo;
+
+-- Later ON UPDATE columns retain their values on updates, but use defaults on inserts.
+create table touch_root (k int primary key, v int, color enum('red','green','blue') unique, tag enum('old','new'));
+insert into touch_root values (1,10,'red','old'),(2,20,'green','old');
+data branch create table touch_src from touch_root;
+data branch create table touch_dst from touch_root;
+create snapshot issue32003_touch_lo for account sys;
+truncate table touch_src;
+insert into touch_src values (1,11,'red','new'),(2,21,'blue','new'),(3,31,'green','new');
+create snapshot issue32003_touch_hi for account sys;
+alter table touch_src add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+alter table touch_dst add column touched timestamp not null default '2000-01-01 00:00:00' on update current_timestamp;
+update touch_dst set touched='2001-01-01 00:00:00' where k in (1,2);
+data branch pick touch_src into touch_dst between snapshot issue32003_touch_lo and issue32003_touch_hi when conflict accept;
+select k,v from touch_dst where tag='new' and color=case k when 1 then 'red' when 2 then 'blue' when 3 then 'green' end order by k;
+select k from touch_dst where (k in (1,2) and touched='2001-01-01 00:00:00') or (k=3 and touched='2000-01-01 00:00:00') order by k;
+drop snapshot issue32003_touch_hi;
+drop snapshot issue32003_touch_lo;
 drop database issue32003;
