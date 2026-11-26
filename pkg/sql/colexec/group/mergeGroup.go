@@ -481,11 +481,11 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 	bat *batch.Batch,
 ) error {
 	ctr := &mergeGroup.ctr
-	if len(bat.ExtraBuf) == 0 {
+	if len(bat.ExtraBuf()) == 0 {
 		return moerr.NewInvalidInputNoCtx("merge-group partial metadata is missing")
 	}
 	ctr.freeSpillAggList()
-	reader := bytes.NewReader(bat.ExtraBuf)
+	reader := bytes.NewReader(bat.ExtraBuf())
 	incomingType, err := types.ReadInt32(reader)
 	if err != nil {
 		return err

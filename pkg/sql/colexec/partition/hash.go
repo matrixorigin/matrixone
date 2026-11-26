@@ -380,8 +380,7 @@ func (ctr *hashContainer) finalizeSortFallback(proc *process.Process, analyzer p
 // selection copy and have no cancellation hook. This operator can retain a
 // large, wide input, so cancellation must be observed during final copying too.
 func (ctr *hashContainer) shuffleRetained(proc *process.Process, analyzer process.Analyzer, selections []int64) (err error) {
-	attrs, attrTypes := ctr.retained.GetSchema()
-	materializing := batch.NewWithSchema(attrs, attrTypes, proc.Mp())
+	materializing := batch.NewWithTypes(ctr.retained.Types(), proc.Mp())
 	ctr.materializing = materializing
 	ctr.accountMemory(analyzer)
 	defer func() {

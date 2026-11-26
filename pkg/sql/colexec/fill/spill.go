@@ -319,7 +319,6 @@ func addOriginalNullMarkers(
 ) error {
 	rows := bat.RowCount()
 	vecCount := len(bat.Vecs)
-	attrCount := len(bat.Attrs)
 	allocMP := mp
 	if view != nil {
 		allocMP = view
@@ -331,12 +330,10 @@ func addOriginalNullMarkers(
 			}
 		}
 		bat.Vecs = bat.Vecs[:vecCount]
-		bat.Attrs = bat.Attrs[:attrCount]
 	}
 	for c := 0; c < colLen; c++ {
 		marker := vector.NewVec(types.T_bool.ToType(), allocMP)
 		bat.Vecs = append(bat.Vecs, nil)
-		bat.Attrs = append(bat.Attrs, "")
 		bat.SetVector(int32(len(bat.Vecs)-1), marker)
 		if err := marker.PreExtend(rows, allocMP); err != nil {
 			rollback()
@@ -372,7 +369,6 @@ func addLinearDistanceMarkers(
 	bat.Vecs = append(bat.Vecs, make([]*vector.Vector, colLen)...)
 	copy(bat.Vecs[originalStart+colLen:], bat.Vecs[originalStart:originalStart+colLen])
 	copy(bat.Vecs[originalStart:], markers)
-	bat.Attrs = append(bat.Attrs, make([]string, colLen)...)
 	return nil
 }
 
@@ -417,7 +413,6 @@ func makeBorrowedSpillBatch(
 	if err := addOriginalNullMarkers(bat, colLen, mp, view); err != nil {
 		clear(bat.Vecs)
 		bat.Vecs = nil
-		bat.Attrs = nil
 		bat.SetRowCount(0)
 		return nil, err
 	}
@@ -439,7 +434,6 @@ func releaseBorrowedSpillBatch(
 	}
 	clear(bat.Vecs)
 	bat.Vecs = nil
-	bat.Attrs = nil
 	bat.SetRowCount(0)
 }
 
@@ -455,9 +449,6 @@ func stripOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) {
 		}
 	}
 	bat.Vecs = bat.Vecs[:start]
-	if len(bat.Attrs) >= colLen {
-		bat.Attrs = bat.Attrs[:len(bat.Attrs)-colLen]
-	}
 }
 
 func stripLinearDistanceMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) {
@@ -731,7 +722,6 @@ func cloneBatchWindow(
 		result = batch.NewWithSize(len(bat.Vecs))
 		cloneMP = view
 	}
-	result.Attrs = append(result.Attrs, bat.Attrs...)
 	for i, vec := range bat.Vecs {
 		cloned, err := vec.CloneWindow(start, end, cloneMP)
 		if err != nil {

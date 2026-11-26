@@ -272,7 +272,7 @@ func bytesOrderPartition(sels []int64, diffs []bool, partitions []int64, vec *ve
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
 	// A constant NULL has no payload domain (a literal NULL can be ANY).
 	// It contributes no new boundaries, but must retain earlier sort keys.
-	if vec.IsConstNull() {
+	if vec.IsConstNull() || (vec.GetType().Oid == types.T_any && (vec.Length() == 0 || vec.AllNull())) {
 		partitions = partitions[:0]
 		if len(sels) == 0 {
 			return partitions

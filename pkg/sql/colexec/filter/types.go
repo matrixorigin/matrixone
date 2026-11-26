@@ -93,6 +93,9 @@ func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err erro
 	filter.ctr.resetExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.RuntimeFilterExprs = nil
+	// Nothing reads the output after Reset: return the view's selection
+	// words to the pool of the execution that allocated them.
+	filter.ctr.selection.view.FreeSelection()
 	if filter.ctr.account != nil {
 		filter.Free(proc, pipelineFailed, err)
 	}
@@ -102,7 +105,7 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 	filter.ctr.cleanExecutor()
 	filter.ctr.cleanRuntimeExecutor()
 	filter.ctr.allExecutors = nil
-	filter.ctr.selection.rows.Free()
+	filter.ctr.selection.view.FreeSelection()
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(filter.ctr.mp(proc))
 		filter.ctr.buf = nil

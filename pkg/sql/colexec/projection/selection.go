@@ -48,7 +48,7 @@ func (projection *Projection) SetSelectionOutput(allowed bool) {
 func (projection *Projection) finishSelected(input *batch.Batch, mp *mpool.MPool) (*batch.Batch, error) {
 	buf := projection.ctr.buf
 	buf.SetRowCount(input.PhysicalRowCount())
-	buf.SetSelection(input.PhysicalRowCount(), input.Selection())
+	buf.SetSelection(input.Selection())
 	if projection.ctr.selection.output {
 		return buf, nil
 	}

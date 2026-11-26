@@ -1715,10 +1715,6 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a != b
 		}, selectList)
-	case types.T_bit:
-		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
-			return a != b
-		}, selectList)
 	case types.T_int8:
 		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a != b
@@ -1747,7 +1743,7 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a != b
 		}, selectList)
-	case types.T_uint64:
+	case types.T_bit, types.T_uint64:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a != b
 		}, selectList)
@@ -1782,7 +1778,12 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)
-	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+	// Geometry stays with the equality-grade varlena family: it shares the
+	// compareTextBytes oracle with equalFn, so ordinary inequality is the
+	// exact complement of ordinary equality on non-NULL values and propagates
+	// ordinary NULLs alongside VARCHAR/BLOB/TEXT/DATALINK.
+	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
+		types.T_geometry, types.T_geometry32:
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareTextBytes(*paramType, a, b) != 0
 		}, selectList)

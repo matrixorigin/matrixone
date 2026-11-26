@@ -262,7 +262,7 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			attrs[i] = attr.ColName
 		}
-		external.ctr.buf = batch.New(attrs)
+		external.ctr.buf = batch.NewWithSize(len(attrs))
 		flag := param.ParallelLoad
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
@@ -478,15 +478,14 @@ func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) (bat *batch.Batch, err error) {
 	num := len(node.TableDef.Cols)
 	bat = &batch.Batch{
-		Attrs: make([]string, num),
-		Vecs:  make([]*vector.Vector, num),
+		Vecs: make([]*vector.Vector, num),
 	}
 
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if i == num-1 && (catalog.ContainExternalHidenCol(bat.Attrs[i]) ||
-			catalog.IsForeignQueryCol(bat.Attrs[i], node.TableDef.Cols[i].ColId)) {
+		name := node.TableDef.Cols[i].Name
+		if i == num-1 && (catalog.ContainExternalHidenCol(name) ||
+			catalog.IsForeignQueryCol(name, node.TableDef.Cols[i].ColId)) {
 			typ := types.T_varchar.ToType()
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
 			if err != nil {

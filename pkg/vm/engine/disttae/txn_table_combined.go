@@ -982,7 +982,6 @@ func appendChangesAtCommitTS(dst **batch.Batch, src **batch.Batch, offset *int, 
 
 func newChangeBatch(src *batch.Batch, mp *mpool.MPool) *batch.Batch {
 	dst := batch.NewWithSize(len(src.Vecs))
-	dst.Attrs = append(dst.Attrs, src.Attrs...)
 	for i, vec := range src.Vecs {
 		dst.Vecs[i] = vector.NewVec(*vec.GetType(), mp)
 	}
@@ -1163,11 +1162,11 @@ func (t *combinedTxnTable) PrimaryKeysMayBeModified(
 	return changed, err
 }
 
-func (t *combinedTxnTable) Write(context.Context, *batch.Batch) error {
+func (t *combinedTxnTable) Write(context.Context, *batch.Batch, []string) error {
 	panic("BUG: cannot write data to partition primary table")
 }
 
-func (t *combinedTxnTable) Delete(context.Context, *batch.Batch, string) error {
+func (t *combinedTxnTable) Delete(context.Context, *batch.Batch, []string, string) error {
 	panic("BUG: cannot delete data to partition primary table")
 }
 

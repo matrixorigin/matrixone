@@ -872,7 +872,10 @@ func (r *reader) read(
 	readerFilter *engine.ReaderFilterRequest,
 	filterBeforeTopK bool,
 ) (isEnd bool, lateMaterialized bool, err error) {
+	// Reusing the output batch for the next block drops the cache pins its
+	// borrowed columns aliased.
 	outBatch.CleanOnlyData()
+	readerFilter.ReleasePins()
 
 	var dataState engine.DataState
 	var blkInfo *objectio.BlockInfo
@@ -1144,8 +1147,6 @@ func (r *reader) read(
 		// we collect mem cache hit related statistics info for blk read here
 		gatherStats(numRead, numHit)
 	}
-
-	outBatch.SetAttributes(cols)
 
 	if blkInfo.IsSorted() && r.columns.indexOfFirstSortedColumn != -1 {
 		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)

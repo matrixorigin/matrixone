@@ -263,7 +263,7 @@ func (idx *MutIndex) Contains(
 	keysZM index.ZM,
 	blkID *types.Blockid,
 	skipFn func(row uint32) error,
-	mp *mpool.MPool,
+	_ *mpool.MPool,
 ) (err error) {
 	if keysZM.Valid() {
 		if exist := idx.zonemap.FastIntersect(keysZM); !exist {
@@ -296,8 +296,7 @@ func (idx *MutIndex) Contains(
 			if err != nil {
 				return err
 			}
-			containers.UpdateValue(keys, uint32(offset), nil, true, mp)
-			return nil
+			return containers.MarkNull(keys, uint32(offset))
 		}
 		return nil
 	}

@@ -158,6 +158,21 @@ func Test_NotEqualFn(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 
+	t.Run("bit", func(t *testing.T) {
+		bitType := types.T_bit.ToType()
+		bitType.Width = 64
+		const highBit uint64 = 1 << 63
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(bitType, []uint64{1, highBit | 1, 1, 0}, []bool{false, false, false, true}),
+			NewFunctionTestInput(bitType, []uint64{1, 1, 0, 1}, []bool{false, false, true, false}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{false, true, false, false}, []bool{false, false, true, true})
+		tcc := NewFunctionTestCase(testutil.NewProcess(t), inputs, expect, notEqualFn)
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, info)
+	})
+
 	// Test string inequality
 	{
 		tc := tcTemp{

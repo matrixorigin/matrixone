@@ -132,9 +132,10 @@ type MultiUpdate struct {
 }
 
 type updateCtxInfo struct {
-	Source       engine.Relation
-	tableType    UpdateTableType
-	insertAttrs  []string
+	Source    engine.Relation
+	tableType UpdateTableType
+	// writeAttrs names the columns of the batches written to Source.
+	writeAttrs   []string
 	isContiguous bool
 	refBatch     *batch.Batch
 }

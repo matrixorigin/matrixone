@@ -248,20 +248,16 @@ func prepareTestInsertBatchs(
 		columnC := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 		columnD := testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), mp, false, nil, nil)
 
-		attrs := []string{"a", "b", "c", "d"}
 		bat := &batch.Batch{
-			Vecs:  []*vector.Vector{columnA, columnB, columnC, columnD},
-			Attrs: attrs,
+			Vecs: []*vector.Vector{columnA, columnB, columnC, columnD},
 		}
 
 		if hasUniqueKey {
 			bat.Vecs = append(bat.Vecs, testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil, nil))
-			bat.Attrs = append(bat.Attrs, "uk_pk")
 		}
 
 		if hasSecondaryKey {
 			bat.Vecs = append(bat.Vecs, testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil, nil))
-			bat.Attrs = append(bat.Attrs, "sk_pk")
 		}
 
 		bat.SetRowCount(bat.Vecs[0].Length())

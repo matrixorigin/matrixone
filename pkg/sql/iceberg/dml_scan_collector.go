@@ -70,16 +70,6 @@ func (c *DMLMatchedScanCollector) AddBatch(ctx context.Context, bat *batch.Batch
 			spec.MemoryBudget.release(reserved)
 		}
 	}()
-	spec.DataFilePathColumnIndex = dmlBatchColumnIndexByName(
-		bat,
-		api.DMLDataFilePathColumnName,
-		spec.DataFilePathColumnIndex,
-	)
-	spec.RowOrdinalColumnIndex = dmlBatchColumnIndexByName(
-		bat,
-		api.DMLRowOrdinalColumnName,
-		spec.RowOrdinalColumnIndex,
-	)
 	targets, err := BuildDMLMatchedDeleteTargetsFromScanBatch(ctx, DMLMatchedScanBatchRequest{
 		Batch:                   bat,
 		DataFiles:               spec.DataFiles,
@@ -162,22 +152,6 @@ func (c *DMLMatchedScanCollector) addTarget(target DMLMatchedDeleteTarget) {
 	if len(merged.EqualityIDs) == 0 && len(target.EqualityIDs) > 0 {
 		merged.EqualityIDs = append([]int(nil), target.EqualityIDs...)
 	}
-}
-
-func dmlBatchColumnIndexByName(bat *batch.Batch, name string, fallback int32) int32 {
-	if bat == nil || len(bat.Attrs) != len(bat.Vecs) {
-		return fallback
-	}
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return fallback
-	}
-	for idx, attr := range bat.Attrs {
-		if strings.ToLower(strings.TrimSpace(attr)) == name {
-			return int32(idx)
-		}
-	}
-	return fallback
 }
 
 func dataFilesFromScanPlan(plan *api.IcebergScanPlan) []api.DataFile {

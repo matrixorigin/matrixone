@@ -681,6 +681,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		if runErr != nil {
 			return runErr
 		}
+		receiver.relayAdmission = scopeRemoteObjectAdmission(s)
 		if !receiver.needNotReply {
 			s = appendWriteBackOperator(runCompile, s)
 		}
@@ -1062,6 +1063,10 @@ type messageReceiverOnServer struct {
 
 	colexecServer *colexec.Server
 
+	// relayAdmission is the decoded scope's remote-object admission; it
+	// picks the wire names older coordinators expect on relay batches.
+	relayAdmission remoteObjectAdmission
+
 	// result.
 	phyPlan                           *models.PhyPlan
 	resourceDelta                     resource.Delta
@@ -1398,7 +1403,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	}
 
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryWithBuffer(&transport, false)
+	data, err := b.MarshalBinaryWithBufferAndNames(
+		&transport, false, receiver.relayAdmission.relayWireNames(b))
 	if err != nil {
 		return err
 	}

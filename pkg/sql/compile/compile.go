@@ -5662,7 +5662,7 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
 		}
 		// Keep the query's coordinator-first list intact for other scans.
-		// Object owners depend only on the selected identities, not ingress.
+		// Immutable object owners depend only on the selected identities, not ingress.
 		slices.SortFunc(nodes, func(a, b engine.Node) int {
 			if n := cmp.Compare(a.Id, b.Id); n != 0 {
 				return n
