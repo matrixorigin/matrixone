@@ -365,7 +365,9 @@ func (m *Merge) doMergeFiles(ctx context.Context, files []*FileMeta) error {
 
 	// Step 3. do simple merge
 	var uploadFile = func(ctx context.Context, fp *FileMeta) error {
-		if m.table.UsesMetricBatchReceipt() {
+		// Only CSV is used by the SQL writer's fallback. TAE is a separate
+		// file-only format and uses the existing TAE reader and import path.
+		if m.table.UsesMetricBatchReceipt() && path.Ext(fp.FilePath) == table.CsvExtension {
 			return m.mergeMetricFile(ctx, fp.FilePath)
 		}
 		row := m.table.GetRow(ctx)

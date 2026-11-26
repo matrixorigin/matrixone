@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
@@ -47,7 +48,7 @@ var commitUnknown = &mysql.MySQLError{Number: moerr.ErrTxnUnknown, Message: "txn
 
 func metricDeliveryDB(t *testing.T) sqlmock.Sqlmock {
 	t.Helper()
-	db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	provider, backoff := dbholder.GetOrInitDBConn, dbholder.DBConnErrCount
@@ -164,6 +165,93 @@ func TestMetricMergeRecoversCommitAndDeleteFailures(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
+func TestMetricReplaySwitchesCNAfterDeadline(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(ctx) })
+	healthy := metricDeliveryDB(t)
+	getHealthy := dbholder.GetOrInitDBConn
+	stalledDB, stalled, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stalledDB.Close() })
+
+	forced := 0
+	dbholder.GetOrInitDBConn = func(forceNew, randomCN bool) (*sql.DB, error) {
+		if forceNew {
+			require.True(t, randomCN)
+			forced++
+			dbholder.DBConnErrCount.Reset()
+		}
+		if forced == 0 {
+			return stalledDB, nil
+		}
+		return getHealthy(forceNew, randomCN)
+	}
+	tbl := mometric.SingleMetricTable
+	id := uuid.New()
+	file := table.MetricBatchPath("etl:sys/logs/reconnect.csv", id)
+	payload := "m," + sampleTime + ",1,cn-1,CN,sys,0,\n"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: file, Entries: []fileservice.IOEntry{{Size: int64(len(payload)), Data: []byte(payload)}},
+	}))
+	merge, err := NewMerge(ctx, "", WithTable(tbl), WithFileService(fs))
+	require.NoError(t, err)
+	t.Cleanup(merge.Stop)
+
+	// A stopped task should leave the connection failure count unchanged.
+	canceled, stop := context.WithCancel(ctx)
+	stop()
+	require.ErrorIs(t, etl.ReplayMetricBatch(canceled, tbl, []byte(payload), id), context.Canceled)
+	require.True(t, dbholder.DBConnErrCount.Check())
+
+	// Simulate the transaction deadline used by the merge path, without
+	// spending ten seconds waiting for each attempt against the stalled CN.
+	for i := 0; i <= dbholder.DBConnRetryThreshold; i++ {
+		stalled.ExpectBegin().WillDelayFor(time.Second)
+		attempt, cancel := context.WithTimeoutCause(ctx, 50*time.Millisecond, moerr.CauseWriteRowRecords)
+		require.Error(t, etl.ReplayMetricBatch(attempt, tbl, []byte(payload), id))
+		require.ErrorIs(t, attempt.Err(), context.DeadlineExceeded)
+		cancel()
+	}
+	require.NoError(t, stalled.ExpectationsWereMet())
+	_, err = fs.StatFile(ctx, file)
+	require.NoError(t, err)
+	require.Zero(t, forced)
+	require.False(t, dbholder.DBConnErrCount.Check())
+
+	expectMetricLoad(healthy, tbl, id, payload)
+	healthy.ExpectCommit()
+	require.NoError(t, merge.mergeMetricFile(ctx, file))
+	require.Equal(t, 1, forced)
+	_, err = fs.StatFile(ctx, file)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
+func TestMetricMergeDeliversTAE(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewFS(t)
+	t.Cleanup(func() { fs.Close(ctx) })
+	mock := metricDeliveryDB(t)
+	tbl := mometric.SqlStatementCUTable
+	file := "etl:sys/logs/2026/11/25/sql_statement_cu/1795599361_cn_CN_111111111.tae"
+	writer := etl.NewTAEWriter(ctx, tbl, mpool.MustNewZero(), file, fs)
+	require.NoError(t, writer.WriteStrings([]string{"sys", sampleTime, "1", "cn", "CN", "internal_sql"}))
+	_, err := writer.FlushAndClose()
+	require.NoError(t, err)
+	info, err := fs.StatFile(ctx, file)
+	require.NoError(t, err)
+	merge, err := NewMerge(ctx, "", WithTable(tbl), WithFileService(fs))
+	require.NoError(t, err)
+	t.Cleanup(merge.Stop)
+
+	mock.ExpectPing()
+	mock.ExpectExec(regexp.QuoteMeta("LOAD DATA INLINE FORMAT='csv', DATA='sys," + sampleTime + ",1.000000,cn,CN,internal_sql\n' INTO TABLE system_metrics.sql_statement_cu FIELDS TERMINATED BY ','")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, merge.doMergeFiles(ctx, []*FileMeta{{FilePath: file, FileSize: info.Size}}))
+	_, err = fs.StatFile(ctx, file)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
 type failMetricFileDelete struct {
 	fileservice.FileService
 	fail atomic.Bool
@@ -209,4 +297,19 @@ func TestMetricMergePreservesIncompatibleFiles(t *testing.T) {
 	}
 	_, err = fs.StatFile(ctx, group[3].FilePath)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+
+	// Once the original batch is verified undelivered, an operator can
+	// publish the same bytes under a stable, versioned filename.
+	recoveryID := uuid.New()
+	recovered := table.MetricBatchPath(group[0].FilePath, recoveryID)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: recovered, Entries: []fileservice.IOEntry{{Size: int64(len(valid)), Data: []byte(valid)}},
+	}))
+	expectMetricLoad(mock, tbl, recoveryID, valid)
+	mock.ExpectCommit()
+	require.NoError(t, merge.doMergeFiles(ctx, []*FileMeta{{FilePath: recovered, FileSize: int64(len(valid))}}))
+	_, err = fs.StatFile(ctx, recovered)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	_, err = fs.StatFile(ctx, group[0].FilePath)
+	require.NoError(t, err)
 }

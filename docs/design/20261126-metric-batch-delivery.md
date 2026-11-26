@@ -46,11 +46,46 @@ query created_at to inspect that growth.
 
 Fresh bootstrap creates the receipt table in the system account. Shutdown
 upgrade creates it through an idempotent cluster entry in the pending
-4.0.7 catalog version. Older files without a batch UUID may include batches
-committed by a previous binary. ETL leaves those files in place for
-reconciliation and continues to the next file. It also retains incompatible
-versioned files before opening a SQL transaction. The two metric tables
-keep their existing columns and CSV column order.
+4.0.7 catalog version. The two metric tables keep their existing columns
+and CSV column order. ETL retains incompatible versioned CSV before opening
+a SQL transaction. Legacy TAE files keep their existing import path. The
+SQL writer has only ever used CSV for fallback.
+
+## Legacy CSV during a shutdown upgrade
+
+A legacy CSV filename is the same whether the producer wrote directly to
+files or fell back after a SQL error. Even a file-only batch may already
+have been imported by the old ETL job if file deletion failed. The new
+importer leaves unversioned CSV in place and reports the path for
+reconciliation. A new batch UUID cannot establish the outcome of an old
+transaction.
+
+Where the deployment can verify that its pending legacy CSV was produced
+without SQL writes and has never been imported, let the old cluster drain
+that backlog before shutdown. Keep the task runner and fileservice
+available until a scheduled ETL run finishes, verify file removal and the
+expected rows, and inventory both metric directories again after all old
+producers stop. Keep remaining files for reconciliation. Do not use the
+old importer to drain an ambiguous SQL fallback backlog.
+
+After upgrade, operators can recover a verified undelivered batch using
+the new importer. Record the original object key, target key and a fresh
+lowercase UUID once. Publish the unchanged CSV in the same table directory
+as `<original-stem>-batch-<uuid>.csv`. For example, on a local fileservice,
+with an already recorded UUID and with `source` set to the verified file:
+
+```sh
+mv -n -- "$source" "${source%.csv}-batch-$batch_uuid.csv"
+```
+
+On object storage, copy to the recorded key and keep the source until the
+receipt is visible. Use the same target key and UUID if the copy result
+is uncertain. A receipt can be checked with
+`SELECT batch_id FROM system_metrics.metric_batch_receipt WHERE batch_id = '<uuid>'`.
+Once the receipt is visible, archive any remaining legacy source outside
+the scanned directory. If the batch was already delivered, archive it
+without publishing a versioned file. Leave unresolved files in place.
+Only CSV that matches the current table schema can use this procedure.
 
 A batch can still be lost if its producer crashes before publishing a
 fallback for a failed write. Persisting the payload before the initial SQL

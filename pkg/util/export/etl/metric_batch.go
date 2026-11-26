@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	dbholder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -30,13 +31,18 @@ func ReplayMetricBatch(ctx context.Context, tbl *table.Table, data []byte, id uu
 }
 
 func (f *SQLFlusher) flushMetricBatch(ctx context.Context, data []byte, id uuid.UUID, firstWrite bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	forceNew := !dbholder.DBConnErrCount.Check()
 	conn, err := dbholder.GetOrInitDBConn(forceNew, firstWrite || forceNew)
 	if err == nil {
 		err = dbholder.CommitMetricBatch(ctx, conn, id, f.loadSQL(data))
 	}
 	if err != nil {
-		if ctx.Err() == nil {
+		// Count the SQL operation's own deadline, even though it canceled
+		// the attempt. A task cancellation does not indicate an unhealthy CN.
+		if ctx.Err() == nil || context.Cause(ctx) == moerr.CauseWriteRowRecords {
 			_ = dbholder.DBConnErrCount.Count()
 		}
 		return err
