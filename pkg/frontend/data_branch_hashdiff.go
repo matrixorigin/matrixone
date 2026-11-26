@@ -2234,164 +2234,215 @@ func reconcilePickWindowDestinationInsert(
 	return emitBatch(emit, wrapped, false, tables.retPool)
 }
 
-// Exclude only unchanged rows that both branches actually inherited. Equal
-// first committed values can also come from writes made to each child.
+// Resolve a fork image against the part of the schema path that led to it.
+func dataBranchSchemaPathTo(image *plan2.TableDef, defs []*plan2.TableDef) []*plan2.TableDef {
+	i := slices.IndexFunc(defs, func(def *plan2.TableDef) bool {
+		return def.TblId == image.TblId && def.Version >= image.Version
+	})
+	if i < 0 {
+		return nil
+	}
+	if defs[i].Version == image.Version {
+		// Retain the existing definition and its proved edge mappings.
+		return defs[:i+1]
+	}
+	return append(slices.Clone(defs[:i]), image)
+}
+
+// Exclude only rows whose current destination values match the initial
+// destination image, with matching fork evidence along both paths. Source
+// writes after cloning may already be visible in its first committed image.
 func excludeInheritedPickRows(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
 	matches *batch.Batch, conflicts []int64,
 ) ([]int64, error) {
 	origin := tables.pickOrigin
 	proof := newDataBranchRenameProof(tables.pickForkColumns)
+	reopen := func(image dataBranchPickWindowStart) (engine.Relation, branchIdentity, error) {
+		return reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{image.identity}, image.tableID, image.snapshot)
+	}
+	source, sourceOwner, err := reopen(origin.source)
+	if isMissingDataBranchRelationByID(err) {
+		return conflicts, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rel, ident, err := reopen(origin.destination)
+	if isMissingDataBranchRelationByID(err) {
+		return conflicts, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sourceImage := source.GetTableDef(identityCtx(ctx, sourceOwner))
+	def := rel.GetTableDef(identityCtx(ctx, ident))
+	if len(historicalPickPrimaryKeyNames(sourceImage, tables.pickSourceDefs, tables.pickSourceEdges, proof)) == 0 ||
+		len(historicalPickPrimaryKeyNames(def, tables.pickBaseDefs, tables.pickBaseEdges, proof)) == 0 {
+		return conflicts, nil
+	}
+	sourcePath := dataBranchSchemaPathTo(sourceImage, tables.pickSourceDefs)
+	destinationPath := dataBranchSchemaPathTo(def, tables.pickBaseDefs)
+	if len(sourcePath) == 0 || len(destinationPath) == 0 {
+		return conflicts, nil
+	}
+	forkColumns, err := dataBranchLineageEndpointColumns(
+		sourcePath, tables.pickSourceEdges[:len(sourcePath)],
+		destinationPath, tables.pickBaseEdges[:len(destinationPath)], proof,
+	)
+	if err != nil {
+		return conflicts, nil // The two fork layouts cannot establish a shared row.
+	}
+
+	sourceCols, proofCols := forkRowColumns(sourceImage), forkRowColumns(def)
+	if len(sourceCols) == 0 || len(proofCols) == 0 {
+		return conflicts, nil
+	}
+	sourceOrder := make([]int, len(sourceCols))
+	for i, col := range sourceCols {
+		destCol := forkColumns[strings.ToLower(col.Name)]
+		if destCol == nil || !isDataBranchLogicalTypeEquivalent(col.Typ, destCol.Typ) {
+			return conflicts, nil
+		}
+		idx := slices.IndexFunc(proofCols, func(c *plan2.ColDef) bool { return c.Name == destCol.Name })
+		if idx < 0 {
+			return conflicts, nil
+		}
+		sourceOrder[i] = idx
+	}
+
+	_, baseIdent := tables.endpointIdentities(ctx, ses)
+	baseDef := tables.baseRel.GetTableDef(identityCtx(ctx, baseIdent))
+	columns, err := pickSegmentColumns(def, baseDef, tables.pickBaseDefs, tables.pickBaseEdges, tables.def.baseColNames, proof)
+	if err != nil {
+		return nil, err
+	}
 	keys := vector.NewVec(*matches.Vecs[tables.def.pkColIdx].GetType(), ses.proc.Mp())
 	defer keys.Free(ses.proc.Mp())
-	inherited := slices.Clone(conflicts)
-	sourceIdent, baseIdent := tables.endpointIdentities(ctx, ses)
-	sourceDef := tables.tarRel.GetTableDef(identityCtx(ctx, sourceIdent))
-	baseDef := tables.baseRel.GetTableDef(identityCtx(ctx, baseIdent))
-	for _, side := range []struct {
-		image dataBranchPickWindowStart
-		forks []uint64
-	}{
-		{origin.source, origin.sourceForks},
-		{origin.destination, origin.destinationForks},
-	} {
-		image := side.image
-		rel, ident, err := reopenDataBranchNodeByID(
-			ctx, ses, bh, []branchIdentity{image.identity}, image.tableID, image.snapshot,
-		)
-		if err != nil {
-			if isMissingDataBranchRelationByID(err) {
-				return conflicts, nil
-			}
+	for _, row := range conflicts {
+		if err := keys.UnionOne(matches.Vecs[tables.def.pkColIdx], row, ses.proc.Mp()); err != nil {
 			return nil, err
 		}
-		def := rel.GetTableDef(identityCtx(ctx, ident))
-		endpoint := sourceDef
-		path, edges, names := tables.pickSourceDefs, tables.pickSourceEdges, tables.def.colNames
-		if image.tableID == origin.destination.tableID {
-			endpoint = baseDef
-			path, edges, names = tables.pickBaseDefs, tables.pickBaseEdges, tables.def.baseColNames
-		}
-		if len(historicalPickPrimaryKeyNames(def, path, edges, proof)) == 0 {
+	}
+
+	probe := tables
+	probe.tarRel = rel
+	probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, origin.destination.snapshot
+	probe.lcaProbeTableId = 0
+	probe.def.colNames = make([]string, 0, len(proofCols)+1)
+	probe.def.colTypes = make([]types.Type, 0, len(proofCols)+1)
+	probe.def.lcaColNames = nil
+	probe.def.tarOnlyIdxes = nil
+	probe.retPool = &retBatchList{}
+	defer probe.retPool.freeAllRetBatches(ses.proc.Mp())
+
+	// Fingerprint the complete original layout, including columns that no
+	// longer participate in the current comparison.
+	for _, col := range proofCols {
+		probe.def.colNames = append(probe.def.colNames, col.Name)
+		probe.def.colTypes = append(probe.def.colTypes, types.MustTypeFromPlan(col.Typ))
+	}
+	pk := def.Pkey.PkeyColName
+	probe.def.pkColIdx = slices.Index(probe.def.colNames, pk)
+	pkCols := def.Pkey.Names
+	if probe.def.pkKind == compositeKind {
+		probe.def.pkColIdx = len(probe.def.colNames)
+		probe.def.colNames = append(probe.def.colNames, pk)
+		probe.def.colTypes = append(probe.def.colTypes, *keys.GetType())
+	} else {
+		pkCols = []string{pk}
+	}
+	probe.def.pkColIdxes = make([]int, len(pkCols))
+	for i, name := range pkCols {
+		idx := slices.Index(probe.def.colNames, name)
+		if idx < 0 {
 			return conflicts, nil
 		}
-		columns, err := pickSegmentColumns(def, endpoint, path, edges, names, proof)
-		if err != nil {
-			return nil, err
+		probe.def.pkColIdxes[i] = idx
+	}
+
+	rows, missing, err := probeDataBranchRows(ctx, ses, bh, keys, probe, origin.destination.snapshot.ToTimestamp())
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil || rows.RowCount() == 0 {
+		return conflicts, nil
+	}
+
+	projected := batch.NewWithSize(len(columns))
+	compareIdxes := tables.def.commonIdxes
+	if len(compareIdxes) == 0 {
+		compareIdxes = tables.def.visibleIdxes
+	}
+	for _, i := range compareIdxes {
+		if slices.Contains(tables.def.pkColIdxes, i) || i == tables.def.pkColIdx {
+			continue
 		}
-		proofCols := forkRowColumns(def)
-		if len(proofCols) == 0 {
+		col := columns[i]
+		current := dataBranchColumnDefByName(baseDef, tables.def.baseColNames[i])
+		if current == nil {
 			return conflicts, nil
 		}
-		probe := tables
-		probe.tarRel = rel
-		probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, image.snapshot
-		probe.lcaProbeTableId = 0
-		probe.def.colNames = make([]string, 0, len(proofCols)+1)
-		probe.def.colTypes = make([]types.Type, 0, len(proofCols)+1)
-		probe.def.lcaColNames = nil
-		probe.def.tarOnlyIdxes = nil
-		probe.retPool = &retBatchList{}
-		defer probe.retPool.freeAllRetBatches(ses.proc.Mp())
-
-		// Read the complete original image for hashing even when the
-		// current endpoints have dropped one of its columns.
-		for _, col := range proofCols {
-			probe.def.colNames = append(probe.def.colNames, col.Name)
-			probe.def.colTypes = append(probe.def.colTypes, types.MustTypeFromPlan(col.Typ))
+		defaultExpr := current.Default.GetExpr()
+		if col == nil && !dataBranchLCASchemaContainsColumn(def, current) &&
+			current.Default.GetNullAbility() && (defaultExpr == nil || defaultExpr.GetLit().GetIsnull()) {
+			// A column introduced after this fork has no inherited value.
+			// Compare it to NULL so independently written non-NULL values
+			// still protect the destination.
+			projected.Vecs[i] = vector.NewConstNull(tables.def.colTypes[i], rows.RowCount(), ses.proc.Mp())
+			defer projected.Vecs[i].Free(ses.proc.Mp())
+			continue
 		}
-		pk := def.Pkey.PkeyColName
-		probe.def.pkColIdx = slices.Index(probe.def.colNames, pk)
-		pkCols := def.Pkey.Names
-		if probe.def.pkKind == compositeKind {
-			probe.def.pkColIdx = len(probe.def.colNames)
-			probe.def.colNames = append(probe.def.colNames, pk)
-			probe.def.colTypes = append(probe.def.colTypes, *keys.GetType())
-		} else {
-			pkCols = []string{pk}
-		}
-		probe.def.pkColIdxes = make([]int, len(pkCols))
-		for i, name := range pkCols {
-			idx := slices.Index(probe.def.colNames, name)
-			if idx < 0 {
-				return conflicts, nil
-			}
-			probe.def.pkColIdxes[i] = idx
-		}
-
-		projected := batch.NewWithSize(len(columns))
-		originalIdxes := make([]int, len(columns))
-		compareIdxes := tables.def.commonIdxes
-		if len(compareIdxes) == 0 {
-			compareIdxes = tables.def.visibleIdxes
-		}
-		for i, col := range columns {
-			if !slices.Contains(compareIdxes, i) || slices.Contains(tables.def.pkColIdxes, i) || i == tables.def.pkColIdx {
-				originalIdxes[i] = -1
-				continue
-			}
-			targetCol := dataBranchColumnDefByName(sourceDef, tables.def.colNames[i])
-			if col == nil || targetCol == nil || !isDataBranchLogicalTypeEquivalent(col.Typ, targetCol.Typ) {
-				return conflicts, nil
-			}
-			idx := slices.Index(probe.def.colNames, col.Name)
-			if idx < 0 {
-				return conflicts, nil
-			}
-			originalIdxes[i] = idx
-		}
-
-		keys.CleanOnlyData()
-		for _, row := range inherited {
-			if err := keys.UnionOne(matches.Vecs[tables.def.pkColIdx], row, ses.proc.Mp()); err != nil {
-				return nil, err
-			}
-		}
-		rows, missing, err := probeDataBranchRows(ctx, ses, bh, keys, probe, image.snapshot.ToTimestamp())
-		if err != nil {
-			return nil, err
-		}
-		if rows == nil || rows.RowCount() == 0 {
+		if col == nil || !isDataBranchLogicalTypeEquivalent(col.Typ, current.Typ) {
 			return conflicts, nil
 		}
-		for i, idx := range originalIdxes {
-			if idx >= 0 {
-				projected.Vecs[i] = rows.Vecs[idx]
-			}
+		idx := slices.Index(probe.def.colNames, col.Name)
+		if idx < 0 {
+			return conflicts, nil
 		}
-		projected.SetRowCount(rows.RowCount())
-		// The probe owns these vectors. The hashing helper can replace
-		// ENUM inputs with temporary ordinal vectors.
-		proofVectors := slices.Clone(rows.Vecs[:len(proofCols)])
-		proven, err := lookupDataBranchForkRows(ctx, ses, bh, side.forks, proofVectors, rows.RowCount())
-		if err != nil {
-			return nil, err
+		projected.Vecs[i] = rows.Vecs[idx]
+	}
+	projected.SetRowCount(rows.RowCount())
+
+	// Hash the same historical values in each fork's own column order.
+	// The helper may replace ENUM inputs with temporary ordinal vectors.
+	sourceValues := make([]*vector.Vector, len(sourceOrder))
+	for i, idx := range sourceOrder {
+		sourceValues[i] = rows.Vecs[idx]
+	}
+	sourceProof, err := lookupDataBranchForkRows(ctx, ses, bh, origin.sourceForks, sourceValues, rows.RowCount())
+	if err != nil {
+		return nil, err
+	}
+	if len(sourceProof) == 0 {
+		return conflicts, nil
+	}
+	destinationProof, err := lookupDataBranchForkRows(ctx, ses, bh,
+		origin.destinationForks, slices.Clone(rows.Vecs[:len(proofCols)]), rows.RowCount())
+	if err != nil {
+		return nil, err
+	}
+
+	inherited := make([]int64, 0, len(conflicts))
+	row, miss := 0, 0
+	for i, candidate := range conflicts {
+		if miss < len(missing) && missing[miss] == int64(i) {
+			miss++
+			continue
 		}
-		kept := inherited[:0]
-		row, miss := 0, 0
-		for i, candidate := range inherited {
-			if miss < len(missing) && missing[miss] == int64(i) {
-				miss++
-				continue
-			}
-			if _, found := slices.BinarySearch(proven, int64(row)); !found {
-				row++
-				continue
-			}
+		_, sourceInherits := slices.BinarySearch(sourceProof, int64(row))
+		_, destInherits := slices.BinarySearch(destinationProof, int64(row))
+		if sourceInherits && destInherits {
 			cmp, err := compareRowInWrappedBatches(ctx, ses, tables, int(candidate), row, true,
 				batchWithKind{batch: matches}, batchWithKind{batch: projected})
 			if err != nil {
 				return nil, err
 			}
-			row++
 			if cmp == 0 {
-				kept = append(kept, candidate)
+				inherited = append(inherited, candidate)
 			}
 		}
-		inherited = kept
-		if len(inherited) == 0 {
-			return conflicts, nil
-		}
+		row++
 	}
 	return slices.DeleteFunc(conflicts, func(row int64) bool {
 		_, found := slices.BinarySearch(inherited, row)
