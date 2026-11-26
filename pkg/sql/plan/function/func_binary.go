@@ -12161,9 +12161,7 @@ func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		return nil
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryPredicateBySRID(srid, v1, v2, geometryIntersects)
-	}, selectList)
+	return geometryPredicateEmptyAsNull(ivecs, result, length, selectList, srid, geometryIntersects)
 }
 
 func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -12175,9 +12173,63 @@ func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return nil
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryPredicateBySRID(srid, v1, v2, geometryDisjoint)
-	}, selectList)
+	return geometryPredicateEmptyAsNull(ivecs, result, length, selectList, srid, geometryDisjoint)
+}
+
+// geometryPredicateEmptyAsNull evaluates a spatial relation and returns SQL
+// NULL when either operand is an empty geometry (POINT EMPTY, LINESTRING
+// EMPTY, GEOMETRYCOLLECTION EMPTY, or a collection with only empty members).
+// MySQL's object-shape relation functions return NULL for empty arguments
+// instead of rejecting them (#33196).
+func geometryPredicateEmptyAsNull(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	srid uint32,
+	predicate func([]byte, []byte) (bool, error),
+) error {
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		if n1 || n2 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		empty1, err := geometryDistancePayloadEmpty(v1)
+		if err != nil {
+			return err
+		}
+		empty2, err := geometryDistancePayloadEmpty(v2)
+		if err != nil {
+			return err
+		}
+		if empty1 || empty2 {
+			if err := rs.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+		r, err := geometryPredicateBySRID(srid, v1, v2, predicate)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(r, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

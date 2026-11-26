@@ -72,3 +72,24 @@ poly    pt
 1    2
 drop table shapes;
 drop database geo_bin;
+SELECT ST_Intersects(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT EMPTY')) AS intersects_empty_right;
+intersects_empty_right
+null
+SELECT ST_Intersects(ST_GeomFromText('POINT EMPTY'), ST_GeomFromText('POINT(0 0)')) AS intersects_empty_left;
+intersects_empty_left
+null
+SELECT ST_Disjoint(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT EMPTY')) AS disjoint_empty_right;
+disjoint_empty_right
+null
+SELECT ST_Intersects(ST_GeomFromText('GEOMETRYCOLLECTION EMPTY'), ST_GeomFromText('POINT(0 0)')) AS intersects_empty_collection;
+intersects_empty_collection
+null
+SELECT ST_Disjoint(ST_GeomFromText('POLYGON EMPTY'), ST_GeomFromText('POINT(0 0)')) AS disjoint_empty_polygon;
+disjoint_empty_polygon
+null
+SELECT ST_Intersects(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT(0 0)')) AS intersects_control;
+intersects_control
+1
+SELECT ST_Disjoint(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT(1 1)')) AS disjoint_control;
+disjoint_control
+1

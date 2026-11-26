@@ -45,3 +45,12 @@ select a.id as poly, b.id as pt
   order by b.id;
 drop table shapes;
 drop database geo_bin;
+
+-- Issue #33196: ST_Intersects and ST_Disjoint return NULL for empty geometries
+SELECT ST_Intersects(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT EMPTY')) AS intersects_empty_right;
+SELECT ST_Intersects(ST_GeomFromText('POINT EMPTY'), ST_GeomFromText('POINT(0 0)')) AS intersects_empty_left;
+SELECT ST_Disjoint(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT EMPTY')) AS disjoint_empty_right;
+SELECT ST_Intersects(ST_GeomFromText('GEOMETRYCOLLECTION EMPTY'), ST_GeomFromText('POINT(0 0)')) AS intersects_empty_collection;
+SELECT ST_Disjoint(ST_GeomFromText('POLYGON EMPTY'), ST_GeomFromText('POINT(0 0)')) AS disjoint_empty_polygon;
+SELECT ST_Intersects(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT(0 0)')) AS intersects_control;
+SELECT ST_Disjoint(ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('POINT(1 1)')) AS disjoint_control;
