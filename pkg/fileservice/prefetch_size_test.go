@@ -33,8 +33,8 @@ import (
 func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	fs.diskCache.prefetched = prefetchedObjects{}
-	stats := &statCountingStorage{ObjectStorage: fs.governor.raw}
-	fs.governor.raw = stats
+	stats := &statCountingStorage{ObjectStorage: fs.server.raw}
+	fs.server.raw = stats
 	fs.prefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data))})
 	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))
 	require.Equal(t, int64(2), storage.reads.Load(), "the whole object in two parts")
@@ -47,7 +47,7 @@ func TestS3FSPrefetchObjectDownloadsWhole(t *testing.T) {
 func TestS3FSReadOfQueuedObjectJoinsItsDownload(t *testing.T) {
 	fs, storage, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	busyFills(t, fs)
-	defer occupy(t, fs.governor, backgroundRequest, fs.governor.backgroundMax-1)()
+	defer occupy(t, fs.server, backgroundRequest, fs.server.backgroundMax-1)()
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data)), Due: 1 << 62}))
 	require.True(t, fs.diskCache.isQueued("object"))
 	got, err := readFullObjectOf(fs, 100, 10)
@@ -294,9 +294,9 @@ func TestS3FSPrefetchPastFlightBytesFinishes(t *testing.T) {
 // downloaded.
 func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
-	storage := &failingRangeStorage{ObjectStorage: fs.governor.raw}
+	storage := &failingRangeStorage{ObjectStorage: fs.server.raw}
 	storage.fail.Store(true)
-	fs.governor.raw = storage
+	fs.server.raw = storage
 	downloaded := promtestutil.ToFloat64(metric.FSPrefetchDownloadedCounter)
 	failed := promtestutil.ToFloat64(metric.FSPrefetchFailedCounter)
 	fs.prefetchObject(context.Background(), ObjectPrefetch{
@@ -314,8 +314,8 @@ func TestS3FSColumnPrefetchFailureCountsFailed(t *testing.T) {
 func TestS3FSColumnPrefetchWaitsForFlightBytes(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, 256<<10, 300<<10)
 	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(10)
-	held := &heldStorage{ObjectStorage: fs.governor.raw, read: make(chan struct{}), released: make(chan struct{})}
-	fs.governor.raw = held
+	held := &heldStorage{ObjectStorage: fs.server.raw, read: make(chan struct{}), released: make(chan struct{})}
+	fs.server.raw = held
 	ctx := context.Background()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}}))
 	<-held.read

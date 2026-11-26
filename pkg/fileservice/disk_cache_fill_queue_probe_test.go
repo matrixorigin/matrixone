@@ -39,9 +39,9 @@ func TestFillProbeReadJoinsWaitingFillWhileBackgroundRoomHeld(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	releaseBusy := probeBusy(t, fs)
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
-	fs.governor.raw = g
-	freeRoom := occupy(t, fs.governor, backgroundRequest, fs.governor.backgroundMax-1)
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return false })
+	fs.server.raw = g
+	freeRoom := occupy(t, fs.server, backgroundRequest, fs.server.backgroundMax-1)
 	defer freeRoom()
 	r := PrefetchRange{Offset: 40 << 10, Size: 1 << 10}
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: r.Size,
@@ -72,8 +72,8 @@ func TestFillProbeReadJoinsWaitingFillWhileBackgroundRoomHeld(t *testing.T) {
 func TestFillProbeOtherBytesOfRunningObjectStartAtOnce(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ctx := context.Background()
@@ -99,8 +99,8 @@ func TestFillProbeMergeOfSameBytes(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	releaseBusy := probeBusy(t, fs)
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return false })
+	fs.server.raw = g
 	ctx := context.Background()
 	r := PrefetchRange{Offset: 40 << 10, Size: 1 << 10}
 	s1, s2 := &PrefetchScan{}, &PrefetchScan{}
@@ -184,8 +184,8 @@ func TestFillProbeScanEndDropsUnjoinedFill(t *testing.T) {
 	scan := &PrefetchScan{}
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10,
 		Ranges: []PrefetchRange{unjoined, joined}, Scan: scan}))
-	starts := &startRecorder{ObjectStorage: fs.governor.raw}
-	fs.governor.raw = starts
+	starts := &startRecorder{ObjectStorage: fs.server.raw}
+	fs.server.raw = starts
 	scan.End()
 	got, err := probeRead(fs, joined)
 	require.NoError(t, err)
@@ -228,8 +228,8 @@ func TestFillProbeFlightBytesWithinBudget(t *testing.T) {
 	budget := 4 * buf
 	fs.diskCache.prefetchFlightBytes = budget
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.governor.raw, func(_ string, off int64) bool { return off < 200<<10 })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(_ string, off int64) bool { return off < 200<<10 })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	var over atomic.Int64
@@ -287,8 +287,8 @@ func TestFillProbeFlightBytesWithinBudget(t *testing.T) {
 func TestFillProbeSplitStartsAtJoinedReadBlock(t *testing.T) {
 	fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 	probeBusy(t, fs)
-	starts := &startRecorder{ObjectStorage: fs.governor.raw}
-	fs.governor.raw = starts
+	starts := &startRecorder{ObjectStorage: fs.server.raw}
+	fs.server.raw = starts
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "object", Size: int64(len(data))}))
 	got, err := readFullObjectOf(fs, 100<<10, 10)
 	require.NoError(t, err)
@@ -333,8 +333,8 @@ func TestFillProbeDeleteAndCloseReachEveryState(t *testing.T) {
 				ctx := context.Background()
 				r := PrefetchRange{Offset: 40 << 10, Size: 1 << 10}
 				key := fs.pathToKey("object")
-				g := newBlackBoxStorage(fs.governor.raw, func(k string, _ int64) bool { return state == "running" && k == key })
-				fs.governor.raw = g
+				g := newBlackBoxStorage(fs.server.raw, func(k string, _ int64) bool { return state == "running" && k == key })
+				fs.server.raw = g
 				defer sync.OnceFunc(func() { close(g.gate) })()
 				joined := make(chan error, 1)
 				freeBuffer := func() {}
@@ -346,7 +346,7 @@ func TestFillProbeDeleteAndCloseReachEveryState(t *testing.T) {
 					fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(r.Size)
 					freeBuffer = holdForegroundBuffer(t, fs, flightBufSize(r.Size))
 				}
-				baseRoom := heldRoom(fs.governor)
+				baseRoom := heldRoom(fs.server)
 				baseBytes, _ := probeFlightBytes(fs)
 				require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: r.Size,
 					Ranges: []PrefetchRange{r}, Scan: &PrefetchScan{}}))
@@ -380,7 +380,7 @@ func TestFillProbeDeleteAndCloseReachEveryState(t *testing.T) {
 				}, 2*time.Second, time.Millisecond)
 				require.Eventually(t, func() bool {
 					bytes, _ := probeFlightBytes(fs)
-					return heldRoom(fs.governor) <= baseRoom && bytes <= baseBytes
+					return heldRoom(fs.server) <= baseRoom && bytes <= baseBytes
 				}, 2*time.Second, time.Millisecond, "the fill holds no room and no buffer")
 			})
 		}

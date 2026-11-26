@@ -119,7 +119,7 @@ func TestPrefetchOfWarmWholeObjectLearnsItsSize(t *testing.T) {
 			// The sizes known in the process are lost, as at a restart.
 			d.prefetched = prefetchedObjects{}
 			stats := &statCountingStorage{ObjectStorage: storage}
-			fs.governor.raw = stats
+			fs.server.raw = stats
 			reads := storage.reads.Load()
 
 			require.NoError(t, fs.PrefetchFile(context.Background(), "object"))
@@ -140,7 +140,7 @@ func TestPrefetchOfWarmObjectWithFailedStatDownloads(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 0, 300<<10)
 	require.NoError(t, fs.diskCache.Update(context.Background(), &IOVector{FilePath: "object",
 		Entries: []IOEntry{{Offset: 0, Size: 100, Data: data[:100]}}}, false))
-	fs.governor.raw = failingStatStorage{storage}
+	fs.server.raw = failingStatStorage{storage}
 	require.NoError(t, fs.PrefetchFile(context.Background(), "object"))
 	require.Equal(t, int64(1), storage.reads.Load())
 	require.True(t, fs.diskCache.cache.Contains(fs.diskCache.wholePath("object", int64(len(data)))))

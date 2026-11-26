@@ -357,7 +357,7 @@ func TestAwsSDKv2WriteUnknownSizeEmptyCreatesObject(t *testing.T) {
 	exists, err := sdk.Exists(context.Background(), "empty")
 	require.NoError(t, err)
 	require.True(t, exists, "success must mean the zero-byte object exists")
-	fs := &S3FS{name: "s3", governor: newGovernor(sdk, 1024), rawStorage: sdk, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: ParallelOff}
+	fs := &S3FS{name: "s3", server: newObjectStorageServer(sdk, 1024), rawStorage: sdk, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: ParallelOff}
 	vector := IOVector{FilePath: "from-fs", Entries: []IOEntry{{Offset: 0, Size: -1, ReaderForWrite: bytes.NewReader(nil)}}}
 	require.NoError(t, fs.Write(context.Background(), vector))
 	entry, err := fs.StatFile(context.Background(), "from-fs")

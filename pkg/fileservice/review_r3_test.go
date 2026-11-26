@@ -81,11 +81,11 @@ func TestJoinedWholeReadFallsBackAfterPartIdleTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			storage := &idlePartStorage{
-				ObjectStorage: fs.governor.raw,
+				ObjectStorage: fs.server.raw,
 				canceled:      make(chan struct{}),
 				proceed:       make(chan struct{}),
 			}
-			fs.governor.raw = storage
+			fs.server.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.proceed) })
 			prefetchDone := make(chan struct{})
 			go func() {

@@ -65,7 +65,7 @@ func (s *S3FS) openStream(ctx context.Context, rr rangeRead) (*streamReader, err
 	rr.buf, rr.file, rr.progress = f.buf, f.file, fillProgress{stream: f}
 	ctx, f.cancel = context.WithCancel(ctx)
 	go func() {
-		_, err := s.governor.Do(ctx, rr)
+		_, err := s.server.Do(ctx, rr)
 		var source *diskCacheSourceError
 		if errors.As(err, &source) {
 			err = source.err

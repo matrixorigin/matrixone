@@ -44,8 +44,8 @@ import (
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
 	name string
-	// governor makes every request to rawStorage.
-	governor   *governor
+	// server makes every request to rawStorage.
+	server     *objectStorageServer
 	rawStorage ObjectStorage
 	keyPrefix  string
 
@@ -169,7 +169,7 @@ func NewS3FS(
 	}
 
 	fs.rawStorage = storage
-	fs.governor = newGovernor(storage, min(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost), int(cmp.Or(args.Concurrency, 1024))))
+	fs.server = newObjectStorageServer(storage, min(cmp.Or(args.MaxConnsPerHost, maxConnsPerHost), int(cmp.Or(args.Concurrency, 1024))))
 
 	// cache
 	if !noCache {
@@ -177,7 +177,7 @@ func NewS3FS(
 			return nil, err
 		}
 		if fs.diskCache != nil {
-			fs.diskCache.governor = fs.governor
+			fs.diskCache.server = fs.server
 			fs.diskCache.prefetchObjects.runWhole = fs.runWholeFill
 		}
 	}
@@ -219,7 +219,7 @@ func (s *S3FS) CopyObject(
 	}
 	srcKey := src.pathToKey(srcParsed.File)
 	dstKey := s.pathToKey(dstParsed.File)
-	res, err := s.governor.Do(ctx, existsRequest{key: dstKey})
+	res, err := s.server.Do(ctx, existsRequest{key: dstKey})
 	if err != nil {
 		return false, err
 	}
@@ -230,7 +230,7 @@ func (s *S3FS) CopyObject(
 		ctx,
 		"CopyObject",
 		func() (bool, error) {
-			res, err := s.governor.Do(ctx, copyRequest{src: src.rawStorage, srcKey: srcKey, dstKey: dstKey})
+			res, err := s.server.Do(ctx, copyRequest{src: src.rawStorage, srcKey: srcKey, dstKey: dstKey})
 			return res.ok, err
 		},
 		maxRetryAttemps,
@@ -356,7 +356,7 @@ func (s *S3FS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, er
 			prefix += "/"
 		}
 
-		for entry, err := range s.governor.list(ctx, prefix) {
+		for entry, err := range s.server.list(ctx, prefix) {
 			if err != nil {
 				yield(nil, err)
 				return
@@ -407,7 +407,7 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 	}
 	key := s.pathToKey(path.File)
 
-	res, err := s.governor.Do(ctx, statRequest{key: key})
+	res, err := s.server.Do(ctx, statRequest{key: key})
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +427,7 @@ func (s *S3FS) StatFileIdentity(ctx context.Context, filePath string) (ObjectIde
 	if err != nil {
 		return ObjectIdentity{}, err
 	}
-	res, err := s.governor.Do(ctx, statIdentityRequest{key: s.pathToKey(path.File)})
+	res, err := s.server.Do(ctx, statIdentityRequest{key: s.pathToKey(path.File)})
 	if err != nil {
 		return ObjectIdentity{}, err
 	}
@@ -536,9 +536,9 @@ func (s *S3FS) newReadCloser(ctx context.Context, filePath string) (io.ReadClose
 	return &src, nil
 }
 
-// source returns the whole object at filePath, read through the governor.
+// source returns the whole object at filePath, read through the server.
 func (s *S3FS) source(filePath string) objectSource {
-	return objectSource{g: s.governor, key: s.pathToKey(filePath), end: -1}
+	return objectSource{g: s.server, key: s.pathToKey(filePath), end: -1}
 }
 
 // readSources are the shared sources of its bytes a read may take them from instead of
@@ -614,7 +614,7 @@ func (s *S3FS) cachedObjectSize(file string, splitAt int64) objectLayout {
 		if err == nil || !s.diskCache.ranges.startsAt0(s.diskCache.objectKey(file)) {
 			return size, splitAt, err
 		}
-		res, err := s.governor.Do(ctx, statRequest{key: s.pathToKey(file)})
+		res, err := s.server.Do(ctx, statRequest{key: s.pathToKey(file)})
 		if err != nil {
 			return 0, 0, errObjectSizeUnknown
 		}
@@ -650,7 +650,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	exists := false
 	if !exclusiveWrite(ctx) {
 		var res result
-		res, err = s.governor.Do(ctx, existsRequest{key: key})
+		res, err = s.server.Do(ctx, existsRequest{key: key})
 		exists = res.ok
 	}
 	metric.FSWriteDurationExists.Observe(time.Since(existsStart).Seconds())
@@ -781,13 +781,13 @@ var writePartSize int64 = defaultParallelMultipartPartSize
 // file and published by one request; other object storage gets r copied into a temporary
 // file of the process first, then sent by one request.
 func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *int64, expire *time.Time, parallel bool) error {
-	switch raw := s.governor.raw.(type) {
+	switch raw := s.server.raw.(type) {
 	case multipartStorage:
 		concurrency := 1
 		if parallel {
 			concurrency = runtime.NumCPU()
 		}
-		return writeParts(ctx, s.governor, key, r, size, &ParallelMultipartOption{
+		return writeParts(ctx, s.server, key, r, size, &ParallelMultipartOption{
 			PartSize: writePartSize, Concurrency: concurrency, Expire: expire,
 		})
 	case *diskObjectStorage:
@@ -795,7 +795,7 @@ func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *i
 		if err != nil {
 			return err
 		}
-		if _, err := s.governor.Do(ctx, publishRequest{key: key, tempPath: tempPath}); err != nil {
+		if _, err := s.server.Do(ctx, publishRequest{key: key, tempPath: tempPath}); err != nil {
 			_ = os.Remove(tempPath)
 			return err
 		}
@@ -816,7 +816,7 @@ func (s *S3FS) writeObject(ctx context.Context, key string, r io.Reader, size *i
 	if size != nil && n != *size {
 		return moerr.NewSizeNotMatchNoCtx(key)
 	}
-	_, err = s.governor.Do(ctx, putFileRequest{key: key, file: f, size: n, expire: expire})
+	_, err = s.server.Do(ctx, putFileRequest{key: key, file: f, size: n, expire: expire})
 	return err
 }
 
@@ -1376,7 +1376,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		}
 		return rr
 	}
-	src := objectSource{g: s.governor, key: key, end: -1}
+	src := objectSource{g: s.server, key: key, end: -1}
 
 	if readFullObject && s.shouldStreamFullObjectToDiskCache(vector) {
 		if s.diskCache.fillsUnderWay(path.File) {
@@ -1449,7 +1449,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 
 		tStart := time.Now()
 		var res result
-		res, err = s.governor.Do(ctx, rangeOf(min, max))
+		res, err = s.server.Do(ctx, rangeOf(min, max))
 		bs = res.data
 		metric.FSReadDurationIOReadAll.Observe(time.Since(tStart).Seconds())
 		if err != nil {
@@ -2047,7 +2047,7 @@ func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
 		}
 	}
 
-	_, err := s.governor.Do(ctx, deleteRequest{keys: keys})
+	_, err := s.server.Do(ctx, deleteRequest{keys: keys})
 	return errors.Join(
 		err,
 		func() error {
@@ -2084,7 +2084,7 @@ func (s *S3FS) IndexFileCache() *IndexFileCache {
 }
 
 func (s *S3FS) Close(ctx context.Context) {
-	defer s.governor.close()
+	defer s.server.close()
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })

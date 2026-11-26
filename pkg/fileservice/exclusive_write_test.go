@@ -174,7 +174,7 @@ func TestWriteExclusiveObjectStorage(t *testing.T) {
 					storage = &MinioSDK{bucket: "bucket", client: client, retryingClient: client, supportsConditionalPut: true}
 				}
 			}
-			fs := &S3FS{name: "etl", governor: newGovernor(storage, 1024), rawStorage: storage, parallelMode: ParallelForce}
+			fs := &S3FS{name: "etl", server: newObjectStorageServer(storage, 1024), rawStorage: storage, parallelMode: ParallelForce}
 			require.NoError(t, WriteExclusive(ctx, fs, publicationVector("manifest.json", "B")))
 			require.True(t, moerr.IsMoErrCode(WriteExclusive(ctx, fs, publicationVector("manifest.json", "A")), moerr.ErrFileAlreadyExists))
 			if provider == "disk" {

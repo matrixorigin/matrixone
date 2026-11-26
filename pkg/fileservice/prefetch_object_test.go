@@ -55,8 +55,8 @@ func TestFilePrefetchObjectReadsJoinOneDownload(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
 	fs.diskCache.memoryPrefetchMax = 16 << 10
-	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &gateStorage{ObjectStorage: fs.server.raw, release: make(chan struct{})}
+	fs.server.raw = storage
 
 	type result struct {
 		data []byte
@@ -93,8 +93,8 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 	fs, storage, _ := newPrefetchRangeFS(t, unit, 4*unit)
 	d := fs.diskCache
 	d.memoryPrefetchMax = 16 << 10
-	limitRoom(t, d.governor, 1, 1)
-	release := occupy(t, d.governor, foregroundRequest, 1)
+	limitRoom(t, d.server, 1, 1)
+	release := occupy(t, d.server, foregroundRequest, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -102,7 +102,7 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 		_, err := readUnit(ctx, fs, 100, 10)
 		done <- err
 	}()
-	require.Eventually(t, func() bool { _, waiting := d.governor.counts(); return waiting[foregroundRequest] > 0 },
+	require.Eventually(t, func() bool { _, waiting := d.server.counts(); return waiting[foregroundRequest] > 0 },
 		10*time.Second, time.Millisecond, "the download waits for room")
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
@@ -110,7 +110,7 @@ func TestFilePrefetchObjectOfEndedReadStops(t *testing.T) {
 	d.prefetchObjects.reads.Wait()
 	release()
 	require.Zero(t, storage.reads.Load())
-	require.Zero(t, heldRoom(d.governor))
+	require.Zero(t, heldRoom(d.server))
 }
 
 // A read that leaves caching to the prefetch range does not join a MemoryPrefetchObject
@@ -126,7 +126,7 @@ func TestPrefetchRangeDoesNotJoinUncachedObject(t *testing.T) {
 		_, _, _, err := d.fetchRange(context.Background(), "object", 0, false, 0, unit, openerSource(func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 			close(opened)
 			<-held
-			return fs.governor.raw.Read(ctx, "object", &start, &end)
+			return fs.server.raw.Read(ctx, "object", &start, &end)
 		}))
 		fetched <- err
 	}()

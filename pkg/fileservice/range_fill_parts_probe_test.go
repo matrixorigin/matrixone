@@ -39,8 +39,8 @@ func TestRangeFillProbeOneRequestWholeObjectSplits(t *testing.T) {
 			require.NoError(t, fs.Write(ctx, IOVector{FilePath: "whole", Entries: []IOEntry{{Size: size, Data: data[:size]}},
 				Policy: SkipDiskCache | SkipMemoryCache}))
 			d.prefetched.store(d.objectKey("whole"), size)
-			starts := &startRecorder{ObjectStorage: fs.governor.raw}
-			fs.governor.raw = starts
+			starts := &startRecorder{ObjectStorage: fs.server.raw}
+			fs.server.raw = starts
 
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "whole", Size: size, Scan: &PrefetchScan{}}))
 			require.Eventually(t, func() bool { return d.cache.Contains(d.wholePath("whole", size)) },

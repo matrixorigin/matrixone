@@ -127,11 +127,11 @@ func TestReplayWriteShortSuccessAndError(t *testing.T) {
 		for _, fail := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/fail-%t", mode, fail), func(t *testing.T) {
 				fs := newReplayWriteTestFS(t)
-				mock := &replayShortStorage{ObjectStorage: fs.governor.raw, consume: 3}
+				mock := &replayShortStorage{ObjectStorage: fs.server.raw, consume: 3}
 				if fail {
 					mock.fail = io.ErrUnexpectedEOF
 				}
-				fs.governor.raw = mock
+				fs.server.raw = mock
 				vector := IOVector{FilePath: "partial", Entries: []IOEntry{{Offset: 0, Size: 7, Data: []byte("1234567")}}}
 				var err error
 				if mode == "ordinary" {
@@ -235,7 +235,7 @@ func TestReplayWriteSkipCacheAndCanceledContext(t *testing.T) {
 	vector := IOVector{FilePath: "skip", Policy: SkipDiskCacheWrites, Entries: []IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}}}
 	require.NoError(t, writeReplayableData(ctx, fs, vector))
 	require.Empty(t, fs.diskCache.objectFiles("skip"))
-	r, err := fs.governor.raw.Read(ctx, fs.pathToKey("skip"), nil, nil)
+	r, err := fs.server.raw.Read(ctx, fs.pathToKey("skip"), nil, nil)
 	require.NoError(t, err)
 	got, err := io.ReadAll(r)
 	require.NoError(t, err)
@@ -357,7 +357,7 @@ func TestReplayWriteCanceledDuringUpload(t *testing.T) {
 			fs := newReplayWriteTestFS(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			fs.governor.raw = &replayCancelStorage{ObjectStorage: fs.governor.raw, cancel: cancel}
+			fs.server.raw = &replayCancelStorage{ObjectStorage: fs.server.raw, cancel: cancel}
 			vector := IOVector{FilePath: "cancel-upload", Entries: []IOEntry{{Offset: 0, Size: 4, Data: []byte("data")}}}
 			var err error
 			if mode == "ordinary" {
@@ -395,7 +395,7 @@ func TestReplayWriteDiskCacheFailureParity(t *testing.T) {
 		_, cacheErr := os.Stat(cacheFile)
 		require.Error(t, cacheErr)
 		failures = append(failures, writeErr != nil)
-		r, err := fs.governor.raw.Read(ctx, fs.pathToKey("readonly.mofscache/object"), nil, nil)
+		r, err := fs.server.raw.Read(ctx, fs.pathToKey("readonly.mofscache/object"), nil, nil)
 		require.NoError(t, err)
 		got, err := io.ReadAll(r)
 		require.NoError(t, err)

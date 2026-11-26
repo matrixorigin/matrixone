@@ -35,7 +35,7 @@ func TestReplayWriteAWSMultipartCancelDoesNotCache(t *testing.T) {
 	state.blockUploadPart = release
 	state.uploadPartStarted = make(chan struct{})
 	fs := newReplayWriteTestFS(t)
-	fs.governor.raw = &replaySmallPartsAWS{AwsSDKv2: newTestAWSClient(t, server)}
+	fs.server.raw = &replaySmallPartsAWS{AwsSDKv2: newTestAWSClient(t, server)}
 	smallWriteParts(t)
 	fs.parallelMode = ParallelForce
 

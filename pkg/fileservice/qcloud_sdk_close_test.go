@@ -45,7 +45,7 @@ func NewQCloudSDKWithTransportForTest(transport http.RoundTripper) *QCloudSDK {
 // NewQCloudFileServiceWithTransportForTest supplies the real cache-free S3FS
 // stream wrappers as well as the COS adapter to the external consumer test.
 func NewQCloudFileServiceWithTransportForTest(transport http.RoundTripper) *S3FS {
-	return &S3FS{name: "etl", governor: newGovernor(NewQCloudSDKWithTransportForTest(transport), 1024), ioMerger: NewIOMerger()}
+	return &S3FS{name: "etl", server: newObjectStorageServer(NewQCloudSDKWithTransportForTest(transport), 1024), ioMerger: NewIOMerger()}
 }
 
 type qcloudCloseBody struct {

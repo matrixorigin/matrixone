@@ -59,8 +59,8 @@ func TestPrefetchMemoryBoundUnderConcurrentReads(t *testing.T) {
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, (units+waiting)*unit)
 	fs.diskCache.prefetchFlightBytes = budget
-	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &gateStorage{ObjectStorage: fs.server.raw, release: make(chan struct{})}
+	fs.server.raw = storage
 	f := &fs.diskCache.prefetchObjects
 
 	var peak atomic.Int64
@@ -176,8 +176,8 @@ func (h *suffixGateStorage) Read(ctx context.Context, key string, min, max *int6
 func TestPrefetchBufferCountedUntilLastRelease(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
-	storage := &suffixGateStorage{ObjectStorage: fs.governor.raw, from: 2 * unit, release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &suffixGateStorage{ObjectStorage: fs.server.raw, from: 2 * unit, release: make(chan struct{})}
+	fs.server.raw = storage
 	f := &fs.diskCache.prefetchObjects
 	bytes := func() int64 {
 		f.mu.Lock()
@@ -229,8 +229,8 @@ func TestPrefetchMemoryBoundForColdMultiRunRead(t *testing.T) {
 	)
 	fs, _, data := newPrefetchRangeFS(t, unit, 2*runs*unit)
 	fs.diskCache.prefetchFlightBytes = budget
-	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &gateStorage{ObjectStorage: fs.server.raw, release: make(chan struct{})}
+	fs.server.raw = storage
 	f := &fs.diskCache.prefetchObjects
 
 	entries := make([]IOEntry, runs)
@@ -391,8 +391,8 @@ func TestPrefetchConcurrentMultiRunReadsUnderTightBudget(t *testing.T) {
 func TestPrefetchReadOfJoinedBlockReleasesIt(t *testing.T) {
 	const unit = 64 << 10
 	fs, _, data := newPrefetchRangeFS(t, unit, 4*unit)
-	storage := &suffixGateStorage{ObjectStorage: fs.governor.raw, from: unit, release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &suffixGateStorage{ObjectStorage: fs.server.raw, from: unit, release: make(chan struct{})}
+	fs.server.raw = storage
 	f := &fs.diskCache.prefetchObjects
 	read := func(off, size int64, done chan<- error) {
 		vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache,
@@ -469,8 +469,8 @@ func TestPrefetchReadRunWaitingAcrossDeleteCachesNothing(t *testing.T) {
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	fs.diskCache.prefetchFlightBytes = flightBufSize(unit)
 	otherKey := fs.pathToKey("other")
-	g := newBlackBoxStorage(keepOnDeleteStorage{fs.governor.raw}, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(keepOnDeleteStorage{fs.server.raw}, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	read := func(name string, done chan<- error) {
@@ -554,8 +554,8 @@ func TestPrefetchMemoryExhaustedHoldsNoBuffer(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, unit, units*unit)
 	fs.diskCache.prefetchFlightBytes = 0
 	fs.diskCache.flightBudget.at.Store(0)
-	storage := &gateStorage{ObjectStorage: fs.governor.raw, release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &gateStorage{ObjectStorage: fs.server.raw, release: make(chan struct{})}
+	fs.server.raw = storage
 	release := sync.OnceFunc(func() { close(storage.release) })
 	t.Cleanup(release)
 	f := &fs.diskCache.prefetchObjects

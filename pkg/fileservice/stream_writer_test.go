@@ -96,8 +96,8 @@ func TestStreamedRangeReadWritesBeforeRangeArrives(t *testing.T) {
 			fs, _, data := newPrefetchRangeFS(t, 0, size)
 			fs.diskCache.memoryPrefetchMax = minDiskPrefetchMemoryMax
 			<-fs.diskCache.load.done
-			storage := &heldTailStorage{ObjectStorage: fs.governor.raw, head: 64 << 10, proceed: make(chan struct{})}
-			fs.governor.raw = storage
+			storage := &heldTailStorage{ObjectStorage: fs.server.raw, head: 64 << 10, proceed: make(chan struct{})}
+			fs.server.raw = storage
 			release := sync.OnceFunc(func() { close(storage.proceed) })
 			defer release()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

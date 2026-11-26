@@ -37,7 +37,7 @@ func TestReplayWriteAWSMultipartAndCache(t *testing.T) {
 	defer server.Close()
 	state.uploadID = "replay-multipart"
 	fs := newReplayWriteTestFS(t)
-	fs.governor.raw = &replaySmallPartsAWS{AwsSDKv2: newTestAWSClient(t, server)}
+	fs.server.raw = &replaySmallPartsAWS{AwsSDKv2: newTestAWSClient(t, server)}
 	smallWriteParts(t)
 	fs.parallelMode = ParallelForce
 

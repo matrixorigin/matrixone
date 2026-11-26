@@ -66,8 +66,8 @@ func newIndexObjectFS(t *testing.T, indexCache bool) (*S3FS, *readCountingStorag
 		data[i] = byte(i*7 + i/1021)
 	}
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipAllCache}))
-	storage := &readCountingStorage{ObjectStorage: fs.governor.raw}
-	fs.governor.raw = storage
+	storage := &readCountingStorage{ObjectStorage: fs.server.raw}
+	fs.server.raw = storage
 	return fs, storage, data
 }
 

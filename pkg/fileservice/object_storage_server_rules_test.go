@@ -135,7 +135,7 @@ func (o *openCountingStorage) List(ctx context.Context, prefix string) iter.Seq2
 	}
 }
 
-// newRoomFS returns an S3FS on a disk object storage whose governor has room free for
+// newRoomFS returns an S3FS on a disk object storage whose server has room free for
 // room requests, at most half of it, or one, for background requests, the rest held until
 // the test ends, and objects of size bytes written.
 func newRoomFS(t *testing.T, room int, objects []string, size int) (*S3FS, []byte) {
@@ -154,15 +154,15 @@ func newRoomFS(t *testing.T, room int, objects []string, size int) (*S3FS, []byt
 	for _, name := range objects {
 		require.NoError(t, fs.Write(ctx, IOVector{FilePath: name, Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipAllCache}))
 	}
-	limitRoom(t, fs.governor, room, max(room/2, 1))
+	limitRoom(t, fs.server, room, max(room/2, 1))
 	return fs, data
 }
 
 // newGovernedFS is newRoomFS whose requests are counted.
 func newGovernedFS(t *testing.T, room int, objects []string, size int) (*S3FS, *openCountingStorage, []byte) {
 	fs, data := newRoomFS(t, room, objects, size)
-	counting := &openCountingStorage{ObjectStorage: fs.governor.raw, gate: make(chan struct{})}
-	fs.governor.raw = counting
+	counting := &openCountingStorage{ObjectStorage: fs.server.raw, gate: make(chan struct{})}
+	fs.server.raw = counting
 	return fs, counting, data
 }
 
@@ -197,7 +197,7 @@ func otherRequests(t *testing.T, ctx context.Context, fs FileService, data []byt
 }
 
 // Probe 1: a caller holding a stream unread makes other requests, then reads the stream.
-func TestGovernorRuleStreamHeldWhileOtherRequests(t *testing.T) {
+func TestServerRuleStreamHeldWhileOtherRequests(t *testing.T) {
 	for _, c := range []struct {
 		name         string
 		offset, size int64
@@ -218,7 +218,7 @@ func TestGovernorRuleStreamHeldWhileOtherRequests(t *testing.T) {
 				require.Equal(t, want, got)
 				require.NoError(t, r.Close())
 			})
-			require.Zero(t, heldRoom(fs.governor))
+			require.Zero(t, heldRoom(fs.server))
 		})
 	}
 }
@@ -240,7 +240,7 @@ func streamCopiedIntoWrite(t *testing.T, fs FileService, data []byte) {
 // Probe 2: a stream of an object is the body of a write of another on the same file
 // service, on the disk object storage, on object storage written through a temporary file,
 // and on object storage written in parts.
-func TestGovernorRuleStreamCopiedIntoWrite(t *testing.T) {
+func TestServerRuleStreamCopiedIntoWrite(t *testing.T) {
 	t.Run("disk", func(t *testing.T) {
 		fs, data := newRoomFS(t, 1, []string{"a"}, 300<<10)
 		streamCopiedIntoWrite(t, fs, data)
@@ -255,8 +255,8 @@ func TestGovernorRuleStreamCopiedIntoWrite(t *testing.T) {
 		writePartSize = minMultipartPartSize
 		t.Cleanup(func() { writePartSize = prev })
 		storage := newPartStorage()
-		parts := &partsOnDisk{ObjectStorage: fs.governor.raw, partStorage: storage}
-		fs.governor.raw = parts
+		parts := &partsOnDisk{ObjectStorage: fs.server.raw, partStorage: storage}
+		fs.server.raw = parts
 		streamCopiedIntoWrite(t, fs, data)
 		require.Len(t, storage.parts, 3)
 	})
@@ -290,7 +290,7 @@ type writerFunc func([]byte) (int, error)
 func (f writerFunc) Write(b []byte) (int, error) { return f(b) }
 
 // Probe 3: the writer of a read makes another read.
-func TestGovernorRuleWriterForReadReads(t *testing.T) {
+func TestServerRuleWriterForReadReads(t *testing.T) {
 	fs, data := newRoomFS(t, 1, []string{"a", "b"}, 300<<10)
 	ctx := context.Background()
 	for _, size := range []int64{200 << 10, -1} {
@@ -312,11 +312,11 @@ func TestGovernorRuleWriterForReadReads(t *testing.T) {
 			require.Equal(t, want, got.Bytes())
 		})
 	}
-	require.Zero(t, heldRoom(fs.governor))
+	require.Zero(t, heldRoom(fs.server))
 }
 
 // Probe 4: the decoder of a read makes another read.
-func TestGovernorRuleToCacheDataReads(t *testing.T) {
+func TestServerRuleToCacheDataReads(t *testing.T) {
 	fs, data := newRoomFS(t, 1, []string{"a", "b"}, 300<<10)
 	ctx := context.Background()
 	for _, policy := range []Policy{SkipAllCache, SkipMemoryCache, 0} {
@@ -337,7 +337,7 @@ func TestGovernorRuleToCacheDataReads(t *testing.T) {
 }
 
 // Probe 5: the body of a listing's loop reads and stats each listed file.
-func TestGovernorRuleListBodyReads(t *testing.T) {
+func TestServerRuleListBodyReads(t *testing.T) {
 	fs, data := newRoomFS(t, 1, names("dir/object", 3), 4<<10)
 	ctx := context.Background()
 	finishes(t, func() {
@@ -353,12 +353,12 @@ func TestGovernorRuleListBodyReads(t *testing.T) {
 		}
 		require.Equal(t, 3, n)
 	})
-	require.Zero(t, heldRoom(fs.governor))
+	require.Zero(t, heldRoom(fs.server))
 }
 
 // Probe 6: a whole-object fill of unknown size learns its size from object storage in a
 // request of its own before it downloads, with room for one request.
-func TestGovernorRuleUnknownSizeFillStats(t *testing.T) {
+func TestServerRuleUnknownSizeFillStats(t *testing.T) {
 	fs, counting, data := newGovernedFS(t, 1, []string{"object"}, 300<<10)
 	fs.SetAsyncUpdate(false)
 	ctx := context.Background()
@@ -377,12 +377,12 @@ func TestGovernorRuleUnknownSizeFillStats(t *testing.T) {
 	_, cached := fs.diskCache.ranges.covering(fs.diskCache.objectKey("object"), 0, int64(len(data)))
 	require.True(t, cached)
 	require.Equal(t, int64(1), counting.most.Load())
-	require.Zero(t, heldRoom(fs.governor))
+	require.Zero(t, heldRoom(fs.server))
 }
 
 // Probe 6: split whole-object reads of many objects at once with room for one request
 // cache them all: each part is its own request.
-func TestGovernorRuleSplitFills(t *testing.T) {
+func TestServerRuleSplitFills(t *testing.T) {
 	objects := names("object", 6)
 	fs, counting, data := newGovernedFS(t, 1, objects, 300<<10+17)
 	fs.diskCache.objectSplit = objectSplitConfig{parts: 3, min: 128 << 10}
@@ -410,13 +410,13 @@ func TestGovernorRuleSplitFills(t *testing.T) {
 			return fs.diskCache.cache.Contains(fs.diskCache.wholePath(name, int64(len(data))))
 		}, 5*time.Second, time.Millisecond, "%s is cached", name)
 	}
-	require.Eventually(t, func() bool { return heldRoom(fs.governor) == 0 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return heldRoom(fs.server) == 0 }, 5*time.Second, time.Millisecond)
 }
 
 // Reads with every policy, whole-object and range prefetches, writes, listings, stats and
 // deletes made at once through the public entry points never have more requests open than
-// the governor's room, and free all of it.
-func TestGovernorProbePeakOpensWithinRoom(t *testing.T) {
+// the server's room, and free all of it.
+func TestServerProbePeakOpensWithinRoom(t *testing.T) {
 	const room = 4
 	objects := names("object", 12)
 	fs, counting, data := newGovernedFS(t, room, objects, 300<<10)
@@ -501,18 +501,18 @@ func TestGovernorProbePeakOpensWithinRoom(t *testing.T) {
 	}
 	fs.diskCache.prefetchObjects.reads.Wait()
 	require.Eventually(t, func() bool {
-		return !slices.ContainsFunc(objects, fs.diskCache.fillsUnderWay) && heldRoom(fs.governor) == 0
+		return !slices.ContainsFunc(objects, fs.diskCache.fillsUnderWay) && heldRoom(fs.server) == 0
 	}, 10*time.Second, time.Millisecond)
 	require.Positive(t, counting.total.Load())
 	require.LessOrEqual(t, counting.most.Load(), int64(room), "peak requests open")
 	require.Zero(t, counting.cur.Load())
-	_, waiting := fs.governor.counts()
+	_, waiting := fs.server.counts()
 	require.Zero(t, waiting[foregroundRequest]+waiting[backgroundRequest])
 }
 
 // With background downloads stalled on all the room background may hold and more waiting,
 // a foreground read of every kind with a deadline of 2s returns its bytes.
-func TestGovernorProbeBystanderForegroundRead(t *testing.T) {
+func TestServerProbeBystanderForegroundRead(t *testing.T) {
 	const room = 8
 	objects := append(names("prefetch", 12), "foreground")
 	fs, counting, data := newGovernedFS(t, room, objects, 300<<10)
@@ -529,8 +529,8 @@ func TestGovernorProbeBystanderForegroundRead(t *testing.T) {
 		go func() { _ = fs.PrefetchFile(ctx, name) }()
 	}
 	require.Eventually(t, func() bool {
-		running, waiting := fs.governor.counts()
-		return running[backgroundRequest] == fs.governor.backgroundMax && waiting[backgroundRequest] > 0
+		running, waiting := fs.server.counts()
+		return running[backgroundRequest] == fs.server.backgroundMax && waiting[backgroundRequest] > 0
 	}, 5*time.Second, time.Millisecond, "background holds its half and more waits")
 	for _, policy := range []Policy{0, SkipMemoryCache, SkipAllCache, SkipMemoryCache | SkipFullFilePreloads,
 		ColumnPrefetch | SkipFullFilePreloads | SkipMemoryCache, SkipAllCache | ExactColumnsRead} {
@@ -541,6 +541,6 @@ func TestGovernorProbeBystanderForegroundRead(t *testing.T) {
 		vec.Release()
 		cancel()
 	}
-	running, _ := fs.governor.counts()
-	require.LessOrEqual(t, running[backgroundRequest], fs.governor.backgroundMax)
+	running, _ := fs.server.counts()
+	require.LessOrEqual(t, running[backgroundRequest], fs.server.backgroundMax)
 }

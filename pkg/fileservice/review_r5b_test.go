@@ -42,8 +42,8 @@ func TestPrefetchBufferReleasedBeforeDecode(t *testing.T) {
 			defer cancel()
 			require.NoError(t, fs.Write(ctx, IOVector{FilePath: "bystander", Policy: SkipAllCache,
 				Entries: []IOEntry{{Size: size, Data: data[:size]}}}))
-			storage := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == fs.pathToKey("object") })
-			fs.governor.raw = storage
+			storage := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == fs.pathToKey("object") })
+			fs.server.raw = storage
 			resumeStorage := sync.OnceFunc(func() { close(storage.gate) })
 			defer resumeStorage()
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: size,

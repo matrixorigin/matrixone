@@ -182,8 +182,8 @@ func TestIndexPrefetchWhileDiskPrefetchRunning(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			fs, _, data := newIndexObjectFS(t, true)
-			storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
-			fs.governor.raw = storage
+			storage := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
+			fs.server.raw = storage
 			resume := sync.OnceFunc(func() { close(storage.gate) })
 			defer resume()
 			ctx := context.Background()
@@ -297,8 +297,8 @@ func TestIndexReadSeesConcurrentPublication(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			fs, _, data := newIndexObjectFS(t, true)
-			storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
-			fs.governor.raw = storage
+			storage := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
+			fs.server.raw = storage
 			resumeStorage := sync.OnceFunc(func() { close(storage.gate) })
 			fillDone := make(chan struct{})
 			var fillErr error

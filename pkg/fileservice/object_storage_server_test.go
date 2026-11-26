@@ -26,16 +26,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// occupied is the room of each governor that occupy holds.
+// occupied is the room of each server that occupy holds.
 var occupied sync.Map
 
-func occupiedRoom(g *governor) *atomic.Int64 {
+func occupiedRoom(g *objectStorageServer) *atomic.Int64 {
 	n, _ := occupied.LoadOrStore(g, new(atomic.Int64))
 	return n.(*atomic.Int64)
 }
 
 // occupy holds n room of class c of g until the returned function frees it.
-func occupy(t *testing.T, g *governor, c requestClass, n int) func() {
+func occupy(t *testing.T, g *objectStorageServer, c requestClass, n int) func() {
 	t.Helper()
 	for range n {
 		require.NoError(t, waitRoom(g, context.Background(), c))
@@ -51,7 +51,7 @@ func occupy(t *testing.T, g *governor, c requestClass, n int) func() {
 
 // limitRoom holds room of g until the test ends or the returned function frees it, so
 // that n of it is free, at most background of it for background requests.
-func limitRoom(t *testing.T, g *governor, n, background int) func() {
+func limitRoom(t *testing.T, g *objectStorageServer, n, background int) func() {
 	t.Helper()
 	freeBackground := occupy(t, g, backgroundRequest, g.backgroundMax-background)
 	freeForeground := occupy(t, g, foregroundRequest, g.capacity-g.backgroundMax-(n-background))
@@ -64,7 +64,7 @@ func limitRoom(t *testing.T, g *governor, n, background int) func() {
 }
 
 // waitingFor returns whether n requests of class c wait for room of g.
-func waitingFor(g *governor, c requestClass, n int) func() bool {
+func waitingFor(g *objectStorageServer, c requestClass, n int) func() bool {
 	return func() bool {
 		_, waiting := g.counts()
 		return waiting[c] == n
@@ -72,7 +72,7 @@ func waitingFor(g *governor, c requestClass, n int) func() bool {
 }
 
 // heldRoom returns the room of g requests hold, beyond the room occupy holds.
-func heldRoom(g *governor) int {
+func heldRoom(g *objectStorageServer) int {
 	running, _ := g.counts()
 	return running[foregroundRequest] + running[backgroundRequest] - int(occupiedRoom(g).Load())
 }
@@ -93,11 +93,11 @@ func (o openerStorage) Read(ctx context.Context, _ string, min, max *int64) (io.
 
 // openerSource returns the source of an object whose ranges open through open.
 func openerSource(open func(ctx context.Context, start, end int64) (io.ReadCloser, error)) objectSource {
-	return objectSource{g: newGovernor(openerStorage{open: open}, 1024), key: "object", end: -1}
+	return objectSource{g: newObjectStorageServer(openerStorage{open: open}, 1024), key: "object", end: -1}
 }
 
 // admitted reports whether a wait of class c on g is admitted within a short time.
-func admitted(g *governor, c requestClass) (func(), bool) {
+func admitted(g *objectStorageServer, c requestClass) (func(), bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if waitRoom(g, ctx, c) != nil {
@@ -107,8 +107,8 @@ func admitted(g *governor, c requestClass) (func(), bool) {
 }
 
 // Waiting requests are admitted foreground first, then background, each in arrival order.
-func TestGovernorOrder(t *testing.T) {
-	g := newGovernor(nil, minRequestRoom)
+func TestServerOrder(t *testing.T) {
+	g := newObjectStorageServer(nil, minRequestRoom)
 	defer occupy(t, g, foregroundRequest, minRequestRoom-1)()
 	free := occupy(t, g, foregroundRequest, 1)
 	var mu sync.Mutex
@@ -137,8 +137,8 @@ func TestGovernorOrder(t *testing.T) {
 }
 
 // A background request arriving while foreground waits is not admitted before it.
-func TestGovernorBackgroundWaitsBehindForeground(t *testing.T) {
-	g := newGovernor(nil, minRequestRoom)
+func TestServerBackgroundWaitsBehindForeground(t *testing.T) {
+	g := newObjectStorageServer(nil, minRequestRoom)
 	free := occupy(t, g, foregroundRequest, minRequestRoom)
 	done := make(chan struct{})
 	go func() {
@@ -155,8 +155,8 @@ func TestGovernorBackgroundWaitsBehindForeground(t *testing.T) {
 }
 
 // Background requests run at most half of the room; foreground may use the rest.
-func TestGovernorBackgroundCap(t *testing.T) {
-	g := newGovernor(nil, minRequestRoom)
+func TestServerBackgroundCap(t *testing.T) {
+	g := newObjectStorageServer(nil, minRequestRoom)
 	free := occupy(t, g, backgroundRequest, minRequestRoom/2)
 	_, ok := admitted(g, backgroundRequest)
 	require.False(t, ok, "background holds its half")
@@ -169,21 +169,21 @@ func TestGovernorBackgroundCap(t *testing.T) {
 }
 
 // A room below minRequestRoom is raised to it, half of it for background requests.
-func TestGovernorRoomAtLeastMinimum(t *testing.T) {
+func TestServerRoomAtLeastMinimum(t *testing.T) {
 	for _, room := range []int{-1, 0, 1, 2, minRequestRoom - 1, minRequestRoom} {
-		g := newGovernor(nil, room)
+		g := newObjectStorageServer(nil, room)
 		require.Equal(t, minRequestRoom, g.capacity, "room %d", room)
 		require.Equal(t, minRequestRoom/2, g.backgroundMax, "room %d", room)
 	}
-	g := newGovernor(nil, 3*minRequestRoom+1)
+	g := newObjectStorageServer(nil, 3*minRequestRoom+1)
 	require.Equal(t, 3*minRequestRoom+1, g.capacity)
 	require.Equal(t, (3*minRequestRoom+1)/2, g.backgroundMax)
 }
 
 // A running request is never stopped: a foreground request waits for a background one to
 // end.
-func TestGovernorNoPreemption(t *testing.T) {
-	g := newGovernor(nil, minRequestRoom)
+func TestServerNoPreemption(t *testing.T) {
+	g := newObjectStorageServer(nil, minRequestRoom)
 	free := occupy(t, g, backgroundRequest, minRequestRoom/2)
 	freeForeground := occupy(t, g, foregroundRequest, minRequestRoom/2)
 	defer freeForeground()
@@ -198,8 +198,8 @@ func TestGovernorNoPreemption(t *testing.T) {
 }
 
 // A wait canceled while waiting, or racing its admission, leaves no room held.
-func TestGovernorCancel(t *testing.T) {
-	g := newGovernor(nil, minRequestRoom)
+func TestServerCancel(t *testing.T) {
+	g := newObjectStorageServer(nil, minRequestRoom)
 	free := occupy(t, g, foregroundRequest, minRequestRoom)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -231,8 +231,8 @@ type panicStorage struct{ ObjectStorage }
 func (panicStorage) Stat(context.Context, string) (int64, error) { panic("stat") }
 
 // A request whose call panics frees its room.
-func TestGovernorPanicFreesRoom(t *testing.T) {
-	g := newGovernor(panicStorage{}, minRequestRoom)
+func TestServerPanicFreesRoom(t *testing.T) {
+	g := newObjectStorageServer(panicStorage{}, minRequestRoom)
 	defer occupy(t, g, foregroundRequest, minRequestRoom-1)()
 	require.Panics(t, func() { _, _ = g.Do(context.Background(), statRequest{key: "key"}) })
 	require.Zero(t, heldRoom(g))
@@ -242,8 +242,8 @@ func TestGovernorPanicFreesRoom(t *testing.T) {
 }
 
 // Close ends the waits for room; running requests keep theirs until they end.
-func TestGovernorCloseWithWaiters(t *testing.T) {
-	g := newGovernor(nil, minRequestRoom)
+func TestServerCloseWithWaiters(t *testing.T) {
+	g := newObjectStorageServer(nil, minRequestRoom)
 	free := occupy(t, g, foregroundRequest, minRequestRoom)
 	errCh := make(chan error, 2)
 	for _, c := range []requestClass{foregroundRequest, backgroundRequest} {
@@ -251,18 +251,18 @@ func TestGovernorCloseWithWaiters(t *testing.T) {
 		require.Eventually(t, waitingFor(g, c, 1), 5*time.Second, time.Millisecond)
 	}
 	g.close()
-	require.ErrorIs(t, <-errCh, errGovernorClosed)
-	require.ErrorIs(t, <-errCh, errGovernorClosed)
+	require.ErrorIs(t, <-errCh, errServerClosed)
+	require.ErrorIs(t, <-errCh, errServerClosed)
 	running, _ := g.counts()
 	require.Equal(t, minRequestRoom, running[foregroundRequest])
 	free()
 	require.Zero(t, heldRoom(g))
-	require.ErrorIs(t, waitRoom(g, context.Background(), foregroundRequest), errGovernorClosed)
+	require.ErrorIs(t, waitRoom(g, context.Background(), foregroundRequest), errServerClosed)
 }
 
 type retryStorage struct {
 	ObjectStorage
-	g     *governor
+	g     *objectStorageServer
 	held  []int
 	fails int
 }
@@ -279,9 +279,9 @@ func (r *retryStorage) Stat(ctx context.Context, key string) (int64, error) {
 
 // A retry waits with no room held, and its next attempt holds room again: a request
 // waiting behind it runs during the wait.
-func TestGovernorRetryWaitsWithoutRoom(t *testing.T) {
+func TestServerRetryWaitsWithoutRoom(t *testing.T) {
 	s := &retryStorage{fails: 2}
-	g := newGovernor(s, minRequestRoom)
+	g := newObjectStorageServer(s, minRequestRoom)
 	s.g = g
 	ctx := context.Background()
 	freeOne := occupy(t, g, foregroundRequest, 1)
@@ -333,11 +333,11 @@ func (g getterStorage) Read(ctx context.Context, _ string, min, max *int64) (io.
 
 // getterSource returns the source of a whole object whose ranges open through get.
 func getterSource(get func(ctx context.Context, min, max *int64) (io.ReadCloser, error)) objectSource {
-	return objectSource{g: newGovernor(getterStorage{get: get}, 1024), key: "object", end: -1}
+	return objectSource{g: newObjectStorageServer(getterStorage{get: get}, 1024), key: "object", end: -1}
 }
 
 // No request type has a function-typed field.
-func TestGovernorRequestsHoldNoFunctions(t *testing.T) {
+func TestServerRequestsHoldNoFunctions(t *testing.T) {
 	for _, req := range requestTypes {
 		typ := reflect.TypeOf(req)
 		for i := range typ.NumField() {

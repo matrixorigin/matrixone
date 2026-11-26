@@ -117,14 +117,14 @@ func TestSplitReadReservesFirstConnectionForNeededPart(t *testing.T) {
 			fs, _, data := newObjectSplitFS(t, objectSplitConfig{parts: 2, min: 128 << 10}, 300<<10)
 			d := fs.diskCache
 			<-d.load.done
-			limitRoom(t, fs.governor, 1, 1)
+			limitRoom(t, fs.server, 1, 1)
 
 			opened := make(chan int64, 2)
-			storage := newBlackBoxStorage(fs.governor.raw, func(_ string, start int64) bool {
+			storage := newBlackBoxStorage(fs.server.raw, func(_ string, start int64) bool {
 				opened <- start
 				return true
 			})
-			fs.governor.raw = storage
+			fs.server.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.gate) })
 			defer unblock()
 
@@ -145,10 +145,10 @@ func TestSplitReadReservesFirstConnectionForNeededPart(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
-			require.Equal(t, 1, heldRoom(fs.governor))
+			require.Equal(t, 1, heldRoom(fs.server))
 			unblock()
 			require.NoError(t, <-result)
-			require.Zero(t, heldRoom(fs.governor))
+			require.Zero(t, heldRoom(fs.server))
 			require.Equal(t, offset, first, "with room for one the read's part must start first")
 		})
 	}
@@ -175,14 +175,14 @@ func TestFileRangeRespectsZeroExtraWait(t *testing.T) {
 
 			open := make(chan struct{})
 			opened := sync.OnceFunc(func() { close(open) })
-			storage := newBlackBoxStorage(fs.governor.raw, func(_ string, offset int64) bool {
+			storage := newBlackBoxStorage(fs.server.raw, func(_ string, offset int64) bool {
 				if offset != 0 {
 					return false
 				}
 				opened()
 				return true
 			})
-			fs.governor.raw = storage
+			fs.server.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.gate) })
 			defer unblock()
 			const size = 192 << 10
@@ -275,14 +275,14 @@ func TestExactReadsShareLargeRange(t *testing.T) {
 			// Exact column reads skip the grid. Use distinct start offsets so the
 			// identical-request I/O merger leaves deduplication to the range owner.
 			started := make(chan struct{}, 2)
-			gate := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool {
+			gate := newBlackBoxStorage(fs.server.raw, func(string, int64) bool {
 				select {
 				case started <- struct{}{}:
 				default:
 				}
 				return true
 			})
-			fs.governor.raw = gate
+			fs.server.raw = gate
 			unblock := sync.OnceFunc(func() { close(gate.gate) })
 			defer unblock()
 			read := func(offset, size int64, result chan<- error) {

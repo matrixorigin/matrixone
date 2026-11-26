@@ -75,8 +75,8 @@ func TestDownloadConnsAreHalfTheStorageConcurrency(t *testing.T) {
 			Concurrency: tc.concurrency, MaxConnsPerHost: tc.conns,
 		}, CacheConfig{DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, false)
 		require.NoError(t, err)
-		require.Equal(t, tc.want, fs.governor.backgroundMax, "conns %d concurrency %d", tc.conns, tc.concurrency)
-		require.Equal(t, 2*tc.want, fs.governor.capacity, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, tc.want, fs.server.backgroundMax, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, 2*tc.want, fs.server.capacity, "conns %d concurrency %d", tc.conns, tc.concurrency)
 		fs.Close(ctx)
 	}
 }
@@ -98,9 +98,9 @@ func newStorageSlotFS(t *testing.T, concurrency int64, conns int, paths []string
 			Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		}))
 	}
-	// Stall prefetch opens after the governor admits them.
-	gated := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return stalled(key) })
-	fs.governor.raw = gated
+	// Stall prefetch opens after the server admits them.
+	gated := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return stalled(key) })
+	fs.server.raw = gated
 	return fs, gated
 }
 
@@ -174,7 +174,7 @@ func TestStalledDownloadsLeaveStorageConcurrencyForForegroundRead(t *testing.T) 
 			cur, _, _ := gated.counts(path)
 			inFlight += cur
 		}
-		require.EqualValues(t, fs.governor.backgroundMax, inFlight, "stalled downloads hold every background room")
+		require.EqualValues(t, fs.server.backgroundMax, inFlight, "stalled downloads hold every background room")
 		requireForegroundReads(t, fs, gated, data, SkipAllCache|ExactColumnsRead)
 	})
 }

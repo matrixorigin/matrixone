@@ -69,8 +69,8 @@ type DiskCache struct {
 	// memoryPrefetchMax is the most bytes of a MemoryPrefetchObject.
 	memoryPrefetchMax int64
 	prefetched        prefetchedObjects
-	// governor makes the requests of fills; nil when the cache has no object storage.
-	governor        *governor
+	// server makes the requests of fills; nil when the cache has no object storage.
+	server          *objectStorageServer
 	prefetchObjects prefetchObjects
 	// wholeFills counts whole-object fills in progress; wholeFileMax is the size of
 	// the largest whole-object file written.

@@ -34,7 +34,7 @@ import (
 // runs, sends the HEADs made so far to ranWith.
 type failingHeads struct {
 	t        *testing.T
-	g        *governor
+	g        *objectStorageServer
 	fails    int32
 	status   int
 	body     string
@@ -87,11 +87,11 @@ func (f *failingHeads) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// statHoldingAllOtherRoom stats object on raw through a governor whose room, but for
+// statHoldingAllOtherRoom stats object on raw through a server whose room, but for
 // one, is held, and returns its result and the HEADs made when the request that waited
 // for room behind it ran.
 func (f *failingHeads) statHoldingAllOtherRoom(raw ObjectStorage) (int64, int32, error) {
-	f.g = newGovernor(raw, minRequestRoom)
+	f.g = newObjectStorageServer(raw, minRequestRoom)
 	defer occupy(f.t, f.g, foregroundRequest, minRequestRoom-1)()
 	res, err := f.g.Do(context.Background(), statRequest{key: "object"})
 	ranWith := <-f.ranWith

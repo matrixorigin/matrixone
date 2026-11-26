@@ -147,7 +147,7 @@ func TestColumnReadPropagatesJoinedPrefetchSourceError(t *testing.T) {
 				fs.diskCache.downloadMaxExtraWait = time.Hour
 			}
 			s := &failOnceStorage{ObjectStorage: storage, fail: r.Offset, gate: make(chan struct{})}
-			fs.governor.raw = s
+			fs.server.raw = s
 			release := sync.OnceFunc(func() { close(s.gate) })
 			t.Cleanup(release)
 			require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{
@@ -407,8 +407,8 @@ func TestReadCloserReturnsBeforeReadingBody(t *testing.T) {
 			// A streamed entry past the bytes a prefetch object buffers opens its own reader.
 			fs.diskCache.memoryPrefetchMax = 32
 			<-fs.diskCache.load.done
-			storage := &stallingStorage{ObjectStorage: fs.governor.raw, stalled: make(chan struct{}), release: make(chan struct{})}
-			fs.governor.raw = storage
+			storage := &stallingStorage{ObjectStorage: fs.server.raw, stalled: make(chan struct{}), release: make(chan struct{})}
+			fs.server.raw = storage
 			unblock := sync.OnceFunc(func() { close(storage.release) })
 			readDone := make(chan struct{})
 			defer func() {

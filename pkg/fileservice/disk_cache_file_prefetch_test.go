@@ -34,8 +34,8 @@ func prefetchFileRange(ctx context.Context, fs *S3FS, start, end int64) error {
 // the download still runs.
 func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
-	storage := &stallingStorage{ObjectStorage: fs.governor.raw, after: 64 << 10, stalled: make(chan struct{}), release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &stallingStorage{ObjectStorage: fs.server.raw, after: 64 << 10, stalled: make(chan struct{}), release: make(chan struct{})}
+	fs.server.raw = storage
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {
@@ -60,8 +60,8 @@ func TestFilePrefetchServesReadsWhileItDownloads(t *testing.T) {
 // read after the object is recreated returns the new object.
 func TestDeleteCancelsFilePrefetch(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 256<<10)
-	storage := &stallingStorage{ObjectStorage: fs.governor.raw, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &stallingStorage{ObjectStorage: fs.server.raw, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
+	fs.server.raw = storage
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {

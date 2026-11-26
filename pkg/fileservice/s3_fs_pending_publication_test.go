@@ -226,8 +226,8 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 					return err
 				}))
 			}
-			storage := &publicationReadStorage{ObjectStorage: fs.governor.raw}
-			fs.governor.raw = storage
+			storage := &publicationReadStorage{ObjectStorage: fs.server.raw}
+			fs.server.raw = storage
 			if mode == "partial-hit" {
 				warm := &IOVector{FilePath: object, Entries: []IOEntry{{Offset: 2048, Size: 3}}, Policy: SkipFullFilePreloads}
 				defer warm.Release()

@@ -155,8 +155,8 @@ func TestColumnRangeReadBeforeDeleteIsNotCached(t *testing.T) {
 		fs, _, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
 		fs.SetAsyncUpdate(async)
 		ctx := context.Background()
-		held := &heldStorage{ObjectStorage: fs.governor.raw, read: make(chan struct{}), released: make(chan struct{})}
-		fs.governor.raw = held
+		held := &heldStorage{ObjectStorage: fs.server.raw, read: make(chan struct{}), released: make(chan struct{})}
+		fs.server.raw = held
 		req := ObjectPrefetch{FilePath: "object", Size: 10, Ranges: []PrefetchRange{{Offset: 100, Size: 10}}}
 		done := make(chan struct{})
 		go func() { defer close(done); fs.prefetchObject(ctx, req) }()
@@ -264,8 +264,8 @@ func (g *firstReadGate) Read(ctx context.Context, key string, min, max *int64) (
 // instead of reading them from object storage again, and so do further downloads of them.
 func TestColumnReadJoinsRangeDownload(t *testing.T) {
 	fs, storage, data := newPrefetchRangeFS(t, 64<<10, 300<<10)
-	gate := &firstReadGate{ObjectStorage: fs.governor.raw, started: make(chan struct{}), release: make(chan struct{})}
-	fs.governor.raw = gate
+	gate := &firstReadGate{ObjectStorage: fs.server.raw, started: make(chan struct{}), release: make(chan struct{})}
+	fs.server.raw = gate
 	ctx := context.Background()
 	req := ObjectPrefetch{FilePath: "object", Size: 64 << 10, Ranges: []PrefetchRange{{Offset: 0, Size: 64 << 10}}}
 	downloaded := make(chan struct{})

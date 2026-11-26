@@ -693,11 +693,11 @@ func (c objectSplitConfig) bounds(size, splitAt int64) []int64 {
 	return bounds
 }
 
-// objectSource is the object key that fills read through the governor g: its bytes from
+// objectSource is the object key that fills read through the server g: its bytes from
 // start to end, or to the end of the object when end is negative. When a read of it ends
 // short, objectEnd, when set, holds where the object ended.
 type objectSource struct {
-	g          *governor
+	g          *objectStorageServer
 	key        string
 	start, end int64
 	objectEnd  *atomic.Int64
@@ -705,7 +705,7 @@ type objectSource struct {
 
 var errObjectSourceRead = moerr.NewInternalErrorNoCtx("fileservice: an object source is read by its fill")
 
-// Read fails: a fill reads an objectSource through its governor.
+// Read fails: a fill reads an objectSource through its server.
 func (*objectSource) Read([]byte) (int, error) { return 0, errObjectSourceRead }
 
 func (*objectSource) Close() error { return nil }
@@ -855,12 +855,12 @@ func (d *DiskCache) finishDownload(o *objectDownload, p *filePrefetchObject) {
 	o.retire()
 }
 
-// backgroundRequests is the most background requests the governor runs at once.
+// backgroundRequests is the most background requests the server runs at once.
 func (d *DiskCache) backgroundRequests() int {
-	if d.governor == nil {
+	if d.server == nil {
 		return maxConnsPerHost / 2
 	}
-	return d.governor.backgroundMax
+	return d.server.backgroundMax
 }
 
 // freedSignal wakes the waiters for a resource once some is freed. It is guarded by the

@@ -28,17 +28,17 @@ import (
 )
 
 // /debug/prefetch_objects lists the prefetch objects, the download holding background room
-// and the governor's requests: a range waiting for room is registered while its request
+// and the server's requests: a range waiting for room is registered while its request
 // waits.
 func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	otherKey := fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
@@ -54,7 +54,7 @@ func TestDebugPrefetchObjectsListsWaitingObjects(t *testing.T) {
 		return strings.Contains(page(), "memory "+objectPath+" [0, 1024) registered")
 	}, 5*time.Second, time.Millisecond, "the waiting object is listed")
 	require.Eventually(t, func() bool {
-		return strings.Contains(page(), fmt.Sprintf("background running %d of %d waiting 1", fs.governor.backgroundMax, fs.governor.backgroundMax))
+		return strings.Contains(page(), fmt.Sprintf("background running %d of %d waiting 1", fs.server.backgroundMax, fs.server.backgroundMax))
 	}, 5*time.Second, time.Millisecond, "its request waits")
 	require.Contains(t, page(), "file "+fs.diskCache.objectKey("other")+" [0, ")
 	release()

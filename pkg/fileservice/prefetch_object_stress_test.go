@@ -110,11 +110,11 @@ func TestPrefetchObjectsUnderStress(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, unit, 1)
 	d := fs.diskCache
 	d.prefetchFlightBytes = 4 * prefetchBlockMax
-	limitRoom(t, d.governor, 6, 3)
+	limitRoom(t, d.server, 6, 3)
 	d.memoryPrefetchMax = 256 << 10
 	d.objectSplit = objectSplitConfig{parts: 2, min: 256 << 10}
-	storage := &stressStorage{ObjectStorage: fs.governor.raw}
-	fs.governor.raw = storage
+	storage := &stressStorage{ObjectStorage: fs.server.raw}
+	fs.server.raw = storage
 	ctx := context.Background()
 
 	// versions[i] is the newest version of object i written; a read may see any version
@@ -269,7 +269,7 @@ func TestPrefetchObjectsUnderStress(t *testing.T) {
 		defer f.mu.Unlock()
 		return len(f.m) == 0 && f.bytes == 0
 	}, 10*time.Second, time.Millisecond, "no prefetch object or buffer stays")
-	require.Eventually(t, func() bool { return heldRoom(d.governor) == 0 }, 10*time.Second, time.Millisecond,
+	require.Eventually(t, func() bool { return heldRoom(d.server) == 0 }, 10*time.Second, time.Millisecond,
 		"no connection stays held")
 
 	// Every object reads its last version, whole and by columns.

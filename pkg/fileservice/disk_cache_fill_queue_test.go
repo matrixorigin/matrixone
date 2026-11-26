@@ -27,7 +27,7 @@ import (
 )
 
 // waitRoom waits for room of class c of g.
-func waitRoom(g *governor, ctx context.Context, c requestClass) error {
+func waitRoom(g *objectStorageServer, ctx context.Context, c requestClass) error {
 	_, err := g.wait(ctx, c)
 	return err
 }
@@ -125,9 +125,9 @@ func (b *busyStorage) Read(ctx context.Context, key string, min, max *int64) (io
 // busyFills lets fs run one background fill at once, and runs one, of the object "busy",
 // whose read of object storage waits until the returned function or the test's end.
 func busyFills(t *testing.T, fs *S3FS) func() {
-	b := &busyStorage{ObjectStorage: fs.governor.raw, key: fs.pathToKey("busy"),
+	b := &busyStorage{ObjectStorage: fs.server.raw, key: fs.pathToKey("busy"),
 		gate: make(chan struct{}), reading: make(chan struct{})}
-	fs.governor.raw = b
+	fs.server.raw = b
 	fs.diskCache.setFillsMax(1)
 	require.NoError(t, fs.PrefetchObject(context.Background(), ObjectPrefetch{FilePath: "busy", Size: 1,
 		Ranges: []PrefetchRange{{Offset: 0, Size: 1}}}))
@@ -156,7 +156,7 @@ func waitFillsIdle(t *testing.T, d *DiskCache) {
 // set, and waits until they end.
 func prefetchRanges(fs *S3FS, ranges []PrefetchRange, open func(ctx context.Context, start, end int64) (io.ReadCloser, error)) {
 	if open != nil {
-		fs.governor.raw = openerStorage{ObjectStorage: fs.governor.raw, open: open}
+		fs.server.raw = openerStorage{ObjectStorage: fs.server.raw, open: open}
 	}
 	var size int64
 	for _, r := range ranges {
@@ -205,8 +205,8 @@ func TestFillsStartInOrder(t *testing.T) {
 			Policy: SkipDiskCache | SkipMemoryCache}))
 	}
 	release := busyFills(t, fs)
-	rec := &keyRecorder{ObjectStorage: fs.governor.raw}
-	fs.governor.raw = rec
+	rec := &keyRecorder{ObjectStorage: fs.server.raw}
+	fs.server.raw = rec
 	add := func(name string, due int64, reads, blocks int) {
 		require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: name, Size: 1 << 10, Due: due, Reads: reads, Blocks: blocks,
 			Ranges: []PrefetchRange{{Offset: 0, Size: 1 << 10}}}))

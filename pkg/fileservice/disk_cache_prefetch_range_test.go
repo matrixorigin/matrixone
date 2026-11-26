@@ -68,8 +68,8 @@ func newPrefetchRangeFS(t *testing.T, unit int64, size int) (*S3FS, *countingSto
 		data[i] = byte(i*7 + i/1021)
 	}
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "object", Entries: []IOEntry{{Size: int64(len(data)), Data: data}}, Policy: SkipDiskCache | SkipMemoryCache}))
-	storage := &countingStorage{ObjectStorage: fs.governor.raw}
-	fs.governor.raw = storage
+	storage := &countingStorage{ObjectStorage: fs.server.raw}
+	fs.server.raw = storage
 	return fs, storage, data
 }
 
@@ -227,9 +227,9 @@ func (b *blockingStorage) Read(ctx context.Context, key string, min, max *int64)
 // storage.
 func TestS3FSPrefetchRangeReadersShareTheRead(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	storage := &blockingStorage{ObjectStorage: fs.governor.raw.(*countingStorage).ObjectStorage,
+	storage := &blockingStorage{ObjectStorage: fs.server.raw.(*countingStorage).ObjectStorage,
 		started: make(chan struct{}), release: make(chan struct{})}
-	fs.governor.raw = storage
+	fs.server.raw = storage
 
 	first := make(chan []byte, 1)
 	go func() { first <- readRangeOf(t, fs, 0, 5000, 2) }()
@@ -255,9 +255,9 @@ func TestS3FSPrefetchRangeReadersShareTheRead(t *testing.T) {
 // a prefetch range under way.
 func TestS3FSCacheBypassReadSkipsActiveRange(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
-	storage := &blockingStorage{ObjectStorage: fs.governor.raw.(*countingStorage).ObjectStorage,
+	storage := &blockingStorage{ObjectStorage: fs.server.raw.(*countingStorage).ObjectStorage,
 		started: make(chan struct{}), release: make(chan struct{})}
-	fs.governor.raw = storage
+	fs.server.raw = storage
 	release := sync.OnceFunc(func() { close(storage.release) })
 	t.Cleanup(release)
 
@@ -313,7 +313,7 @@ func TestS3FSPrefetchRangeWaiterFallsBackOnFailure(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 4096, 64<<10)
 	diskPath := fs.diskCache.objectKey("object")
 	fl := addFlight(fs.diskCache, diskPath, 4096, 8192, time.Now())
-	storage := fs.governor.raw.(*countingStorage)
+	storage := fs.server.raw.(*countingStorage)
 	done := make(chan []byte, 1)
 	go func() { done <- readRangeOf(t, fs, 0, 5000, 2) }()
 	time.Sleep(20 * time.Millisecond)
@@ -532,7 +532,7 @@ func TestPrefetchReadOutlivesItsReader(t *testing.T) {
 	var opened, ended atomic.Int64
 	open := func(ctx context.Context, start, end int64) (io.ReadCloser, error) {
 		opened.Add(1)
-		r, err := fs.governor.raw.Read(ctx, "object", &start, &end)
+		r, err := fs.server.raw.Read(ctx, "object", &start, &end)
 		if err != nil {
 			return nil, err
 		}
@@ -596,8 +596,8 @@ func (b *stuckStorage) Read(ctx context.Context, key string, min, max *int64) (i
 // reads that start them.
 func TestCloseCancelsPrefetchRangeReads(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 4096, 64<<10)
-	storage := &stuckStorage{ObjectStorage: fs.governor.raw, started: make(chan struct{}, 1), end: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &stuckStorage{ObjectStorage: fs.server.raw, started: make(chan struct{}, 1), end: make(chan struct{})}
+	fs.server.raw = storage
 	t.Cleanup(func() { close(storage.end) })
 	readCtx, cancel := context.WithCancel(context.Background())
 	readDone := make(chan struct{})
@@ -678,8 +678,8 @@ func (r *stallingReader) Close() error { return r.r.Close() }
 func TestDeleteDropsPrefetchRangeUnderWay(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 64<<10, 256<<10)
 	ctx := context.Background()
-	storage := &stallingStorage{ObjectStorage: fs.governor.raw, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
-	fs.governor.raw = storage
+	storage := &stallingStorage{ObjectStorage: fs.server.raw, after: 4096, stalled: make(chan struct{}), release: make(chan struct{})}
+	fs.server.raw = storage
 
 	vec := &IOVector{FilePath: "object", Policy: SkipFullFilePreloads | SkipMemoryCache, Entries: []IOEntry{{Offset: 100, Size: 10}}}
 	require.NoError(t, fs.Read(ctx, vec))
@@ -731,7 +731,7 @@ func TestFlightBytesFollowAvailableMemory(t *testing.T) {
 	var calls int
 	avail := uint64(4 << 30)
 	memoryAvailable = func() (uint64, bool) { calls++; return avail, true }
-	d := &DiskCache{memoryPrefetchMax: 20 << 20, governor: newGovernor(nil, minRequestRoom)}
+	d := &DiskCache{memoryPrefetchMax: 20 << 20, server: newObjectStorageServer(nil, minRequestRoom)}
 	share := int64(avail / 100 * flightMemoryPercent)
 	require.Equal(t, share, d.flightBytes())
 	avail = 1 << 20
@@ -845,8 +845,8 @@ func TestPrefetchFilesBoundsRangesAtOnce(t *testing.T) {
 	fs.diskCache.memoryPrefetchMax = 512
 	fs.diskCache.setFillsMax(3)
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.governor.raw, func(k string, _ int64) bool { return k == key })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(k string, _ int64) bool { return k == key })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ranges := columnRanges(14, 20<<10, 1<<10)

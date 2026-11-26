@@ -1339,7 +1339,7 @@ type prefetchObjects struct {
 	queuedBytes  int64
 	fillSeq      uint64
 	// backgroundFills counts the background fills running, at most fillsMax, 0 for the
-	// governor's background room.
+	// server's background room.
 	backgroundFills int
 	fillsMax        int
 	// runWhole runs a fill of the whole object.

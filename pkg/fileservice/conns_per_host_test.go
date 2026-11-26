@@ -23,7 +23,7 @@ import (
 )
 
 // A max-conns-per-host or a concurrency below minRequestRoom is raised to it: the
-// governor has room for minRequestRoom requests, half of them background; a negative one
+// server has room for minRequestRoom requests, half of them background; a negative one
 // is rejected.
 func TestRoomBelowMinimumIsRaised(t *testing.T) {
 	noProbe := func(context.Context, string) (string, error) { return "", nil }
@@ -62,8 +62,8 @@ func TestRoomBelowMinimumIsRaised(t *testing.T) {
 		}
 		fs, err := NewS3FS(context.Background(), args, CacheConfig{MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, true)
 		require.NoError(t, err, "conns %d concurrency %d", tc.conns, tc.concurrency)
-		require.Equal(t, tc.room, fs.governor.capacity, "conns %d concurrency %d", tc.conns, tc.concurrency)
-		require.Equal(t, tc.room/2, fs.governor.backgroundMax, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, tc.room, fs.server.capacity, "conns %d concurrency %d", tc.conns, tc.concurrency)
+		require.Equal(t, tc.room/2, fs.server.backgroundMax, "conns %d concurrency %d", tc.conns, tc.concurrency)
 		fs.Close(context.Background())
 	}
 	_, err := NewS3FS(context.Background(), ObjectStorageArguments{Name: "s3", Endpoint: "disk", Bucket: t.TempDir(), MaxConnsPerHost: -1},
@@ -77,6 +77,6 @@ func TestDownloadConnsAreHalfTheConfiguredLimit(t *testing.T) {
 		CacheConfig{DiskPath: ptrTo(t.TempDir()), DiskCapacity: ptrTo[toml.ByteSize](64 << 20), MemoryCapacity: ptrTo[toml.ByteSize](0)}, nil, false, false)
 	require.NoError(t, err)
 	defer fs.Close(ctx)
-	require.Equal(t, 100, fs.governor.capacity)
-	require.Equal(t, 50, fs.governor.backgroundMax)
+	require.Equal(t, 100, fs.server.capacity)
+	require.Equal(t, 50, fs.server.backgroundMax)
 }

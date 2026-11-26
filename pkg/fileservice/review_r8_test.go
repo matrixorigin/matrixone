@@ -39,7 +39,7 @@ func TestCachingReadDoesNotJoinUncachedFlight(t *testing.T) {
 			fs, storage, data := newPrefetchRangeFS(t, 0, 1024)
 			<-fs.diskCache.load.done
 			failedOpen := &failOnceStorage{ObjectStorage: storage, fail: offset, gate: make(chan struct{})}
-			fs.governor.raw = failedOpen
+			fs.server.raw = failedOpen
 			release := sync.OnceFunc(func() { close(failedOpen.gate) })
 			defer release()
 			type result struct {
@@ -93,8 +93,8 @@ func TestAsyncDiskPrefetchSurvivesIndexDownload(t *testing.T) {
 				ctx := context.Background()
 				fs, _, data := newIndexObjectFS(t, true)
 				fs.SetAsyncUpdate(true)
-				storage := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
-				fs.governor.raw = storage
+				storage := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
+				fs.server.raw = storage
 				resume := sync.OnceFunc(func() { close(storage.gate) })
 				defer resume()
 

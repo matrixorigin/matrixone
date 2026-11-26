@@ -111,14 +111,14 @@ func TestBlackBoxJoinedColumnReadReturnsWhileRangesWait(t *testing.T) {
 	ranges := columnRanges(3, 40<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(ranges[0].Size)
 	first, rest := make(chan struct{}), make(chan struct{})
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return false })
 	g.gated = func(_ string, offset int64) chan struct{} {
 		if offset == ranges[0].Offset {
 			return first
 		}
 		return rest
 	}
-	fs.governor.raw = g
+	fs.server.raw = g
 	releaseFirst, releaseRest := sync.OnceFunc(func() { close(first) }), sync.OnceFunc(func() { close(rest) })
 	defer releaseFirst()
 	defer releaseRest()
@@ -147,9 +147,9 @@ func TestBlackBoxJoinedColumnReadReturnsWhileRangesWait(t *testing.T) {
 // The memory flights of a background column prefetch run at most the background room left.
 func TestBlackBoxColumnPrefetchHoldsDownloadConnections(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
-	limitRoom(t, fs.governor, 18, 2)
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
-	fs.governor.raw = g
+	limitRoom(t, fs.server, 18, 2)
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ranges := columnRanges(8, 20<<10, 1<<10)
@@ -168,8 +168,8 @@ func TestBlackBoxColumnPrefetchStopsAfterDelete(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	fs.diskCache.memoryPrefetchMax = 1
 	fs.diskCache.setFillsMax(4)
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ranges := columnRanges(14, 20<<10, 1<<10)
@@ -193,8 +193,8 @@ func TestBlackBoxEndedDeferredPrefetchNotInherited(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == objectKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == objectKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	limit := fs.diskCache.fillQueueLimit()
@@ -221,14 +221,14 @@ func foregroundReadOfWaitingRange(t *testing.T, fs *S3FS, ranges []PrefetchRange
 	t.Cleanup(sync.OnceFunc(func() { close(held) }))
 	var heldOffset atomic.Int64
 	heldOffset.Store(-1)
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return false })
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return false })
 	g.gated = func(_ string, offset int64) chan struct{} {
 		if heldOffset.CompareAndSwap(-1, offset) {
 			return held
 		}
 		return nil
 	}
-	fs.governor.raw = g
+	fs.server.raw = g
 	ctx := context.Background()
 	key := fs.pathToKey("object")
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 << 10, Ranges: ranges, Scan: &PrefetchScan{}}))
@@ -247,7 +247,7 @@ func foregroundReadOfWaitingRange(t *testing.T, fs *S3FS, ranges []PrefetchRange
 // download connection, reads its own bytes: the range is not joinable before it holds one.
 func TestBlackBoxForegroundReadNotHeldByWaitingConnection(t *testing.T) {
 	fs, _, data := newPrefetchRangeFS(t, 0, 300<<10)
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	ranges := columnRanges(2, 40<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = 4 * flightBufSize(ranges[0].Size)
 	got, offset, err := foregroundReadOfWaitingRange(t, fs, ranges)
@@ -263,11 +263,11 @@ func TestBlackBoxForegroundReadNotHeldByBufferOfWaitingRange(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	fs.diskCache.prefetchFlightBytes = flightBufSize(ranges[0].Size)
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
@@ -294,10 +294,10 @@ func TestBlackBoxColumnReadNotHeldByPrefetchWaitingForConnection(t *testing.T) {
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
@@ -331,11 +331,11 @@ func TestBlackBoxColumnReadNotHeldByFilePrefetchWaitingForConnection(t *testing.
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 16<<10)
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	fs.diskCache.memoryPrefetchMax = 16 << 10
 	otherKey := fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
@@ -359,10 +359,10 @@ func TestBlackBoxColumnReadNotHeldByWholeObjectPrefetchWaitingForConnection(t *t
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	otherKey := fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
@@ -390,10 +390,10 @@ func TestBlackBoxMemoryColumnPrefetchWaitingForConnectionEndsOnDelete(t *testing
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
 	ranges := columnRanges(2, 40<<10, 1<<10)
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
@@ -415,10 +415,10 @@ func TestBlackBoxWholeObjectPrefetchWaitingForConnection(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
@@ -437,7 +437,7 @@ func TestBlackBoxWholeObjectPrefetchWaitingForConnection(t *testing.T) {
 	require.Zero(t, total)
 	release()
 	require.Eventually(t, func() bool { return !fs.diskCache.fillsUnderWay("other") }, 5*time.Second, time.Millisecond)
-	require.Zero(t, heldRoom(d.governor))
+	require.Zero(t, heldRoom(d.server))
 }
 
 // A memory-backed column prefetch starts no range of an object deleted while its ranges
@@ -446,8 +446,8 @@ func TestBlackBoxMemoryColumnPrefetchStopsAfterDelete(t *testing.T) {
 	fs, _, _ := newPrefetchRangeFS(t, 0, 300<<10)
 	ranges := columnRanges(6, 20<<10, 1<<10)
 	fs.diskCache.prefetchFlightBytes = 2 * flightBufSize(ranges[0].Size)
-	g := newBlackBoxStorage(fs.governor.raw, func(string, int64) bool { return true })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(string, int64) bool { return true })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	ctx := context.Background()
@@ -469,17 +469,17 @@ func TestBlackBoxConcurrentReadsOfFileRunDownloadOnce(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: int64(len(data)), Data: data}},
 		Policy: SkipDiskCache | SkipMemoryCache}))
-	limitRoom(t, fs.governor, 2, 1)
+	limitRoom(t, fs.server, 2, 1)
 	fs.diskCache.memoryPrefetchMax = 2 * unit
 	objectKey, otherKey := fs.pathToKey("object"), fs.pathToKey("other")
-	g := newBlackBoxStorage(fs.governor.raw, func(key string, _ int64) bool { return key == otherKey })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(key string, _ int64) bool { return key == otherKey })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	defer release()
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "other", Size: int64(len(data)), Scan: &PrefetchScan{}}))
 	require.Eventually(t, func() bool { cur, _, _ := g.counts(otherKey); return cur == 1 }, 5*time.Second, time.Millisecond,
 		"the whole download of other holds the connection")
-	freeForeground := occupy(t, fs.governor, foregroundRequest, 1)
+	freeForeground := occupy(t, fs.server, foregroundRequest, 1)
 	const readers = 3
 	errs := make(chan error, readers)
 	for range readers {
@@ -515,8 +515,8 @@ func TestBlackBoxEndedPrefetchRangeFreesItsBuffer(t *testing.T) {
 	d := fs.diskCache
 	d.prefetchFlightBytes = 2 * flightBufSize(unit)
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.governor.raw, func(k string, offset int64) bool { return k == key && offset == 0 })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(k string, offset int64) bool { return k == key && offset == 0 })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	t.Cleanup(release)
 	require.NoError(t, fs.PrefetchObject(ctx, ObjectPrefetch{FilePath: "object", Size: 2 * unit,
@@ -563,11 +563,11 @@ func TestBlackBoxWideRangePrefetchWaitingTakesNoGoroutinePerRange(t *testing.T) 
 	fs, _, _ := newPrefetchRangeFS(t, 0, n*64)
 	ctx := context.Background()
 	d := fs.diskCache
-	limitRoom(t, d.governor, 1, 0)
+	limitRoom(t, d.server, 1, 0)
 	d.setFillsMax(8)
 	f := &d.prefetchObjects
 	waiting := func() int {
-		_, waiting := d.governor.counts()
+		_, waiting := d.server.counts()
 		return waiting[backgroundRequest]
 	}
 	before := runtime.NumGoroutine()
@@ -584,7 +584,7 @@ func TestBlackBoxWideRangePrefetchWaitingTakesNoGoroutinePerRange(t *testing.T) 
 	f.mu.Lock()
 	require.Zero(t, f.bytes)
 	f.mu.Unlock()
-	require.Zero(t, heldRoom(d.governor), "no range took room")
+	require.Zero(t, heldRoom(d.server), "no range took room")
 }
 
 // A prefetch whose bytes a range download a read started holds keeps it downloading once
@@ -654,10 +654,10 @@ func TestBlackBoxWideRangePrefetchLeavesConnectionsToOthers(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, fs.Write(ctx, IOVector{FilePath: "other", Entries: []IOEntry{{Size: 64 << 10, Data: data[:64<<10]}}, Policy: SkipDiskCache | SkipMemoryCache}))
 	share := 14
-	require.Less(t, share, fs.governor.backgroundMax)
+	require.Less(t, share, fs.server.backgroundMax)
 	key := fs.pathToKey("object")
-	g := newBlackBoxStorage(fs.governor.raw, func(k string, _ int64) bool { return k == key })
-	fs.governor.raw = g
+	g := newBlackBoxStorage(fs.server.raw, func(k string, _ int64) bool { return k == key })
+	fs.server.raw = g
 	release := sync.OnceFunc(func() { close(g.gate) })
 	t.Cleanup(release)
 	ranges := columnRanges(14, 20<<10, 1<<10)

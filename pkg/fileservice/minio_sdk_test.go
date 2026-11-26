@@ -337,7 +337,7 @@ func TestMinioSDKWriteInParts(t *testing.T) {
 		Endpoint: "http://localhost:9007", Bucket: "test", KeyID: "minioadmin", KeySecret: "minioadmin",
 	}, nil)
 	require.NoError(t, err)
-	g := newGovernor(sdk, minRequestRoom)
+	g := newObjectStorageServer(sdk, minRequestRoom)
 	opt := &ParallelMultipartOption{PartSize: minMultipartPartSize, Concurrency: 4}
 	read := func(key string) []byte {
 		res, err := g.Do(ctx, rangeRead{key: key, end: -1})

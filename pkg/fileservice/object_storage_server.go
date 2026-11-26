@@ -72,16 +72,16 @@ func requestClassOf(ctx context.Context) requestClass {
 	return foregroundRequest
 }
 
-var errGovernorClosed = moerr.NewInternalErrorNoCtx("fileservice: object storage governor closed")
+var errServerClosed = moerr.NewInternalErrorNoCtx("fileservice: object storage server closed")
 
-// minRequestRoom is the least room of a governor.
+// minRequestRoom is the least room of a server.
 const minRequestRoom = 64
 
-// governor makes every request to the object storage raw, at most capacity at once.
+// server makes every request to the object storage raw, at most capacity at once.
 // Waiting requests are admitted foreground first, then background, each in arrival
 // order; background requests run at most backgroundMax at once. A running request is
 // never stopped.
-type governor struct {
+type objectStorageServer struct {
 	raw ObjectStorage
 	ops [opCount]prometheus.Gauge
 
@@ -100,10 +100,10 @@ type roomWaiter struct {
 	elem    *list.Element
 }
 
-// newGovernor returns a governor of raw with room for capacity requests, at least
+// newObjectStorageServer returns a server of raw with room for capacity requests, at least
 // minRequestRoom, half of it for background requests.
-func newGovernor(raw ObjectStorage, capacity int) *governor {
-	g := &governor{raw: raw, closedCh: make(chan struct{})}
+func newObjectStorageServer(raw ObjectStorage, capacity int) *objectStorageServer {
+	g := &objectStorageServer{raw: raw, closedCh: make(chan struct{})}
 	for op, name := range opNames {
 		g.ops[op] = metric.FSObjectStorageOperations.WithLabelValues("s3", name)
 	}
@@ -112,7 +112,7 @@ func newGovernor(raw ObjectStorage, capacity int) *governor {
 	return g
 }
 
-func (g *governor) canRunLocked(c requestClass) bool {
+func (g *objectStorageServer) canRunLocked(c requestClass) bool {
 	if g.running[foregroundRequest]+g.running[backgroundRequest] >= g.capacity {
 		return false
 	}
@@ -122,7 +122,7 @@ func (g *governor) canRunLocked(c requestClass) bool {
 // wait waits for room for a request of class c until ctx ends or g closes, and returns
 // the class of the room granted. A background request whose promotion of ctx closes
 // waits as a foreground one from then.
-func (g *governor) wait(ctx context.Context, c requestClass) (requestClass, error) {
+func (g *objectStorageServer) wait(ctx context.Context, c requestClass) (requestClass, error) {
 	if err := ctx.Err(); err != nil {
 		return c, err
 	}
@@ -139,7 +139,7 @@ func (g *governor) wait(ctx context.Context, c requestClass) (requestClass, erro
 	g.mu.Lock()
 	if g.closed {
 		g.mu.Unlock()
-		return c, errGovernorClosed
+		return c, errServerClosed
 	}
 	if g.waiting[foregroundRequest].Len() == 0 &&
 		(c == foregroundRequest || g.waiting[backgroundRequest].Len() == 0) && g.canRunLocked(c) {
@@ -161,13 +161,13 @@ func (g *governor) wait(ctx context.Context, c requestClass) (requestClass, erro
 		case <-ctx.Done():
 			return g.abandon(w, ctx.Err())
 		case <-g.closedCh:
-			return g.abandon(w, errGovernorClosed)
+			return g.abandon(w, errServerClosed)
 		}
 	}
 }
 
 // promote moves w, while it waits as a background request, to the foreground waiters.
-func (g *governor) promote(w *roomWaiter) {
+func (g *objectStorageServer) promote(w *roomWaiter) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if w.elem == nil || w.class == foregroundRequest {
@@ -182,7 +182,7 @@ func (g *governor) promote(w *roomWaiter) {
 }
 
 // abandon ends the wait of w with err, freeing the room it was granted meanwhile.
-func (g *governor) abandon(w *roomWaiter, err error) (requestClass, error) {
+func (g *objectStorageServer) abandon(w *roomWaiter, err error) (requestClass, error) {
 	g.mu.Lock()
 	c := w.class
 	if w.elem == nil {
@@ -198,12 +198,12 @@ func (g *governor) abandon(w *roomWaiter, err error) (requestClass, error) {
 	return c, err
 }
 
-func (g *governor) startLocked(c requestClass) {
+func (g *objectStorageServer) startLocked(c requestClass) {
 	g.running[c]++
 	runningGauge(c).Inc()
 }
 
-func (g *governor) done(c requestClass) {
+func (g *objectStorageServer) done(c requestClass) {
 	g.mu.Lock()
 	g.running[c]--
 	runningGauge(c).Dec()
@@ -211,7 +211,7 @@ func (g *governor) done(c requestClass) {
 	g.mu.Unlock()
 }
 
-func (g *governor) grantLocked() {
+func (g *objectStorageServer) grantLocked() {
 	for _, c := range []requestClass{foregroundRequest, backgroundRequest} {
 		for g.waiting[c].Len() > 0 && g.canRunLocked(c) {
 			w := g.waiting[c].Remove(g.waiting[c].Front()).(*roomWaiter)
@@ -227,7 +227,7 @@ func (g *governor) grantLocked() {
 }
 
 // close ends the waits for room; running requests run on.
-func (g *governor) close() {
+func (g *objectStorageServer) close() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if !g.closed {
@@ -237,7 +237,7 @@ func (g *governor) close() {
 }
 
 // counts returns the requests running and waiting of each class.
-func (g *governor) counts() (running, waiting [2]int) {
+func (g *objectStorageServer) counts() (running, waiting [2]int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for c := range running {
@@ -263,7 +263,7 @@ func waitingGauge(c requestClass) prometheus.Gauge {
 // requestRoom is the room of a request: held while the request runs and while a retry of
 // it does not wait.
 type requestRoom struct {
-	g     *governor
+	g     *objectStorageServer
 	class requestClass
 
 	mu   sync.Mutex
@@ -408,7 +408,7 @@ type result struct {
 }
 
 // Do waits for room for req in the class of ctx, makes req on raw, and frees the room.
-func (g *governor) Do(ctx context.Context, req request) (result, error) {
+func (g *objectStorageServer) Do(ctx context.Context, req request) (result, error) {
 	switch req.(type) {
 	case copyRequest:
 		if _, ok := g.raw.(objectStorageCopier); !ok {
@@ -477,7 +477,7 @@ type listing struct {
 
 // list lists prefix. Each entry is taken by a listRequest, so the request that reads a page
 // holds room while it runs, and the entry is yielded with no room held.
-func (g *governor) list(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
+func (g *objectStorageServer) list(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
 	return func(yield func(*DirEntry, error) bool) {
 		l := &listing{room: &requestRoom{g: g, class: requestClassOf(ctx)}}
 		next, stop := iter.Pull2(g.raw.List(context.WithValue(withHTTPTrace(ctx), requestKey{}, l.room), prefix))

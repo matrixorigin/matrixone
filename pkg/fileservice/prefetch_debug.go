@@ -103,7 +103,7 @@ func (d *DiskCache) writePrefetchObjects(w io.Writer) {
 		fmt.Fprintln(w, l)
 	}
 	fmt.Fprintf(w, "  buffer bytes %d of %d, queued background fill bytes %d of %d\n", bytes, d.flightBytes(), queued, d.fillQueueLimit())
-	if g := d.governor; g != nil {
+	if g := d.server; g != nil {
 		running, waiting := g.counts()
 		fmt.Fprintf(w, "  requests of %d: foreground running %d waiting %d, background running %d of %d waiting %d\n",
 			g.capacity, running[foregroundRequest], waiting[foregroundRequest],

@@ -184,7 +184,7 @@ var (
 		},
 	)
 
-	// FSObjectStorageRequestsGauge is the requests of the object-storage governors running
+	// FSObjectStorageRequestsGauge is the requests of the object storage servers running
 	// and waiting for room, by class.
 	FSObjectStorageRequestsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{

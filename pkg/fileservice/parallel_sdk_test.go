@@ -295,7 +295,7 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 		traceMu.Unlock()
 		return upstream.RoundTrip(req)
 	}))
-	g := newGovernor(newTestAWSClientWithTransport(t, server, transport), minRequestRoom)
+	g := newObjectStorageServer(newTestAWSClientWithTransport(t, server, transport), minRequestRoom)
 	counter := new(perfcounter.CounterSet)
 	ctx := perfcounter.WithCounterSet(context.Background(), counter)
 	var callerHooks atomic.Int64
