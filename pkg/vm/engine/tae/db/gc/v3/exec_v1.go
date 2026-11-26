@@ -226,7 +226,7 @@ func MakeBloomfilterCoarseFilter(
 	ctx context.Context,
 	rowCount int,
 	probability float64,
-	buffer containers.IBatchBuffer,
+	buffer *containers.OneSchemaBatchBuffer,
 	location objectio.Location,
 	ckpVersion uint32,
 	ts *types.TS,

@@ -858,7 +858,7 @@ func TestCombinedTxnTable_Write(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
 	assert.PanicsWithValue(t, "BUG: cannot write data to partition primary table", func() {
-		table.Write(context.Background(), &batch.Batch{})
+		table.Write(context.Background(), &batch.Batch{}, nil)
 	})
 }
 
@@ -866,7 +866,7 @@ func TestCombinedTxnTable_Delete(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
 	assert.PanicsWithValue(t, "BUG: cannot delete data to partition primary table", func() {
-		table.Delete(context.Background(), &batch.Batch{}, "")
+		table.Delete(context.Background(), &batch.Batch{}, nil, "")
 	})
 }
 
@@ -2086,7 +2086,6 @@ func newChangesTestBatch(t testing.TB, mp *mpool.MPool, values []int64, timestam
 	t.Helper()
 	require.Len(t, values, len(timestamps))
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{"value", "commit_ts"}
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType(), mp)
 	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	for i, value := range values {
@@ -2353,11 +2352,11 @@ func (m *mockRelation) PrimaryKeysMayBeModified(ctx context.Context, from types.
 	return false, nil
 }
 
-func (m *mockRelation) Write(ctx context.Context, bat *batch.Batch) error {
+func (m *mockRelation) Write(ctx context.Context, bat *batch.Batch, attrs []string) error {
 	return nil
 }
 
-func (m *mockRelation) Delete(ctx context.Context, bat *batch.Batch, s string) error {
+func (m *mockRelation) Delete(ctx context.Context, bat *batch.Batch, attrs []string, s string) error {
 	return nil
 }
 

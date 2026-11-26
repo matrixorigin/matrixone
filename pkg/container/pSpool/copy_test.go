@@ -82,7 +82,6 @@ func TestCopyBatchCopiesMixedShapes(t *testing.T) {
 	t.Cleanup(func() { defer mpool.DeleteMPool(sourceMP); require.Zero(t, sourceMP.CurrNB()) })
 
 	source := batch.NewWithSize(5)
-	source.Attrs = []string{"fixed", "nil", "varlen", "const", "alias"}
 	fixed := vector.NewVec(types.T_int64.ToType(), sourceMP)
 	require.NoError(t, vector.AppendFixedList(fixed, []int64{1, 2, 3}, nil, sourceMP))
 	fixed.SetSorted(true)
@@ -108,7 +107,6 @@ func TestCopyBatchCopiesMixedShapes(t *testing.T) {
 	require.True(t, owned)
 	require.True(t, aliased)
 
-	require.Equal(t, source.Attrs, copied.Attrs)
 	require.Equal(t, rows, copied.RowCount())
 	require.Equal(t, source.Recursive, copied.Recursive)
 	require.Equal(t, source.ShuffleIDX, copied.ShuffleIDX)

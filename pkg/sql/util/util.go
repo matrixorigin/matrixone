@@ -43,7 +43,6 @@ func InitPredefinedTables(tables []string) {
 
 func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	rbat := batch.NewWithSize(len(bat.Vecs))
-	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, srcVec := range bat.Vecs {
 		vec, err := srcVec.CloneToFlatCompact(proc.Mp())
 		if err != nil {
@@ -64,7 +63,6 @@ func CopyBatchWithAllocation(bat *batch.Batch, proc *process.Process, mp *mpool.
 		return CopyBatch(bat, proc)
 	}
 	dst := batch.NewWithSize(len(bat.Vecs))
-	dst.Attrs = append(dst.Attrs, bat.Attrs...)
 	for i, src := range bat.Vecs {
 		v, err := src.CloneToFlatCompact(mp)
 		if err != nil {

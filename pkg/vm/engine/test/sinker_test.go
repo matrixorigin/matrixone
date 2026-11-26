@@ -114,7 +114,7 @@ func Test_Sinker(t *testing.T) {
 	bat2 := readutil.NewCNTombstoneBatch(&pkType, hiddenSels, mp)
 	buffer := readutil.NewCNTombstoneBatch(&pkType, hiddenSels, mp)
 	for {
-		done, err := r.Read(ctx, buffer.Attrs, nil, mp, buffer)
+		done, err := r.Read(ctx, objectio.GetTombstoneAttrs(hiddenSels), nil, mp, buffer)
 		require.NoError(t, err)
 		if done {
 			break

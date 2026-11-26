@@ -284,7 +284,7 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 	if err = ctr.ensureBufMP(proc); err != nil {
 		return false, err
 	}
-	if len(bat.ExtraBuf) != 0 {
+	if len(bat.ExtraBuf()) != 0 {
 		return false, moerr.NewInternalError(proc.Ctx,
 			"order build should not have extra buffers")
 	}

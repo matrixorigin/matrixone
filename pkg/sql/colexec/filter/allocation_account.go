@@ -35,7 +35,8 @@ func (filter *Filter) SetAllocationAccount(account *mpool.AllocationAccount) err
 	if !filter.ActivatesAllocationAccountLifecycle() {
 		return nil
 	}
-	if filter.ctr.buf != nil || len(filter.ctr.executors)+len(filter.ctr.runtimeExecutors) > 0 {
+	if filter.ctr.buf != nil || len(filter.ctr.executors)+len(filter.ctr.runtimeExecutors) > 0 ||
+		filter.ctr.selection.view.HoldsSelectionMemory() {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	filter.ctr.account = account
@@ -49,7 +50,8 @@ func (filter *Filter) ClearAllocationAccount(account *mpool.AllocationAccount) e
 	if filter.ctr.account != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if filter.ctr.buf != nil || len(filter.ctr.executors)+len(filter.ctr.runtimeExecutors) > 0 {
+	if filter.ctr.buf != nil || len(filter.ctr.executors)+len(filter.ctr.runtimeExecutors) > 0 ||
+		filter.ctr.selection.view.HoldsSelectionMemory() {
 		return mpool.ErrAllocationAccountLive
 	}
 	filter.ctr.account = nil

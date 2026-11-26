@@ -84,7 +84,7 @@ func TestGetFlushTS(t *testing.T) {
 	bat := catalog2.MockBatch(schema, 10)
 	defer bat.Close()
 	bats := bat.Split(10)
-	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]), bats[0].Attrs)
 	require.NoError(t, err)
 
 	err = txn.Commit(ctxWithTimeout)
@@ -145,7 +145,7 @@ func TestGetFlushTS(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert some data into table
-	err = rel4.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]))
+	err = rel4.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]), bats[1].Attrs)
 	require.NoError(t, err)
 
 	err = txn4.Commit(ctxWithTimeout)

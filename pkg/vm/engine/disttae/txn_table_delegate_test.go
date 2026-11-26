@@ -188,7 +188,7 @@ func TestTxnTableDelegate_Write(t *testing.T) {
 	table.combined.tbl = newMockCombinedTxnTable()
 
 	assert.PanicsWithValue(t, "BUG: cannot write data to partition primary table", func() {
-		table.Write(context.Background(), &batch.Batch{})
+		table.Write(context.Background(), &batch.Batch{}, nil)
 	})
 }
 
@@ -198,7 +198,7 @@ func TestTxnTableDelegate_Delete(t *testing.T) {
 	table.combined.tbl = newMockCombinedTxnTable()
 
 	assert.PanicsWithValue(t, "BUG: cannot delete data to partition primary table", func() {
-		table.Delete(context.Background(), &batch.Batch{}, "")
+		table.Delete(context.Background(), &batch.Batch{}, nil, "")
 	})
 }
 

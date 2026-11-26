@@ -105,7 +105,6 @@ func (limit *Limit) Call(proc *process.Process) (vm.CallResult, error) {
 		if err != nil {
 			return vm.CancelResult, err
 		}
-		limit.ctr.buf.Attrs = append(limit.ctr.buf.Attrs[:0], bat.Attrs...)
 		limit.ctr.buf.Recursive = bat.Recursive
 		limit.ctr.buf.ShuffleIDX = bat.ShuffleIDX
 		limit.ctr.buf.SetRowCount(bat.RowCount())

@@ -458,7 +458,7 @@ func (r *TableMetaReader) rejectInMemoryRows(isTombstone bool) error {
 			if found || entry.typ != wantType || entry.bat == nil || entry.bat.IsEmpty() {
 				return
 			}
-			if slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats) == -1 {
+			if slices.Index(entry.attrs, catalog.ObjectMeta_ObjectStats) == -1 {
 				found = true
 			}
 		},
@@ -603,9 +603,8 @@ func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
 
 	appendTombstoneRow := func(rowid types.Rowid, pkVec *vector.Vector, offset int64) error {
 		if rowsBatch == nil {
-			rowsBatch = batch.New(attrs)
-			rowsBatch.Attrs = attrs
-			for i := 0; i < len(rowsBatch.Attrs); i++ {
+			rowsBatch = batch.NewWithSize(len(attrs))
+			for i := 0; i < len(attrs); i++ {
 				rowsBatch.Vecs[i] = vector.NewVec(colTypes[i], mp)
 			}
 		}
@@ -703,9 +702,8 @@ func readWriteHelper(
 	}()
 
 	if reader != nil {
-		dataBatch = batch.New(attrs)
-		dataBatch.Attrs = attrs
-		for i := 0; i < len(dataBatch.Attrs); i++ {
+		dataBatch = batch.NewWithSize(len(attrs))
+		for i := 0; i < len(attrs); i++ {
 			dataBatch.Vecs[i] = vector.NewVec(colTypes[i], mp)
 		}
 
