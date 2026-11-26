@@ -199,7 +199,7 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 		if buf.Len() == 0 {
 			return 0, nil
 		}
-		return 0, f.flushMetricBatch(f.ctx, buf.Bytes(), f.metricBatchID, true, metricBatchTimeout)
+		return 0, f.flushMetricBatch(f.ctx, buf.Bytes(), f.metricBatchID, true)
 	}
 
 	forceNewConn := !db_holder.DBConnErrCount.Check()

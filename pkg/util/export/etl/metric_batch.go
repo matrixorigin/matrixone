@@ -23,10 +23,8 @@ import (
 	"errors"
 	"io"
 	"net"
-	"time"
 
 	"github.com/go-sql-driver/mysql"
-
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
@@ -37,29 +35,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-const metricBatchTimeout = 10 * time.Second
 const metricReplaySQLTarget = 4 * mpool.MB
 
 func ReplayMetricBatch(ctx context.Context, tbl *table.Table, data []byte, id uuid.UUID) error {
-	return NewSQLFlusher(tbl).flushMetricBatch(ctx, data, id, false, metricBatchTimeout)
+	return NewSQLFlusher(tbl).flushMetricBatch(ctx, data, id, false)
 }
 
-func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uuid.UUID, firstWrite bool, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeoutCause(parent, timeout, moerr.CauseWriteRowRecords)
-	defer cancel()
-	db, err := dbholder.GetOrInitMetricDBConn(ctx)
+func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uuid.UUID, firstWrite bool) error {
+	ctx := parent
+	if firstWrite {
+		// Keep the original total budget for synchronous collection.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(parent, dbholder.MetricBatchTimeout)
+		defer cancel()
+	}
+	var db *sql.DB
+	err := dbholder.WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		var err error
+		db, err = dbholder.GetOrInitMetricDBConn(opCtx)
+		return err
+	})
 	if err != nil {
 		return err
 	}
 	err = dbholder.CommitMetricBatch(ctx, db, id, func(conn *sql.Conn) error {
 		if firstWrite {
-			_, err := conn.ExecContext(ctx, f.loadSQL(data))
-			return err
+			return f.loadMetricCSV(ctx, conn, data)
 		}
 		return f.replayMetricLoads(ctx, conn, data)
 	})
 	if err != nil {
-		if parent.Err() == nil && (ctx.Err() == context.DeadlineExceeded || isMetricConnectionError(err)) {
+		if parent.Err() == nil && shouldReselectMetricCN(err) {
 			dbholder.MarkMetricDBConnFailed(db)
 		}
 		return err
@@ -74,18 +80,30 @@ func (f *SQLFlusher) flushMetricBatch(parent context.Context, data []byte, id uu
 	return nil
 }
 
-func isMetricConnectionError(err error) bool {
+func shouldReselectMetricCN(err error) bool {
 	var netErr net.Error
 	var mysqlErr *mysql.MySQLError
 	return errors.As(err, &netErr) || errors.Is(err, driver.ErrBadConn) ||
 		errors.Is(err, mysql.ErrInvalidConn) || errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
-		(errors.As(err, &mysqlErr) && (mysqlErr.Number == 2006 || mysqlErr.Number == 2013))
+		(errors.As(err, &mysqlErr) && (mysqlErr.Number == 2006 || mysqlErr.Number == 2013 ||
+			mysqlErr.Number == moerr.ER_SERVER_SHUTDOWN ||
+			mysqlErr.Number == moerr.ErrNewTxnInCNRollingRestart || mysqlErr.Number == moerr.ErrRetryForCNRollingRestart))
+}
+
+func (f *SQLFlusher) loadMetricCSV(ctx context.Context, conn *sql.Conn, data []byte) error {
+	query := f.loadSQL(data)
+	return dbholder.WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		_, err := conn.ExecContext(opCtx, query)
+		return err
+	})
 }
 
 func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data []byte) error {
 	var packetLimit int
-	if err := conn.QueryRowContext(ctx, "SELECT @@session.max_allowed_packet").Scan(&packetLimit); err != nil {
+	if err := dbholder.WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		return conn.QueryRowContext(opCtx, "SELECT @@session.max_allowed_packet").Scan(&packetLimit)
+	}); err != nil {
 		return err
 	}
 	// The driver reserves one byte from the negotiated limit, and
@@ -116,7 +134,7 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 		// Slice the original bytes at CSV record boundaries, including
 		// records with embedded newlines. Keep all LOADs in this transaction.
 		if start != end && size+rowSize > target {
-			if _, err := conn.ExecContext(ctx, f.loadSQL(data[start:end])); err != nil {
+			if err := f.loadMetricCSV(ctx, conn, data[start:end]); err != nil {
 				return err
 			}
 			start, size = end, overhead
@@ -124,8 +142,7 @@ func (f *SQLFlusher) replayMetricLoads(ctx context.Context, conn *sql.Conn, data
 		end, size = next, size+rowSize
 	}
 	if start != end {
-		_, err := conn.ExecContext(ctx, f.loadSQL(data[start:end]))
-		return err
+		return f.loadMetricCSV(ctx, conn, data[start:end])
 	}
 	return nil
 }

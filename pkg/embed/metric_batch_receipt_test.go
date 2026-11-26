@@ -19,11 +19,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -222,6 +224,50 @@ func TestMetricBatchReceiptSQL(t *testing.T) {
 				require.NoError(t, etl.ReplayMetricBatch(ctx, mometric.SqlStatementCUTable, []byte(payload), id))
 				count(rowCount)
 			}
+		})
+
+		t.Run("reselect_after_rolling_restart", func(t *testing.T) {
+			oldPool, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer oldPool.Close()
+			dbholder.SetDBConn(oldPool)
+			defer dbholder.CloseDBConn()
+			defer dbholder.SetSQLWriterDBAddressFunc(dbholder.GetSQLWriterDBAddressFunc())
+			var reselections int
+			dbholder.SetSQLWriterDBAddressFunc(func(_ context.Context, random bool) (string, error) {
+				require.True(t, random)
+				reselections++
+				return cfg.Addr, nil
+			})
+
+			node := uuid.NewString()
+			id := uuid.New()
+			t.Cleanup(func() {
+				cleanup, stop := context.WithTimeoutCause(context.Background(), 5*time.Second, moerr.CauseWriteRowRecords)
+				defer stop()
+				_, err := pool.ExecContext(cleanup, "delete from system_metrics.sql_statement_cu where node = ?", node)
+				require.NoError(t, err)
+				require.NoError(t, dbholder.DeleteMetricBatchReceipt(cleanup, pool, id))
+			})
+			row := fmt.Appendf(nil, "sys,2026-11-25 09:36:01.123456,2,%s,CN,internal_sql\n", node)
+			restart := &mysql.MySQLError{Number: moerr.ErrNewTxnInCNRollingRestart}
+			mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(regexp.QuoteMeta("insert into system_metrics.metric_batch_receipt (batch_id) values (?)")).
+				WithArgs(id.String()).WillReturnError(restart)
+			mock.ExpectExec("^ROLLBACK$").WillReturnResult(sqlmock.NewResult(0, 0))
+			require.ErrorIs(t, etl.ReplayMetricBatch(ctx, mometric.SqlStatementCUTable, row, id), restart)
+			require.NoError(t, mock.ExpectationsWereMet())
+			require.Zero(t, reselections)
+
+			// A sparse retry still selects the healthy embedded CN.
+			dbholder.DBConnErrCount.Reset()
+			for range 2 {
+				require.NoError(t, etl.ReplayMetricBatch(ctx, mometric.SqlStatementCUTable, row, id))
+				var count int
+				require.NoError(t, pool.QueryRowContext(ctx, "select count(*) from system_metrics.sql_statement_cu where node = ?", node).Scan(&count))
+				require.Equal(t, 1, count)
+			}
+			require.Equal(t, 1, reselections)
 		})
 	})
 }

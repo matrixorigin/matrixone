@@ -18,10 +18,14 @@ Both write paths insert the UUID into the primary key of
 system_metrics.metric_batch_receipt and load the rows in the same transaction.
 Replay splits LOAD statements at CSV record boundaries using the connection's
 packet limit. Partial loads are rolled back together with the receipt.
-The operation deadline covers CN discovery, connection acquisition, SQL and
-the wait for COMMIT. An interrupted COMMIT leaves the file available for
-receipt-based adjudication. A connection error or operation deadline marks
-that pool for CN reselection even if the next replay runs minutes later.
+Replay observes task cancellation throughout the transaction. CN discovery,
+connection acquisition, each SQL statement and COMMIT each get a fresh
+10-second deadline, so a large file can finish while its statements make
+progress. The synchronous first write retains its 10-second total budget.
+An interrupted COMMIT leaves the file available for receipt-based
+adjudication. A connection error, operation timeout or rolling-restart
+refusal marks the pool for CN reselection even if the next replay runs
+minutes later.
 A rollback removes both effects. When the insert or commit reports a
 duplicate key, the writer checks the receipt from a new SQL statement after
 releasing the failed transaction. A visible receipt proves that a previous

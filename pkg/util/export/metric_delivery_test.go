@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -235,6 +236,28 @@ func TestMetricReplayChunksRollBackTogether(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
+func TestMetricReplayRenewsDeadlinePerLoad(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mock := metricDeliveryDB(t)
+		tbl := mometric.SqlStatementCUTable
+		id := uuid.New()
+		row := "sys," + sampleTime + ",1,cn,CN,internal_sql\n"
+		mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnResult(sqlmock.NewResult(0, 1))
+		expectMetricPacket(mock, 185)
+		for range 3 {
+			mock.ExpectExec(regexp.QuoteMeta("LOAD DATA INLINE FORMAT='csv', DATA='" + row + "' INTO TABLE system_metrics.sql_statement_cu FIELDS TERMINATED BY ','")).
+				WillDelayFor(4 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+		}
+		expectMetricCommit(mock)
+
+		start := time.Now()
+		err := etl.ReplayMetricBatch(t.Context(), tbl, []byte(strings.Repeat(row, 3)), id)
+		require.NoError(t, err)
+		require.Equal(t, 12*time.Second, time.Since(start))
+	})
+}
+
 func TestMetricReplayReselectsAfterConnectionError(t *testing.T) {
 	mock := metricDeliveryDB(t)
 	dbholder.SetSQLWriterDBUser("test", "test")
@@ -255,6 +278,40 @@ func TestMetricReplayReselectsAfterConnectionError(t *testing.T) {
 	// Reproduce the state of a lone file after the normal retry window.
 	dbholder.DBConnErrCount.Reset()
 	require.ErrorIs(t, etl.ReplayMetricBatch(t.Context(), tbl, payload, id), reselected)
+}
+
+func TestMetricReplayReselectsAfterCNRefusal(t *testing.T) {
+	for _, failure := range []struct {
+		name string
+		code uint16
+	}{
+		{"new_txn_during_restart", moerr.ErrNewTxnInCNRollingRestart},
+		{"retry_after_restart", moerr.ErrRetryForCNRollingRestart},
+		{"server_shutdown", moerr.ER_SERVER_SHUTDOWN},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			mock := metricDeliveryDB(t)
+			dbholder.SetSQLWriterDBUser("test", "test")
+			address := dbholder.GetSQLWriterDBAddressFunc()
+			t.Cleanup(func() { dbholder.SetSQLWriterDBAddressFunc(address) })
+			reselected := errors.New("CN selection attempted")
+			dbholder.SetSQLWriterDBAddressFunc(func(_ context.Context, random bool) (string, error) {
+				require.True(t, random)
+				return "", reselected
+			})
+			id := uuid.New()
+			tbl := mometric.SingleMetricTable
+			payload := []byte("m," + sampleTime + ",1,cn-1,CN,sys,0,\n")
+			restart := &mysql.MySQLError{Number: failure.code}
+			mock.ExpectExec("^START TRANSACTION$").WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(regexp.QuoteMeta(insertReceipt)).WithArgs(id.String()).WillReturnError(restart)
+			expectMetricRollback(mock)
+			require.ErrorIs(t, etl.ReplayMetricBatch(t.Context(), tbl, payload, id), restart)
+
+			dbholder.DBConnErrCount.Reset()
+			require.ErrorIs(t, etl.ReplayMetricBatch(t.Context(), tbl, payload, id), reselected)
+		})
+	}
 }
 
 func TestMetricReplayCanceledDuringCommitRetainsFile(t *testing.T) {

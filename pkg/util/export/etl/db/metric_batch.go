@@ -19,12 +19,15 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
+
+const MetricBatchTimeout = 10 * time.Second
 
 const MetricBatchReceiptTable = "metric_batch_receipt"
 const metricBatchReceiptRelation = "system_metrics." + MetricBatchReceiptTable
@@ -33,6 +36,28 @@ const metricBatchReceiptRelation = "system_metrics." + MetricBatchReceiptTable
 // definition frozen once the upgrade is released.
 const CreateMetricBatchReceipt = "CREATE TABLE IF NOT EXISTS " + metricBatchReceiptRelation +
 	" (batch_id varchar(36) primary key, created_at datetime(6) not null default current_timestamp(6))"
+
+// WithMetricBatchTimeout bounds a single database operation. A replay
+// with many LOAD statements can continue while each operation makes progress.
+func WithMetricBatchTimeout(parent context.Context, run func(context.Context) error) error {
+	ctx, cancel := context.WithTimeoutCause(parent, MetricBatchTimeout, moerr.CauseWriteRowRecords)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := run(ctx)
+	if ctxErr := ctx.Err(); err != nil && ctxErr != nil && !errors.Is(err, ctxErr) {
+		return errors.Join(err, ctxErr)
+	}
+	return err
+}
+
+func execMetricBatch(ctx context.Context, conn *sql.Conn, query string, args ...any) error {
+	return WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		_, err := conn.ExecContext(opCtx, query, args...)
+		return err
+	})
+}
 
 func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, load func(*sql.Conn) error) error {
 	err := insertMetricBatch(ctx, db, id.String(), load)
@@ -48,8 +73,10 @@ func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, load func(
 	// The attempt has released its transaction and connection. Use a new
 	// statement to observe a committed receipt, including commit-time conflicts.
 	var committed bool
-	checkErr := db.QueryRowContext(ctx, "select exists(select 1 from "+metricBatchReceiptRelation+
-		" where batch_id = ?)", id.String()).Scan(&committed)
+	checkErr := WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		return db.QueryRowContext(opCtx, "select exists(select 1 from "+metricBatchReceiptRelation+
+			" where batch_id = ?)", id.String()).Scan(&committed)
+	})
 	if checkErr != nil {
 		return errors.Join(err, checkErr)
 	}
@@ -60,7 +87,12 @@ func CommitMetricBatch(ctx context.Context, db *sql.DB, id uuid.UUID, load func(
 }
 
 func insertMetricBatch(ctx context.Context, db *sql.DB, id string, load func(*sql.Conn) error) error {
-	conn, err := db.Conn(ctx)
+	var conn *sql.Conn
+	err := WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		var err error
+		conn, err = db.Conn(opCtx)
+		return err
+	})
 	if err != nil {
 		return err
 	}
@@ -71,7 +103,7 @@ func insertMetricBatch(ctx context.Context, db *sql.DB, id string, load func(*sq
 	}
 	// Pin one connection and use context-aware commands through COMMIT.
 	// ExecContext on sql.Conn never retries a COMMIT on another connection.
-	if _, err = conn.ExecContext(ctx, "START TRANSACTION"); err != nil {
+	if err = execMetricBatch(ctx, conn, "START TRANSACTION"); err != nil {
 		discard()
 		return err
 	}
@@ -80,27 +112,27 @@ func insertMetricBatch(ctx context.Context, db *sql.DB, id string, load func(*sq
 		if committed {
 			return
 		}
-		if ctx.Err() == nil {
-			if _, rollbackErr := conn.ExecContext(ctx, "ROLLBACK"); rollbackErr == nil {
-				return
-			}
+		if rollbackErr := execMetricBatch(ctx, conn, "ROLLBACK"); rollbackErr == nil {
+			return
 		}
 		// Canceled or unclean transactions cannot return to the shared pool.
 		discard()
 	}()
 
-	if _, err = conn.ExecContext(ctx, "insert into "+metricBatchReceiptRelation+" (batch_id) values (?)", id); err != nil {
+	if err = execMetricBatch(ctx, conn, "insert into "+metricBatchReceiptRelation+" (batch_id) values (?)", id); err != nil {
 		return err
 	}
 	if err = load(conn); err != nil {
 		return err
 	}
-	_, err = conn.ExecContext(ctx, "COMMIT")
+	err = execMetricBatch(ctx, conn, "COMMIT")
 	committed = err == nil
 	return err
 }
 
 func DeleteMetricBatchReceipt(ctx context.Context, db *sql.DB, id uuid.UUID) error {
-	_, err := db.ExecContext(ctx, "delete from "+metricBatchReceiptRelation+" where batch_id = ?", id.String())
-	return err
+	return WithMetricBatchTimeout(ctx, func(opCtx context.Context) error {
+		_, err := db.ExecContext(opCtx, "delete from "+metricBatchReceiptRelation+" where batch_id = ?", id.String())
+		return err
+	})
 }
