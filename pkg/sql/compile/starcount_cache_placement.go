@@ -110,12 +110,14 @@ func (c *Compile) placeStarCountByCache(
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(req.QueryWorkers) <= 1 {
 		return fallback, nil
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, starCountCacheProbeTimeout)
-	defer cancel()
-	objects, err := sampler.SampleCountTombstoneObjects(probeCtx, defaultStarCountTombstoneThreshold)
+	// Snapshot admission also belongs to the ordinary scan. Start the
+	// advisory network budget only after the local threshold has qualified.
+	objects, err := sampler.SampleCountTombstoneObjects(ctx, defaultStarCountTombstoneThreshold)
 	if err != nil || len(objects) == 0 {
 		return fallback, ctx.Err()
 	}
+	probeCtx, cancel := context.WithTimeout(ctx, starCountCacheProbeTimeout)
+	defer cancel()
 	fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
 	if err != nil {
 		return fallback, ctx.Err()

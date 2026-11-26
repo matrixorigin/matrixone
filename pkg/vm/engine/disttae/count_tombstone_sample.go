@@ -30,8 +30,8 @@ func (tbl *txnTableDelegate) SampleCountTombstoneObjects(ctx context.Context, mi
 	return tbl.origin.SampleCountTombstoneObjects(ctx, minRows)
 }
 
-// SampleCountTombstoneObjects returns a bounded sample from an already
-// available committed snapshot, once it crosses the per-block threshold.
+// SampleCountTombstoneObjects returns a bounded sample from the scan's
+// committed snapshot once it crosses the per-block threshold.
 func (tbl *txnTable) SampleCountTombstoneObjects(ctx context.Context, minRows int) ([][]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -44,13 +44,20 @@ func (tbl *txnTable) SampleCountTombstoneObjects(ctx context.Context, minRows in
 		return nil, nil
 	}
 
-	// This advisory check should never subscribe, wait for logtail, or fetch
-	// checkpoints. The ordinary scan still owns snapshot admission.
+	// Reuse a ready partition on the hot path. On first access the scan
+	// requires ordinary snapshot admission even if every CN is cold.
 	snapshot := tbl.db.op.SnapshotTS()
 	part, _, available := txn.engine.PushClient().planningInputSnapshot(
 		tbl.db.databaseId, tbl.tableId, client.CatalogReadStamp{Snapshot: snapshot},
 	)
-	if !available || part.ApproxTombstoneObjectsNum() == 0 {
+	if !available {
+		var err error
+		part, err = tbl.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if part.ApproxTombstoneObjectsNum() == 0 {
 		return nil, nil
 	}
 	iter, err := part.NewObjectsIter(types.TimestampToTS(snapshot), true, true)

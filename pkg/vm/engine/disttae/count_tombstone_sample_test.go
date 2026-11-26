@@ -52,6 +52,8 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 	tbl := &txnTable{
 		db:      &txnDatabase{databaseId: dbID, op: op},
 		tableId: tableID,
+		fake:    true,
+		relKind: "v", // Supply immutable state to ordinary partition admission in this fixture.
 	}
 	rel := &txnTableDelegate{origin: tbl}
 	sample, err := rel.SampleCountTombstoneObjects(ctx, 5_000_000)
@@ -103,9 +105,9 @@ func TestSampleCountTombstoneObjects(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 
 	eng.pClient.receivedLogTailTime.tList[0].Store(timestamp.Timestamp{})
-	sample, err = rel.SampleCountTombstoneObjects(ctx, 0)
+	sample, err = rel.SampleCountTombstoneObjects(ctx, 5_000_000)
 	require.NoError(t, err)
-	require.Empty(t, sample, "advisory scheduling must skip a snapshot whose logtail is behind")
+	require.Equal(t, again, sample, "a missing ready snapshot must use ordinary local admission")
 	eng.pClient.receivedLogTailTime.tList[0].Store(snapshot.Prev())
 
 	txn.readOnly.Store(false)
