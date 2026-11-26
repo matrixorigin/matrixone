@@ -82,10 +82,11 @@ type MergeScheduler struct {
 	supps map[uint64]*todoSupporter
 
 	// control flow
-	allPaused  bool
-	generation atomic.Pointer[mergeSchedulerGeneration]
-	stopRecv   chan struct{}
-	stopped    atomic.Bool
+	allPaused   bool
+	generation  atomic.Pointer[mergeSchedulerGeneration]
+	lifecycleMu sync.Mutex // Start must not rearm the queue before Stop joins the old loop
+	stopRecv    chan struct{}
+	stopped     atomic.Bool
 
 	msgChan      chan *MMsg
 	bootstrapMsg *MMsg
@@ -151,6 +152,8 @@ func (a *MergeScheduler) PatchTestRscController(rc rscthrottler.RSCThrottler) {
 }
 
 func (a *MergeScheduler) Stop() {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
 	if a.stopped.CompareAndSwap(false, true) {
 		generation := a.generation.Load()
 		if generation != nil {
@@ -161,9 +164,20 @@ func (a *MergeScheduler) Stop() {
 }
 
 func (a *MergeScheduler) Start() {
+	a.lifecycleMu.Lock()
+	defer a.lifecycleMu.Unlock()
 	if a.stopped.CompareAndSwap(true, false) {
 		generation := newMergeSchedulerGeneration()
 		a.generation.Store(generation)
+		// The previous generation may have stopped while an admitted task was
+		// still running. Recheck its retained manual work even if that task's
+		// completion notification was delivered while the scheduler was stopped.
+		now := a.clock.Now()
+		for _, supp := range a.supps {
+			if _, ok := a.nextManualRetryDue(supp, now); ok {
+				a.pq.Update(supp.todo, now)
+			}
+		}
 		if a.bootstrapMsg != nil {
 			generation.ioChan <- &MMsg{
 				Kind:       a.bootstrapMsg.Kind,
@@ -210,7 +224,6 @@ func (a *MergeScheduler) OnMergeDone(table catalog.MergeTable, esize int) {
 }
 
 func (a *MergeScheduler) taskObserverFactory(
-	generation *mergeSchedulerGeneration,
 	supp *todoSupporter,
 	size int,
 	rc rscthrottler.RSCThrottler,
@@ -219,15 +232,18 @@ func (a *MergeScheduler) taskObserverFactory(
 		supp.DoneTask()
 		rc.Release(int64(size))
 		if supp.mergingTaskCnt.Load() == 0 {
-			a.notifyTaskCompletion(generation, supp)
+			a.notifyTaskCompletion(supp)
 		}
 	}}
 }
 
 func (a *MergeScheduler) notifyTaskCompletion(
-	generation *mergeSchedulerGeneration,
 	supp *todoSupporter,
 ) {
+	if a.stopped.Load() {
+		return
+	}
+	generation := a.generation.Load()
 	if generation == nil {
 		return
 	}
@@ -1058,6 +1074,36 @@ func (a *MergeScheduler) handleTaskCompleted(supp *todoSupporter) {
 	}
 }
 
+func (a *MergeScheduler) nextManualRetryDue(supp *todoSupporter, now time.Time) (time.Time, bool) {
+	delay := min(max(a.baseInterval, time.Second), manualMergeRetryWindow/4)
+	var due time.Time
+	for _, trigger := range supp.triggers {
+		if trigger.retryUntil.IsZero() || !now.Before(trigger.retryUntil) {
+			continue
+		}
+		candidate := now.Add(delay)
+		if trigger.retryUntil.Before(candidate) {
+			candidate = trigger.retryUntil
+		}
+		if due.IsZero() || candidate.Before(due) {
+			due = candidate
+		}
+	}
+	return due, !due.IsZero()
+}
+
+func (supp *todoSupporter) requeueManualRetry(retry *MMsgTaskTrigger) {
+	// One-shot triggers are taken from the end. Put this denied retry before
+	// the other one-shots so each live request gets an admission attempt.
+	index := 0
+	if len(supp.triggers) > 0 && !supp.triggers[0].expire.IsZero() {
+		index = 1 // keep the policy patch at the front
+	}
+	supp.triggers = append(supp.triggers, nil)
+	copy(supp.triggers[index+1:], supp.triggers[index:])
+	supp.triggers[index] = retry
+}
+
 func (a *MergeScheduler) handleTaskTrigger(
 	generation *mergeSchedulerGeneration,
 	msg *MMsgTaskTrigger,
@@ -1146,7 +1192,15 @@ func (a *MergeScheduler) handleSwitch(msg MMsgSwitch) {
 				zap.String("table", msg.Table.GetNameDesc()),
 			)
 			supp.paused = true
-			a.pq.Update(supp.todo, a.clock.Now().Add(time.Hour*24))
+			now := a.clock.Now()
+			due := now.Add(time.Hour * 24)
+			if retryDue, ok := a.nextManualRetryDue(supp, now); ok {
+				due = retryDue
+				if supp.todo.readyAt.Before(due) {
+					due = supp.todo.readyAt
+				}
+			}
+			a.pq.Update(supp.todo, due)
 		}
 	}
 }
@@ -1265,7 +1319,13 @@ func (a *MergeScheduler) doSched(
 
 	// this table is merging, postpone the task
 	if supp.mergingTaskCnt.Load() > 0 {
-		a.pq.Update(todo, now.Add(a.baseInterval/2))
+		due := now.Add(a.baseInterval / 2)
+		if retryDue, ok := a.nextManualRetryDue(supp, now); ok {
+			if retryDue.Before(due) {
+				due = retryDue
+			}
+		}
+		a.pq.Update(todo, due)
 		return
 	}
 
@@ -1302,7 +1362,11 @@ func (a *MergeScheduler) doSched(
 	// this table is paused, postpone tasks if it triggered by inner codes.
 	// User triggerd disposal actions is allowed to run even if the table is paused.
 	if supp.paused && !trigger.byUser {
-		a.pq.Update(todo, now.Add(time.Hour*24))
+		due := now.Add(time.Hour * 24)
+		if retryDue, ok := a.nextManualRetryDue(supp, now); ok {
+			due = retryDue
+		}
+		a.pq.Update(todo, due)
 		return
 	}
 
@@ -1325,7 +1389,7 @@ func (a *MergeScheduler) doSched(
 			}
 			continue
 		}
-		task.doneCB = a.taskObserverFactory(generation, supp, task.eSize, rc)
+		task.doneCB = a.taskObserverFactory(supp, task.eSize, rc)
 		if a.executor.ExecuteFor(todo.table, task) {
 			supp.AddTask()
 			task.doneCB.Admit()
@@ -1346,15 +1410,16 @@ func (a *MergeScheduler) doSched(
 	if !trigger.retryUntil.IsZero() {
 		clear(tasks[len(denied):])
 	}
-	var retry *MMsgTaskTrigger
 	if len(denied) > 0 {
-		retry = trigger
+		retry := trigger
 		if retry.retryUntil.IsZero() {
 			retry = NewMMsgTaskTrigger(todo.table).WithByUser(true)
 			retry.retryUntil = afterGather.Add(manualMergeRetryWindow)
 		}
-		retry.assigns = denied
-		supp.triggers = append(supp.triggers, retry)
+		if afterGather.Before(retry.retryUntil) {
+			retry.assigns = denied
+			supp.requeueManualRetry(retry)
+		}
 	}
 
 	// Postprocess tasks: issue new vacuum task or adjust the next due time
@@ -1389,11 +1454,9 @@ func (a *MergeScheduler) doSched(
 		supp.nextDue = a.baseInterval
 	}
 	due := afterGather.Add(supp.nextDue)
-	if retry != nil {
-		delay := min(max(a.baseInterval, time.Second), manualMergeRetryWindow/4)
-		due = afterGather.Add(delay)
-		if retry.retryUntil.Before(due) {
-			due = retry.retryUntil
+	if retryDue, ok := a.nextManualRetryDue(supp, afterGather); ok {
+		if retryDue.Before(due) {
+			due = retryDue
 		}
 	}
 	a.pq.Update(todo, due)
