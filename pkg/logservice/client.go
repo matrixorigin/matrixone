@@ -206,9 +206,7 @@ func NewTNWriterClientFactory(sid string, cfg ClientConfig, timeout time.Duratio
 			}
 		}
 		if err != nil {
-			if closeErr := c.close(); closeErr != nil {
-				logutil.Error("failed to close the client", zap.Error(closeErr))
-			}
+			closeStartupRPCClient(ctx, c.client)
 			return nil, err
 		}
 		return &managedClient{cfg: cfg, client: c, sid: sid}, nil
@@ -617,9 +615,7 @@ func connectToLogServiceAddress(
 	c.client = cc
 	if cfg.ReadOnly || cfg.connectWithoutLease {
 		if err := c.connectReadOnly(ctx); err != nil {
-			if closeErr := c.close(); closeErr != nil {
-				logutil.Error("failed to close the client", zap.Error(closeErr))
-			}
+			closeStartupRPCClient(ctx, cc)
 			return nil, err
 		}
 		return c, nil
@@ -753,6 +749,21 @@ func (c *client) close() error {
 	return c.client.Close()
 }
 
+// A canceled startup request can return before the RPC writer is done. The
+// unused client owns that writer and its request until transport cleanup ends.
+func closeStartupRPCClient(ctx context.Context, cc morpc.RPCClient) {
+	closeClient := func() {
+		if err := cc.Close(); err != nil {
+			logutil.Error("failed to close the client", zap.Error(err))
+		}
+	}
+	if ctx.Err() != nil {
+		go closeClient()
+		return
+	}
+	closeClient()
+}
+
 func (c *client) updateLeaseholderID(ctx context.Context, leaseholderID uint64) (bool, error) {
 	_, _, dispatched, err := c.requestWithDispatch(ctx, pb.UPDATE_LEASEHOLDER_ID, nil, leaseholderID, 0, time.Time{})
 	return dispatched, err
@@ -851,11 +862,21 @@ func (c *client) requestWithDispatch(ctx context.Context,
 		},
 	}
 	r := c.pool.Get().(*RPCRequest)
-	defer r.Release()
 	r.Request = req
 	r.payload = payload
+	// Ordinary WAL requests may borrow the caller's payload. Only startup
+	// messages transfer ownership and may return before the write completes.
+	writerOwnsRequest := isStartupRPCRequest(r)
+	if writerOwnsRequest {
+		ctx = morpc.WithRequestRelease(ctx, releaseRPCRequest)
+	} else {
+		defer r.Release()
+	}
 	future, err := c.client.Send(ctx, c.addr, r)
 	if err != nil {
+		if writerOwnsRequest {
+			r.Release()
+		}
 		return pb.Response{}, nil, false, err
 	}
 	defer future.Close()
@@ -1036,4 +1057,21 @@ func getRPCClient(
 
 func releaseOrphanRPCResponse(message morpc.Message) {
 	message.(*RPCResponse).Release()
+}
+
+func isStartupRPCRequest(message morpc.Message) bool {
+	req, ok := message.(*RPCRequest)
+	if !ok || len(req.payload) != 0 {
+		return false
+	}
+	switch req.Request.Method {
+	case pb.CONNECT_RO, pb.CLAIM_TN_LEASE, pb.GET_SHARD_INFO:
+		return true
+	default:
+		return false
+	}
+}
+
+func releaseRPCRequest(message morpc.Message) {
+	message.(*RPCRequest).Release()
 }

@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,24 +43,41 @@ type delayedWALAppendClient struct {
 	release <-chan struct{}
 }
 
-func TestCanceledWALLeaseClaimReleasesWriterLock(t *testing.T) {
+func TestCanceledWALStartupReleasesWriterLock(t *testing.T) {
+	for _, method := range []pb.MethodType{pb.GET_SHARD_INFO, pb.CONNECT_RO, pb.CLAIM_TN_LEASE} {
+		t.Run(method.String(), func(t *testing.T) {
+			testCanceledWALStartup(t, method)
+		})
+	}
+}
+
+func testCanceledWALStartup(t *testing.T, method pb.MethodType) {
+	t.Helper()
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	service, cfg, err := logservice.NewTestService(vfs.NewStrictMem())
 	require.NoError(t, err)
 	defer service.Close()
+	if method == pb.GET_SHARD_INFO {
+		cfg.DiscoveryAddress = cfg.ServiceAddresses[0]
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	claimStarted := make(chan struct{})
-	once := sync.OnceFunc(func() { close(claimStarted) })
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	requestAfterCancel := make(chan pb.Request, 1)
+	var writerSelected atomic.Bool
+	unblockWriter := sync.OnceFunc(func() { close(releaseWrite) })
+	defer unblockWriter()
 	openCtx := logservice.SetBackendOptions(ctx, morpc.WithBackendFilter(func(msg morpc.Message, _ string) bool {
 		req, ok := msg.(*logservice.RPCRequest)
-		if !ok || req.Request.Method != pb.CLAIM_TN_LEASE {
+		if !ok || req.Request.Method != method || !writerSelected.CompareAndSwap(false, true) {
 			return true
 		}
-		once()
-		<-ctx.Done()
-		return false
+		close(writeStarted)
+		<-releaseWrite
+		requestAfterCancel <- req.Request
+		return true
 	}))
 	dir := t.TempDir()
 	factory := logservice.NewTNWriterClientFactory("", cfg, 30*time.Second)
@@ -74,11 +92,11 @@ func TestCanceledWALLeaseClaimReleasesWriterLock(t *testing.T) {
 	}()
 
 	select {
-	case <-claimStarted:
+	case <-writeStarted:
 	case err := <-done:
-		t.Fatalf("DB open exited before requesting a lease: %v", err)
+		t.Fatalf("DB open exited before dispatching %s: %v", method, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("lease RPC did not start")
+		t.Fatalf("RPC %s did not reach the writer", method)
 	}
 	lock, err := createDBLock(dir)
 	require.Error(t, err)
@@ -94,6 +112,18 @@ func TestCanceledWALLeaseClaimReleasesWriterLock(t *testing.T) {
 	lock, err = createDBLock(dir)
 	require.NoError(t, err)
 	require.NoError(t, lock.Close())
+
+	unblockWriter()
+	select {
+	case req := <-requestAfterCancel:
+		require.Equal(t, method, req.Method, "the writer still owns the request")
+		require.Equal(t, cfg.LogShardID, req.LogRequest.ShardID)
+		if method != pb.GET_SHARD_INFO {
+			require.Equal(t, cfg.TNReplicaID, req.LogRequest.TNID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the writer did not resume")
+	}
 }
 
 func (c *delayedWALAppendClient) Append(ctx context.Context, record logservice.LogRecord) (uint64, error) {
