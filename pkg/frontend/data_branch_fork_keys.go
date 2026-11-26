@@ -87,6 +87,9 @@ func captureDataBranchForkKeys(
 			names := make([]string, len(columns))
 			for i, col := range columns {
 				names[i] = forkColumnValueSQL(col)
+				if types.T(col.Typ.Id).IsLowPrecisionFloat() {
+					names[i] = "cast(" + names[i] + " as float)"
+				}
 			}
 			// The row proof includes the entire visible row, so identical
 			// writes made independently after a fork cannot hide conflicts.
@@ -134,7 +137,7 @@ func forkRowColumns(def *plan.TableDef) []*plan.ColDef {
 		oid := types.T(col.Typ.Id)
 		// Keep key evidence for domains without a common SQL and vector
 		// serialization.
-		if !function.SerialTypeSupported(oid) {
+		if !oid.IsLowPrecisionFloat() && !function.SerialTypeSupported(oid) {
 			return nil
 		}
 		columns = append(columns, col)
@@ -148,6 +151,17 @@ func lookupDataBranchForkRows(
 	// SQL binds ENUM functions to the display label unless explicitly
 	// cast. Use the same ordinal on both sides of the proof.
 	for i, col := range columns {
+		if col.GetType().Oid.IsLowPrecisionFloat() {
+			target := vector.NewVec(types.T_float32.ToType(), ses.proc.Mp())
+			converted, err := function.RunFunctionDirectly(ses.proc, function.CastFunctionEncodeID, []*vector.Vector{col, target}, length)
+			target.Free(ses.proc.Mp())
+			if err != nil {
+				return nil, err
+			}
+			defer converted.Free(ses.proc.Mp())
+			columns[i] = converted
+			continue
+		}
 		if col.GetType().Oid != types.T_enum {
 			continue
 		}

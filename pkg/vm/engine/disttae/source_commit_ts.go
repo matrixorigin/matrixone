@@ -88,10 +88,24 @@ func (tbl *txnTable) SourceVisibleAtSnapshot(ctx context.Context) (bool, error) 
 }
 
 func (tbl *txnTableDelegate) SourceVisibleAtSnapshot(ctx context.Context) (bool, error) {
-	if tbl.combined.is {
-		return false, moerr.NewNotSupported(ctx, "historical IVF cohorts on partitioned tables")
+	visible, err := tbl.origin.SourceVisibleAtSnapshot(ctx)
+	if err != nil || !visible || !tbl.combined.is {
+		return visible, err
 	}
-	return tbl.origin.SourceVisibleAtSnapshot(ctx)
+	members, err := tbl.combined.tbl.tablesFunc()
+	if err != nil {
+		return false, err
+	}
+	for _, member := range members {
+		provider, ok := member.(engine.HistoricalSourceProvider)
+		if !ok {
+			return false, moerr.NewNotSupported(ctx, "partition snapshot visibility")
+		}
+		if visible, err := provider.SourceVisibleAtSnapshot(ctx); err != nil || !visible {
+			return visible, err
+		}
+	}
+	return len(members) > 0, nil
 }
 
 func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {

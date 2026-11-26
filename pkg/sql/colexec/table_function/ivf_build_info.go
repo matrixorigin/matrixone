@@ -70,6 +70,9 @@ func historicalIVFSource(proc *process.Process, sp *sqlexec.SqlProcess, cfg vect
 		return false, err
 	}
 	info.SourceTableID = rel.GetTableID(ctx)
+	if partitioned, ok := rel.(interface{ IsPartitionedRelation() bool }); ok && partitioned.IsPartitionedRelation() {
+		return false, moerr.NewNotSupported(ctx, "historical IVF cohorts on partitioned tables")
+	}
 	provider, ok := rel.(engine.HistoricalSourceProvider)
 	if !ok {
 		return false, moerr.NewNotSupported(ctx, "source snapshot visibility check")

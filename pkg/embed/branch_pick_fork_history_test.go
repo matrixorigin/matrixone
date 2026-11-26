@@ -195,3 +195,55 @@ func TestBoundedPickForkEvidenceSurvivesPublisherDrop(t *testing.T) {
 			"drop database fork_survivor", "drop database if exists fork_subscription")
 	})
 }
+
+func TestBoundedPickForkCapture(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db := recoverySQLClient(t, cn)
+		defer db.Close()
+		conn, err := db.Conn(t.Context())
+		require.NoError(t, err)
+		defer conn.Close()
+		exec := func(statement string) {
+			t.Helper()
+			_, err := conn.ExecContext(t.Context(), statement)
+			require.NoError(t, err, statement)
+		}
+		exec("create database bounded_fork_capture")
+		defer exec("drop database bounded_fork_capture")
+		exec("use bounded_fork_capture")
+		exec("create table root(k int primary key,v int,n bf16,f float16,g float8,h float4)")
+		exec("begin")
+		exec("insert into root values (2,20,1.5,null,1,1)")
+		exec("data branch create table src from root")
+		for _, dst := range []string{"dst_fail", "dst_skip"} {
+			exec("data branch create table " + dst + " from root")
+		}
+		exec("commit")
+		exec("create snapshot capture_lo for table bounded_fork_capture src")
+		defer exec("drop snapshot capture_lo")
+		exec("update src set v=52 where k=2")
+		exec("create snapshot capture_hi for table bounded_fork_capture src")
+		defer exec("drop snapshot capture_hi")
+		for _, policy := range []string{"fail", "skip"} {
+			dst := "dst_" + policy
+			exec("data branch pick src into " + dst + " between snapshot capture_lo and capture_hi when conflict " + policy)
+			var v int
+			require.NoError(t, conn.QueryRowContext(t.Context(), "select v from "+dst+" where k=2").Scan(&v))
+			require.Equal(t, 52, v)
+		}
+		exec("create table part(k int primary key) partition by hash(k) partitions 2")
+		exec("insert into part values(1),(2)")
+		exec("data branch create table cloned from part")
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		ctx = context.WithValue(defines.AttachAccountId(ctx, 0), defines.BranchForkKeyAccess{}, true)
+		result, err := cn.RawService().(cnservice.Service).GetSQLExecutor().Exec(ctx,
+			"select count(*) from mo_catalog.mo_branch_fork_keys where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='bounded_fork_capture' and relname='cloned')", executor.Options{})
+		require.NoError(t, err)
+		defer result.Close()
+		require.Len(t, result.Batches, 1)
+		require.EqualValues(t, 1, executor.GetFixedRows[int64](result.Batches[0].Vecs[0])[0])
+	})
+}
