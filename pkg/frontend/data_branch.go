@@ -1051,6 +1051,7 @@ func diffMergeAgency(
 		copt.conflictOpt = &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}
 		copt.expandUpdate = true
 		copt.preservePickConflicts = true
+		copt.protectMissingPickHistory = pickStmt.ConflictOpt != nil && pickStmt.ConflictOpt.Opt != tree.CONFLICT_ACCEPT
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, pickStmt.SrcTable, pickStmt.DstTable,
 		); err != nil {
@@ -2409,6 +2410,8 @@ func constructChangeHandle(
 		return
 	}
 	tables.zeroHistoryBaseStarts = baseRange.zeroHistoryStarts
+	tables.zeroHistorySourceStart = tarRange.firstCommitted
+	tables.zeroHistoryBaseFork = branchInfo.baseFirstFork
 	if tables.lcaHasZeroHistory && tables.lcaRel != nil &&
 		tarRange.firstCommitted.tableID != 0 && baseRange.firstCommitted.tableID != 0 &&
 		tarRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) && baseRange.firstCommitted.snapshot.EQ(&tables.lcaCTS) {
@@ -4428,6 +4431,9 @@ func decideLCABranchTSFromBranchDAG(
 		branchInfo.pathFromLCAToBase = baseIDs
 		branchInfo.pathFromLCAToBaseTS = buildTSs(baseTSs)
 		branchInfo.pathFromLCAToBaseLineageOnly = dataBranchPathLineageOnly(dag, baseIDs)
+		if i, ok := firstDataBranchForkIndex(branchInfo.pathFromLCAToBaseLineageOnly, len(baseIDs)); ok {
+			branchInfo.baseFirstFork = dataBranchForkKeyRef{tableID: baseIDs[i], account: dag.Creator(baseIDs[i])}
+		}
 		return
 	}
 
@@ -4529,7 +4535,7 @@ func branchDAGSelectSQL(forUpdate bool) string {
 		lockClause = " for update"
 	}
 	return fmt.Sprintf(
-		"select table_id, clone_ts, p_table_id, level, table_deleted from %s.%s%s",
+		"select table_id, clone_ts, p_table_id, level, table_deleted, creator from %s.%s%s",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, lockClause,
 	)
 }
@@ -4575,12 +4581,14 @@ func constructBranchDAGWithLock(
 		pTblIds := vector.MustFixedColNoTypeCheck[uint64](cols[2])
 		levels := executor.GetStringRows(cols[3])
 		tableDeleted := vector.MustFixedColNoTypeCheck[bool](cols[4])
+		creators := vector.MustFixedColNoTypeCheck[uint64](cols[5])
 		for i := range tblIds {
 			rowData = append(rowData, databranchutils.DataBranchMetadata{
 				TableID:      tblIds[i],
 				CloneTS:      cloneTS[i],
 				PTableID:     pTblIds[i],
 				TableDeleted: tableDeleted[i],
+				Creator:      creators[i],
 				LineageOnly:  databranchutils.IsAlterLineageLevel(levels[i]),
 			})
 		}

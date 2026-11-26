@@ -131,7 +131,7 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 						return err
 					}
 				}
-				return nil
+				return databranchutils.ReclaimBranchForkKeys(dag, names, c.deleteBranchForkKeys)
 			},
 		); err != nil {
 			return err
@@ -148,6 +148,18 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 		}
 		return nil
 	}, dag, nil
+}
+
+func (c *Compile) deleteBranchForkKeys(owner uint32, sql string) error {
+	// An earlier DROP ACCOUNT may have removed the owner's entire catalog.
+	oldCtx := c.proc.Ctx
+	c.proc.Ctx = context.WithValue(oldCtx, defines.BranchForkKeyAccess{}, true)
+	defer func() { c.proc.Ctx = oldCtx }()
+	err := c.runSqlWithAccountIdAndOptions(sql, int32(owner), executor.StatementOption{}.WithDisableLog())
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
 }
 
 func removeCompactedBranchRows(dag *databranchutils.BranchReclaimDag, ids []uint64) {

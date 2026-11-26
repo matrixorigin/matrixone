@@ -487,7 +487,7 @@ func TestValidateNamedDataBranchCloneSnapshotRecordRejectsIdentityDrift(t *testi
 func TestBranchDAGSelectSQLLocksTimestampValidation(t *testing.T) {
 	require.NotContains(t, branchDAGSelectSQL(false), "for update")
 	require.Equal(t,
-		"select table_id, clone_ts, p_table_id, level, table_deleted from "+
+		"select table_id, clone_ts, p_table_id, level, table_deleted, creator from "+
 			"mo_catalog.mo_branch_metadata for update",
 		branchDAGSelectSQL(true),
 	)

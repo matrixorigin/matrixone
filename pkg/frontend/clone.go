@@ -1821,5 +1821,5 @@ func updateBranchMetaTable(
 		return err
 	}
 
-	return nil
+	return captureDataBranchForkKeys(ctx, ses, bh, receipt, cloneTxnOp, dstTblDef)
 }

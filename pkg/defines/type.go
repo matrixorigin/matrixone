@@ -343,6 +343,9 @@ type OptimizerHints struct{}
 // Determine if now is a bg sql.
 type BgKey struct{}
 
+// BranchForkKeyAccess allows branch metadata operations to open the fork key catalog.
+type BranchForkKeyAccess struct{}
+
 // PublicationViewBinding marks a background statement whose only job is
 // binding the persisted metadata of a published view: identifiers keep their
 // source case in parsing, the compile stops after binding (no optimizer rule

@@ -182,6 +182,7 @@ type branchMetaInfo struct {
 	pathFromLCAToBase            []uint64
 	pathFromLCAToBaseTS          []types.TS
 	pathFromLCAToBaseLineageOnly []bool
+	baseFirstFork                dataBranchForkKeyRef
 }
 
 // hasLCA reports whether tar and base share a common ancestor in the
@@ -281,13 +282,15 @@ type tableStuff struct {
 	tarOperand  *branchOperand
 	baseOperand *branchOperand
 
-	lcaRel                engine.Relation
-	lcaRelSnapshot        types.TS // snapshot at which lcaRel was opened
-	lcaProbeTableId       uint64   // nonzero when the probe uses a different generation from lcaRel
-	lcaCTS                types.TS
-	lcaHasZeroHistory     bool
-	zeroHistoryBaseStarts []dataBranchPickWindowStart
-	pickOrigin            *dataBranchPickOrigin
+	lcaRel                 engine.Relation
+	lcaRelSnapshot         types.TS // snapshot at which lcaRel was opened
+	lcaProbeTableId        uint64   // nonzero when the probe uses a different generation from lcaRel
+	lcaCTS                 types.TS
+	lcaHasZeroHistory      bool
+	zeroHistoryBaseStarts  []dataBranchPickWindowStart
+	zeroHistorySourceStart dataBranchPickWindowStart
+	zeroHistoryBaseFork    dataBranchForkKeyRef
+	pickOrigin             *dataBranchPickOrigin
 	// lcaIdent is the winning owner identity lcaRel was reopened under
 	// (design §6.4). Nil when the LCA is an endpoint of a legacy
 	// local-local diff; identity accessors fall back to the session.
@@ -499,9 +502,10 @@ type retBatchList struct {
 
 type compositeOption struct {
 	// onlineApply orders transaction probes and retry-capable MERGE/PICK writes.
-	onlineApply           bool
-	conflictOpt           *tree.ConflictOpt
-	outputSQL             bool
-	expandUpdate          bool
-	preservePickConflicts bool
+	onlineApply               bool
+	conflictOpt               *tree.ConflictOpt
+	outputSQL                 bool
+	expandUpdate              bool
+	preservePickConflicts     bool
+	protectMissingPickHistory bool
 }

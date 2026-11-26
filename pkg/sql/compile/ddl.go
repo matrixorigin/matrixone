@@ -1947,6 +1947,15 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		dbName = qry.GetDatabase()
 	}
 	aliasName := qry.GetTableDef().GetName()
+	if strings.EqualFold(dbName, catalog.MO_CATALOG) && strings.EqualFold(aliasName, catalog.MO_BRANCH_FORK_KEYS) {
+		oldCtx := c.proc.Ctx
+		if oldCtx.Value(defines.InternalExecutorKey{}) == nil {
+			return moerr.NewNotSupportedNoCtx("DDL on the data branch fork catalog")
+		}
+		c.proc.Ctx = context.WithValue(oldCtx, defines.BranchForkKeyAccess{}, true)
+		defer func() { c.proc.Ctx = oldCtx }()
+	}
+
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
 	if isTemp {
@@ -3056,6 +3065,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		return false, nil
 	}
 
+	var dag databranchutils.BranchReclaimDag
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
 		// `FOR UPDATE` serialises sibling reclaim paths: two concurrent
 		// drops from the same parent would otherwise each miss the
@@ -3065,7 +3075,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		// above already confirmed the drop touches mo_branch_metadata,
 		// so the lock scope is limited to real branch drops.
 		querySql := fmt.Sprintf(
-			"select table_id, p_table_id, clone_ts, level, table_deleted from %s.%s for update",
+			"select table_id, p_table_id, clone_ts, level, table_deleted, creator from %s.%s for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 		)
 		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
@@ -3082,6 +3092,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 			parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 			cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
 			levels := executor.GetStringRows(cols[3])
+			creators := vector.MustFixedColWithTypeCheck[uint64](cols[5])
 			for i := 0; i < n; i++ {
 				deleted := !cols[4].IsNull(uint64(i)) &&
 					vector.GetFixedAtWithTypeCheck[bool](cols[4], i)
@@ -3089,13 +3100,15 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 					TableID:      tableIDs[i],
 					CloneTS:      cloneTSs[i],
 					PTableID:     parentIDs[i],
+					Creator:      creators[i],
 					Level:        levels[i],
 					TableDeleted: deleted,
 				})
 			}
 			return true
 		})
-		return databranchutils.NewBranchReclaimDag(rows), nil
+		dag = databranchutils.NewBranchReclaimDag(rows)
+		return dag, nil
 	}
 	markDeleted := func() error {
 		return c.runSqlWithSystemTenant(fmt.Sprintf(
@@ -3104,8 +3117,10 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		))
 	}
 	execDelete := func(snames []string) error {
-		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
-		return c.runSqlWithSystemTenant(sql)
+		if err := c.runSqlWithSystemTenant(databranchutils.BuildBranchSnapshotDeleteSQL(snames)); err != nil {
+			return err
+		}
+		return databranchutils.ReclaimBranchForkKeys(dag, snames, c.deleteBranchForkKeys)
 	}
 	return true, databranchutils.MarkAndReclaimBranchSnapshotsCore(
 		deadTIDs, loadDAG, markDeleted, execDelete,

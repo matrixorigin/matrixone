@@ -959,6 +959,7 @@ var (
 		catalog.MO_ISCP_LOG:           0,
 		catalog.MO_INDEX_UPDATE:       0,
 		catalog.MO_BRANCH_METADATA:    0,
+		catalog.MO_BRANCH_FORK_KEYS:   0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
@@ -1010,6 +1011,7 @@ var (
 		catalog.MO_ISCP_LOG:             0,
 		catalog.MO_INDEX_UPDATE:         0,
 		catalog.MO_BRANCH_METADATA:      0,
+		catalog.MO_BRANCH_FORK_KEYS:     0,
 		catalog.MO_FEATURE_LIMIT:        0,
 		catalog.MO_FEATURE_REGISTRY:     0,
 		catalog.MO_ROLE_RULE:            0,
@@ -1070,6 +1072,7 @@ var (
 		MoCatalogMoISCPLogDDL,
 		MoCatalogMoIndexUpdateDDL,
 		MoCatalogBranchMetadataDDL,
+		MoCatalogBranchForkKeysDDL,
 		MoCatalogMoCcprLogDDL,
 		MoCatalogMoCcprTablesDDL,
 		MoCatalogMoCcprDbsDDL,
@@ -4446,6 +4449,11 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
+		forkKeysCtx := context.WithValue(deleteCtx, defines.BranchForkKeyAccess{}, true)
+		rtnErr = bh.Exec(forkKeysCtx, "drop table if exists mo_catalog.mo_branch_fork_keys")
+		if rtnErr != nil {
+			return rtnErr
+		}
 		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_database_defaults")
 		if rtnErr != nil {
 			return rtnErr

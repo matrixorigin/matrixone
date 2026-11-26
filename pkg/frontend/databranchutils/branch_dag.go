@@ -28,6 +28,7 @@ type dagNode struct {
 	TableID  uint64
 	CloneTS  int64
 	ParentID uint64
+	Creator  uint64
 	// LineageOnly marks copy-and-swap generations (for example ALTER)
 	// that preserve one logical branch rather than creating a new fork.
 	LineageOnly bool
@@ -65,6 +66,7 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 
 		node1.CloneTS = row.CloneTS
 		node1.ParentID = row.PTableID
+		node1.Creator = row.Creator
 		node1.LineageOnly = row.LineageOnly
 
 		if _, ok = dag.nodes[row.PTableID]; !ok {
@@ -94,6 +96,11 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 	}
 
 	return dag
+}
+
+// Creator returns the account that owns the physical child of a fork.
+func (d *DataBranchDAG) Creator(tableID uint64) uint32 {
+	return uint32(d.nodes[tableID].Creator)
 }
 
 // calculateDepth computes node depth iteratively. If the parent walk reaches a

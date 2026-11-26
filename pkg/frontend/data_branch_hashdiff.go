@@ -2043,7 +2043,7 @@ func reconcilePickWindowDestinationInsert(
 				}
 			}
 		}
-		if stop, err := emitPreviouslyPresentPickKeys(ctx, ses, bh, tables, missingKeys, inheritedAt, emit); err != nil || stop {
+		if stop, err := emitPreviouslyPresentPickKeys(ctx, ses, bh, tables, missingKeys, inheritedAt, copt.protectMissingPickHistory, emit); err != nil || stop {
 			return stop, err
 		}
 	}
@@ -2310,64 +2310,126 @@ func historicalPickPrimaryKeyNames(
 	return oldNames
 }
 
+// probePickKeyMembership probes a historical generation only if its primary
+// key still denotes the same columns as the current key. Nil means the key
+// has changed, so this generation cannot provide membership evidence.
+func probePickKeyMembership(
+	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
+	keys *vector.Vector, start dataBranchPickWindowStart, defs []*plan2.TableDef, edges []bool,
+	proof dataBranchRenameProof,
+) (*batch.Batch, []int64, error) {
+	rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{start.identity}, start.tableID, start.snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	names := historicalPickPrimaryKeyNames(rel.GetTableDef(identityCtx(ctx, ident)), defs, edges, proof)
+	if len(names) == 0 {
+		return nil, nil, nil
+	}
+
+	probe := tables
+	probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, start.snapshot
+	probe.lcaProbeTableId = 0
+	probe.def.lcaColNames = make([]string, len(probe.def.colNames))
+	probe.def.tarOnlyIdxes = nil
+	for i, idx := range probe.def.pkColIdxes {
+		probe.def.lcaColNames[idx] = names[i]
+	}
+	for idx, name := range probe.def.lcaColNames {
+		if name == "" && idx != probe.def.pkColIdx {
+			probe.def.tarOnlyIdxes = append(probe.def.tarOnlyIdxes, idx)
+		}
+	}
+	return probeDataBranchRows(ctx, ses, bh, keys, probe, start.snapshot.ToTimestamp())
+}
+
 func emitPreviouslyPresentPickKeys(
 	ctx context.Context, ses *Session, bh BackgroundExec, tables tableStuff,
-	keys *vector.Vector, creation types.TS, emit emitFunc,
+	keys *vector.Vector, creation types.TS, protect bool, emit emitFunc,
 ) (bool, error) {
 	starts := append([]dataBranchPickWindowStart{
 		{tableID: tables.baseRel.GetTableID(ctx), snapshot: creation, identity: tables.resolvedLCAIdentity(ctx, ses)},
 	}, tables.zeroHistoryBaseStarts...)
+	// The earliest visible destination generation can be a descendant of
+	// the fork. Validate its primary key before interpreting fork bytes.
+	oldest := starts[0].tableID
+	if len(tables.zeroHistoryBaseStarts) != 0 {
+		oldest = tables.zeroHistoryBaseStarts[0].tableID
+	}
+	var compatibleForkKey bool
 	proof := newDataBranchRenameProof(tables.pickForkColumns)
+	emitDeletion := func(prior *batch.Batch) (bool, error) {
+		return emitBatch(emit, batchWithKind{
+			name: tables.baseRel.GetTableName(), kind: diffDelete, side: diffSideBase, batch: prior,
+			hasReplacement: true, fromUpdate: true,
+		}, false, tables.retPool)
+	}
 	for _, start := range starts {
-		rel, ident, err := reopenDataBranchNodeByID(ctx, ses, bh, []branchIdentity{start.identity}, start.tableID, start.snapshot)
+		prior, missing, err := probePickKeyMembership(ctx, ses, bh, tables, keys, start,
+			tables.pickBaseDefs, tables.pickBaseEdges, proof)
 		if err != nil {
 			return false, err
 		}
-		names := historicalPickPrimaryKeyNames(
-			rel.GetTableDef(identityCtx(ctx, ident)), tables.pickBaseDefs, tables.pickBaseEdges, proof,
-		)
-		if len(names) == 0 {
+		if prior == nil {
 			continue
 		}
-		probe := tables
-		probe.lcaRel, probe.lcaIdent, probe.lcaRelSnapshot = rel, &ident, start.snapshot
-		probe.lcaProbeTableId = 0
-		probe.def.lcaColNames = make([]string, len(probe.def.colNames))
-		probe.def.tarOnlyIdxes = nil
-		for i, idx := range probe.def.pkColIdxes {
-			probe.def.lcaColNames[idx] = names[i]
+		if start.tableID == oldest {
+			compatibleForkKey = true
 		}
-		// Membership uses only the historical key. An ordinary column may
-		// have used the current key's name before a rename.
-		for idx, name := range probe.def.lcaColNames {
-			if name == "" && idx != probe.def.pkColIdx {
-				probe.def.tarOnlyIdxes = append(probe.def.tarOnlyIdxes, idx)
-			}
-		}
-		prior, missing, err := probeDataBranchRows(ctx, ses, bh, keys, probe, start.snapshot.ToTimestamp())
-		if err != nil {
-			return false, err
-		}
-		if prior.RowCount() != 0 {
-			if stop, err := emitBatch(emit, batchWithKind{
-				name: tables.baseRel.GetTableName(), kind: diffDelete, side: diffSideBase, batch: prior,
-				hasReplacement: true, fromUpdate: true,
-			}, false, tables.retPool); err != nil || stop {
-				return stop, err
-			}
-		} else {
+		if prior.RowCount() == 0 {
 			tables.retPool.releaseRetBatch(prior, false)
+			continue
+		}
+		if stop, err := emitDeletion(prior); err != nil || stop {
+			return stop, err
 		}
 		if len(missing) == 0 {
-			break
+			return false, nil
 		}
-		if len(missing) != keys.Length() {
-			if err := keys.Shrink(missing, false, ses.proc.Mp()); err != nil {
-				return false, err
-			}
+		if err = keys.Shrink(missing, false, ses.proc.Mp()); err != nil {
+			return false, err
 		}
 	}
-	return false, nil
+
+	fork := tables.zeroHistoryBaseFork
+	source := tables.zeroHistorySourceStart
+	if !protect || !tables.boundedPick || fork.tableID == 0 || source.tableID == 0 || !compatibleForkKey || tables.def.pkKind == fakeKind {
+		return false, nil
+	}
+	// Only consider keys from the source's initial committed state. A key
+	// added later on the source and updated in the window is a source-only
+	// addition relative to the fork.
+	prior, _, err := probePickKeyMembership(ctx, ses, bh, tables, keys, source,
+		tables.pickSourceDefs, tables.pickSourceEdges, proof)
+	if err != nil || prior == nil {
+		return false, err
+	}
+	transfer := false
+	defer func() {
+		if !transfer {
+			tables.retPool.releaseRetBatch(prior, false)
+		}
+	}()
+	if prior.RowCount() == 0 {
+		return false, nil
+	}
+
+	found, recorded, err := lookupDataBranchForkKeys(ctx, ses, bh, fork, prior.Vecs[tables.def.pkColIdx],
+		tables.def.pkKind == compositeKind)
+	if err != nil {
+		return false, err
+	}
+	if !recorded {
+		return false, moerr.NewNotSupportedNoCtx("DATA BRANCH PICK cannot distinguish an inherited deletion from an absent key without fork history")
+	}
+	if len(found) == 0 {
+		return false, nil
+	}
+	if err = prior.Shrink(found, false, ses.proc.Mp()); err != nil {
+		return false, err
+	}
+	transfer = true
+	return emitDeletion(prior)
 }
 
 func hashDiffIfNoLCA(

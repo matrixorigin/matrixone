@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -767,6 +768,45 @@ func BuildBranchSnapshotDeleteSQL(snames []string) string {
 	}
 	b.WriteByte(')')
 	return b.String()
+}
+
+// ReclaimBranchForkKeys removes fork evidence after every descendant of the
+// logical fork has been deleted. An intermediate table may be gone while
+// its ledger is still needed by a live descendant.
+func ReclaimBranchForkKeys(dag BranchReclaimDag, names []string, deleteSQL func(uint32, string) error) error {
+	byOwner := make(map[uint32][]uint64)
+	for _, name := range names {
+		id, ok := ParseBranchSnapshotName(name)
+		if !ok {
+			continue
+		}
+		node, ok := dag.Info[id]
+		if !ok || IsAlterLineageLevel(node.Level) {
+			continue
+		}
+		owner := uint32(node.Creator)
+		byOwner[owner] = append(byOwner[owner], id)
+	}
+	owners := make([]uint32, 0, len(byOwner))
+	for owner := range byOwner {
+		owners = append(owners, owner)
+	}
+	sort.Slice(owners, func(i, j int) bool { return owners[i] < owners[j] })
+	for _, owner := range owners {
+		var b strings.Builder
+		b.WriteString("delete from " + catalog.MO_CATALOG + "." + catalog.MO_BRANCH_FORK_KEYS + " where table_id in (")
+		for i, id := range byOwner[owner] {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(strconv.FormatUint(id, 10))
+		}
+		b.WriteByte(')')
+		if err := deleteSQL(owner, b.String()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // BuildBranchMetadataDeleteSQL returns a guarded DELETE for reclaimable
