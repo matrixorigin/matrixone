@@ -49,7 +49,7 @@ func (mock *MockTxnExecutor) Exec(sql string, options executor.StatementOption) 
 		return executor.Result{}, assert.AnError
 	}
 
-	bat := batch.New([]string{"a"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, mock.mp)
 	bat.SetRowCount(1)
 	return executor.Result{

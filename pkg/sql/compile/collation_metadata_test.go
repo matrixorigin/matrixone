@@ -34,7 +34,6 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 		source.Clean(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
-	source.Attrs = []string{"legacy", "disabled"}
 	for i, version := range []uint8{0, 1} {
 		typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
 		typ.CollationVersion = version

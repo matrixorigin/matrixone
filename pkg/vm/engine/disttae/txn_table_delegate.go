@@ -953,22 +953,24 @@ func (tbl *txnTableDelegate) GetPrimaryKeys(
 func (tbl *txnTableDelegate) Write(
 	ctx context.Context,
 	bat *batch.Batch,
+	attrs []string,
 ) error {
 	if tbl.combined.is {
-		return tbl.combined.tbl.Write(ctx, bat)
+		return tbl.combined.tbl.Write(ctx, bat, attrs)
 	}
-	return tbl.origin.Write(ctx, bat)
+	return tbl.origin.Write(ctx, bat, attrs)
 }
 
 func (tbl *txnTableDelegate) Delete(
 	ctx context.Context,
 	bat *batch.Batch,
+	attrs []string,
 	name string,
 ) error {
 	if tbl.combined.is {
-		return tbl.combined.tbl.Delete(ctx, bat, name)
+		return tbl.combined.tbl.Delete(ctx, bat, attrs, name)
 	}
-	return tbl.origin.Delete(ctx, bat, name)
+	return tbl.origin.Delete(ctx, bat, attrs, name)
 }
 
 func (tbl *txnTableDelegate) SoftDeleteObject(ctx context.Context, objID *objectio.ObjectId, isTombstone bool) error {

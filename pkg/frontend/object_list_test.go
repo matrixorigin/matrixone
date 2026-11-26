@@ -218,7 +218,7 @@ func Test_collectObjectListForTable(t *testing.T) {
 		mp := mpool.MustNewZero()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		bat := batch.New([]string{"col1"})
+		bat := batch.NewWithSize(1)
 
 		// Test with nil engine
 		err := collectObjectListForTable(ctx, types.MinTs(), types.MaxTs(), "test_db", "test_table", nil, txnOperator, bat, mp)
@@ -257,7 +257,7 @@ func Test_collectObjectListForDatabase(t *testing.T) {
 		mp := mpool.MustNewZero()
 		eng := mock_frontend.NewMockEngine(ctrl)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		bat := batch.New([]string{"col1"})
+		bat := batch.NewWithSize(1)
 
 		// Test with nil engine
 		err := collectObjectListForDatabase(ctx, types.MinTs(), types.MaxTs(), "test_db", "", nil, txnOperator, bat, mp)
@@ -547,7 +547,7 @@ func Test_handleInternalObjectList_GoodPath(t *testing.T) {
 
 		// Stub ProcessObjectListFunc to return a mock batch
 		mp := mpool.MustNewZero()
-		mockBatch := batch.New([]string{"dbname", "tablename", "object_name"})
+		mockBatch := batch.NewWithSize(3)
 		mockBatch.Vecs = []*vector.Vector{
 			vector.NewVec(types.T_varchar.ToType(), mp),
 			vector.NewVec(types.T_varchar.ToType(), mp),
@@ -625,7 +625,7 @@ func TestObjectListExplicitIndexRootPolicy(t *testing.T) {
 			rel := mock_frontend.NewMockRelation(ctrl)
 			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 			mp := mpool.MustNewZero()
-			bat := batch.New(nil)
+			bat := batch.NewWithSize(0)
 			defer bat.Clean(mp)
 			eng.EXPECT().Database(ctx, "app", txnOp).Return(db, nil)
 			db.EXPECT().Relation(ctx, tc.name, nil).Return(rel, nil)

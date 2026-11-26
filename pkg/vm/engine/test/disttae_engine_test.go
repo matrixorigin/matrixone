@@ -104,7 +104,7 @@ func Test_InsertRows(t *testing.T) {
 	require.Contains(t, rel.GetTableName(), tableName)
 
 	bat := catalog2.MockBatch(schema, 10)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 	require.Nil(t, err)
 
 	err = txn.Commit(ctx)
@@ -510,7 +510,7 @@ func TestAlterTableBasic(t *testing.T) {
 	}, true)
 
 	bat, _ := batch.ProtoBatchToBatch(resp.Commands[2].Bat, p.Mp)
-	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
+	cstrCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Bat.Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Constraint)
 	require.Equal(t, 3, cstrCol.Length())
 	c1, err := cstr1.MarshalBinary()
 	require.NoError(t, err)
@@ -520,7 +520,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, c1, cstrCol.Get(1).([]byte))
 	require.Equal(t, c2, cstrCol.Get(2).([]byte))
 
-	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Comment)
+	commetCol := containers.NewNonNullBatchWithSharedMemory(bat, resp.Commands[2].Bat.Attrs, common.DefaultAllocator).GetVectorByName(catalog.SystemRelAttr_Comment)
 	require.Equal(t, 3, cstrCol.Length())
 	require.Equal(t, []byte(initComment), commetCol.Get(0).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
@@ -634,6 +634,7 @@ func TestInProgressTransfer(t *testing.T) {
 
 	var did, tid uint64
 	var theRow *batch.Batch
+	var theRowAttrs []string
 	{
 		var (
 			dbName = "db"
@@ -647,7 +648,8 @@ func TestInProgressTransfer(t *testing.T) {
 		did, tid = rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
 		bat := catalog2.MockBatch(schema, 10)
 		theRow = containers.ToCNBatch(bat.CloneWindow(7, 1, p.Mp))
-		require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
+		theRowAttrs = bat.Attrs
+		require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat), bat.Attrs))
 		require.NoError(t, txnop.Commit(p.Ctx))
 		require.Nil(t, p.D.SubscribeTable(p.Ctx, did, tid, dbName, tName, false))
 	}
@@ -669,7 +671,7 @@ func TestInProgressTransfer(t *testing.T) {
 
 		delBatch := batch.NewWithSize(2)
 		delBatch.SetRowCount(1)
-		delBatch.Attrs = []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
+		delBatchAttrs := []string{catalog.Row_ID, catalog.TableTailAttrPKVal}
 		delBatch.Vecs[0] = vec1
 		delBatch.Vecs[1] = vec2
 
@@ -678,8 +680,8 @@ func TestInProgressTransfer(t *testing.T) {
 			require.NoError(t, err)
 			rel, err := db.Relation(p.Ctx, "test", nil)
 			require.NoError(t, err)
-			require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
-			require.NoError(t, rel.Write(p.Ctx, theRow))
+			require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
+			require.NoError(t, rel.Write(p.Ctx, theRow, theRowAttrs))
 		}
 
 		{
@@ -687,7 +689,7 @@ func TestInProgressTransfer(t *testing.T) {
 			require.NoError(t, err)
 			rel, err := db.Relation(p.Ctx, "test", nil)
 			require.NoError(t, err)
-			require.NoError(t, rel.Delete(p.Ctx, delBatch, catalog.Row_ID))
+			require.NoError(t, rel.Delete(p.Ctx, delBatch, delBatchAttrs, catalog.Row_ID))
 		}
 	}
 
@@ -1084,7 +1086,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	bats := catalog2.MockBatch(schema, 4).Split(2)
 	bat, bat1 := bats[0], bats[1]
 	_, rel := p.CreateDBAndTable(txnop, dbName, schema)
-	rel.Write(p.Ctx, containers.ToCNBatch(bat)) // pk 0 and 1
+	rel.Write(p.Ctx, containers.ToCNBatch(bat), bat.Attrs) // pk 0 and 1
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	did, tid := rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
@@ -1130,7 +1132,7 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	require.NoError(t, err)
 	rel, err = db.Relation(p.Ctx, "mo_account", nil)
 	require.NoError(t, err)
-	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat1))) // pk 2 and 3
+	require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat1), bat1.Attrs)) // pk 2 and 3
 	res, err := exec.Exec(p.Ctx, "select * from db.mo_account", executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.Equal(t, 1, len(res.Batches))
@@ -1337,18 +1339,21 @@ func TestWorkspaceQuota2(t *testing.T) {
 	rowsCount := 30
 	bat := catalog2.MockBatch(schema, rowsCount)
 	bat1, _ := containers.ToCNBatch(bat).Window(0, 10)
+	bat1Attrs := bat.Attrs
 	bat2, _ := containers.ToCNBatch(bat).Window(10, 20)
+	bat2Attrs := bat.Attrs
 	bat3, _ := containers.ToCNBatch(bat).Window(20, 30)
+	bat3Attrs := bat.Attrs
 
 	{
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
 		// exceed workspace write threshold, acquire quota success, do not write s3
-		require.NoError(t, relation.Write(ctx, bat1))
+		require.NoError(t, relation.Write(ctx, bat1, bat1Attrs))
 		// exceed workspace write threshold, acquire quota success, do not write s3
-		require.NoError(t, relation.Write(ctx, bat2))
+		require.NoError(t, relation.Write(ctx, bat2, bat2Attrs))
 		// exceed workspace write threshold, acquire quota failed,  write s3
-		require.NoError(t, relation.Write(ctx, bat3))
+		require.NoError(t, relation.Write(ctx, bat3, bat3Attrs))
 		// exceed workspace commit threshold, write s3
 		require.NoError(t, txn.Commit(ctx))
 	}
@@ -1374,9 +1379,10 @@ func TestWorkspaceQuota2(t *testing.T) {
 	require.NoError(t, err)
 
 	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
+	retAttrs := testutil.SchemaAttrs(schema, primaryKeyIdx)
 	cnt := 0
 	for {
-		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		ok, err := reader.Read(ctx, retAttrs, nil, mp, ret)
 		require.NoError(t, err)
 		cnt += ret.RowCount()
 		if ok {
@@ -1437,24 +1443,27 @@ func TestWorkspaceQuota3(t *testing.T) {
 	rowsCount := 30
 	bat := catalog2.MockBatch(schema, rowsCount)
 	bat1, _ := containers.ToCNBatch(bat).Window(0, 10)
+	bat1Attrs := bat.Attrs
 	bat2, _ := containers.ToCNBatch(bat).Window(10, 20)
+	bat2Attrs := bat.Attrs
 	bat3, _ := containers.ToCNBatch(bat).Window(20, 30)
+	bat3Attrs := bat.Attrs
 
 	{
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
-		require.NoError(t, relation.Write(ctx, bat1))
-		require.NoError(t, relation.Write(ctx, bat2))
-		require.NoError(t, relation.Write(ctx, bat3))
+		require.NoError(t, relation.Write(ctx, bat1, bat1Attrs))
+		require.NoError(t, relation.Write(ctx, bat2, bat2Attrs))
+		require.NoError(t, relation.Write(ctx, bat3, bat3Attrs))
 		require.NoError(t, txn.Rollback(ctx))
 	}
 
 	{
 		_, relation, txn, err = disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.NoError(t, err)
-		require.NoError(t, relation.Write(ctx, bat1))
-		require.NoError(t, relation.Write(ctx, bat2))
-		require.NoError(t, relation.Write(ctx, bat3))
+		require.NoError(t, relation.Write(ctx, bat1, bat1Attrs))
+		require.NoError(t, relation.Write(ctx, bat2, bat2Attrs))
+		require.NoError(t, relation.Write(ctx, bat3, bat3Attrs))
 		require.NoError(t, txn.Commit(ctx))
 	}
 
@@ -1477,9 +1486,10 @@ func TestWorkspaceQuota3(t *testing.T) {
 	require.NoError(t, err)
 
 	ret := testutil.EmptyBatchFromSchema(schema, mp, primaryKeyIdx)
+	retAttrs := testutil.SchemaAttrs(schema, primaryKeyIdx)
 	cnt := 0
 	for {
-		ok, err := reader.Read(ctx, ret.Attrs, nil, mp, ret)
+		ok, err := reader.Read(ctx, retAttrs, nil, mp, ret)
 		require.NoError(t, err)
 		cnt += ret.RowCount()
 		if ok {
@@ -1599,7 +1609,7 @@ func Test_SubUnsubTable(t *testing.T) {
 	require.Contains(t, rel.GetTableName(), tableName)
 
 	bat := catalog2.MockBatch(schema, 10)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	err = rel.Write(ctx, containers.ToCNBatch(bat), bat.Attrs)
 	require.Nil(t, err)
 
 	err = txn.Commit(ctx)
@@ -1623,13 +1633,14 @@ func Test_SubUnsubTable(t *testing.T) {
 		defer func() { require.NoError(t, readTxn.Rollback(ctx)) }()
 		defer func() { require.NoError(t, reader.Close()) }()
 		result := testutil.EmptyBatchFromSchema(schema, mp, 0)
+		resultAttrs := testutil.SchemaAttrs(schema, 0)
 		defer result.Clean(mp)
 		var got, want []int8
 		for i := 0; i < 10; i++ {
 			want = append(want, bat.Vecs[0].Get(i).(int8))
 		}
 		for {
-			done, err := reader.Read(ctx, result.Attrs, nil, mp, result)
+			done, err := reader.Read(ctx, resultAttrs, nil, mp, result)
 			require.NoError(t, err)
 			for i := 0; i < result.RowCount(); i++ {
 				got = append(got, vector.GetFixedAtNoTypeCheck[int8](result.Vecs[0], i))

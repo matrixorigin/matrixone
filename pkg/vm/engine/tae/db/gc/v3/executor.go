@@ -44,7 +44,7 @@ func BuildBloomfilter(
 	probability float64,
 	columnIdx int,
 	sourcer SourerFn,
-	buffer containers.IBatchBuffer,
+	buffer *containers.OneSchemaBatchBuffer,
 	mp *mpool.MPool,
 	dataProcess ...func(*bloomfilter.BloomFilter, *vector.Vector, *mpool.MPool) error,
 ) (bf *bloomfilter.BloomFilter, err error) {
@@ -79,7 +79,7 @@ func BuildBloomfilter(
 			return nil, context.Cause(ctx)
 		default:
 		}
-		if done, err = sourcer(ctx, bat.Attrs, nil, mp, bat); err != nil {
+		if done, err = sourcer(ctx, buffer.Attrs(), nil, mp, bat); err != nil {
 			return
 		}
 		if done {
@@ -151,7 +151,7 @@ func (exec *GCExecutor) doFilter(
 		default:
 		}
 		// 1. get next batch from sourcer
-		done, err := sourcer(ctx, bat.Attrs, nil, exec.mp, bat)
+		done, err := sourcer(ctx, exec.buffer.impl.Attrs(), nil, exec.mp, bat)
 		if err != nil {
 			return err
 		}

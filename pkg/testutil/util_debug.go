@@ -31,8 +31,7 @@ func OperatorCatchBatch(operatorName string, bat *batch.Batch) string {
 	}
 	str := fmt.Sprintf("`%s` operator catch a batch, batch length is %d\n", operatorName, bat.RowCount())
 	for i, vec := range bat.Vecs {
-		str += fmt.Sprintf("[vec-%d(%s)[type is %v, %p] : len is %d]\n", i,
-			bat.Attrs[i],
+		str += fmt.Sprintf("[vec-%d[type is %v, %p] : len is %d]\n", i,
 			vec.GetType().Oid, vec,
 			vec.Length())
 	}

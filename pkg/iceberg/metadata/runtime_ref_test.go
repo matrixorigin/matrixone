@@ -106,6 +106,8 @@ func TestRuntimeScanPlannerReadRefPrecedenceAndRouting(t *testing.T) {
 	}{
 		{name: "selector only", selectorRef: "branch:main", wantRef: "main", wantID: 22},
 		{name: "request only", ref: "branch:main", wantRef: "main", wantID: 22},
+		{name: "uppercase branch prefix", ref: "BRANCH:main", wantRef: "main", wantID: 22},
+		{name: "uppercase snapshot prefix", ref: "SNAPSHOT:11", wantRef: "main", wantID: 11},
 		{name: "request wins conflicting selector", ref: "main", selectorRef: "snapshot:11", wantRef: "main", wantID: 22},
 		{name: "snapshot ID overrides default pin", ref: "snapshot:11", snapshot: api.SnapshotSelector{HasSnapshotID: true, SnapshotID: 22}, wantRef: "main", wantID: 22},
 		{name: "timestamp overrides default pin", ref: "snapshot:22", snapshot: api.SnapshotSelector{HasTimestampMS: true, TimestampMS: 1710000000000}, wantRef: "main", wantID: 11},
@@ -114,6 +116,7 @@ func TestRuntimeScanPlannerReadRefPrecedenceAndRouting(t *testing.T) {
 		{name: "branch name parsed once", ref: "branch:snapshot:11", wantRef: "snapshot:11", wantID: 22},
 		{name: "Nessie branch name parsed once", ref: "branch:snapshot:11", nessie: true, configPrefix: "main|warehouse", wantPrefix: "snapshot:11|warehouse", wantID: 22},
 		{name: "generic tag", ref: "tag:audit", wantRef: "audit", wantID: 11},
+		{name: "untyped name with surrounding whitespace", ref: " audit ", wantRef: "audit", wantID: 11},
 		{name: "generic hash keeps existing lookup", ref: "hash:abcdef", wantRef: "hash:abcdef", wantCode: api.ErrTableNotFound},
 		{name: "unknown typed prefix remains a name", ref: "custom:missing", wantRef: "custom:missing", wantCode: api.ErrTableNotFound},
 		{name: "supplied opaque prefix", ref: "tag:audit", prefix: "opaque-route", nessie: true, wantPrefix: "opaque-route", wantRef: "audit", wantID: 11},

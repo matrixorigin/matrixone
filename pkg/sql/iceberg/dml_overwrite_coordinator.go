@@ -143,7 +143,6 @@ func (c *DMLOverwriteCoordinator) AppendWithProcess(proc *process.Process, bat *
 		return api.ToMOErr(proc.Ctx, api.NewError(api.ErrCommitUnknown, "Iceberg DML overwrite coordinator already committed before all rows were appended", nil))
 	}
 	replacementCols := append([]int(nil), c.replacementCols...)
-	attrs := append([]string(nil), c.writeReq.Attrs...)
 	retainedBytes := retainedDMLBatchBytes(bat)
 	if err := c.budget.reserve(proc.Ctx, retainedBytes); err != nil {
 		c.mu.Unlock()
@@ -151,7 +150,7 @@ func (c *DMLOverwriteCoordinator) AppendWithProcess(proc *process.Process, bat *
 	}
 	c.mu.Unlock()
 
-	cloned, err := bat.CloneSelectedColumns(replacementCols, attrs, proc.Mp())
+	cloned, err := bat.CloneSelectedColumns(replacementCols, proc.Mp())
 	if err != nil {
 		c.budget.release(retainedBytes)
 		return api.ToMOErr(proc.Ctx, api.WrapError(api.ErrInternal, "Iceberg DML overwrite coordinator failed to clone replacement rows", nil, err))

@@ -113,7 +113,7 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxCatalog] = bat.Vecs[catalog.MO_DATABASE_CREATED_TIME_IDX]
 		}
-		ibat, err := fillRandomRowidAndZeroTs(bat, m)
+		ibat, err := fillRandomRowidAndZeroTs(bat, catalog.MoDatabaseSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
@@ -144,7 +144,7 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxDatabase] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		ibat, err := fillRandomRowidAndZeroTs(bat, m)
+		ibat, err := fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
@@ -174,7 +174,7 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxTables] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, m)
+		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
@@ -203,7 +203,7 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxColumns] = bat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, m)
+		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoTablesSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
@@ -231,7 +231,7 @@ func initSysTable(
 		if sysTablesCreatedTime != nil {
 			sysTablesCreatedTime[sysTableCreatedTimeIdxIndexTbl] = indexBat.Vecs[catalog.MO_TABLES_CREATED_TIME_IDX]
 		}
-		indexIbat, err := fillRandomRowidAndZeroTs(indexBat, m)
+		indexIbat, err := fillRandomRowidAndZeroTs(indexBat, catalog.MoTablesSchema, m)
 		if err != nil {
 			indexBat.Clean(m)
 			return err
@@ -258,7 +258,7 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err := fillRandomRowidAndZeroTs(bat, m)
+		ibat, err := fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
@@ -284,7 +284,7 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, m)
+		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
@@ -309,7 +309,7 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, m)
+		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err
@@ -335,7 +335,7 @@ func initSysTable(
 		if err != nil {
 			return err
 		}
-		ibat, err = fillRandomRowidAndZeroTs(bat, m)
+		ibat, err = fillRandomRowidAndZeroTs(bat, catalog.MoColumnsSchema, m)
 		if err != nil {
 			bat.Clean(m)
 			return err

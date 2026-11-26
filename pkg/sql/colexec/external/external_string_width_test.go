@@ -59,7 +59,7 @@ func Test_getColData_StringWidthStrict(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			colType := plan.Type{Id: int32(tc.oid), Width: tc.width}
 
-			bat := batch.New([]string{"a"})
+			bat := batch.NewWithSize(1)
 			bat.Vecs[0] = vector.NewVec(types.New(tc.oid, tc.width, 0), proc.Mp())
 
 			param := &ExternalParam{

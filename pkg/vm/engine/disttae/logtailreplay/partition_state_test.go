@@ -2244,7 +2244,7 @@ func TestCalculateTableStatsWithAppendableRows(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2321,7 +2321,6 @@ func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	input := batch.NewWithSize(3)
-	input.SetAttributes([]string{"rowid", "time", "id"})
 	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), mp)
 	input.Vecs[1] = vector.NewVec(types.T_TS.ToType(), mp)
 	input.Vecs[2] = vector.NewVec(types.T_int64.ToType(), mp)
@@ -2330,7 +2329,7 @@ func TestCollectDataStatsCountsCompactReplayPhysicalColumns(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.BuildTS(1, 0), false, mp))
 	require.NoError(t, vector.AppendFixed(input.Vecs[2], int64(42), false, mp))
 	input.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(input)
+	proto, err := batch.BatchToProtoBatch(input, []string{"rowid", "time", "id"})
 	require.NoError(t, err)
 	state := NewPartitionState("test", false, 42, false)
 	packer := types.NewPacker()
@@ -2426,7 +2425,7 @@ func TestCalculateTableStatsPairedInsertDelete(t *testing.T) {
 		BlockID: rid.CloneBlockID(),
 		RowID:   rid,
 		Time:    types.BuildTS(5, 0),
-		Batch:   bat,
+		Batch:   &ReplayBatch{Batch: bat},
 		Offset:  0,
 		ID:      0,
 		Deleted: false,
@@ -2493,7 +2492,7 @@ func TestCalculateTableStatsFilterByObjectVisibility(t *testing.T) {
 			BlockID: rid1.CloneBlockID(),
 			RowID:   rid1,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -2564,7 +2563,7 @@ func TestCalculateTableStatsIntegration(t *testing.T) {
 			BlockID: rid.CloneBlockID(),
 			RowID:   rid,
 			Time:    types.BuildTS(5, uint32(i)),
-			Batch:   bat,
+			Batch:   &ReplayBatch{Batch: bat},
 			Offset:  int64(i),
 			ID:      int64(i),
 			Deleted: false,
@@ -3086,7 +3085,7 @@ func TestTombstoneReplayReclamationBoundaries(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(input.Vecs[3], types.NewRowid(&block, uint32(i)), false, pool))
 			}
 			input.SetRowCount(len(rowIDs))
-			proto, err := batch.BatchToProtoBatch(input)
+			proto, err := batch.BatchToProtoBatch(input, nil)
 			require.NoError(t, err)
 			state.HandleRowsDelete(t.Context(), proto, packer, pool)
 			retained, ok := state.rows.Get(&RowEntry{
@@ -3191,7 +3190,7 @@ func newReplayObjectListBatch(tb testing.TB, pool *mpool.MPool, entry objectio.O
 		require.NoError(tb, err)
 	}
 	live.SetRowCount(1)
-	proto, err := batch.BatchToProtoBatch(live)
+	proto, err := batch.BatchToProtoBatch(live, nil)
 	require.NoError(tb, err)
 	return proto
 }

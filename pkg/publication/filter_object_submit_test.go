@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -439,8 +440,8 @@ func TestApplyObjectsTracksNonAppendableTombstoneSpillsAcrossIterations(t *testi
 	insertRelation := mock_frontend.NewMockRelation(ctrl)
 	insertRelation.EXPECT().GetTableDef(gomock.Any()).Return(nil)
 	var insertedIDs []objectio.ObjectId
-	insertRelation.EXPECT().Delete(gomock.Any(), gomock.Any(), "").DoAndReturn(
-		func(_ context.Context, bat *batch.Batch, _ string) error {
+	insertRelation.EXPECT().Delete(gomock.Any(), gomock.Any(), []string{catalog.ObjectMeta_ObjectStats}, "").DoAndReturn(
+		func(_ context.Context, bat *batch.Batch, _ []string, _ string) error {
 			for i := 0; i < bat.RowCount(); i++ {
 				stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
 				insertedIDs = append(insertedIDs, *stats.ObjectName().ObjectId())

@@ -83,7 +83,7 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 		count = source.RowCount()
 		selected.All = true
 	}
-	if r.publish && filter.PublishSelection != nil && !selected.All {
+	if r.publish && filter.PublishSelection && !selected.All {
 		for col, v := range source.Vecs {
 			if filter.ColumnUse(col, len(out.Vecs)) == engine.ReaderColumnUnused {
 				continue
@@ -92,11 +92,14 @@ func (r *ownedSelectionTestReader) ReadWithFilter(_ context.Context, _ []string,
 				return false, err
 			}
 		}
-		mustBitmapOK(filter.PublishSelection.InitWithSize(int64(source.RowCount()), filter.PublishSelection.MPool()))
-		for _, row := range selected.Sels {
-			filter.PublishSelection.Add(uint64(row))
+		sel, err := out.OwnSelection(mp, source.RowCount())
+		if err != nil {
+			return false, err
 		}
-		out.SetSelection(source.RowCount(), filter.PublishSelection)
+		for _, row := range selected.Sels {
+			sel.Add(uint64(row))
+		}
+		out.SetSelection(sel)
 		return false, nil
 	}
 	for col, v := range source.Vecs {
@@ -266,11 +269,14 @@ func TestTableScanPublishesReaderSelection(t *testing.T) {
 			} else {
 				require.Equal(t, []types.Decimal64{100, 200, 300}, vector.MustFixedColNoTypeCheck[types.Decimal64](out.Vecs[0]))
 			}
+			require.Equal(t, parentAccepts, scan.ctr.buf.HoldsSelectionMemory())
 			result, err = vm.Exec(scan, proc)
 			require.NoError(t, err)
 			require.Nil(t, result.Batch)
 			scan.Reset(proc, false, nil)
 			require.True(t, reader.closed)
+			// Reset returns the published selection's words to the pool.
+			require.False(t, scan.ctr.buf.HoldsSelectionMemory())
 		})
 	}
 }
