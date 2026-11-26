@@ -2512,6 +2512,36 @@ func (r failingBuildReader) Read(ctx context.Context, _ []string, _ *plan.Expr, 
 
 func (failingBuildReader) Close() error { return nil }
 
+type interruptedReaderFactory struct {
+	engine.Relation
+	called bool
+	ctxErr error
+}
+
+func (r *interruptedReaderFactory) BuildReaders(ctx context.Context, _ any, _ *plan.Expr, _ engine.RelData, _, _ int, _ bool, _ engine.TombstoneApplyPolicy, _ engine.FilterHint) ([]engine.Reader, error) {
+	r.called, r.ctxErr = true, ctx.Err()
+	return nil, context.Canceled
+}
+
+func TestRunOncePreservesReaderConstructionFailure(t *testing.T) {
+	c := NewMockCompile(t)
+	defer c.proc.Free()
+	query := c.proc.Base.GetContextBase().BuildQueryCtx(c.proc.GetTopContext())
+	c.proc.BuildPipelineContext(query)
+	defer c.proc.Cancel(nil)
+	scan := table_scan.NewArgument()
+	defer scan.Release()
+	rel := new(interruptedReaderFactory)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.affectRows = new(atomic.Uint64)
+	c.scopes = []*Scope{{Magic: Normal, Proc: c.proc.NewContextChildProc(0), RootOp: scan, NodeInfo: engine.Node{Mcpu: 1}, DataSource: &Source{Rel: rel, FilterList: []*plan.Expr{plan2.MakeFalseExpr()}}}}
+	err := c.runOnce()
+	require.True(t, rel.called)
+	require.NoError(t, rel.ctxErr)
+	require.NoError(t, query.Err())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted), "%v", err)
+}
+
 func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
@@ -2524,12 +2554,13 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 		{name: "scan end", transport: "scan"},
 		{name: "scan timeout", err: context.DeadlineExceeded, transport: "scan"},
 		{name: "scan foreign key", err: moerr.NewErrFKNoReferencedRow2(context.Background()), code: moerr.ErrFKNoReferencedRow2, transport: "scan"},
-		{name: "scan failure", err: context.Canceled, code: moerr.ErrInternal, transport: "scan"},
-		{name: "shuffled scan failure", err: context.Canceled, code: moerr.ErrInternal, transport: "shuffle"},
-		{name: "aborted connector spool", err: context.Canceled, code: moerr.ErrInternal, transport: "spool"},
-		{name: "stored materialized failure", err: context.Canceled, code: moerr.ErrInternal, transport: "materialized"},
-		{name: "canceled input", err: context.Canceled, code: moerr.ErrInternal},
-		{name: "canceled input before local stop", err: context.Canceled, code: moerr.ErrInternal, cancelAfterReceive: true},
+		{name: "scan typed interruption", err: moerr.NewQueryInterrupted(context.Background()), code: moerr.ErrQueryInterrupted, transport: "scan"},
+		{name: "scan failure", err: context.Canceled, code: moerr.ErrQueryInterrupted, transport: "scan"},
+		{name: "shuffled scan failure", err: context.Canceled, code: moerr.ErrQueryInterrupted, transport: "shuffle"},
+		{name: "aborted connector spool", err: context.Canceled, code: moerr.ErrQueryInterrupted, transport: "spool"},
+		{name: "stored materialized failure", err: context.Canceled, code: moerr.ErrQueryInterrupted, transport: "materialized"},
+		{name: "canceled input", err: context.Canceled, code: moerr.ErrQueryInterrupted},
+		{name: "canceled input before local stop", err: context.Canceled, code: moerr.ErrQueryInterrupted, cancelAfterReceive: true},
 		{name: "foreign key", err: moerr.NewErrFKNoReferencedRow2(context.Background()), code: moerr.ErrFKNoReferencedRow2, cancelAfterReceive: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2624,7 +2655,10 @@ func TestJoinMapPreservesInputTerminalFailure(t *testing.T) {
 			} else if tc.err == context.DeadlineExceeded {
 				require.ErrorIs(t, err, tc.err)
 			} else {
-				require.ErrorContains(t, err, tc.err.Error())
+				if tc.code == moerr.ErrQueryInterrupted {
+					require.Error(t, err)
+					requireFragmentFKOnWire(t, query, err)
+				}
 				require.True(t, moerr.IsMoErrCode(err, tc.code), "%v", err)
 			}
 		})

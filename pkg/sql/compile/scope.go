@@ -1700,6 +1700,17 @@ func (s *Scope) readerContext(c *Compile) context.Context {
 }
 
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
+	// Capture independent reader preparation failures before Run or ParallelRun
+	// cancels the pipeline. Do not classify a later consumer's dependency error
+	// here: its own scope can be live while its producer is stopping normally.
+	defer func() {
+		if err != nil {
+			ctx, query := s.readerContext(c), scopeRunQueryContext(s.Proc)
+			if ctx != nil && ctx.Err() == nil && query != nil && query.Err() == nil {
+				err = message.PreserveExplicitPipelineFailure(query, err)
+			}
+		}
+	}()
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {

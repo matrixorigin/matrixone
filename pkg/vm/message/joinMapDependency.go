@@ -102,7 +102,10 @@ func PreserveExplicitPipelineFailure(ctx context.Context, err error) error {
 		return c.interrupted
 	}
 	if c.pureCancellation && !c.deadline {
-		return moerr.NewInternalError(ctx, err.Error())
+		if c.interrupted != nil {
+			return c.interrupted.AsReportedInterruption()
+		}
+		return moerr.NewQueryInterrupted(ctx).AsReportedInterruption()
 	}
 	return err
 }

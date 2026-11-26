@@ -525,6 +525,30 @@ func TestRemoteRun(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// The server sends the final fragment's error before the group error.
+func requireFragmentFKOnWire(t *testing.T, ctx context.Context, interrupted error) {
+	t.Helper()
+	for _, interruptedLast := range []bool{true, false} {
+		board := message.NewMessageBoard()
+		first, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+		require.NoError(t, err)
+		second, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
+		require.NoError(t, err)
+		var a, b error = moerr.NewErrFKNoReferencedRow2(ctx), interrupted
+		if !interruptedLast {
+			a, b = b, a
+		}
+		_, err = first.finish(a)
+		require.NoError(t, err)
+		_, groupErr := second.finish(b)
+		var response pipeline.Message
+		response.SetMoError(ctx, errors.Join(b, groupErr))
+		decoded, ok := response.TryToGetMoErr()
+		require.True(t, ok)
+		require.True(t, moerr.IsMoErrCode(decoded, moerr.ErrFKNoReferencedRow2), "interruptedLast=%t: %v", interruptedLast, decoded)
+	}
+}
+
 func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 	oldRuntime := runtime.ServiceRuntime("")
 	testRuntime := runtime.DefaultRuntime()
@@ -658,26 +682,7 @@ func TestIssue27757RemoteRunCancellationClassification(t *testing.T) {
 				runErr = s.RemoteRun(c)
 			}
 			if tt.remoteError {
-				// A second CN sends the final fragment error before the group result.
-				for _, interruptedLast := range []bool{true, false} {
-					board := message.NewMessageBoard()
-					first, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
-					require.NoError(t, err)
-					second, err := acquireRemoteAllocationStatementTestParticipant(t, board, 2, nil)
-					require.NoError(t, err)
-					var a, b error = moerr.NewErrFKNoReferencedRow2(queryCtx), runErr
-					if !interruptedLast {
-						a, b = b, a
-					}
-					_, err = first.finish(a)
-					require.NoError(t, err)
-					_, groupErr := second.finish(b)
-					var response pipeline.Message
-					response.SetMoError(queryCtx, errors.Join(b, groupErr))
-					decoded, ok := response.TryToGetMoErr()
-					require.True(t, ok)
-					require.True(t, moerr.IsMoErrCode(decoded, moerr.ErrFKNoReferencedRow2), "%v", decoded)
-				}
+				requireFragmentFKOnWire(t, queryCtx, runErr)
 				require.True(t, moerr.IsMoErrCode(runErr, moerr.ErrQueryInterrupted))
 			} else if tt.wantErr == nil {
 				require.NoError(t, runErr)
