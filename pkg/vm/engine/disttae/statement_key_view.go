@@ -55,6 +55,7 @@ type statementKeyView struct {
 	snapshot           timestamp.Timestamp
 	rollbackCount      int
 	tables             map[uint64]*statementKeyTable
+	partitionTables    map[uint64][]*statementKeyTable // Logical relation ID to captured physical members.
 	objects            map[string]struct{}
 	reservations       []engine.StatementViewReservation
 	reserveMemory      func(uint64) (engine.StatementViewReservation, error)
@@ -132,29 +133,42 @@ func (tbl *txnTableDelegate) NewStatementKeyView(
 			return nil, err
 		}
 		d, ok := relation.(*txnTableDelegate)
-		if !ok || d.combined.is || d.origin.getTxn() != txn {
+		if !ok || d.origin.getTxn() != txn {
 			return nil, moerr.NewNotSupported(ctx, "statement key view requires relations from the current transaction")
 		}
 		id := d.origin.tableId
-		if _, exists := v.tables[id]; exists {
+		if !d.combined.is {
+			if _, err = v.captureTable(ctx, d); err != nil {
+				return nil, err
+			}
 			continue
 		}
-		t := &statementKeyTable{relation: d, table: d.origin, def: d.GetTableDef(ctx),
-			selections: make(map[*batch.Batch][]int64), cnDeletes: make(map[types.Blockid][]int64)}
-		t.local, err = d.isLocal()
+		if v.partitionTables[id] != nil {
+			continue
+		}
+		parts, err := d.combined.tbl.tablesFunc()
 		if err != nil {
 			return nil, err
 		}
-		t.pk = int(t.def.Name2ColIndex[t.def.Pkey.PkeyColName])
-		for _, c := range t.def.Cols {
-			t.attrs = append(t.attrs, c.Name)
-			t.colTypes = append(t.colTypes, vector.ProtoTypeToType(c.Typ))
+		if len(parts) == 0 {
+			return nil, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 		}
-		t.state, err = t.table.getPartitionStateAt(ctx, v.snapshot)
-		if err != nil {
-			return nil, err
+		members := make([]*statementKeyTable, 0, len(parts))
+		for _, part := range parts {
+			physical, ok := part.(*txnTableDelegate)
+			if !ok || physical.combined.is || physical.origin.getTxn() != txn {
+				return nil, moerr.NewInternalError(ctx, "invalid physical partition for statement key view")
+			}
+			t, err := v.captureTable(ctx, physical)
+			if err != nil {
+				return nil, err
+			}
+			members = append(members, t)
 		}
-		v.tables[id] = t
+		if v.partitionTables == nil {
+			v.partitionTables = make(map[uint64][]*statementKeyTable)
+		}
+		v.partitionTables[id] = members
 	}
 	if err = v.captureWorkspace(ctx, reserve); err != nil {
 		return nil, err
@@ -162,6 +176,30 @@ func (tbl *txnTableDelegate) NewStatementKeyView(
 
 	complete = true
 	return v, nil
+}
+
+func (v *statementKeyView) captureTable(ctx context.Context, d *txnTableDelegate) (*statementKeyTable, error) {
+	id := d.origin.tableId
+	if t := v.tables[id]; t != nil {
+		return t, nil
+	}
+	local, err := d.isLocal()
+	if err != nil {
+		return nil, err
+	}
+	state, err := d.origin.getPartitionStateAt(ctx, v.snapshot)
+	if err != nil {
+		return nil, err
+	}
+	t := &statementKeyTable{relation: d, table: d.origin, def: d.GetTableDef(ctx), local: local, state: state,
+		selections: make(map[*batch.Batch][]int64), cnDeletes: make(map[types.Blockid][]int64)}
+	t.pk = int(t.def.Name2ColIndex[t.def.Pkey.PkeyColName])
+	for _, c := range t.def.Cols {
+		t.attrs = append(t.attrs, c.Name)
+		t.colTypes = append(t.colTypes, vector.ProtoTypeToType(c.Typ))
+	}
+	v.tables[id] = t
+	return t, nil
 }
 
 // captureWorkspace publishes one immutable target-family capture. Defers release
@@ -226,6 +264,10 @@ func (v *statementKeyView) captureWorkspace(ctx context.Context, reserve func(ui
 			return
 		}
 		retained += count * size
+	}
+	for _, parts := range v.partitionTables {
+		add(1, 128)
+		add(uint64(len(parts)), uint64(reflect.TypeFor[*statementKeyTable]().Size()))
 	}
 	for _, t := range v.tables {
 		add(1, uint64(reflect.TypeFor[statementKeyTable]().Size()))
@@ -442,8 +484,11 @@ func (v *statementKeyView) Lookup(ctx context.Context, tableID uint64, key *vect
 	if err = v.validateSnapshot(ctx); err != nil {
 		return nil, err
 	}
-	t := v.tables[tableID]
-	if t == nil || key == nil || row < 0 || row >= key.Length() {
+	tables := []*statementKeyTable{v.tables[tableID]}
+	if tables[0] == nil {
+		tables = v.partitionTables[tableID]
+	}
+	if len(tables) == 0 || key == nil || row < 0 || row >= key.Length() {
 		return nil, moerr.NewInternalError(ctx, "invalid statement key lookup")
 	}
 	if key.IsNull(uint64(row)) {
@@ -453,9 +498,14 @@ func (v *statementKeyView) Lookup(ctx context.Context, tableID uint64, key *vect
 	stop := context.AfterFunc(v.ctx, func() { cancel(context.Cause(v.ctx)) })
 	defer func() { stop(); cancel(nil) }()
 	ctx = lookupCtx
-	if result, err = v.lookupWorkspace(ctx, t, key, row); err != nil || result != nil {
-		return result, err
+	for _, t := range tables {
+		if result, err = v.lookupWorkspace(ctx, t, key, row); err != nil || result != nil {
+			return result, err
+		}
 	}
+	// Physical members have the same key and column layout. The physical key
+	// can pack multiple columns, so use the same point probe for each member.
+	t := tables[0]
 	queryKey, err := vector.NewOffHeapVecWithTypeAndAllocation(t.colTypes[t.pk], v.vectorAllocation)
 	if err != nil {
 		return nil, err
@@ -479,7 +529,16 @@ func (v *statementKeyView) Lookup(ctx context.Context, tableID uint64, key *vect
 	if err != nil {
 		return nil, err
 	}
-	reader, rangeReservations, err := v.newReader(lookupCtx, t, expr)
+	for _, t := range tables {
+		if result, err = v.lookupCommitted(ctx, t, queryKey, expr); err != nil || result != nil {
+			return result, err
+		}
+	}
+	return nil, nil
+}
+
+func (v *statementKeyView) lookupCommitted(ctx context.Context, t *statementKeyTable, key *vector.Vector, expr *plan.Expr) (result *batch.Batch, err error) {
+	reader, rangeReservations, err := v.newReader(ctx, t, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -499,21 +558,21 @@ func (v *statementKeyView) Lookup(ctx context.Context, tableID uint64, key *vect
 	}
 	defer b.Clean(v.proc.Mp())
 	for {
-		if err = v.validateSnapshot(lookupCtx); err != nil {
+		if err = v.validateSnapshot(ctx); err != nil {
 			return nil, err
 		}
 		b.CleanOnlyData()
-		end, readErr := reader.Read(lookupCtx, t.attrs, expr, v.proc.Mp(), b)
+		end, readErr := reader.Read(ctx, t.attrs, expr, v.proc.Mp(), b)
 		if readErr != nil {
 			return nil, readErr
 		}
 		if remote, ok := reader.(*shardingLocalReader); ok && remote.iteratePhase == InRemote {
-			if err = v.applyRemoteDeletes(lookupCtx, t, b); err != nil {
+			if err = v.applyRemoteDeletes(ctx, t, b); err != nil {
 				return nil, err
 			}
 		}
 		for i := 0; i < b.RowCount(); i++ {
-			if sameStatementKey(b.Vecs[t.pk], i, queryKey, 0) {
+			if sameStatementKey(b.Vecs[t.pk], i, key, 0) {
 				result, err = v.copyRow(t, b, i, nil)
 				return result, err
 			}
@@ -1025,6 +1084,7 @@ func (v *statementKeyView) clearCapture() {
 	// A prepared operator may retain a closed handle until rebinding. Drop
 	// data-scaled metadata before relinquishing the capture reservation.
 	v.tables = nil
+	v.partitionTables = nil
 	v.objects = nil
 	v.hashAllocation = nil
 	v.iteratorAllocation = nil
