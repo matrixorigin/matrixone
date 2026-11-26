@@ -237,7 +237,7 @@ func (p *VectorPool) String() string {
 func (p *VectorPool) GetVector(t *types.Type) Vector {
 	p.totalStats.Add(1)
 	if p.closed.Load() {
-		return NewVector(*t, Options{Allocator: p.mp})
+		return MakeVector(*t, p.mp)
 	}
 	if t.IsFixedLen() {
 		if len(p.fixSizedPool) > 0 {
@@ -263,7 +263,18 @@ func (p *VectorPool) GetVector(t *types.Type) Vector {
 		}
 	}
 
-	return NewVector(*t, Options{Allocator: p.mp})
+	return MakeVector(*t, p.mp)
+}
+
+// CloneWindow copies rows [offset, offset+length) of src into a vector lent
+// by p; release it with ReleaseVector.
+func (p *VectorPool) CloneWindow(src Vector, offset, length int) (Vector, error) {
+	cloned := p.GetVector(src.GetType())
+	if err := src.CloneWindowTo(cloned, offset, offset+length, cloned.MPool()); err != nil {
+		ReleaseVector(cloned)
+		return nil, err
+	}
+	return cloned, nil
 }
 
 func (p *VectorPool) GetMPool() *mpool.MPool {
@@ -371,4 +382,17 @@ func newVectorElement(pool *VectorPool, t *types.Type, mp *mpool.MPool) *vectorP
 		vec:  vec,
 	}
 	return element
+}
+
+// ReleaseVector releases vec: a vector lent by a VectorPool goes back to its
+// pool, any other vector is freed. Releasing a vector again, or the shared
+// EMPTY_VECTOR, does nothing.
+func ReleaseVector(vec Vector) {
+	if vec == nil || vec == EMPTY_VECTOR {
+		return
+	}
+	if returnToPool(vec) {
+		return
+	}
+	vec.Free(vec.MPool())
 }

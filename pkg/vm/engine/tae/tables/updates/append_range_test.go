@@ -44,7 +44,8 @@ func warmAppendRangeHistory(t *testing.T, h *AppendMVCCHandle) {
 	defer mpool.DeleteMPool(mp)
 	for range 2 {
 		h.RLock()
-		selection, commits, aborts := h.CollectAppendLocked(types.TS{}, types.TS{}, mp)
+		selection, commits, aborts, err := h.CollectAppendLocked(types.TS{}, types.TS{}, mp)
+		require.NoError(t, err)
 		h.RUnlock()
 		if commits != nil {
 			defer containers.ReleaseVector(commits)
@@ -76,7 +77,8 @@ func TestCollectAppendRangePhysicalOrder(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { mpool.DeleteMPool(mp) })
 			h.RLock()
-			selection, commits, aborts := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(3, 0), mp)
+			selection, commits, aborts, err := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(3, 0), mp)
+			require.NoError(t, err)
 			h.RUnlock()
 			require.NotNil(t, commits)
 			t.Cleanup(func() { containers.ReleaseVector(commits) })
@@ -86,8 +88,8 @@ func TestCollectAppendRangePhysicalOrder(t *testing.T) {
 			for i := range count {
 				for j := range 2 {
 					require.True(t, selection.Contains(uint32(3*i+j)))
-					require.Equal(t, types.BuildTS(int64(12+i%2), 0), containers.GetValue(commits, 2*i+j))
-					require.Equal(t, i%3 == 0, containers.GetValue(aborts, 2*i+j))
+					require.Equal(t, types.BuildTS(int64(12+i%2), 0), commits.GetValue(2*i+j))
+					require.Equal(t, i%3 == 0, aborts.GetValue(2*i+j))
 				}
 				require.False(t, selection.Contains(uint32(3*i+2)))
 			}
@@ -114,7 +116,8 @@ func TestCollectAppendRangeBoundariesAndDeletion(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("%d-%d", c.from, c.to), func(t *testing.T) {
 			h.RLock()
-			selection, commits, aborts := h.CollectAppendLocked(types.BuildTS(c.from, 0), types.BuildTS(c.to, 0), mp)
+			selection, commits, aborts, err := h.CollectAppendLocked(types.BuildTS(c.from, 0), types.BuildTS(c.to, 0), mp)
+			require.NoError(t, err)
 			h.RUnlock()
 			if c.rows == 0 {
 				require.True(t, selection.IsEmpty())
@@ -132,7 +135,8 @@ func TestCollectAppendRangeBoundariesAndDeletion(t *testing.T) {
 	h.DeleteAppendNodeLocked(first)
 	h.Unlock()
 	h.RLock()
-	selection, commits, aborts := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(2, 0), mp)
+	selection, commits, aborts, err := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(2, 0), mp)
+	require.NoError(t, err)
 	h.RUnlock()
 	require.True(t, selection.IsEmpty())
 	require.Nil(t, commits)
@@ -169,20 +173,22 @@ func TestCollectAppendRangeLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	h.RLock()
-	selection, commits, aborts := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(5, 0), mp)
+	selection, commits, aborts, err := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(5, 0), mp)
+	require.NoError(t, err)
 	h.RUnlock()
 	t.Cleanup(func() { containers.ReleaseVector(commits) })
 	t.Cleanup(func() { containers.ReleaseVector(aborts) })
 	require.Equal(t, uint32(2005), selection.MaxRow)
 	require.Equal(t, 5, commits.Length())
-	require.Equal(t, true, containers.GetValue(aborts, 1))
-	require.Equal(t, types.BuildTS(15, 0), containers.GetValue(commits, 4))
+	require.Equal(t, true, aborts.GetValue(1))
+	require.Equal(t, types.BuildTS(15, 0), commits.GetValue(4))
 	h.Lock()
 	h.DeleteAppendNodeLocked(nodes[2])
 	h.Unlock()
 	require.NoError(t, nodes[2].ApplyRollback())
 	h.RLock()
-	deleted, deletedCommits, deletedAborts := h.CollectAppendLocked(types.BuildTS(4, 0), types.BuildTS(4, 0), mp)
+	deleted, deletedCommits, deletedAborts, err := h.CollectAppendLocked(types.BuildTS(4, 0), types.BuildTS(4, 0), mp)
+	require.NoError(t, err)
 	h.RUnlock()
 	require.True(t, deleted.IsEmpty())
 	require.Nil(t, deletedCommits)
@@ -192,7 +198,8 @@ func TestCollectAppendRangeLifecycle(t *testing.T) {
 	h.ReleaseAppends()
 	require.Zero(t, h.EstimateMemSizeLocked())
 	h.RLock()
-	selection, emptyCommits, emptyAborts := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(5, 0), mp)
+	selection, emptyCommits, emptyAborts, err := h.CollectAppendLocked(types.BuildTS(2, 0), types.BuildTS(5, 0), mp)
+	require.NoError(t, err)
 	h.RUnlock()
 	require.True(t, selection.IsEmpty())
 	require.Nil(t, emptyCommits)
@@ -250,7 +257,8 @@ func TestCollectAppendRangeConcurrentReaders(t *testing.T) {
 					last := cutoff.Load()
 					end := types.BuildTS(last, 0)
 					h.RLock()
-					selection, commits, aborts := h.CollectAppendLocked(types.BuildTS(2, 0), end, mp)
+					selection, commits, aborts, err := h.CollectAppendLocked(types.BuildTS(2, 0), end, mp)
+					require.NoError(t, err)
 					h.RUnlock()
 					if !assert.NotNil(t, commits) {
 						return
@@ -261,8 +269,8 @@ func TestCollectAppendRangeConcurrentReaders(t *testing.T) {
 					assert.Zero(t, selection.MinRow)
 					assert.Equal(t, int(selection.MaxRow), commits.Length())
 					for row := range commits.Length() {
-						assert.Equal(t, types.BuildTS(int64(row+2), 0), containers.GetValue(commits, row))
-						assert.Equal(t, false, containers.GetValue(aborts, row))
+						assert.Equal(t, types.BuildTS(int64(row+2), 0), commits.GetValue(row))
+						assert.Equal(t, false, aborts.GetValue(row))
 					}
 				}()
 			}

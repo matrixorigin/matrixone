@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -259,7 +260,9 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 	if err != nil {
 		return err
 	}
-	containers.AppendValue(pkVec, pkVal, false)
+	if err = vector.AppendAny(pkVec, pkVal, false, pkVec.MPool()); err != nil {
+		return err
+	}
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
@@ -278,8 +281,10 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 			}
 		}
 		vec := makeWorkspaceVector(def.Type)
-		containers.AppendValue(vec, colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
+		if err = vector.AppendAny(vec, colVal, colValIsNull, vec.MPool()); err != nil {
+			return err
+		}
 	}
 	if err = h.table.RangeDelete(id, row, row, pkVec, handle.DT_Normal); err != nil {
 		return
@@ -330,7 +335,9 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 	if err != nil {
 		return err
 	}
-	containers.AppendValue(pkVec, val, false)
+	if err = vector.AppendAny(pkVec, val, false, pkVec.MPool()); err != nil {
+		return err
+	}
 	return h.Txn.GetStore().RangeDelete(id, row, row, pkVec, handle.DT_Normal)
 }
 
@@ -347,7 +354,9 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 		if err != nil {
 			return err
 		}
-		containers.AppendValue(pkVec, pkVal, false)
+		if err = vector.AppendAny(pkVec, pkVal, false, pkVec.MPool()); err != nil {
+			return err
+		}
 	}
 	return h.Txn.GetStore().RangeDelete(id, start, end, pkVec, dt)
 }

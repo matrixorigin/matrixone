@@ -239,7 +239,21 @@ func (node *persistedNode) Scan(
 				containers.ReleaseVector(destVec)
 				(*bat).Vecs[destIdx] = newInner
 			}
-			containers.Extend((*bat).GetVectorByName(attr), vecs[i])
+			if destVec := (*bat).GetVectorByName(attr); vecs[i].Length() > 0 {
+				if err = destVec.UnionBatch(vecs[i], 0, vecs[i].Length(), nil, destVec.MPool()); err != nil {
+					// Same cleanup as above: release every input vector.
+					for _, v := range vecs {
+						containers.ReleaseVector(v)
+					}
+					if tidvec != nil {
+						containers.ReleaseVector(tidvec)
+					}
+					if release != nil {
+						release()
+					}
+					return
+				}
+			}
 
 			// RelLogicalID COMPAT
 			if attr == pkgcatalog.SystemRelAttr_ID {
@@ -356,9 +370,10 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), rowIDs[i], false)
-					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr), containers.GetValue(vecs[1], i), false)
-					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), commitTS, false)
+					if err = appendTombstoneRow(*bat, rowIDs[i], vecs[1], i, commitTS); err != nil {
+						releaseVectors(vecs)
+						return err
+					}
 				}
 			}
 		} else {
@@ -370,17 +385,22 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
-					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr), rowIDs[i], false)
-					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_PK_Attr), containers.GetValue(vecs[1], i), false)
-					containers.AppendValue((*bat).GetVectorByName(objectio.TombstoneAttr_CommitTs_Attr), startTS, false)
+					if err = appendTombstoneRow(*bat, rowIDs[i], vecs[1], i, startTS); err != nil {
+						releaseVectors(vecs)
+						return err
+					}
 				}
 			}
 		}
-		for i := range vecs {
-			containers.ReleaseVector(vecs[i])
-		}
+		releaseVectors(vecs)
 	}
 	return
+}
+
+func releaseVectors(vecs []containers.Vector) {
+	for _, vec := range vecs {
+		containers.ReleaseVector(vec)
+	}
 }
 
 func (node *persistedNode) FillBlockTombstones(

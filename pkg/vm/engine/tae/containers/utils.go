@@ -495,14 +495,14 @@ func GenericUpdateFixedValue[T types.FixedSizeT](
 	vec *vector.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
 ) {
 	if isNull {
-		vec.GetNulls().Add(uint64(row))
+		vec.SetNull(uint64(row))
 	} else {
 		err := vector.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
 		if err != nil {
 			panic(err)
 		}
 		if vec.GetNulls().Contains(uint64(row)) {
-			vec.GetNulls().Unset(uint64(row))
+			vec.UnsetNull(uint64(row))
 		}
 	}
 }
@@ -511,19 +511,24 @@ func GenericUpdateBytes(
 	vec *vector.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
 ) {
 	if isNull {
-		vec.GetNulls().Add(uint64(row))
+		vec.SetNull(uint64(row))
 	} else {
 		err := vector.SetBytesAt(vec, int(row), v.([]byte), mp)
 		if err != nil {
 			panic(err)
 		}
 		if vec.GetNulls().Contains(uint64(row)) {
-			vec.GetNulls().Unset(uint64(row))
+			vec.UnsetNull(uint64(row))
 		}
 	}
 }
 
+// UpdateValue sets row to val, or to NULL. It panics on a const or read-only
+// vector.
 func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool.MPool) {
+	if col.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("update to const vector"))
+	}
 	switch col.GetType().Oid {
 	case types.T_bool:
 		GenericUpdateFixedValue[bool](col, row, val, isNull, mp)

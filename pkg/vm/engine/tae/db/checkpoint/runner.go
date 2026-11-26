@@ -487,7 +487,10 @@ func (r *runner) saveCheckpoint(
 	if injectErrMsg, injected := objectio.CheckpointSaveInjected(); injected {
 		return "", moerr.NewInternalErrorNoCtx(injectErrMsg)
 	}
-	bat := r.collectCheckpointMetadata(start, end)
+	bat, err := r.collectCheckpointMetadata(start, end)
+	if err != nil {
+		return
+	}
 	defer bat.Close()
 	name = ioutil.EncodeCKPMetadataFullName(start, end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs)

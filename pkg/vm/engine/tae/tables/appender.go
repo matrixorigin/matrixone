@@ -131,7 +131,11 @@ func (appender *objectAppender) ReserveAppend(offset, rows uint32) {
 	defer n.Unref()
 	appender.obj.appendMVCC.LockForAppend()
 	defer appender.obj.appendMVCC.UnlockForAppend()
-	n.MustMNode().ReserveRowsLocked(offset + rows)
+	// The rows are already allocated to this append: a reservation that
+	// cannot be materialized leaves the node inconsistent.
+	if err := n.MustMNode().ReserveRowsLocked(offset + rows); err != nil {
+		panic(err)
+	}
 }
 func (appender *objectAppender) ReplayAppend(
 	bat *containers.Batch,
@@ -201,7 +205,7 @@ func (appender *objectAppender) ApplyAppendAt(
 			if oldVec.IsNull(uint64(physicalRow)) {
 				continue
 			}
-			if err = node.pkIndex.DeleteAt(containers.GetValue(oldVec, physicalRow), uint32(physicalRow)); err != nil {
+			if err = node.pkIndex.DeleteAt(oldVec.GetValue(physicalRow), uint32(physicalRow)); err != nil {
 				return err
 			}
 		}

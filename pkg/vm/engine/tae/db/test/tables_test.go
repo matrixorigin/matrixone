@@ -217,7 +217,9 @@ func TestTxn4(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		pk := containers.MakeVector(schema.GetSingleSortKey().Type, common.DefaultAllocator)
 		defer containers.ReleaseVector(pk)
-		containers.AppendMany(pk, []any{int32(1), int32(2), int32(1)}, []bool{false, false, false})
+		for _, v := range []int32{1, 2, 1} {
+			pk.MustAppendValue(v, false)
+		}
 		provider := containers.NewMockDataProvider()
 		provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 		bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), 3, schema.GetSingleSortKeyIdx(), provider)
@@ -438,8 +440,8 @@ func TestFlushAblkMerge(t *testing.T) {
 	defer containers.ReleaseVector(col3)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
-		containers.AppendValue(pk, v, false)
-		containers.AppendValue(col3, col3Data[i], false)
+		pk.MustAppendValue(v, false)
+		col3.MustAppendValue(col3Data[i], false)
 		mapping[v] = col3Data[i]
 	}
 
@@ -513,8 +515,8 @@ func TestFlushAblkMerge(t *testing.T) {
 					t.Log(view.Deletes.String())
 				}
 				for i := 0; i < view.Length(); i++ {
-					pkv := containers.GetValue(view.Vecs[1], i)
-					colv := containers.GetValue(view.Vecs[0], i)
+					pkv := view.Vecs[1].GetValue(i)
+					colv := view.Vecs[0].GetValue(i)
 					assert.Equal(t, mapping[pkv.(int32)], colv)
 				}
 
@@ -547,8 +549,8 @@ func TestMergeBlocks2(t *testing.T) {
 	col3 := containers.MakeVector(schema.ColDefs[3].Type, common.DefaultAllocator)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
-		containers.AppendValue(pk, v, false)
-		containers.AppendValue(col3, col3Data[i], false)
+		pk.MustAppendValue(v, false)
+		col3.MustAppendValue(col3Data[i], false)
 		mapping[v] = col3Data[i]
 	}
 

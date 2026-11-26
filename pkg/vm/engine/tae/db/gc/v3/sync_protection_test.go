@@ -36,7 +36,7 @@ func buildTestBF(t *testing.T, objects []string) string {
 	defer containers.ReleaseVector(vec)
 
 	for _, obj := range objects {
-		containers.AppendValue(vec, []byte(obj), false)
+		vec.MustAppendValue([]byte(obj), false)
 	}
 
 	// Create BloomFilter using index.NewBloomFilter (xorfilter based)

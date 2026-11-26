@@ -52,7 +52,7 @@ func TestReshapeBatches(t *testing.T) {
 		for j := 0; j < batchSize; j++ {
 			vec := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 			for k := uint32(0); k < fromLayout[i]; k++ {
-				containers.AppendValue(vec, int32(k), false)
+				vec.MustAppendValue(int32(k), false)
 			}
 			batches[i].Vecs = append(batches[i].Vecs, vec)
 			batches[i].Attrs = append(batches[i].Attrs, "")

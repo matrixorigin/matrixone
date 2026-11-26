@@ -89,7 +89,7 @@ func (r *duplicatedRowIDs) Close() {
 	}
 }
 
-func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) {
+func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) error {
 	var (
 		rows containers.Vector
 		keys *[][]int
@@ -102,8 +102,11 @@ func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) {
 		keys = &r.nonAppendableByKey
 	}
 	idx := rows.Length()
-	containers.AppendValue(rows, rowID, false)
+	if err := vector.AppendFixed(rows, rowID, false, rows.MPool()); err != nil {
+		return err
+	}
 	(*keys)[key] = append((*keys)[key], idx)
+	return nil
 }
 
 func (r *duplicatedRowIDs) HasCandidate() bool {
@@ -140,20 +143,19 @@ func (r *duplicatedRowIDs) firstLive(
 // candidates from the same object class are retained until that filtering is
 // complete; the first surviving candidate preserves the existing object-list
 // traversal order.
-func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) containers.Vector {
+func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) (containers.Vector, error) {
 	rowIDs := pool.GetVector(&objectio.RowidType)
 	for i := range r.appendableByKey {
-		if rowID, ok := r.firstLive(r.appendable, r.appendableByKey[i]); ok {
-			containers.AppendValue(rowIDs, rowID, false)
-			continue
+		rowID, ok := r.firstLive(r.appendable, r.appendableByKey[i])
+		if !ok {
+			rowID, ok = r.firstLive(r.nonAppendable, r.nonAppendableByKey[i])
 		}
-		if rowID, ok := r.firstLive(r.nonAppendable, r.nonAppendableByKey[i]); ok {
-			containers.AppendValue(rowIDs, rowID, false)
-			continue
+		if err := vector.AppendFixed(rowIDs, rowID, !ok, rowIDs.MPool()); err != nil {
+			containers.ReleaseVector(rowIDs)
+			return nil, err
 		}
-		containers.AppendValue(rowIDs, nil, true)
 	}
-	return rowIDs
+	return rowIDs, nil
 }
 
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {
@@ -331,11 +333,15 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 		if err == nil || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			for i := 0; i < pks.Length(); i++ {
 				if !objectRowIDs.IsNull(uint64(i)) {
-					rowIDs.add(
+					if addErr := rowIDs.add(
 						obj.IsAppendable(),
 						i,
 						vector.GetFixedAtNoTypeCheck[types.Rowid](objectRowIDs, i),
-					)
+					); addErr != nil {
+						containers.ReleaseVector(objectRowIDs)
+						err = addErr
+						return
+					}
 				}
 			}
 		}
