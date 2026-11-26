@@ -59,6 +59,7 @@ type VisibleStateKeySelector func(*vector.Vector) ([]int64, error)
 type VisibleStateDiff struct {
 	SelectKeys     VisibleStateKeySelector
 	CompareColumns map[string]string
+	StartAccount   *uint32 // Owner of the protected start relation, when supplied.
 }
 
 func WithCollectChangesVisibleDiff(ctx context.Context, diff VisibleStateDiff) context.Context {

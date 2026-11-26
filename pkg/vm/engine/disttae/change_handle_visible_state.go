@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -145,14 +146,18 @@ func NewVisibleStateChangesHandle(
 			"table %d resolved to nil at snapshot %s", tbl.tableId, end.ToString())
 	}
 
-	var beforeDef *plan2.TableDef
-	if beforeRel != nil {
-		beforeDef = beforeRel.GetTableDef(ctx)
-	}
+	beforeCtx := ctx
 	var compareColumns map[string]string
 	if diff := engine.CollectChangesVisibleDiffFromContext(ctx); diff != nil {
 		h.selectKeys = diff.SelectKeys
 		compareColumns = diff.CompareColumns
+		if diff.StartAccount != nil {
+			beforeCtx = defines.AttachAccountId(ctx, *diff.StartAccount)
+		}
+	}
+	var beforeDef *plan2.TableDef
+	if beforeRel != nil {
+		beforeDef = beforeRel.GetTableDef(beforeCtx)
 	}
 	if err = h.initSchema(beforeDef, afterRel.GetTableDef(ctx), compareColumns); err != nil {
 		return nil, err
@@ -161,10 +166,10 @@ func NewVisibleStateChangesHandle(
 		return nil, err
 	}
 	if beforeRel != nil {
-		if h.beforeScan.readers, err = h.buildSnapshotReaders(ctx, beforeRel); err != nil {
+		if h.beforeScan.readers, err = h.buildSnapshotReaders(beforeCtx, beforeRel); err != nil {
 			return nil, err
 		}
-		if err = h.loadVisibleRows(ctx); err != nil {
+		if err = h.loadVisibleRows(beforeCtx); err != nil {
 			return nil, err
 		}
 	}

@@ -1639,9 +1639,15 @@ func pickForkSchemaPath(
 			if err != nil {
 				return nil, nil, err
 			}
-			if created.Version != 0 && !crossedUnobservable {
-				return nil, nil, moerr.NewNotSupportedNoCtxf(
-					"DATA BRANCH PICK cannot establish the creation schema for table %d", path[i])
+			if created.Version != 0 {
+				if edges[i] {
+					return nil, nil, moerr.NewNotSupportedNoCtxf(
+						"DATA BRANCH PICK cannot establish the creation schema for table %d", path[i])
+				}
+				// An in-place change in the clone transaction is already
+				// present in the creation image. Follow column order across
+				// the logical fork, even when the names on both sides exist.
+				crossedUnobservable = true
 			}
 			// An ephemeral ancestor can use its first committed child's
 			// definition as a stand-in. Anchor those entries at creation.
@@ -1652,7 +1658,7 @@ func pickForkSchemaPath(
 			sameGeneration = true
 		}
 		out, outEdges = append(out, def), append(outEdges, sameGeneration || edges[i])
-		if crossedUnobservable {
+		if crossedUnobservable || i > 0 && !edges[i] {
 			child := len(out) - 1
 			if sameGeneration {
 				child--
@@ -1663,7 +1669,15 @@ func pickForkSchemaPath(
 				if err != nil {
 					return nil, nil, err
 				}
-				forks[[2]*plan.TableDef{previous, current}] = cols
+				// The creation image can already contain a rename even
+				// when its schema version is zero.
+				needsMapping := crossedUnobservable
+				for name, parent := range cols {
+					needsMapping = needsMapping || name != parent.Name
+				}
+				if needsMapping {
+					forks[[2]*plan.TableDef{previous, current}] = cols
+				}
 			}
 			crossedUnobservable = false
 		}
@@ -1776,7 +1790,11 @@ func diffOnBase(
 					}
 					if !zeroHistory {
 						tblStuff.lcaRelSnapshot = endpointCreationTS
-						tblStuff.lcaHasZeroHistory = false
+						tarFork, baseFork, siblings := dagInfo.lcaProbeAnchors(tarSp, baseSp)
+						// The ancestor's commit image can include writes after
+						// both clones. It is not either fork's before-image.
+						tblStuff.lcaHasZeroHistory = tblStuff.boundedPick && siblings &&
+							tarFork.LT(&tblStuff.lcaCTS) && baseFork.LT(&tblStuff.lcaCTS)
 						break
 					}
 					tblStuff.lcaHasZeroHistory = true
@@ -2699,17 +2717,17 @@ func dataBranchSegmentCollectContext(
 		return collectCtx, nil
 	}
 	before := ranges.forkBefore[i]
-	diff := engine.VisibleStateDiff{SelectKeys: selectKeys}
-	if before.collapsedFork {
-		parentDef := start.GetTableDef(identityCtx(ctx, before.identity))
-		cols, err := dataBranchSameCommitForkColumns(parentDef, segDef)
-		if err != nil {
-			return nil, err
-		}
-		diff.CompareColumns = make(map[string]string, len(cols))
-		for child, parent := range cols {
-			diff.CompareColumns[parent.Name] = child
-		}
+	parentDef := start.GetTableDef(identityCtx(ctx, before.identity))
+	cols, err := dataBranchSameCommitForkColumns(parentDef, segDef)
+	if err != nil {
+		return nil, err
+	}
+	diff := engine.VisibleStateDiff{SelectKeys: selectKeys, CompareColumns: make(map[string]string, len(cols))}
+	if before.identity.ctx != nil && before.identity.account != owner.account {
+		diff.StartAccount = &before.identity.account
+	}
+	for child, parent := range cols {
+		diff.CompareColumns[parent.Name] = child
 	}
 	return engine.WithCollectChangesVisibleDiff(collectCtx, diff), nil
 }
@@ -3511,6 +3529,10 @@ func decideCollectRange(
 //
 // Empty windows (windowFrom > windowEnd) are dropped silently.
 //
+// Bounded PICK also compares each retained logical fork's creation commit
+// against its parent at the fork snapshot. The child commit includes both
+// clone materialization and user writes made within that transaction.
+//
 // Relations are looked up once per node (cache-hit on tar/base/lca,
 // one fresh fetch per intermediate). CTSes are resolved lazily and
 // reuse the already-known endpointCTS for the endpoint.
@@ -3653,6 +3675,13 @@ func buildSideCollectRange(
 			nodeCTS = ctsList[0]
 		}
 
+		if i == 0 && tables.boundedPick && tables.lcaHasZeroHistory && nodeCTS.GT(&windowEnd) {
+			// A retained ancestor that committed after the fork has no
+			// observable history for this path, just like a dropped root.
+			hasZeroHistory = true
+			continue
+		}
+
 		// Window lower bound.
 		if tables.boundedPick && tables.lcaHasZeroHistory && hasZeroHistory &&
 			nodeID != endpointID && nodeCTS.LE(&windowEnd) {
@@ -3694,7 +3723,7 @@ func buildSideCollectRange(
 				pendingForkCommit = nodeCTS
 				continue
 			}
-			if nodeCTS.LE(&windowEnd) && (continuesFork || sourceSide && hasZeroHistory && tables.lcaHasZeroHistory) {
+			if nodeCTS.LE(&windowEnd) {
 				before := previousPoint
 				before.collapsedFork = continuesFork
 				appendSegment(rel, nodeCTS, nodeCTS, nodeCTS, segIdent, &before)
