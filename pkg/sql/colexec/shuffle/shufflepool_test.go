@@ -291,10 +291,7 @@ func TestShufflePoolKeepsIndependentProducerTails(t *testing.T) {
 
 	inputs := make([]*batch.Batch, 2)
 	for producer := range inputs {
-		inputs[producer] = batch.NewWithSchema(
-			nil,
-			[]types.Type{types.T_int64.ToType()}, mp,
-		)
+		inputs[producer] = batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, mp)
 		for row := range 2 {
 			require.NoError(t, vector.AppendFixed(
 				inputs[producer].Vecs[0], int64(producer*10+row), false, mp,
@@ -380,7 +377,7 @@ func TestShufflePoolMatchingProducersCoalesce(t *testing.T) {
 			if tc.drainAll {
 				getFull = sp.getAnyFullBatch
 			}
-			input := batch.NewWithSchema(nil, []types.Type{types.T_int64.ToType()}, proc.Mp())
+			input := batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, proc.Mp())
 			defer input.Clean(proc.Mp())
 			sels := make([]int32, objectio.BlockMaxRows)
 			for row := range sels {
@@ -836,10 +833,7 @@ func BenchmarkShufflePoolProducerTails(b *testing.B) {
 			var err error
 			inputs := make([]*batch.Batch, producerCount)
 			for producer := range inputs {
-				inputs[producer] = batch.NewWithSchema(
-					nil,
-					[]types.Type{types.T_int64.ToType()}, mp,
-				)
+				inputs[producer] = batch.NewWithTypes([]types.Type{types.T_int64.ToType()}, mp)
 				for row := range rowsPerBatch {
 					if err = vector.AppendFixed(
 						inputs[producer].Vecs[0], int64(row), false, mp,

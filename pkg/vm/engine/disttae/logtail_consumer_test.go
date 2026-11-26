@@ -593,10 +593,9 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil, m),
 		},
-		Attrs: []string{"varchar_column"},
 	}
 	rowBatch.SetRowCount(3)
-	ibat, err := fillRandomRowidAndZeroTs(rowBatch, m)
+	ibat, err := fillRandomRowidAndZeroTs(rowBatch, []string{"varchar_column"}, m)
 	assert.NoError(t, err)
 	state.HandleRowsInsert(ctx, ibat, 0, packer, m)
 	assert.Equal(t, 3, state.ApproxInMemRows())
@@ -1004,12 +1003,11 @@ func TestDispatchUpdateResponseAdvancesTimestampAfterLastLogtail(t *testing.T) {
 	e.pClient.receivedLogTailTime.initLogTailTimestamp(tw)
 	e.pClient.receivedLogTailTime.ready.Store(true)
 	rowBatch := &batch.Batch{
-		Vecs:  []*vector.Vector{testutil.MakeVarcharVector([]string{"a"}, nil, mp)},
-		Attrs: []string{"pk"},
+		Vecs: []*vector.Vector{testutil.MakeVarcharVector([]string{"a"}, nil, mp)},
 	}
 	t.Cleanup(func() { rowBatch.Clean(mp) })
 	rowBatch.SetRowCount(1)
-	rows, err := fillRandomRowidAndZeroTs(rowBatch, mp)
+	rows, err := fillRandomRowidAndZeroTs(rowBatch, []string{"pk"}, mp)
 	require.NoError(t, err)
 
 	recRoutines := newTestRoutineControllers(8)
@@ -3891,13 +3889,13 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 			routines := newTestRoutineControllers(16)
 			makeTail := func(bat *batch.Batch, id uint64, name string, seq uint32, at int64) logtail.TableLogtail {
 				t.Helper()
-				_, err := fillRandomRowidAndZeroTs(bat, mp)
+				filled, err := fillRandomRowidAndZeroTs(bat, catalogTupleAttrsForTest(id), mp)
 				require.NoError(t, err)
 				ts := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[cache.MO_TIMESTAMP_IDX])
 				for i := range ts {
 					ts[i] = types.BuildTS(at, 0)
 				}
-				encoded, err := batch.BatchToProtoBatch(bat)
+				encoded, err := batch.BatchToProtoBatch(bat, filled.Attrs)
 				require.NoError(t, err)
 				t.Cleanup(func() { bat.Clean(mp) })
 				return logtail.TableLogtail{Table: &api.TableID{DbId: catalog.MO_CATALOG_ID, TbId: id, DbName: catalog.MO_CATALOG, TbName: name, PrimarySeqnum: seq},
@@ -3943,5 +3941,18 @@ func TestDispatchCatalogUpdateOrdersTablesBeforeColumns(t *testing.T) {
 			require.Equal(t, uint32(200), q.Version)
 			require.Equal(t, "200", q.ReadPlanTableDef().Cols[0].Comment)
 		})
+	}
+}
+
+// catalogTupleAttrsForTest names the columns of a catalog tuple batch built
+// for the catalog table id.
+func catalogTupleAttrsForTest(id uint64) []string {
+	switch id {
+	case catalog.MO_DATABASE_ID:
+		return catalog.MoDatabaseSchema
+	case catalog.MO_COLUMNS_ID:
+		return catalog.MoColumnsSchema
+	default:
+		return catalog.MoTablesSchema
 	}
 }

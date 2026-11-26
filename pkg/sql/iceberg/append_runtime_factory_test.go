@@ -323,7 +323,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		require.Same(t, scope.shared, secondScope.(*appendRuntimeSharedCoordinatorScope).shared)
 		require.NoError(t, secondScope.Begin(ctx, secondReq))
 		mp := mpool.MustNewZero()
-		bat := batch.New([]string{"id", "region", "amount"})
+		bat := batch.NewWithSize(3)
 		bat.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)}
 		defer bat.Clean(mp)
 		for i := 0; i < 100; i++ {
@@ -384,7 +384,7 @@ func TestAppendRuntimeCoordinatorCommitsPreservedManifestList(t *testing.T) {
 		next, err := f.NewCoordinator(ctx, nextReq)
 		require.NoError(t, err)
 		require.NoError(t, next.Begin(ctx, nextReq))
-		nextBatch := batch.New([]string{"id", "region", "amount"})
+		nextBatch := batch.NewWithSize(3)
 		nextBatch.Vecs = []*vector.Vector{vector.NewVec(types.T_int64.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp), vector.NewVec(types.T_varchar.ToType(), mp)}
 		defer nextBatch.Clean(mp)
 		require.NoError(t, vector.AppendFixed(nextBatch.Vecs[0], int64(1), false, mp))
@@ -484,21 +484,20 @@ func TestWriteRuntimeCoordinatorFactoryDispatchesAppendAndDML(t *testing.T) {
 	require.Contains(t, err.Error(), string(api.ErrUnsupportedFeature))
 }
 
-func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
+func TestAppendRuntimeVisibleBatchTakesPlanPrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "__mo_rowid", "region"})
+	bat := batch.NewWithSize(3)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
-	hiddenVec := vector.NewVec(types.T_int64.ToType(), mp)
 	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
+	hiddenVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
-	require.NoError(t, vector.AppendFixed[int64](hiddenVec, 99, false, mp))
 	require.NoError(t, vector.AppendBytes(regionVec, []byte("ksa"), false, mp))
-	bat.Vecs[0] = idVec
-	bat.Vecs[1] = hiddenVec
-	bat.Vecs[2] = regionVec
+	require.NoError(t, vector.AppendFixed[int64](hiddenVec, 99, false, mp))
+	bat.Vecs = []*vector.Vector{idVec, regionVec, hiddenVec}
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
+	// Generated or hidden vectors trail the plan's visible columns.
 	visible, err := appendRuntimeVisibleBatch([]string{"id", "region"}, bat)
 	require.NoError(t, err)
 	require.NotSame(t, bat, visible)
@@ -507,62 +506,19 @@ func TestAppendRuntimeVisibleBatchFiltersExtraNamedColumns(t *testing.T) {
 	require.Same(t, idVec, visible.Vecs[0])
 	require.Same(t, regionVec, visible.Vecs[1])
 
-	fallback := batch.New([]string{"missing", "also_missing", "region"})
-	fallback.Vecs = bat.Vecs
-	fallback.SetRowCount(1)
-	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, fallback)
+	exact := batch.NewWithSize(2)
+	exact.Vecs = []*vector.Vector{idVec, regionVec}
+	exact.SetRowCount(1)
+	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, exact)
+	require.NoError(t, err)
+	require.Same(t, exact, visible)
+
+	short := batch.NewWithSize(1)
+	short.Vecs = []*vector.Vector{idVec}
+	short.SetRowCount(1)
+	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, short)
 	require.Error(t, err)
 	require.Nil(t, visible)
-
-	unnamed := batch.NewWithSize(3)
-	unnamed.Vecs = []*vector.Vector{idVec, regionVec, hiddenVec}
-	unnamed.SetRowCount(1)
-	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, unnamed)
-	require.NoError(t, err)
-	require.NotSame(t, unnamed, visible)
-	require.Equal(t, []string{"id", "region"}, visible.Attrs)
-	require.Equal(t, 1, visible.RowCount())
-	require.Same(t, idVec, visible.Vecs[0])
-	require.Same(t, regionVec, visible.Vecs[1])
-
-	prefixNamed := batch.New([]string{"region", "id"})
-	prefixNamed.Vecs = []*vector.Vector{regionVec, idVec, hiddenVec}
-	prefixNamed.SetRowCount(1)
-	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, prefixNamed)
-	require.NoError(t, err)
-	require.Same(t, idVec, visible.Vecs[0])
-	require.Same(t, regionVec, visible.Vecs[1])
-
-	incomplete := batch.New([]string{"id"})
-	incomplete.Vecs = []*vector.Vector{idVec, regionVec, hiddenVec}
-	incomplete.SetRowCount(1)
-	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, incomplete)
-	require.Error(t, err)
-	require.Nil(t, visible)
-}
-
-func TestAppendRuntimeVisibleBatchPreservesCaseSensitiveNames(t *testing.T) {
-	bat := batch.New([]string{"ID", "hidden", "id"})
-	bat.Vecs = []*vector.Vector{
-		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
-		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
-		vector.NewVec(types.T_int64.ToType(), mpool.MustNewZero()),
-	}
-	visible, err := appendRuntimeVisibleBatch([]string{"ID", "id"}, bat)
-	require.NoError(t, err)
-	require.Same(t, bat.Vecs[0], visible.Vecs[0])
-	require.Same(t, bat.Vecs[2], visible.Vecs[1])
-
-	visible, err = appendRuntimeVisibleBatch([]string{"Id"}, bat)
-	require.Error(t, err)
-	require.Nil(t, visible)
-
-	reordered := batch.New([]string{"region", "id"})
-	reordered.Vecs = []*vector.Vector{bat.Vecs[2], bat.Vecs[0]}
-	visible, err = appendRuntimeVisibleBatch([]string{"id", "region"}, reordered)
-	require.NoError(t, err)
-	require.Same(t, bat.Vecs[0], visible.Vecs[0])
-	require.Same(t, bat.Vecs[2], visible.Vecs[1])
 }
 
 func TestAppendRuntimeSharedCoordinatorCommitsOncePerStatement(t *testing.T) {
@@ -891,7 +847,7 @@ func TestAppendRuntimeSchemaSpecAndReporterHelpers(t *testing.T) {
 func appendGoldKPIBatch(t *testing.T) (*batch.Batch, *mpool.MPool) {
 	t.Helper()
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "region", "amount"})
+	bat := batch.NewWithSize(3)
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	regionVec := vector.NewVec(types.T_varchar.ToType(), mp)
 	amountVec := vector.NewVec(types.T_int64.ToType(), mp)

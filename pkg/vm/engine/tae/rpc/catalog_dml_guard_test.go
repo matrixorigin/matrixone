@@ -41,7 +41,7 @@ func TestMalformedDatabaseCatalogEntryRollsBackEarlierDDL(t *testing.T) {
 	// A generic SQL UPDATE's delete half carries only rowid and pk. It must
 	// not be dispatched as the four-column DROP DATABASE command.
 	bat := batch.NewWithSize(2)
-	bat.Attrs = []string{catalog2.Row_ID, "pk"}
+	batAttrs := []string{catalog2.Row_ID, "pk"}
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType(), h.m)
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), h.m)
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], types.Rowid{}, false, h.m))
@@ -49,7 +49,7 @@ func TestMalformedDatabaseCatalogEntryRollsBackEarlierDDL(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(h.m)
 	malformed, err := makePBEntry(DELETE, catalog2.MO_CATALOG_ID, catalog2.MO_DATABASE_ID,
-		catalog2.MO_CATALOG, catalog2.MO_DATABASE, "", bat)
+		catalog2.MO_CATALOG, catalog2.MO_DATABASE, "", bat, batAttrs)
 	require.NoError(t, err)
 
 	commit := func(entries []*api.Entry) error {

@@ -515,7 +515,7 @@ func TestIndexBlockInputUsesRealCachedBlocks(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(rows.Vecs[2], uint64(1), false, mp))
 				require.NoError(t, vector.AppendFixed(rows.Vecs[3], id, false, mp))
 				rows.SetRowCount(1)
-				proto, err := batch.BatchToProtoBatch(rows)
+				proto, err := batch.BatchToProtoBatch(rows, nil)
 				require.NoError(t, err)
 				packer := types.NewPacker()
 				defer packer.Close()

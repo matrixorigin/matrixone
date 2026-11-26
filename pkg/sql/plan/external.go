@@ -115,13 +115,9 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) *batch.Batch {
 	num := len(node.TableDef.Cols)
-	bat := &batch.Batch{
-		Attrs: make([]string, num),
-		Vecs:  make([]*vector.Vector, num),
-	}
+	bat := batch.NewWithSize(num)
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if i == num-1 && bat.Attrs[i] == catalog.ExternalFilePath {
+		if i == num-1 && node.TableDef.Cols[i].Name == catalog.ExternalFilePath {
 			typ := types.T_varchar.ToType()
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)

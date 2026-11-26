@@ -177,9 +177,13 @@ func observeArrowError(err error) {
 }
 
 // ArrowReader is the LOAD-only adapter between the format-neutral External
-// operator and the canonical Arrow-to-MO bridge. The IPC reader owns the
-// current record; borrowed MO vectors retain only the ArrayData/range leases
-// they reference and therefore safely outlive the next IPC Next call.
+// operator and the canonical Arrow-to-MO bridge. The reader owns everything a
+// published batch borrows: when the batch has borrowed columns it retains the
+// record the batch was converted from (the IPC reader releases its current
+// record at the next Next call), and it owns the varlen descriptor scratch, so
+// no per-column lease is needed. A fully materialized batch borrows nothing,
+// so its record is not retained and the next read does not hold two records'
+// ranges at once.
 type ArrowReader struct {
 	param                 *ExternalParam
 	reader                arrowio.Reader
@@ -192,11 +196,19 @@ type ArrowReader struct {
 	conversionFingerprint [sha256.Size]byte
 	fingerprintSet        bool
 	// published is the batch the last PublishBatch returned. The reader owns
-	// it - its vectors are in allocation, or read-only references to Arrow
-	// buffers its leases keep alive - until the next PublishBatch or
-	// ReleaseBatch. Close (one file done) keeps it: it is still the
+	// it - its vectors are in allocation, or read-only references to
+	// publishedRecord's buffers and descriptors - until the next PublishBatch
+	// or ReleaseBatch. Close (one file done) keeps it: it is still the
 	// operator's current output.
 	published *batch.Batch
+	// publishedRecord is the record published was converted from, retained
+	// until published is released. It is nil when published borrows nothing
+	// from it (every column materialized).
+	publishedRecord arrow.RecordBatch
+	// descriptors is the reusable varlena descriptor scratch of borrowed
+	// varlen columns. It lives until the reader is closed and its last batch
+	// released.
+	descriptors arrowbridge.Descriptors
 }
 
 func NewArrowReader(
@@ -495,14 +507,25 @@ func (r *ArrowReader) ReadBatch(
 	return false, moerr.NewInternalError(ctx, "Arrow reader publishes its batches; use PublishBatch")
 }
 
-// ReleaseBatch frees the last published batch. The operator calls it once
-// nothing reads that batch any more (Reset, Free).
+// ReleaseBatch frees the last published batch and releases the record it
+// borrows from. The operator calls it once nothing reads that batch any more
+// (Reset, Free). Once the reader is also closed, the descriptor scratch goes
+// too.
 func (r *ArrowReader) ReleaseBatch() {
-	if r == nil || r.published == nil {
+	if r == nil {
 		return
 	}
-	r.published.Clean(r.allocation)
-	r.published = nil
+	if r.published != nil {
+		r.published.Clean(r.allocation)
+		r.published = nil
+	}
+	if r.publishedRecord != nil {
+		r.publishedRecord.Release()
+		r.publishedRecord = nil
+	}
+	if r.reader == nil {
+		r.descriptors.Free()
+	}
 }
 
 // PublishBatch converts the next window of the current record batch and
@@ -523,6 +546,7 @@ func (r *ArrowReader) PublishBatch(
 	}
 	converted, fileFinished, err := r.convertNext(ctx, proc)
 	if err != nil {
+		r.ReleaseBatch()
 		return nil, false, err
 	}
 	attrs := make([]string, len(r.param.Attrs))
@@ -531,15 +555,16 @@ func (r *ArrowReader) PublishBatch(
 	}
 	if len(converted.Vecs) != len(attrs) {
 		converted.Clean(r.allocation)
+		r.ReleaseBatch()
 		return nil, false, moerr.NewInternalErrorNoCtx("Arrow conversion produced an incompatible MatrixOne batch")
 	}
 	for i, vec := range converted.Vecs {
 		if vec == nil {
 			converted.Clean(r.allocation)
+			r.ReleaseBatch()
 			return nil, false, moerr.NewInternalErrorNoCtxf("Arrow conversion produced a nil vector at column %d", i)
 		}
 	}
-	converted.Attrs = attrs
 	r.published = converted
 	metric.ArrowLoadBatchCounter.Inc()
 	metric.ArrowLoadRowCounter.Add(float64(converted.RowCount()))
@@ -584,6 +609,7 @@ func (r *ArrowReader) convertNext(ctx context.Context, proc *process.Process) (*
 	convertStart := time.Now()
 	converted, stats, err := r.plan.ConvertValidatedRecordWindow(ctx, view, proc.Mp(), arrowbridge.ConvertOptions{
 		Location: location, Allocation: r.allocation, ForceMaterialize: r.forceMaterialize,
+		Descriptors: &r.descriptors,
 	})
 	observeArrowPhase(convertStart, "convert", err)
 	if err != nil {
@@ -610,6 +636,15 @@ func (r *ArrowReader) convertNext(ctx context.Context, proc *process.Process) (*
 		converted.Clean(r.allocation)
 		return nil, false, err
 	}
+	// A borrowed column references record's buffers: retain it before
+	// advancing, since the IPC reader releases its current record at the next
+	// Next call. A fully materialized batch references none of them, so the
+	// record is left to the IPC reader and its range is released before the
+	// next record's is admitted.
+	if borrowsArrowBuffers(converted) {
+		record.Retain()
+		r.publishedRecord = record
+	}
 	fileFinished := false
 	if end < record.NumRows() {
 		r.rowOffset = end
@@ -621,6 +656,21 @@ func (r *ArrowReader) convertNext(ctx context.Context, proc *process.Process) (*
 		}
 	}
 	return converted, fileFinished, nil
+}
+
+// borrowsArrowBuffers reports whether bat references Arrow memory. The bridge
+// aliases Arrow buffers only in read-only vectors (borrowed fixed-width values
+// and borrowed varlen areas); materialized vectors and every null bitmap are
+// copies in the reader's pool. A read-only varlen vector whose values are all
+// inline references only the descriptor scratch, which is conservatively
+// treated as borrowing too.
+func borrowsArrowBuffers(bat *batch.Batch) bool {
+	for _, vec := range bat.Vecs {
+		if vec != nil && vec.IsReadOnly() {
+			return true
+		}
+	}
+	return false
 }
 
 func fitArrowBatchToWireBudget(
@@ -689,14 +739,14 @@ func fitArrowBatchToWireBudget(
 
 // stableArrowBatchPrefix keeps the zero-copy contract column-local while
 // making a prefix independent of the source batch's vectors. Borrowed columns
-// become windows of their Arrow payloads and the source's Arrow references
-// move to the prefix (the caller cleans source next); materialized columns
-// copy only the selected rows.
+// become windows of the same Arrow payloads, which the reader keeps alive (the
+// caller cleans source next); materialized columns copy only the selected
+// rows.
 func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *batch.Batch, err error) {
 	if source == nil || mp == nil || rows <= 0 || rows > source.RowCount() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid Arrow batch prefix")
 	}
-	stable := batch.New(append([]string(nil), source.Attrs...))
+	stable := batch.NewWithSize(len(source.Vecs))
 	stable.Recursive = source.Recursive
 	stable.ShuffleIDX = source.ShuffleIDX
 	defer func() {
@@ -710,8 +760,8 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 		}
 		var snapshot *vector.Vector
 		if sourceVector.IsReadOnly() {
-			// A read-only reference to the Arrow buffers source holds. Its
-			// nulls are a view of source's bitmap, which Clean frees, so the
+			// A read-only reference to the reader's Arrow buffers. Its nulls
+			// are a view of source's bitmap, which Clean frees, so the
 			// snapshot gets its own copy.
 			if snapshot, err = sourceVector.WindowByLogicalRows(0, rows); err == nil {
 				if err = snapshot.DetachNulls(mp); err != nil {
@@ -726,9 +776,6 @@ func stableArrowBatchPrefix(source *batch.Batch, rows int, mp *mpool.MPool) (_ *
 		}
 		stable.SetVector(int32(index), snapshot)
 	}
-	// The borrowed windows alias the Arrow buffers source holds; the prefix
-	// becomes their lender.
-	stable.MoveLeasesFrom(source)
 	stable.SetRowCount(rows)
 	return stable, nil
 }
@@ -745,6 +792,11 @@ func (r *ArrowReader) Close() error {
 	}
 	reader := r.reader
 	r.reader = nil
+	// The last published batch may still be the operator's output; its
+	// ReleaseBatch frees the descriptor scratch then.
+	if r.published == nil {
+		r.descriptors.Free()
+	}
 	return reader.Close()
 }
 

@@ -44,7 +44,7 @@ func TestExternalNullAppendFailureIsReturned(t *testing.T) {
 			defer proc.Free()
 			defer mpool.DeleteMPool(mp)
 
-			bat := batch.New([]string{"a", "b"})
+			bat := batch.NewWithSize(2)
 			bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType(), mp)
 			bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType(), mp)
 			defer bat.Clean(mp)

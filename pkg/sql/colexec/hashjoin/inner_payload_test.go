@@ -59,8 +59,8 @@ func TestNonuniqueInnerLongProbePayloadCapacity(t *testing.T) {
 			join.arg.resultAllocation, err = mpool.NewAccountBinding(account, mpool.AllocationOwnerHashBuild,
 				hashJoinAllocationSiteResultData)
 			require.NoError(t, err)
-			probe := batch.NewWithSchema(nil, join.arg.LeftTypes, join.proc.Mp())
-			build := batch.NewWithSchema(nil, join.arg.RightTypes, join.proc.Mp())
+			probe := batch.NewWithTypes(join.arg.LeftTypes, join.proc.Mp())
+			build := batch.NewWithTypes(join.arg.RightTypes, join.proc.Mp())
 			t.Cleanup(func() {
 				join.arg.Reset(join.proc, false, nil)
 				join.barg.Reset(join.proc, false, nil)

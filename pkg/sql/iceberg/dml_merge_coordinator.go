@@ -169,7 +169,7 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 		if err := c.budget.reserve(ctx, retainedBytes); err != nil {
 			return err
 		}
-		cloned, err := updateBatch.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
+		cloned, err := updateBatch.CloneSelectedColumns(replacementCols, proc.Mp())
 		if err != nil {
 			c.budget.release(retainedBytes)
 			return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to clone matched update rows", nil, err))
@@ -187,7 +187,7 @@ func (c *DMLMergeCoordinator) AppendWithProcess(proc *process.Process, bat *batc
 		if err := c.budget.reserve(ctx, retainedBytes); err != nil {
 			return err
 		}
-		cloned, err := insertBatch.CloneSelectedColumns(replacementCols, append([]string(nil), c.replacementAttrs...), proc.Mp())
+		cloned, err := insertBatch.CloneSelectedColumns(replacementCols, proc.Mp())
 		if err != nil {
 			c.budget.release(retainedBytes)
 			return api.ToMOErr(ctx, api.WrapError(api.ErrInternal, "Iceberg DML merge coordinator failed to clone unmatched insert rows", nil, err))
@@ -374,7 +374,6 @@ func emptyBatchLike(src *batch.Batch, mp *mpool.MPool) *batch.Batch {
 		return nil
 	}
 	out := batch.NewWithSize(len(src.Vecs))
-	out.Attrs = append([]string(nil), src.Attrs...)
 	for idx, vec := range src.Vecs {
 		if vec == nil {
 			continue

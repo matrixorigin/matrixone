@@ -55,7 +55,6 @@ func TestCNS3DataWriterMemoryThresholdAndSyncAndFillBlockInfoBat(t *testing.T) {
 		require.Equal(t, 1, writer.MemorySizeThreshold())
 
 		bat := &batch.Batch{
-			Attrs: []string{"a", "b"},
 			Vecs: []*vector.Vector{
 				testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
 				testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
@@ -118,7 +117,6 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 		Pkey: &plan.PrimaryKeyDef{},
 	}
 	bat := batch.NewWithSize(1)
-	bat.Attrs = []string{"payload"}
 	bat.SetVector(0, vector.NewVec(types.T_text.ToType(), proc.Mp()))
 	payload := make([]byte, 20<<10)
 	for i := range 512 {
@@ -244,8 +242,8 @@ func TestCNS3TombstoneMultipleObjectsReachConsumer(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	require.NoError(t, err)
 	pkType := types.T_text.ToType()
-	attrs, typs := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
-	input := batch.NewWithSchema(attrs, typs, proc.Mp())
+	_, typs := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
+	input := batch.NewWithTypes(typs, proc.Mp())
 	defer input.Clean(proc.Mp())
 	want := make(map[types.Rowid]string)
 	for i := 0; i < 4; i++ {
@@ -332,7 +330,7 @@ func TestCNS3CleanupHonorsOriginalDeadline(t *testing.T) {
 			fs := &cleanupDeadlineFS{FileService: base, failDelete: true}
 			writer := NewCNS3DataWriter(proc.Mp(), fs, testCNS3WriterTableDef(), 1, false)
 			defer writer.Close()
-			input := &batch.Batch{Attrs: []string{"a", "b"}, Vecs: []*vector.Vector{
+			input := &batch.Batch{Vecs: []*vector.Vector{
 				testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
 				testutil.MakeVarcharVector([]string{"value"}, nil, proc.Mp()),
 			}}

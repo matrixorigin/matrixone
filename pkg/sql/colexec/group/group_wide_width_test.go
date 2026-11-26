@@ -239,8 +239,8 @@ func TestGroupWideDeclaredWidthsPartialMerge(t *testing.T) {
 				for _, output := range outputs {
 					copied := cloneBatch(t, proc, output)
 					copies = append(copies, copied)
-					require.GreaterOrEqual(t, len(copied.ExtraBuf), 4)
-					require.Equal(t, int32(HStr), types.DecodeInt32(copied.ExtraBuf[:4]))
+					require.GreaterOrEqual(t, len(copied.ExtraBuf()), 4)
+					require.Equal(t, int32(HStr), types.DecodeInt32(copied.ExtraBuf()[:4]))
 				}
 				partial.Reset(proc, false, nil)
 				child.Free(proc, false, nil)

@@ -198,7 +198,7 @@ func TestTableScanner1(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
+	bat := batch.NewWithSize(8)
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"tblName"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -298,7 +298,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
   FOREIGN KEY (parent_id) REFERENCES parent(id)
 )`
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
+	bat := batch.NewWithSize(8)
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -355,7 +355,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 
 	createSQL := "CREATE TABLE child (note VARCHAR(32) DEFAULT 'foreign key')"
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
+	bat := batch.NewWithSize(8)
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -413,7 +413,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 
 	createSQL := "CREATE TABLE child (id BIGINT PRIMARY KEY, parent_id BIGINT)"
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
+	bat := batch.NewWithSize(8)
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
@@ -468,7 +468,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "has_pk"})
+	bat := batch.NewWithSize(8)
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001, 1002}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child", "broken"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10, 10}, nil, proc.Mp())
@@ -1412,7 +1412,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
+	bat1 := batch.NewWithSize(8)
 	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -1427,7 +1427,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		Batches: []*batch.Batch{bat1},
 	}
 
-	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
+	bat2 := batch.NewWithSize(8)
 	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil, proc.Mp())
 	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())

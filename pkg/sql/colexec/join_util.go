@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"slices"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -232,9 +230,6 @@ func (bs *Batches) copyIntoBatches(
 			}
 			return err
 		}
-		if allocationLimit != 0 {
-			tmp.SetAttributes(slices.Clone(tmp.Attrs))
-		}
 		bs.MemSize += int64(tmp.Size())
 		bs.Buf = append(bs.Buf, tmp)
 		lenBuf := len(bs.Buf)
@@ -278,9 +273,6 @@ func (bs *Batches) copyIntoBatches(
 			if err != nil {
 				return err
 			}
-			if allocationLimit != 0 {
-				tmp.SetAttributes(slices.Clone(tmp.Attrs))
-			}
 			bs.Buf = append(bs.Buf, tmp)
 		}
 		if err = appendBatchRange(tmp, src, offset, rows, proc, allocationMP(proc, selection)); err != nil {
@@ -319,8 +311,10 @@ func appendableRows(dst, src *batch.Batch, start, rows int, limit int64) int {
 			}
 			continue
 		}
+		// Even if descriptors overlap, one row copies at most the source area's
+		// size. If that bound is too large, count just the selected rows.
 		area := int64(len(vec.GetArea()))
-		if area == 0 || (vec.VarlenaAreaIsDisjoint() && area <= available) || area <= available/int64(rows) {
+		if area == 0 || area <= available/int64(rows) {
 			continue
 		}
 		for row := 0; row < rows; row++ {

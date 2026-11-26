@@ -3902,3 +3902,142 @@ func Test_convertRowsIntoBatchFreesPartialBatchOnError(t *testing.T) {
 	require.Nil(t, pColDefs)
 	require.Zero(t, pool.CurrNB())
 }
+
+func TestConvertRowsIntoBatchNullAtPoolCapacity(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetName("v")
+	col.SetColumnType(defines.MYSQL_TYPE_TINY)
+	col.SetSigned(true)
+
+	for _, tc := range []struct {
+		name      string
+		value     any
+		remaining int
+		wantError bool
+	}{
+		{name: "null fits without a copy", remaining: 16},
+		{name: "non-null needs only data", value: int8(7), remaining: 8},
+		{name: "null cannot fit", remaining: 8, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const capacity = 1 << 20
+			pool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(pool)
+			filler, err := pool.Alloc(capacity-tc.remaining, true)
+			require.NoError(t, err)
+			defer pool.Free(filler)
+			before := pool.CurrNB()
+
+			data, defs, err := convertRowsIntoBatch(pool, []Column{col}, [][]any{{tc.value}})
+			if tc.wantError {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+				require.Nil(t, data)
+				require.Nil(t, defs)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, defs)
+				require.Equal(t, 1, data.RowCount())
+				require.Equal(t, tc.value == nil, data.Vecs[0].GetNulls().Contains(0))
+				if tc.value != nil {
+					require.Equal(t, tc.value, vector.GetFixedAtNoTypeCheck[int8](data.Vecs[0], 0))
+				}
+				data.Clean(pool)
+			}
+			require.Equal(t, before, pool.CurrNB())
+		})
+	}
+}
+
+func TestConvertRowsIntoBatchDistinguishesNullAndEmptyBytes(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetName("v")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetLength(64)
+	pool := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(pool)
+
+	data, _, err := convertRowsIntoBatch(pool, []Column{col}, [][]any{{""}, {nil}, {"last"}})
+	require.NoError(t, err)
+	defer data.Clean(pool)
+	vec := data.Vecs[0]
+	require.False(t, vec.GetNulls().Contains(0))
+	require.Empty(t, vec.GetBytesAt(0))
+	require.True(t, vec.GetNulls().Contains(1))
+	require.False(t, vec.GetNulls().Contains(2))
+	require.Equal(t, []byte("last"), vec.GetBytesAt(2))
+}
+
+func TestConvertRowsIntoBatchNullWordGrowth(t *testing.T) {
+	col := new(MysqlColumn)
+	col.SetName("v")
+	col.SetColumnType(defines.MYSQL_TYPE_TINY)
+	col.SetSigned(true)
+	cols := []Column{col}
+	rows := make([][]any, 257)
+	for i := range rows {
+		rows[i] = []any{int8(7)}
+	}
+
+	// Measure the data-only peak, so the constrained pool has room for
+	// the data and exactly one bitmap word during the largest data growth.
+	dataPeak := func() int64 {
+		pool := mpool.MustNewZeroNoFixed()
+		defer mpool.DeleteMPool(pool)
+		data, _, err := convertRowsIntoBatch(pool, cols, rows)
+		require.NoError(t, err)
+		defer data.Clean(pool)
+		return pool.Stats().HighWaterMark.Load()
+	}()
+	rows[0][0] = nil
+	t.Run("early null only needs one word", func(t *testing.T) {
+		const capacity = 1 << 20
+		const bitmapWordBytes = 8
+		pool, err := mpool.NewMPool(t.Name(), capacity, mpool.NoFixed)
+		require.NoError(t, err)
+		defer mpool.DeleteMPool(pool)
+		filler, err := pool.Alloc(capacity-int(dataPeak)-bitmapWordBytes, true)
+		require.NoError(t, err)
+		defer pool.Free(filler)
+		before := pool.CurrNB()
+
+		data, _, err := convertRowsIntoBatch(pool, cols, rows)
+		require.NoError(t, err)
+		func() {
+			defer data.Clean(pool)
+			mask := data.Vecs[0].GetNulls().GetBitmap()
+			require.Equal(t, 1, mask.CapWords())
+			require.True(t, mask.Contains(0))
+			require.False(t, mask.Contains(uint64(len(rows)-1)))
+		}()
+		// A late NULL needs more words. The allocation error must clean
+		// the partially filled vector.
+		rows[len(rows)-1][0] = nil
+		defer func() { rows[len(rows)-1][0] = int8(7) }()
+		data, defs, err := convertRowsIntoBatch(pool, cols, rows)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "%v", err)
+		require.Nil(t, data)
+		require.Nil(t, defs)
+		require.Equal(t, before, pool.CurrNB())
+	})
+
+	t.Run("nulls cross word boundaries", func(t *testing.T) {
+		for _, i := range []int{63, 64, 129, len(rows) - 1} {
+			rows[i][0] = nil
+		}
+		pool := mpool.MustNewZeroNoFixed()
+		defer mpool.DeleteMPool(pool)
+		data, _, err := convertRowsIntoBatch(pool, cols, rows)
+		require.NoError(t, err)
+		defer data.Clean(pool)
+		require.Equal(t, len(rows), data.RowCount())
+		vec := data.Vecs[0]
+		getNulls := vec.GetNulls()
+		for i, row := range rows {
+			require.Equal(t, row[0] == nil, getNulls.Contains(uint64(i)), "row %d", i)
+			if row[0] != nil {
+				require.Equal(t, int8(7), vector.GetFixedAtNoTypeCheck[int8](vec, i))
+			}
+		}
+	})
+}

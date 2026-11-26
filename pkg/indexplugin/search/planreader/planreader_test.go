@@ -50,7 +50,6 @@ func (s *scriptedSearcher) Close() error {
 
 func newOut(attrs []string, typs []types.Type, mp *mpool.MPool) *batch.Batch {
 	out := batch.NewWithSize(len(attrs))
-	out.Attrs = attrs
 	for i, typ := range typs {
 		out.Vecs[i] = vector.NewVec(typ, mp)
 	}

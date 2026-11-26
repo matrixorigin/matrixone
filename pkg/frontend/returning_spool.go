@@ -288,13 +288,7 @@ func (s *returningSpool) releaseAttemptLocked() error {
 }
 
 func estimateReturningBatchBytes(bat *batch.Batch) (uint64, error) {
-	bytes := uint64(returningSpoolBufferSize + 32 + len(bat.Vecs)*64 + len(bat.ExtraBuf))
-	for _, attr := range bat.Attrs {
-		if math.MaxUint64-bytes < uint64(len(attr)+4) {
-			return 0, moerr.NewInternalErrorNoCtx("DML RETURNING batch size overflow")
-		}
-		bytes += uint64(len(attr) + 4)
-	}
+	bytes := uint64(returningSpoolBufferSize + 32 + len(bat.Vecs)*64 + len(bat.ExtraBuf()))
 	dataBytes := bat.Size()
 	if allocated := bat.Allocated(); allocated > dataBytes {
 		dataBytes = allocated

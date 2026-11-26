@@ -19,7 +19,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -406,10 +405,8 @@ func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch
 			return err
 		}
 	}
-	bat.Attrs = append(bat.Attrs, catalog.ExternalQuery)
 	bat.Vecs = append(bat.Vecs, queryVector)
 	if maxBatchBytes > 0 && int64(bat.Size()) > maxBatchBytes {
-		bat.Attrs = bat.Attrs[:len(bat.Attrs)-1]
 		bat.Vecs = bat.Vecs[:len(bat.Vecs)-1]
 		queryVector.Free(scan.mp(proc))
 		return moerr.NewInvalidInput(proc.Ctx, "MongoDB batch byte limit exceeded")

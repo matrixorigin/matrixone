@@ -76,7 +76,7 @@ func TestPreInsertIgnoreStatementAdjustsInsteadOfAborting(t *testing.T) {
 		nnVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(nnVec, []int64{10, 7, 12}, nil, mp))
 		nnVec.GetNulls().Add(1)
-		bat := batch.New([]string{"a", "nn"})
+		bat := batch.NewWithSize(2)
 		bat.Vecs = []*vector.Vector{aVec, nnVec}
 		bat.SetRowCount(3)
 		return bat
@@ -164,7 +164,7 @@ func TestPreInsertIgnoreFillLeavesChildVectorsUntouched(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(nnVec, []byte("x"), false, mp))
 	require.NoError(t, vector.AppendAny(nnVec, nil, true, mp))
 	require.NoError(t, vector.AppendBytes(nnVec, []byte("z"), false, mp))
-	child := batch.New([]string{"a", "nn"})
+	child := batch.NewWithSize(2)
 	child.Vecs = []*vector.Vector{aVec, nnVec}
 	child.SetRowCount(3)
 
@@ -227,7 +227,7 @@ func TestPreInsertIgnoreSelectorMirrorsAdjustedColumns(t *testing.T) {
 	require.NoError(t, vector.AppendFixedList(rowIDVec,
 		[]types.Rowid{{1}, {2}, {3}}, nil, proc.Mp()))
 
-	bat := batch.New([]string{"nn", "sel_row_number", "sel_active", "sel_rowid"})
+	bat := batch.NewWithSize(4)
 	bat.Vecs = []*vector.Vector{nnVec, rowNumberVec, activeVec, rowIDVec}
 	bat.SetRowCount(3)
 
@@ -293,7 +293,7 @@ func TestPreInsertIgnoreFillDropsSingleColumnPkBeforeConsumers(t *testing.T) {
 		nnVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(nnVec, []int64{20, 0, 400}, nil, mp))
 		nnVec.GetNulls().Add(1)
-		bat := batch.New([]string{"id", "nn"})
+		bat := batch.NewWithSize(2)
 		bat.Vecs = []*vector.Vector{idVec, nnVec}
 		bat.SetRowCount(3)
 
@@ -346,7 +346,7 @@ func TestPreInsertIgnoreFillDropsSingleColumnPkBeforeConsumers(t *testing.T) {
 		nnVec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixedList(nnVec, []int64{20, 0, 400}, nil, mp))
 		nnVec.GetNulls().Add(1)
-		bat := batch.New([]string{"id", "nn"})
+		bat := batch.NewWithSize(2)
 		bat.Vecs = []*vector.Vector{idVec, nnVec}
 		bat.SetRowCount(3)
 
@@ -398,7 +398,7 @@ func TestPreInsertIgnoreNewUpdateKeepsStrictRejection(t *testing.T) {
 	nnVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixedList(nnVec, []int64{0, 5}, nil, mp))
 	nnVec.GetNulls().Add(1)
-	bat := batch.New([]string{"nn"})
+	bat := batch.NewWithSize(1)
 	bat.Vecs = []*vector.Vector{nnVec}
 	bat.SetRowCount(2)
 

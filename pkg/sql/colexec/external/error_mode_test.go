@@ -94,7 +94,7 @@ func errorModeParam(t *testing.T, format string, jsonData string, keep int) (*Ex
 	}
 	resolveExternalErrorMode(param)
 
-	bat := batch.New(names)
+	bat := batch.NewWithSize(len(names))
 	for i := range cols {
 		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
@@ -435,7 +435,7 @@ func kafkaErrorModeParam(t *testing.T, ks *plan.KafkaScan) (*ExternalParam, *pro
 		},
 	}
 	resolveExternalErrorMode(param)
-	bat := batch.New(names)
+	bat := batch.NewWithSize(len(names))
 	for i := range cols {
 		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}
@@ -528,7 +528,7 @@ func TestLookalikeUserColumnStillReadsItsData(t *testing.T) {
 	resolveExternalErrorMode(param)
 	require.False(t, param.ErrorMode.Tolerate, "a lookalike column must not switch tolerance on")
 
-	bat := batch.New([]string{"a", catalog.ExternalErrorMessage})
+	bat := batch.NewWithSize(2)
 	for i := range cols {
 		bat.Vecs[i] = vector.NewVec(makeType(&cols[i].Typ, false), proc.Mp())
 	}

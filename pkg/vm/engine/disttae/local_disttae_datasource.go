@@ -662,7 +662,7 @@ func checkWorkspaceEntryType(
 		if entry.typ != INSERT ||
 			entry.bat == nil ||
 			entry.bat.IsEmpty() ||
-			entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
+			entry.attrs[0] == catalog.BlockMeta_BlockInfo {
 			return false
 		}
 		if deleted, exist := tbl.getTxn().batchSelectList[entry.bat]; exist &&
@@ -942,9 +942,10 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		// not output, so it is never charged to an accounted view of mp.
 		physicalMP = mp
 	)
+	// The reader maps the physical address column to SEQNUM_ROWID.
 	if physicalColumnPos = slices.Index(
-		outBatch.Attrs,
-		objectio.PhysicalAddr_Attr,
+		seqNums,
+		objectio.SEQNUM_ROWID,
 	); physicalColumnPos == -1 {
 		physicalMP = mp.Base()
 		physicalColumn.InitVec(objectio.RowidType, physicalMP)
@@ -1023,7 +1024,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			); err != nil {
 				return err
 			}
-			for i := range outBatch.Attrs {
+			for i := range outBatch.Vecs {
 				if i == physicalColumnPos {
 					continue
 				}

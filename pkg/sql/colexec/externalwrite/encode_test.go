@@ -31,7 +31,7 @@ import (
 )
 
 func testBatch(t *testing.T, mp *mpool.MPool) *batch.Batch {
-	bat := batch.New([]string{"id", "name"})
+	bat := batch.NewWithSize(2)
 
 	idVec := vector.NewVec(types.T_int64.ToType(), mp)
 	require.NoError(t, vector.AppendFixed[int64](idVec, 1, false, mp))
@@ -139,7 +139,7 @@ func TestEncodeCSVCommentGuard(t *testing.T) {
 
 	// first column is an integer (written unenclosed); 13 and 135 begin with the
 	// marker '13', while 1 and 99 do not.
-	bat := batch.New([]string{"a", "b"})
+	bat := batch.NewWithSize(2)
 	aVec := vector.NewVec(types.T_int64.ToType(), mp)
 	for _, v := range []int64{13, 1, 135, 99} {
 		require.NoError(t, vector.AppendFixed[int64](aVec, v, false, mp))
@@ -214,7 +214,7 @@ func TestEncodeJSONLineNoAttrs(t *testing.T) {
 // unescapes those too — and backslash is no longer special.
 func TestEncodeCSVCustomEscape(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bat := batch.New([]string{"id", "name"})
+	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = func() *vector.Vector {
 		vec := vector.NewVec(types.T_int64.ToType(), mp)
 		require.NoError(t, vector.AppendFixed[int64](vec, 7, false, mp))
@@ -309,7 +309,7 @@ func TestAppendJSONFloat(t *testing.T) {
 func TestEncodeRoundTripGuards(t *testing.T) {
 	mp := mpool.MustNewZero()
 	mkBat := func(s string) *batch.Batch {
-		bat := batch.New([]string{"b"})
+		bat := batch.NewWithSize(1)
 		vec := vector.NewVec(types.T_varchar.ToType(), mp)
 		require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
 		bat.Vecs[0] = vec
