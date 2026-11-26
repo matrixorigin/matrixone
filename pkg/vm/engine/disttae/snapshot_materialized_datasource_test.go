@@ -25,6 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -407,4 +411,134 @@ func TestMaterializedSnapshotDataSourceAccessors_WithRemote(t *testing.T) {
 	_ = src.GetOrderBy()
 	src.SetFilterZM(objectio.ZoneMap{})
 	_ = src.String()
+}
+
+func TestSnapshotStateChangeRangeProjectsEvolvedColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		persisted  bool
+		appendable bool
+		hole       bool
+	}{
+		{name: "historical logtail"},
+		{name: "logtail interior hole", hole: true},
+		{name: "mixed logtail and CN object", persisted: true},
+		{name: "mixed logtail and appendable object", persisted: true, appendable: true},
+		{name: "persisted interior hole", persisted: true, appendable: true, hole: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := engine.WithRetainRowID(t.Context(), true)
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			fs, err := fileservice.NewLocalFS(ctx, "change", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			defer fs.Close(ctx)
+
+			intType, boolType := types.T_int64.ToType(), types.T_bool.ToType()
+			tbl := &txnTable{tableDef: &plan.TableDef{
+				FeatureFlag: features.SchemaEvolved,
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: intType.PlanType()},
+					{Name: "payload", Seqnum: 1, Typ: intType.PlanType()},
+					{Name: "extra", Seqnum: 2, Typ: boolType.PlanType()},
+					{Name: objectio.PhysicalAddr_Attr, Seqnum: objectio.SEQNUM_ROWID, Typ: objectio.RowidType.PlanType()},
+				},
+			}}
+			tbl.ensureSeqnumsAndTypesExpectRowid()
+			start, end := types.BuildTS(1, 0), types.BuildTS(20, 0)
+			memTS, objectTS := types.BuildTS(10, 0), types.BuildTS(12, 0)
+			memRow := buildTestMaterializedSnapshotRowID(t, 1)
+			state := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
+				{rowID: memRow, ts: memTS, id: 7, payload: 70},
+			})
+			type result struct {
+				rowID   types.Rowid
+				ts      types.TS
+				payload int64
+			}
+			want := map[int64]result{7: {memRow, memTS, 70}}
+			if tc.persisted {
+				seqs := []uint16{0, 1}
+				if tc.hole {
+					seqs[1] = 2
+				}
+				if tc.appendable {
+					seqs = append(seqs, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT)
+				}
+				input := batch.NewWithSize(len(seqs))
+				defer input.Clean(mp)
+				input.Vecs[0] = vector.NewVec(intType, mp)
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(8), false, mp))
+				if tc.hole {
+					input.Vecs[1] = vector.NewVec(boolType, mp)
+					require.NoError(t, vector.AppendFixed(input.Vecs[1], true, false, mp))
+				} else {
+					input.Vecs[1] = vector.NewVec(intType, mp)
+					require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(80), false, mp))
+				}
+				if tc.appendable {
+					input.Vecs[2] = vector.NewVec(objectio.TSType, mp)
+					input.Vecs[3] = vector.NewVec(boolType, mp)
+					require.NoError(t, vector.AppendFixed(input.Vecs[2], objectTS, false, mp))
+					require.NoError(t, vector.AppendFixed(input.Vecs[3], false, false, mp))
+				}
+				input.SetRowCount(1)
+				writer := ioutil.ConstructWriter(0, seqs, -1, false, false, fs)
+				if tc.appendable {
+					writer.SetAppendable()
+				}
+				_, err = writer.WriteBatch(input)
+				require.NoError(t, err)
+				_, _, err = writer.Sync(ctx)
+				require.NoError(t, err)
+				stats := writer.GetObjectStats()
+				if tc.appendable {
+					stats = writer.GetObjectStats(objectio.WithAppendable())
+				} else {
+					stats = writer.GetObjectStats(objectio.WithCNCreated())
+				}
+				require.NoError(t, state.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{ObjectStats: stats, CreateTime: objectTS}, false))
+				blockID := objectio.NewBlockidWithObjectID(stats.ObjectName().ObjectId(), 0)
+				want[8] = result{types.NewRowid(&blockID, 0), objectTS, 80}
+			} else if tc.hole {
+				iter := state.NewRowsIter(end, nil, false)
+				require.True(t, iter.Next())
+				iter.Entry().Batch.Attrs[3] = ""
+				require.NoError(t, iter.Close())
+			}
+
+			h := &PartitionChangesHandle{currentPSFrom: start, currentPSTo: end, fs: fs, mp: mp}
+			require.NoError(t, h.installSnapshotStateRangeHandle(ctx, tbl, state))
+			defer h.Close()
+			if tc.hole {
+				data, _, _, err := h.currentChangeHandle.Next(ctx, mp)
+				require.Nil(t, data)
+				require.ErrorContains(t, err, "column sequence 1 is missing within")
+				return
+			}
+			got := make(map[int64]result)
+			for {
+				data, tombstone, _, err := h.currentChangeHandle.Next(ctx, mp)
+				require.NoError(t, err)
+				require.Nil(t, tombstone)
+				if data == nil {
+					break
+				}
+				require.Len(t, data.Vecs, 5)
+				require.Equal(t, boolType, *data.Vecs[3].GetType())
+				for i := range data.RowCount() {
+					require.True(t, data.Vecs[3].IsNull(uint64(i)))
+					id := vector.GetFixedAtWithTypeCheck[int64](data.Vecs[1], i)
+					require.NotContains(t, got, id)
+					got[id] = result{
+						vector.GetFixedAtWithTypeCheck[types.Rowid](data.Vecs[0], i),
+						vector.GetFixedAtWithTypeCheck[types.TS](data.Vecs[4], i),
+						vector.GetFixedAtWithTypeCheck[int64](data.Vecs[2], i),
+					}
+				}
+				data.Clean(mp)
+			}
+			require.Equal(t, want, got)
+		})
+	}
 }

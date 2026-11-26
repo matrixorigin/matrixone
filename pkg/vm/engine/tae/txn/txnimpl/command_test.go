@@ -19,7 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
@@ -71,4 +74,69 @@ func TestLegacyRenameAppendRequiresExactLayout(t *testing.T) {
 	changedSeq := current.Clone()
 	changedSeq.ColDefs[0], changedSeq.ColDefs[1] = changedSeq.ColDefs[1], changedSeq.ColDefs[0]
 	require.False(t, isLegacyRenameAppend(attrs, previous, changedSeq))
+}
+
+func TestRecoverCheckpointAppendNames(t *testing.T) {
+	typ := types.T_int64.ToType()
+	for _, scenario := range []string{"rename", "rename_then_comment", "swap", "sparse", "evolved", "wrong_type", "duplicate_name", "incomplete"} {
+		t.Run(scenario, func(t *testing.T) {
+			previous := catalog.NewEmptySchema("checkpoint_rename")
+			require.NoError(t, previous.AppendPKCol("id", typ, 0))
+			if scenario == "sparse" {
+				previous.Extra.NextColSeqnum = 8
+				require.NoError(t, previous.AppendColWithAttribute(engine.Attribute{Name: "price", Seqnum: 7, Type: typ}))
+			} else {
+				require.NoError(t, previous.AppendCol("price", typ))
+			}
+			require.NoError(t, previous.Finalize(false))
+			current := previous.Clone()
+			rename := func(old, new string, seq uint16) {
+				t.Helper()
+				require.NoError(t, current.ApplyAlterTable(api.NewRenameColumnReq(0, 0, old, new, uint32(seq))))
+			}
+			if scenario == "swap" {
+				rename("id", "tmp", 0)
+				rename("price", "id", 1)
+				rename("tmp", "price", 0)
+			} else {
+				rename("price", "amount", previous.GetSeqnum("price"))
+			}
+			current.Version++
+			if scenario == "rename_then_comment" {
+				current.Version++
+				current.Extra.ColumnChanged = false
+			}
+			if scenario == "evolved" {
+				current.Extra.FeatureFlag = features.SchemaEvolved
+			}
+
+			attrs, typs := previous.AllNames(), previous.AllTypes()
+			if scenario == "wrong_type" {
+				typs[1] = types.T_int32.ToType()
+			}
+			if scenario == "incomplete" {
+				attrs, typs = attrs[:2], typs[:2]
+			}
+			original := append([]string(nil), attrs...)
+			bat := containers.BuildBatch(attrs, typs, containers.Options{Allocator: common.DefaultAllocator})
+			defer bat.Close()
+			bat.Vecs[0].Append(int64(1), false)
+			if scenario != "wrong_type" {
+				bat.Vecs[1].Append(int64(42), false)
+			}
+			if scenario == "duplicate_name" {
+				bat.Attrs[1] = "id"
+				delete(bat.Nameidx, "price")
+				original[1] = "id"
+			}
+			recoverCheckpointAppendNames(bat, current)
+			if scenario == "rename" || scenario == "rename_then_comment" || scenario == "swap" {
+				require.Equal(t, current.AllNames(), bat.Attrs)
+				require.Equal(t, int64(1), bat.GetVectorByName(current.ColDefs[0].Name).Get(0))
+				require.Equal(t, int64(42), bat.GetVectorByName(current.ColDefs[1].Name).Get(0))
+			} else {
+				require.Equal(t, original, bat.Attrs)
+			}
+		})
+	}
 }

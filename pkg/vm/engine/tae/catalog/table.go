@@ -436,7 +436,7 @@ func (entry *TableEntry) GetLastestSchema(isTombstone bool) *Schema {
 
 // GetVisibleSchema returns the schema visible to the transaction, including its own DDL.
 func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader, isTombstone bool) *Schema {
-	schema, _ := entry.getVisibleSchemas(txn, isTombstone, false)
+	schema, _, _ := entry.getVisibleSchemas(txn, isTombstone, false)
 	return schema
 }
 
@@ -482,11 +482,11 @@ func (entry *TableEntry) GetAppendSchemaAtPrepare(txn txnif.TxnReader) *Schema {
 
 // GetReplayAppendSchemas also returns the writer's committed snapshot schema
 // when the replayed transaction has installed its own column change.
-func (entry *TableEntry) GetReplayAppendSchemas(txn txnif.TxnReader, isTombstone bool) (current, previous *Schema) {
+func (entry *TableEntry) GetReplayAppendSchemas(txn txnif.TxnReader, isTombstone bool) (current, previous *Schema, fromCheckpoint bool) {
 	return entry.getVisibleSchemas(txn, isTombstone, true)
 }
 
-func (entry *TableEntry) getVisibleSchemas(txn txnif.TxnReader, isTombstone, replayAppend bool) (current, previous *Schema) {
+func (entry *TableEntry) getVisibleSchemas(txn txnif.TxnReader, isTombstone, replayAppend bool) (current, previous *Schema, fromCheckpoint bool) {
 	entry.RLock()
 	defer entry.RUnlock()
 	node := entry.GetVisibleNodeLocked(txn)
@@ -494,14 +494,15 @@ func (entry *TableEntry) getVisibleSchemas(txn txnif.TxnReader, isTombstone, rep
 		node = entry.sessionTemporarySchemaLocked(txn, txn.IsReplay())
 	}
 	if node == nil {
-		return nil, nil
+		return nil, nil, false
 	}
 	if isTombstone {
-		return node.BaseNode.GetTombstoneSchema(), nil
+		return node.BaseNode.GetTombstoneSchema(), nil, false
 	}
 	current = node.BaseNode.Schema
+	fromCheckpoint = replayAppend && node.GetEnd() == checkpointCatalogTS
 	if !replayAppend || !node.IsSameTxn(txn) || current.Version == 0 || !current.Extra.ColumnChanged {
-		return current, nil
+		return current, nil, fromCheckpoint
 	}
 	entry.LoopChainLocked(func(node *MVCCNode[*TableMVCCNode]) bool {
 		if !node.IsCommitted() || !node.IsVisible(txn) {
@@ -512,7 +513,7 @@ func (entry *TableEntry) getVisibleSchemas(txn txnif.TxnReader, isTombstone, rep
 		}
 		return false
 	})
-	return current, previous
+	return current, previous, fromCheckpoint
 }
 
 // sessionTemporarySchemaLocked allows an independently committed empty schema

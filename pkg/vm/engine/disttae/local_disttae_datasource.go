@@ -967,25 +967,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	return nil
 }
 
-// ReplayBatch retains logtail names independently of batch.Batch. A dropped
-// slot can contain a placeholder vector, so both the name and vector matter.
-func replayDataColumn(bat *logtailreplay.ReplayBatch, seq uint16, spec *objectio.ColumnReadSpec) (*vector.Vector, error) {
-	if bat == nil || bat.Batch == nil {
-		return nil, moerr.NewInternalErrorNoCtx("missing logtail batch layout")
-	}
-	pos := 2 + int(seq) // rowid and commit timestamp precede data
-	if pos >= len(bat.Vecs) {
-		return nil, spec.ValidateMissingColumn(seq)
-	}
-	if pos >= len(bat.Attrs) || bat.Attrs[pos] == "" || bat.Vecs[pos] == nil {
-		if spec != nil {
-			return nil, moerr.NewInternalErrorNoCtxf("column sequence %d is missing within logtail batch layout", seq)
-		}
-		return nil, nil
-	}
-	return bat.Vecs[pos], nil
-}
-
 func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	ctx context.Context,
 	colTypes []types.Type,
@@ -1093,7 +1074,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			// apply bf filter on committed entries
 			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
 				bfSeq := uint16(ls.memPKFilter.BFSeqNum)
-				bfColVec, err := replayDataColumn(entry.Batch, bfSeq, ls.readSpec)
+				bfColVec, err := entry.Batch.DataColumn(bfSeq, ls.readSpec)
 				if err != nil {
 					return err
 				}
@@ -1129,7 +1110,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 					continue
 				}
 
-				src, err := replayDataColumn(entry.Batch, seqNums[i], ls.readSpec)
+				src, err := entry.Batch.DataColumn(seqNums[i], ls.readSpec)
 				if err != nil {
 					return err
 				}

@@ -299,7 +299,7 @@ func (ds *materializedSnapshotDataSource) shouldSkipCommittedInMemEntry(
 	if ds.memPKFilter == nil || !ds.memPKFilter.HasMemberFilter() {
 		return false, nil
 	}
-	vec, err := replayDataColumn(entry.Batch, uint16(ds.memPKFilter.BFSeqNum), spec)
+	vec, err := entry.Batch.DataColumn(uint16(ds.memPKFilter.BFSeqNum), spec)
 	if err != nil {
 		return false, err
 	}
@@ -366,7 +366,7 @@ func appendCommittedInMemEntry(
 				return err
 			}
 		default:
-			src, err := replayDataColumn(entry.Batch, seqNums[i], readSpec)
+			src, err := entry.Batch.DataColumn(seqNums[i], readSpec)
 			if err != nil {
 				return err
 			}

@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
@@ -36,6 +38,25 @@ type sharedStates struct {
 type ReplayBatch struct {
 	*batch.Batch
 	Attrs []string
+}
+
+// DataColumn resolves a physical sequence in an INSERT logtail batch. A
+// dropped slot can contain a placeholder vector, so the name matters too.
+func (bat *ReplayBatch) DataColumn(seq uint16, spec *objectio.ColumnReadSpec) (*vector.Vector, error) {
+	if bat == nil || bat.Batch == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing logtail batch layout")
+	}
+	pos := 2 + int(seq) // rowid and commit timestamp precede data
+	if pos >= len(bat.Vecs) {
+		return nil, spec.ValidateMissingColumn(seq)
+	}
+	if pos >= len(bat.Attrs) || bat.Attrs[pos] == "" || bat.Vecs[pos] == nil {
+		if spec != nil {
+			return nil, moerr.NewInternalErrorNoCtxf("column sequence %d is missing within logtail batch layout", seq)
+		}
+		return nil, nil
+	}
+	return bat.Vecs[pos], nil
 }
 
 type RowEntry struct {

@@ -101,6 +101,12 @@ func (s *ColumnReadSpec) missingEntry(seqnum uint16) (columnReadEntry, error) {
 	return entry, entry.err
 }
 
+// ColumnType returns the read schema's type for a projected sequence.
+func (s *ColumnReadSpec) ColumnType(seqnum uint16) (types.Type, error) {
+	entry, err := s.missingEntry(seqnum)
+	return entry.typ, err
+}
+
 // ValidateMissingColumn checks schema membership after the caller establishes
 // that the column is absent from an older layout.
 func (s *ColumnReadSpec) ValidateMissingColumn(seqnum uint16) error {

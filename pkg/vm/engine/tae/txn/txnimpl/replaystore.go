@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -44,6 +46,7 @@ type replayTxnStore struct {
 	ctx            context.Context
 	preparedTables map[uint64]*catalog.TableEntry
 	preparedTxnID  string
+	checkpointEnd  types.TS
 }
 
 func MakeReplayTxn(
@@ -54,12 +57,14 @@ func MakeReplayTxn(
 	cmd *txnbase.TxnCmd,
 	observer wal.ReplayObserver,
 	catalog *catalog.Catalog,
+	checkpointEnd types.TS,
 ) *txnbase.Txn {
 	store := &replayTxnStore{
-		Cmd:      cmd,
-		Observer: observer,
-		catalog:  catalog,
-		ctx:      ctx,
+		Cmd:           cmd,
+		Observer:      observer,
+		catalog:       catalog,
+		ctx:           ctx,
+		checkpointEnd: checkpointEnd,
 	}
 	txn := txnbase.NewPersistedTxn(
 		mgr,
@@ -223,7 +228,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, txn txnif.TxnReade
 			continue
 		}
 		table := blk.GetTable()
-		source, previous := table.GetReplayAppendSchemas(txn, cmd.IsTombstone)
+		source, previous, fromCheckpoint := table.GetReplayAppendSchemas(txn, cmd.IsTombstone)
 		if source == nil {
 			panic(moerr.NewInternalErrorNoCtxf("no visible WAL append schema for table %d at %s",
 				id.TableID, txn.GetStartTS().ToString()))
@@ -236,22 +241,57 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, txn txnif.TxnReade
 			if prepared != nil && prepared != source && sameAppendColumnLayout(source, prepared) &&
 				walColumnsInSchemaOrder(data.Attrs, prepared) {
 				source = prepared
+				fromCheckpoint = false
 			}
 		}
 		if previous != nil && !walColumnsInSchemaOrder(data.Attrs, source) &&
 			isLegacyRenameAppend(data.Attrs, previous, source) {
 			source = previous
+			fromCheckpoint = false
 		}
 		start := info.GetSrcOff()
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
+		startTS := txn.GetStartTS()
+		if fromCheckpoint && !pkgcatalog.IsSystemTable(table.ID) && startTS.LT(&store.checkpointEnd) &&
+			!walColumnsInSchemaOrder(bat.Attrs, source) {
+			recoverCheckpointAppendNames(bat, source)
+		}
 		if err = blk.GetObjectData().OnReplayAppendPayload(bat, info.GetDestOff(), source); err != nil || sarg != "" {
 			logutil.Infof("cmd %v\ncatalog: %v", cmd.String(), store.catalog.SimplePPString(3))
 			if sarg == "" {
 				panic(err)
 			}
 		}
+	}
+}
+
+// Legacy WAL writes every column in schema order. If recovery has only the
+// checkpoint's renamed schema, a complete ordinal layout proves that no
+// sequence could have been retired or inserted since the writer's snapshot:
+// an ADD would change the width, and a DROP would leave a sequence gap or a
+// larger allocation watermark. Sparse and evolved layouts require the source
+// schema and remain subject to the normal name and sequence validation.
+func recoverCheckpointAppendNames(bat *containers.Batch, schema *catalog.Schema) {
+	n := len(schema.ColDefs)
+	if schema.Version == 0 || schema.ColumnReadSpec() != nil ||
+		schema.PhyAddrKey == nil || schema.PhyAddrKey.Idx != n-1 ||
+		int(schema.Extra.NextColSeqnum) != n-1 || len(bat.Attrs) != n || len(bat.Vecs) != n ||
+		len(bat.Nameidx) != n || bat.Attrs[n-1] != schema.PhyAddrKey.Name {
+		return
+	}
+	for i, col := range schema.ColDefs {
+		pos, ok := bat.Nameidx[bat.Attrs[i]]
+		if !ok || pos != i || bat.Attrs[i] == "" || bat.Vecs[i] == nil ||
+			!col.Type.Eq(*bat.Vecs[i].GetType()) || (!col.PhyAddr && int(col.SeqNum) != i) {
+			return
+		}
+	}
+	clear(bat.Nameidx)
+	for i, col := range schema.ColDefs {
+		bat.Attrs[i] = col.Name
+		bat.Nameidx[col.Name] = i
 	}
 }
 

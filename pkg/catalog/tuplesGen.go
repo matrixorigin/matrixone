@@ -90,8 +90,10 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 	// backing columns consume ordinary sequence numbers; physical rowid does not.
 	ordinaryColumns := 0
 	hasAssignedSeqnums := false
+	nonOrdinalSeqnums := false
 	for _, def := range defs {
 		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.Name != Row_ID {
+			nonOrdinalSeqnums = nonOrdinalSeqnums || int(attr.Attr.Seqnum) != ordinaryColumns
 			ordinaryColumns++
 			hasAssignedSeqnums = hasAssignedSeqnums || attr.Attr.Seqnum != 0
 			if ordinaryColumns > objectio.SEQNUM_UPPER {
@@ -238,7 +240,7 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 	rowidTyp := types.T_Rowid.ToType()
 	typ, _ := types.Encode(&rowidTyp)
 	rowidSeqnum := uint16(len(cols))
-	if hasAssignedSeqnums {
+	if hasAssignedSeqnums && nonOrdinalSeqnums {
 		rowidSeqnum = objectio.SEQNUM_ROWID
 	}
 	cols = append(cols, Column{

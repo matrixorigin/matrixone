@@ -389,6 +389,8 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 		return false, nil
 	}
+	ctx = logtailreplay.WithChangeReadSchema(ctx, h.tbl.seqnums,
+		objectio.NewColumnReadSpecFromTableDef(h.tbl.tableDef))
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	state, err := h.tbl.getPartitionState(ctxWithTimeout)
@@ -574,6 +576,7 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
 	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, snapshotTbl.primarySeqnum, snapshotTbl.primaryIdx
 	logicalSeqnums := append([]uint16(nil), snapshotTbl.seqnums...)
+	readSpec := objectio.NewColumnReadSpecFromTableDef(snapshotTbl.tableDef)
 	rangeMP, rangeFS := h.mp, h.fs
 	h.currentChangeHandle = &deferredChangesHandle{
 		build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
@@ -603,6 +606,7 @@ func (h *PartitionChangesHandle) installSnapshotStateRangeHandle(
 				logicalSeqnums,
 				rangeMP,
 				rangeFS,
+				readSpec,
 			)
 		},
 	}

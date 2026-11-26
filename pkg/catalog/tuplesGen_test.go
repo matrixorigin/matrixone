@@ -16,13 +16,14 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -98,4 +99,41 @@ func TestGenColumnsFromDefsSequenceLimit(t *testing.T) {
 	require.Equal(t, uint16(77), first.Attr.Seqnum)
 	require.Equal(t, uint64(42), extra.Attr.ID)
 	require.Equal(t, uint16(17), extra.Attr.Seqnum)
+}
+
+func TestGenColumnsFromDefsKeepsRowIDSequenceAcrossCatalogRebuild(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	defs := NewDefines().MoDatabaseTableDefs
+	var first uint16
+	for pass := range 2 {
+		cols, err := GenColumnsFromDefs(0, MO_DATABASE, MO_CATALOG, MO_DATABASE_ID, MO_CATALOG_ID, defs)
+		require.NoError(t, err)
+		bat, err := GenCreateColumnTuples(cols, mp, packer)
+		require.NoError(t, err)
+		seq := vector.GetFixedAtWithTypeCheck[uint16](bat.Vecs[MO_COLUMNS_ATT_SEQNUM_IDX], len(cols)-1)
+		bat.Clean(mp)
+		require.Equal(t, Row_ID, cols[len(cols)-1].Name)
+		if pass == 0 {
+			first = seq
+		}
+		require.Equal(t, uint16(len(MoDatabaseSchema)), first)
+		require.Equal(t, first, seq)
+	}
+
+	typ := types.T_int64.ToType()
+	sparse := []engine.TableDef{
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "c", Type: typ, Seqnum: 2}},
+		&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: typ}},
+	}
+	for range 2 {
+		cols, err := GenColumnsFromDefs(0, "sparse", "db", 1, 1, sparse)
+		require.NoError(t, err)
+		require.Equal(t, uint16(2), cols[0].Seqnum)
+		require.Zero(t, cols[1].Seqnum)
+		require.Equal(t, uint16(objectio.SEQNUM_ROWID), cols[2].Seqnum)
+	}
 }
